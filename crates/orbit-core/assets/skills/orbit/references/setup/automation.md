@@ -13,12 +13,15 @@ OS clock unit (every minute)
               └── job:<name>            runs as a normal, auditable run
 ```
 
-Four things must all be true for a routine to fire:
+Three things must all be true for a routine to fire:
 
 1. This host has a clock unit installed (or something invokes `orbit sweep`).
-2. The workspace declares itself a routine source.
-3. The routine's `enabled:` is true and this host is in its `hosts:` list.
-4. The routine is not paused on this host.
+2. The routine's `enabled:` is true.
+3. The routine is not paused on this host.
+
+The workspace itself opts in by being registered: `orbit sweep` loads definitions
+from every registered, active **owner** checkout on the host. Replica checkouts
+are skipped, and there is no config key to set.
 
 ## Turning the scheduler on
 
@@ -41,25 +44,18 @@ orbit routine clock set <minutes>   # whole-minute cadence, reloads the unit
 
 `clock pause` stops scheduled invocation; a manual `orbit sweep` still works.
 
-**2. Make the workspace a routine source.** In `.orbit/config.toml`:
-
-```toml
-[routines]
-role = "source"
-```
-
-`source` is the only supported value; anything else is a fail-closed config
-error. `orbit sweep` loads definitions from every registered workspace carrying
-this, and ignores workspaces that don't.
-
-**3. Enable routines, one at a time.** Each is a versioned YAML file — flipping
-`enabled: true` is a reviewable commit, not a runtime toggle.
+**2. Enable routines, one at a time.** Each is a versioned YAML file — flipping
+`enabled: true` is a reviewable commit, not a runtime toggle. Registering the
+checkout already made the workspace a routine source; an older `.orbit/config.toml`
+may still carry a `[routines]` section, which is ignored with a warning and can
+be deleted.
 
 ## The seven seeded routines
 
-`orbit workspace init` seeds all seven, **all disabled**, with the host pin and a
-workspace-unique name (`<base>-<workspace>`) resolved at seed time. Run
-`orbit routine list` to see their actual names on this host.
+`orbit workspace init` seeds all seven, **all disabled**, with a workspace-unique
+name (`<base>-<workspace>`) resolved at seed time. Nothing else is resolved per
+machine, so two hosts seed identical bytes. Run `orbit routine list` to see their
+names on this host.
 
 | Base name | Cadence | Target | What it does |
 |---|---|---|---|
@@ -108,7 +104,6 @@ single activity in a one-step job.
 schemaVersion: 1
 name: <routine-name>              # unique across every routine source on the host
 enabled: true                      # versioned kill-switch
-hosts: [<host-id>]                 # explicit pinning; there is no "any host"
 trigger:
   cron: "0 22 * * *"              # 5-field, host-local time
   missed_run: skip                 # skip | catch_up_once
@@ -130,7 +125,7 @@ version and field names from the installed definition when authoring one.
 ## Verify without firing
 
 ```bash
-orbit routine list                 # every routine: enabled / pinned / paused, next due
+orbit routine list                 # every routine: enabled / paused, next due
 orbit routine show <name>          # definition, effective state, recent fires
 orbit sweep --dry-run              # what would fire; records and dispatches nothing
 orbit sweep --dry-run --verbose    # include not-due rows
@@ -138,8 +133,8 @@ orbit --workspace <name> sweep --dry-run   # restrict the pass to one workspace
 ```
 
 The global `--workspace` selector narrows a sweep — dry-run or live — to one
-registered workspace's routines; without it the pass covers every routine-source
-workspace on the host.
+registered workspace's routines; without it the pass covers every registered
+owner checkout on the host.
 
 ## Observe and control
 
@@ -153,15 +148,15 @@ orbit routine resume <name>
 
 ## "Why didn't it fire?"
 
-Resolve the toggles in this order — `orbit routine list` shows all three at once:
+Resolve the toggles in this order — `orbit routine list` shows both at once:
 
 1. `enabled: false` in the definition (versioned, affects every host).
-2. This host is not in the routine's `hosts:` list (versioned, per host).
-3. A local pause (this host only, unversioned, durable across reboots).
+2. A local pause (this host only, unversioned, durable across reboots).
 
-If none of those explain it, check further out: is the workspace declared a
-routine source, is the clock unit running (`orbit routine clock status`), and did
-the sweep itself error (`orbit log tail --level warn --since 1h`)? For a fire
+If neither explains it, check further out: is this checkout registered as an
+owner (`orbit workspace list`), is the clock unit running
+(`orbit routine clock status`), and did the sweep itself error
+(`orbit log tail --level warn --since 1h`)? For a fire
 that started and then failed, the run is the evidence —
 [run-debugging.md](../run-debugging.md).
 

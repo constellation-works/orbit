@@ -93,8 +93,8 @@ writes, so profiles are declared explicitly.
 ## Scheduling
 
 **Routine** — a git-versioned cron trigger (`.orbit/routines/*.yaml`) pointing at
-a `job:<name>` target, pinned to specific hosts, with a retry and overlap
-policy. Definitions sync through git.
+a `job:<name>` target, with a retry and overlap policy. Definitions sync through
+git and are evaluated by every host holding an owner checkout.
 
 **Sweep** — the stateless tick. `orbit sweep` fires whatever routine is due on
 this host, and an OS clock unit invokes it every minute.

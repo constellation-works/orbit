@@ -64,8 +64,9 @@ orbit init
 This creates `~/.orbit/` and, on a fresh machine, establishes host identity. Two
 values are asked for and both matter:
 
-**Host name** — how this machine is named in routine `hosts:` pins. Defaults to
-the OS hostname. Renameable later with `orbit host rename`.
+**Host name** — how this machine is named in run ownership, task claims, and
+Orbit's own output. Defaults to the OS hostname. Renameable later with
+`orbit host rename`.
 
 **Task prefix** — 2–5 uppercase ASCII letters that namespace every task ID this
 machine allocates. **Chosen once and never changed.** Its whole purpose is to

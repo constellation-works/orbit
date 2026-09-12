@@ -172,10 +172,8 @@ impl OrbitRuntime {
             &[RoutineSource {
                 workspace: "workspace".to_string(),
                 orbit_dir: self.shared_root(),
-                enabled: true,
             }],
             &|_, _| true,
-            self.automation_machine_identity().unwrap_or_default(),
         );
         collection
             .routines

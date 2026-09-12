@@ -1,13 +1,12 @@
-//! Routine discovery [ORB-10021]: enumerate the global workspace registry,
-//! visit every registered, active workspace whose versioned config declares
-//! `[routines] role = "source"` (ADR-0205), and load `.orbit/routines/*.yaml`
-//! from each — fail-closed per file. An invalid definition becomes a load
-//! error and that routine is treated as absent; it never fires with defaults.
+//! Routine discovery [ORB-10021]: visit every registered, active owner
+//! checkout on this host and load `.orbit/routines/*.yaml` from each —
+//! fail-closed per file. An invalid definition becomes a load error and that
+//! routine is treated as absent; it never fires with defaults.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use orbit_common::protocol::yaml::{parse_local_routine_yaml, parse_routine_yaml};
+use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_types::workflow::RoutineDefinition;
 
 use super::due::parse_cron;
@@ -17,19 +16,20 @@ pub const ROUTINES_DIR: &str = "routines";
 
 /// Subdirectory of [`ROUTINES_DIR`] holding machine-local routine definitions
 /// (gitignored by convention). The directory is the origin contract — the
-/// sweep never shells out to `git check-ignore` (host-registry design §6).
+/// sweep never shells out to `git check-ignore`.
 pub const LOCAL_ROUTINES_SUBDIR: &str = "local";
 
 /// Where a routine definition came from — the directory decides, not git
-/// status (host-registry design §6). Committed definitions must pin a host;
-/// local definitions are implicitly pinned to the loading host.
+/// status. Both origins are evaluated identically on the checkout's host;
+/// the distinction is provenance, reported so an operator can tell a shared
+/// definition from an uncommitted one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoutineOrigin {
     /// A git-committed definition under `.orbit/routines/` (excluding
-    /// `local/`). Requires a non-empty explicit `hosts:` pin.
+    /// `local/`), shared with every checkout of the repository.
     Committed,
-    /// A machine-local definition under `.orbit/routines/local/`. Implicitly
-    /// pinned to the loading host; may not name another host.
+    /// A machine-local definition under `.orbit/routines/local/`, belonging to
+    /// this checkout alone.
     Local,
 }
 
@@ -84,27 +84,20 @@ pub struct RoutineCollection {
 pub struct RoutineSource {
     pub workspace: String,
     pub orbit_dir: PathBuf,
-    pub enabled: bool,
 }
 
 /// Load routines from every source workspace among `workspaces` (the same
-/// runtimes are later used for dispatch), origin-aware: committed definitions
-/// under `.orbit/routines/` require a host pin, local definitions under
-/// `.orbit/routines/local/` are implicit to `host_id`. Cross-origin name
-/// collisions are load-time errors: every colliding definition is dropped and
-/// each conflicting source is named.
+/// runtimes are later used for dispatch), from both origins. Cross-origin
+/// name collisions are load-time errors: every colliding definition is
+/// dropped and each conflicting source is named.
 pub fn collect_routines(
     workspaces: &[RoutineSource],
     catalog: &dyn Fn(&Path, &str) -> bool,
-    host_id: &str,
 ) -> RoutineCollection {
     let mut collection = RoutineCollection::default();
 
     for source in workspaces {
-        if !source.enabled {
-            continue;
-        }
-        load_source_workspace(source, catalog, host_id, &mut collection);
+        load_source_workspace(source, catalog, &mut collection);
     }
 
     drop_name_collisions(&mut collection);
@@ -114,7 +107,6 @@ pub fn collect_routines(
 fn load_source_workspace(
     source: &RoutineSource,
     catalog: &dyn Fn(&Path, &str) -> bool,
-    host_id: &str,
     collection: &mut RoutineCollection,
 ) {
     let routines_dir = source.orbit_dir.join(ROUTINES_DIR);
@@ -130,11 +122,10 @@ fn load_source_workspace(
         RoutineOrigin::Committed,
         source,
         catalog,
-        host_id,
         collection,
     );
 
-    // Local definitions: `.orbit/routines/local/`, implicit to this host.
+    // Local definitions: `.orbit/routines/local/`, this checkout's own.
     let local_dir = routines_dir.join(LOCAL_ROUTINES_SUBDIR);
     if local_dir.is_dir() {
         load_origin_dir(
@@ -142,7 +133,6 @@ fn load_source_workspace(
             RoutineOrigin::Local,
             source,
             catalog,
-            host_id,
             collection,
         );
     }
@@ -156,7 +146,6 @@ fn load_origin_dir(
     origin: RoutineOrigin,
     source: &RoutineSource,
     catalog: &dyn Fn(&Path, &str) -> bool,
-    host_id: &str,
     collection: &mut RoutineCollection,
 ) {
     let paths = match yaml_files_in(dir) {
@@ -172,7 +161,7 @@ fn load_origin_dir(
     };
 
     for path in paths {
-        match load_routine_file(&path, origin, source, catalog, host_id) {
+        match load_routine_file(&path, origin, source, catalog) {
             Ok(routine) => collection.routines.push(routine),
             Err(message) => collection.errors.push(RoutineLoadError {
                 source_workspace: source.workspace.clone(),
@@ -209,32 +198,17 @@ fn yaml_files_in(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
 /// before it becomes a load-time error that drops *both* definitions. Files
 /// that fail to parse are skipped: [`collect_routines`] treats them as absent,
 /// so they claim no name.
-pub fn declared_routine_names(orbit_dir: &Path, host_id: &str) -> BTreeMap<String, PathBuf> {
+pub fn declared_routine_names(orbit_dir: &Path) -> BTreeMap<String, PathBuf> {
     let routines_dir = orbit_dir.join(ROUTINES_DIR);
     let mut declared = BTreeMap::new();
 
-    collect_declared_names(
-        &routines_dir,
-        RoutineOrigin::Committed,
-        host_id,
-        &mut declared,
-    );
-    collect_declared_names(
-        &routines_dir.join(LOCAL_ROUTINES_SUBDIR),
-        RoutineOrigin::Local,
-        host_id,
-        &mut declared,
-    );
+    collect_declared_names(&routines_dir, &mut declared);
+    collect_declared_names(&routines_dir.join(LOCAL_ROUTINES_SUBDIR), &mut declared);
 
     declared
 }
 
-fn collect_declared_names(
-    dir: &Path,
-    origin: RoutineOrigin,
-    host_id: &str,
-    declared: &mut BTreeMap<String, PathBuf>,
-) {
+fn collect_declared_names(dir: &Path, declared: &mut BTreeMap<String, PathBuf>) {
     let Ok(paths) = yaml_files_in(dir) else {
         return;
     };
@@ -242,11 +216,7 @@ fn collect_declared_names(
         let Ok(raw) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let parsed = match origin {
-            RoutineOrigin::Committed => parse_routine_yaml(&raw).ok(),
-            RoutineOrigin::Local => parse_local_routine_yaml(&raw, host_id).ok(),
-        };
-        if let Some(definition) = parsed {
+        if let Ok(definition) = parse_routine_yaml(&raw) {
             declared.entry(definition.name).or_insert(path);
         }
     }
@@ -257,17 +227,21 @@ fn load_routine_file(
     origin: RoutineOrigin,
     source: &RoutineSource,
     catalog: &dyn Fn(&Path, &str) -> bool,
-    host_id: &str,
 ) -> Result<LoadedRoutine, String> {
     let raw = std::fs::read_to_string(path).map_err(|error| format!("read failed: {error}"))?;
-    // Origin decides the host contract: committed definitions must pin a host,
-    // local definitions are implicit to (and may name only) this host.
-    let definition = match origin {
-        RoutineOrigin::Committed => parse_routine_yaml(&raw).map_err(|error| error.to_string())?,
-        RoutineOrigin::Local => {
-            parse_local_routine_yaml(&raw, host_id).map_err(|error| error.to_string())?
-        }
-    };
+    let definition = parse_routine_yaml(&raw).map_err(|error| error.to_string())?;
+    // [ORB-12236] Definitions carry no host pin. A file that still has one
+    // loads and is evaluated here; the warning names it so the key can be
+    // dropped before the next release rejects it.
+    if definition.has_legacy_host_pin() {
+        tracing::warn!(
+            target: "orbit.routines",
+            path = %path.display(),
+            routine = %definition.name,
+            "routine still declares the retired `hosts:` key; it is ignored and the routine \
+             is evaluated on this host — remove the key from the definition",
+        );
+    }
 
     // Load-time cron validation: a routine with an unparsable trigger never
     // reaches the due computation.

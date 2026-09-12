@@ -1,7 +1,7 @@
 # Default workspace ship-sweep routine. Seeded into
-# `.orbit/routines/` with a workspace-unique name and the initializing host
-# pin resolved at seed time. It is intentionally disabled: enabling scheduled
-# shipment is an explicit, versioned workspace decision.
+# `.orbit/routines/` with a workspace-unique name resolved at seed time. It is
+# intentionally disabled: enabling scheduled shipment is an explicit,
+# versioned workspace decision.
 #
 # The target is workspace-local. `workspace_ship_pipeline` resolves the source
 # workspace's ship mode and configured base branch, then invokes and waits for
@@ -14,8 +14,6 @@ description: >
   Disabled by default; set enabled to true in this versioned definition to
   opt this workspace into scheduled shipment.
 enabled: false
-hosts:
-  - __ORBIT_HOST_ID__
 trigger:
   cron: "*/20 * * * *"
   missed_run: skip

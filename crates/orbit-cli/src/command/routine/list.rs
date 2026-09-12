@@ -29,9 +29,6 @@ impl RoutineListArgs {
                     "origin": status.routine.origin.as_str(),
                     "target": status.routine.definition.target.as_ref_string(),
                     "enabled": status.routine.definition.enabled,
-                    "hosts": status.routine.definition.hosts,
-                    "pinned_to_host": status.pinned_to_host,
-                    "validation": &status.validation,
                     "paused_at": status.paused_at,
                     "effective": status.effective(),
                     "cron": status.routine.definition.trigger.cron,
@@ -48,7 +45,6 @@ impl RoutineListArgs {
         let doc = json!({
             "host_id": report.host_id,
             "machine_id": report.machine_id,
-            "registry": &report.registry,
             "routines": statuses,
             "load_errors": report.load_errors.iter().map(|e| json!({
                 "source_workspace": e.source_workspace,
@@ -63,13 +59,13 @@ impl RoutineListArgs {
             Column::new("SOURCE"),
             Column::new("ORIGIN").fixed(),
             Column::new("ENABLED").fixed(),
-            Column::new("PINNED").fixed(),
             Column::new("PAUSED").fixed(),
             Column::new("NEXT DUE").fixed(),
             Column::new("LAST FIRE").fixed(),
         ])
         .empty_message(format!(
-            "no routines found (host {}); mark a workspace with [routines] role = \"source\"",
+            "no routines found (host {}); register an owner checkout that defines \
+             .orbit/routines/*.yaml",
             report.host_id
         ));
         for status in &report.statuses {
@@ -87,7 +83,6 @@ impl RoutineListArgs {
                 } else {
                     "no"
                 }),
-                Cell::new(if status.pinned_to_host { "yes" } else { "no" }),
                 Cell::new(if status.paused_at.is_some() {
                     "yes"
                 } else {
@@ -99,27 +94,6 @@ impl RoutineListArgs {
         }
         // Context about where the list came from, not a record in it (spec §5).
         eprintln!("host: {}", report.host_id);
-        eprintln!(
-            "registry: {}/{}{}",
-            report.registry.source,
-            report.registry.state,
-            report
-                .registry
-                .age_seconds
-                .map(|age| format!(" ({age}s old)"))
-                .unwrap_or_default()
-        );
-        for status in &report.statuses {
-            for diagnostic in &status.validation.diagnostics {
-                eprintln!(
-                    "{} [{}:{}]: {}",
-                    status.routine.definition.name,
-                    diagnostic.severity.as_str(),
-                    diagnostic.code,
-                    diagnostic.message
-                );
-            }
-        }
         for error in &report.load_errors {
             let path = error
                 .path

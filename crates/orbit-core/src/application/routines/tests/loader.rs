@@ -1,8 +1,9 @@
 //! Origin-aware routine loading tests [ORB-10258]: committed definitions under
-//! `.orbit/routines/` must pin a host and fail closed when they do not; local
-//! definitions under `.orbit/routines/local/` are implicit to the loading host,
-//! may not name another host, and load with no registry/network; and a name
-//! defined by more than one origin fails deterministically naming both sources.
+//! `.orbit/routines/` and machine-local ones under `.orbit/routines/local/`
+//! both load and are evaluated on this host [ORB-12236]; a definition still
+//! carrying the retired `hosts:` key loads with a warning that names its file;
+//! and a name defined by more than one origin fails deterministically naming
+//! both sources.
 //!
 //! These drive `collect_routines` over a real seeded source workspace (the same
 //! discovery path the sweep uses), so origin resolution, fail-before-dispatch,
@@ -10,6 +11,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
@@ -19,8 +21,6 @@ use crate::OrbitRuntime;
 use crate::application::routines::loader::{
     LoadedRoutine, RoutineCollection, RoutineOrigin, collect_routines,
 };
-
-const HOST: &str = "test-host";
 
 const NOOP_JOB: &str = "schemaVersion: 2\n\
 kind: Job\n\
@@ -52,11 +52,6 @@ fn seed_source_workspace() -> SourceWorkspace {
     fs::create_dir_all(&local_dir).unwrap();
     fs::create_dir_all(ws_orbit.join("resources/jobs")).unwrap();
 
-    fs::write(
-        ws_orbit.join("config.toml"),
-        "[routines]\nrole = \"source\"\n",
-    )
-    .unwrap();
     fs::write(ws_orbit.join("resources/jobs/noop.yaml"), NOOP_JOB).unwrap();
 
     let workspace = Workspace {
@@ -85,9 +80,9 @@ fn write_routine(dir: &Path, file: &str, body: &str) {
     fs::write(dir.join(file), body).unwrap();
 }
 
-/// Collect against `HOST`, the same seam the sweep and status projections use.
+/// Collect through the same seam the sweep and status projections use.
 fn collect(ws: &SourceWorkspace) -> RoutineCollection {
-    collect_routines(&[(ws.workspace.clone(), ws.runtime.clone())], HOST)
+    collect_routines(&[(ws.workspace.clone(), ws.runtime.clone())])
 }
 
 fn find<'a>(collection: &'a RoutineCollection, name: &str) -> Option<&'a LoadedRoutine> {
@@ -97,35 +92,69 @@ fn find<'a>(collection: &'a RoutineCollection, name: &str) -> Option<&'a LoadedR
         .find(|r| r.definition.name == name)
 }
 
-fn committed(name: &str, hosts: &str) -> String {
+fn definition(name: &str) -> String {
     format!(
-        "schemaVersion: 1\nname: {name}\nhosts: {hosts}\n\
+        "schemaVersion: 1\nname: {name}\n\
          trigger: {{ cron: \"* * * * *\" }}\ntarget: job:noop\n"
     )
 }
 
-fn local(name: &str, hosts_line: &str) -> String {
-    format!(
-        "schemaVersion: 1\nname: {name}\n{hosts_line}\
-         trigger: {{ cron: \"* * * * *\" }}\ntarget: job:noop\n"
-    )
+/// Capture WARN-level tracing emitted while `f` runs, so a deprecation the
+/// operator must act on is asserted as output rather than as a return value.
+fn capture_warnings<F, T>(f: F) -> (T, String)
+where
+    F: FnOnce() -> T,
+{
+    use std::io::{self, Write};
+    use tracing_subscriber::filter::LevelFilter;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone)]
+    struct CaptureMakeWriter(Arc<Mutex<Vec<u8>>>);
+    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl<'a> MakeWriter<'a> for CaptureMakeWriter {
+        type Writer = CaptureWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            CaptureWriter(Arc::clone(&self.0))
+        }
+    }
+
+    impl Write for CaptureWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("capture lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(CaptureMakeWriter(Arc::clone(&buffer)))
+        .with_max_level(LevelFilter::WARN)
+        .with_ansi(false)
+        .without_time()
+        .finish();
+    let result = tracing::subscriber::with_default(subscriber, f);
+    let logs =
+        String::from_utf8(buffer.lock().expect("capture buffer lock").clone()).expect("utf8 logs");
+    (result, logs)
 }
 
 // ---- committed origin -----------------------------------------------------
 
 #[test]
-fn committed_pinned_routine_loads_with_committed_origin() {
+fn committed_routine_loads_with_committed_origin() {
     let ws = seed_source_workspace();
-    write_routine(
-        &ws.routines_dir,
-        "pinned.yaml",
-        &committed("committed-pinned", &format!("[{HOST}]")),
-    );
+    write_routine(&ws.routines_dir, "nightly.yaml", &definition("committed"));
 
     let collection = collect(&ws);
-    let routine = find(&collection, "committed-pinned").expect("committed routine loads");
+    let routine = find(&collection, "committed").expect("committed routine loads");
     assert_eq!(routine.origin, RoutineOrigin::Committed);
-    assert_eq!(routine.definition.hosts, vec![HOST.to_string()]);
     assert!(collection.errors.is_empty(), "{:?}", collection.errors);
 }
 
@@ -135,10 +164,8 @@ fn disabled_committed_routine_still_loads() {
     write_routine(
         &ws.routines_dir,
         "disabled.yaml",
-        &format!(
-            "schemaVersion: 1\nname: committed-disabled\nenabled: false\nhosts: [{HOST}]\n\
-             trigger: {{ cron: \"* * * * *\" }}\ntarget: job:noop\n"
-        ),
+        "schemaVersion: 1\nname: committed-disabled\nenabled: false\n\
+         trigger: { cron: \"* * * * *\" }\ntarget: job:noop\n",
     );
 
     let collection = collect(&ws);
@@ -147,117 +174,39 @@ fn disabled_committed_routine_still_loads() {
     assert!(!routine.definition.enabled);
 }
 
+/// [ORB-12236] `hosts:` is retired. A definition that still carries one is
+/// loaded and evaluated by this host's clock; the warning names the file so
+/// the key can be dropped before the next release rejects it.
 #[test]
-fn committed_missing_hosts_fails_before_dispatch() {
+fn retired_host_pin_loads_with_a_warning_naming_the_file() {
     let ws = seed_source_workspace();
     write_routine(
         &ws.routines_dir,
-        "nohosts.yaml",
-        // No `hosts:` at all — a committed definition must pin a host.
-        "schemaVersion: 1\nname: committed-nohosts\n\
+        "pinned.yaml",
+        "schemaVersion: 1\nname: committed-pinned\nhosts: [some-other-host]\n\
          trigger: { cron: \"* * * * *\" }\ntarget: job:noop\n",
     );
 
-    let collection = collect(&ws);
-    assert!(
-        find(&collection, "committed-nohosts").is_none(),
-        "unpinned committed routine must not load (never reaches dispatch)"
-    );
-    assert!(
-        collection
-            .errors
-            .iter()
-            .any(|e| e.message.contains("must pin at least one host")),
-        "{:?}",
-        collection.errors
-    );
-}
-
-#[test]
-fn committed_blank_hosts_fails_closed() {
-    let ws = seed_source_workspace();
-    write_routine(
-        &ws.routines_dir,
-        "blank.yaml",
-        &committed("committed-blank", "[\"   \"]"),
-    );
-
-    let collection = collect(&ws);
-    assert!(find(&collection, "committed-blank").is_none());
-    assert!(
-        collection
-            .errors
-            .iter()
-            .any(|e| e.message.contains("empty entries")),
-        "{:?}",
-        collection.errors
-    );
+    let (collection, warnings) = capture_warnings(|| collect(&ws));
+    let routine = find(&collection, "committed-pinned").expect("a pinned routine still loads");
+    assert!(routine.definition.has_legacy_host_pin());
+    assert!(collection.errors.is_empty(), "{:?}", collection.errors);
+    assert!(warnings.contains("pinned.yaml"), "{warnings}");
+    assert!(warnings.contains("hosts:"), "{warnings}");
 }
 
 // ---- local origin ---------------------------------------------------------
 
 #[test]
-fn local_without_hosts_loads_offline_pinned_to_this_host() {
+fn local_routine_loads_offline_with_local_origin() {
     let ws = seed_source_workspace();
     // No registry cache, no network — discovery reads only the local registry.
-    write_routine(&ws.local_dir, "personal.yaml", &local("local-nohost", ""));
+    write_routine(&ws.local_dir, "personal.yaml", &definition("local-only"));
 
     let collection = collect(&ws);
-    let routine = find(&collection, "local-nohost").expect("local routine loads without a host");
+    let routine = find(&collection, "local-only").expect("local routine loads");
     assert_eq!(routine.origin, RoutineOrigin::Local);
-    // Normalized to an implicit pin on the loading host so the sweep fires it.
-    assert_eq!(routine.definition.hosts, vec![HOST.to_string()]);
     assert!(collection.errors.is_empty(), "{:?}", collection.errors);
-}
-
-#[test]
-fn local_naming_the_loading_host_is_accepted() {
-    let ws = seed_source_workspace();
-    write_routine(
-        &ws.local_dir,
-        "explicit.yaml",
-        &local("local-explicit", &format!("hosts: [{HOST}]\n")),
-    );
-
-    let collection = collect(&ws);
-    let routine =
-        find(&collection, "local-explicit").expect("local routine naming this host loads");
-    assert_eq!(routine.origin, RoutineOrigin::Local);
-    assert_eq!(routine.definition.hosts, vec![HOST.to_string()]);
-}
-
-#[test]
-fn local_remote_pin_is_refused_naming_file_and_routine() {
-    let ws = seed_source_workspace();
-    write_routine(
-        &ws.local_dir,
-        "remote.yaml",
-        &local("local-remote", "hosts: [other-host]\n"),
-    );
-
-    let collection = collect(&ws);
-    assert!(
-        find(&collection, "local-remote").is_none(),
-        "a local definition naming another host must not load"
-    );
-    let error = collection
-        .errors
-        .iter()
-        .find(|e| e.message.contains("local-remote"))
-        .expect("error names the routine");
-    assert!(
-        error.message.contains("other-host"),
-        "error names the offending pin: {}",
-        error.message
-    );
-    assert!(
-        error
-            .path
-            .as_ref()
-            .is_some_and(|p| p.ends_with("remote.yaml")),
-        "error names the file: {:?}",
-        error.path
-    );
 }
 
 // ---- cross-origin duplicate names -----------------------------------------
@@ -265,12 +214,8 @@ fn local_remote_pin_is_refused_naming_file_and_routine() {
 #[test]
 fn duplicate_name_across_committed_and_local_fails_deterministically() {
     let ws = seed_source_workspace();
-    write_routine(
-        &ws.routines_dir,
-        "dup.yaml",
-        &committed("dup-name", &format!("[{HOST}]")),
-    );
-    write_routine(&ws.local_dir, "dup.yaml", &local("dup-name", ""));
+    write_routine(&ws.routines_dir, "dup.yaml", &definition("dup-name"));
+    write_routine(&ws.local_dir, "dup.yaml", &definition("dup-name"));
 
     let collection = collect(&ws);
     // Neither definition may silently shadow the other: both are dropped.

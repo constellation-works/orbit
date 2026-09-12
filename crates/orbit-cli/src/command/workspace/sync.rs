@@ -44,18 +44,18 @@ impl WorkspaceSyncArgs {
             .ok_or_else(workspace_init_required)?;
         let workspace = workspace_registry::find_workspace_by_id(&registry, &checkout.workspace_id)
             .ok_or_else(workspace_init_required)?;
-        let host_id = match inspect_host_identity(&global_root)? {
-            HostIdentityState::Present(identity) => identity.host_id,
+        match inspect_host_identity(&global_root)? {
+            HostIdentityState::Present(_) => {}
             HostIdentityState::Legacy { .. } | HostIdentityState::Absent => {
                 return Err(OrbitError::WorkspaceError(
                     "cannot sync workspace managed artifacts without an initialized host identity; run `orbit init`, then `orbit workspace init`".to_string(),
                 ));
             }
-        };
+        }
         // Routine names carry the registered workspace name, not the checkout
         // directory basename, so convergence renders the same binding that
         // `orbit workspace init` recorded [ORB-12107].
-        let routine_identity = RoutineSeedIdentity::new(&host_id, &workspace.name)?;
+        let routine_identity = RoutineSeedIdentity::new(&workspace.name)?;
         let report = reconcile_workspace_managed_artifacts(
             &global_root,
             &checkout.orbit_dir,

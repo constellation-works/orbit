@@ -168,16 +168,15 @@ why.
 ### Routines
 
 Each card is one versioned routine from the selected workspace: name, enabled
-/ blocked / disabled, target job, schedule, host pin, last and next
-evaluation, and last fire.
+/ blocked / disabled, target job, schedule, last and next evaluation, and last
+fire.
 
 **Enable** / **Disable** writes that routine's enabled field. The control is
 disabled when:
 
 - no single workspace is selected,
-- the session is not an authorized operator (see
-  [Authorization](#authorization)),
-- or the routine is pinned to another host — the note names the pinned host.
+- or the session is not an authorized operator (see
+  [Authorization](#authorization)).
 
 Toggling a routine does not start or stop the host sweep clock.
 
@@ -285,7 +284,6 @@ ship, workspace claim held).
 | Connect waits then fails readiness | SSH must work non-interactively to that host, and `orbit` must be on the remote `PATH`. The remote process has about 30 seconds to answer `/healthz`. |
 | Workspace selector missing | Only one servable workspace is registered; the UI has nothing to switch. |
 | Enable / Mint now / clock buttons disabled | Select one active workspace. If the note mentions an authorized operator session, start `orbit web serve` from an interactive terminal or with `ORBIT_OPERATOR=1`. |
-| Routine toggle names another host | The routine is pinned; change it on that host, or use `orbit routine` there. |
 | Mint created a second open task | Expected: manual mint ignores dedupe. The card's **Open duplicate** field says so before you confirm. |
 | Ship returns 409 `ship_run_in_flight` | That task already has a non-terminal ship run. Open the named `run_id`. |
 | 409 `workspace_claim_held` | Another operator holds the workspace claim. Wait for expiry or inspect the holder; do not retry in a loop. |

@@ -11,26 +11,26 @@ summary: Durable, git-versioned scheduler primitive that fires catalog jobs/acti
 tags: [routines, scheduler]
 paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/sqlite/routine_store/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry]
-related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10739]
+related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10739, ORB-12236]
 ---
 
 # Routines — Overview
 
 Routines make Orbit the constellation's single scheduler. A **routine** is a durable,
 git-versioned definition of recurring work — a cron trigger, a job target from the existing
-catalog, host pinning, and a retry/overlap policy. A stateless **`orbit sweep`**
+catalog, and a retry/overlap policy. A stateless **`orbit sweep`**
 pass, invoked on the configured OS schedule (one minute by default, via launchd on macOS or a
 systemd timer on Linux), fires whatever is due on the current host through the existing v2 run
 machinery. Definitions
 are shared across hosts via git; all scheduler state (last fires, pauses, locks, run history)
-is host-local and never synced. [2_design.md](./2_design.md) is the v1 contract;
+is host-local and never synced, so each owner checkout is an independent schedule. [2_design.md](./2_design.md) is the v1 contract;
 [3_vision.md](./3_vision.md) holds what is deliberately out of scope for v1.
 
-> **Pending change — clock consolidation (decided 2026-09-12, unimplemented).** One host
-> tick (`orbit clock tick`, alias `orbit sweep`) will evaluate routines *and* auto-task
-> definitions; `orbit routine clock` becomes `orbit clock`; `hosts:` and
-> `[routines] role = "source"` are removed. Target contract:
-> [3_vision.md §0](./3_vision.md#0-graduating-clock-consolidation).
+> **Pending change — clock consolidation, part 2 (decided 2026-09-12, unimplemented).** One
+> host tick (`orbit clock tick`, alias `orbit sweep`) will evaluate routines *and* auto-task
+> definitions, and `orbit routine clock` becomes `orbit clock`. Target contract:
+> [3_vision.md §0](./3_vision.md#0-graduating-clock-consolidation). Part 1 shipped in
+> [ORB-12236]: definitions carry no `hosts:` pin and there is no `[routines] role` key.
 >
 > **Status.** v1 shipped in [ORB-10021]; the At a Glance table lists the actual home of
 > each concern. Targets are `job:<name>` in v1 — see [Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only-no-inline-command-payloads) for why `activity:` is
@@ -56,7 +56,7 @@ OS level on either host (no crontab, no custom launchd agents); recurring chores
 auto-commits, session-log extraction, semantic reindexing — run only when a human or agent
 remembers to run them. The work spans two machines (`dk-mac`, `dk-server-1`) with different
 availability profiles (a laptop that sleeps vs. an always-on box), so any solution must
-handle host pinning, missed-fire policy, and per-host toggles.
+handle missed-fire policy and per-host toggles.
 
 Orbit is the right owner because the hard parts already exist here:
 
@@ -76,24 +76,23 @@ fragmentation this feature exists to end.
 
 ## 2. Core Concepts
 
-- **Routine** — a versioned YAML definition in a routine-source workspace: name, trigger,
-  target, `hosts` (slated for removal), `enabled`, and policy. The durable unit of scheduling.
+- **Routine** — a versioned YAML definition in a registered workspace: name, trigger,
+  target, `enabled`, and policy. The durable unit of scheduling.
 - **Target** — what fires: a reference into the existing catalog. v1 dispatches
   `job:<name>`; `activity:<name>` is reserved (wrap the activity in a one-step job — see
   [Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only-no-inline-command-payloads)). Routines carry no inline commands; the `shell` activity variant was
   removed fail-closed in [ORB-00374] (see [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed)), and routines inherit that posture.
 - **Sweep** — `orbit sweep`, the stateless due-check pass the OS clock invokes on its configured
-  cadence. Loads definitions, filters for this host, fires due routines, records state, exits.
-- **Routine source** — a registered workspace whose config opts in with
-  `[routines] role = "source"`. The constellation convention is a single source (polaris),
-  but the mechanism permits several. Slated for removal: any registered owner checkout is
-  a source.
-- **Host identity** — a `host_id` (e.g. `dk-mac`) in host-local config under `~/.orbit/`,
-  matched against each routine's `hosts` list. Slated to stop participating in scheduling;
-  it remains for run ownership and display.
+  cadence. Loads definitions, fires due routines, records state, exits.
+- **Routine source** — any registered, active **owner** checkout on the host: registration
+  is the whole opt-in [ORB-12236]. Replica checkouts are skipped; they cannot write the
+  owner's coordination store.
+- **Host identity** — a `host_id` (e.g. `dk-mac`) in host-local config under `~/.orbit/`.
+  It takes no part in scheduling; it names run ownership and display.
 - **Owner checkout** — a registered checkout whose logical workspace this machine owns
-  (host-registry). Under the pending change, the unit of scheduling: each owner checkout
-  evaluates every enabled definition against its own store and `task_prefix`.
+  (host-registry). The unit of scheduling: each owner checkout evaluates every enabled
+  definition against its own store and `task_prefix`, so N owner checkouts of one
+  repository are N independent schedules.
 - **Local pause** — a host-local, SQLite-persisted toggle (`orbit routine pause <name>`)
   that suppresses a routine on one host without touching the shared definition.
 - **Fire** — one scheduled dispatch of a routine's target, executed as a normal run with
@@ -106,14 +105,13 @@ fragmentation this feature exists to end.
 | Concern | File | Task |
 |---------|------|------|
 | Routine definition type + fail-closed YAML parse | `crates/orbit-types/src/workflow/routine.rs` | [ORB-10021] |
-| Registry-neutral loading, due computation, dispatch, status, and pin validation | `crates/orbit-core/src/application/routines/` | [ORB-10021], [ORB-10270] |
+| Registry-neutral loading, due computation, dispatch, and status | `crates/orbit-core/src/application/routines/` | [ORB-10021], [ORB-12236] |
 | Local identity/catalog composition, workspace discovery, and runtime construction | `crates/orbit-cmd/src/registry_routines.rs`, `crates/orbit-cmd/src/registry_runtime.rs`, `crates/orbit-registry/src/` | [ORB-10270], [ORB-10319] |
 | Host-local scheduler state (fires, pauses) | `crates/orbit-store/src/sqlite/routine_store/` | [ORB-10021] |
 | Sweep advisory lock (flock, host-global) | `crates/orbit-store/src/sqlite/routine_store/mod.rs` | [ORB-10021] |
 | `orbit sweep` CLI entrypoint | `crates/orbit-cli/src/command/sweep.rs` | [ORB-10021] |
 | `orbit routine` CLI (`list/show/pause/resume/init/clock`; `clock` slated to move to `orbit clock`) | `crates/orbit-cli/src/command/routine/` | [ORB-10021] |
 | launchd/systemd unit templates + installer | `crates/orbit-core/assets/clock/` + `crates/orbit-core/src/application/routines/clock.rs` | [ORB-10021] |
-| `[routines] role = "source"` config key (slated for removal) | `crates/orbit-config/src/{raw,resolved}.rs` | [ORB-10021] |
 | Disabled default routine seeding + workspace ship wrapper | `crates/orbit-core/assets/{routines,jobs}/` | [ORB-10207] / [Delegate workspace ship routines through a synchronous wrapper job](./4_decisions.md#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job) |
 
 ---
@@ -127,6 +125,8 @@ fragmentation this feature exists to end.
   the current local-only projection preserves the no-backfill state behavior:
   the old host preserves its cursor/fire/pause state, while the new host baselines on first
   observation and starts at the next natural slot without backfill.
+- [ORB-12236] — removed the `hosts:` pin, placement validation, and the
+  `[routines] role = "source"` config key; registering an owner checkout is the opt-in.
 - [ORB-10319] — historical boundary extraction; current composition lives in `orbit-cmd`
   over `orbit-registry` local files without fleet registry/cache state.
 - [ORB-10739] — added the disabled `task_pilot` default routine; its zero-input target

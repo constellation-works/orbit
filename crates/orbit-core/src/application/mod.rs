@@ -110,11 +110,17 @@ pub(crate) struct RoutineAssetProvenance {
     pub binding: RoutineMaterializationBinding,
 }
 
+/// The per-workspace values a shipped routine template is rendered against.
+///
+/// Templates no longer render a host id [ORB-12236], so the binding is just
+/// the routine name. A manifest written before that change still carries a
+/// `hosts` entry, which is why `deny_unknown_fields` is off here: the stale
+/// entry loads and its routine reconciles as an ordinary managed refresh.
+/// Restore `deny_unknown_fields` after 2026-12-01.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct RoutineMaterializationBinding {
     pub name: String,
-    pub hosts: Vec<String>,
 }
 
 /// Materialize the current embedded resource set and reconcile assets retired

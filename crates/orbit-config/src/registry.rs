@@ -242,11 +242,6 @@ define_config_settings! {
         description: "URL template used to link a task ID in PR descriptions.",
         resolve: |raw: Option<String>| Ok::<_, OrbitError>(raw),
     },
-    routines_role: Option<String> => String {
-        key: "routines.role", value_type: "string",
-        description: "Opt-in for the routine scheduler; the only supported value is 'source' (marks this workspace as a routine source for `orbit sweep`).",
-        resolve: |raw: Option<String>| resolve_optional_choice(raw, "routines.role", &["source"]),
-    },
     runtime_log_max_file_mb: u64 => u64 {
         key: "runtime.log_max_file_mb", value_type: "integer",
         description: "Roll the active JSONL log once it grows past this many MiB (must be >= 1 and <= runtime.log_max_total_mb).",

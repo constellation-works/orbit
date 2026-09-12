@@ -174,9 +174,12 @@ impl WorkspaceInitArgs {
         // Seeded routine names are suffixed with the registered workspace name,
         // not the checkout directory, so two checkouts sharing a basename stay
         // distinct on one host [ORB-12107]. Validate the name before any write.
+        // The definitions themselves are machine-independent [ORB-12236]; an
+        // uninitialized host still seeds none, because `orbit init` owns the
+        // host state the clock evaluates them against.
         let routine_identity = local_host_id
-            .as_deref()
-            .map(|host_id| RoutineSeedIdentity::new(host_id, &name))
+            .is_some()
+            .then(|| RoutineSeedIdentity::new(&name))
             .transpose()?;
         let git_remote = detect_git_remote(cwd);
         let default_base_branch = checked_out_branch(cwd);

@@ -22,10 +22,9 @@ use serde_json::json;
 #[command(
     name = "sweep",
     about = "Fire due routines on this host (the scheduler pass the OS clock invokes)",
-    after_help = "Loads routine definitions from every registered workspace with\n\
-                  `[routines] role = \"source\"` in its config.toml, filters them for this\n\
-                  host, and dispatches due targets as normal runs. Intended for the OS\n\
-                  clock (launchd / systemd timer), e.g.:\n  orbit sweep --json\n\n\
+    after_help = "Loads routine definitions from every registered, active owner checkout\n\
+                  on this host and dispatches due targets as normal runs. Intended for\n\
+                  the OS clock (launchd / systemd timer), e.g.:\n  orbit sweep --json\n\n\
                   By default only noteworthy rows (fires, retries, baselines, errors)\n\
                   print — the per-minute clock must not grow its log with `not_due`\n\
                   churn. Use --verbose for every routine's row.\n\n\
@@ -65,14 +64,6 @@ pub(crate) fn format_report_line(report: &RoutineSweepReport) -> String {
     }
     if let Some(run_id) = &report.run_id {
         line.push_str(&format!(" — run {run_id}"));
-    }
-    for diagnostic in &report.validation.diagnostics {
-        line.push_str(&format!(
-            " — {}[{}]: {}",
-            severity_label(diagnostic.severity),
-            diagnostic.code,
-            diagnostic.message
-        ));
     }
     line
 }
@@ -121,10 +112,7 @@ impl SweepCommand {
         if outcome.lock_busy {
             return vec!["sweep: another pass holds the lock on this host; exiting".to_string()];
         }
-        if outcome.reports.is_empty()
-            && outcome.load_errors.is_empty()
-            && outcome.registry.diagnostics.is_empty()
-        {
+        if outcome.reports.is_empty() && outcome.load_errors.is_empty() {
             return vec![format!(
                 "sweep[{}]: no routines configured",
                 outcome.host_id
@@ -135,22 +123,8 @@ impl SweepCommand {
         let show_all = self.verbose || self.dry_run;
         let mut lines = Vec::new();
         for report in &outcome.reports {
-            if show_all
-                || report_is_noteworthy(report.action)
-                || !report.validation.diagnostics.is_empty()
-            {
+            if show_all || report_is_noteworthy(report.action) {
                 lines.push(format_report_line(report));
-            }
-        }
-        if outcome.reports.is_empty() {
-            for diagnostic in &outcome.registry.diagnostics {
-                lines.push(format!(
-                    "sweep[{}]: {}[{}]: {}",
-                    outcome.host_id,
-                    severity_label(diagnostic.severity),
-                    diagnostic.code,
-                    diagnostic.message
-                ));
             }
         }
         // A one-line heartbeat when a healthy pass had nothing to report, so the
@@ -186,7 +160,6 @@ pub(crate) fn outcome_json(outcome: &SweepOutcome, dry_run: bool) -> serde_json:
     json!({
         "host_id": outcome.host_id,
         "machine_id": outcome.machine_id,
-        "registry": &outcome.registry,
         "dry_run": dry_run,
         "lock_busy": outcome.lock_busy,
         "fired": outcome
@@ -202,7 +175,6 @@ pub(crate) fn outcome_json(outcome: &SweepOutcome, dry_run: bool) -> serde_json:
             "reason": r.reason,
             "slot": r.slot,
             "run_id": r.run_id,
-            "validation": &r.validation,
         })).collect::<Vec<_>>(),
         "load_errors": outcome.load_errors.iter().map(|e| json!({
             "source_workspace": e.source_workspace,
@@ -210,10 +182,4 @@ pub(crate) fn outcome_json(outcome: &SweepOutcome, dry_run: bool) -> serde_json:
             "message": e.message,
         })).collect::<Vec<_>>(),
     })
-}
-
-fn severity_label(
-    severity: orbit_core::application::routines::RoutineDiagnosticSeverity,
-) -> &'static str {
-    severity.as_str()
 }

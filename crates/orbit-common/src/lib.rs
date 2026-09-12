@@ -43,7 +43,6 @@ pub use observability::audit_id::audit_execution_id;
 pub use protocol::tool_input;
 pub use protocol::tool_schema;
 pub use protocol::yaml::{
-    parse_auto_task_yaml, parse_local_routine_yaml, parse_policy_resource, parse_routine_yaml,
-    parse_task_plan,
+    parse_auto_task_yaml, parse_policy_resource, parse_routine_yaml, parse_task_plan,
 };
 pub use tracing;

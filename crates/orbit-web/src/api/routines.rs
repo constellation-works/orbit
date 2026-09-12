@@ -35,6 +35,8 @@ pub(super) struct RoutineToggleRequest {
     name: String,
     source: String,
     target: String,
+    /// The host the browser acted from. Recorded in the audit event; routine
+    /// definitions are host-independent [ORB-12236], so it selects nothing.
     host_id: String,
     expected_enabled: bool,
     enabled: bool,
@@ -127,15 +129,6 @@ pub(super) async fn toggle_routine(
             ),
         );
     }
-    if body.host_id != report.host_id || !status.pinned_to_host {
-        return selection_conflict(
-            "host_mismatch",
-            format!(
-                "select pinned host '{}' before changing '{}'",
-                report.host_id, body.name
-            ),
-        );
-    }
     let actual_target = status.routine.definition.target.as_ref_string();
     if body.target != actual_target {
         return selection_conflict(
@@ -144,12 +137,7 @@ pub(super) async fn toggle_routine(
         );
     }
 
-    let outcome = match set_routine_enabled(
-        &status.routine,
-        &report.host_id,
-        body.expected_enabled,
-        body.enabled,
-    ) {
+    let outcome = match set_routine_enabled(&status.routine, body.expected_enabled, body.enabled) {
         Ok(outcome) => outcome,
         Err(error) => {
             let error_message = error.to_string();
@@ -364,8 +352,6 @@ fn status_json(status: &RoutineStatus) -> Value {
         "source": status.routine.source_workspace,
         "target": definition.target.as_ref_string(),
         "enabled": definition.enabled,
-        "hosts": definition.hosts,
-        "pinned_to_host": status.pinned_to_host,
         "paused_at": status.paused_at,
         "effective": status.effective(),
         "cron": definition.trigger.cron,

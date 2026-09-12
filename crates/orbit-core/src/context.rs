@@ -274,9 +274,6 @@ pub(crate) struct OrbitRuntimeSettings {
     /// Opt-in for unattended ship dispatch
     /// (`[workflow] auto_ship` in `config.toml`, default `false`).
     workflow_auto_ship: bool,
-    /// Whether this workspace is a routine source
-    /// (`[routines] role = "source"` in `config.toml`, default `false`).
-    routines_source: bool,
     crews: std::collections::BTreeMap<String, Crew>,
     default_crew: Option<String>,
     complexity_crews: orbit_config::ComplexityCrewPools,
@@ -295,7 +292,6 @@ impl OrbitRuntimeSettings {
         pr_config: PrConfig,
         workflow_base_branch: String,
         workflow_auto_ship: bool,
-        routines_source: bool,
         crews: std::collections::BTreeMap<String, Crew>,
         default_crew: Option<String>,
         complexity_crews: orbit_config::ComplexityCrewPools,
@@ -309,7 +305,6 @@ impl OrbitRuntimeSettings {
             pr_config,
             workflow_base_branch,
             workflow_auto_ship,
-            routines_source,
             crews,
             default_crew,
             complexity_crews,
@@ -332,10 +327,6 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn workflow_auto_ship(&self) -> bool {
         self.workflow_auto_ship
-    }
-
-    pub(crate) fn routines_source(&self) -> bool {
-        self.routines_source
     }
 
     pub(crate) fn crews(&self) -> &std::collections::BTreeMap<String, Crew> {

@@ -1,7 +1,7 @@
 //! Routine definition schema (v1) — the durable, git-versioned unit of
-//! scheduled work. One YAML file under `.orbit/routines/` in a routine-source
-//! workspace describes a cron trigger, a catalog target, host pinning, and a
-//! retry/overlap policy. See `docs/design/routines/2_design.md` [ORB-10021].
+//! scheduled work. One YAML file under `.orbit/routines/` describes a cron
+//! trigger, a catalog target, and a retry/overlap policy. See
+//! `docs/design/routines/2_design.md` [ORB-10021].
 //!
 //! Parsing is fail-closed: an invalid file is an error, never a routine that
 //! fires with defaults. Targets are catalog references only — there is no
@@ -37,17 +37,14 @@ pub struct RoutineDefinition {
     /// Versioned global kill-switch. Absent means enabled.
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Explicit host pinning — the routine fires only on hosts whose
-    /// `host_id` appears here. There is no "any host" value in v1.
-    ///
-    /// A *committed* definition (`.orbit/routines/*.yaml`) must list at least
-    /// one host (see [`RoutineDefinition::validate_committed`]). A *local*
-    /// definition (`.orbit/routines/local/*.yaml`) may omit it — it is
-    /// implicitly pinned to the loading host — and, if present, may name only
-    /// that host (see [`RoutineDefinition::validate_local`] and
-    /// [`parse_local_routine_yaml`]).
-    #[serde(default)]
-    pub hosts: Vec<String>,
+    /// Retired host pin [ORB-12236]. Definitions carry no host field: every
+    /// registered owner checkout is an independent schedule. The key is still
+    /// accepted here — and ignored — so a checkout that has not dropped it
+    /// keeps loading instead of failing `deny_unknown_fields`; the loader
+    /// warns and names the file. Delete this field and its warning in the
+    /// release after 2026-12-01, after which `hosts:` is an unknown key.
+    #[serde(default, rename = "hosts", skip_serializing)]
+    pub legacy_hosts: Option<Vec<String>>,
     /// When the routine is due.
     pub trigger: RoutineTrigger,
     /// What fires: a catalog reference (`job:<name>`).
@@ -227,12 +224,10 @@ const fn default_backoff_minutes() -> u64 {
 const MAX_DURATION_MINUTES: u64 = 7 * 24 * 60;
 
 impl RoutineDefinition {
-    /// Origin-agnostic semantic checks beyond serde shape: name charset, no
-    /// blank host entries, non-empty cron, positive timeout. Full cron parsing
-    /// happens in the scheduler (orbit-core), which owns the cron dependency.
-    /// Host-count and host-identity rules are origin-specific — see
-    /// [`Self::validate_committed`] and [`Self::validate_local`].
-    pub fn validate_common(&self) -> Result<(), WorkflowError> {
+    /// Semantic checks beyond serde shape: name charset, non-empty cron,
+    /// positive timeout. Full cron parsing happens in the scheduler
+    /// (orbit-core), which owns the cron dependency.
+    pub fn validate(&self) -> Result<(), WorkflowError> {
         if !is_valid_routine_name(&self.name) {
             return Err(WorkflowError::Invalid(format!(
                 "routine name '{}' must be non-empty, lowercase alphanumeric \
@@ -240,32 +235,21 @@ impl RoutineDefinition {
                 self.name
             )));
         }
-        if self.hosts.iter().any(|host| host.trim().is_empty()) {
-            return Err(WorkflowError::Invalid(format!(
-                "routine '{}' hosts must not contain empty entries",
-                self.name
-            )));
-        }
         if let Some(state) = &self.trigger.state {
             state.validate()?;
             if !self.trigger.cron.is_empty()
                 || self.trigger.deliveries_landed.is_some()
-                || self.hosts.len() > 1
                 || self.policy.overlap != OverlapPolicy::Forbid
                 || self.target.job_name() != state.job_name()
             {
-                return Err(WorkflowError::Invalid("state routines require their pilot/triage target, one owner, overlap forbid and exactly one trigger".into()));
+                return Err(WorkflowError::Invalid("state routines require their pilot/triage target, overlap forbid and exactly one trigger".into()));
             }
         }
         if let Some(delivery) = &self.trigger.deliveries_landed {
             delivery.validate()?;
-            if !self.trigger.cron.is_empty()
-                || self.hosts.len() > 1
-                || self.policy.overlap != OverlapPolicy::Forbid
-            {
+            if !self.trigger.cron.is_empty() || self.policy.overlap != OverlapPolicy::Forbid {
                 return Err(WorkflowError::Invalid(
-                    "delivery routines require one owner, overlap forbid, and exactly one trigger"
-                        .into(),
+                    "delivery routines require overlap forbid and exactly one trigger".into(),
                 ));
             }
         }
@@ -293,45 +277,9 @@ impl RoutineDefinition {
         Ok(())
     }
 
-    /// Committed-origin validation (`.orbit/routines/*.yaml`, excluding
-    /// `local/`): the origin-agnostic checks plus a mandatory, non-empty host
-    /// pin. A committed definition with no `hosts:` is a fail-closed load error
-    /// — never "any host" — because an unpinned routine checked out on N
-    /// source machines is N independent schedules (host-registry design §6).
-    pub fn validate_committed(&self) -> Result<(), WorkflowError> {
-        self.validate_common()?;
-        if self.hosts.is_empty() {
-            return Err(WorkflowError::Invalid(format!(
-                "committed routine '{}' must pin at least one host (there is no \
-                 \"any host\" in v1; move it to .orbit/routines/local/ to run \
-                 only on the local host)",
-                self.name
-            )));
-        }
-        Ok(())
-    }
-
-    /// Local-origin validation (`.orbit/routines/local/`): the origin-agnostic
-    /// checks; `hosts:` may be omitted (an implicit pin to the loading host)
-    /// but any entry must name only `local_host_id`. A local definition that
-    /// names another host — a remote pin — is rejected rather than becoming a
-    /// hidden cross-machine schedule (host-registry design §6).
-    pub fn validate_local(&self, local_host_id: &str) -> Result<(), WorkflowError> {
-        self.validate_common()?;
-        for host in &self.hosts {
-            if host.trim() != local_host_id {
-                return Err(WorkflowError::Invalid(format!(
-                    "local routine '{}' pins host '{}', but a definition under \
-                     .orbit/routines/local/ is implicit to the loading host '{}' and \
-                     may not name another host; move it to a committed \
-                     .orbit/routines/ definition to target another machine",
-                    self.name,
-                    host.trim(),
-                    local_host_id
-                )));
-            }
-        }
-        Ok(())
+    /// Whether this definition still carries the retired `hosts:` key.
+    pub fn has_legacy_host_pin(&self) -> bool {
+        self.legacy_hosts.is_some()
     }
 }
 

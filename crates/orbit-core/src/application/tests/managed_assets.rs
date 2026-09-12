@@ -416,7 +416,7 @@ mod artifacts {
                 refresh_defaults: true,
                 global_root_override: Some(global_root.clone()),
                 routine_seed_identity: Some(
-                    RoutineSeedIdentity::new("test-host", "repo").expect("routine seed identity"),
+                    RoutineSeedIdentity::new("repo").expect("routine seed identity"),
                 ),
                 config_seed: Some(ConfigSeed::default()),
                 ..Default::default()

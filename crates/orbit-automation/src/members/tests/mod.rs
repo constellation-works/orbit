@@ -496,13 +496,12 @@ fn checkpoint_rejects_budget_reset_ack_replacement_and_lost_failure_tombstone() 
 #[test]
 fn state_configuration_rejects_ambiguous_authority_and_invalid_budgets() {
     use orbit_common::protocol::yaml::parse_routine_yaml;
-    let yaml = "schemaVersion: 1\nname: pilot\nhosts: [host]\ntrigger:\n  state:\n    kind: preparation_eligible\n    owner_machine: machine\n    branch: agent-main\n    debounce_minutes: 2\n    max_wait_minutes: 10\n    max_items: 50\n    retries: 1\n    deadline_minutes: 30\ntarget: job:task_pilot_pipeline\n";
+    let yaml = "schemaVersion: 1\nname: pilot\ntrigger:\n  state:\n    kind: preparation_eligible\n    owner_machine: machine\n    branch: agent-main\n    debounce_minutes: 2\n    max_wait_minutes: 10\n    max_items: 50\n    retries: 1\n    deadline_minutes: 30\ntarget: job:task_pilot_pipeline\n";
     assert!(parse_routine_yaml(yaml).is_ok());
     for invalid in [
         yaml.replace("trigger:\n", "trigger:\n  cron: '* * * * *'\n"),
         yaml.replace("max_items: 50", "max_items: 0"),
         yaml.replace("retries: 1", "retries: 6"),
-        yaml.replace("hosts: [host]", "hosts: [host, second]"),
         yaml.replace("job:task_pilot_pipeline", "job:task_pr_pipeline"),
     ] {
         assert!(parse_routine_yaml(&invalid).is_err(), "{invalid}");

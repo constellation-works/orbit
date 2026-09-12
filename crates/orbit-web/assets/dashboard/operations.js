@@ -185,11 +185,8 @@ function actionReason(payload, action) {
   return "Action availability is unavailable. Refresh the dashboard server and this page.";
 }
 
-function controlReason(payload, routine, action = "routine_toggle") {
-  const reason = actionReason(payload, action);
-  if (reason) return reason;
-  if (routine && !routine.pinned_to_host) return `This routine is not pinned to host ${payload.host_id}. Select its owning host.`;
-  return "";
+function controlReason(payload, action = "routine_toggle") {
+  return actionReason(payload, action) || "";
 }
 
 function explainUnavailable(button, reason) {
@@ -249,7 +246,7 @@ function routineButton(payload, routine) {
   const selection = selectionSnapshot();
   const nextEnabled = !routine.enabled;
   const key = `routine:${selection.workspace}:${routine.name}`;
-  const reason = controlReason(payload, routine);
+  const reason = controlReason(payload);
   const button = el("button", {
     class: `operation-button ${nextEnabled ? "enable" : "disable"}`,
     text: pendingOperations.has(key) ? "Pending…" : nextEnabled ? "Enable" : "Disable",
@@ -310,7 +307,6 @@ function renderOperations(payload) {
         el("div", { class: "operation-grid" }, [
           field("Source workspace", routine.source),
           field("Schedule", schedule),
-          field("Host pin", (routine.hosts || []).join(", ") || "Local host"),
           field("Last evaluation", time(routine.last_evaluated_slot || routine.first_observed_at)),
           field("Next evaluation", nextEvaluationText(routine.next_evaluation, routine.next_due)),
           field("Last fire", fire ? time(fire.finished_at || fire.started_at) : "Never"),
@@ -329,7 +325,7 @@ function renderOperations(payload) {
 function clockButton(payload, action, label) {
   const selection = selectionSnapshot();
   const key = `clock:${payload.host_id}`;
-  const reason = controlReason(payload, null, "clock_service");
+  const reason = controlReason(payload, "clock_service");
   const button = el("button", { class: "operation-button", text: pendingOperations.has(key) ? "Pending…" : label, title: reason });
   button.type = "button";
   button.disabled = Boolean(reason) || pendingOperations.has(key);
@@ -356,7 +352,7 @@ function renderClock(payload) {
   const clock = payload.clock;
   const body = $("clock-body");
   body.textContent = "";
-  const reason = controlReason(payload, null, "clock_cadence");
+  const reason = controlReason(payload, "clock_cadence");
   const selection = selectionSnapshot();
   const key = `clock:${payload.host_id}`;
   body.append(

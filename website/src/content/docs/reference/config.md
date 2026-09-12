@@ -121,7 +121,6 @@ These are the keys `orbit config set` accepts:
 | `workflow.default_crew` | string | Crew used when a task declares none and no override is given. |
 | `workflow.system_crew` | string | Crew used by system activities such as step-failure recovery and failed-run triage. |
 | `workflow.auto_ship` | bool | Opt in to unattended ship dispatch via the routine/sweep scheduler. |
-| `routines.role` | string | Opt in to the routine scheduler. The only supported value is `source`. |
 | `tasks.id_start` | integer | Floor for this machine's task-id allocator. Forward-only; lets machines hold disjoint ID ranges. |
 | `scoring.enabled` | bool | Whether scoreboard metrics are recorded for task runs. |
 | `pr.task_url_template` | string | URL template used to link a task ID in PR descriptions. |

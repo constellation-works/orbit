@@ -430,7 +430,6 @@ template:
 schemaVersion: 2
 name: task_pilot
 enabled: false
-hosts: [designated-owner]
 target: job:task_pilot_pipeline
 trigger:
   kind: preparation_eligible
@@ -465,7 +464,6 @@ deterministic policy fixtures, not a claim about live-model accuracy.
 schemaVersion: 2
 name: task_triage
 enabled: false
-hosts: [designated-owner]
 target: job:task_triage_pipeline
 trigger:
   kind: execution_failed

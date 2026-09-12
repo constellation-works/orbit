@@ -45,5 +45,6 @@ libc.workspace = true
 
 [dev-dependencies]
 orbit-common = { path = "../orbit-common", features = ["test-util"] }
+tracing-subscriber.workspace = true
 orbit-engine = { path = "../orbit-engine", features = ["test-support"] }
 orbit-exec = { path = "../orbit-exec" }

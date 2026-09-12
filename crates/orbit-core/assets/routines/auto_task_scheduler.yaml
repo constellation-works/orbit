@@ -1,8 +1,8 @@
 # Default auto-task scheduler routine [ORB-10149]. Seeded into
-# `.orbit/routines/` on `orbit init` with the routine name and host pin
-# resolved at seed time (see `seed_default_routines` in
-# `crates/orbit-core/src/command/routine.rs`). It only fires from workspaces
-# whose config declares `[routines] role = "source"`. The versioned
+# `.orbit/routines/` on `orbit init` with the routine name resolved at seed
+# time (see `seed_default_routines` in
+# `crates/orbit-core/src/application/routine.rs`). It is evaluated by the
+# clock of every host with an owner checkout of this workspace. The versioned
 # `enabled` switch is deliberately false when seeded; opt in by reviewing
 # this definition and changing it to true.
 #
@@ -24,8 +24,6 @@ description: >
   dedupe are enforced by the scheduler; each definition's own schedule
   governs its cadence.
 enabled: false
-hosts:
-  - __ORBIT_HOST_ID__
 trigger:
   cron: "* * * * *"
   missed_run: skip

@@ -1,9 +1,9 @@
 # Default CI-failure sweep routine [ORB-11107]. Seeded into `.orbit/routines/`
-# on `orbit init` with the routine name and host pin resolved at seed time (see
-# `seed_default_routines`). It only fires from workspaces whose config declares
-# `[routines] role = "source"`. The versioned `enabled` switch is deliberately
-# false when seeded: turning on unattended CI-failure filing is an explicit,
-# reviewed, per-workspace decision.
+# on `orbit init` with the routine name resolved at seed time (see
+# `seed_default_routines`). It is evaluated by the clock of every host with an
+# owner checkout of this workspace. The versioned `enabled` switch is
+# deliberately false when seeded: turning on unattended CI-failure filing is an
+# explicit, reviewed, per-workspace decision.
 #
 # This routine is a scheduling surface only. Discovery, filing, task-pilot, and
 # guarded admission live in the target job, so an operator-triggered run of
@@ -31,8 +31,6 @@ description: >
   a proposed task, and promote only pilot-validated current repairs to backlog.
   Deduped against still-open tasks by failure key.
 enabled: false
-hosts:
-  - __ORBIT_HOST_ID__
 trigger:
   cron: "5 * * * *"
   missed_run: skip

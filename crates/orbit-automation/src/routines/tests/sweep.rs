@@ -21,7 +21,6 @@ use crate::routines::loader::{LoadedRoutine, RoutineCollection, RoutineOrigin};
 use crate::routines::sweep::RunOwnerLiveness;
 use crate::routines::sweep::{RoutineDispatch, SweepOptions, run_sweep_core};
 
-const HOST: &str = "test-host";
 const SOURCE_DIR: &str = "/ws/.orbit";
 
 // ---- fixtures -------------------------------------------------------------
@@ -38,7 +37,6 @@ fn routine(
         "schemaVersion: 1\n\
          name: {name}\n\
          enabled: {enabled}\n\
-         hosts: [{HOST}]\n\
          trigger:\n  cron: \"{cron}\"\n\
          target: job:noop\n\
          policy:\n  timeout_minutes: 10\n  overlap: {overlap}\n  \
@@ -150,7 +148,6 @@ fn first_sweep_baselines_and_fires_nothing_then_next_slot_fires() {
     // First observation: baseline is recorded, nothing fires.
     let reports = run_sweep_core(
         &store,
-        HOST,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -165,7 +162,6 @@ fn first_sweep_baselines_and_fires_nothing_then_next_slot_fires() {
     // A later natural slot fires exactly once.
     let reports = run_sweep_core(
         &store,
-        HOST,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -190,27 +186,11 @@ fn same_slot_second_sweep_does_not_double_fire() {
         .unwrap();
 
     let opts = SweepOptions::default();
-    let first = run_sweep_core(
-        &store,
-        HOST,
-        &coll,
-        &dispatch,
-        opts,
-        ts(2026, 1, 1, 0, 1, 10),
-    )
-    .unwrap();
+    let first = run_sweep_core(&store, &coll, &dispatch, opts, ts(2026, 1, 1, 0, 1, 10)).unwrap();
     assert_eq!(first[0].action, "fired");
 
     // Second sweep in the SAME minute: the consumed slot is not re-fired.
-    let second = run_sweep_core(
-        &store,
-        HOST,
-        &coll,
-        &dispatch,
-        opts,
-        ts(2026, 1, 1, 0, 1, 50),
-    )
-    .unwrap();
+    let second = run_sweep_core(&store, &coll, &dispatch, opts, ts(2026, 1, 1, 0, 1, 50)).unwrap();
     assert_eq!(second[0].action, "skipped");
     assert_eq!(second[0].reason.as_deref(), Some("not_due"));
 
@@ -237,38 +217,17 @@ fn five_minute_clock_fires_the_incident_slot_once_after_a_phase_gap() {
 
     // The first poll is before the 01:05 slot. The next poll is 305 seconds
     // later, matching the observed 01:03:38 -> 01:08:43 phase gap.
-    let before_slot = run_sweep_core(
-        &store,
-        HOST,
-        &coll,
-        &dispatch,
-        options,
-        ts(2026, 9, 7, 1, 3, 38),
-    )
-    .expect("pre-slot sweep");
+    let before_slot = run_sweep_core(&store, &coll, &dispatch, options, ts(2026, 9, 7, 1, 3, 38))
+        .expect("pre-slot sweep");
     assert_eq!(before_slot[0].reason.as_deref(), Some("not_due"));
 
-    let fired = run_sweep_core(
-        &store,
-        HOST,
-        &coll,
-        &dispatch,
-        options,
-        ts(2026, 9, 7, 1, 8, 43),
-    )
-    .expect("delayed sweep");
+    let fired = run_sweep_core(&store, &coll, &dispatch, options, ts(2026, 9, 7, 1, 8, 43))
+        .expect("delayed sweep");
     assert_eq!(fired[0].action, "fired");
     assert_eq!(fired[0].slot.as_deref(), Some("2026-09-07T01:05:00+00:00"));
 
-    let later_poll = run_sweep_core(
-        &store,
-        HOST,
-        &coll,
-        &dispatch,
-        options,
-        ts(2026, 9, 7, 1, 13, 43),
-    )
-    .expect("later sweep");
+    let later_poll = run_sweep_core(&store, &coll, &dispatch, options, ts(2026, 9, 7, 1, 13, 43))
+        .expect("later sweep");
     assert_eq!(later_poll[0].reason.as_deref(), Some("not_due"));
     assert_eq!(dispatch.submit_count(), 1, "one ordinary fire for the slot");
     assert_eq!(
@@ -290,22 +249,15 @@ fn toggles_suppress_the_fire_with_the_right_reason() {
     store
         .routine_record_baseline("paused", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
         .unwrap();
-    store
-        .routine_record_baseline("elsewhere", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
-        .unwrap();
     store.routine_pause("paused", "test").unwrap();
 
-    let mut off = routine("elsewhere", "* * * * *", true, "allow", 0);
-    off.definition.hosts = vec!["other-host".to_string()];
     let coll = collection(vec![
         routine("disabled", "* * * * *", false, "allow", 0),
         routine("paused", "* * * * *", true, "allow", 0),
-        off,
     ]);
 
     let reports = run_sweep_core(
         &store,
-        HOST,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -324,8 +276,34 @@ fn toggles_suppress_the_fire_with_the_right_reason() {
         Some("disabled_in_definition")
     );
     assert_eq!(reason("paused").as_deref(), Some("paused_locally"));
-    assert_eq!(reason("elsewhere").as_deref(), Some("host_not_pinned"));
     assert_eq!(dispatch.submit_count(), 0);
+}
+
+/// [ORB-12236] Eligibility is registration plus the definition's own switches;
+/// a retired `hosts:` pin naming another machine changes nothing.
+#[test]
+fn a_retired_host_pin_does_not_suppress_the_fire() {
+    let store = store();
+    let dispatch = FakeDispatch::default();
+    let yaml = "schemaVersion: 1\nname: pinned\nenabled: true\nhosts: [some-other-host]\n\
+                trigger:\n  cron: \"* * * * *\"\n\
+                target: job:noop\n";
+    let coll = collection(vec![loaded(parse_routine_yaml(yaml).expect("valid yaml"))]);
+    store
+        .routine_record_baseline("pinned", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        .unwrap();
+
+    let reports = run_sweep_core(
+        &store,
+        &coll,
+        &dispatch,
+        SweepOptions::default(),
+        ts(2026, 1, 1, 0, 5, 10),
+    )
+    .unwrap();
+
+    assert_eq!(reports[0].action, "fired");
+    assert_eq!(dispatch.submit_count(), 1);
 }
 
 // ---- overlap: forbid ------------------------------------------------------
@@ -358,7 +336,6 @@ fn overlap_forbid_skips_while_in_flight_then_fires_once_terminal() {
     // sync cannot reclaim it as stale — it is genuinely in flight.
     let reports = run_sweep_core(
         &store,
-        HOST,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -373,7 +350,6 @@ fn overlap_forbid_skips_while_in_flight_then_fires_once_terminal() {
     dispatch.set_state("inflight", JobRunState::Success);
     let reports = run_sweep_core(
         &store,
-        HOST,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -435,7 +411,6 @@ fn interrupted_run_still_executing_keeps_the_forbid_slot_held() {
 
     let reports = run_sweep_core(
         &store,
-        HOST,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -469,7 +444,6 @@ fn interrupted_run_that_genuinely_stopped_releases_the_forbid_slot() {
 
     let reports = run_sweep_core(
         &store,
-        HOST,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -498,7 +472,6 @@ fn interrupted_run_with_unprobeable_owner_is_reclaimed_at_the_policy_timeout() {
     // real-clock `created_at`.
     let reports = run_sweep_core(
         &store,
-        HOST,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -539,7 +512,6 @@ fn running_run_orphaned_by_restart_releases_the_forbid_slot_immediately() {
 
     let reports = run_sweep_core(
         &store,
-        HOST,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -585,7 +557,6 @@ fn running_run_with_a_live_owner_keeps_the_forbid_slot() {
 
     let reports = run_sweep_core(
         &store,
-        HOST,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -643,7 +614,6 @@ fn sync_reclaims_stale_intent_and_dispatched_past_timeout() {
     let reclaim_at = now + Duration::hours(2);
     run_sweep_core(
         &store,
-        HOST,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -693,7 +663,6 @@ fn malformed_timeout_in_one_dispatched_fire_reports_only_that_routine() {
 
     let reports = run_sweep_core(
         &store,
-        HOST,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -729,14 +698,12 @@ fn dispatch_error_is_retry_eligible_under_the_same_slot() {
     // Daily catch-up routine so exactly one slot is due across both sweeps
     // (a frequent cron would surface a *new* slot before any retry). backoff 0
     // keeps the retry immediately eligible without wall-clock waiting.
-    let yaml = format!(
-        "schemaVersion: 1\nname: job\nenabled: true\nhosts: [{HOST}]\n\
-         trigger:\n  cron: \"0 0 * * *\"\n  missed_run: catch_up_once\n\
-         target: job:noop\n\
-         policy:\n  timeout_minutes: 10\n  overlap: forbid\n  \
-         retries: {{ max: 2, backoff_minutes: 0 }}\n"
-    );
-    let coll = collection(vec![loaded(parse_routine_yaml(&yaml).unwrap())]);
+    let yaml = "schemaVersion: 1\nname: job\nenabled: true\n\
+                trigger:\n  cron: \"0 0 * * *\"\n  missed_run: catch_up_once\n\
+                target: job:noop\n\
+                policy:\n  timeout_minutes: 10\n  overlap: forbid\n  \
+                retries: { max: 2, backoff_minutes: 0 }\n";
+    let coll = collection(vec![loaded(parse_routine_yaml(yaml).unwrap())]);
     // `now` sits just ahead of wall-clock so the errored fire's stored
     // updated_at is strictly in the past (backoff 0 is then satisfied).
     let now = Utc::now() + Duration::minutes(1);
@@ -746,7 +713,7 @@ fn dispatch_error_is_retry_eligible_under_the_same_slot() {
 
     // Sweep 1: the slot is due; the synchronous dispatch fails.
     dispatch.set_fail(true);
-    let r1 = run_sweep_core(&store, HOST, &coll, &dispatch, SweepOptions::default(), now).unwrap();
+    let r1 = run_sweep_core(&store, &coll, &dispatch, SweepOptions::default(), now).unwrap();
     assert_eq!(
         r1[0].action, "error",
         "dispatch failure is reported as error"
@@ -765,7 +732,7 @@ fn dispatch_error_is_retry_eligible_under_the_same_slot() {
     // Sweep 2: no new slot is due, but the dispatch error is now retryable.
     // With submit healthy it re-dispatches attempt 2 under the SAME slot.
     dispatch.set_fail(false);
-    let r2 = run_sweep_core(&store, HOST, &coll, &dispatch, SweepOptions::default(), now).unwrap();
+    let r2 = run_sweep_core(&store, &coll, &dispatch, SweepOptions::default(), now).unwrap();
     assert_eq!(r2[0].action, "retry_fired");
     let retried = store.routine_latest_fire("job").unwrap().unwrap();
     assert_eq!(retried.state, RoutineFireState::Dispatched);
@@ -792,7 +759,6 @@ fn dry_run_records_no_state() {
 
     let reports = run_sweep_core(
         &store,
-        HOST,
         &coll,
         &dispatch,
         SweepOptions {
@@ -831,7 +797,6 @@ fn state_and_temporal_owners_of_same_pipeline_are_withheld_in_preview() {
         });
     let reports = run_sweep_core(
         &store(),
-        HOST,
         &collection(vec![legacy, state]),
         &FakeDispatch::default(),
         SweepOptions {

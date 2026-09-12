@@ -634,9 +634,9 @@ const routines = {
     last_tick_at: "2026-09-07T21:00:00Z", next_tick_at: "2026-09-07T21:05:00Z",
   },
   routines: [
-    { name: "ship-sweep-orbit", source: "one", target: "job:ship", enabled: false, effective: false, cron: "30 14 * * *", hosts: ["host-1"], pinned_to_host: true, next_due: "2026-09-07T21:30:00Z", next_evaluation: { state: "disabled", at: "2026-09-07T21:30:00Z", hypothetical: true }, last_fire: null },
-    { name: "paused-nightly", source: "one", target: "job:nightly", enabled: true, effective: false, paused_at: "2026-09-07T20:00:00Z", cron: "0 2 * * *", hosts: ["host-1"], pinned_to_host: true, next_due: "2026-09-08T09:00:00Z", next_evaluation: { state: "paused", at: "2026-09-08T09:00:00Z", hypothetical: true }, last_fire: null },
-    { name: "delivery-cover", source: "one", target: "job:cover", enabled: true, effective: true, trigger: { deliveries_landed: { threshold: 3, branch: "agent-main" } }, hosts: ["host-1"], pinned_to_host: true, next_evaluation: { state: "waiting", at: null, hypothetical: false }, last_fire: null },
+    { name: "ship-sweep-orbit", source: "one", target: "job:ship", enabled: false, effective: false, cron: "30 14 * * *", next_due: "2026-09-07T21:30:00Z", next_evaluation: { state: "disabled", at: "2026-09-07T21:30:00Z", hypothetical: true }, last_fire: null },
+    { name: "paused-nightly", source: "one", target: "job:nightly", enabled: true, effective: false, paused_at: "2026-09-07T20:00:00Z", cron: "0 2 * * *", next_due: "2026-09-08T09:00:00Z", next_evaluation: { state: "paused", at: "2026-09-08T09:00:00Z", hypothetical: true }, last_fire: null },
+    { name: "delivery-cover", source: "one", target: "job:cover", enabled: true, effective: true, trigger: { deliveries_landed: { threshold: 3, branch: "agent-main" } }, next_evaluation: { state: "waiting", at: null, hypothetical: false }, last_fire: null },
   ],
 };
 const autoTasks = {
@@ -3125,7 +3125,7 @@ const routines = {
   capabilities: { routine_toggle: { authorized: true }, clock_service: { authorized: true }, clock_cadence: { authorized: true } },
   routines: [{
     name: "pilot", source: "one", target: "orbit.workflow.auto", enabled: true, effective: true,
-    pinned_to_host: true, cron: "*/5 * * * *", hosts: ["hm_local"], description: "pilot routine",
+    cron: "*/5 * * * *", description: "pilot routine",
     next_evaluation: { state: "scheduled", at: "2026-09-08T01:00:00Z" }, last_fire: null,
     automation: {
       reason: "not_due", ownership: { owned_here: true }, receipts: [], waivers: [],

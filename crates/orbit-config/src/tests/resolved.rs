@@ -7,7 +7,10 @@ use tempfile::tempdir;
 
 use super::{roots, write_config};
 use crate::registry::resolve_default_crew;
-use crate::resolved::{RETIRED_DUEL_CONFIG_WARNING, default_crews, retired_backend_override_check};
+use crate::resolved::{
+    RETIRED_DUEL_CONFIG_WARNING, RETIRED_ROUTINES_CONFIG_WARNING, default_crews,
+    retired_backend_override_check,
+};
 use crate::{ConfigSnapshot, ExecutionEnvPolicy, PersistenceConfig, ResolvedConfig};
 
 fn single_family_crew(name: &str) -> Crew {
@@ -141,6 +144,27 @@ gemini = "pro"
     assert!(config.snapshot.value_for("duel.models").is_none());
     assert!(RETIRED_DUEL_CONFIG_WARNING.contains("[duel]"));
     assert!(RETIRED_DUEL_CONFIG_WARNING.contains("[duel.models]"));
+}
+
+/// [ORB-12236] Registering an owner checkout is the automation opt-in. A
+/// workspace that still carries the retired key keeps loading, and the key
+/// selects nothing.
+#[test]
+fn retired_routines_role_loads_and_is_not_a_registry_key() {
+    let config = load_config(
+        r#"
+[workflow]
+base_branch = "agent-main"
+
+[routines]
+role = "source"
+"#,
+    )
+    .expect("retired [routines] config must load");
+
+    assert_eq!(config.workflow_base_branch, "agent-main");
+    assert!(config.snapshot.value_for("routines.role").is_none());
+    assert!(RETIRED_ROUTINES_CONFIG_WARNING.contains("[routines]"));
 }
 
 #[test]
