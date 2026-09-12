@@ -63,6 +63,8 @@ mod worker;
 pub(crate) use admission::input_hash;
 pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
+#[cfg(test)]
+pub(crate) use wait::{PIPELINE_WAIT_MAX_TIMEOUT_SECONDS, PipelineWaitClock};
 pub use wait::{PipelineWaitEntry, PipelineWaitResult, pipeline_wait_status_is_success};
 #[cfg(test)]
 pub(crate) use worker::command::{

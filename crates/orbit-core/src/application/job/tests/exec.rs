@@ -1,8 +1,10 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 mod already_landed;
 mod ci_sweep;
@@ -28,6 +30,7 @@ use tempfile::tempdir;
 
 use crate::OrbitRuntime;
 use crate::application::SYSTEM_AUDIT_IDENTITY;
+use crate::application::job::pipeline::{PIPELINE_WAIT_MAX_TIMEOUT_SECONDS, PipelineWaitClock};
 use crate::application::job::seed_default_jobs;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 use crate::bootstrap::activity::seed_default_activities;
@@ -1782,6 +1785,153 @@ fn worker_path_persists_steps_and_wait_agrees_on_state_and_duration() {
     let projection = crate::application::job::job_run_to_json(&stored, Some(&state));
     assert_eq!(projection["state"], "success");
     assert_eq!(projection["duration_ms"], json!(stored.duration_ms));
+}
+
+struct FastPipelineWaitClock<'a> {
+    elapsed: Cell<Duration>,
+    completion_at: Option<Duration>,
+    runtime: &'a OrbitRuntime,
+    run_id: &'a str,
+    completed: Cell<bool>,
+}
+
+impl FastPipelineWaitClock<'_> {
+    fn new<'a>(
+        runtime: &'a OrbitRuntime,
+        run_id: &'a str,
+        completion_at: Option<Duration>,
+    ) -> FastPipelineWaitClock<'a> {
+        FastPipelineWaitClock {
+            elapsed: Cell::new(Duration::ZERO),
+            completion_at,
+            runtime,
+            run_id,
+            completed: Cell::new(false),
+        }
+    }
+}
+
+impl PipelineWaitClock for FastPipelineWaitClock<'_> {
+    fn elapsed(&self) -> Duration {
+        self.elapsed.get()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        let elapsed = self.elapsed.get() + duration;
+        self.elapsed.set(elapsed);
+
+        if !self.completed.get() && self.completion_at.is_some_and(|limit| elapsed >= limit) {
+            self.runtime
+                .stores()
+                .jobs()
+                .finalize_job_run(
+                    self.run_id,
+                    JobRunState::Success,
+                    Utc::now(),
+                    Some(elapsed.as_millis() as u64),
+                )
+                .expect("fast-clock child completion");
+            self.completed.set(true);
+        }
+    }
+}
+
+fn running_wait_fixture(runtime: &OrbitRuntime, job_name: &str) -> String {
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(job_name, 1, Utc::now(), None, None)
+        .expect("insert wait fixture");
+    runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .expect("start wait fixture");
+    run.run_id
+}
+
+/// The accelerated clock covers the two formerly impossible production
+/// timelines without turning this into a multi-hour test: an auto parent sees
+/// admission near the one-hour limit plus delivery beyond its old one-hour
+/// wait, and a gate sees the supported three-hour activity plus its bounded
+/// delivery tail.
+#[test]
+fn nested_pipeline_wait_budgets_keep_healthy_long_running_children_successful() {
+    let (_root, runtime, _repo_root, _global_root) = test_runtime();
+    let scenarios = [
+        ("task_gate_pipeline", 3_590 + 7_200, 21_600),
+        ("task_pr_pipeline", 10_800 + 3_590, 14_400),
+    ];
+
+    for (job_name, completion_at, timeout) in scenarios {
+        let run_id = running_wait_fixture(&runtime, job_name);
+        let clock =
+            FastPipelineWaitClock::new(&runtime, &run_id, Some(Duration::from_secs(completion_at)));
+        let waited = runtime
+            .wait_pipeline_runs_with_clock(
+                std::slice::from_ref(&run_id),
+                timeout,
+                30,
+                Some("fast-clock-test"),
+                &clock,
+            )
+            .expect("healthy child completes within composed parent budget");
+
+        assert_eq!(waited.results[0].run_id, run_id);
+        assert_eq!(waited.results[0].status, "success");
+        assert!(clock.elapsed() > Duration::from_secs(3_600));
+    }
+}
+
+#[test]
+fn configured_pipeline_wait_deadline_reports_link_and_leaves_child_running() {
+    let (_root, runtime, _repo_root, _global_root) = test_runtime();
+    let run_id = running_wait_fixture(&runtime, "task_pr_pipeline");
+    let clock = FastPipelineWaitClock::new(&runtime, &run_id, None);
+
+    let waited = runtime
+        .wait_pipeline_runs_with_clock(
+            std::slice::from_ref(&run_id),
+            90,
+            30,
+            Some("fast-clock-test"),
+            &clock,
+        )
+        .expect("configured timeout is a wait result");
+
+    assert_eq!(clock.elapsed(), Duration::from_secs(90));
+    assert_eq!(waited.results[0].run_id, run_id);
+    assert_eq!(waited.results[0].status, "timeout");
+    assert_eq!(
+        runtime
+            .show_job_run(&run_id)
+            .expect("inspect linked child")
+            .state,
+        JobRunState::Running,
+        "the wait deadline must not terminalize the child run"
+    );
+}
+
+#[test]
+fn pipeline_wait_keeps_a_bounded_generic_default_and_validates_the_ceiling() {
+    assert_eq!(
+        OrbitRuntime::normalize_pipeline_wait_timeout(None).expect("default wait timeout"),
+        3_600
+    );
+    assert_eq!(
+        OrbitRuntime::normalize_pipeline_wait_timeout(Some(PIPELINE_WAIT_MAX_TIMEOUT_SECONDS))
+            .expect("maximum wait timeout"),
+        PIPELINE_WAIT_MAX_TIMEOUT_SECONDS
+    );
+    let error =
+        OrbitRuntime::normalize_pipeline_wait_timeout(Some(PIPELINE_WAIT_MAX_TIMEOUT_SECONDS + 1))
+            .expect_err("timeout beyond the finite ceiling must be refused");
+    assert!(
+        error
+            .to_string()
+            .contains(&PIPELINE_WAIT_MAX_TIMEOUT_SECONDS.to_string()),
+        "{error}"
+    );
 }
 
 /// [ORB-12255] A routine fire records trigger provenance on the run document

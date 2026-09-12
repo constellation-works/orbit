@@ -46,7 +46,7 @@ spec:
       timeout_seconds:
         type: number
         minimum: 1
-        maximum: 7200
+        maximum: 21600
       poll_interval_seconds:
         type: number
         minimum: 1

@@ -1,9 +1,28 @@
 use super::*;
 
 const PIPELINE_WAIT_DEFAULT_TIMEOUT_SECONDS: u64 = 3600;
-const PIPELINE_WAIT_MAX_TIMEOUT_SECONDS: u64 = 7200;
+pub(crate) const PIPELINE_WAIT_MAX_TIMEOUT_SECONDS: u64 = 21600;
 const PIPELINE_WAIT_DEFAULT_POLL_SECONDS: u64 = 5;
 pub(super) const PIPELINE_WAIT_MIN_POLL_SECONDS: u64 = 1;
+
+pub(crate) trait PipelineWaitClock {
+    fn elapsed(&self) -> Duration;
+    fn sleep(&self, duration: Duration);
+}
+
+struct SystemPipelineWaitClock {
+    started_at: Instant,
+}
+
+impl PipelineWaitClock for SystemPipelineWaitClock {
+    fn elapsed(&self) -> Duration {
+        self.started_at.elapsed()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        thread::sleep(duration);
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PipelineWaitResult {
@@ -44,6 +63,25 @@ impl OrbitRuntime {
         poll_interval_seconds: u64,
         actor: Option<&str>,
     ) -> Result<PipelineWaitResult, OrbitError> {
+        self.wait_pipeline_runs_with_clock(
+            run_ids,
+            timeout_seconds,
+            poll_interval_seconds,
+            actor,
+            &SystemPipelineWaitClock {
+                started_at: Instant::now(),
+            },
+        )
+    }
+
+    pub(crate) fn wait_pipeline_runs_with_clock(
+        &self,
+        run_ids: &[String],
+        timeout_seconds: u64,
+        poll_interval_seconds: u64,
+        actor: Option<&str>,
+        clock: &dyn PipelineWaitClock,
+    ) -> Result<PipelineWaitResult, OrbitError> {
         let started_payload = json!({
             "actor": actor,
             "run_ids": run_ids,
@@ -58,7 +96,6 @@ impl OrbitRuntime {
             None,
         )?;
 
-        let started_at = Instant::now();
         let timeout = Duration::from_secs(timeout_seconds);
         let poll = Duration::from_secs(poll_interval_seconds.max(PIPELINE_WAIT_MIN_POLL_SECONDS));
 
@@ -73,7 +110,7 @@ impl OrbitRuntime {
                 return Ok(result);
             }
 
-            if started_at.elapsed() >= timeout {
+            if clock.elapsed() >= timeout {
                 let result = PipelineWaitResult {
                     results: self.collect_pipeline_wait_entries(run_ids, true)?,
                 };
@@ -81,7 +118,7 @@ impl OrbitRuntime {
                 return Ok(result);
             }
 
-            thread::sleep(poll);
+            clock.sleep(poll);
         }
     }
     pub fn normalize_pipeline_wait_timeout(raw: Option<u64>) -> Result<u64, OrbitError> {
