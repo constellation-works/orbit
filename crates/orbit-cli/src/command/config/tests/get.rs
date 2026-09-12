@@ -155,3 +155,72 @@ fn get_without_json_flag_still_returns_a_payload() {
     assert_eq!(document["scope"], "effective");
     assert!(document.get("value").is_some(), "{document}");
 }
+
+#[test]
+fn get_scoped_workspace_without_config_file_returns_explicit_absent() {
+    let (_root, runtime, global_root, _workspace_root) = test_runtime();
+    fs::write(
+        global_root.join("config.toml"),
+        "[scoring]\nenabled = true\n\n[workflow]\nbase_branch = \"custom-global\"\n",
+    )
+    .expect("write global config");
+
+    let mut args = get_args("scoring.enabled", true);
+    args.scope = ConfigScopeArg::Workspace;
+    let output = args.execute(&runtime).expect("get workspace scoring");
+    let document = json_value(output);
+
+    assert_eq!(document["key"], "scoring.enabled");
+    assert_eq!(document["scope"], "workspace");
+    assert_eq!(document["value"], serde_json::Value::Null);
+    assert_eq!(document["exists"], false);
+    assert!(
+        document["path"].is_null(),
+        "path must be null when layer file is absent: {document}"
+    );
+
+    let mut text_args = get_args("scoring.enabled", false);
+    text_args.scope = ConfigScopeArg::Workspace;
+    let text_output = text_args.execute(&runtime).expect("get workspace text");
+    let CommandOutput::Payload(payload) = text_output else {
+        panic!("expected payload");
+    };
+    let (_, view) = payload.into_view();
+    let crate::output::payload::View::Blocks(blocks) = view else {
+        panic!("expected blocks");
+    };
+    let crate::output::payload::Block::Text(text) = &blocks[0] else {
+        panic!("expected text block");
+    };
+    assert_eq!(text, "null");
+}
+
+#[test]
+fn get_scoped_workspace_with_file_distinguishes_set_and_unset_keys() {
+    let (_root, runtime, global_root, workspace_root) = test_runtime();
+    fs::write(
+        global_root.join("config.toml"),
+        "[scoring]\nenabled = true\n\n[workflow]\nbase_branch = \"global-main\"\n",
+    )
+    .expect("write global config");
+    let ws_config = workspace_root.join("config.toml");
+    fs::write(&ws_config, "[scoring]\nenabled = false\n").expect("write workspace config");
+
+    let mut set_args = get_args("scoring.enabled", true);
+    set_args.scope = ConfigScopeArg::Workspace;
+    let set_doc = json_value(set_args.execute(&runtime).expect("get set key"));
+    assert_eq!(set_doc["key"], "scoring.enabled");
+    assert_eq!(set_doc["scope"], "workspace");
+    assert_eq!(set_doc["value"], false);
+    assert_eq!(set_doc["exists"], true);
+    assert_eq!(set_doc["path"], ws_config.to_string_lossy().as_ref());
+
+    let mut unset_args = get_args("workflow.base_branch", true);
+    unset_args.scope = ConfigScopeArg::Workspace;
+    let unset_doc = json_value(unset_args.execute(&runtime).expect("get unset key"));
+    assert_eq!(unset_doc["key"], "workflow.base_branch");
+    assert_eq!(unset_doc["scope"], "workspace");
+    assert_eq!(unset_doc["value"], serde_json::Value::Null);
+    assert_eq!(unset_doc["exists"], false);
+    assert_eq!(unset_doc["path"], ws_config.to_string_lossy().as_ref());
+}

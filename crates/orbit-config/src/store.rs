@@ -128,6 +128,36 @@ impl ConfigStore {
         &self.path
     }
 
+    /// Whether the file backing this store exists on disk.
+    pub fn exists_on_disk(&self) -> bool {
+        self.path.exists()
+    }
+
+    /// Check if `key` is explicitly defined in this store's TOML document.
+    pub fn is_key_set(&self, key: &str) -> bool {
+        let mut item: &toml_edit::Item = self.doc.as_item();
+        for segment in key.split('.') {
+            let Some(table) = item.as_table_like() else {
+                return false;
+            };
+            let Some(next) = table.get(segment) else {
+                return false;
+            };
+            item = next;
+        }
+        !matches!(item, toml_edit::Item::None)
+    }
+
+    /// Look up the value of `key` if it was explicitly defined in this document,
+    /// returning `None` if the key is not set.
+    pub fn explicit_value(&self, key: &str) -> Result<Option<JsonValue>, OrbitError> {
+        registry::admit_config_key(key)?;
+        if !self.is_key_set(key) {
+            return Ok(None);
+        }
+        self.effective_value(key).map(Some)
+    }
+
     /// The fully resolved (defaulted) view of this document, as if it were
     /// loaded as the effective `config.toml`. Used by both `orbit config
     /// show` and `orbit config get` so they report identical values for the

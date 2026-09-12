@@ -126,3 +126,63 @@ fn config_show_omits_the_retired_workspace_task_projection() {
         "scoped text must not advertise the removed task store: {scoped_text}"
     );
 }
+
+#[test]
+fn config_show_marks_absent_workspace_layer_and_lists_every_settable_key() {
+    let (_root, runtime, global_root, workspace_root) = test_runtime();
+    fs::write(
+        global_root.join("config.toml"),
+        "[workflow]\nbase_branch = \"integration\"\n",
+    )
+    .expect("write global config");
+
+    let effective = load_effective_config(&ConfigRoots::new(&global_root, &workspace_root))
+        .expect("load effective");
+    let json = effective_json(&runtime, effective.values());
+    let text = effective_text(&runtime, effective.values());
+
+    // 1. Marks absent workspace layer
+    assert_eq!(json["source"]["workspace_exists"], false);
+    assert_eq!(json["source"]["global_exists"], true);
+    assert!(text.contains("workspace:"));
+    assert!(
+        text.contains("(absent)"),
+        "text must mark absent layer: {text}"
+    );
+
+    // 2. Lists every settable key from CONFIG_KEY_REGISTRY
+    for descriptor in orbit_config::CONFIG_KEY_REGISTRY {
+        assert!(
+            json["settings"].get(descriptor.key).is_some(),
+            "settings must contain {}",
+            descriptor.key
+        );
+        assert!(
+            text.contains(descriptor.key),
+            "text must list {}",
+            descriptor.key
+        );
+    }
+
+    // 3. Unset keys render as [unset]
+    assert!(
+        text.contains("tasks.id_start"),
+        "tasks.id_start must be present: {text}"
+    );
+    assert!(
+        text.contains("[unset]"),
+        "unset keys must display [unset]: {text}"
+    );
+
+    // 4. Scoped show for workspace also marks absent
+    let scoped_store =
+        open_store_for_scope(&runtime, ConfigScopeArg::Workspace).expect("open workspace store");
+    let scoped_snapshot = scoped_store.snapshot().expect("snapshot");
+    let scoped_settings = scoped_snapshot.all_values();
+    let s_json = scoped_json(&runtime, &scoped_store, &scoped_snapshot, &scoped_settings);
+    let s_text = scoped_text(&runtime, &scoped_store, &scoped_snapshot, &scoped_settings);
+
+    assert_eq!(s_json["source"]["exists"], false);
+    assert!(s_text.contains("(absent)"));
+    assert!(s_text.contains("[unset]"));
+}

@@ -56,7 +56,9 @@ pub(super) fn effective_json(runtime: &OrbitRuntime, values: &[EffectiveConfigVa
     }
     let global_path = global_config_path(runtime);
     let workspace_path = runtime.shared_root().join("config.toml");
-    let config_path = if workspace_path.exists() && runtime.shared_root() != runtime.global_root() {
+    let global_exists = global_path.exists();
+    let workspace_exists = workspace_path.exists();
+    let config_path = if workspace_exists && runtime.shared_root() != runtime.global_root() {
         &workspace_path
     } else {
         &global_path
@@ -66,7 +68,9 @@ pub(super) fn effective_json(runtime: &OrbitRuntime, values: &[EffectiveConfigVa
         "source": {
             "scope": "effective",
             "global_path": global_path.to_string_lossy(),
+            "global_exists": global_exists,
             "workspace_path": workspace_path.to_string_lossy(),
+            "workspace_exists": workspace_exists,
         },
         "shadowed_global_path": JsonValue::Null,
         "settings": settings,
@@ -84,21 +88,29 @@ pub(super) fn effective_text(runtime: &OrbitRuntime, values: &[EffectiveConfigVa
     use std::fmt::Write as _;
     let mut out = String::new();
     let _ = writeln!(out, "source: effective layered configuration");
+    let global_path = global_config_path(runtime);
+    let workspace_path = runtime.shared_root().join("config.toml");
+    let global_status = if global_path.exists() {
+        ""
+    } else {
+        " (absent)"
+    };
+    let workspace_status = if workspace_path.exists() {
+        ""
+    } else {
+        " (absent)"
+    };
     let _ = writeln!(
         out,
-        "  global:    {}",
-        redact_home_dir(&global_config_path(runtime).display().to_string())
+        "  global:    {}{}",
+        redact_home_dir(&global_path.display().to_string()),
+        global_status
     );
     let _ = writeln!(
         out,
-        "  workspace: {}",
-        redact_home_dir(
-            &runtime
-                .shared_root()
-                .join("config.toml")
-                .display()
-                .to_string()
-        )
+        "  workspace: {}{}",
+        redact_home_dir(&workspace_path.display().to_string()),
+        workspace_status
     );
     let _ = writeln!(out);
 
@@ -173,6 +185,7 @@ pub(super) fn scoped_json(
         "source": {
             "scope": store.scope().label(),
             "path": store.path().to_string_lossy(),
+            "exists": store.path().exists(),
         },
         "shadowed_global_path": JsonValue::Null,
         "settings": settings_obj,
@@ -193,11 +206,17 @@ pub(super) fn scoped_text(
 ) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
+    let store_status = if store.path().exists() {
+        ""
+    } else {
+        " (absent)"
+    };
     let _ = writeln!(
         out,
-        "source: {} ({})",
+        "source: {} ({}){}",
         store.scope().label(),
-        redact_home_dir(&store.path().display().to_string())
+        redact_home_dir(&store.path().display().to_string()),
+        store_status
     );
     let _ = writeln!(out);
 
@@ -248,6 +267,7 @@ pub(super) fn scoped_text(
 
 fn render_value(value: &JsonValue) -> String {
     match value {
+        JsonValue::Null => "[unset]".to_string(),
         JsonValue::String(s) => format!("\"{s}\""),
         other => other.to_string(),
     }
