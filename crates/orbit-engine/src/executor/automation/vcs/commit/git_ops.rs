@@ -3,7 +3,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_exec::{EnvironmentMode, NoSandbox, run_process};
 
-use super::super::git::{git_output, git_output_paths, git_request, git_success};
+use super::super::git::{git_output, git_output_paths, git_output_raw, git_request, git_success};
 use super::author::GitAuthor;
 
 pub(super) fn git_commit_with_identity(
@@ -137,8 +137,11 @@ pub(super) fn ensure_named_branch(workspace_path: &Path) -> Result<(), OrbitErro
     Ok(())
 }
 
+/// Uses [`git_output_raw`] rather than [`git_output`]: the latter trims the
+/// whole output, which would misalign the index/worktree columns of a
+/// single-line result by one byte (see `git_output`'s doc comment).
 pub(super) fn ensure_no_unmerged_changes(workspace_path: &Path) -> Result<(), OrbitError> {
-    let status = git_output(workspace_path, &["status", "--porcelain"])?;
+    let status = git_output_raw(workspace_path, &["status", "--porcelain"])?;
     for line in status.lines() {
         if line.len() < 2 {
             continue;
