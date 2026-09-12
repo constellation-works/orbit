@@ -2,7 +2,6 @@
   "schemaVersion": 2,
   "assetKind": "routine",
   "assets": {
-    "auto_task_scheduler": "93736db5f7b50c3b6881b160dfd7e3c2df6a1af728faaacdebd9a0501c89995a",
     "ci_failure_sweep": "546ede608888be980616b70ab17053021629ae471f277ce373a05bcf506566c9",
     "dependabot_alert_sweep": "79b47b6709a71a07a63696789d21c17e1cc942a8ae306e85681e5e92e36b726a",
     "ship_sweep": "bda9f2df808b42ed7f330e5d07977d0676f33c3257ee9442e137b54d60326a54",
@@ -15,70 +14,49 @@
       "templateDigest": "7f3b1a41dfe43b5445b47450f21d8e424fcdeeaa977a6f09d4ded03fc7ed16be",
       "renderedDigest": "93736db5f7b50c3b6881b160dfd7e3c2df6a1af728faaacdebd9a0501c89995a",
       "binding": {
-        "name": "auto-task-scheduler-orbit",
-        "hosts": [
-          "dk-server-1"
-        ]
+        "name": "auto-task-scheduler-orbit"
       }
     },
     "ci_failure_sweep": {
       "templateDigest": "ccc847c206916831c13a514b46923ebd10003b5d351b77e36a220122376df72c",
       "renderedDigest": "546ede608888be980616b70ab17053021629ae471f277ce373a05bcf506566c9",
       "binding": {
-        "name": "ci-failure-sweep-orbit",
-        "hosts": [
-          "dk-server-1"
-        ]
+        "name": "ci-failure-sweep-orbit"
       }
     },
     "dependabot_alert_sweep": {
       "templateDigest": "e66de2d11cf610f8bb9100845aafe8a85a33bc5678a10e30bd062d6894ad0d0f",
       "renderedDigest": "79b47b6709a71a07a63696789d21c17e1cc942a8ae306e85681e5e92e36b726a",
       "binding": {
-        "name": "dependabot-alert-sweep-orbit",
-        "hosts": [
-          "dk-server-1"
-        ]
+        "name": "dependabot-alert-sweep-orbit"
       }
     },
     "ship_sweep": {
       "templateDigest": "416134b342e33f1b2565b88bc2e41b885a39b21c02324f0c8ed79bec74c562d1",
       "renderedDigest": "bda9f2df808b42ed7f330e5d07977d0676f33c3257ee9442e137b54d60326a54",
       "binding": {
-        "name": "ship-sweep-orbit",
-        "hosts": [
-          "dk-server-1"
-        ]
+        "name": "ship-sweep-orbit"
       }
     },
     "task_pilot": {
       "templateDigest": "f8b9699a0dc505ea5cbe44998b88995b8720d6e0bdde3fa6ab3f40bec863f280",
       "renderedDigest": "6283babc6c62998ad9ef7c387579545077671d51203621b6e77dd9ba62231ce8",
       "binding": {
-        "name": "task-pilot-orbit",
-        "hosts": [
-          "dk-server-1"
-        ]
+        "name": "task-pilot-orbit"
       }
     },
     "task_triage": {
       "templateDigest": "21feb397078d47165a0e2a618e8f0dfc97cdbd02c60d0595d71b43b20abd7c5e",
       "renderedDigest": "79739728e435a63e9604bf8a5dd34eed24b7d76fbba468d76e754820b8575592",
       "binding": {
-        "name": "task-triage-orbit",
-        "hosts": [
-          "dk-server-1"
-        ]
+        "name": "task-triage-orbit"
       }
     },
     "worktree_gc": {
       "templateDigest": "b03d4f900f0746dd317d82fc11b6cd81a398edee18519e3f650d37ed9195a70d",
       "renderedDigest": "5b0c3d6c1d40b7e7fa5d8b5cf7e9942a60911987a846402f94fd1c11b35bb755",
       "binding": {
-        "name": "worktree-gc-orbit",
-        "hosts": [
-          "dk-server-1"
-        ]
+        "name": "worktree-gc-orbit"
       }
     }
   }
