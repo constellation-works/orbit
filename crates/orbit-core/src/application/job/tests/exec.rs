@@ -1059,7 +1059,7 @@ fn task_gate_noops_when_task_reaches_review_after_reservation() {
         "stale gate must not submit a child PR pipeline"
     );
     let dispatch = &outcome.pipeline["dispatch_child"];
-    assert_eq!(dispatch["status"], json!("succeeded"));
+    assert_eq!(dispatch["status"], json!("success"));
     assert_eq!(dispatch["skipped"], json!(true));
     let reason = dispatch["reason"].as_str().expect("stale reason");
     assert!(reason.contains(&task_id), "{reason}");
