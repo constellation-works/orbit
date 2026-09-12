@@ -16,7 +16,7 @@ use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{Crew, CrewAssignment, resolve_crew};
-use orbit_types::workflow::Provider;
+use orbit_types::workflow::{CODEX_PROVIDER_SANDBOX_MODES, Provider};
 
 use crate::operation::{
     self, CompletionPreference, DeliveryCap, OperationPreset, PreparationPreference,
@@ -155,7 +155,7 @@ define_config_settings! {
     codex_sandbox: String => String {
         key: "execution.codex.sandbox", value_type: "string",
         description: "Codex sandbox mode: one of read-only, workspace-write, danger-full-access.",
-        resolve: |raw: Option<String>| resolve_choice(raw, "workspace-write", "execution.codex.sandbox", &["read-only", "workspace-write", "danger-full-access"]),
+        resolve: |raw: Option<String>| resolve_choice(raw, "workspace-write", "execution.codex.sandbox", CODEX_PROVIDER_SANDBOX_MODES),
     },
     execution_env_pass: Vec<String> => Vec<String> {
         key: "execution.env.pass", value_type: "array<string>",

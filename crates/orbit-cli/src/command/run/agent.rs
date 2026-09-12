@@ -36,7 +36,8 @@ Examples:
   orbit run agent 'why does the sweep clock keep restarting?'
   orbit run agent 'explain this failure' --cwd /srv/checkout --crew qa
   orbit run agent 'long investigation' --timeout 3600 --json
-  orbit run agent 'retryable submit' --idempotency-key incident-4821"
+  orbit run agent 'retryable submit' --idempotency-key incident-4821
+  orbit run agent 'read Cargo.toml' --provider-sandbox read-only"
 )]
 pub struct RunAgentArgs {
     /// What to investigate.
@@ -61,6 +62,12 @@ pub struct RunAgentArgs {
     /// resolves that run instead of starting a second agent.
     #[arg(long)]
     pub idempotency_key: Option<String>,
+
+    /// Per-invocation provider inner-sandbox override (Codex: read-only,
+    /// workspace-write, or danger-full-access). Values the provider does not
+    /// support are refused.
+    #[arg(long)]
+    pub provider_sandbox: Option<String>,
 
     /// Output as JSON.
     #[arg(long)]
@@ -90,6 +97,7 @@ impl Execute for RunAgentArgs {
             crew: self.crew.as_deref(),
             timeout_seconds: self.timeout,
             idempotency_key: self.idempotency_key.as_deref(),
+            provider_sandbox: self.provider_sandbox.as_deref(),
             actor: None,
             session_context: &session_context,
         })?;
@@ -106,6 +114,8 @@ impl Execute for RunAgentArgs {
             "workspace_path": submission.admission.workspace_path,
             "cwd": submission.admission.cwd,
             "sandboxed": false,
+            "provider_sandbox": submission.provider_sandbox,
+            "warnings": submission.warnings,
         });
         let mut lines = Vec::new();
         if submission.deduplicated {
@@ -130,6 +140,8 @@ impl Execute for RunAgentArgs {
                 submission.admission.authorized_by,
                 submission.admission.authorizer_provenance
             ));
+            lines.push(format!("provider sandbox: {}", submission.provider_sandbox));
+            lines.extend(submission.warnings.iter().cloned());
         }
         lines.push(format!(
             "track it: orbit run show {run_id}  |  orbit run logs {run_id}  |  orbit run cancel {run_id}",

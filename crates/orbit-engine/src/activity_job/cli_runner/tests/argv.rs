@@ -27,8 +27,8 @@ use orbit_types::workflow::{ActivityV2Spec, ExecutorSandboxKind};
 #[cfg(target_os = "linux")]
 use super::super::argv::try_audit_argv_for_dispatch;
 use super::super::argv::{
-    apply_provider_runtime_arg_fixups, audit_argv_for_dispatch, neutralize_inner_sandbox,
-    rewrite_debug_file_value,
+    apply_provider_runtime_arg_fixups, apply_trusted_host_provider_sandbox,
+    audit_argv_for_dispatch, neutralize_inner_sandbox, rewrite_debug_file_value,
 };
 use super::test_support::sandbox_for_test;
 #[cfg(target_os = "linux")]
@@ -400,6 +400,29 @@ fn absolutize_test_rule(workspace_root: &str, rule: &str) -> String {
     } else {
         absolute
     }
+}
+
+#[test]
+fn apply_trusted_host_provider_sandbox_pins_codex_to_the_persisted_mode() {
+    let mut config = HashMap::new();
+    config.insert("sandbox".to_string(), "danger-full-access".to_string());
+    apply_trusted_host_provider_sandbox(
+        "codex",
+        &serde_json::json!({ "provider_sandbox": "codex:read-only" }),
+        &mut config,
+    );
+    assert_eq!(config.get("sandbox").map(String::as_str), Some("read-only"));
+}
+
+#[test]
+fn apply_trusted_host_provider_sandbox_ignores_non_codex_providers() {
+    let mut config = HashMap::new();
+    apply_trusted_host_provider_sandbox(
+        "claude",
+        &serde_json::json!({ "provider_sandbox": "claude:default" }),
+        &mut config,
+    );
+    assert!(config.is_empty());
 }
 
 #[test]

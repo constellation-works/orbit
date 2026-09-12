@@ -7,10 +7,18 @@ pub mod activity_roles;
 pub mod activity_v2;
 pub mod audit_envelope;
 pub mod job_v2;
+pub mod provider_sandbox;
 pub mod retired;
 pub mod schema_header;
 pub mod tool_allowlist;
 pub mod trusted_host;
+
+pub use provider_sandbox::{
+    CODEX_LEAST_RESTRICTIVE_SANDBOX, CODEX_PROVIDER_SANDBOX_MODES, DEFAULT_PROVIDER_SANDBOX,
+    admit_provider_sandbox_mode, format_provider_sandbox, is_least_restrictive_provider_sandbox,
+    least_restrictive_provider_sandbox, least_restrictive_provider_sandbox_warning,
+    parse_provider_sandbox_label, provider_sandbox_modes,
+};
 
 /// The single declaration of the deterministic action catalog. The generated
 /// typed actions make the core/engine ownership boundary exhaustive at compile

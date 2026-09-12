@@ -23,9 +23,12 @@ use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
 use crate::OrbitRuntime;
+use crate::application::job::pipeline::worker_command_override;
 use crate::application::job::{
     AGENT_INVOKE_JOB_ID, AgentInvokeRequest, MAX_AGENT_INVOKE_TIMEOUT_SECONDS, agent_invoke_result,
+    seed_default_jobs,
 };
+use crate::bootstrap::activity::seed_default_activities;
 
 /// A runtime plus the checkout an invocation is admitted against.
 fn test_runtime() -> (TempDir, OrbitRuntime, PathBuf) {
@@ -38,6 +41,61 @@ fn test_runtime() -> (TempDir, OrbitRuntime, PathBuf) {
     let runtime =
         OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build test runtime");
     (root, runtime, repo_root)
+}
+
+fn test_runtime_with_codex_crew(sandbox: &str) -> (TempDir, OrbitRuntime, PathBuf) {
+    let root = tempdir().expect("create tempdir");
+    let global_root = root.path().join("global");
+    let repo_root = root.path().join("repo");
+    let workspace_root = repo_root.join(".orbit");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(
+        workspace_root.join("config.toml"),
+        format!(
+            r#"[workflow]
+default_crew = "system"
+
+[crews.system]
+provider = "codex"
+model = "gpt-5.4"
+backend = "cli"
+
+[crews.opus]
+provider = "claude"
+model = "claude-opus-4-6"
+backend = "cli"
+
+[execution.codex]
+sandbox = "{sandbox}"
+"#
+        ),
+    )
+    .expect("write crew config");
+    let runtime =
+        OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build test runtime");
+    seed_default_jobs(&runtime.paths().global_dir.join("resources/jobs"), true).expect("seed jobs");
+    seed_default_activities(
+        &runtime.paths().global_dir.join("resources/activities"),
+        true,
+    )
+    .expect("seed activities");
+    (root, runtime, repo_root)
+}
+
+struct IdleWorker;
+
+impl IdleWorker {
+    fn install() -> Self {
+        worker_command_override::set(["sh", "-c", "sleep 1"]);
+        Self
+    }
+}
+
+impl Drop for IdleWorker {
+    fn drop(&mut self) {
+        worker_command_override::clear();
+    }
 }
 
 /// A session an MCP operator surface would present.
@@ -92,6 +150,7 @@ fn request<'a>(cwd: &'a str, session: &'a ToolSessionContext) -> AgentInvokeRequ
         crew: None,
         timeout_seconds: None,
         idempotency_key: None,
+        provider_sandbox: None,
         actor: Some("human"),
         session_context: session,
     }
@@ -515,6 +574,19 @@ fn an_unrelated_run_has_no_agent_invocation_projection() {
     assert!(agent_invoke_result(&run, Some(&outputs)).is_none());
 }
 
+#[test]
+fn run_show_projects_the_persisted_provider_sandbox() {
+    let (mut run, outputs) = finished_run(JobRunState::Success, json!({}));
+    run.input = Some(json!({
+        "provider_sandbox": "codex:danger-full-access",
+    }));
+    let result = agent_invoke_result(&run, Some(&outputs)).expect("result");
+    assert_eq!(
+        result.provider_sandbox.as_deref(),
+        Some("codex:danger-full-access")
+    );
+}
+
 // ---------------------------------------------------- restart and retry
 
 /// A run that carries an admission cannot be resumed: the admission covered one
@@ -641,4 +713,117 @@ fn a_blank_idempotency_key_is_treated_as_absent() {
         matches!(error, OrbitError::NotFound { .. }),
         "expected the submission to reach catalog resolution, got {error:?}"
     );
+}
+
+// ------------------------------------------------------ provider sandbox
+
+#[test]
+fn a_danger_full_access_codex_invocation_warns_and_records_provider_sandbox() {
+    let _worker = IdleWorker::install();
+    let (_root, runtime, repo_root) = test_runtime_with_codex_crew("danger-full-access");
+    let session = operator_session();
+    let cwd = repo_root.display().to_string();
+    let submission = runtime
+        .submit_agent_invoke_run(request(&cwd, &session))
+        .expect("submit");
+
+    assert_eq!(submission.provider_sandbox, "codex:danger-full-access");
+    assert_eq!(
+        submission.warnings,
+        vec![
+            "provider runs with codex:danger-full-access; it may use host integrations \
+             (browser, computer use, …) beyond the working directory"
+                .to_string()
+        ]
+    );
+
+    let run = runtime
+        .stores()
+        .jobs()
+        .get_job_run(&submission.run_id)
+        .expect("load run")
+        .expect("run exists");
+    assert_eq!(
+        run.input
+            .as_ref()
+            .and_then(|input| input.get("provider_sandbox"))
+            .and_then(Value::as_str),
+        Some("codex:danger-full-access")
+    );
+    let result = agent_invoke_result(&run, None).expect("projection");
+    assert_eq!(
+        result.provider_sandbox.as_deref(),
+        Some("codex:danger-full-access")
+    );
+}
+
+#[test]
+fn a_codex_read_only_override_is_honoured_and_does_not_warn() {
+    let _worker = IdleWorker::install();
+    let (_root, runtime, repo_root) = test_runtime_with_codex_crew("danger-full-access");
+    let session = operator_session();
+    let cwd = repo_root.display().to_string();
+    let mut request = request(&cwd, &session);
+    request.provider_sandbox = Some("read-only");
+    let submission = runtime
+        .submit_agent_invoke_run(request)
+        .expect("submit with override");
+
+    assert_eq!(submission.provider_sandbox, "codex:read-only");
+    assert!(submission.warnings.is_empty());
+    let run = runtime
+        .stores()
+        .jobs()
+        .get_job_run(&submission.run_id)
+        .expect("load run")
+        .expect("run exists");
+    assert_eq!(
+        run.input
+            .as_ref()
+            .and_then(|input| input.get("provider_sandbox"))
+            .and_then(Value::as_str),
+        Some("codex:read-only")
+    );
+}
+
+#[test]
+fn an_unsupported_provider_sandbox_override_is_refused() {
+    let (_root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
+    let session = operator_session();
+    let cwd = repo_root.display().to_string();
+    let mut request = request(&cwd, &session);
+    request.provider_sandbox = Some("unrestricted");
+    match runtime
+        .submit_agent_invoke_run(request)
+        .expect_err("unsupported mode")
+    {
+        OrbitError::InvalidInput(message) => {
+            assert!(message.contains("`provider_sandbox`"), "{message}");
+            assert!(message.contains("unrestricted"), "{message}");
+            assert!(message.contains("read-only"), "{message}");
+        }
+        other => panic!("expected invalid input, got {other:?}"),
+    }
+    assert_no_run_created(&runtime);
+}
+
+#[test]
+fn a_codex_sandbox_mode_is_refused_for_claude() {
+    let (_root, runtime, repo_root) = test_runtime_with_codex_crew("workspace-write");
+    let session = operator_session();
+    let cwd = repo_root.display().to_string();
+    let mut request = request(&cwd, &session);
+    request.crew = Some("opus");
+    request.provider_sandbox = Some("read-only");
+    match runtime
+        .submit_agent_invoke_run(request)
+        .expect_err("claude has no inner-sandbox override")
+    {
+        OrbitError::InvalidInput(message) => {
+            assert!(message.contains("claude"), "{message}");
+            assert!(message.contains("default"), "{message}");
+        }
+        other => panic!("expected invalid input, got {other:?}"),
+    }
+    assert_no_run_created(&runtime);
 }

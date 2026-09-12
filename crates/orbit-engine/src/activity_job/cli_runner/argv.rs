@@ -7,6 +7,7 @@ use orbit_exec::{
     sandbox_exec_program_for_audit,
 };
 use orbit_types::workflow::ExecutorSandboxKind;
+use serde_json::Value;
 
 use super::super::dispatcher::ResolvedSandbox;
 
@@ -74,6 +75,27 @@ pub(super) fn try_audit_argv_for_dispatch(
 /// `--sandbox` toggle, and drop grok's `--sandbox <profile>` value so the
 /// inner CLI sandbox does not double-encode the outer orbit-exec sandbox.
 /// Claude has no native sandbox flag — nothing to neutralize.
+/// Apply a trusted-host `provider_sandbox` label to the provider CLI config.
+///
+/// Codex is the only provider whose inner sandbox is a dynamic `--sandbox`
+/// flag. Other providers ignore the label here because they have no
+/// configurable inner sandbox to honour.
+pub(super) fn apply_trusted_host_provider_sandbox(
+    provider: &str,
+    input: &Value,
+    provider_config: &mut HashMap<String, String>,
+) {
+    let Some(label) = input.get("provider_sandbox").and_then(Value::as_str) else {
+        return;
+    };
+    let Some((_, mode)) = orbit_types::workflow::parse_provider_sandbox_label(label) else {
+        return;
+    };
+    if provider == "codex" {
+        provider_config.insert("sandbox".to_string(), mode.to_string());
+    }
+}
+
 pub(super) fn neutralize_inner_sandbox(
     provider: &str,
     provider_config: &mut HashMap<String, String>,

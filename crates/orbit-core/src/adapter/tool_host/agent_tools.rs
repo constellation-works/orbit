@@ -23,6 +23,7 @@ pub(super) fn invoke(
     let cwd = required_string(&input, &["cwd"], "cwd")?;
     let crew = optional_string(&input, "crew")?;
     let idempotency_key = optional_string(&input, "idempotency_key")?;
+    let provider_sandbox = optional_string(&input, "provider_sandbox")?;
     let timeout_seconds = parse_timeout(&input)?;
     let actor = orbit_types::identity::normalize_optional_attribution_label(
         model.as_deref().or(agent.as_deref()),
@@ -35,6 +36,7 @@ pub(super) fn invoke(
         crew: crew.as_deref(),
         timeout_seconds,
         idempotency_key: idempotency_key.as_deref(),
+        provider_sandbox: provider_sandbox.as_deref(),
         actor: actor.as_deref(),
         session_context,
     })?;
@@ -54,6 +56,8 @@ pub(super) fn invoke(
         "workspace_path": submission.admission.workspace_path,
         "cwd": submission.admission.cwd,
         "sandboxed": false,
+        "provider_sandbox": submission.provider_sandbox,
+        "warnings": submission.warnings,
     }))
 }
 

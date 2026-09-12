@@ -58,6 +58,8 @@ spec:
       # raise it, so the asset remains the ceiling.
       timeout_seconds:
         type: number
+      provider_sandbox:
+        type: string
       trusted_host_admission:
         type: object
   output_schema_json:

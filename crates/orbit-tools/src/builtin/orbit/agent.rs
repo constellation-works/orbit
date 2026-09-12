@@ -66,6 +66,18 @@ impl Tool for OrbitAgentInvokeTool {
                 param_type: "string".to_string(),
                 required: false,
             },
+            ToolParam {
+                name: "provider_sandbox".to_string(),
+                description: "Per-invocation inner-sandbox override for the selected crew's \
+                     provider (Codex: `read-only`, `workspace-write`, or \
+                     `danger-full-access`). Tightens or names the provider sandbox for \
+                     this run only; values the provider does not support are refused. \
+                     The submission result reports the effective mode as \
+                     `provider:mode`."
+                    .to_string(),
+                param_type: "string".to_string(),
+                required: false,
+            },
         ];
         parameters.extend(super::model_identity_params());
         ToolSchema {
