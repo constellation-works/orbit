@@ -44,6 +44,7 @@ pub struct TaskAddArgs {
     pub external_refs: Vec<String>,
     /// Task context selectors. Repeat or comma-separate for multiple selectors.
     /// Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded.
+    /// Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.
     #[arg(long, action = ArgAction::Append, value_delimiter = ',')]
     pub context: Vec<String>,
     /// Accept context selectors whose target does not exist yet (for work that creates the file)

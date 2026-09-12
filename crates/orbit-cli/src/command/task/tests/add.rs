@@ -170,6 +170,10 @@ fn task_add_status_only_advertises_creation_legal_values() {
         "complexity must be advertised: {rendered}"
     );
     assert!(
+        rendered.contains("filesystem anchor only"),
+        "--context help must document that a `symbol:` name is not verified: {rendered}"
+    );
+    assert!(
         !rendered.contains("Optional task complexity"),
         "complexity must not be described as optional: {rendered}"
     );

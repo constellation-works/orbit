@@ -106,6 +106,11 @@ fn schema_exposes_context_files() {
             .contains("comma-separated string or array")
     );
     assert!(param.description.contains("file:path"));
+    assert!(
+        param.description.contains("filesystem anchor only"),
+        "context_files help must document that a `symbol:` name is not verified: {}",
+        param.description
+    );
 }
 
 #[test]

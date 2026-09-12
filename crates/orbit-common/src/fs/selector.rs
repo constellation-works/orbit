@@ -334,7 +334,8 @@ pub fn anchor_path(selector: &str) -> Result<PathBuf, SelectorParseError> {
 ///
 /// Relative anchors are resolved against `workspace`; absolute anchors are
 /// checked as-is. Invalid selector strings and anchor-less selectors return
-/// `false`.
+/// `false`. For `symbol:` this is the backing file only; the `#name:kind`
+/// half is not looked up.
 pub fn exists_in_workspace(selector: &str, workspace: &Path) -> bool {
     let Ok(anchor) = anchor_path(selector) else {
         return false;

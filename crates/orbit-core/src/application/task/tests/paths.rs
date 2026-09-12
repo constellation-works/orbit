@@ -1,6 +1,7 @@
 //! Context selector and path validation coverage. Task context selectors are
 //! always canonicalized against the repository root, and operator surfaces
-//! reject selectors that do not resolve to existing targets.
+//! reject selectors whose filesystem anchor does not exist. A `symbol:` name
+//! and kind are not looked up.
 
 use orbit_common::OrbitError;
 use tempfile::tempdir;
@@ -86,6 +87,19 @@ fn ensure_context_selectors_exist_accepts_resolvable_selectors() {
 }
 
 #[test]
+fn ensure_context_selectors_exist_accepts_symbol_whose_name_is_absent() {
+    let (root, runtime) = test_runtime();
+    let repo_root = root.path().join("repo");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create src");
+    std::fs::write(repo_root.join("src/lib.rs"), b"pub fn real_symbol() {}\n")
+        .expect("write anchor");
+
+    runtime
+        .ensure_context_selectors_exist(&["symbol:src/lib.rs#no_such_symbol:fn".to_string()])
+        .expect("an existing filesystem anchor is enough; the `symbol:` name is not verified");
+}
+
+#[test]
 fn ensure_context_selectors_exist_rejects_missing_selectors() {
     let (_root, runtime) = test_runtime();
 
@@ -94,11 +108,23 @@ fn ensure_context_selectors_exist_rejects_missing_selectors() {
         message.contains("file:does/not/exist.rs"),
         "error must name selector: {message}"
     );
+    assert!(
+        message.contains("only the filesystem anchor is verified"),
+        "error must document that a `symbol:` name is not verified: {message}"
+    );
+    assert!(
+        message.contains("not a `symbol:` name or kind"),
+        "error must name the unverified `symbol:` half: {message}"
+    );
 
     let message = expect_selector_rejection(&runtime, "symbol:does/not/exist.rs#run:function");
     assert!(
         message.contains("symbol:does/not/exist.rs#run:function"),
         "error must name selector: {message}"
+    );
+    assert!(
+        message.contains("only the filesystem anchor is verified"),
+        "error must document that a `symbol:` name is not verified: {message}"
     );
 }
 
