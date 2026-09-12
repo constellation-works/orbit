@@ -16,7 +16,8 @@ template:
     sandbox or other environment constraint makes the usual local state
     unwritable, put scratch checkouts, caches, and other ephemeral state in a
     writable temporary location rather than the machine's real home directory
-    or the product's live data root.
+    or the product's live data root. A writable temporary location may be too
+    small for build output; choose the build cache location for capacity.
 
     In agent-executor sandboxes and linked job-run worktrees, the repository's
     managed `.git` mount is read-only by design and must not be worked around by
@@ -32,6 +33,11 @@ template:
       `git show HEAD:<path> > <path>`.
     - Read-only inspection commands such as `git status --short` succeed with
       `GIT_OPTIONAL_LOCKS=0`.
+
+    A long build or test command's completion must be confirmed by a positive
+    marker in its captured output (`test result:`, `Finished`, or the target's
+    own final line), with its absence treated as "did not run" regardless of the
+    reported exit status.
 
     Before reporting anything, search the workspace's configured task or issue surface
     for open work covering the same problem. For each real issue that is not already

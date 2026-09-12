@@ -23,22 +23,42 @@ template:
 
     Root `init` hangs on stdin without `--non-interactive`. `workspace init`
     does not need that flag and does not prompt non-interactively in
-    practice.
+    practice. Keep disposable Orbit roots and scratch checkouts under `/tmp`,
+    but build in the worktree's gitignored `target/` (or another disk-backed
+    path), naming the 14 GiB tmpfs and the ~11-14 GiB workspace target directory
+    as the reason: building in `/tmp` exhausts the tmpfs and breaks the harness.
+    `cargo clean` — not `rm -rf` — is the cleanup and an emptied `target/` is
+    the expected end state.
 
     Similarly, in agent-executor sandboxes and linked job-run worktrees, the
     repository's managed `.git` mount is read-only by design and must not be
-    worked around by chmod or host-side gitdir writes. Commands that write to
-    `.git` fail (such as `git worktree add` or `git checkout --`).
+    worked around by chmod or host-side gitdir writes. In a job-run worktree,
+    `git rm`, `git mv` and `git add` fail because `.git/worktrees/<id>/` is
+    read-only. A tracked deletion is made with `rm <path>`, which `git status --short`
+    still reports as `D <path>`. Other commands that write to `.git` fail as well
+    (such as `git worktree add` or `git checkout --`).
     Instead:
     - To build an arbitrary baseline revision without writing `.git` or creating
       `.git/worktrees/*`, extract an archive to a scratch directory:
       `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base`,
-      then build there with a separate `CARGO_TARGET_DIR`.
+      then build there with a disk-backed `CARGO_TARGET_DIR` (such as
+      `<worktree>/target/scratch-base`), keeping multi-gigabyte build output
+      out of `/tmp`.
     - To revert a modified tracked file when `git checkout -- <path>` fails
       because it cannot acquire `index.lock`, restore it from the commit tree:
       `git show HEAD:<path> > <path>`.
     - Read-only inspection commands such as `git status --short` succeed with
       `GIT_OPTIONAL_LOCKS=0`.
+
+    The session's granted `orbit.*` MCP tools run the machine's installed binary
+    rather than the build under test; tool behavior at HEAD is validated with
+    `<worktree>/target/debug/orbit tool run <tool.name>` against a scratch `/tmp`
+    Orbit root, with MCP output treated as bookkeeping.
+
+    A long build or test command's completion must be confirmed by a positive
+    marker in its captured output (`test result:`, `Finished`, or the target's
+    own final line), with its absence treated as "did not run" regardless of the
+    reported exit status.
 
     Before filing anything, search open Orbit tasks tagged `qa-sweep`. For each
     real issue that is not already filed, create an Orbit task yourself through
