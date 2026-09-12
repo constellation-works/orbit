@@ -409,28 +409,11 @@ fn diagnosed_run_is_suppressed_until_new_failure_or_explicit_request() {
 }
 
 #[test]
-fn agent_completed_task_makes_apply_step_a_clean_skip() {
+fn landed_work_stays_blocked_with_diagnosis_for_human_reconciliation() {
     let (_root, runtime, repo_root) = test_runtime();
-    let task_id = create_backlog_task(&runtime, &repo_root, "completed-externally");
+    let task_id = create_backlog_task(&runtime, &repo_root, "landed-externally");
     fail_pipeline_run_for_task(&runtime, &task_id);
     let listing = list_candidates(&runtime, json!({}));
-
-    runtime
-        .apply_task_automation_update(
-            &task_id,
-            TaskAutomationUpdate {
-                status: Some(TaskStatus::Done),
-                status_note: Some(
-                    "triage reconciled externally-completed work: PR #619 merged".to_string(),
-                ),
-                ..TaskAutomationUpdate::default()
-            },
-        )
-        .expect("triage agent reconciles task to done");
-    let history_len_before_apply = runtime
-        .get_task_history(&task_id)
-        .expect("history before apply")
-        .len();
 
     let applied = apply_dispositions(
         &runtime,
@@ -439,28 +422,28 @@ fn agent_completed_task_makes_apply_step_a_clean_skip() {
                 "task_id": task_id,
                 "classification": "unknown",
                 "disposition": "stay_blocked",
-                "diagnosis": "work already landed",
+                "diagnosis": "work already landed: PR #619 merged as abc123 on agent-main",
             }],
             "candidates": listing["candidates"],
         }),
     );
-    assert_eq!(applied["skipped_count"], json!(1));
-    assert_eq!(applied["diagnosed_count"], json!(0));
-    assert_eq!(
-        applied["results"][0]["reason"],
-        json!("task is no longer blocked (status: done)")
-    );
+    assert_eq!(applied["diagnosed_count"], json!(1));
+    assert_eq!(applied["skipped_count"], json!(0));
     assert_eq!(
         runtime.get_task(&task_id).expect("task after apply").status,
-        TaskStatus::Done
+        TaskStatus::Blocked,
+        "landed work awaits lifecycle-legal human reconciliation"
     );
-    assert_eq!(
-        runtime
-            .get_task_history(&task_id)
-            .expect("history after apply")
-            .len(),
-        history_len_before_apply,
-        "the deterministic apply step must not double-write after reconciliation"
+    let history = runtime.get_task_history(&task_id).expect("history");
+    let note = history
+        .iter()
+        .rev()
+        .find(|entry| entry.event == TRIAGE_DIAGNOSIS_EVENT)
+        .and_then(|entry| entry.note.as_deref())
+        .expect("triage diagnosis recorded");
+    assert!(
+        note.contains("PR #619 merged as abc123 on agent-main"),
+        "the durable diagnosis must preserve the exact landing evidence: {note}"
     );
 }
 

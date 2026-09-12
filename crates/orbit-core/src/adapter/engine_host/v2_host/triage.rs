@@ -9,9 +9,8 @@
 //! bounds: only listed candidates may be touched, only `environmental`
 //! classifications may re-backlog, and a durable per-task re-backlog budget
 //! (counted from `triage_rebacklogged` history events) stops the
-//! blocked → backlog → blocked ping-pong. The agent's one direct lifecycle
-//! write is an evidence-gated blocked → done reconciliation; every other
-//! transition remains bounded here.
+//! blocked → backlog → blocked ping-pong. Agent dispositions are advisory;
+//! lifecycle transitions remain bounded here or require human action.
 
 use std::collections::{BTreeMap, BTreeSet};
 

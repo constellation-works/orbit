@@ -16,9 +16,8 @@ spec:
     the agent reads the failure evidence, classifies the cause
     (environmental / task_defect / code_defect / unknown), applies bounded
     read-mostly mitigation, and returns per-task dispositions as data. Its
-    one permitted lifecycle write is the evidence-gated blocked → done
-    reconciliation of externally-completed work; every other transition
-    belongs to the deterministic `apply_triage_dispositions` step, and the
+    dispositions are advisory data; every lifecycle transition belongs to
+    the deterministic `apply_triage_dispositions` step or a human, and the
     tool allowlist makes code edits, commits, pushes, merges, PR approvals,
     and pipeline invocations structurally impossible (`on_denial: terminate`).
   input_schema_json:
@@ -115,22 +114,19 @@ spec:
        are already reconciled deterministically before you run — do not
        reimplement that. Record what you did in `mitigation`.
     4. Decide the disposition:
-       - **work already landed → reconcile to done yourself.** If the
+       - **work already landed → leave blocked for human reconciliation.** If the
          evidence is conclusive that the task's deliverable already landed
          despite the failed run — e.g. the run failed at `pr_promote` /
          `pr_open` but the task's own PR is recorded as merged to the
          landing branch (task history/comments, run logs, `.orbit/state/`,
-         or the repo's git refs via the provider-native file-read tool) — set the task to `done`
-         via `orbit.task.update` with `status: "done"`, attaching a comment
-         that cites the exact evidence (PR number, merge commit, where you
-         saw it). Then return
-         `stay_blocked` as the disposition: the apply step sees the task
-         has left `blocked` and skips it. Never `rebacklog` landed work —
-         a rerun redoes merged work and risks duplicate PRs. This is the
-         ONLY lifecycle transition you may perform, and only on a
-         candidate you were given; if the evidence is anything short of
-         conclusive, do not touch the task and fall through to the rules
-         below.
+         or the repo's git refs via the provider-native file-read tool) —
+         return `stay_blocked` and cite the exact evidence in `diagnosis`
+         (PR number, merge commit, where you saw it). The deterministic apply
+         step records that diagnosis while leaving the task blocked for a
+         human to reconcile through a lifecycle-legal path. Never `rebacklog`
+         landed work — a rerun redoes merged work and risks duplicate PRs.
+         If the evidence is anything short of conclusive, fall through to
+         the rules below.
        - `environmental` and mitigated (or transient and now clear) →
          `rebacklog`. The deterministic apply step returns the task to the
          backlog and the normal ship sweep picks it up — never re-run a
@@ -141,10 +137,8 @@ spec:
     Hard bounds (violations terminate the run):
     - Never edit code, commit, push, merge, or approve a PR.
     - Never invoke a pipeline or job run.
-    - The only lifecycle transition you may perform yourself is the
-      evidence-gated blocked → done reconciliation in step 4, on a listed
-      candidate. Never make any other status change — return dispositions
-      as data; the deterministic step is the only other writer.
+    - Never change task status. Return dispositions as data; the deterministic
+      apply step is the only lifecycle writer in this activity.
     - Only reason about the candidates you were given.
 
     Return exactly one JSON object:
@@ -155,7 +149,6 @@ spec:
   tools:
     - orbit.task.show
     - orbit.task.list
-    - orbit.task.update
     - orbit.friction.add
     - orbit.search
     - proc.spawn
