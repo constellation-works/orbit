@@ -199,13 +199,7 @@ impl RegisteredRuntimeFactory {
         selector: &str,
     ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
         let registry_path = workspace_registry::registry_path_for(global_root);
-        let registry = workspace_registry::with_registry_lock(&registry_path, || {
-            let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-            if workspace_registry::validate_workspaces(&mut registry) {
-                let _ = workspace_registry::save_registry_to(&registry, &registry_path);
-            }
-            Ok(registry)
-        })?;
+        let registry = load_registry_for_selector_resolution(&registry_path)?;
         let (workspace, checkout) = resolve_cli_workspace_binding(&registry, selector)?;
         if workspace.status != WorkspaceStatus::Active {
             return Err(inactive_cli_workspace(workspace, checkout));
@@ -343,13 +337,7 @@ impl RegisteredRuntimeFactory {
         };
         let global_root = runtime.global_root();
         let registry_path = workspace_registry::registry_path_for(&global_root);
-        let registry = workspace_registry::with_registry_lock(&registry_path, || {
-            let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-            if workspace_registry::validate_workspaces(&mut registry) {
-                let _ = workspace_registry::save_registry_to(&registry, &registry_path);
-            }
-            Ok(registry)
-        })?;
+        let registry = load_registry_for_selector_resolution(&registry_path)?;
         match resolve_cli_workspace_target(&registry, runtime, &selector)? {
             CliWorkspaceTarget::CurrentRuntime => Ok(None),
             CliWorkspaceTarget::Checkout {
@@ -370,6 +358,28 @@ impl RegisteredRuntimeFactory {
             }
         }
     }
+}
+
+/// Read the common no-maintenance case without taking a write lock. If the
+/// snapshot needs migration or checkout validation, re-read it under the lock
+/// so a concurrent registration cannot be overwritten by the maintenance save.
+fn load_registry_for_selector_resolution(
+    registry_path: &Path,
+) -> Result<WorkspaceRegistry, OrbitError> {
+    let loaded = workspace_registry::load_registry_from_read_only(registry_path)?;
+    let mut registry = loaded.registry;
+    let validation_required = workspace_registry::validate_workspaces(&mut registry);
+    if !loaded.migration_required && !validation_required {
+        return Ok(registry);
+    }
+
+    workspace_registry::with_registry_lock(registry_path, || {
+        let mut registry = workspace_registry::load_registry_from(registry_path)?;
+        if workspace_registry::validate_workspaces(&mut registry) {
+            let _ = workspace_registry::save_registry_to(&registry, registry_path);
+        }
+        Ok(registry)
+    })
 }
 
 /// The host data directory a registry lookup reads: the `--root` override when

@@ -12,9 +12,10 @@ use tempfile::tempdir;
 
 use crate::workspace_registry::{
     assign_checkout_role, find_checkout_by_path, find_workspace, find_workspace_by_id,
-    find_workspace_by_path, load_registry_from, load_registry_from_with_writer, register_checkout,
-    remove_workspace, rename_local_owner_host_id, resolve_logical_workspace, save_registry_to,
-    set_path_override, validate_workspaces, with_registry_lock,
+    find_workspace_by_path, load_registry_from, load_registry_from_read_only,
+    load_registry_from_with_writer, register_checkout, remove_workspace,
+    rename_local_owner_host_id, resolve_logical_workspace, save_registry_to, set_path_override,
+    validate_workspaces, with_registry_lock,
 };
 
 fn timestamp() -> chrono::DateTime<Utc> {
@@ -124,6 +125,50 @@ fn legacy_registry_migrates_to_path_free_catalog_and_is_byte_stable() {
     let second = load_registry_from(&path).expect("load migrated registry again");
     assert_eq!(second, migrated);
     assert_eq!(fs::read(&path).expect("read second migration"), first_bytes);
+}
+
+#[test]
+fn read_only_load_reports_legacy_migration_without_writing() {
+    let root = tempdir().expect("tempdir");
+    let path = root.path().join("workspaces.json");
+    let original = write_json(
+        &path,
+        &json!({
+            "workspaces": [{
+                "id": "ws_orbit",
+                "name": "orbit",
+                "root": "/repos/orbit",
+                "orbit_dir": "/repos/orbit/.orbit",
+                "git_remote": null,
+                "base_branch": "main",
+                "status": "active",
+                "created_at": "2026-07-18T01:02:03Z",
+                "updated_at": "2026-07-18T01:02:03Z"
+            }],
+            "path_overrides": {}
+        }),
+    );
+
+    let loaded = load_registry_from_read_only(&path).expect("inspect legacy registry");
+
+    assert!(loaded.migration_required);
+    assert_eq!(loaded.registry.workspaces[0].id, "ws_orbit");
+    assert_eq!(loaded.registry.checkouts[0].workspace_id, "ws_orbit");
+    assert_eq!(fs::read(&path).expect("read unchanged registry"), original);
+}
+
+#[test]
+fn read_only_load_reports_current_registry_without_maintenance() {
+    let root = tempdir().expect("tempdir");
+    let path = root.path().join("workspaces.json");
+    save_registry_to(&WorkspaceRegistry::default(), &path).expect("write current registry");
+    let original = fs::read(&path).expect("snapshot current registry");
+
+    let loaded = load_registry_from_read_only(&path).expect("inspect current registry");
+
+    assert!(!loaded.migration_required);
+    assert_eq!(loaded.registry, WorkspaceRegistry::default());
+    assert_eq!(fs::read(&path).expect("read unchanged registry"), original);
 }
 
 #[test]

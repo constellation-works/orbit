@@ -13,8 +13,9 @@ pub use catalog::{
     validate_workspace_registry, validate_workspaces,
 };
 pub use io::{
-    global_orbit_dir, load_registry, load_registry_from, registry_path, registry_path_for,
-    save_registry, save_registry_to, with_registry_lock,
+    ReadOnlyRegistryLoad, global_orbit_dir, load_registry, load_registry_from,
+    load_registry_from_read_only, registry_path, registry_path_for, save_registry,
+    save_registry_to, with_registry_lock,
 };
 pub use publication::{
     bind_publication, bind_publication_by_id, find_publication_binding,

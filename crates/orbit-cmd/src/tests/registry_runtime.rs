@@ -507,6 +507,209 @@ fn workspace_registered_during_selector_resolution_survives_validation_save() {
     );
 }
 
+/// Managed MCP calls and registered CLI tools both enter through these two
+/// resolver seams. Run them as an unprivileged child so directory modes enforce
+/// the same no-lock-file boundary as a read-only registry mount; the parent test
+/// process may be root and would otherwise bypass ordinary permission bits.
+#[cfg(unix)]
+#[test]
+fn read_only_global_registry_supports_mcp_and_cli_workspace_bindings() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::process::CommandExt;
+
+    const CHILD_MARKER: &str = "ORBIT_TEST_READ_ONLY_SELECTOR_CHILD";
+    const GLOBAL_ROOT: &str = "ORBIT_TEST_READ_ONLY_SELECTOR_GLOBAL";
+    const ROOT: &str = "ORBIT_TEST_READ_ONLY_SELECTOR_ROOT";
+    const TASK_ID: &str = "ORBIT_TEST_READ_ONLY_SELECTOR_TASK";
+
+    if std::env::var_os(CHILD_MARKER).is_some() {
+        let root = PathBuf::from(std::env::var(ROOT).expect("fixture root"));
+        let global = PathBuf::from(std::env::var(GLOBAL_ROOT).expect("global root"));
+        let task_id = std::env::var(TASK_ID).expect("task id");
+        let lock_path = global.join(".workspaces.json.lock");
+        let lock_error = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .expect_err("read-only registry root must reject the original lock open");
+        assert!(
+            matches!(
+                lock_error.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+            ),
+            "unexpected lock error: {lock_error}"
+        );
+
+        let selected = RegisteredRuntimeFactory::resolve_workspace_selector(&global, "ws_beta")
+            .expect("explicit MCP selector must be observational");
+        let beta = RegisteredRuntimeFactory::open_registered_checkout(
+            &global,
+            &selected.workspace,
+            &selected.checkout,
+        )
+        .expect("open MCP-selected workspace");
+        run_tool(
+            &beta,
+            "orbit.task.update",
+            json!({
+                "id": task_id,
+                "workspace": selected.checkout.repo_root,
+                "plan": "Updated after explicit MCP workspace resolution."
+            }),
+        )
+        .expect("MCP-selected runtime must reach writable assigned task state");
+
+        let alpha =
+            RegisteredRuntimeFactory::initialize_with_overrides(Some(&global), Some("ws_alpha"))
+                .expect("open initial CLI runtime");
+        execute_cli_tool(
+            &alpha,
+            "orbit.task.update",
+            json!({
+                "id": task_id,
+                "workspace": "ws_beta",
+                "plan": "Updated after registered CLI workspace binding."
+            }),
+        )
+        .expect("CLI-bound runtime must reach writable assigned task state");
+
+        for selector in ["ws_inactive", "ws_unknown"] {
+            let error = RegisteredRuntimeFactory::resolve_workspace_selector(&global, selector)
+                .expect_err("inactive and unknown MCP selectors must fail closed");
+            assert!(
+                error.to_string().contains(selector),
+                "selector must be named: {error}"
+            );
+
+            let mut input = json!({"workspace": selector});
+            let error = match RegisteredRuntimeFactory::bind_cli_tool_workspace(&alpha, &mut input)
+            {
+                Ok(_) => panic!("inactive and unknown CLI selectors must fail closed"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains(selector),
+                "selector must be named: {error}"
+            );
+        }
+
+        assert!(
+            !lock_path.exists(),
+            "unchanged-registry resolution must not create the global lock file"
+        );
+        assert!(root.join("beta/.orbit").is_dir());
+        return;
+    }
+
+    let root = tempfile::tempdir().expect("root");
+    let global = root.path().join("global");
+    std::fs::create_dir_all(&global).expect("global root");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_read_only\"\nhost_id = \"read-only\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("host identity");
+
+    let (alpha_workspace, alpha_checkout) =
+        registered_workspace(root.path(), "ws_alpha", "alpha", "hm_read_only");
+    let (beta_workspace, beta_checkout) =
+        registered_workspace(root.path(), "ws_beta", "beta", "hm_read_only");
+    let (mut inactive_workspace, inactive_checkout) =
+        registered_workspace(root.path(), "ws_inactive", "inactive", "hm_read_only");
+    inactive_workspace.status = WorkspaceStatus::Invalid;
+    save_registry_to(
+        &WorkspaceRegistry {
+            workspaces: vec![
+                alpha_workspace.clone(),
+                beta_workspace.clone(),
+                inactive_workspace,
+            ],
+            checkouts: vec![
+                alpha_checkout.clone(),
+                beta_checkout.clone(),
+                inactive_checkout,
+            ],
+            ..Default::default()
+        },
+        &registry_path_for(&global),
+    )
+    .expect("workspace registry");
+
+    let beta = RegisteredRuntimeFactory::open_registered_checkout(
+        &global,
+        &beta_workspace,
+        &beta_checkout,
+    )
+    .expect("seed beta runtime");
+    let created = run_tool(
+        &beta,
+        "orbit.task.add",
+        json!({
+            "title": "Read-only registry routing task",
+            "description": "The assigned task state remains writable.",
+            "complexity": "low",
+            "workspace": beta_checkout.repo_root
+        }),
+    )
+    .expect("seed assigned task");
+    let task_id = created["id"].as_str().expect("created task id");
+
+    fn make_writable(path: &Path) {
+        let metadata = std::fs::metadata(path).expect("fixture metadata");
+        let mode = if metadata.is_dir() { 0o777 } else { 0o666 };
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            .expect("make assigned state writable");
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(path).expect("fixture directory") {
+                make_writable(&entry.expect("fixture entry").path());
+            }
+        }
+    }
+
+    make_writable(&global.join("tasks"));
+    for checkout in [&alpha_checkout, &beta_checkout] {
+        make_writable(&checkout.repo_root);
+    }
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755))
+        .expect("make fixture root traversable");
+    std::fs::set_permissions(
+        global.join("workspaces.json"),
+        std::fs::Permissions::from_mode(0o444),
+    )
+    .expect("make registry file read-only");
+    std::fs::set_permissions(
+        global.join("host.toml"),
+        std::fs::Permissions::from_mode(0o444),
+    )
+    .expect("make host identity read-only");
+    std::fs::set_permissions(&global, std::fs::Permissions::from_mode(0o555))
+        .expect("make registry root read-only");
+
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .arg("read_only_global_registry_supports_mcp_and_cli_workspace_bindings")
+        .arg("--exact")
+        .env(CHILD_MARKER, "1")
+        .env(ROOT, root.path())
+        .env(GLOBAL_ROOT, &global)
+        .env(TASK_ID, task_id);
+    // SAFETY: `geteuid` reads process credentials and has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        command.gid(65_534).uid(65_534);
+    }
+    let output = command.output().expect("run unprivileged selector test");
+    assert!(
+        output.status.success(),
+        "read-only selector child failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn bootstrap_hint_stays_within_its_registered_git_repository() {
     let root = tempfile::tempdir().expect("root");

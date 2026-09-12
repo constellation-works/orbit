@@ -11,6 +11,13 @@ use crate::{HostIdentityState, inspect_host_identity};
 
 const REGISTRY_FILE_NAME: &str = "workspaces.json";
 
+/// A validated registry snapshot that has not performed any maintenance write.
+#[derive(Debug)]
+pub struct ReadOnlyRegistryLoad {
+    pub registry: WorkspaceRegistry,
+    pub migration_required: bool,
+}
+
 /// Return the path to the machine-global workspace registry.
 pub fn registry_path() -> Result<PathBuf, OrbitError> {
     Ok(registry_path_for(&global_orbit_dir()?))
@@ -54,22 +61,39 @@ pub fn load_registry_from(path: &Path) -> Result<WorkspaceRegistry, OrbitError> 
     load_registry_from_with_writer(path, write_registry)
 }
 
+/// Load and validate a registry without creating a lock or persisting migrations.
+///
+/// Callers that only inspect current registry data can use the returned snapshot
+/// directly. A caller that sees `migration_required` must re-read and migrate
+/// while holding [`with_registry_lock`] before it performs maintenance.
+pub fn load_registry_from_read_only(path: &Path) -> Result<ReadOnlyRegistryLoad, OrbitError> {
+    let path = validated_registry_path(path)?;
+    if !path.exists() {
+        return Ok(ReadOnlyRegistryLoad {
+            registry: WorkspaceRegistry::default(),
+            migration_required: false,
+        });
+    }
+    let content =
+        std::fs::read_to_string(&path).map_err(|error| OrbitError::Io(error.to_string()))?;
+    let context = registry_host_context(&path)?;
+    let (registry, migration_required) = parse_workspace_registry(&content, &context)?;
+    Ok(ReadOnlyRegistryLoad {
+        registry,
+        migration_required,
+    })
+}
+
 pub(crate) fn load_registry_from_with_writer(
     path: &Path,
     writer: impl FnOnce(&WorkspaceRegistry, &Path) -> Result<(), OrbitError>,
 ) -> Result<WorkspaceRegistry, OrbitError> {
     let path = validated_registry_path(path)?;
-    if !path.exists() {
-        return Ok(WorkspaceRegistry::default());
+    let loaded = load_registry_from_read_only(&path)?;
+    if loaded.migration_required {
+        writer(&loaded.registry, &path)?;
     }
-    let content =
-        std::fs::read_to_string(&path).map_err(|error| OrbitError::Io(error.to_string()))?;
-    let context = registry_host_context(&path)?;
-    let (registry, migrated) = parse_workspace_registry(&content, &context)?;
-    if migrated {
-        writer(&registry, &path)?;
-    }
-    Ok(registry)
+    Ok(loaded.registry)
 }
 
 /// Save the machine-global workspace registry atomically.
