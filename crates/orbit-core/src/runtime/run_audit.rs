@@ -211,6 +211,15 @@ impl RunExecutionProgress {
 /// Provider children carried on the progress projection. A run spawns a
 /// handful per step; the budget only bites on a long retry history.
 const MAX_PROVIDER_PROCESSES: usize = 8;
+/// Rows per store read while reconstructing a complete run audit trail.
+///
+/// This is a paging size, not an evidence limit. Safety decisions such as
+/// orphan reconciliation must see provider spawns even in unusually long
+/// trails, while each SQLite read should remain bounded.
+#[cfg(not(test))]
+const RUN_AUDIT_PAGE_SIZE: usize = 50_000;
+#[cfg(test)]
+const RUN_AUDIT_PAGE_SIZE: usize = 8;
 
 /// What one scan of a run's v2 audit trail says about its execution: every
 /// step it started, and every provider child those steps spawned.
@@ -339,13 +348,24 @@ impl OrbitRuntime {
     }
 
     pub fn collect_run_audit_events(&self, run_id: &str) -> Result<Vec<RunAuditEvent>, OrbitError> {
-        let rows = self.list_v2_audit_events(V2AuditEventFilter {
-            workspace_id: String::new(),
-            run_id: Some(run_id.to_string()),
-            source: Some("v2_envelope".to_string()),
-            limit: Some(50_000),
-            ..Default::default()
-        })?;
+        let mut rows = Vec::new();
+        let mut offset = 0;
+        loop {
+            let page = self.list_v2_audit_events(V2AuditEventFilter {
+                workspace_id: String::new(),
+                run_id: Some(run_id.to_string()),
+                source: Some("v2_envelope".to_string()),
+                limit: Some(RUN_AUDIT_PAGE_SIZE),
+                offset: Some(offset),
+                ..Default::default()
+            })?;
+            let page_len = page.len();
+            rows.extend(page);
+            if page_len < RUN_AUDIT_PAGE_SIZE {
+                break;
+            }
+            offset += page_len;
+        }
         let mut events_by_id = HashMap::new();
         let mut ordered_ids = Vec::new();
         for row in rows.into_iter().rev() {
@@ -392,7 +412,7 @@ impl OrbitRuntime {
         Ok(events)
     }
 
-    /// The newest valid timestamp carried by the bounded v2 envelope rows for
+    /// The newest valid timestamp carried by the newest v2 envelope rows for
     /// a run. This deliberately reads the envelope payload rather than the
     /// audit row ordering: imports and delayed writers can persist rows out of
     /// timestamp order.
@@ -404,7 +424,7 @@ impl OrbitRuntime {
             workspace_id: String::new(),
             run_id: Some(run_id.to_string()),
             source: Some("v2_envelope".to_string()),
-            limit: Some(50_000),
+            limit: Some(RUN_AUDIT_PAGE_SIZE),
             ..Default::default()
         })?;
 
