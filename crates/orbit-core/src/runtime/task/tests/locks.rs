@@ -85,13 +85,15 @@ fn task_locks_reserve_adapter_surfaces_new_validation_errors() {
     let _env = unmanaged_tool_env_guard();
     let (_root, runtime, _repo_root) = test_runtime();
 
-    let missing = invalid_input_message(runtime.run_tool(
+    let missing = invalid_input_message(run_tool_as_operator(
+        &runtime,
         "orbit.task.locks.reserve",
         json!({ "model": orbit_common::test_fixtures::TEST_CODEX_MODEL }),
     ));
     assert!(missing.contains("exactly one of 'task_ids' or 'files' must be provided"));
 
-    let both = invalid_input_message(runtime.run_tool(
+    let both = invalid_input_message(run_tool_as_operator(
+        &runtime,
         "orbit.task.locks.reserve",
         json!({
             "task_ids": ["T20260506-15"],
@@ -101,7 +103,8 @@ fn task_locks_reserve_adapter_surfaces_new_validation_errors() {
     ));
     assert!(both.contains("exactly one of 'task_ids' or 'files' must be provided"));
 
-    let raw_path = invalid_input_message(runtime.run_tool(
+    let raw_path = invalid_input_message(run_tool_as_operator(
+        &runtime,
         "orbit.task.locks.reserve",
         json!({
             "files": ["src/lib.rs"],
@@ -111,7 +114,8 @@ fn task_locks_reserve_adapter_surfaces_new_validation_errors() {
     assert!(raw_path.contains("`file:`"));
     assert!(raw_path.contains("`dir:`"));
 
-    let symbol = invalid_input_message(runtime.run_tool(
+    let symbol = invalid_input_message(run_tool_as_operator(
+        &runtime,
         "orbit.task.locks.reserve",
         json!({
             "files": ["symbol:src/lib.rs#run:function"],
@@ -288,7 +292,8 @@ fn task_scope_reserve_refuses_a_task_with_no_context_surface() {
 
     let task = create_context_task(&runtime, &repo_root, TaskStatus::Backlog, &[]);
 
-    let message = invalid_input_message(runtime.run_tool(
+    let message = invalid_input_message(run_tool_as_operator(
+        &runtime,
         "orbit.task.locks.reserve",
         json!({
             "task_ids": [task.id.clone()],
@@ -321,16 +326,16 @@ fn task_scope_reserve_still_admits_a_task_whose_declared_file_does_not_exist_yet
         &["docs/design/missing.md"],
     );
 
-    let reserved = runtime
-        .run_tool(
-            "orbit.task.locks.reserve",
-            json!({
-                "task_ids": [task.id],
-                "ttl_seconds": 3600,
-                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
-            }),
-        )
-        .expect("a declared-but-not-yet-created file must still reserve");
+    let reserved = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [task.id],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("a declared-but-not-yet-created file must still reserve");
     assert_eq!(reserved["reserved"], true);
     assert_eq!(reserved["reserved_files"], json!([]));
 }
@@ -355,16 +360,16 @@ fn reservation_conflicts_clear_immediately_after_release() {
         &["file:src/lib.rs"],
     );
 
-    let first_reserve = runtime
-        .run_tool(
-            "orbit.task.locks.reserve",
-            json!({
-                "task_ids": [first.id.clone()],
-                "ttl_seconds": 3600,
-                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
-            }),
-        )
-        .expect("reserve first task");
+    let first_reserve = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [first.id.clone()],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("reserve first task");
     let reservation_id = first_reserve
         .get("reservation_id")
         .and_then(Value::as_str)
@@ -389,16 +394,16 @@ fn reservation_conflicts_clear_immediately_after_release() {
         "reservation visibility should include expiration"
     );
 
-    let blocked = runtime
-        .run_tool(
-            "orbit.task.locks.reserve",
-            json!({
-                "task_ids": [second.id.clone()],
-                "ttl_seconds": 3600,
-                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
-            }),
-        )
-        .expect("second reservation returns conflict");
+    let blocked = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [second.id.clone()],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("second reservation returns conflict");
     assert_eq!(blocked["reserved"], false);
     assert_eq!(
         blocked["conflicts"],
@@ -420,16 +425,16 @@ fn reservation_conflicts_clear_immediately_after_release() {
     .expect("release reservation");
     assert_eq!(release["released"], true);
 
-    let second_reserve = runtime
-        .run_tool(
-            "orbit.task.locks.reserve",
-            json!({
-                "task_ids": [second.id],
-                "ttl_seconds": 3600,
-                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
-            }),
-        )
-        .expect("second reservation succeeds after release");
+    let second_reserve = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [second.id],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("second reservation succeeds after release");
     assert_eq!(second_reserve["reserved"], true);
 }
 
@@ -469,16 +474,16 @@ fn v2_task_locks_store_workspace_binding_id() {
     );
     assert_eq!(task.id, "ORB-00000");
 
-    let reservation = runtime
-        .run_tool(
-            "orbit.task.locks.reserve",
-            json!({
-                "task_ids": [task.id],
-                "ttl_seconds": 3600,
-                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
-            }),
-        )
-        .expect("reserve v2 task");
+    let reservation = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [task.id],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("reserve v2 task");
     assert_eq!(reservation["reserved"], true);
 
     let locks = runtime
@@ -498,16 +503,16 @@ fn v2_task_locks_fail_when_workspace_binding_config_disappears() {
     std::fs::write(repo_root.join("src/lib.rs"), "pub fn ok() {}\n").expect("write source file");
     std::fs::remove_file(repo_root.join(".orbit/config.yaml")).expect("remove workspace config");
 
-    let err = runtime
-        .run_tool(
-            "orbit.task.locks.reserve",
-            json!({
-                "files": ["file:src/lib.rs"],
-                "ttl_seconds": 3600,
-                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
-            }),
-        )
-        .expect_err("missing v2 binding config should fail");
+    let err = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "files": ["file:src/lib.rs"],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect_err("missing v2 binding config should fail");
     assert!(matches!(
         err,
         OrbitError::Store(message)
@@ -522,19 +527,19 @@ fn files_shape_reservations_conflict_and_release_like_task_reservations() {
     std::fs::create_dir_all(repo_root.join("src")).expect("create src dir");
     std::fs::write(repo_root.join("src/lib.rs"), "pub fn ok() {}\n").expect("write source file");
 
-    let direct_reserve = runtime
-        .run_tool(
-            "orbit.task.locks.reserve",
-            json!({
-                "files": [
-                    format!("file:{}", repo_root.join("src/lib.rs").display()),
-                    "dir:src/auth/",
-                ],
-                "ttl_seconds": 3600,
-                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
-            }),
-        )
-        .expect("reserve direct file selectors");
+    let direct_reserve = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "files": [
+                format!("file:{}", repo_root.join("src/lib.rs").display()),
+                "dir:src/auth/",
+            ],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("reserve direct file selectors");
     assert_eq!(direct_reserve["reserved"], true);
     assert_eq!(
         direct_reserve["reserved_files"],
@@ -566,16 +571,16 @@ fn files_shape_reservations_conflict_and_release_like_task_reservations() {
         TaskStatus::Backlog,
         &["file:src/lib.rs"],
     );
-    let blocked = runtime
-        .run_tool(
-            "orbit.task.locks.reserve",
-            json!({
-                "task_ids": [task.id.clone()],
-                "ttl_seconds": 3600,
-                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
-            }),
-        )
-        .expect("task reservation returns conflict");
+    let blocked = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [task.id.clone()],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("task reservation returns conflict");
     assert_eq!(blocked["reserved"], false);
     assert_eq!(
         blocked["conflicts"],
@@ -597,16 +602,16 @@ fn files_shape_reservations_conflict_and_release_like_task_reservations() {
     .expect("release direct reservation");
     assert_eq!(release["released"], true);
 
-    let task_reserve = runtime
-        .run_tool(
-            "orbit.task.locks.reserve",
-            json!({
-                "task_ids": [task.id],
-                "ttl_seconds": 3600,
-                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
-            }),
-        )
-        .expect("task reservation succeeds after release");
+    let task_reserve = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [task.id],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("task reservation succeeds after release");
     assert_eq!(task_reserve["reserved"], true);
 }
 
@@ -615,16 +620,16 @@ fn files_shape_reservations_reject_outside_workspace_before_persisting() {
     let _env = unmanaged_tool_env_guard();
     let (_root, runtime, _repo_root) = test_runtime();
 
-    let error = runtime
-        .run_tool(
-            "orbit.task.locks.reserve",
-            json!({
-                "files": ["file:/outside-workspace/lib.rs"],
-                "ttl_seconds": 3600,
-                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
-            }),
-        )
-        .expect_err("outside-workspace selector is rejected");
+    let error = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "files": ["file:/outside-workspace/lib.rs"],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect_err("outside-workspace selector is rejected");
     let message = invalid_input_message::<Value>(Err(error));
     assert!(
         message.contains("must remain inside workspace"),
@@ -640,6 +645,8 @@ fn files_shape_reservations_reject_outside_workspace_before_persisting() {
 use orbit_tools::{ReservationOwnerContext, ToolContext};
 use orbit_types::policy::Role;
 use orbit_types::telemetry::AuditEvent;
+use orbit_types::tool::{McpCapability, ToolSessionContext};
+use std::collections::BTreeSet;
 
 fn task_lock_audit_event(runtime: &OrbitRuntime, tool_name: &str, command: &str) -> AuditEvent {
     runtime
@@ -656,6 +663,10 @@ fn reserve_files(runtime: &OrbitRuntime, owner_run_id: Option<&str>) -> String {
         "ttl_seconds": 3600,
         "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
     });
+    let operator_session = ToolSessionContext {
+        effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+        ..ToolSessionContext::default()
+    };
     let output = match owner_run_id {
         Some(owner_run_id) => runtime
             .run_tool_with_context_and_role(
@@ -663,6 +674,7 @@ fn reserve_files(runtime: &OrbitRuntime, owner_run_id: Option<&str>) -> String {
                 input,
                 Role::Admin,
                 ToolContext {
+                    session_context: operator_session,
                     reservation_owner: Some(ReservationOwnerContext {
                         owner_run_id: owner_run_id.to_string(),
                         owner_metadata_json: None,
@@ -672,7 +684,15 @@ fn reserve_files(runtime: &OrbitRuntime, owner_run_id: Option<&str>) -> String {
             )
             .expect("reserve direct file selectors with owner"),
         None => runtime
-            .run_tool("orbit.task.locks.reserve", input)
+            .run_tool_with_context_and_role(
+                "orbit.task.locks.reserve",
+                input,
+                Role::Admin,
+                ToolContext {
+                    session_context: operator_session,
+                    ..ToolContext::default()
+                },
+            )
             .expect("reserve direct file selectors"),
     };
 
@@ -754,16 +774,16 @@ fn reserve_audit_for_task_scope_records_first_task_id() {
         &["file:src/lib.rs"],
     );
 
-    let reserve = runtime
-        .run_tool(
-            "orbit.task.locks.reserve",
-            json!({
-                "task_ids": [task.id.clone()],
-                "ttl_seconds": 3600,
-                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
-            }),
-        )
-        .expect("reserve task scope");
+    let reserve = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [task.id.clone()],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("reserve task scope");
     assert_eq!(reserve["reserved"], true);
     let reservation_id = reserve["reservation_id"]
         .as_str()
@@ -777,4 +797,146 @@ fn reserve_audit_for_task_scope_records_first_task_id() {
     );
     assert_eq!(row.target_id.as_deref(), Some(reservation_id.as_str()));
     assert_eq!(row.task_id.as_deref(), Some(task.id.as_str()));
+}
+
+/// ORB-12251: a caller could `reserve` with no capability at all and then be
+/// refused `release` on the very reservation it just created — an `unknown`
+/// caller could gate dispatch admission for a surface it was not itself
+/// trusted to clear. `reserve` must deny the same unprivileged caller
+/// `release` already denies, and admit the same `operator`/`runner` callers.
+#[test]
+fn reserve_requires_the_same_capability_as_release() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    std::fs::create_dir_all(repo_root.join("src")).expect("create src dir");
+    std::fs::write(repo_root.join("src/lib.rs"), "pub fn ok() {}\n").expect("write source file");
+
+    let unprivileged = ToolContext::default();
+    let reserve_input = json!({
+        "files": ["file:src/lib.rs"],
+        "ttl_seconds": 3600,
+        "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+    });
+
+    let denied_reserve = runtime
+        .run_tool_with_context_and_role(
+            "orbit.task.locks.reserve",
+            reserve_input.clone(),
+            Role::Admin,
+            unprivileged.clone(),
+        )
+        .expect_err("an unprivileged caller must not be able to reserve");
+    let OrbitError::CapabilityDenied(reserve_message) = denied_reserve else {
+        panic!("expected capability denial, got {denied_reserve:?}");
+    };
+    assert!(reserve_message.contains("orbit.task.locks.reserve"));
+    assert!(reserve_message.contains("operator or runner"));
+
+    let denied_release = runtime
+        .run_tool_with_context_and_role(
+            "orbit.task.locks.release",
+            json!({
+                "reservation_id": "reservation-does-not-matter",
+                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+            }),
+            Role::Admin,
+            unprivileged,
+        )
+        .expect_err("an unprivileged caller must not be able to release");
+    let OrbitError::CapabilityDenied(release_message) = denied_release else {
+        panic!("expected capability denial, got {denied_release:?}");
+    };
+    assert!(release_message.contains("orbit.task.locks.release"));
+    assert!(release_message.contains("operator or runner"));
+
+    // The same caller that was refused above is admitted for both once it
+    // holds either half of the shared `operator or runner` requirement.
+    for capability in [McpCapability::Operator, McpCapability::Runner] {
+        let context = ToolContext {
+            session_context: ToolSessionContext {
+                effective_capabilities: BTreeSet::from([capability]),
+                ..ToolSessionContext::default()
+            },
+            ..ToolContext::default()
+        };
+        let reserved = runtime
+            .run_tool_with_context_and_role(
+                "orbit.task.locks.reserve",
+                reserve_input.clone(),
+                Role::Admin,
+                context.clone(),
+            )
+            .unwrap_or_else(|error| panic!("{capability} must be able to reserve: {error}"));
+        assert_eq!(reserved["reserved"], true);
+        let reservation_id = reserved["reservation_id"]
+            .as_str()
+            .expect("reservation id")
+            .to_string();
+
+        let released = runtime
+            .run_tool_with_context_and_role(
+                "orbit.task.locks.release",
+                json!({
+                    "reservation_id": reservation_id,
+                    "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+                }),
+                Role::Admin,
+                context,
+            )
+            .unwrap_or_else(|error| panic!("{capability} must be able to release: {error}"));
+        assert_eq!(released["released"], true);
+    }
+}
+
+/// ORB-12251: `locks list` reported "0 task(s)" for a reservation that named
+/// a task ID, because the count only walked active (in-progress/review)
+/// tasks. A task-bound reservation's `task_ids` must count too, even for a
+/// task that is not itself active — and a task counted both ways must not be
+/// double-counted.
+#[test]
+fn locks_list_counts_distinct_tasks_across_reservations_and_active_tasks() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    std::fs::create_dir_all(repo_root.join("src")).expect("create src dir");
+    std::fs::write(repo_root.join("src/lib.rs"), "pub fn ok() {}\n").expect("write source file");
+    std::fs::write(repo_root.join("other.rs"), "pub fn other() {}\n")
+        .expect("write second source file");
+
+    // A backlog task reserved by ID: not active, so it contributes to the
+    // count only through the reservation's `task_ids`.
+    let backlog_task = create_context_task(
+        &runtime,
+        &repo_root,
+        TaskStatus::Backlog,
+        &["file:src/lib.rs"],
+    );
+    run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [backlog_task.id],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("reserve backlog task by id");
+
+    // An active task holding a different file, counted through `by_task`.
+    let active_task = create_context_task(
+        &runtime,
+        &repo_root,
+        TaskStatus::InProgress,
+        &["file:other.rs"],
+    );
+
+    let locks = runtime
+        .run_tool("orbit.task.locks", json!({}))
+        .expect("list task locks");
+    assert_eq!(
+        locks["total_tasks"],
+        json!(2),
+        "expected the backlog task named by the reservation and the active task, got {locks}"
+    );
+    assert_eq!(locks["by_task"].as_array().expect("by_task array").len(), 1);
+    assert_eq!(locks["by_task"][0]["id"], json!(active_task.id));
 }

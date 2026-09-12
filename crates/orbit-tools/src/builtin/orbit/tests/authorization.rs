@@ -69,6 +69,7 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.semantic.uninstall", Placement::Unadvertised),
     ("orbit.task.delete", Placement::Unadvertised),
     ("orbit.task.locks.release", Placement::Unadvertised),
+    ("orbit.task.locks.reserve", Placement::Unadvertised),
     ("orbit.task.reject", Placement::Unadvertised),
     ("orbit.workspace.claim.release", Placement::Unadvertised),
 ];
