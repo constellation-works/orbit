@@ -310,6 +310,85 @@ captured branch head immediately before that transaction and refuses a moved
 head. Restore unavailable objects or provider evidence and retry; do not reset
 the consumer or treat missing proof as coverage.
 
+### Automatic replay, and the stall that replaces a silent retry loop [ORB-12346]
+
+`history_diverged` no longer defers forever. When observation reports it, the
+evaluator runs the same replay proof `--replay-history` previews, in the same
+pass:
+
+- **The proof succeeds** — every observed commit maps onto a canonical commit
+  with an identical `.orbit` tree and parent-relative patch. The evaluator
+  applies the replay itself under a recovery record attributed to
+  `system:automation`, files one friction so the rewrite is not invisible, and
+  keeps observing. The tick reports `history_replayed`; the next tick is
+  ordinary observation. No operator is in the loop for a proven-safe rebase.
+- **The proof is refused** — `history_mapping_ambiguous`, `history_debt_lost`,
+  `history_contract_drift`, `provider_proof_unavailable`,
+  `coverage_unverifiable` or any other refusal. The consumer records a
+  `stall` marker naming the orphaned revision, the head, the refusal and the
+  obligations it could not map; files one friction carrying that list and the
+  two commands that clear it; and stops evaluating. The tick reports
+  `stalled: history_diverged`, `recover`'s stall classifier reports
+  `history_diverged` rather than `not_stalled`, and `orbit doctor` lists the
+  consumer under `automation-consumers`.
+
+Frictions are deduped on repository, branch, reason and the orphaned revision,
+so repeated ticks and every sibling consumer watching the same branch share one
+record. The eventual recovery or reset links it (`friction_id`).
+
+Deferred reasons are classified rather than treated alike.
+`history_diverged`, `repository_changed`, `provider_identity_missing` and
+`state_missing` are *stuck*: they read identically on every future tick, so they
+stall the consumer instead of retrying. Everything else — `source_backpressure`,
+`concurrent_evaluation`, `source_deadline`, `source_budget`, a superseded claim —
+keeps the silent retry and writes nothing, because marking a transient deferral
+would put a fenced state write on the path of the pass that is making progress.
+A recorded stall that outlives `automation.stall_window_minutes` (default 60) is
+logged once at `warn` and filed once as friction; before that window it is
+recorded but quiet. A stall clears itself only when the orphaned revision is
+provably reachable from the branch head again, which moves no debt and needs no
+audit.
+
+### Resetting a consumer whose debt cannot be reconciled [ORB-12346]
+
+`orbit auto-task reset` is the audited counterpart to recovery: the only
+operation that *forgets* obligations. Use it when no recovery can repair the
+consumer — a destructive rewrite, or pre-0.21.0 state with neither a recorded
+trigger nor a frozen batch, which recovery refuses as
+`coverage_unverifiable`.
+
+Without `--reason` it previews and writes nothing:
+
+```sh
+orbit auto-task reset delivery-qa --json
+```
+
+The preview names the consumer key, its generation and epoch, the debt that
+would be forgotten (pending deliveries and commits, unresolved evidence, waived
+and excluded landings, accepted receipts), any executing action, a recorded
+stall, and the head the consumer re-baselines at.
+
+```sh
+orbit auto-task reset delivery-qa \
+  --reason "agent-main was rewritten past the observed commit"
+```
+
+An apply writes one immutable record into the same `automation_recoveries`
+table — kind `reset`, carrying `by`/`at`/`reason`, the previous epoch and
+generation, the forgotten-debt inventory, the abandoned action and the new
+baseline — drops the consumer row in the same transaction, and deletes the
+`refs/orbit/automation/<consumer digest>/*` pins of the forgotten batches. The
+next evaluation seeds a fresh baseline at the configured branch head *with* its
+resolved trigger, so a later recovery can always prove its coverage contract.
+
+Reset has deliberately no compatibility refusals: a branch, repository, owner or
+coverage class that moved is exactly when it is needed. It refuses
+`action_executing` unless `--force` is passed (the admitted task or run is
+abandoned, not cancelled), `member_consumer`, `unknown_consumer`,
+`owned_elsewhere` and `missing_authorization`. Forgotten debt is not coverage:
+the discarded landings never appear in a receipt, and the record is the only
+trace they existed.
+
 ## Rollback and limits
 
 Disable delivery definitions and allow admitted work to settle before rolling back.
@@ -323,11 +402,13 @@ Store feature records do not replace the old scheduler state or require a new DB
 Source objects are pinned under `refs/orbit/automation/<consumer digest>/<batch>/`.
 Retain those refs while any obligation is unresolved and throughout the desired
 audit window. Explicit retention cleanup after that window may delete the refs;
-no automatic GC policy is added here.
+no automatic GC policy is added here. `orbit auto-task reset` deletes the pins of
+the batches it forgets, and records which ones it released.
 
 The source currently understands GitHub PR evidence and authorized local direct
 landings. Other/manual direct changes stay unresolved until an authoritative
-receipt exists. History rewrites pause rather than silently reset. Automatic
+receipt exists. A history rewrite is replayed only on deterministic proof, and
+otherwise stalls the consumer for an operator; nothing resets itself. Automatic
 policy migration and complete usage accounting remain separately scoped work.
 No review exclusions are inferred from tags or summaries, and QA coverage never
 substitutes for review.

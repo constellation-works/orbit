@@ -39,6 +39,31 @@ pub trait AutomationStoreBackend: Send + Sync {
         ))
     }
 
+    /// Forget one consumer's state entirely and write the audit record that
+    /// says what was forgotten, in one transaction under the same generation
+    /// fence. The next evaluation seeds a fresh baseline at the branch head.
+    fn automation_reset(
+        &self,
+        _previous: &AutomationState,
+        _record: &RecoveryRecord,
+    ) -> Result<bool, OrbitError> {
+        Err(OrbitError::Store(
+            "consumer reset persistence unavailable".into(),
+        ))
+    }
+
+    /// Record or clear the consumer's stall marker under the generation
+    /// fence. Nothing but the marker may move.
+    fn automation_stall(
+        &self,
+        _previous: &AutomationState,
+        _next: &AutomationState,
+    ) -> Result<bool, OrbitError> {
+        Err(OrbitError::Store(
+            "consumer stall persistence unavailable".into(),
+        ))
+    }
+
     /// Audited recoveries for a consumer, newest first.
     fn automation_recoveries(
         &self,

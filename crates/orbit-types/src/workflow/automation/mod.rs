@@ -248,6 +248,11 @@ pub struct AutomationState {
     #[serde(default)]
     pub associations: BTreeMap<String, Option<DeliveryAssociation>>,
     pub active: Option<BatchAttempt>,
+    /// Why this consumer stopped making progress. A recorded stall suspends
+    /// evaluation until an audited recovery or reset clears it, so the reason
+    /// is reported once as a durable fact instead of every tick as an error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall: Option<recovery::AutomationStall>,
 }
 
 /// Worker-submitted structured evidence, attached through orbit.task.artifact.put.

@@ -18,7 +18,7 @@ use orbit_types::{
 use serde_json::json;
 use std::{path::Path, process::Command};
 
-fn git(root: &Path, args: &[&str]) -> String {
+pub(super) fn git(root: &Path, args: &[&str]) -> String {
     let result = Command::new("git")
         .args(args)
         .current_dir(root)
@@ -32,14 +32,14 @@ fn git(root: &Path, args: &[&str]) -> String {
     String::from_utf8(result.stdout).unwrap().trim().into()
 }
 
-fn commit(root: &Path, text: &str) -> String {
+pub(super) fn commit(root: &Path, text: &str) -> String {
     std::fs::write(root.join("sample.txt"), text).unwrap();
     git(root, &["add", "sample.txt"]);
     git(root, &["commit", "-m", "fixture change"]);
     git(root, &["rev-parse", "HEAD"])
 }
 
-fn runtime() -> OrbitRuntime {
+pub(super) fn runtime() -> OrbitRuntime {
     let runtime = OrbitRuntime::in_memory()
         .unwrap()
         .with_automation_machine_identity(Some("fixture-machine".into()));
@@ -150,6 +150,7 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
             .collect(),
         associations: Default::default(),
         active: None,
+        stall: None,
     };
     let provider_lookups = std::cell::RefCell::new(Vec::new());
     let provider = |_: &str, sha: &str| {
@@ -253,7 +254,7 @@ fn replay_refuses_ambiguous_mapping_and_bounded_traversal_exhaustion() {
     ));
 }
 
-fn definition(
+pub(super) fn definition(
     runtime: &OrbitRuntime,
     name: &str,
     coverage: CoverageClass,

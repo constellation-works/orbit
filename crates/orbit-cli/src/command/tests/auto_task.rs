@@ -396,3 +396,95 @@ fn auto_task_recover_defaults_to_a_preview_and_needs_a_delivery_definition() {
             .contains("no such auto-task 'ghost'")
     );
 }
+
+#[test]
+fn auto_task_reset_previews_without_a_reason_and_carries_force() {
+    let preview = Cli::try_parse_from(["orbit", "auto-task", "reset", "delivery-qa"])
+        .expect("parse auto-task reset");
+    let Commands::AutoTask(auto_task) = preview.command else {
+        panic!("expected auto-task command");
+    };
+    let AutoTaskSubcommand::Reset(args) = auto_task.command else {
+        panic!("expected auto-task reset command");
+    };
+    assert_eq!(args.name, "delivery-qa");
+    assert!(args.reason.is_none(), "a bare reset only previews");
+    assert!(!args.force);
+
+    let forced = Cli::try_parse_from([
+        "orbit",
+        "auto-task",
+        "reset",
+        "delivery-qa",
+        "--force",
+        "--reason",
+        "agent-main was rewritten past the observed commit",
+    ])
+    .expect("parse forced auto-task reset");
+    let Commands::AutoTask(auto_task) = forced.command else {
+        panic!("expected auto-task command");
+    };
+    let AutoTaskSubcommand::Reset(args) = auto_task.command else {
+        panic!("expected auto-task reset command");
+    };
+    assert!(args.force);
+    assert_eq!(
+        args.reason.as_deref(),
+        Some("agent-main was rewritten past the observed commit")
+    );
+}
+
+#[test]
+fn auto_task_reset_needs_a_delivery_definition_that_exists() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    runtime
+        .auto_task_add(AutoTaskAddParams {
+            name: "interval".to_string(),
+            description: "Not a delivery consumer.".to_string(),
+            schedule: AutoTaskSchedule::Interval { every_minutes: 5 },
+            template: AutoTaskTemplate {
+                title: "Sweep".to_string(),
+                description: String::new(),
+                acceptance_criteria: vec![],
+                task_type: TaskType::Chore,
+                tags: vec![],
+                required_tools: vec![],
+                priority: TaskPriority::Medium,
+                crew: None,
+                status: TaskStatus::Backlog,
+            },
+            dedupe: DedupePolicy::SkipIfOpen,
+        })
+        .expect("add interval auto-task");
+
+    let cli = Cli::try_parse_from(["orbit", "auto-task", "reset", "interval"])
+        .expect("parse auto-task reset");
+    let Commands::AutoTask(auto_task) = cli.command else {
+        panic!("expected auto-task command");
+    };
+    let AutoTaskSubcommand::Reset(args) = auto_task.command else {
+        panic!("expected auto-task reset command");
+    };
+    let error = args
+        .execute(&runtime)
+        .expect_err("only delivery consumers hold coverage debt to forget");
+    assert!(
+        error.to_string().contains("not a delivery definition"),
+        "{error}"
+    );
+
+    let missing = Cli::try_parse_from(["orbit", "auto-task", "reset", "ghost"])
+        .expect("parse auto-task reset");
+    let Commands::AutoTask(auto_task) = missing.command else {
+        panic!("expected auto-task command");
+    };
+    let AutoTaskSubcommand::Reset(args) = auto_task.command else {
+        panic!("expected auto-task reset command");
+    };
+    assert!(
+        args.execute(&runtime)
+            .expect_err("unknown definition")
+            .to_string()
+            .contains("no such auto-task 'ghost'")
+    );
+}

@@ -141,6 +141,7 @@ pub fn evaluate(
                 unresolved: BTreeMap::new(),
                 associations: BTreeMap::new(),
                 active: None,
+                stall: None,
             };
 
             if !dry_run && !store.automation_initialize(&state)? {

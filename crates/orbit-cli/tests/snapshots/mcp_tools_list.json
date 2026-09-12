@@ -185,7 +185,7 @@
               "type": "string"
             }
           ],
-          "description": "Friction taxonomy tags as a string or array; valid tags: build | docs | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other"
+          "description": "Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other"
         },
         "title": {
           "description": "One-line handle identifying the problem, at most 120 characters. This is what lists and searches show, so name the surface and the failure. Derived from the body's opening line when omitted",
@@ -293,7 +293,7 @@
               "type": "string"
             }
           ],
-          "description": "Optional replacement taxonomy tags as a string or array; valid tags: build | docs | lifecycle | naming | other | policy | skill-guidance | tooling"
+          "description": "Optional replacement taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling"
         },
         "title": {
           "description": "Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body",

@@ -29,6 +29,7 @@ fn state() -> AutomationState {
         unresolved: Default::default(),
         associations: Default::default(),
         active: None,
+        stall: None,
     }
 }
 
@@ -263,6 +264,8 @@ fn adoption(previous: &AutomationState, next: &AutomationState) -> RecoveryRecor
         adopted_settings: true,
         reissued: None,
         replayed_history: None,
+        reset: None,
+        friction_id: None,
         reason: "threshold retuned tonight".into(),
         by: "operator".into(),
         at: at(),
@@ -329,6 +332,8 @@ fn replay_fixture() -> (AutomationState, AutomationState, RecoveryRecord) {
         trigger: previous.trigger.clone(),
         adopted_settings: false,
         reissued: None,
+        reset: None,
+        friction_id: None,
         replayed_history: Some(replay),
         reason: "reconcile proven history".into(),
         by: "operator".into(),
@@ -518,6 +523,8 @@ fn a_reissue_keeps_the_frozen_batch_and_names_the_action_it_replaces() {
             authorization: authorization.clone(),
         }),
         replayed_history: None,
+        reset: None,
+        friction_id: None,
         reason: authorization.reason.clone(),
         by: authorization.by.clone(),
         at: authorization.at,
@@ -588,4 +595,163 @@ fn an_ordinary_checkpoint_cannot_move_the_identity_or_forge_an_authorization() {
             Some(previous.clone())
         );
     }
+}
+
+/// The audit record is the only trace a forgotten consumer leaves, so the store
+/// refuses one that does not describe the state it is destroying.
+#[test]
+fn a_reset_record_must_match_the_state_it_forgets_and_fences_on_it() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let mut previous = state();
+    previous.pending_commits = vec!["c1".into()];
+    previous
+        .unresolved
+        .insert("c1".into(), "evidence_pending".into());
+    assert!(store.automation_initialize(&state()).unwrap());
+    assert!(
+        store
+            .automation_commit(
+                &state(),
+                &{
+                    let mut next = previous.clone();
+                    next.generation = 1;
+                    next
+                },
+                None
+            )
+            .unwrap()
+    );
+    previous.generation = 1;
+
+    let record = reset_record(&previous);
+
+    let mut mismatched = record.clone();
+    if let Some(reset) = &mut mismatched.reset {
+        reset.forgotten.pending_commits = 0;
+    }
+    assert!(
+        store.automation_reset(&previous, &mismatched).is_err(),
+        "an inventory that disagrees with the state is not an audit"
+    );
+
+    let mut unauthorized = record.clone();
+    unauthorized.reason = "  ".into();
+    assert!(store.automation_reset(&previous, &unauthorized).is_err());
+
+    let mut stale = previous.clone();
+    stale.generation = 0;
+    assert!(
+        !store
+            .automation_reset(&stale, &reset_record(&stale))
+            .unwrap(),
+        "a consumer another pass already moved is not reset from stale facts"
+    );
+
+    assert!(store.automation_reset(&previous, &record).unwrap());
+    assert_eq!(store.automation_state(&previous.consumer).unwrap(), None);
+    let history = store.automation_recoveries(&previous.consumer, 10).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].kind(), "reset");
+    assert_eq!(
+        history[0].reset.as_ref().unwrap().forgotten.pending_commits,
+        1
+    );
+}
+
+fn reset_record(previous: &AutomationState) -> RecoveryRecord {
+    RecoveryRecord {
+        consumer: previous.consumer.clone(),
+        previous_epoch: previous.epoch.clone(),
+        epoch: previous.epoch.clone(),
+        previous_trigger: previous.trigger.clone(),
+        trigger: previous.trigger.clone(),
+        adopted_settings: false,
+        reissued: None,
+        replayed_history: None,
+        reset: Some(orbit_types::workflow::automation::recovery::ResetRecord {
+            previous_generation: previous.generation,
+            forgotten: orbit_types::workflow::automation::recovery::CoverageDebt {
+                baseline: previous.baseline.clone(),
+                covered: previous.covered.clone(),
+                observed: previous.observed.clone(),
+                pending_deliveries: previous.pending.len(),
+                pending_commits: previous.pending_commits.len(),
+                unresolved: previous.unresolved.len(),
+                waived: previous.waived.len(),
+                excluded: previous.excluded.len(),
+                receipts: 0,
+            },
+            abandoned_action: None,
+            baseline: SourceRevision {
+                commit: "new-head".into(),
+                tree: "new-tree".into(),
+            },
+            released_refs: vec!["refs/orbit/automation/digest/batch/from".into()],
+            cleared_stall: previous.stall.clone(),
+        }),
+        friction_id: None,
+        reason: "the branch was rewritten past the observed commit".into(),
+        by: "operator".into(),
+        at: at(),
+    }
+}
+
+/// A stall records why evaluation stopped. It may not move the consumer.
+#[test]
+fn a_stall_marker_moves_only_itself_under_the_generation_fence() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let previous = state();
+    assert!(store.automation_initialize(&previous).unwrap());
+
+    let stall = orbit_types::workflow::automation::recovery::AutomationStall {
+        reason: "history_diverged".into(),
+        since: at(),
+        escalated_at: None,
+        friction_id: None,
+        divergence: None,
+    };
+
+    let mut unchanged = previous.clone();
+    unchanged.generation = 1;
+    assert!(
+        store.automation_stall(&previous, &unchanged).is_err(),
+        "a write that records no marker change is not a stall"
+    );
+
+    let mut moved = previous.clone();
+    moved.generation = 1;
+    moved.stall = Some(stall.clone());
+    moved.observed = SourceRevision {
+        commit: "moved".into(),
+        tree: "moved-tree".into(),
+    };
+    assert!(
+        store.automation_stall(&previous, &moved).is_err(),
+        "a stall may not advance the observed cursor"
+    );
+
+    let mut marked = previous.clone();
+    marked.generation = 1;
+    marked.stall = Some(stall);
+    assert!(store.automation_stall(&previous, &marked).unwrap());
+    assert_eq!(
+        store.automation_state(&previous.consumer).unwrap(),
+        Some(marked.clone())
+    );
+    assert!(
+        !store.automation_stall(&previous, &marked).unwrap(),
+        "the fence rejects a second write from the stale generation"
+    );
+
+    let mut cleared = marked.clone();
+    cleared.generation = 2;
+    cleared.stall = None;
+    assert!(store.automation_stall(&marked, &cleared).unwrap());
+    assert_eq!(
+        store
+            .automation_state(&previous.consumer)
+            .unwrap()
+            .and_then(|state| state.stall),
+        None
+    );
 }

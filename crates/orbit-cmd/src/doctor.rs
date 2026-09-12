@@ -169,6 +169,7 @@ impl DoctorCommands for OrbitRuntime {
             doctor_check_job_runs(self),
             doctor_check_task_reservations(self),
             doctor_check_task_relations(self),
+            doctor_check_stalled_automation(self),
             doctor_check_orphan_task_stores(self),
         ];
         results.extend(doctor_check_definition_artifacts(self));
@@ -797,6 +798,65 @@ fn doctor_check_job_runs(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
 /// task bundle — the "grandfathered" relations that make a generated task
 /// index fail to rebuild against its relation validator, forcing an unbounded
 /// bundle-scan fallback (ORB-10305). Scoped to the current
+/// Delivery automation consumers whose evaluation is suspended by a stall.
+///
+/// A stalled consumer is silent by design — it stops reporting a per-tick
+/// error precisely so the debt is visible here instead of scrolling past in a
+/// sweep log. Nothing resumes it without an operator, so it is reported until
+/// one recovers or resets it.
+fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    let stalled = match orbit_core::application::automation::stalled_consumers(runtime) {
+        Ok(stalled) => stalled,
+        Err(error) => {
+            return check(
+                "automation-consumers",
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot read delivery automation state: {error}"),
+            );
+        }
+    };
+
+    if stalled.is_empty() {
+        return check(
+            "automation-consumers",
+            WorkspaceDoctorStatus::Ok,
+            "no stalled delivery automation consumer".to_string(),
+        );
+    }
+
+    let now = chrono::Utc::now();
+    let detail = stalled
+        .iter()
+        .map(|consumer| {
+            format!(
+                "{} ({}, stalled {} min)",
+                consumer.definition(),
+                consumer.stall.reason,
+                orbit_core::application::automation::stalled_minutes(&consumer.stall, now)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let first = stalled
+        .first()
+        .map(|consumer| consumer.definition().to_string())
+        .unwrap_or_default();
+
+    actionable_check(
+        "automation-consumers",
+        WorkspaceDoctorStatus::Warning,
+        format!(
+            "{} delivery automation consumer(s) stalled and accumulating debt: {detail}",
+            stalled.len()
+        ),
+        format!(
+            "Inspect with `orbit auto-task recover {first}`, then either \
+             `orbit auto-task recover {first} --replay-history --reason <why>` to retain \
+             the debt, or `orbit auto-task reset {first} --reason <why>` to forget it."
+        ),
+    )
+}
+
 /// workspace; surfacing them here lets an operator fix or remove the offending
 /// relation before the validator trips over it at rebuild time.
 fn doctor_check_task_relations(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {

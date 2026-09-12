@@ -181,9 +181,9 @@ fn healthy_fresh_workspace_has_no_failures() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let results = runtime.doctor_workspace().expect("doctor");
 
-    // Ten infrastructure checks plus one definition-artifact row per kind
+    // Eleven infrastructure checks plus one definition-artifact row per kind
     // (skills, jobs, activities, auto-tasks, routines).
-    assert_eq!(results.len(), 15, "one row per check: {results:?}");
+    assert_eq!(results.len(), 16, "one row per check: {results:?}");
     assert!(
         results
             .iter()
@@ -1617,4 +1617,24 @@ fn unreachable_checkout_partition_is_reported_without_the_deletion_repair() {
             .is_dir(),
         "the repair must not delete task bundles it cannot prove are abandoned"
     );
+}
+
+/// A workspace with no delivery automation state is healthy, not skipped: the
+/// check reads persisted stall markers, and having none is the answer.
+#[test]
+fn automation_consumer_check_passes_without_any_stalled_consumer() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let runtime = workspace_runtime(&temp);
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "automation-consumers");
+
+    assert_eq!(row.status, WorkspaceDoctorStatus::Ok);
+    assert!(
+        row.message
+            .contains("no stalled delivery automation consumer"),
+        "{}",
+        row.message
+    );
+    assert_eq!(row.remediation, None);
 }

@@ -59,6 +59,9 @@ pub struct ResolvedConfig {
     pub pr: PrSettings,
     /// Whether scoreboard metrics are recorded for task runs.
     pub scoring_enabled: bool,
+    /// Minutes a deferred delivery-automation reason may persist before it is
+    /// escalated (`[automation] stall_window_minutes`; default 60).
+    pub automation_stall_window_minutes: u32,
     /// Default base branch for ship workflows. Sourced from `[workflow]
     /// base_branch`; defaults to `"main"` when no key is set.
     pub workflow_base_branch: String,
@@ -100,6 +103,7 @@ impl ResolvedConfig {
                 task_url_template: snapshot.pr_task_url_template.clone(),
             },
             scoring_enabled: snapshot.scoring_enabled,
+            automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             workflow_auto_ship: snapshot.workflow_auto_ship,
             crews: default_crews(),
@@ -223,6 +227,7 @@ impl ResolvedConfig {
                 task_url_template: snapshot.pr_task_url_template.clone(),
             },
             scoring_enabled: snapshot.scoring_enabled,
+            automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             workflow_auto_ship: snapshot.workflow_auto_ship,
             crews,
