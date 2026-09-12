@@ -63,6 +63,7 @@ impl RoutineDispatch for RuntimeDispatch<'_> {
         source_orbit_dir: &Path,
         job_name: &str,
         actor: &str,
+        slot: &str,
     ) -> Result<String, OrbitError> {
         let runtime = self.runtimes.get(source_orbit_dir).ok_or_else(|| {
             OrbitError::WorkspaceError(format!(
@@ -77,8 +78,15 @@ impl RoutineDispatch for RuntimeDispatch<'_> {
         let mut input = json!({});
         input[crate::application::job::pipeline::ROUTINE_DISPATCH_ORBIT_DIR_FIELD] =
             json!(source_orbit_dir.to_string_lossy());
+        let routine = actor.strip_prefix("routine/").unwrap_or(actor);
         runtime
-            .submit_pipeline_run(job_name, input, None, Some(actor))
+            .submit_pipeline_run_with_trigger(
+                job_name,
+                input,
+                None,
+                Some(actor),
+                orbit_types::workflow::JobRunTrigger::routine(routine, slot),
+            )
             .map(|invoke| invoke.run_id)
     }
 

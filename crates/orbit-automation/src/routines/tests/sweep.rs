@@ -108,7 +108,13 @@ impl FakeDispatch {
 }
 
 impl RoutineDispatch for FakeDispatch {
-    fn submit(&self, dir: &Path, job: &str, _actor: &str) -> Result<String, OrbitError> {
+    fn submit(
+        &self,
+        dir: &Path,
+        job: &str,
+        _actor: &str,
+        _slot: &str,
+    ) -> Result<String, OrbitError> {
         if self.fail_submit.get() {
             return Err(OrbitError::Execution("dispatch boom".to_string()));
         }

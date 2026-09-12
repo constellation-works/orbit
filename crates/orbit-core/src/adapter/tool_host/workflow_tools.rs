@@ -178,6 +178,7 @@ pub(crate) fn project_workflow_run_list(
         .iter()
         .map(|run| {
             run_json_enriched(
+                Some(runtime),
                 run,
                 states.get(&run.run_id).and_then(Option::as_ref),
                 recoveries.get(&run.run_id),
@@ -291,6 +292,7 @@ fn run_json(run: &JobRun) -> Result<Value, OrbitError> {
     let mut value = serde_json::to_value(run).map_err(serialize_error("serialize workflow run"))?;
     value["steps"] = serde_json::to_value(&run.steps)
         .map_err(serialize_error("serialize workflow run steps"))?;
+    value["steps_source"] = json!("record");
     Ok(value)
 }
 
@@ -304,15 +306,23 @@ fn run_json(run: &JobRun) -> Result<Value, OrbitError> {
 fn run_json_with_lineage(runtime: &OrbitRuntime, run: &JobRun) -> Result<Value, OrbitError> {
     let state = runtime.read_run_state(&run.run_id).ok().flatten();
     let recovery = runtime.collect_run_recovery_attempts(&run.run_id).ok();
-    run_json_enriched(run, state.as_ref(), recovery.as_ref())
+    run_json_enriched(Some(runtime), run, state.as_ref(), recovery.as_ref())
 }
 
 fn run_json_enriched(
+    runtime: Option<&OrbitRuntime>,
     run: &JobRun,
     state: Option<&PipelineState>,
     recovery: Option<&RunRecoveryAttempts>,
 ) -> Result<Value, OrbitError> {
     let mut value = run_json(run)?;
+    if let Some(trigger) = state.and_then(|state| state.trigger.as_ref()) {
+        value["trigger"] =
+            serde_json::to_value(trigger).map_err(serialize_error("serialize run trigger"))?;
+    }
+    if let Some(runtime) = runtime {
+        attach_displayed_steps(runtime, run, &mut value)?;
+    }
     let dispatches = state
         .map(|state| state.child_dispatches.clone())
         .unwrap_or_default();
@@ -366,4 +376,55 @@ fn run_json_enriched(
         }),
     };
     Ok(value)
+}
+
+/// [ORB-12255] Prefer stored `JobRun::steps`; reconstruct from the v2 audit
+/// trail when the worker path left the record empty. `steps_source` names
+/// which one answered, matching CLI `run show --json`.
+fn attach_displayed_steps(
+    runtime: &OrbitRuntime,
+    run: &JobRun,
+    value: &mut Value,
+) -> Result<(), OrbitError> {
+    if !run.steps.is_empty() {
+        value["steps_source"] = json!("record");
+        return Ok(());
+    }
+    let audit = runtime
+        .collect_run_audit_steps(&run.run_id)
+        .unwrap_or_default();
+    if audit.is_empty() {
+        value["steps_source"] = json!("record");
+        return Ok(());
+    }
+    let steps = audit
+        .iter()
+        .map(|step| {
+            let duration_ms = match (step.started_at, step.finished_at) {
+                (Some(started), Some(finished)) => Some(
+                    finished
+                        .signed_duration_since(started)
+                        .num_milliseconds()
+                        .max(0) as u64,
+                ),
+                _ => None,
+            };
+            json!({
+                "step_index": step.step_index,
+                "target_type": "activity",
+                "target_id": step.step_id,
+                "started_at": step.started_at.map(|value| value.to_rfc3339()),
+                "finished_at": step.finished_at.map(|value| value.to_rfc3339()),
+                "duration_ms": duration_ms,
+                "exit_code": Value::Null,
+                "agent_response_json": Value::Null,
+                "state": step.state.as_deref().unwrap_or("running"),
+                "error_code": Value::Null,
+                "error_message": step.error_message,
+            })
+        })
+        .collect::<Vec<_>>();
+    value["steps"] = Value::Array(steps);
+    value["steps_source"] = json!("audit");
+    Ok(())
 }

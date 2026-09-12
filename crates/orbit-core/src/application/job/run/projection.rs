@@ -77,6 +77,7 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         "drain_admissions_stop": drain_admissions_stop,
         "run_id": run.run_id,
         "run_role": run_id_role(&run.run_id).map(|role| role.to_string()),
+        "trigger": state_for_agent_result.and_then(|state| state.trigger.as_ref()),
         "job_id": run.job_id,
         "attempt": run.attempt,
         "state": run.state.to_string(),

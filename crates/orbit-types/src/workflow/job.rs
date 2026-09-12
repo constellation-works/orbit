@@ -432,6 +432,96 @@ pub struct Job {
     pub updated_at: DateTime<Utc>,
 }
 
+/// How a job run was submitted [ORB-12255].
+///
+/// Stored on the run's pipeline document and projected on every operator-facing
+/// run JSON so MCP, CLI, and audit agree on provenance. Older runs have none.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobRunTriggerKind {
+    Routine,
+    Cli,
+    Mcp,
+    Child,
+}
+
+impl JobRunTriggerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Routine => "routine",
+            Self::Cli => "cli",
+            Self::Mcp => "mcp",
+            Self::Child => "child",
+        }
+    }
+}
+
+impl Display for JobRunTriggerKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JobRunTrigger {
+    pub kind: JobRunTriggerKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
+}
+
+impl JobRunTrigger {
+    pub fn cli() -> Self {
+        Self {
+            kind: JobRunTriggerKind::Cli,
+            routine: None,
+            slot: None,
+        }
+    }
+
+    pub fn mcp() -> Self {
+        Self {
+            kind: JobRunTriggerKind::Mcp,
+            routine: None,
+            slot: None,
+        }
+    }
+
+    pub fn child() -> Self {
+        Self {
+            kind: JobRunTriggerKind::Child,
+            routine: None,
+            slot: None,
+        }
+    }
+
+    pub fn routine(name: impl Into<String>, slot: impl Into<String>) -> Self {
+        Self {
+            kind: JobRunTriggerKind::Routine,
+            routine: Some(name.into()),
+            slot: Some(slot.into()),
+        }
+    }
+
+    /// Value written on the v2 `run.started` audit event's `job_name`.
+    pub fn audit_job_name(&self, job_name: &str) -> String {
+        match self.kind {
+            JobRunTriggerKind::Routine => {
+                let name = self
+                    .routine
+                    .as_deref()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(job_name);
+                format!("routine:{name}")
+            }
+            JobRunTriggerKind::Mcp => format!("mcp:{job_name}"),
+            JobRunTriggerKind::Child => format!("child:{job_name}"),
+            JobRunTriggerKind::Cli => format!("cli:{job_name}"),
+        }
+    }
+}
+
 /// Per-step execution record stored in a step file inside the run bundle directory.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobRunStep {

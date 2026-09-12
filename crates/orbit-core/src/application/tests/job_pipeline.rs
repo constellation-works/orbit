@@ -817,7 +817,12 @@ spec:
         )
         .expect("insert mixed-crew run");
     runtime
-        .seed_v2_pipeline_run(&run, &input, None)
+        .seed_v2_pipeline_run(
+            &run,
+            &input,
+            None,
+            orbit_types::workflow::JobRunTrigger::cli(),
+        )
         .expect("seed pipeline state");
 
     let error = runtime

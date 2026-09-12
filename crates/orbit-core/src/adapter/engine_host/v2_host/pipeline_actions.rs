@@ -872,7 +872,11 @@ fn record_pipeline_results(action: &str, input: &Value) -> Result<Value, Dispatc
             ));
         }
         match status {
-            "succeeded" => succeeded_count += 1,
+            status
+                if crate::application::job::pipeline::pipeline_wait_status_is_success(status) =>
+            {
+                succeeded_count += 1
+            }
             "failed" | "cancelled" | "interrupted" | "timeout" => non_success_count += 1,
             other => {
                 return Err(action_failed(
@@ -973,7 +977,7 @@ fn pipeline_wait_entry_failure(label: &str, entry: &Value) -> Option<String> {
     let Some(status) = entry.get("status").and_then(Value::as_str) else {
         return Some(format!("{label} missing string status"));
     };
-    if status == "succeeded" {
+    if crate::application::job::pipeline::pipeline_wait_status_is_success(status) {
         return None;
     }
 

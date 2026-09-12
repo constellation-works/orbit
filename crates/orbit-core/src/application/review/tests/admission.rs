@@ -229,7 +229,12 @@ fn pr_bound_epic_submits_a_local_child_then_gates_the_combined_candidate() {
     let child = seed_task(runtime, "child");
     let parent = super::admitted_run(runtime, "epic_pipeline", std::slice::from_ref(&epic.id));
     runtime
-        .seed_v2_pipeline_run(&parent, parent.input.as_ref().expect("parent input"), None)
+        .seed_v2_pipeline_run(
+            &parent,
+            parent.input.as_ref().expect("parent input"),
+            None,
+            orbit_types::workflow::JobRunTrigger::cli(),
+        )
         .expect("parent pipeline state");
     implement_candidate(&fixture.repo, &epic.id);
 

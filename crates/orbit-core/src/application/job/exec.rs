@@ -20,7 +20,7 @@ use orbit_types::workflow::activity_job::{
     validate_job_retired_sessions,
 };
 use orbit_types::workflow::{
-    JobRun, JobRunStartOutcome, JobRunState, JobTargetType, PipelineState,
+    JobRun, JobRunStartOutcome, JobRunState, JobRunTrigger, JobTargetType, PipelineState,
 };
 use serde_json::{Value, json};
 
@@ -154,7 +154,7 @@ impl OrbitRuntime {
             Some(input.clone()),
             retry_source_run_id.clone(),
         )?;
-        self.seed_v2_pipeline_run(&run, &input, resume)?;
+        self.seed_v2_pipeline_run(&run, &input, resume, JobRunTrigger::cli())?;
 
         let started_at = chrono::Utc::now();
         // [ORB-10965] This run was inserted moments ago by this very process,
@@ -285,8 +285,15 @@ impl OrbitRuntime {
         self.record_event(OrbitEvent::ActivityRunStarted {
             id: asset.name.clone(),
         })?;
+        let audit_job_name = self
+            .read_run_state(&run_id)
+            .ok()
+            .flatten()
+            .and_then(|state| state.trigger)
+            .unwrap_or_else(JobRunTrigger::cli)
+            .audit_job_name(&asset.name);
         let _ = writer.emit(V2AuditEventKind::RunStarted {
-            job_name: format!("cli:{}", asset.name),
+            job_name: audit_job_name,
             retry_source_run_id,
         });
 
@@ -331,11 +338,13 @@ impl OrbitRuntime {
         run: &JobRun,
         input: &Value,
         resume: Option<&ResumePlan>,
+        trigger: JobRunTrigger,
     ) -> Result<(), OrbitError> {
         let mut initial_state = match resume.and_then(|plan| plan.resume_state.as_ref()) {
             Some(source_state) => seeded_resume_state(source_state, run),
             None => PipelineState::new(run.run_id.clone(), run.job_id.clone(), input.clone()),
         };
+        initial_state.trigger = Some(trigger);
         // [ORB-11283] A queued drain can carry an operator stop (or worker
         // ceiling) written before the worker seeded this document. Replacing
         // the whole state would silently resume admissions.
@@ -348,6 +357,9 @@ impl OrbitRuntime {
             }
             if initial_state.child_dispatches.is_empty() {
                 initial_state.child_dispatches = existing.child_dispatches;
+            }
+            if existing.trigger.is_some() {
+                initial_state.trigger = existing.trigger;
             }
         }
         self.stores()
@@ -381,6 +393,8 @@ impl OrbitRuntime {
                 self.persist_v2_run_state(run, input, result, JobRunState::Success, options)?;
                 if options.record_synthetic_success_step {
                     self.record_synthetic_v2_success_step(run, started_at, finished_at, result)?;
+                } else {
+                    self.persist_detached_worker_steps(run, started_at, finished_at, result)?;
                 }
                 JobRunState::Success
             }
@@ -512,6 +526,75 @@ impl OrbitRuntime {
             },
         )?;
         Ok(())
+    }
+
+    /// Persist a step summary on the run record for the detached worker path
+    /// [ORB-12255]. Replay already writes a synthetic step 0; workers used to
+    /// leave `JobRun::steps` empty and only reconstruct from audit at `run
+    /// show`. MCP readers never reconstructed, so they saw `steps: []`.
+    ///
+    /// Audit-derived rows are preferred so the stored summary matches the
+    /// reconstructed view. The synthetic job-level step is the fallback when
+    /// the trail is empty, matching replay.
+    fn persist_detached_worker_steps(
+        &self,
+        run: &JobRun,
+        started_at: chrono::DateTime<chrono::Utc>,
+        finished_at: chrono::DateTime<chrono::Utc>,
+        result: &V2JobRunResult,
+    ) -> Result<(), OrbitError> {
+        let current = self.get_job_run_backend(&run.run_id)?;
+        if current.is_some_and(|stored| !stored.steps.is_empty()) {
+            return Ok(());
+        }
+
+        let audit_steps = self
+            .collect_run_audit_steps(&run.run_id)
+            .unwrap_or_default();
+        if audit_steps.is_empty() {
+            return self.record_synthetic_v2_success_step(run, started_at, finished_at, result);
+        }
+
+        for step in audit_steps {
+            let step_started = step.started_at.unwrap_or(started_at);
+            let step_finished = step.finished_at.unwrap_or(finished_at);
+            let duration_ms = Some(
+                step_finished
+                    .signed_duration_since(step_started)
+                    .num_milliseconds()
+                    .max(0) as u64,
+            );
+            let state = job_run_state_from_audit_outcome(step.state.as_deref());
+            self.stores().jobs().complete_job_run_step(
+                &run.run_id,
+                &JobRunStepParams {
+                    step_index: step.step_index as usize,
+                    target_type: JobTargetType::Activity,
+                    target_id: step.step_id,
+                    started_at: step_started,
+                    finished_at: step_finished,
+                    duration_ms,
+                    exit_code: None,
+                    agent_response_json: None,
+                    state,
+                    error_code: None,
+                    error_message: step.error_message,
+                },
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn job_run_state_from_audit_outcome(outcome: Option<&str>) -> JobRunState {
+    match outcome {
+        Some("success" | "succeeded" | "finished") => JobRunState::Success,
+        Some("failed" | "error" | "denied") => JobRunState::Failed,
+        Some("timeout") => JobRunState::Timeout,
+        Some("skipped") => JobRunState::Skipped,
+        Some("cancelled") => JobRunState::Cancelled,
+        Some("interrupted") => JobRunState::Interrupted,
+        _ => JobRunState::Success,
     }
 }
 

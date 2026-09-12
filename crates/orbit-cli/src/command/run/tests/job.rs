@@ -149,6 +149,7 @@ fn wait_entry(status: &str, error: Option<&str>) -> orbit_core::PipelineWaitEntr
         run_id: "jrun-20260815-0001".to_string(),
         status: status.to_string(),
         finished_at: Some("2026-08-15T00:01:00Z".to_string()),
+        duration_ms: Some(1000),
         pipeline: None,
         error: error.map(ToOwned::to_owned),
     }
@@ -238,12 +239,15 @@ fn wait_exits_nonzero_for_every_failing_terminal_state() {
 
 #[test]
 fn wait_exits_zero_when_the_run_succeeded() {
-    let output = render_wait(&invoke_result(false), &wait_entry("succeeded", None))
+    let output = render_wait(&invoke_result(false), &wait_entry("success", None))
         .expect("a successful run must exit zero");
     let crate::command::CommandOutput::Payload(payload) = output else {
         panic!("successful wait must return a payload, got {output:?}");
     };
     assert_eq!(payload.exit_code(), 0);
+    let (doc, _) = payload.into_view();
+    assert_eq!(doc["state"], "success");
+    assert_eq!(doc["duration_ms"], 1000);
 }
 
 /// Both text and the structured payload expose the terminal state and its

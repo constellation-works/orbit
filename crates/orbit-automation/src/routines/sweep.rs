@@ -39,12 +39,14 @@ pub trait RoutineDispatch {
     }
 
     /// Submit `job_name` in the source workspace rooted at `source_orbit_dir`
-    /// under `actor`, returning the dispatched run id.
+    /// under `actor`, returning the dispatched run id. `slot` is the RFC 3339
+    /// scheduled slot consumed by this fire [ORB-12255].
     fn submit(
         &self,
         source_orbit_dir: &Path,
         job_name: &str,
         actor: &str,
+        slot: &str,
     ) -> Result<String, OrbitError>;
 
     /// Current run state for a dispatched fire, when the run is queryable.
@@ -377,6 +379,7 @@ fn fire(
         &routine.source_orbit_dir,
         definition.target.job_name(),
         &actor,
+        slot,
     ) {
         Ok(run_id) => {
             store.routine_mark_fire_dispatched(name, slot, attempt, &run_id)?;
