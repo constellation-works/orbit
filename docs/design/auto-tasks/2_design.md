@@ -17,18 +17,8 @@ related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-1
 # Auto-tasks — Design
 
 This doc covers the shipped implementation: the definition record, discovery,
-due computation, cursor state, the scheduler pass, and the CRUD surfaces. The
-routine machinery it rides on (cron eval, fire records, dashboard health) is
-documented under `docs/design/routines/`.
-
-> **Pending change — clock consolidation (decided 2026-09-12, unimplemented).** §4's
-> routine → job → activity wrapping is replaced by a direct call from the host clock tick;
-> the `auto_task_scheduler` routine, `auto_task_scheduler_pipeline` job, and
-> `run_auto_task_scheduler` activity are retired. Definitions gain no host field: every
-> registered owner checkout with an enabled clock evaluates every enabled definition
-> against its own store. See
-> [Auto-task definitions are evaluated by the host tick, not fired by a routine](./4_decisions.md#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine)
-> and [routines/3_vision.md §0](../routines/3_vision.md#0-graduating-clock-consolidation).
+due computation, cursor state, the scheduler pass, and the CRUD surfaces. The shared
+host clock and routine due-math it uses are documented under `docs/design/routines/`.
 
 The [shared automation-trigger proposal](../automation-triggers/1_overview.md)
 from [ORB-11315] specifies delivery thresholds, preparation/failure eligibility,
@@ -141,14 +131,12 @@ Recovery on the next locked pass:
   mint evidence; retry reconciles from `pending.task_id` or stays
   unresolved.
 
-The pass is the deterministic `run_auto_task_scheduler` action
-(`dispatch.rs`), wrapped in `auto_task_scheduler_pipeline` (`max_active_runs:
-1`), fired by the seeded `auto_task_scheduler` routine (`overlap: forbid`,
-minutely). Those job/routine knobs reduce overlap; they are not storage-level
-idempotency. Because it is a routine, its fires flow to `GET /api/routines`.
-**[slated to change]** — the tick calls `run_auto_task_scheduler_at` directly
-under the host sweep lock; the job/routine knobs go away (the sidecar lock is
-the exclusion, as it already was) and fires stop appearing on `/api/routines`.
+The host tick calls `run_auto_task_scheduler_at` directly for every registered
+owner checkout after routine evaluation and under the host sweep lock. The pass
+is bounded by the finite discovered workspace and definition collections. Its
+sidecar lock remains the per-workspace exclusion boundary. No scheduler routine,
+job, activity, or job run is created, and fires do not appear on
+`GET /api/routines`; the tick report and Operations auto-task panel expose them.
 
 ## 5. CRUD surfaces
 
@@ -209,8 +197,8 @@ Deliberately rejected:
   would drift from the scheduler's, and the provenance parity that makes the
   feature worth having is precisely what drift destroys.
 - **Honoring `enabled`/`dedupe`/due-math.** That makes `mint` a "run the
-  scheduler early" button, which the existing `run_auto_task_scheduler` action
-  already is. The gap being closed is *manual mint*, not *early fire*.
+  scheduler early" button, which `orbit clock tick` already is. The gap being
+  closed is *manual mint*, not *early fire*.
 - **Advancing the cursor.** It would consume a real scheduled slot, silently
   cancelling the next automatic fire.
 - **`--dry-run` / `--force` flags.** `--force` has nothing to override — the mint

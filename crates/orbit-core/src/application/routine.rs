@@ -42,10 +42,6 @@ use orbit_common::fs::io::{atomic_write_text, write_text_with_parent};
 /// fail-closed before writing.
 pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
     (
-        "auto_task_scheduler",
-        include_str!("../../assets/routines/auto_task_scheduler.yaml"),
-    ),
-    (
         "ci_failure_sweep",
         include_str!("../../assets/routines/ci_failure_sweep.yaml"),
     ),
@@ -637,7 +633,6 @@ mod tests {
         assert_eq!(seeded.refreshed, DEFAULT_ROUTINE_FILES.len());
 
         for (stem, target) in [
-            ("auto_task_scheduler", "auto_task_scheduler_pipeline"),
             ("ci_failure_sweep", "ci_failure_sweep_pipeline"),
             ("dependabot_alert_sweep", "dependabot_alert_sweep_pipeline"),
             ("task_triage", "task_triage_pipeline"),

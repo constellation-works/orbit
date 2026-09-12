@@ -26,11 +26,11 @@ and unimplemented; existing scheduling and action semantics remain current.
 
 ## 1. Open Questions
 
-1. **Cross-workspace scheduling.** *Graduating* — decided 2026-09-12 as part of
-   the clock consolidation ([Auto-task definitions are evaluated by the host tick, not fired by a routine](./4_decisions.md#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine)):
+1. **Cross-workspace scheduling.** *Graduated* — delivered in [ORB-12237] through
+   clock consolidation ([Auto-task definitions are evaluated by the host tick, not fired by a routine](./4_decisions.md#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine)):
    the host tick fans out over every registered owner checkout's `auto_tasks/`,
-   mirroring routine discovery, with no routine in between. Target contract in
-   [routines/3_vision.md §0](../routines/3_vision.md#0-graduating-clock-consolidation).
+   mirroring routine discovery, with no routine in between. The current contract is in
+   [routines/2_design.md §3](../routines/2_design.md#3-clock-tick).
 2. **Dispatch coupling.** A minted task lands in `backlog`; the orchestrator
    still triages/ships it. Should a definition optionally auto-dispatch its
    task (e.g. straight into `workflow_ship`) under a crew, or does that

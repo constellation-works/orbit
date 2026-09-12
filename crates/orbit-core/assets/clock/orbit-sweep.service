@@ -1,4 +1,4 @@
-# Oneshot service driving `orbit sweep` [ORB-10021] / ADR-0204.
+# Oneshot service driving `orbit clock tick` [ORB-10021, ORB-12237].
 # Installed as a systemd *user* unit by `orbit routine init --install-clock`.
 [Unit]
 Description=Orbit routine sweep (fires due routines on this host)
@@ -10,4 +10,4 @@ KillMode=process
 # systemd for the service user, keeping provider and Rust tool launchers
 # discoverable without embedding a host-specific home directory.
 Environment=PATH=%h/.local/bin:%h/.orbit/bin:%h/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart={{ORBIT_BIN}} sweep
+ExecStart={{ORBIT_BIN}} clock tick

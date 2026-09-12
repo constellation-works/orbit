@@ -383,6 +383,14 @@ async fn authorized_routine_toggle_reads_back_and_rejects_stale_or_wrong_selecti
             assert_eq!(persisted["enabled"].as_bool(), Some(enabled));
             let listed = body_json(routine_request(state.clone(), "/routines", None).await).await;
             assert_eq!(listed["routines"][0]["enabled"], enabled, "{listed}");
+            assert!(
+                listed["routines"]
+                    .as_array()
+                    .expect("routine rows")
+                    .iter()
+                    .all(|routine| routine["name"] != "auto_task_scheduler"),
+                "auto-task evaluation must not be projected as a routine: {listed}"
+            );
             assert_eq!(listed["capabilities"]["routine_toggle"]["authorized"], true);
             let stale = routine_request(state.clone(), "/routines/toggle?workspace=alpha", Some(body)).await;
             assert_eq!(stale.status(), StatusCode::CONFLICT);

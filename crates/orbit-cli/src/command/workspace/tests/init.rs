@@ -962,7 +962,6 @@ fn workspace_init_seeds_disabled_routines_and_reinit_preserves_authored_files() 
 
     let routines_dir = workspace.path().join(".orbit/routines");
     for (stem, target) in [
-        ("auto_task_scheduler", "auto_task_scheduler_pipeline"),
         ("task_triage", "task_triage_pipeline"),
         ("ship_sweep", "workspace_ship_pipeline"),
     ] {

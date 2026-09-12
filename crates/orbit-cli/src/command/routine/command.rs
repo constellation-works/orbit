@@ -10,7 +10,6 @@ use clap::{Args, Subcommand};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 
-use super::clock::RoutineClockArgs;
 use super::init::RoutineInitArgs;
 use super::list::RoutineListArgs;
 use super::pause::RoutinePauseArgs;
@@ -25,7 +24,7 @@ use crate::command::CommandOut;
     subcommand_required = true,
     after_help = "Routine definitions are versioned YAML under `.orbit/routines/` in any\n\
                   registered owner checkout. Pauses are host-local and never synced.\n\
-                  The scheduler pass itself is `orbit sweep`."
+                  The host scheduler is controlled through `orbit clock`."
 )]
 pub struct RoutineCommand {
     #[command(subcommand)]
@@ -61,8 +60,6 @@ pub enum RoutineSubcommand {
     Pause(RoutinePauseArgs),
     /// Clear a host-local pause
     Resume(RoutineResumeArgs),
-    /// Show, pause, enable, or configure the host OS sweep clock
-    Clock(RoutineClockArgs),
     /// Read this host's identity and optionally install the OS clock unit
     Init(RoutineInitArgs),
 }
@@ -74,7 +71,6 @@ impl RoutineSubcommand {
             Self::Show(args) => args.execute_without_runtime(global_root),
             Self::Pause(args) => args.execute_without_runtime(global_root),
             Self::Resume(args) => args.execute_without_runtime(global_root),
-            Self::Clock(args) => args.execute_without_runtime(global_root),
             Self::Init(args) => args.execute_without_runtime(global_root),
         }
     }

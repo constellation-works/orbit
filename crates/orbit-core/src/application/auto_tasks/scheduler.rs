@@ -10,7 +10,6 @@ pub use orbit_automation::auto_tasks::scheduler::{
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::{AutoTaskDefinition, auto_task_tag};
-use serde_json::{Value, json};
 use std::path::PathBuf;
 
 impl AutoTaskDispatch for OrbitRuntime {
@@ -123,60 +122,4 @@ pub(crate) fn template_params(definition: &AutoTaskDefinition) -> TaskAddParams 
         system_created: true,
         ..TaskAddParams::default()
     }
-}
-
-/// Run one scheduler pass now and project it to the deterministic-action JSON
-/// contract (kept in sync with `run_auto_task_scheduler.yaml` output_schema).
-pub fn run_scheduler_action_json(
-    runtime: &OrbitRuntime,
-    input: &Value,
-) -> Result<Value, OrbitError> {
-    let dry_run = input
-        .get("dry_run")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let outcome = run_auto_task_scheduler_at(runtime, Utc::now(), SchedulerOptions { dry_run })?;
-
-    let created: Vec<&AutoTaskFireReport> = outcome
-        .reports
-        .iter()
-        .filter(|report| report.action == "fired")
-        .collect();
-    let reports = outcome
-        .reports
-        .iter()
-        .map(|report| {
-            json!({
-                "name": report.name,
-                "action": report.action,
-                "reason": report.reason,
-                "slot": report.slot,
-                "task_id": report.task_id,
-                "blocking_task_id": report.blocking_task_id,
-                "automation": report.automation,
-            })
-        })
-        .collect::<Vec<_>>();
-    let errors = outcome
-        .errors
-        .iter()
-        .map(|error| {
-            json!({
-                "path": error.path.as_ref().map(|p| p.display().to_string()),
-                "message": error.message,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    Ok(json!({
-        "dry_run": dry_run,
-        "definitions": outcome.reports.len(),
-        "created": created.len(),
-        "created_task_ids": created
-            .iter()
-            .filter_map(|report| report.task_id.clone())
-            .collect::<Vec<_>>(),
-        "reports": reports,
-        "load_errors": errors,
-    }))
 }

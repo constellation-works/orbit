@@ -7,50 +7,40 @@ status: Accepted
 feature: routines
 doc_role: design
 type: design
-summary: Proposed contract for routine definitions, sweep dispatch, host-local state, and OS clock integration.
+summary: Contract for routine definitions, clock-tick dispatch, host-local state, and OS clock integration.
 tags: [routines, scheduler]
 paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/sqlite/routine_store/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry]
-related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10800, ORB-10986, ORB-11082, ORB-11315, ORB-12236]
+related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10800, ORB-10986, ORB-11082, ORB-11315, ORB-12236, ORB-12237]
 ---
 
 # Routines — Design
 
-This doc is the v1 contract as shipped in [ORB-10021]: the routine definition schema,
-how definitions are discovered, what `orbit sweep` does on each invocation, where state
+This doc is the current contract: the routine definition schema, how definitions are
+discovered, what `orbit clock tick` does on each invocation, where state
 lives, and how the OS clock drives it. Cross-host coordination, event triggers, and everything else deferred is
 in [3_vision.md](./3_vision.md). Decision rationale lives in [4_decisions.md](./4_decisions.md).
 
-> **Pending change — clock consolidation, part 2 (decided 2026-09-12, unimplemented).** The
-> OS clock will drive one host tick that evaluates both routines and auto-task definitions
-> in-process, and `orbit routine clock` becomes top-level `orbit clock`. Sections below
-> marked **[slated to change]** describe what ships today and go away with that change. The
-> target contract is [3_vision.md §0](./3_vision.md#0-graduating-clock-consolidation); the
-> reasoning is in
-> [4_decisions.md](./4_decisions.md#one-host-tick-evaluates-routines-and-auto-task-definitions-in-process).
-> Part 1 shipped in [ORB-12236]: this doc already describes the hostless eligibility rule
-> (registered owner checkout + clock enabled + definition enabled + no local pause).
-
 ## OS sweep clock controls
 
-There are two independent scheduling layers. The per-user OS clock wakes Orbit and
-invokes the stateless `orbit sweep` pass; each versioned routine's cron expression then
+There are two independent scheduling layers. The per-user OS clock wakes Orbit and invokes
+the stateless `orbit clock tick` pass; each versioned routine and auto-task definition then
 decides whether that pass fires work. The OS clock is host-local infrastructure, not a
 routine definition. Its durable configuration is `~/.orbit/clock.toml`, defaults to a
 60-second cadence, and accepts only whole-minute values from 60 through 3600 seconds.
 
-**[CLI home slated to move]** — every `orbit routine clock <verb>` below becomes
-`orbit clock <verb>`; storage, cadence rules, and health semantics are unchanged.
-
-`orbit routine clock status` reports configured cadence, native-manager enabled state,
+`orbit clock status` reports configured cadence, native-manager enabled state,
 and whether an enabled Linux timer is active with a finite next trigger. An enabled timer
 without that scheduling state is `unhealthy`, has no effective cadence, and reports
-`orbit routine clock enable`, which rewrites a stale installed systemd timer if needed,
+`orbit clock enable`, which rewrites a stale installed systemd timer if needed,
 restarts the timer, and verifies the resulting deadline.
-`orbit routine clock pause` disables only launchd/systemd
+An installed unit that still invokes `orbit sweep` is stale; `orbit clock enable` rewrites
+it to invoke `orbit clock tick` through the same compare-and-rewrite path.
+`orbit clock pause` disables only launchd/systemd
 scheduled invocations (surviving logout/reboot through the native per-user manager);
 it preserves routine cursors, fire history, and per-routine pauses, and a deliberate
-`orbit sweep` is still available. `enable` resumes with the configured cadence, while
+`orbit clock tick` (or its `orbit sweep` compatibility alias) is still available. `enable`
+resumes with the configured cadence, while
 `set --cadence-seconds N` atomically rewrites the host setting and reloads the existing
 unit identity. Linux installation, cadence changes, and enablement verify an active timer
 with a finite next trigger after native commands complete. A failed verification is an
@@ -144,12 +134,12 @@ as absent; it never degrades into "fire with defaults".
 
 ### Seeded defaults and ownership
 
-`orbit workspace init` seeds `auto_task_scheduler.yaml`, `task_triage.yaml`,
-`task_pilot.yaml`, `ship_sweep.yaml`, `worktree_gc.yaml`, and `ci_failure_sweep.yaml`
+`orbit workspace init` seeds `task_triage.yaml`, `task_pilot.yaml`, `ship_sweep.yaml`,
+`worktree_gc.yaml`, and `ci_failure_sweep.yaml`
 with a workspace-unique name and `enabled: false`. Nothing else is resolved at seed time, so
 two hosts initializing the same workspace name write byte-identical definitions
-[ORB-12236]. **[slated to change]** — `auto_task_scheduler.yaml` leaves the default set
-(auto-task definitions are evaluated by the tick directly). The definition's versioned
+[ORB-12236]. Auto-task definitions are evaluated by the tick directly; there is no seeded
+auto-task scheduler routine. The definition's versioned
 `enabled` field is the opt-in: changing it to `true` deliberately grants that scheduled
 capability in the workspace.
 
@@ -301,9 +291,10 @@ health, or remote placement service in the v1 path.
 
 ---
 
-## 3. Sweep
+## 3. Clock tick
 
-`orbit sweep` is the stateless entrypoint the OS clock invokes every minute. Like
+`orbit clock tick` is the stateless entrypoint the OS clock invokes every minute;
+`orbit sweep` invokes the same implementation as a compatibility alias. Like
 `ship-sweep`, it never bootstraps a workspace from the caller's cwd, isolates per-routine
 failures, and exits non-zero on infrastructure errors such as malformed host identity,
 an unreadable registry, or an unopenable store. A valid empty local registry simply
@@ -359,9 +350,14 @@ Per pass:
    is not expected to satisfy the gate unless the worker's resolved `orbit_dir` is exactly
    the declared `.orbit` path. The gate deliberately refuses that redirected-root case so
    routine provenance cannot silently resolve to a different store.
-9. Record outcomes and exit. **[slated to change]** — the tick then runs the auto-task
-   evaluator over the same runtimes before exiting
-   ([3_vision.md §0.2](./3_vision.md#02-the-tick)).
+9. Run the auto-task evaluator directly over every discovered runtime, after routine
+   evaluation and while still holding the host sweep lock. A due definition mints a task
+   without creating a job run. Per-definition rows (`name`, `action`, `slot`, `task_id`,
+   `reason`) join routine rows in the report. One definition or workspace error becomes an
+   `error` row and does not stop routines or other workspaces. The phase is bounded by the
+   finite discovered workspace and definition collections.
+10. Record outcomes and exit. In dry-run mode both evaluators report what would happen and
+    write no routine fire, auto-task cursor, task, or run state.
 
 The global `--workspace <selector>` narrows one pass to a single registered
 workspace: discovery visits only that workspace, so nothing outside it is
@@ -370,7 +366,7 @@ resolved against the local registry before the pass touches scheduler state, and
 an unknown, unregistered, or inactive selector fails the invocation rather than
 silently sweeping the host [ORB-12108].
 
-`orbit routine list`, `orbit routine show`, and `orbit sweep` name this host and each
+`orbit routine list`, `orbit routine show`, and `orbit clock tick` name this host and each
 routine's source workspace in human and JSON output. Scheduler state never moves between
 hosts: a host that starts evaluating a definition has no migrated cursor, so its first
 sweep records the normal first-observation baseline and only the next natural slot can
@@ -379,9 +375,9 @@ fire — the other host's cursor, fires, and pauses are untouched.
 Fires are normal runs: they appear in run history, carry v2 audit envelopes, and are
 debuggable with the existing run tooling — there is no separate "scheduled run" ledger.
 
-Naming note: `orbit sweep` is the general scheduler pass. The seeded `ship_sweep` routine
-is workspace-local; the legacy `orbit run ship-sweep` cross-workspace entrypoint remains
-compatible during routine burn-in and is a separate eventual-removal concern.
+Naming note: `orbit clock tick` is the general scheduler pass and `orbit sweep` is its
+compatibility alias. The seeded `ship_sweep` routine is workspace-local; the legacy
+`orbit run ship-sweep` cross-workspace entrypoint is separate.
 
 ---
 
@@ -417,8 +413,9 @@ renders and installs the platform unit:
   `OnUnitActiveSec=<cadence>` plus a oneshot service. Every timer activation (fresh install,
   late reinstall, cadence change, or re-enable) therefore arms a finite first sweep relative
   to that activation; successful service activations schedule subsequent sweeps at the
-  configured cadence. `orbit routine clock enable` compares the installed timer with the
+  configured cadence. `orbit clock enable` compares the installed timer and service with the
   embedded template, rewrites a stale definition (for example pre-fix `OnStartupSec`), and
+  rewrites a service still invoking `orbit sweep` to invoke `orbit clock tick`, then
   daemon-reloads before restart [ORB-11082]. `AccuracySec=5s` bounds manager coalescing
   after each deadline [ORB-10986]. These monotonic
   triggers deliberately do not replay timer events missed while the manager or host was
@@ -430,6 +427,20 @@ renders and installs the platform unit:
 
 There is no resident Orbit daemon. Sub-minute triggers and event triggers are explicitly
 out of v1 scope for this reason.
+
+### Existing-host migration
+
+After upgrading, `orbit clock status` reports a native unit that still invokes
+`orbit sweep` as stale; `orbit clock enable` rewrites it to `orbit clock tick` and
+re-arms it. Workspace synchronization refreshes managed routine definitions and retires
+the former auto-task scheduler routine. `orbit doctor` reports that retired managed file
+as deprecated, and `orbit doctor --fix-stale-artifacts` moves an unchanged seeded copy to
+`.retired-managed/` while preserving an operator-edited copy there for inspection.
+
+Legacy `[routines] role` and routine `hosts:` fields warn during their compatibility
+window but no longer affect eligibility. Every registered owner checkout with an enabled
+host clock evaluates its enabled definitions against its own store; enabling the clock on
+an additional owner therefore creates an independent schedule on that host.
 
 ---
 

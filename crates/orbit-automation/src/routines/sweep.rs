@@ -99,6 +99,24 @@ pub struct RoutineSweepReport {
     pub run_id: Option<String>,
 }
 
+/// Per-auto-task outcome included in the host tick report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoTaskSweepReport {
+    /// Auto-task definition name, or the failing file name for a load error.
+    pub name: String,
+    /// Source workspace name.
+    pub source: String,
+    /// One of: `minted`, `would_fire`, `baselined`, `would_baseline`,
+    /// `skipped`, `error`.
+    pub action: &'static str,
+    /// Why, for `skipped` and `error` rows.
+    pub reason: Option<String>,
+    /// Scheduled slot consumed (RFC 3339, UTC), when a fire was involved.
+    pub slot: Option<String>,
+    /// Task minted by this tick.
+    pub task_id: Option<String>,
+}
+
 /// Result of one sweep pass.
 #[derive(Debug, Default)]
 pub struct SweepOutcome {
@@ -110,6 +128,8 @@ pub struct SweepOutcome {
     pub lock_busy: bool,
     /// Per-routine outcomes.
     pub reports: Vec<RoutineSweepReport>,
+    /// Per-auto-task outcomes, evaluated after all routine rows.
+    pub auto_task_reports: Vec<AutoTaskSweepReport>,
     /// Fail-closed definition/load failures (those routines were absent).
     pub load_errors: Vec<RoutineLoadError>,
     /// Set when every discovered workspace failed to open, so this pass

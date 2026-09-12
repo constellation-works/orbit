@@ -702,6 +702,44 @@ mod artifacts {
         );
     }
 
+    #[test]
+    fn previous_release_auto_task_scheduler_routine_is_deprecated_and_retired() {
+        let root = tempdir().expect("create tempdir");
+        let (global_root, workspace_root) = init_workspace(root.path());
+        let routines_dir = workspace_root.join("routines");
+        let previous_release = "schemaVersion: 1\n\
+name: auto-task-scheduler-repo\n\
+description: The previous release scheduler routine.\n\
+enabled: false\n\
+trigger:\n  cron: '* * * * *'\n  missed_run: skip\n\
+target: job:auto_task_scheduler_pipeline\n\
+policy:\n  timeout_minutes: 30\n  overlap: forbid\n";
+        let path = routines_dir.join("auto_task_scheduler.yaml");
+        std::fs::write(&path, previous_release).expect("seed previous release routine");
+        add_managed_manifest_entry(&routines_dir, "auto_task_scheduler", previous_release);
+
+        let runtime =
+            OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build runtime");
+        let report = runtime
+            .inspect_definition_artifacts()
+            .expect("inspect artifacts");
+        let finding = health_of(&report, ArtifactKind::Routine)
+            .findings
+            .iter()
+            .find(|finding| finding.name == "auto_task_scheduler")
+            .expect("scheduler routine is reported");
+        assert_eq!(finding.condition, ArtifactCondition::Deprecated);
+        assert_eq!(finding.provenance, ArtifactProvenance::OrbitWritten);
+
+        assert_eq!(
+            runtime
+                .remove_stale_definition_artifacts()
+                .expect("retire scheduler routine"),
+            1
+        );
+        assert!(!path.exists());
+    }
+
     /// Criteria: a faulty *user-authored* artifact is reported but never
     /// removed or rewritten by the fix flag.
     #[test]

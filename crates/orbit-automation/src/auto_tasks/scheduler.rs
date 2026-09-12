@@ -43,7 +43,8 @@ pub trait AutoTaskDispatch {
 pub struct AutoTaskFireReport {
     /// Definition name.
     pub name: String,
-    /// One of: `fired`, `would_fire`, `baselined`, `would_baseline`, `skipped`.
+    /// One of: `fired`, `would_fire`, `baselined`, `would_baseline`, `skipped`,
+    /// `error`.
     pub action: &'static str,
     /// Why, for `skipped` rows; for `fired` rows, when the cursor checkpoint
     /// after minting failed or a pending mint was reconciled.
@@ -99,8 +100,8 @@ pub fn run_auto_task_scheduler_at(
             fire_definition(host, definition, &state_path, now, options).unwrap_or_else(|error| {
                 AutoTaskFireReport {
                     name: definition.name.clone(),
-                    action: "skipped",
-                    reason: Some(format!("error: {error}")),
+                    action: "error",
+                    reason: Some(error.to_string()),
                     slot: None,
                     task_id: None,
                     blocking_task_id: None,

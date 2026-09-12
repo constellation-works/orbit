@@ -1,6 +1,7 @@
 pub mod activity;
 pub mod audit;
 pub mod auto_task;
+pub mod clock;
 pub mod config;
 pub mod docs;
 pub mod doctor;
@@ -109,7 +110,8 @@ Definitions:
   executor    View executors
 
 Scheduler:
-  sweep       Fire due routines on this host (the scheduler pass)
+  clock       Inspect, control, and manually tick the host scheduler
+  sweep       Compatibility alias for `orbit clock tick`
   routine     Inspect and control scheduled routines on this host
   auto-task   Define recurring auto-task templates (the scheduler primitive)
 
@@ -170,6 +172,7 @@ pub enum Commands {
     Executor(executor::ExecutorCommand),
 
     // ── Scheduler ──
+    Clock(clock::ClockCommand),
     Sweep(sweep::SweepCommand),
     Routine(routine::RoutineCommand),
     #[command(name = "auto-task")]

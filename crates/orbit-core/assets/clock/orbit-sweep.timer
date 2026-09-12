@@ -1,11 +1,11 @@
-# Configured timer for `orbit sweep` [ORB-10720].
+# Configured timer for `orbit clock tick` [ORB-10720, ORB-12237].
 # OnActiveSec arms the first sweep relative to every timer activation, including
 # a late install, reinstall, cadence change, or re-enable. Subsequent sweeps are
 # measured from the last service activation. Monotonic timers do not replay
 # missed timer events; each routine's `missed_run` policy decides what a sweep
 # after downtime does with missed cron slots.
 [Unit]
-Description=Run orbit sweep every {{CADENCE_SECONDS}} seconds
+Description=Run orbit clock tick every {{CADENCE_SECONDS}} seconds
 
 [Timer]
 OnActiveSec={{CADENCE_SECONDS}}s

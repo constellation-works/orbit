@@ -1,4 +1,4 @@
-# Automation: the sweep clock and routines
+# Automation: the host clock, routines, and auto-tasks
 
 How scheduled work happens, and what to turn on. A fresh workspace has the whole
 automation layer installed and **switched off** — this is the reference for
@@ -8,18 +8,18 @@ opting in deliberately.
 
 ```text
 OS clock unit (every minute)
-  └── orbit sweep                       stateless: what is due on this host?
-        └── routine (.orbit/routines/*.yaml)
-              └── job:<name>            runs as a normal, auditable run
+  └── orbit clock tick                  stateless: what is due on this host?
+        ├── routine (.orbit/routines/*.yaml) → job:<name> → normal run
+        └── auto-task (.orbit/auto_tasks/*.yaml) → normal task
 ```
 
 Three things must all be true for a routine to fire:
 
-1. This host has a clock unit installed (or something invokes `orbit sweep`).
+1. This host has a clock unit installed (or something invokes `orbit clock tick`).
 2. The routine's `enabled:` is true.
 3. The routine is not paused on this host.
 
-The workspace itself opts in by being registered: `orbit sweep` loads definitions
+The workspace itself opts in by being registered: the tick loads definitions
 from every registered, active **owner** checkout on the host. Replica checkouts
 are skipped, and there is no config key to set.
 
@@ -32,17 +32,18 @@ orbit routine init --install-clock
 ```
 
 Reads the machine identity written by `orbit init` and installs the per-user OS
-clock unit that runs `orbit sweep` every minute — launchd on macOS, a systemd
+clock unit that runs `orbit clock tick` every minute — launchd on macOS, a systemd
 user timer on Linux. It never creates or rewrites host identity; `orbit init`
 owns that.
 
 ```bash
-orbit routine clock status          # cadence and native manager state
-orbit routine clock pause|enable    # host-wide, without touching routine state
-orbit routine clock set <minutes>   # whole-minute cadence, reloads the unit
+orbit clock status                  # cadence and native manager state
+orbit clock pause|enable            # host-wide, without touching definition state
+orbit clock set --cadence-seconds 300  # whole-minute cadence, reloads the unit
 ```
 
-`clock pause` stops scheduled invocation; a manual `orbit sweep` still works.
+`clock pause` stops scheduled invocation; a manual `orbit clock tick` still works.
+`orbit sweep` is a compatibility alias for the same tick and produces the same output.
 
 **2. Enable routines, one at a time.** Each is a versioned YAML file — flipping
 `enabled: true` is a reviewable commit, not a runtime toggle. Registering the
@@ -50,9 +51,9 @@ checkout already made the workspace a routine source; an older `.orbit/config.to
 may still carry a `[routines]` section, which is ignored with a warning and can
 be deleted.
 
-## The seven seeded routines
+## The six seeded routines
 
-`orbit workspace init` seeds all seven, **all disabled**, with a workspace-unique
+`orbit workspace init` seeds all six, **all disabled**, with a workspace-unique
 name (`<base>-<workspace>`) resolved at seed time. Nothing else is resolved per
 machine, so two hosts seed identical bytes. Run `orbit routine list` to see their
 names on this host.
@@ -62,14 +63,9 @@ names on this host.
 | `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived. |
 | `task-pilot` | every 4h | `task_pilot_pipeline` | Preflights proposed/backlog tasks with empty `context_files` and fills in validated selectors. |
 | `task-triage` | hourly | `task_triage_pipeline` | Diagnoses tasks blocked by failed runs; re-backlogs environmental casualties, leaves real failures blocked with a diagnosis. |
-| `auto-task-scheduler` | every minute | `auto_task_scheduler_pipeline` | Mints tasks from every due, enabled auto-task definition. → [auto-tasks.md](auto-tasks.md) |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `ship-sweep` | every 20m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. |
-
-The minutely cadence on the auto-task scheduler is intentional: each definition
-carries its *own* schedule, so the routine just has to tick often enough not to
-delay them. Per-definition cursors and catch-up collapse keep it cheap.
 
 ## Recommended enablement order
 
@@ -87,10 +83,7 @@ without the ones after it; **the reverse is not true.**
    use to keep parallel runs off each other's files.
 3. **`task-triage`.** Cleanup, not a hot path. Worth having before unattended
    shipping, so a failed run gets diagnosed instead of silently sitting blocked.
-4. **`auto-task-scheduler`**, once at least one auto-task definition is enabled.
-   With no enabled definitions it is a no-op every minute — harmless, but
-   pointless.
-5. **`ship-sweep` last, and only deliberately.** This is the one that commits,
+4. **`ship-sweep` last, and only deliberately.** This is the one that commits,
    pushes, and opens PRs without a human present. It also needs
    `workflow.auto_ship = true`. Do not enable it in the same change as anything
    above; let the earlier ones prove themselves against real traffic first.
@@ -127,9 +120,9 @@ version and field names from the installed definition when authoring one.
 ```bash
 orbit routine list                 # every routine: enabled / paused, next due
 orbit routine show <name>          # definition, effective state, recent fires
-orbit sweep --dry-run              # what would fire; records and dispatches nothing
-orbit sweep --dry-run --verbose    # include not-due rows
-orbit --workspace <name> sweep --dry-run   # restrict the pass to one workspace
+orbit clock tick --dry-run         # what would fire; writes nothing
+orbit clock tick --dry-run --verbose  # include not-due rows
+orbit --workspace <name> clock tick --dry-run  # restrict to one workspace
 ```
 
 The global `--workspace` selector narrows a sweep — dry-run or live — to one
@@ -155,7 +148,7 @@ Resolve the toggles in this order — `orbit routine list` shows both at once:
 
 If neither explains it, check further out: is this checkout registered as an
 owner (`orbit workspace list`), is the clock unit running
-(`orbit routine clock status`), and did the sweep itself error
+(`orbit clock status`), and did the tick itself error
 (`orbit log tail --level warn --since 1h`)? For a fire
 that started and then failed, the run is the evidence —
 [run-debugging.md](../run-debugging.md).

@@ -235,22 +235,23 @@ Each detailed check is time-bounded to two seconds and runs per workspace.
 `sqlite_writable` executes `BEGIN IMMEDIATE; ROLLBACK` without mutation. Point uptime
 monitoring at the detailed form.
 
-## Check the routine clock
+## Check the host clock
 
 Routines are Orbit's scheduling surface. Install or refresh the host clock with
 `orbit routine init --install-clock`. Verify the native clock separately from routine due
 state:
 
 ```sh
-orbit routine clock status
+orbit clock status
 orbit routine list
-orbit sweep --json
+orbit clock tick --json
 orbit doctor
 ```
 
-`orbit routine clock status` prints the unit's program path and the version that program
+`orbit clock status` prints the unit's program path and the version that program
 reports next to `platform:`. A version that does not match this binary is flagged on the
-same line as `mismatch: running <version> at <path>`. `orbit doctor`'s `clock-unit` row is
+same line as `mismatch: running <version> at <path>`. A unit that still invokes the
+compatibility alias `orbit sweep` is reported as stale. `orbit doctor`'s `clock-unit` row is
 the same comparison in check form:
 
 - **ok** — the unit invokes this binary (canonical path and version match)
@@ -258,12 +259,12 @@ the same comparison in check form:
   clock can drift), or the named program is missing/unrunnable
 - **ERROR** — the unit's program reports a different version than this binary. The row names
   the unit file, both program paths, and both versions. Rewrite the unit with
-  `orbit routine init --install-clock`, or repoint the package-manager install the unit
+  `orbit clock enable`, or repoint the package-manager install the unit
   names so it is this version
 - **skipped** — no launchd plist or systemd user service is installed
 
 `orbit update --check` reports the binary on `PATH` / the cargo install; it does not inspect
-what the clock unit invokes. After an upgrade, run `orbit doctor` or `orbit routine clock
+what the clock unit invokes. After an upgrade, run `orbit doctor` or `orbit clock
 status` before assuming unattended sweeps are running the new binary.
 
 A sweep that discovers workspaces but fails to open every one of them exits non-zero and
@@ -274,8 +275,8 @@ exit 0. An unconfigured host (no registered workspaces) remains a clean no-op.
 On Linux, a healthy enabled status includes an active timer, a finite next systemd trigger,
 and an effective cadence. `clock: unhealthy` with an inactive effective cadence means the
 timer is enabled but elapsed, unscheduled, inactive, or could not be probed. Inspect the
-printed diagnostic, then run `orbit routine clock enable`: it rewrites a stale installed
-timer if needed, restarts the timer even when it is already enabled, and returns success
+printed diagnostic, then run `orbit clock enable`: it rewrites stale installed service and
+timer files if needed, restarts the timer even when it is already enabled, and returns success
 only after verifying a finite next trigger. If that verification fails, inspect the
 `systemctl --user status` and `journalctl --user` commands in the error rather than repeating
 enable. The generated timer schedules its first sweep from every timer activation and then
@@ -286,15 +287,15 @@ routine `missed_run: catch_up_once` fires once for a gap while `skip` waits for 
 cron slot.
 
 If an `overlap: forbid` routine remains `overlap_in_flight` after a restart, run one explicit
-`orbit sweep --json` and inspect the referenced run. Sweep releases a dispatched in-flight
+`orbit clock tick --json` and inspect the referenced run. The tick releases a dispatched in-flight
 fire immediately only when the recorded owner process is conclusively gone; a live or
 unprobeable owner remains protected until terminal or until the routine timeout. Use
 `orbit doctor` and the stuck-job-run runbook below when the run itself remains orphaned.
 
 The dashboard also exposes `GET /api/routines`. `qa-sweep` and other auto-task
-definitions are ordinary workspace data under `.orbit/auto_tasks/`, processed by the
-generic auto-task scheduler routine. The scheduler mints tasks from every due,
-enabled definition; it does not itself edit docs, ADRs, learnings, friction records,
+definitions are ordinary workspace data under `.orbit/auto_tasks/`, evaluated in-process
+by the host tick. It mints tasks from every due, enabled definition and creates no
+scheduler run; it does not itself edit docs, design records, learnings, friction records,
 or comments.
 
 ## Verification and escalation

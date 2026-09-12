@@ -1,6 +1,6 @@
 //! Inspect the installed OS sweep-clock unit and compare it to this binary.
 //!
-//! `orbit doctor` and `orbit routine clock status` share this helper so a
+//! `orbit doctor` and `orbit clock status` share this helper so a
 //! launchd/systemd unit that still points at an older package-manager install
 //! is visible without talking to the unit manager.
 
@@ -50,6 +50,9 @@ pub enum ClockUnitVerdict {
     PathMismatch,
     /// The unit's program reports a different version than this binary.
     VersionMismatch,
+    /// The unit runs this binary but still uses the legacy `orbit sweep`
+    /// invocation instead of `orbit clock tick`.
+    InvocationMismatch,
     /// The unit exists but its program could not be probed.
     Unrunnable {
         /// Why `--version` did not yield a version string.
@@ -75,7 +78,7 @@ pub struct ClockUnitInspection {
 }
 
 impl ClockUnitInspection {
-    /// Fragment appended after `platform:` on `orbit routine clock status`.
+    /// Fragment appended after `platform:` on `orbit clock status`.
     pub fn status_line_suffix(&self) -> String {
         let Some(program_path) = &self.program_path else {
             return String::new();
@@ -98,6 +101,9 @@ impl ClockUnitInspection {
                     self.running_path.display()
                 )
             }
+            ClockUnitVerdict::InvocationMismatch => format!(
+                " | program: {program} (stale: invokes `orbit sweep`; run `orbit clock enable` to rewrite)"
+            ),
             ClockUnitVerdict::Unrunnable { reason } => {
                 format!(" | program: {program} (version unavailable: {reason})")
             }
@@ -133,6 +139,11 @@ impl ClockUnitInspection {
                 self.running_path.display(),
                 self.running_version
             ),
+            ClockUnitVerdict::InvocationMismatch => format!(
+                "clock unit {} runs {} through stale `orbit sweep`; the current unit invokes `orbit clock tick`",
+                display_opt_path(&self.unit_path),
+                display_opt_path(&self.program_path)
+            ),
             ClockUnitVerdict::Unrunnable { reason } => format!(
                 "clock unit {} names {}, which could not report a version: {reason}",
                 display_opt_path(&self.unit_path),
@@ -145,11 +156,15 @@ impl ClockUnitInspection {
     pub fn doctor_remediation(&self) -> Option<String> {
         match self.verdict {
             ClockUnitVerdict::VersionMismatch | ClockUnitVerdict::PathMismatch => Some(
-                "Run `orbit routine init --install-clock` so the clock unit invokes this binary, or repoint the package-manager install the unit names so it is this version."
+                "Run `orbit clock enable` so the clock unit invokes this binary, or repoint the package-manager install the unit names so it is this version."
+                    .to_string(),
+            ),
+            ClockUnitVerdict::InvocationMismatch => Some(
+                "Run `orbit clock enable` to rewrite the stale unit to `orbit clock tick`."
                     .to_string(),
             ),
             ClockUnitVerdict::Unrunnable { .. } => Some(
-                "Restore the orbit binary the clock unit names, or run `orbit routine init --install-clock` to rewrite the unit to this binary."
+                "Restore the orbit binary the clock unit names, or run `orbit clock enable` to rewrite the unit to this binary."
                     .to_string(),
             ),
             ClockUnitVerdict::NoUnitInstalled | ClockUnitVerdict::Matching => None,
@@ -196,7 +211,7 @@ pub(crate) fn inspect_clock_unit_at(
             running_version: running.version.clone(),
             verdict: ClockUnitVerdict::Unrunnable { reason },
         },
-        Some(Ok((unit_path, program_path))) => match probe(&program_path) {
+        Some(Ok((unit_path, program_path, legacy_invocation))) => match probe(&program_path) {
             Err(reason) => ClockUnitInspection {
                 unit_path: Some(unit_path),
                 program_path: Some(program_path),
@@ -208,7 +223,9 @@ pub(crate) fn inspect_clock_unit_at(
             Ok(raw_version) => {
                 let program_version = normalize_version(&raw_version);
                 let running_version = normalize_version(&running.version);
-                let verdict = if program_version != running_version {
+                let verdict = if legacy_invocation {
+                    ClockUnitVerdict::InvocationMismatch
+                } else if program_version != running_version {
                     ClockUnitVerdict::VersionMismatch
                 } else if same_program(&program_path, &running.path) {
                     ClockUnitVerdict::Matching
@@ -292,10 +309,13 @@ pub fn probe_program_version(program: &Path) -> Result<String, String> {
     }
 }
 
+type ClockUnitProgram = (PathBuf, PathBuf, bool);
+type ClockUnitParseError = (PathBuf, String);
+
 fn discover_clock_unit_program(
     home: &Path,
     platform: ClockPlatform,
-) -> Option<Result<(PathBuf, PathBuf), (PathBuf, String)>> {
+) -> Option<Result<ClockUnitProgram, ClockUnitParseError>> {
     let unit_path = match platform {
         ClockPlatform::Launchd => launchd_plist_path(home),
         ClockPlatform::Systemd => systemd_service_path(home),
@@ -316,8 +336,16 @@ fn discover_clock_unit_program(
         ClockPlatform::Launchd => parse_launchd_program(&contents),
         ClockPlatform::Systemd => parse_systemd_exec_start(&contents),
     };
+    let legacy_invocation = match platform {
+        ClockPlatform::Launchd => launchd_arguments(&contents)
+            .is_some_and(|arguments| arguments.get(1).is_some_and(|arg| arg == "sweep")),
+        ClockPlatform::Systemd => systemd_arguments(&contents)
+            .is_some_and(|arguments| arguments.first().is_some_and(|arg| arg == "sweep")),
+    };
     match program {
-        Some(program) if !program.is_empty() => Some(Ok((unit_path, PathBuf::from(program)))),
+        Some(program) if !program.is_empty() => {
+            Some(Ok((unit_path, PathBuf::from(program), legacy_invocation)))
+        }
         _ => Some(Err((
             unit_path,
             "unit file does not name an orbit program path".to_string(),
@@ -326,17 +354,27 @@ fn discover_clock_unit_program(
 }
 
 fn parse_launchd_program(plist: &str) -> Option<String> {
-    if let Some(args) = plist.split("<key>ProgramArguments</key>").nth(1)
-        && let Some(array) = args.split("<array>").nth(1)
-        && let Some(array) = array.split("</array>").next()
-        && let Some(program) = first_plist_string(array)
-    {
+    if let Some(program) = launchd_arguments(plist).and_then(|args| args.into_iter().next()) {
         return Some(program);
     }
     plist
         .split("<key>Program</key>")
         .nth(1)
         .and_then(first_plist_string)
+}
+
+fn launchd_arguments(plist: &str) -> Option<Vec<String>> {
+    let args = plist.split("<key>ProgramArguments</key>").nth(1)?;
+    let array = args.split("<array>").nth(1)?.split("</array>").next()?;
+    let mut values = Vec::new();
+    let mut remaining = array;
+    while let Some(start) = remaining.find("<string>") {
+        remaining = &remaining[start + "<string>".len()..];
+        let end = remaining.find("</string>")?;
+        values.push(remaining[..end].trim().to_string());
+        remaining = &remaining[end + "</string>".len()..];
+    }
+    (!values.is_empty()).then_some(values)
 }
 
 fn first_plist_string(fragment: &str) -> Option<String> {
@@ -362,6 +400,23 @@ fn parse_systemd_exec_start(unit: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn systemd_arguments(unit: &str) -> Option<Vec<String>> {
+    let line = unit
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("ExecStart="))?
+        .trim();
+    let rest = if let Some(stripped) = line.strip_prefix('"') {
+        let end = stripped.find('"')?;
+        &stripped[end + 1..]
+    } else {
+        line.split_once(char::is_whitespace)
+            .map(|(_, rest)| rest)
+            .unwrap_or("")
+    };
+    Some(rest.split_whitespace().map(ToString::to_string).collect())
 }
 
 fn same_program(left: &Path, right: &Path) -> bool {

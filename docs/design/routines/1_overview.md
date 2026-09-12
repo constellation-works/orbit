@@ -18,29 +18,23 @@ related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-1
 
 Routines make Orbit the constellation's single scheduler. A **routine** is a durable,
 git-versioned definition of recurring work — a cron trigger, a job target from the existing
-catalog, and a retry/overlap policy. A stateless **`orbit sweep`**
-pass, invoked on the configured OS schedule (one minute by default, via launchd on macOS or a
-systemd timer on Linux), fires whatever is due on the current host through the existing v2 run
-machinery. Definitions
+catalog, and a retry/overlap policy. A stateless **`orbit clock tick`** pass, also available
+through the compatibility alias `orbit sweep`, is invoked on the configured OS schedule (one
+minute by default, via launchd on macOS or a systemd timer on Linux). It fires due routines
+through the existing v2 run machinery and evaluates due auto-task definitions in-process.
+Definitions
 are shared across hosts via git; all scheduler state (last fires, pauses, locks, run history)
 is host-local and never synced, so each owner checkout is an independent schedule. [2_design.md](./2_design.md) is the v1 contract;
 [3_vision.md](./3_vision.md) holds what is deliberately out of scope for v1.
 
-> **Pending change — clock consolidation, part 2 (decided 2026-09-12, unimplemented).** One
-> host tick (`orbit clock tick`, alias `orbit sweep`) will evaluate routines *and* auto-task
-> definitions, and `orbit routine clock` becomes `orbit clock`. Target contract:
-> [3_vision.md §0](./3_vision.md#0-graduating-clock-consolidation). Part 1 shipped in
-> [ORB-12236]: definitions carry no `hosts:` pin and there is no `[routines] role` key.
->
 > **Status.** v1 shipped in [ORB-10021]; the At a Glance table lists the actual home of
 > each concern. Targets are `job:<name>` in v1 — see [Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only-no-inline-command-payloads) for why `activity:` is
 > reserved. `orbit-cmd::registry_routines` composes local host identity and the workspace
 > catalog from `orbit-registry` with registered runtimes; Core keeps the registry-neutral
 > scheduler, validation, and dispatch kernels.
 
-`orbit workspace init` creates the complete default set (`auto_task_scheduler`,
-`ci_failure_sweep`, `dependabot_alert_sweep`, `task_triage`, `task_pilot`, `ship_sweep`, and
-`worktree_gc`) under
+`orbit workspace init` creates the complete default set (`ci_failure_sweep`,
+`dependabot_alert_sweep`, `task_triage`, `task_pilot`, `ship_sweep`, and `worktree_gc`) under
 `.orbit/routines/`. Every default is `enabled: false`: scheduled execution is an explicit,
 versioned opt-in made by changing the reviewed definition to `enabled: true`. Re-init
 creates newly introduced missing defaults but never rewrites existing routine files; those
@@ -82,8 +76,9 @@ fragmentation this feature exists to end.
   `job:<name>`; `activity:<name>` is reserved (wrap the activity in a one-step job — see
   [Routine targets are catalog references only — no inline command payloads](./4_decisions.md#routine-targets-are-catalog-references-only-no-inline-command-payloads)). Routines carry no inline commands; the `shell` activity variant was
   removed fail-closed in [ORB-00374] (see [The v2 shell activity surface is removed, not sandboxed](../activity-job/4_decisions.md#the-v2-shell-activity-surface-is-removed-not-sandboxed)), and routines inherit that posture.
-- **Sweep** — `orbit sweep`, the stateless due-check pass the OS clock invokes on its configured
-  cadence. Loads definitions, fires due routines, records state, exits.
+- **Tick** — `orbit clock tick`, the stateless due-check pass the OS clock invokes on its
+  configured cadence. It loads definitions, fires due routines, evaluates auto-task
+  definitions, records state, and exits. `orbit sweep` is a compatibility alias.
 - **Routine source** — any registered, active **owner** checkout on the host: registration
   is the whole opt-in [ORB-12236]. Replica checkouts are skipped; they cannot write the
   owner's coordination store.

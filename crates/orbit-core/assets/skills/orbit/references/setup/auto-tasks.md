@@ -1,8 +1,8 @@
 # Auto-tasks: recurring work as data
 
-An auto-task is a definition that **mints a task** on its own schedule. One
-generic routine drives every definition in the workspace, so adding a recurring
-chore is a new YAML file — never new code, and never a new routine.
+An auto-task is a definition that **mints a task** on its own schedule. The host
+clock tick evaluates every definition in each registered owner checkout, so
+adding a recurring chore is a new YAML file — never new code or a new routine.
 
 Use an auto-task when the recurring thing is *work someone should do*: a QA
 sweep, a dependency audit, a stale-branch review, doc validation. Use a
@@ -10,9 +10,9 @@ sweep, a dependency audit, a stale-branch review, doc validation. Use a
 
 ## Prerequisites
 
-Definitions are inert until the generic scheduler routine is enabled. See
-[automation.md](automation.md) — the `auto-task-scheduler` routine ships
-disabled, like the rest.
+Definitions fire when their versioned `enabled` switch is on and the host clock
+is enabled. See [automation.md](automation.md). No scheduler routine or job is
+required.
 
 ## Creating one
 
@@ -156,10 +156,10 @@ exists. So:
 
 ## Scheduling notes
 
-The scheduler ticks minutely, so each definition's own cron governs its cadence.
+The host tick runs minutely by default, so each definition's own cron governs its cadence.
 Catch-up collapses: a machine that was asleep through six firings mints once, not
-six times. Per-definition cursors make the sweep idempotent, and the driving job
-holds `max_active_runs: 1`, so definitions never fan out concurrently.
+six times. Per-definition cursors and their sidecar lock make evaluation
+idempotent and single-flight within the workspace.
 
-Fires are observable in `orbit run history` and on the dashboard's routines
-surface, like any other run.
+Fires are reported by `orbit clock tick` and in the dashboard auto-task panel;
+the minted task is the durable record. Evaluation creates no scheduler job run.
