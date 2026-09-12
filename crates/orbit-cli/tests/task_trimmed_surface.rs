@@ -448,6 +448,44 @@ fn locks_release_reaches_the_admin_tool_only_with_the_operator_capability() {
 }
 
 #[test]
+fn locks_reserve_requires_the_same_operator_capability_as_release() {
+    let workspace = TestWorkspace::new();
+    fs::write(workspace.work.join("reserve_me.rs"), "// reserve\n").expect("write fixture file");
+    const RESERVE: &[&str] = &[
+        "task",
+        "locks",
+        "reserve",
+        "--file",
+        "file:reserve_me.rs",
+        "--json",
+    ];
+
+    // ORB-12251: an unidentified caller could previously reserve a surface it
+    // was then refused `release` on — creating a claim it was not trusted to
+    // clear. `reserve` must be refused the same way `release` already is.
+    let ungoverned = workspace.run_raw(RESERVE);
+    assert!(!ungoverned.status.success());
+    let denial = String::from_utf8_lossy(&ungoverned.stderr);
+    assert!(denial.contains("capability denied"), "{denial}");
+    assert!(denial.contains("operator or runner"), "{denial}");
+
+    let output = workspace.run_as_operator(RESERVE, "task locks reserve");
+    let value: Value = serde_json::from_slice(&output.stdout).expect("reserve JSON");
+    assert_eq!(value["reserved"], json!(true));
+    let reservation_id = value["reservation_id"]
+        .as_str()
+        .expect("reservation id")
+        .to_string();
+
+    // The same operator capability that created the reservation can also
+    // release it — the symmetry this task requires.
+    workspace.run_as_operator(
+        &["task", "locks", "release", &reservation_id, "--confirm"],
+        "task locks release",
+    );
+}
+
+#[test]
 fn audit_prune_refuses_unconfirmed_then_deletes_when_confirmed() {
     let workspace = TestWorkspace::new();
     workspace.add_task("Create an audit event");

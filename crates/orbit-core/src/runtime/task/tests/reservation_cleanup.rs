@@ -14,8 +14,17 @@ use orbit_tools::{ReservationOwnerContext, ToolContext};
 use orbit_types::policy::Role;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::telemetry::AuditEventStatus;
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use tempfile::tempdir;
+
+fn operator_session() -> ToolSessionContext {
+    ToolSessionContext {
+        effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+        ..ToolSessionContext::default()
+    }
+}
 
 fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, std::path::PathBuf) {
     let root = tempdir().expect("create tempdir");
@@ -144,6 +153,7 @@ fn reserve_via_tool_for_owner(runtime: &OrbitRuntime, owner_run_id: &str, task_i
             }),
             Role::Admin,
             ToolContext {
+                session_context: operator_session(),
                 reservation_owner: Some(ReservationOwnerContext {
                     owner_run_id: owner_run_id.to_string(),
                     owner_metadata_json: Some(r#"{"source":"test"}"#.to_string()),
@@ -460,13 +470,18 @@ fn task_reservation_reserve_pressure_reconciles_stale_running_owner() {
     reserve_via_tool_for_owner(&runtime, &stale_run.run_id, &stale_task);
 
     let output = runtime
-        .run_tool(
+        .run_tool_with_context_and_role(
             "orbit.task.locks.reserve",
             json!({
                 "task_ids": [waiter_task],
                 "ttl_seconds": 3600,
                 "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
             }),
+            Role::Admin,
+            ToolContext {
+                session_context: operator_session(),
+                ..ToolContext::default()
+            },
         )
         .expect("reserve after pressure");
 

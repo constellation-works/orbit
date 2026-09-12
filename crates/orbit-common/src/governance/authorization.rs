@@ -319,6 +319,15 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "releasing another run's reservation can let two runs edit the same files",
     },
     GovernedOperation {
+        id: "orbit.task.locks.reserve",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator, McpCapability::Runner],
+        rationale: "a reservation blocks every other caller from its surface until it expires or \
+                    is released, so creating one requires the same authority as removing one — \
+                    otherwise a caller could gate others out of a surface it is not itself \
+                    trusted to clear",
+    },
+    GovernedOperation {
         id: "orbit.workspace.claim.release",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

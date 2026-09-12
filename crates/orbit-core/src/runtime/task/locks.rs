@@ -89,6 +89,22 @@ pub(crate) fn list(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
         })
         .collect::<Vec<_>>();
 
+    // Counts distinct task IDs across both projections: a task-bound
+    // reservation names task IDs that need not belong to any active task (the
+    // reserving task may still be `backlog`), so counting only
+    // `locked_surfaces` undercounts whenever a reservation is the sole holder
+    // for a task.
+    let distinct_tasks: BTreeSet<&str> = locked_surfaces
+        .iter()
+        .map(|(task, _)| task.id.as_str())
+        .chain(
+            reservation_result
+                .reservations
+                .iter()
+                .flat_map(|reservation| reservation.task_ids.iter().map(String::as_str)),
+        )
+        .collect();
+
     Ok(json!({
         "locked_files": locked_files.iter().cloned().collect::<Vec<_>>(),
         "by_task": locked_surfaces
@@ -97,7 +113,7 @@ pub(crate) fn list(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
             .collect::<Vec<_>>(),
         "by_reservation": by_reservation,
         "total_locked": locked_files.len(),
-        "total_tasks": locked_surfaces.len(),
+        "total_tasks": distinct_tasks.len(),
         "total_reservations": reservation_result.reservations.len(),
     }))
 }
