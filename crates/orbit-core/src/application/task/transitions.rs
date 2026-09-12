@@ -4,7 +4,8 @@ use orbit_store::contracts::FrictionStoreBackend;
 use orbit_types::identity::is_valid_friction_id;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    Task, TaskHistoryEntry, TaskRelationType, TaskStatus, unmet_task_dependencies,
+    Task, TaskHistoryEntry, TaskRelationType, TaskStatus, normalize_task_tags,
+    unmet_task_dependencies,
 };
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
@@ -38,7 +39,7 @@ pub(super) fn set_transition_read_hook_status(id: Option<&str>, status: Option<T
         id.zip(status).map(|(id, status)| (id.to_string(), status));
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct StartTaskOptions {
     note: Option<String>,
     comment: Option<String>,
@@ -47,6 +48,22 @@ struct StartTaskOptions {
     actor_label_override: Option<String>,
     crew_override: Option<String>,
     plan: Option<String>,
+    field_edits: TaskUpdateParams,
+}
+
+fn start_body_field_edits(
+    mut field_edits: TaskUpdateParams,
+    plan: Option<String>,
+) -> TaskUpdateParams {
+    field_edits.status = Some(TaskStatus::InProgress);
+    if plan.is_some() {
+        field_edits.plan = plan;
+    }
+    field_edits.comment = None;
+    if let Some(tags) = field_edits.tags.take() {
+        field_edits.tags = Some(normalize_task_tags(tags));
+    }
+    field_edits
 }
 
 impl OrbitRuntime {
@@ -302,6 +319,7 @@ impl OrbitRuntime {
         model: Option<String>,
         crew_override: Option<String>,
         plan: Option<String>,
+        field_edits: TaskUpdateParams,
     ) -> Result<Task, OrbitError> {
         self.start_task_with_actor_label_override(
             id,
@@ -312,6 +330,7 @@ impl OrbitRuntime {
                 model,
                 crew_override,
                 plan,
+                field_edits,
                 ..Default::default()
             },
         )
@@ -348,6 +367,7 @@ impl OrbitRuntime {
             actor_label_override,
             crew_override,
             plan,
+            field_edits,
         } = options;
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
@@ -410,6 +430,7 @@ impl OrbitRuntime {
                     );
                 }
             };
+            let start_edits = start_body_field_edits(field_edits.clone(), plan.clone());
 
             started = Some(match task.status {
                 TaskStatus::Proposed => {
@@ -431,11 +452,7 @@ impl OrbitRuntime {
                             }],
                             append_comments: append_comments.clone(),
                             expected_status: Some(vec![task.status]),
-                            ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                                status: Some(TaskStatus::InProgress),
-                                plan: plan.clone(),
-                                ..Default::default()
-                            })
+                            ..StoreTaskUpdateParams::from(start_edits.clone())
                         },
                     )?;
                     Ok((
@@ -460,11 +477,7 @@ impl OrbitRuntime {
                             status_note: note.clone(),
                             append_comments: append_comments.clone(),
                             expected_status: Some(vec![task.status]),
-                            ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                                status: Some(TaskStatus::InProgress),
-                                plan: plan.clone(),
-                                ..Default::default()
-                            })
+                            ..StoreTaskUpdateParams::from(start_edits.clone())
                         },
                     )?;
                     Ok((

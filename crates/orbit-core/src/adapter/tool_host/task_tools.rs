@@ -297,15 +297,20 @@ pub(super) fn update(
                         agent,
                         model,
                     )?,
-                GuardedLifecycleWrite::Start => runtime.start_task_with_identity_and_crew(
-                    &id,
-                    optional_string(&input, "note")?,
-                    optional_string(&input, "comment")?,
-                    agent,
-                    model,
-                    optional_string(&input, "crew")?,
-                    optional_plan(&input)?,
-                )?,
+                GuardedLifecycleWrite::Start => {
+                    let params = task_update_params_from_input(&input, requested_status)?;
+                    ensure_context_selectors_if_required(runtime, &input, &params)?;
+                    runtime.start_task_with_identity_and_crew(
+                        &id,
+                        optional_string(&input, "note")?,
+                        params.comment.clone(),
+                        agent,
+                        model,
+                        params.crew.clone().flatten(),
+                        params.plan.clone(),
+                        params,
+                    )?
+                }
             };
             return serialize_task(runtime, &task);
         }
@@ -315,63 +320,11 @@ pub(super) fn update(
             "`note` is only accepted on the guarded approval (proposed → backlog) or start (pickup → in-progress) transition".to_string(),
         ));
     }
-    let context_files = optional_csv_or_string_list_alias(&input, &["context_files", "context"])?;
-    if !allows_missing_context(&input)?
-        && let Some(candidates) = context_files.as_deref()
-    {
-        runtime.ensure_context_selectors_exist(candidates)?;
-    }
+    let params = task_update_params_from_input(&input, requested_status)?;
+    ensure_context_selectors_if_required(runtime, &input, &params)?;
     let task = runtime.update_task_with_owner(
         &id,
-        TaskUpdateParams {
-            title: optional_string(&input, "title")?,
-            description: input
-                .get("description")
-                .map(|value| {
-                    value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
-                        OrbitError::InvalidInput("`description` must be a string".to_string())
-                    })
-                })
-                .transpose()?,
-            acceptance_criteria: optional_string_list_alias(
-                &input,
-                &[
-                    "acceptance_criteria",
-                    "acceptanceCriteria",
-                    "acceptance-criteria",
-                ],
-            )?,
-            dependencies: optional_csv_or_string_list_alias(&input, &["dependencies"])?,
-            relations: parse_relations(&input)?,
-            tags: optional_csv_or_string_list_alias(&input, &["tags", "tag"])?,
-            plan: optional_plan(&input)?,
-            execution_summary: optional_raw_string(&input, "execution_summary")?,
-            comment: optional_string(&input, "comment")?,
-            status: requested_status,
-            priority: optional_string(&input, "priority")?
-                .map(|value| parse_task_priority("priority", &value))
-                .transpose()?,
-            complexity: optional_string(&input, "complexity")?
-                .map(|value| parse_assessed_task_complexity("complexity", &value))
-                .transpose()?,
-            task_type: optional_string_alias(&input, &["type", "task_type", "taskType"])?
-                .map(|value| parse_task_type("type", &value))
-                .transpose()?,
-            source_task_id: optional_raw_string_alias(
-                &input,
-                &["source_task_id", "source_task", "sourceTaskId"],
-            )?
-            .map(empty_string_to_none),
-            planned_by: optional_raw_string(&input, "planned_by")?.map(empty_string_to_none),
-            implemented_by: optional_raw_string(&input, "implemented_by")?
-                .map(empty_string_to_none),
-            pr_status: optional_raw_string(&input, "pr_status")?.map(empty_string_to_none),
-            job_run_id: optional_raw_string(&input, "job_run_id")?.map(empty_string_to_none),
-            crew: optional_raw_string(&input, "crew")?.map(empty_string_to_none),
-            orchestrator: optional_raw_string(&input, "orchestrator")?.map(empty_string_to_none),
-            context_files,
-            upsert_artifacts: parse_artifacts(&input)?,
-        },
+        params,
         agent,
         model,
         owner.map(|owner| owner.owner_run_id),
@@ -384,30 +337,16 @@ enum GuardedLifecycleWrite {
     Start,
 }
 
-/// Fields the start body can apply on the same write that moves a task to
-/// in-progress: identity/routing, the lifecycle note, crew resolution, and
-/// the plan `ensure_status_change_allowed` already accepts in a transitioning
-/// write.
-const START_ABSORBABLE_FIELDS: &[&str] = &[
-    "id",
-    "status",
-    "note",
-    "comment",
-    "crew",
-    "model",
-    "workspace",
-    "plan",
-];
-
 const APPROVAL_ALLOWED_FIELDS: &[&str] = &["id", "status", "note", "comment", "model", "workspace"];
 
 /// Choose the special transition body only when this write actually needs it.
 ///
-/// `proposed → backlog` is approval. A start-shaped `in-progress` write (no
-/// field edits beyond `plan`/`crew`/`note`/`comment`) still goes through
-/// `start_task` so crew resolution and `TaskStarted` survive. Any other
-/// `backlog` / `in-progress` combination — including `someday → backlog`
-/// plus a field edit — falls through to the ordinary governed update.
+/// `proposed → backlog` is approval. Every `in-progress` write goes through
+/// `start_task` so crew resolution and `TaskStarted` survive, and so a
+/// non-pickup source is refused the same way with or without extra fields.
+/// Field edits on a start write are absorbed by the start body. Any other
+/// `backlog` combination — including `someday → backlog` plus a field edit —
+/// falls through to the ordinary governed update.
 fn guarded_lifecycle_write(
     from: TaskStatus,
     to: TaskStatus,
@@ -418,18 +357,9 @@ fn guarded_lifecycle_write(
             reject_fields_for_approval_transition(input)?;
             Ok(Some(GuardedLifecycleWrite::Approve))
         }
-        (_, TaskStatus::InProgress) if start_fields_are_absorbable(input)? => {
-            Ok(Some(GuardedLifecycleWrite::Start))
-        }
+        (_, TaskStatus::InProgress) => Ok(Some(GuardedLifecycleWrite::Start)),
         _ => Ok(None),
     }
-}
-
-fn start_fields_are_absorbable(input: &Value) -> Result<bool, OrbitError> {
-    let fields = update_object_fields(input)?;
-    Ok(fields
-        .keys()
-        .all(|field| START_ABSORBABLE_FIELDS.contains(&field.as_str())))
 }
 
 fn reject_fields_for_approval_transition(input: &Value) -> Result<(), OrbitError> {
@@ -463,6 +393,73 @@ fn optional_plan(input: &Value) -> Result<Option<String>, OrbitError> {
             "`plan` must be a string".to_string(),
         )),
     }
+}
+
+fn task_update_params_from_input(
+    input: &Value,
+    status: Option<TaskStatus>,
+) -> Result<TaskUpdateParams, OrbitError> {
+    Ok(TaskUpdateParams {
+        title: optional_string(input, "title")?,
+        description: input
+            .get("description")
+            .map(|value| {
+                value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                    OrbitError::InvalidInput("`description` must be a string".to_string())
+                })
+            })
+            .transpose()?,
+        acceptance_criteria: optional_string_list_alias(
+            input,
+            &[
+                "acceptance_criteria",
+                "acceptanceCriteria",
+                "acceptance-criteria",
+            ],
+        )?,
+        dependencies: optional_csv_or_string_list_alias(input, &["dependencies"])?,
+        relations: parse_relations(input)?,
+        tags: optional_csv_or_string_list_alias(input, &["tags", "tag"])?,
+        plan: optional_plan(input)?,
+        execution_summary: optional_raw_string(input, "execution_summary")?,
+        comment: optional_string(input, "comment")?,
+        status,
+        priority: optional_string(input, "priority")?
+            .map(|value| parse_task_priority("priority", &value))
+            .transpose()?,
+        complexity: optional_string(input, "complexity")?
+            .map(|value| parse_assessed_task_complexity("complexity", &value))
+            .transpose()?,
+        task_type: optional_string_alias(input, &["type", "task_type", "taskType"])?
+            .map(|value| parse_task_type("type", &value))
+            .transpose()?,
+        source_task_id: optional_raw_string_alias(
+            input,
+            &["source_task_id", "source_task", "sourceTaskId"],
+        )?
+        .map(empty_string_to_none),
+        planned_by: optional_raw_string(input, "planned_by")?.map(empty_string_to_none),
+        implemented_by: optional_raw_string(input, "implemented_by")?.map(empty_string_to_none),
+        pr_status: optional_raw_string(input, "pr_status")?.map(empty_string_to_none),
+        job_run_id: optional_raw_string(input, "job_run_id")?.map(empty_string_to_none),
+        crew: optional_raw_string(input, "crew")?.map(empty_string_to_none),
+        orchestrator: optional_raw_string(input, "orchestrator")?.map(empty_string_to_none),
+        context_files: optional_csv_or_string_list_alias(input, &["context_files", "context"])?,
+        upsert_artifacts: parse_artifacts(input)?,
+    })
+}
+
+fn ensure_context_selectors_if_required(
+    runtime: &OrbitRuntime,
+    input: &Value,
+    params: &TaskUpdateParams,
+) -> Result<(), OrbitError> {
+    if !allows_missing_context(input)?
+        && let Some(candidates) = params.context_files.as_deref()
+    {
+        runtime.ensure_context_selectors_exist(candidates)?;
+    }
+    Ok(())
 }
 
 /// Whether the caller explicitly opted out of the operator-surface check that

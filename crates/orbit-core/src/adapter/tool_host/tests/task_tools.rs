@@ -1040,6 +1040,178 @@ fn task_update_start_accepts_plan_on_the_same_write() {
     );
 }
 
+/// ORB-12344: `status: in-progress` routing is decided by the transition, not
+/// by which extra keys the payload carries. A non-absorbable field must not
+/// turn a pickup-state refusal into an ordinary success, and must not drop
+/// `TaskStarted` on a real start.
+#[test]
+fn task_update_in_progress_outcome_does_not_depend_on_extra_fields() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let agent = Some("codex".to_string());
+    let model = Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string());
+    let seed_plan = |id: &str| {
+        runtime
+            .update_task(
+                id,
+                crate::application::task::TaskUpdateParams {
+                    plan: Some(
+                        "Keep a plan so an ordinary in-progress write would be allowed."
+                            .to_string(),
+                    ),
+                    ..Default::default()
+                },
+            )
+            .expect("seed plan");
+    };
+
+    let rejected = create_task(
+        &runtime,
+        &repo_root,
+        "Rejected task",
+        "Extra fields must not bypass the start refusal.",
+        TaskStatus::Rejected,
+        &[],
+    );
+    seed_plan(&rejected.id);
+    let rejected_plain = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({ "id": rejected.id, "status": "in-progress" }),
+        agent.clone(),
+        model.clone(),
+    ));
+    let rejected_with_priority = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({
+            "id": rejected.id,
+            "status": "in-progress",
+            "priority": "high",
+        }),
+        agent.clone(),
+        model.clone(),
+    ));
+    assert_eq!(
+        rejected_plain, rejected_with_priority,
+        "rejected → in-progress must refuse the same way with or without extra fields"
+    );
+    assert!(
+        rejected_plain.contains("start requires"),
+        "rejected is not a pickup state: {rejected_plain}"
+    );
+
+    let review = create_task(
+        &runtime,
+        &repo_root,
+        "Review task",
+        "Extra fields must not bypass the start refusal.",
+        TaskStatus::Review,
+        &[],
+    );
+    seed_plan(&review.id);
+    let review_plain = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({ "id": review.id, "status": "in-progress" }),
+        agent.clone(),
+        model.clone(),
+    ));
+    let review_with_priority = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({
+            "id": review.id,
+            "status": "in-progress",
+            "priority": "high",
+        }),
+        agent.clone(),
+        model.clone(),
+    ));
+    assert_eq!(
+        review_plain, review_with_priority,
+        "review → in-progress must refuse the same way with or without extra fields"
+    );
+    assert!(
+        review_plain.contains("start requires"),
+        "review is not a pickup state: {review_plain}"
+    );
+
+    let backlog = create_task(
+        &runtime,
+        &repo_root,
+        "Backlog task",
+        "Start with an extra field edit must still record TaskStarted.",
+        TaskStatus::Backlog,
+        &[],
+    );
+    seed_plan(&backlog.id);
+    let started = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": backlog.id,
+                "status": "in-progress",
+                "priority": "high",
+                "tags": ["x"],
+            }),
+            agent.clone(),
+            model.clone(),
+        )
+        .expect("backlog start may include field edits");
+    assert_eq!(started["status"], "in-progress");
+    assert_eq!(started["priority"], "high");
+    assert_eq!(started["tags"], json!(["x"]));
+    assert!(
+        runtime
+            .list_session_events(20)
+            .expect("events")
+            .iter()
+            .any(|event| {
+                event.event_type == "TaskStarted" && event.payload["data"]["id"] == backlog.id
+            }),
+        "extra fields on a pickup start must still run the start body: {started}"
+    );
+
+    let proposed = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Proposed start with extras".to_string(),
+            description: "Approval-plus-pickup must keep proposal_approved.".to_string(),
+            plan: "1. start with field edits.".to_string(),
+            ..Default::default()
+        })
+        .expect("add proposed task");
+    let picked_up = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": proposed.id,
+                "status": "in-progress",
+                "priority": "high",
+                "tags": ["x"],
+            }),
+            agent,
+            model,
+        )
+        .expect("proposed start may include field edits");
+    assert_eq!(picked_up["status"], "in-progress");
+    assert_eq!(picked_up["priority"], "high");
+    assert_eq!(picked_up["tags"], json!(["x"]));
+    assert!(
+        picked_up["history"].as_array().is_some_and(|history| {
+            history
+                .iter()
+                .any(|entry| entry["event"] == "proposal_approved")
+        }),
+        "proposed → in-progress must still record proposal_approved: {picked_up}"
+    );
+    assert!(
+        runtime
+            .list_session_events(20)
+            .expect("events")
+            .iter()
+            .any(|event| {
+                event.event_type == "TaskStarted" && event.payload["data"]["id"] == proposed.id
+            }),
+        "proposed start with extra fields must still emit TaskStarted: {picked_up}"
+    );
+}
+
 /// ORB-10648: `priority` is an advertised and applied update field. The record
 /// layer could always persist it, but neither the tool schema nor the update
 /// handler read it, so a caller's re-prioritization was discarded while the
