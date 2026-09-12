@@ -52,12 +52,12 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     // run cannot admit a subprocess outside the sandbox it executes inside.
     ("orbit.agent.invoke", Placement::Advertised),
     ("orbit.command.exec", Placement::Advertised),
-    // [ORB-11332] Grant lifecycle: advertised so an operator MCP session can
-    // enable, stop, or revoke scoped automation; governed so an agent
-    // session cannot grant itself authority.
-    ("orbit.operation.enable", Placement::Advertised),
-    ("orbit.operation.revoke", Placement::Advertised),
-    ("orbit.operation.stop", Placement::Advertised),
+    // [ORB-11332] Grant lifecycle: off MCP (CLI/dashboard only; agents read
+    // grant state via run readiness), governed so an agent cannot grant
+    // itself authority through `orbit tool run`.
+    ("orbit.operation.enable", Placement::Unadvertised),
+    ("orbit.operation.revoke", Placement::Unadvertised),
+    ("orbit.operation.stop", Placement::Unadvertised),
     ("orbit.workflow.run.list", Placement::Advertised),
     ("orbit.workflow.run.resume", Placement::Advertised),
     ("orbit.workflow.run.show", Placement::Advertised),

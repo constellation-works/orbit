@@ -56,15 +56,7 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_auto_task_list"
         | "orbit_auto_task_mint"
         | "orbit_search"
-        | "orbit_workflow_ship"
-        // Grants are durable coordination records on the owning workspace;
-        // enabling, stopping, or revoking one runs no process on the
-        // destination host [ORB-11332].
-        | "orbit_operation_explain"
-        | "orbit_operation_enable"
-        | "orbit_operation_list"
-        | "orbit_operation_stop"
-        | "orbit_operation_revoke" => McpToolClass::ControlPlane,
+        | "orbit_workflow_ship" => McpToolClass::ControlPlane,
         // Runs a process on the destination host outside Orbit's sandbox, so
         // the host that would execute it owns the decision — the same reason
         // `orbit.command.exec` is Execute [ORB-11354].

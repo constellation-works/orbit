@@ -12,7 +12,6 @@ use crate::governance::operation::{
     CliArgKind, CliBinding, CliRender, Description, OperationSpec, ParamSpec, ParamType,
     find_by_name,
 };
-use orbit_types::tool::McpToolScope;
 
 /// Every verb the operation noun supports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -59,6 +58,9 @@ impl OperationModeVerb {
 }
 
 /// The operation-mode registry. Declaration order is `--help` order.
+///
+/// Operation mode is CLI/dashboard only; agents read grant state via
+/// `run readiness`.
 pub const OPERATION_MODE_OPERATIONS: &[OperationModeOperation] =
     &[EXPLAIN, ENABLE, LIST, SHOW, STOP, REVOKE];
 
@@ -111,7 +113,7 @@ const EXPLAIN: OperationModeOperation = OperationModeOperation {
         RUN_LAYER_PARAMS[5],
     ],
     rejects_agent_field: false,
-    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    mcp_scope: None,
     cli_json_flag: true,
     cli_render: CliRender::AlwaysJson,
 };
@@ -184,7 +186,7 @@ const ENABLE: OperationModeOperation = OperationModeOperation {
         mcp_model_param(),
     ],
     rejects_agent_field: false,
-    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    mcp_scope: None,
     cli_json_flag: true,
     cli_render: CliRender::Record,
 };
@@ -201,7 +203,7 @@ const LIST: OperationModeOperation = OperationModeOperation {
         "Maximum number of grants to return (default 20)",
     )],
     rejects_agent_field: false,
-    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    mcp_scope: None,
     cli_json_flag: true,
     cli_render: CliRender::RecordTable,
 };
@@ -223,8 +225,6 @@ const SHOW: OperationModeOperation = OperationModeOperation {
         }),
     }],
     rejects_agent_field: false,
-    // `list` and `explain` already carry what an agent needs; one-by-id is
-    // a human follow-up on the CLI surface.
     mcp_scope: None,
     cli_json_flag: true,
     cli_render: CliRender::Record,
@@ -248,7 +248,7 @@ const STOP: OperationModeOperation = OperationModeOperation {
         mcp_model_param(),
     ],
     rejects_agent_field: false,
-    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    mcp_scope: None,
     cli_json_flag: true,
     cli_render: CliRender::Record,
 };
@@ -271,7 +271,7 @@ const REVOKE: OperationModeOperation = OperationModeOperation {
         mcp_model_param(),
     ],
     rejects_agent_field: false,
-    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    mcp_scope: None,
     cli_json_flag: true,
     cli_render: CliRender::Record,
 };

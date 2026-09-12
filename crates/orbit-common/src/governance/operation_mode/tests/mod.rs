@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 
 use super::operations::{OPERATION_MODE_OPERATIONS, OperationModeVerb, operation_mode_operation};
 use crate::governance::operation::CliArgKind;
-use orbit_types::tool::McpToolScope;
 
 const ALL_VERBS: &[OperationModeVerb] = &[
     OperationModeVerb::Explain,
@@ -92,17 +91,10 @@ fn subcommand_order_is_the_shipped_help_order() {
 }
 
 #[test]
-fn mcp_exposure_keeps_show_on_the_cli_surface() {
-    for verb in [
-        OperationModeVerb::Explain,
-        OperationModeVerb::Enable,
-        OperationModeVerb::List,
-        OperationModeVerb::Stop,
-        OperationModeVerb::Revoke,
-    ] {
-        assert_eq!(verb.spec().mcp_scope, Some(McpToolScope::WorkspaceRequired));
+fn mcp_exposure_is_cli_and_dashboard_only() {
+    for spec in OPERATION_MODE_OPERATIONS {
+        assert!(spec.mcp_scope.is_none(), "{} stays off MCP", spec.tool_name);
     }
-    assert_eq!(OperationModeVerb::Show.spec().mcp_scope, None);
 }
 
 #[test]

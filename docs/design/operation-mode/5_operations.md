@@ -187,15 +187,16 @@ a preference has no owner to act through.
 
 ## 8. Surfaces and observability
 
-- CLI/MCP: `orbit operation explain|enable|list|show|stop|revoke`
-  (`orbit.operation.*`; `show` is CLI-only), `orbit run auto --grant`, and
+- CLI: `orbit operation explain|enable|list|show|stop|revoke`, `orbit run auto --grant`, and
   `orbit run readiness`, whose `capacity.operation` block and per-task
   reasons (`outside_grant_scope`, `grant_*`) reflect a live grant-bound drain.
+  Operation mode is an operator control on the CLI and dashboard; agents read
+  grant state from readiness rather than MCP tools.
 - Dashboard: the Operations → Auto-drain view has an **Operation Mode** panel
   showing every field with its source, the grant, caps, limiting reasons,
   and governed Stop/Revoke controls with compare-and-set. When a grant is
   active the panel shows the captured grant policy separately from current
-  preferences (future grants). Enablement is deliberately CLI/MCP only.
+  preferences (future grants). Enablement is deliberately CLI only.
 - Audit: `operation.grant` (enabled/stopped/revoked/rejected),
   `operation.promotion`, `operation.recovery`, `operation.completion`,
   plus the existing `pipeline.invoke` and admissions-stop rows. Run inputs

@@ -1,11 +1,12 @@
-//! Operation-mode MCP tools, derived from the operation-mode registry
+//! Operation-mode tools, derived from the operation-mode registry
 //! [ORB-11332].
 //!
 //! Every `orbit.operation.*` verb is declared once in
 //! `orbit_common::governance::operation_mode`; this module turns each spec into
-//! a registered tool. Authorization is not decided here: the governed verbs
-//! (`enable`, `stop`, `revoke`) are refused at the runtime chokepoint for a
-//! caller without the operator capability.
+//! a registered tool. `mcp_scope: None` keeps them off MCP. Authorization is
+//! not decided here: the governed verbs (`enable`, `stop`, `revoke`) are
+//! refused at the runtime chokepoint for a caller without the operator
+//! capability.
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation_mode::{OPERATION_MODE_OPERATIONS, OperationModeOperation};
@@ -15,7 +16,7 @@ use serde_json::Value;
 use super::operation::{operation_tool_schema, register_operation};
 use crate::{OrbitBuiltinAction, Tool, ToolContext, ToolRegistry};
 
-/// One operation-mode verb, exposed as an MCP tool.
+/// One operation-mode verb, registered from its spec.
 pub struct OperationModeTool(pub &'static OperationModeOperation);
 
 impl Tool for OperationModeTool {
