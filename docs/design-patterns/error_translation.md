@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Crate-Boundary Error Translation"
-last_validated: 2026-08-23
+last_validated: 2026-09-12
 ---
 # Crate-Boundary Error Translation
 
@@ -55,8 +55,8 @@ pub enum DispatchError {
 }
 ```
 
-The translator lives next to the error and preserves validation failures while
-collapsing the remaining dispatch failures:
+The translator lives next to the error and preserves validation failures and
+recoverable VCS conflicts while collapsing the remaining dispatch failures:
 
 ```rust
 pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
@@ -68,6 +68,9 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
     }
 }
 ```
+
+The live translator additionally preserves `DispatchError::RecoverableVcsConflict`
+as `OrbitError::RecoverableVcsConflict`.
 
 Other live translators in the same shape are `selector_error_to_orbit`
 (`orbit-common::fs::selector`) and `rpc_error_to_orbit`

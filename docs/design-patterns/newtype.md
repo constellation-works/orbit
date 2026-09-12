@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Newtype Wrapper"
-last_validated: 2026-08-23
+last_validated: 2026-09-12
 ---
 # Newtype Wrapper
 
@@ -37,4 +37,4 @@ The former `RefName` example was removed with the `orbit-knowledge` crate; no cu
 
 ---
 
-**Related: parsed sum-type form.** `Selector` (`crates/orbit-common/src/fs/selector.rs:40`) applies the same principle to a structured input string: `FromStr` parses `dir:`/`file:`/`symbol:` prefixes into an enum with a typed `SelectorParseError`. The enum variants have `pub` fields (a deliberate ergonomics trade for pattern matching at use sites), so the invariant is enforced by convention — every callsite uses `parse()` — rather than by visibility. Reach for this when the input has multiple legitimate shapes and pattern-matching the parsed result outweighs airtight construction.
+**Related: parsed sum-type form.** `Selector` (`crates/orbit-common/src/fs/selector.rs`) applies the same principle to a structured input string: `FromStr` parses `dir:`/`file:`/`symbol:` prefixes into an enum with a typed `SelectorParseError`. The enum variants have `pub` fields (a deliberate ergonomics trade for pattern matching at use sites), so the invariant is enforced by convention — every callsite uses `parse()` — rather than by visibility. Reach for this when the input has multiple legitimate shapes and pattern-matching the parsed result outweighs airtight construction.

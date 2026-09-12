@@ -5,7 +5,7 @@ tags: [operations, logs, tracing, rotation, routines]
 paths: ["crates/orbit-common/src/observability/log_rotation.rs", "crates/orbit-core/src/application/routines/sweep.rs"]
 related_features: [auditability, routines]
 related_artifacts: [ORB-00423]
-last_validated: 2026-08-22
+last_validated: 2026-09-12
 ---
 
 # Inspect and Retain Logs
@@ -19,8 +19,10 @@ All Orbit processes—the CLI, `orbit web serve`, and the MCP server—append st
 events to one global JSONL sink:
 
 ```text
-~/.orbit/state/logs/orbit.jsonl        # override: $ORBIT_LOG_PATH
+~/.orbit/state/logs/orbit.jsonl        # default writer and reader path
 ```
+
+`orbit log tail` can read another sink with `--path` or `$ORBIT_LOG_PATH`.
 
 One JSON object is written per line:
 `{"timestamp", "level", "target", "fields": {..., "message"}}`. Secret-looking values
@@ -28,8 +30,8 @@ One JSON object is written per line:
 `Authorization` or `x-api-key` headers; and `sk-…` keys) are redacted before reaching the
 sink.
 
-Before diagnosing a missing or unexpected log, confirm the actual binary, effective
-`ORBIT_LOG_PATH`, `RUST_LOG`, root, and config file used by the process.
+Before diagnosing a missing or unexpected log, confirm the actual binary, reader path
+(`--path` or `$ORBIT_LOG_PATH`), `RUST_LOG`, root, and config file used by the process.
 
 ## Read and filter logs
 
@@ -64,7 +66,7 @@ log_max_total_mb = 500
 log_max_file_mb = 100
 ```
 
-Rotation is implemented in `orbit-common/src/utility/log_rotation.rs`.
+Rotation is implemented in `crates/orbit-common/src/observability/log_rotation.rs`.
 
 ## Routine sweep log on macOS
 
