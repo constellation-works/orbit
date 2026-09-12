@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::workflow::JobRunState;
+use crate::workflow::JobRunTrigger;
 use crate::workflow::child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
 };
@@ -142,6 +143,10 @@ pub struct PipelineState {
     /// evidence on its own.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rebase_recovery_checkpoints: BTreeMap<String, Value>,
+    /// How this run was submitted [ORB-12255]. Absent on runs recorded before
+    /// trigger provenance existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<JobRunTrigger>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -166,6 +171,7 @@ impl PipelineState {
             drain_admissions_stop: None,
             failure_activity_checkpoint: None,
             rebase_recovery_checkpoints: BTreeMap::new(),
+            trigger: None,
             updated_at: Utc::now(),
         }
     }

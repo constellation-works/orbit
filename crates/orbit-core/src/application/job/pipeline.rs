@@ -27,7 +27,7 @@ use orbit_store::contracts::{
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
-    JobRun, JobRunStartOutcome, JobRunState, JobScheduleState, JobTargetType,
+    JobRun, JobRunStartOutcome, JobRunState, JobRunTrigger, JobScheduleState, JobTargetType,
 };
 use orbit_types::workspace::WorkspacePaths;
 use serde::Serialize;
@@ -124,6 +124,8 @@ struct PipelineSubmission<'a> {
     /// [ORB-11332]. Only it (and the parent-authorized child path, which
     /// copies the parent's snapshot) may carry [`OPERATION_ADMISSION_KEY`].
     operation_bound: bool,
+    /// How this run was submitted [ORB-12255].
+    trigger: JobRunTrigger,
 }
 
 /// What a parent-authorized child submission produced.
@@ -157,7 +159,13 @@ impl<'a> PipelineSubmission<'a> {
             action_key: None,
             trusted_host: false,
             operation_bound: false,
+            trigger: JobRunTrigger::cli(),
         }
+    }
+
+    fn with_trigger(mut self, trigger: JobRunTrigger) -> Self {
+        self.trigger = trigger;
+        self
     }
 }
 
@@ -216,9 +224,23 @@ pub struct PipelineWaitEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pipeline: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// Wait-envelope success token. Canonical spelling is `JobRunState::Success`
+/// (`success`); `succeeded` is accepted so in-flight synthetic skip results
+/// and older wait JSON keep matching [ORB-12255].
+pub fn pipeline_wait_status_is_success(status: &str) -> bool {
+    matches!(status, "success" | "succeeded")
+}
+
+pub fn pipeline_wait_status_is_settled(status: &str) -> bool {
+    pipeline_wait_status_is_success(status)
+        || matches!(status, "failed" | "cancelled" | "interrupted")
 }
 
 impl OrbitRuntime {
@@ -628,11 +650,26 @@ impl OrbitRuntime {
         priority: Option<&str>,
         actor: Option<&str>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
-        let result = self.submit_persisted_pipeline_run(PipelineSubmission::catalog(
+        self.submit_pipeline_run_with_trigger(
             job_name,
-            input.clone(),
+            input,
+            priority,
             actor,
-        ));
+            JobRunTrigger::cli(),
+        )
+    }
+
+    pub(crate) fn submit_pipeline_run_with_trigger(
+        &self,
+        job_name: &str,
+        input: Value,
+        priority: Option<&str>,
+        actor: Option<&str>,
+        trigger: JobRunTrigger,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        let result = self.submit_persisted_pipeline_run(
+            PipelineSubmission::catalog(job_name, input.clone(), actor).with_trigger(trigger),
+        );
 
         self.record_pipeline_audit(
             "pipeline.invoke",
@@ -670,7 +707,8 @@ impl OrbitRuntime {
         admission: &ChildPipelineAdmission,
     ) -> Result<ChildSubmission, OrbitError> {
         let result = self.submit_persisted_pipeline_run_with_admission(
-            PipelineSubmission::catalog(job_name, input.clone(), actor),
+            PipelineSubmission::catalog(job_name, input.clone(), actor)
+                .with_trigger(JobRunTrigger::child()),
             Some(admission),
         );
 
@@ -760,6 +798,7 @@ impl OrbitRuntime {
             action_key,
             trusted_host,
             operation_bound,
+            trigger,
         } = submission;
         // [ORB-11354] The reserved admission key is writable by exactly one
         // caller. Refusing it here — on the single path every submission
@@ -872,9 +911,16 @@ impl OrbitRuntime {
                     Some(input.clone()),
                     resume.map(|plan| plan.source.run_id.clone()),
                 )?;
-                self.seed_v2_pipeline_run(&run, &input, resume)?;
+                self.seed_v2_pipeline_run(&run, &input, resume, trigger.clone())?;
                 run
             };
+
+            let trigger = if admission.is_some() {
+                JobRunTrigger::child()
+            } else {
+                trigger
+            };
+            self.record_run_trigger(&run.run_id, &trigger)?;
 
             // Pin the definition before the worker can exist. A direct-path
             // submission must not depend on the source file surviving
@@ -1001,12 +1047,10 @@ impl OrbitRuntime {
 
         loop {
             let snapshot = self.collect_pipeline_wait_entries(run_ids, false)?;
-            if snapshot.iter().all(|entry| {
-                matches!(
-                    entry.status.as_str(),
-                    "succeeded" | "failed" | "cancelled" | "interrupted"
-                )
-            }) {
+            if snapshot
+                .iter()
+                .all(|entry| pipeline_wait_status_is_settled(&entry.status))
+            {
                 let result = PipelineWaitResult { results: snapshot };
                 self.record_pipeline_wait_finished(actor, &result)?;
                 return Ok(result);
@@ -1210,6 +1254,18 @@ impl OrbitRuntime {
         })
     }
 
+    pub(crate) fn record_run_trigger(
+        &self,
+        run_id: &str,
+        trigger: &JobRunTrigger,
+    ) -> Result<(), OrbitError> {
+        let Some(mut state) = self.read_run_state(run_id)? else {
+            return Ok(());
+        };
+        state.trigger = Some(trigger.clone());
+        self.write_run_state(run_id, &state)
+    }
+
     fn execute_pipeline_run_now(&self, run: &JobRun, yaml_path: &Path) -> Result<(), OrbitError> {
         let started_at = Utc::now();
         // [ORB-10965] The state read in `execute_pipeline_run_worker` and this
@@ -1406,6 +1462,7 @@ impl OrbitRuntime {
                             run_id: run_id.clone(),
                             status: "failed".to_string(),
                             finished_at: None,
+                            duration_ms: None,
                             pipeline: None,
                             error: Some("unknown run".to_string()),
                         });
@@ -1414,14 +1471,14 @@ impl OrbitRuntime {
                 };
 
                 let terminal = match run.state {
-                    JobRunState::Success => Some("succeeded"),
-                    JobRunState::Failed => Some("failed"),
-                    JobRunState::Cancelled => Some("cancelled"),
-                    JobRunState::Interrupted => Some("interrupted"),
+                    JobRunState::Success => Some(JobRunState::Success.to_string()),
+                    JobRunState::Failed => Some(JobRunState::Failed.to_string()),
+                    JobRunState::Cancelled => Some(JobRunState::Cancelled.to_string()),
+                    JobRunState::Interrupted => Some(JobRunState::Interrupted.to_string()),
                     _ => None,
                 };
                 let status = match (terminal, timeout_incomplete) {
-                    (Some(status), _) => status.to_string(),
+                    (Some(status), _) => status,
                     (None, true) => "timeout".to_string(),
                     (None, false) => run.state.to_string(),
                 };
@@ -1451,6 +1508,7 @@ impl OrbitRuntime {
                     run_id: run_id.clone(),
                     status,
                     finished_at: run.finished_at.map(|value| value.to_rfc3339()),
+                    duration_ms: run.duration_ms,
                     pipeline,
                     error,
                 })
@@ -1873,7 +1931,7 @@ impl OrbitRuntime {
         let mut timeout = 0usize;
         for entry in &result.results {
             match entry.status.as_str() {
-                "succeeded" => succeeded += 1,
+                status if pipeline_wait_status_is_success(status) => succeeded += 1,
                 "failed" => failed += 1,
                 "cancelled" => cancelled += 1,
                 "timeout" => timeout += 1,

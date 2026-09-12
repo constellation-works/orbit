@@ -167,7 +167,7 @@ pub(super) fn record_child_wait_outcome(
     status: &str,
     error_message: Option<&str>,
 ) -> Result<(), DispatchError> {
-    let succeeded = status == "succeeded";
+    let succeeded = crate::application::job::pipeline::pipeline_wait_status_is_success(status);
     record_child_audit(
         runtime,
         action,

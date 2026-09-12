@@ -1,4 +1,6 @@
-use orbit_types::workflow::{JobRunState, PipelineState, run_id_role};
+use orbit_types::workflow::{
+    JobRunState, JobRunTrigger, JobRunTriggerKind, PipelineState, run_id_role,
+};
 
 /// Which side of a parent/child relationship a run id declares.
 ///
@@ -8,6 +10,22 @@ use orbit_types::workflow::{JobRunState, PipelineState, run_id_role};
 /// role its suffix never encoded.
 pub(crate) fn format_run_role(run_id: &str) -> String {
     run_id_role(run_id).map_or_else(|| "unmarked".to_string(), |role| role.to_string())
+}
+
+/// ROLE column for `run history`: a routine-fired run names the routine
+/// instead of the id marker (`top-level` / `unmarked`) [ORB-12255].
+pub(crate) fn format_history_role(run_id: &str, trigger: Option<&JobRunTrigger>) -> String {
+    if let Some(trigger) = trigger
+        && trigger.kind == JobRunTriggerKind::Routine
+    {
+        return trigger
+            .routine
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("routine")
+            .to_string();
+    }
+    format_run_role(run_id)
 }
 
 pub(crate) fn summarize_error_message(raw: Option<&str>) -> String {

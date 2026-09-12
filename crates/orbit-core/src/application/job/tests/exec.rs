@@ -1729,6 +1729,124 @@ fn replay_job_run_records_lineage_and_preserves_source_bundle() {
     );
 }
 
+/// [ORB-12255] Detached workers used to leave `JobRun::steps` empty. The
+/// worker path now persists the step summary, and `--wait` uses the same
+/// `success` token and `duration_ms` as `run show`.
+#[test]
+fn worker_path_persists_steps_and_wait_agrees_on_state_and_duration() {
+    let (_root, runtime, _repo_root, global_root) = test_runtime();
+    let jobs_dir = global_root.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
+    let yaml_path = jobs_dir.join("qa_worker_steps.yaml");
+    write_job(&yaml_path, "qa_worker_steps", "sleep");
+
+    let input = json!({ "seconds": 0 });
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("qa_worker_steps", 1, Utc::now(), Some(input.clone()), None)
+        .expect("insert worker run");
+    runtime
+        .seed_v2_pipeline_run(
+            &run,
+            &input,
+            None,
+            orbit_types::workflow::JobRunTrigger::cli(),
+        )
+        .expect("seed worker run");
+    runtime
+        .execute_pipeline_run_worker(&run.run_id)
+        .expect("worker executes");
+
+    let stored = runtime.show_job_run(&run.run_id).expect("show worker run");
+    assert_eq!(stored.state, JobRunState::Success);
+    assert!(
+        !stored.steps.is_empty(),
+        "worker-spawned run must persist steps, got none"
+    );
+    assert!(
+        stored.duration_ms.is_some(),
+        "worker-spawned run must record duration_ms"
+    );
+
+    let waited = runtime
+        .wait_pipeline_runs(std::slice::from_ref(&run.run_id), 1, 1, Some("test"))
+        .expect("wait on terminal run");
+    assert_eq!(waited.results[0].status, "success");
+    assert_eq!(waited.results[0].duration_ms, stored.duration_ms);
+
+    let state = runtime
+        .read_run_state(&stored.run_id)
+        .expect("read state")
+        .expect("pipeline state");
+    let projection = crate::application::job::job_run_to_json(&stored, Some(&state));
+    assert_eq!(projection["state"], "success");
+    assert_eq!(projection["duration_ms"], json!(stored.duration_ms));
+}
+
+/// [ORB-12255] A routine fire records trigger provenance on the run document
+/// and uses `routine:<name>` on `run.started`.
+#[test]
+fn routine_submit_records_trigger_and_audit_prefix() {
+    let (_root, runtime, _repo_root, global_root) = test_runtime();
+    let jobs_dir = global_root.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
+    let yaml_path = jobs_dir.join("qa_routine_trigger.yaml");
+    write_job(&yaml_path, "qa_routine_trigger", "sleep");
+
+    let slot = "2026-09-12T03:00:00Z";
+    let input = json!({ "seconds": 0 });
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            "qa_routine_trigger",
+            1,
+            Utc::now(),
+            Some(input.clone()),
+            None,
+        )
+        .expect("insert routine run");
+    runtime
+        .seed_v2_pipeline_run(
+            &run,
+            &input,
+            None,
+            orbit_types::workflow::JobRunTrigger::routine("auto-task-scheduler-nebula", slot),
+        )
+        .expect("seed routine run");
+
+    let state = runtime
+        .read_run_state(&run.run_id)
+        .expect("read state")
+        .expect("pipeline state");
+    let trigger = state.trigger.expect("trigger recorded");
+    assert_eq!(
+        trigger.kind,
+        orbit_types::workflow::JobRunTriggerKind::Routine
+    );
+    assert_eq!(
+        trigger.routine.as_deref(),
+        Some("auto-task-scheduler-nebula")
+    );
+    assert_eq!(trigger.slot.as_deref(), Some(slot));
+
+    runtime
+        .execute_pipeline_run_worker(&run.run_id)
+        .expect("worker executes");
+    let event: serde_json::Value = serde_json::from_str(
+        &v2_events(&runtime, &run.run_id, "run.started")
+            .first()
+            .expect("run.started audit event")
+            .payload_json,
+    )
+    .expect("parse run.started");
+    assert_eq!(
+        event.get("job_name").and_then(serde_json::Value::as_str),
+        Some("routine:auto-task-scheduler-nebula")
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn v2_cli_agent_loop_persists_invocation_metrics() {

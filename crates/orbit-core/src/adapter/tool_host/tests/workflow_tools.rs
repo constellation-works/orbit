@@ -561,6 +561,88 @@ fn mcp_run_observation_names_the_child_a_blocked_parent_dispatched() {
     );
 }
 
+/// [ORB-12255] MCP run show/list reconstruct steps from the audit trail when
+/// the run record stores none, and name the source.
+#[test]
+fn mcp_run_show_and_list_reconstruct_empty_record_steps() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_auto_pipeline", 1, Utc::now(), None, None)
+        .expect("insert run");
+    runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: runtime.workspace_id().expect("workspace id"),
+            event_id: "evt-step-start".to_string(),
+            source: "v2_envelope".to_string(),
+            schema_version: 1,
+            event_type: "step.started".to_string(),
+            ts: chrono::DateTime::parse_from_rfc3339("2026-09-12T04:00:00Z")
+                .expect("fixture timestamp")
+                .with_timezone(&Utc),
+            run_id: run.run_id.clone(),
+            agent_identity: "codex".to_string(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json: json!({
+                "schemaVersion": 1,
+                "event_type": "step.started",
+                "event_id": "evt-step-start",
+                "ts": "2026-09-12T04:00:00Z",
+                "run_id": run.run_id,
+                "agent_identity": "codex",
+                "body_kind": "step_started",
+                "step_id": "nap",
+            })
+            .to_string(),
+        })
+        .expect("insert step.started");
+    runtime
+        .insert_v2_audit_event(&V2AuditEventInsertParams {
+            workspace_id: runtime.workspace_id().expect("workspace id"),
+            event_id: "evt-step-finish".to_string(),
+            source: "v2_envelope".to_string(),
+            schema_version: 1,
+            event_type: "step.finished".to_string(),
+            ts: chrono::DateTime::parse_from_rfc3339("2026-09-12T04:00:01Z")
+                .expect("fixture timestamp")
+                .with_timezone(&Utc),
+            run_id: run.run_id.clone(),
+            agent_identity: "codex".to_string(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json: json!({
+                "schemaVersion": 1,
+                "event_type": "step.finished",
+                "event_id": "evt-step-finish",
+                "ts": "2026-09-12T04:00:01Z",
+                "run_id": run.run_id,
+                "agent_identity": "codex",
+                "body_kind": "step_finished",
+                "step_id": "nap",
+                "outcome": "success",
+            })
+            .to_string(),
+        })
+        .expect("insert step.finished");
+
+    let shown = run_tool_as_operator(
+        &runtime,
+        "orbit.workflow.run.show",
+        json!({"id": run.run_id}),
+    )
+    .expect("operator run show");
+    assert_eq!(shown["steps_source"], json!("audit"));
+    assert_eq!(shown["steps"][0]["target_id"], json!("nap"));
+    assert_eq!(shown["steps"][0]["state"], json!("success"));
+
+    let listed = run_tool_as_operator(&runtime, "orbit.workflow.run.list", json!({}))
+        .expect("operator run list");
+    assert_eq!(listed["items"][0]["steps_source"], json!("audit"));
+    assert_eq!(listed["items"][0]["steps"][0]["target_id"], json!("nap"));
+}
+
 #[test]
 fn mcp_run_observation_carries_an_empty_lineage_for_a_run_without_children() {
     let (_root, runtime, _repo_root) = test_runtime();

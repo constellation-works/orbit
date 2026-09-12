@@ -2,8 +2,8 @@
 
 use chrono::Utc;
 use orbit_types::workflow::{
-    ChildDispatch, ChildDispatchPhase, JobRun, JobRunState, JobRunStep, JobTargetType,
-    PipelineState,
+    ChildDispatch, ChildDispatchPhase, JobRun, JobRunState, JobRunStep, JobRunTrigger,
+    JobTargetType, PipelineState,
 };
 use serde_json::{Value, json};
 
@@ -69,6 +69,25 @@ fn active_run_projects_waiting_reasons_and_child_dispatches() {
         json!("jrun-child")
     );
     assert_eq!(value["drain_admissions_stop"], Value::Null);
+}
+
+#[test]
+fn projection_includes_routine_trigger_on_a_terminal_run() {
+    let run = test_run(JobRunState::Success);
+    let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+    state.trigger = Some(JobRunTrigger::routine(
+        "auto-task-scheduler-nebula",
+        "2026-09-12T03:00:00Z",
+    ));
+
+    let value = job_run_to_json(&run, Some(&state));
+
+    assert_eq!(value["trigger"]["kind"], json!("routine"));
+    assert_eq!(
+        value["trigger"]["routine"],
+        json!("auto-task-scheduler-nebula")
+    );
+    assert_eq!(value["trigger"]["slot"], json!("2026-09-12T03:00:00Z"));
 }
 
 #[test]

@@ -311,7 +311,7 @@ spec:
         ],
     );
     assert_eq!(
-        run["state"], "succeeded",
+        run["state"], "success",
         "fixture job run did not settle: {run}"
     );
     let run_id = run["run_id"]

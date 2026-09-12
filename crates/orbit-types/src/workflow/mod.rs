@@ -51,9 +51,9 @@ pub use executor_def::{
 };
 pub use job::{
     AgentCommitRequest, AgentResponseEnvelope, AgentRunError, Job, JobRun, JobRunStartOutcome,
-    JobRunState, JobRunStep, JobScheduleState, JobStep, JobTargetType, KnowledgeRunMetrics,
-    RunEvent, RunStateUpdate, StepCondition, default_job_max_active_runs, default_max_iterations,
-    default_retry_backoff_seconds,
+    JobRunState, JobRunStep, JobRunTrigger, JobRunTriggerKind, JobScheduleState, JobStep,
+    JobTargetType, KnowledgeRunMetrics, RunEvent, RunStateUpdate, StepCondition,
+    default_job_max_active_runs, default_max_iterations, default_retry_backoff_seconds,
 };
 pub use operation::{
     GrantAdmission, GrantLimits, GrantRights, GrantStatus, GrantTransition, MAX_GRANT_SCOPE_TASKS,

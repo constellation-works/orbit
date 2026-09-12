@@ -91,6 +91,7 @@ pub(super) fn render_wait(invoke: &PipelineInvokeResult, entry: &PipelineWaitEnt
         "submitted_at": invoke.submitted_at,
         "waited": true,
         "finished_at": entry.finished_at,
+        "duration_ms": entry.duration_ms,
         "error": entry.error,
         "pipeline": entry.pipeline,
     });

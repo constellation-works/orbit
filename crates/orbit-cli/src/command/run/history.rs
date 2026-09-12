@@ -7,7 +7,7 @@ use crate::command::{Block, CommandOut, Execute, Payload};
 use crate::output::color::Domain;
 
 use super::format::{
-    format_run_role, format_timestamp, format_waiting_line, summarize_error_message,
+    format_history_role, format_timestamp, format_waiting_line, summarize_error_message,
 };
 use super::job::cli_job_run_to_json;
 
@@ -88,12 +88,15 @@ pub(crate) fn run_history_payload(
         Column::new("ERROR_MESSAGE"),
     ]);
     let mut table = Table::new(columns).empty_message("no runs recorded");
-    for run in &runs {
+    for (run, state) in runs.iter().zip(states.iter()) {
         use comfy_table::Cell;
         let last = run.steps.last();
         let mut row = vec![
             Cell::new(&run.run_id),
-            Cell::new(format_run_role(&run.run_id)),
+            Cell::new(format_history_role(
+                &run.run_id,
+                state.as_ref().and_then(|state| state.trigger.as_ref()),
+            )),
         ];
         if include_job_id {
             row.push(Cell::new(&run.job_id));

@@ -207,3 +207,19 @@ fn run_role_reads_the_id_and_admits_when_it_cannot() {
     assert_eq!(format_run_role("jrun-20260911-0146-2"), "unmarked");
     assert_eq!(format_run_role("jrun-20260911-0146"), "unmarked");
 }
+
+#[test]
+fn history_role_prints_the_routine_name_instead_of_the_id_marker() {
+    let trigger = orbit_types::workflow::JobRunTrigger::routine(
+        "auto-task-scheduler-nebula",
+        "2026-09-12T03:00:00Z",
+    );
+    assert_eq!(
+        format_history_role("jrun-20260912-0302-t1", Some(&trigger)),
+        "auto-task-scheduler-nebula"
+    );
+    assert_eq!(
+        format_history_role("jrun-20260911-0146-2", None),
+        "unmarked"
+    );
+}
