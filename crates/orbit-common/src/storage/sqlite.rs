@@ -12,6 +12,7 @@ use std::fs;
 use std::io;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
 
 use rusqlite::{Connection, OpenFlags};
 
@@ -49,6 +50,76 @@ pub struct OpenedConnection {
     pub currency: ObservationCurrency,
 }
 
+/// A live SQLite connection that keeps one WAL file set linked.
+///
+/// Linux runtime sandboxes bind the database, WAL, and shared-memory files by
+/// descriptor so a pathname replacement cannot redirect a grant. SQLite may
+/// normally unlink those sidecars when its last connection closes. Keeping a
+/// connection alive until the sandboxed provider exits prevents the bound
+/// descriptors from becoming a coherent but obsolete file set.
+pub struct WalFileSetLease {
+    path: PathBuf,
+    _connection: Mutex<Connection>,
+}
+
+impl std::fmt::Debug for WalFileSetLease {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WalFileSetLease")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Keep an existing WAL database's sidecars linked until this lease is dropped.
+///
+/// Returns `None` for a missing database or a database that is not in WAL mode.
+/// The connection does not hold a transaction, so it does not pin a read
+/// snapshot or prevent ordinary checkpoints; it only prevents last-close WAL
+/// cleanup from replacing the descriptor-backed sandbox file set.
+pub fn lease_wal_file_set(path: &Path) -> Result<Option<WalFileSetLease>, OrbitError> {
+    if !path
+        .try_exists()
+        .map_err(|error| sqlite_path_error("inspect", path, error))?
+    {
+        return Ok(None);
+    }
+
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|error| sqlite_operation_error(Some(path), "open WAL file-set lease", &error))?;
+    connection
+        .busy_timeout(std::time::Duration::from_millis(u64::from(
+            DEFAULT_BUSY_TIMEOUT_MS,
+        )))
+        .map_err(|error| sqlite_operation_error(Some(path), "set lease busy_timeout", &error))?;
+    let journal_mode = connection
+        .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+        .map_err(|error| {
+            sqlite_operation_error(Some(path), "inspect lease journal mode", &error)
+        })?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        return Ok(None);
+    }
+
+    connection
+        .query_row("SELECT count(*) FROM sqlite_schema", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|error| {
+            sqlite_operation_error(Some(path), "initialize WAL file-set lease", &error)
+        })?;
+
+    Ok(Some(WalFileSetLease {
+        path: path.to_path_buf(),
+        _connection: Mutex::new(connection),
+    }))
+}
+
 /// Open an Orbit SQLite database without exposing its persisted state.
 ///
 /// Writable databases are created or repaired to owner-only access on Unix.
@@ -83,12 +154,7 @@ pub fn open_private(path: &Path) -> Result<OpenedConnection, OrbitError> {
             | OpenFlags::SQLITE_OPEN_NO_MUTEX
             | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )
-    .map_err(|error| {
-        OrbitError::Store(format!(
-            "cannot open SQLite database '{}': {error}",
-            path.display()
-        ))
-    })?;
+    .map_err(|error| sqlite_operation_error(Some(&path), "cannot open SQLite database", &error))?;
     let pragmas = apply_default_pragmas_for_path(&connection, &path)?;
     if pragmas.write_denied || filesystem_is_read_only(&path)? {
         drop(connection);
@@ -365,7 +431,7 @@ fn apply_default_pragmas_inner(
     conn: &Connection,
     path: Option<&Path>,
 ) -> Result<PragmaOutcome, OrbitError> {
-    let (journal_mode, mut write_denied) = request_wal_journal_mode(conn);
+    let (journal_mode, mut write_denied) = request_wal_journal_mode(conn, path);
     conn.pragma_update(None, "busy_timeout", DEFAULT_BUSY_TIMEOUT_MS)
         .map_err(|error| sqlite_operation_error(path, "set busy_timeout", &error))?;
     conn.pragma_update(None, "foreign_keys", "ON")
@@ -396,21 +462,33 @@ fn sqlite_operation_error(path: Option<&Path>, phase: &str, error: &rusqlite::Er
         error.sqlite_error_code(),
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
     );
+    let detail = sqlite_error_detail(error);
     if contention && let Some(path) = path {
         return OrbitError::SqliteContention(Box::new(SqliteContention {
             path: path.display().to_string(),
             phase: phase.to_string(),
-            detail: error.to_string(),
+            detail,
         }));
     }
 
-    let message = match phase {
-        "set busy_timeout" => format!("failed to set busy_timeout: {error}"),
-        "enable foreign keys" => format!("failed to enable foreign keys: {error}"),
-        "set synchronous=NORMAL" => format!("failed to set synchronous=NORMAL: {error}"),
-        _ => error.to_string(),
+    let operation = match phase {
+        "set busy_timeout" => "failed to set busy_timeout",
+        "enable foreign keys" => "failed to enable foreign keys",
+        "set synchronous=NORMAL" => "failed to set synchronous=NORMAL",
+        _ => phase,
     };
-    OrbitError::Store(message)
+    let path = path.map_or_else(String::new, |path| format!(" for '{}'", path.display()));
+    OrbitError::Store(format!("{operation}{path}: {detail}"))
+}
+
+fn sqlite_error_detail(error: &rusqlite::Error) -> String {
+    match error.sqlite_error() {
+        Some(sqlite) => format!(
+            "{} [code={:?}, extended_code={}]",
+            error, sqlite.code, sqlite.extended_code
+        ),
+        None => error.to_string(),
+    }
 }
 
 /// What a caller needs from an observational open.
@@ -482,7 +560,10 @@ pub fn open_observational(
             row.get::<_, i64>(0)
         })
         .map_err(|error| {
-            observational_unavailable(path, &format!("its first read failed: {error}"))
+            observational_unavailable(
+                path,
+                &format!("its first read failed: {}", sqlite_error_detail(&error)),
+            )
         })?;
 
     if currency == ObservationCurrency::MainFileOnly {
@@ -600,18 +681,19 @@ fn open_read_only_connection(
             | OpenFlags::SQLITE_OPEN_URI,
     )
     .map_err(|error| {
-        OrbitError::Store(format!(
-            "cannot open SQLite database '{}' for observational reads: {error}",
-            path.display()
-        ))
+        sqlite_operation_error(
+            Some(path),
+            "cannot open SQLite database for observational reads",
+            &error,
+        )
     })?;
 
     conn.pragma_update(None, "query_only", "ON")
-        .map_err(|error| OrbitError::Store(format!("failed to set query_only: {error}")))?;
+        .map_err(|error| sqlite_operation_error(Some(path), "set query_only", &error))?;
     conn.pragma_update(None, "busy_timeout", DEFAULT_BUSY_TIMEOUT_MS)
-        .map_err(|error| OrbitError::Store(format!("failed to set busy_timeout: {error}")))?;
+        .map_err(|error| sqlite_operation_error(Some(path), "set busy_timeout", &error))?;
     conn.pragma_update(None, "foreign_keys", "ON")
-        .map_err(|error| OrbitError::Store(format!("failed to enable foreign keys: {error}")))?;
+        .map_err(|error| sqlite_operation_error(Some(path), "enable foreign keys", &error))?;
     Ok(conn)
 }
 
@@ -670,7 +752,7 @@ pub fn filesystem_is_read_only(_path: &Path) -> Result<bool, OrbitError> {
 /// Request WAL and report the journal mode SQLite settled on. Never fails:
 /// WAL is a performance/concurrency upgrade, not a correctness requirement,
 /// so refusals degrade to a warning plus the active mode.
-fn request_wal_journal_mode(conn: &Connection) -> (String, bool) {
+fn request_wal_journal_mode(conn: &Connection, path: Option<&Path>) -> (String, bool) {
     match conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0)) {
         Ok(mode) => {
             if !mode.eq_ignore_ascii_case("wal") && !mode.eq_ignore_ascii_case("memory") {
@@ -683,9 +765,11 @@ fn request_wal_journal_mode(conn: &Connection) -> (String, bool) {
             (mode, false)
         }
         Err(error) => {
+            let detail = sqlite_error_detail(&error);
             tracing::warn!(
                 target: "orbit.common.sqlite",
-                error = %error,
+                path = path.map(|path| path.display().to_string()),
+                error = detail,
                 "could not set WAL mode; continuing with the active journal mode",
             );
             let write_denied = OrbitError::Store(error.to_string()).is_readonly_or_access_failure();

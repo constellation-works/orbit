@@ -331,9 +331,7 @@ fn append_linux_runtime_write_roots(
     for relative in ["state/logs", "state/audit", "tasks"] {
         append_runtime_directory_grant(&global, relative, resolved, authority)?;
     }
-    for relative in ["orbit.db", "orbit.db-wal", "orbit.db-shm"] {
-        append_runtime_sidecar_grant(&global, relative, resolved, authority)?;
-    }
+    append_runtime_sqlite_grants(&global, "orbit.db", resolved, authority)?;
 
     if !grants_workspace_modify {
         return Ok(());
@@ -348,13 +346,7 @@ fn append_linux_runtime_write_roots(
     ] {
         append_runtime_directory_grant(&workspace, relative, resolved, authority)?;
     }
-    for relative in [
-        "state/semantic.db",
-        "state/semantic.db-wal",
-        "state/semantic.db-shm",
-    ] {
-        append_runtime_sidecar_grant(&workspace, relative, resolved, authority)?;
-    }
+    append_runtime_sqlite_grants(&workspace, "state/semantic.db", resolved, authority)?;
 
     // Language-neutral host cache for toolchain artifacts shared across
     // worktrees (compiler caches, etc.). Implementer-only so read-only
@@ -394,6 +386,7 @@ pub(super) fn append_runtime_directory_grant(
     authority.push(LinuxRuntimeWriteAuthority {
         path: directory,
         handle: std::sync::Arc::new(File::from(handle)),
+        wal_file_set_lease: None,
     });
     Ok(())
 }
@@ -406,12 +399,47 @@ pub(super) fn append_runtime_directory_grant(
 /// symlink would otherwise hand the sandbox a writable bind on whatever the
 /// link names.
 // pub(super) widened for the sibling tests/ layout.
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", test))]
 pub(super) fn append_runtime_sidecar_grant(
     root: &Path,
     relative: &str,
     resolved: &mut ResolvedFsProfile,
     authority: &mut Vec<LinuxRuntimeWriteAuthority>,
+) -> Result<(), DispatchError> {
+    append_runtime_sidecar_grant_with_lease(root, relative, resolved, authority, None)
+}
+
+#[cfg(target_os = "linux")]
+fn append_runtime_sqlite_grants(
+    root: &Path,
+    relative: &str,
+    resolved: &mut ResolvedFsProfile,
+    authority: &mut Vec<LinuxRuntimeWriteAuthority>,
+) -> Result<(), DispatchError> {
+    let database = root.join(relative);
+    let lease = orbit_common::storage::sqlite::lease_wal_file_set(&database)
+        .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?
+        .map(std::sync::Arc::new);
+
+    for suffix in ["", "-wal", "-shm"] {
+        append_runtime_sidecar_grant_with_lease(
+            root,
+            &format!("{relative}{suffix}"),
+            resolved,
+            authority,
+            lease.clone(),
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn append_runtime_sidecar_grant_with_lease(
+    root: &Path,
+    relative: &str,
+    resolved: &mut ResolvedFsProfile,
+    authority: &mut Vec<LinuxRuntimeWriteAuthority>,
+    wal_file_set_lease: Option<std::sync::Arc<orbit_common::storage::sqlite::WalFileSetLease>>,
 ) -> Result<(), DispatchError> {
     let Some(file) = validated_linux_runtime_descendant(root, relative)? else {
         tracing::warn!(
@@ -429,6 +457,7 @@ pub(super) fn append_runtime_sidecar_grant(
             authority.push(LinuxRuntimeWriteAuthority {
                 path: file,
                 handle: std::sync::Arc::new(File::from(handle)),
+                wal_file_set_lease,
             });
             Ok(())
         }

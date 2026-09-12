@@ -257,6 +257,15 @@ fn descriptor_mount_plan_holds_the_validated_object_and_closes_it_on_drop() {
     )
     .expect("descriptor-backed plan");
     let retained_fd = plan.mount_sources[0].as_raw_fd();
+    let evidence = &plan.mount_evidence()[0];
+    let metadata = plan.mount_sources[0]
+        .metadata()
+        .expect("mounted object metadata");
+    use std::os::unix::fs::MetadataExt;
+    assert_eq!(evidence.destination, target);
+    assert_eq!(evidence.source_fd, retained_fd);
+    assert_eq!(evidence.device, metadata.dev());
+    assert_eq!(evidence.inode, metadata.ino());
     assert!(plan.args.windows(3).any(|args| {
         args[0] == "--bind-fd"
             && args[1] == retained_fd.to_string()

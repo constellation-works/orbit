@@ -43,6 +43,7 @@ pub struct LinuxBwrapPlan {
     /// Mount-source descriptors retained until Bubblewrap has consumed argv.
     /// Empty for ordinary path-based plans and audit rendering.
     mount_sources: Vec<File>,
+    mount_evidence: Vec<LinuxBwrapMountEvidence>,
 }
 
 impl PartialEq for LinuxBwrapPlan {
@@ -54,6 +55,22 @@ impl PartialEq for LinuxBwrapPlan {
 }
 
 impl Eq for LinuxBwrapPlan {}
+
+impl LinuxBwrapPlan {
+    /// Descriptor and object identity used by each effective `--bind-fd` grant.
+    pub fn mount_evidence(&self) -> &[LinuxBwrapMountEvidence] {
+        &self.mount_evidence
+    }
+}
+
+/// Bounded evidence tying a writable sandbox destination to its open object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinuxBwrapMountEvidence {
+    pub destination: PathBuf,
+    pub source_fd: i32,
+    pub device: u64,
+    pub inode: u64,
+}
 
 /// A host object already validated and opened by the runtime owner.
 #[derive(Debug)]
@@ -692,6 +709,7 @@ pub fn compile_linux_bwrap_argv(
         args: out,
         dropped_grants,
         mount_sources: Vec::new(),
+        mount_evidence: Vec::new(),
     })
 }
 
@@ -714,6 +732,13 @@ pub fn compile_linux_bwrap_argv_with_authority(
         let source = prepare_mount_source(grant.source)?;
         #[cfg(unix)]
         let source_fd = source.as_raw_fd();
+        #[cfg(unix)]
+        let metadata = source.metadata().map_err(|error| {
+            OrbitError::Execution(format!(
+                "inspect Linux runtime grant descriptor for `{}`: {error}",
+                grant.destination.display()
+            ))
+        })?;
         let rendered = grant.destination.display().to_string();
         let mut replaced = false;
         for index in 0..plan.args.len().saturating_sub(2) {
@@ -737,6 +762,17 @@ pub fn compile_linux_bwrap_argv_with_authority(
                 "validated Linux runtime grant `{}` had no writable mount in the final sandbox plan",
                 grant.destination.display()
             )));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+
+            plan.mount_evidence.push(LinuxBwrapMountEvidence {
+                destination: grant.destination,
+                source_fd,
+                device: metadata.dev(),
+                inode: metadata.ino(),
+            });
         }
         plan.mount_sources.push(source);
     }

@@ -60,6 +60,102 @@ fn defaults_are_idempotent() {
     assert!(outcome.wal_active());
 }
 
+#[cfg(unix)]
+#[test]
+fn wal_file_set_lease_keeps_sidecar_identity_stable() {
+    use std::os::unix::fs::MetadataExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("leased.db");
+    let connection = Connection::open(&path).expect("create database");
+    connection
+        .pragma_update(None, "journal_mode", "WAL")
+        .expect("enable WAL");
+    connection
+        .execute_batch("CREATE TABLE fixture(value INTEGER); INSERT INTO fixture VALUES (1);")
+        .expect("seed database");
+    drop(connection);
+    assert!(
+        ["-wal", "-shm"]
+            .iter()
+            .all(
+                |suffix| !std::path::PathBuf::from(format!("{}{suffix}", path.display())).exists()
+            ),
+        "the pre-repair lifecycle gap requires SQLite last-close cleanup"
+    );
+
+    let lease = super::super::sqlite::lease_wal_file_set(&path)
+        .expect("open WAL lease")
+        .expect("WAL database needs a lease");
+    let identities = ["-wal", "-shm"].map(|suffix| {
+        std::fs::metadata(format!("{}{suffix}", path.display()))
+            .expect("lease materialized sidecar")
+            .ino()
+    });
+
+    let writer = Connection::open(&path).expect("open concurrent writer");
+    writer
+        .execute("INSERT INTO fixture VALUES (2)", [])
+        .expect("write through leased file set");
+    drop(writer);
+
+    assert_eq!(
+        ["-wal", "-shm"].map(|suffix| {
+            std::fs::metadata(format!("{}{suffix}", path.display()))
+                .expect("leased sidecar remains linked")
+                .ino()
+        }),
+        identities,
+        "last-close cleanup must not replace descriptor-backed sidecars"
+    );
+    drop(lease);
+}
+
+#[test]
+fn wal_file_set_lease_keeps_missing_and_corrupt_failures_attributable() {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("missing.db");
+    assert!(
+        super::super::sqlite::lease_wal_file_set(&missing)
+            .expect("missing database is not a lease error")
+            .is_none()
+    );
+
+    let corrupt = dir.path().join("corrupt.db");
+    std::fs::write(&corrupt, b"not a SQLite database").expect("write corrupt database");
+    let error = super::super::sqlite::lease_wal_file_set(&corrupt)
+        .expect_err("corrupt database must fail closed");
+    let message = error.to_string();
+    assert!(
+        message.contains(&corrupt.display().to_string()),
+        "{message}"
+    );
+    assert!(message.contains("code=NotADatabase"), "{message}");
+    assert!(message.contains("extended_code=26"), "{message}");
+
+    #[cfg(unix)]
+    {
+        let unreadable = dir.path().join("unreadable.db");
+        Connection::open(&unreadable).expect("create unreadable fixture");
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000))
+            .expect("remove database access");
+        let error = super::super::sqlite::lease_wal_file_set(&unreadable)
+            .expect_err("unreadable database must fail closed");
+        std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o600))
+            .expect("restore database access");
+        let message = error.to_string();
+        assert!(
+            message.contains(&unreadable.display().to_string()),
+            "{message}"
+        );
+        assert!(message.contains("code=CannotOpen"), "{message}");
+        assert!(message.contains("extended_code=14"), "{message}");
+    }
+}
+
 #[test]
 fn private_open_rejects_parent_directory_traversal() {
     let dir = tempfile::tempdir().expect("tempdir");

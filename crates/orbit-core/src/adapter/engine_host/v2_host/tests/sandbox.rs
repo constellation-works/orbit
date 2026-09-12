@@ -56,6 +56,61 @@ fn reviewer_read_rules_follow_inspection_cwd_without_primary_write_grants() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn reviewer_runtime_database_grants_hold_one_wal_file_set_lease() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let inspection = tempfile::tempdir().expect("inspection checkout");
+    seed_executor(
+        &runtime,
+        "codex",
+        Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
+    );
+
+    let sandbox = runtime
+        .resolve_executor_sandbox("codex", Some("reviewer"), Some(inspection.path()))
+        .expect("resolve reviewer sandbox")
+        .expect("Linux sandbox");
+    let database_grants = sandbox
+        .runtime_write_authority
+        .iter()
+        .filter(|grant| {
+            grant.path.file_name().is_some_and(|name| {
+                matches!(
+                    name.to_str(),
+                    Some("orbit.db" | "orbit.db-wal" | "orbit.db-shm")
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(database_grants.len(), 3);
+    assert!(
+        database_grants
+            .iter()
+            .all(|grant| grant.wal_file_set_lease.is_some()),
+        "the DB, WAL, and SHM descriptors must share a live SQLite lease"
+    );
+    let first = database_grants[0]
+        .wal_file_set_lease
+        .as_ref()
+        .expect("database lease");
+    assert!(database_grants.iter().all(|grant| {
+        std::sync::Arc::ptr_eq(
+            first,
+            grant.wal_file_set_lease.as_ref().expect("sidecar lease"),
+        )
+    }));
+    assert!(
+        sandbox
+            .fs_profile
+            .modify
+            .iter()
+            .all(|grant| !grant.starts_with(inspection.path().to_string_lossy().as_ref())),
+        "the runtime lease must not grant source-inspection writes"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn resolve_executor_sandbox_returns_linux_descriptor_with_absolute_mounts() {
     let runtime =
         seeded_runtime_with_executor(Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap));

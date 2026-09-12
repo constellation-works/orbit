@@ -56,6 +56,9 @@ pub struct ResolvedShellExecutor {
 pub struct LinuxRuntimeWriteAuthority {
     pub path: PathBuf,
     pub handle: Arc<File>,
+    /// Shared connection that prevents SQLite last-close cleanup from
+    /// replacing a descriptor-backed WAL/SHM file set while the provider runs.
+    pub wal_file_set_lease: Option<Arc<orbit_common::storage::sqlite::WalFileSetLease>>,
 }
 
 impl PartialEq for LinuxRuntimeWriteAuthority {
