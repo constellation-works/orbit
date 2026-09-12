@@ -1183,6 +1183,42 @@
         flex-wrap: wrap;
         gap: 6px;
       }
+      .property-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .property-row {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 6px 16px;
+      }
+      /* The label lines up with a 28px control, and stays on the first line
+         when the tags editor opens beside it. */
+      .property-row .label {
+        color: var(--fg-dim);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        line-height: 28px;
+      }
+      .property-row .task-complexity-select {
+        width: 120px;
+        min-width: 0;
+      }
+      .property-row .field-editor-cell {
+        flex: 1 1 auto;
+        min-width: 0;
+        align-items: flex-end;
+      }
+      .property-row .field-editor {
+        width: 100%;
+        align-items: flex-end;
+      }
+      .property-row .detail-tag-row {
+        justify-content: flex-end;
+      }
       .detail-tag-row .chip {
         cursor: default;
       }
@@ -1327,14 +1363,29 @@
         border-bottom: 1px solid rgba(255, 255, 255, 0.05);
         padding-bottom: 8px;
         transition: color 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 8px;
       }
+      /* The header holds the title, an optional count, and the field's own
+         action (its edit button) pushed to the far end. */
+      .field-block h4 .field-count {
+        color: var(--fg-mute);
+        font-family: var(--font-mono);
+        font-weight: 400;
+        letter-spacing: 0;
+      }
+      .field-block h4 .field-actions {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+      }
+      .field-block h4 .field-actions:empty { display: none; }
       
       .field-block.collapsible h4 {
         cursor: pointer;
         user-select: none;
-        display: flex;
         justify-content: space-between;
-        align-items: center;
       }
       
       .field-block.collapsible h4:hover {
@@ -1538,13 +1589,27 @@
         text-decoration: underline;
       }
 
-      .row-detail .ac-list,
-      .row-detail .file-list {
+      .row-detail .ac-list {
         margin: 0;
         padding-left: 24px;
         line-height: 1.6;
         overflow-wrap: anywhere;
         word-break: break-all;
+      }
+      .row-detail .file-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 11px;
+        line-height: 1.6;
+        overflow-wrap: anywhere;
+        word-break: break-all;
+      }
+      .row-detail .file-list .selector-dim {
+        color: var(--fg-mute);
       }
       
       .row-detail .history-line,

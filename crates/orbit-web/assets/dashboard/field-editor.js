@@ -27,6 +27,9 @@ export function buildInlineFieldEditor({
   hint = "",
   toggle = null,
   onEditingChange = () => {},
+  // Where given, the edit button renders into this node (a field header) rather
+  // than after the value; it is cleared while the editor is open.
+  editSlot = null,
 }) {
   const wrap = el("div", { class: "field-editor" });
   const accessibleName = editTitle || `Edit ${label}`;
@@ -49,7 +52,12 @@ export function buildInlineFieldEditor({
       // widget rather than a property of how it happens to be rendered.
       if (editable) showEditor();
     });
-    wrap.replaceChildren(renderView(), editButton);
+    if (editSlot) {
+      wrap.replaceChildren(renderView());
+      editSlot.replaceChildren(editButton);
+    } else {
+      wrap.replaceChildren(renderView(), editButton);
+    }
   };
 
   const showEditor = () => {
@@ -113,6 +121,7 @@ export function buildInlineFieldEditor({
     if (toggleRow) children.push(toggleRow);
     children.push(el("div", { class: "field-editor-controls" }, [saveButton, cancelButton, status]));
     children.push(error);
+    if (editSlot) editSlot.replaceChildren();
     wrap.replaceChildren(...children);
     onEditingChange(true);
     input.focus();
