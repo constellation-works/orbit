@@ -83,38 +83,24 @@ fn pipeline_worker_bootstrap_deadline_returns_precise_last_contention() {
 }
 
 #[test]
-fn managed_worker_bootstrap_recovers_after_real_audit_store_busy_timeout() {
+fn managed_worker_current_schema_bootstrap_does_not_wait_for_audit_writer() {
     let fixture = managed_worktree_fixture();
     let audit_db = fixture.registry_root.join("orbit.db");
-    let (locked, ready) = mpsc::sync_channel(1);
-    let blocker = std::thread::spawn(move || {
-        let store = orbit_store::Store::open(&audit_db).expect("open audit blocker");
-        store
-            .with_transaction(|tx| {
-                tx.connection()
-                    .execute(
-                        "UPDATE schema_meta SET value = value WHERE key = 'fixture-lock'",
-                        [],
-                    )
-                    .map_err(|error| OrbitError::Store(error.to_string()))?;
-                locked.send(()).expect("signal held audit lock");
-                std::thread::sleep(Duration::from_millis(5_250));
-                Ok(())
-            })
-            .expect("release audit writer");
-    });
-    ready.recv().expect("audit lock held");
+    let blocker_store = orbit_store::Store::open(&audit_db).expect("open audit blocker");
+    let blocker_connection = blocker_store.connection();
+    let blocker = blocker_connection.lock().expect("lock audit blocker");
+    blocker
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("hold audit WAL writer");
 
     let started = Instant::now();
     let runtime = RegisteredRuntimeFactory::initialize_pipeline_worker_with_overrides(
         Some(&fixture.registry_root),
         Some(&fixture.repo_root.to_string_lossy()),
     )
-    .expect("worker bootstrap recovers inside its bounded budget");
-    blocker.join().expect("audit blocker");
+    .expect("current-schema worker bootstrap only observes the audit store");
 
-    assert!(started.elapsed() > Duration::from_secs(5));
-    assert!(started.elapsed() < Duration::from_secs(20));
+    assert!(started.elapsed() < Duration::from_secs(4));
     let shown = run_tool(
         &runtime,
         "orbit.task.show",
@@ -122,6 +108,9 @@ fn managed_worker_bootstrap_recovers_after_real_audit_store_busy_timeout() {
     )
     .expect("recovered worker runtime retains authoritative task ownership");
     assert_eq!(shown["id"], fixture.task_id);
+    blocker
+        .execute_batch("ROLLBACK")
+        .expect("release audit writer");
 }
 
 fn workspace(id: &str, ship_mode: &str) -> Workspace {

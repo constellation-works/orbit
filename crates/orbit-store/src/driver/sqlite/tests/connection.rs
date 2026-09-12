@@ -191,33 +191,59 @@ fn schema_version_matches_binary_after_open() {
 }
 
 #[test]
-fn current_store_bootstrap_names_locked_write_admission_after_busy_timeout() {
+fn current_store_opens_and_reads_while_a_wal_writer_is_held() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("store.db");
     drop(Store::open(&path).expect("initialize current store"));
 
     let blocker = rusqlite::Connection::open(&path).expect("open blocker");
     blocker
-        .execute_batch("BEGIN EXCLUSIVE")
+        .execute_batch("BEGIN IMMEDIATE")
         .expect("hold SQLite write lock");
     let started = std::time::Instant::now();
-    let error = match Store::open(&path) {
-        Ok(_) => panic!("bootstrap must exhaust the busy timeout"),
-        Err(error) => error,
-    };
+    let store = Store::open(&path).expect("current-schema open needs no writer reservation");
+    assert_eq!(
+        store
+            .schema_version()
+            .expect("read schema while writer held"),
+        SUPPORTED_SCHEMA_VERSION
+    );
 
     assert!(
-        started.elapsed()
-            >= std::time::Duration::from_millis(u64::from(
-                orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS,
-            )),
-        "the regression must exercise SQLite's real busy timeout"
+        started.elapsed() < std::time::Duration::from_secs(4),
+        "current-schema observation waited for the unrelated WAL writer"
     );
+    blocker.execute_batch("ROLLBACK").expect("release writer");
+}
+
+#[test]
+fn pending_migration_contention_names_the_required_write_boundary() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("store.db");
+    let blocker = rusqlite::Connection::open(&path).expect("create pre-migration database");
+    blocker
+        .pragma_update(None, "journal_mode", "WAL")
+        .expect("enable WAL");
+    blocker
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("hold writer before the required migration");
+
+    let error = match Store::open(&path) {
+        Ok(_) => panic!("pending migration requires the writer"),
+        Err(error) => error,
+    };
     let contention = error
         .sqlite_contention()
-        .expect("lock failure remains typed across the store boundary");
+        .expect("migration lock remains typed across Store::open");
     assert_eq!(contention.path, path.display().to_string());
-    assert_eq!(contention.phase, "bootstrap write admission");
+    assert!(
+        contention.phase.starts_with("begin migration v1 ("),
+        "{}",
+        contention.phase
+    );
+
+    blocker.execute_batch("ROLLBACK").expect("release writer");
+    Store::open(&path).expect("migration succeeds after contention clears");
 }
 
 #[cfg(unix)]
