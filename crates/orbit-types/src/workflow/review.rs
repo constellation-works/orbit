@@ -421,6 +421,12 @@ pub struct ReviewCertificate {
     /// The reason the gate stopped, for non-pass verdicts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escalation: Option<String>,
+    /// Selectors the gate appended because a repaired finding declared an
+    /// out-of-scope repair path. Empty when the reviewer already widened
+    /// through the task API or no such repair occurred. Absent on certificates
+    /// issued before this field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selectors_widened: Vec<String>,
     pub issued_at: DateTime<Utc>,
 }
 

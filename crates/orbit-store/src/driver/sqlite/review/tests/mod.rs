@@ -97,6 +97,7 @@ fn certificate(attempt_id: &str, verdict: ReviewVerdict) -> ReviewCertificate {
         consumed: ReviewConsumption::default(),
         budget: ReviewBudget::default(),
         escalation: None,
+        selectors_widened: Vec::new(),
         issued_at: Utc::now(),
     }
 }
