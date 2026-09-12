@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
@@ -10,7 +12,9 @@ use orbit_types::workspace::{
 };
 use serde_json::{Value, json};
 
-use orbit_registry::workspace_registry::{registry_path_for, save_registry_to};
+use orbit_registry::workspace_registry::{
+    self, load_registry_from, registry_path_for, save_registry_to,
+};
 
 use crate::registry_runtime::{
     RegisteredRuntimeFactory, resolved_workspace_binding, select_workspace_for_cwd_and_roots,
@@ -421,6 +425,86 @@ fn registered_workspace(
     };
     let checkout = WorkspaceCheckout::owner(id.to_string(), repo, orbit_dir);
     (workspace, checkout)
+}
+
+#[test]
+fn workspace_registered_during_selector_resolution_survives_validation_save() {
+    let root = tempfile::tempdir().expect("root");
+    let global = root.path().join("global");
+    std::fs::create_dir_all(&global).expect("global root");
+
+    let mut stale_workspace = workspace("ws_stale", "local");
+    stale_workspace.name = "stale".to_string();
+    let stale_repo = root.path().join("missing");
+    let stale_checkout = WorkspaceCheckout::owner(
+        stale_workspace.id.clone(),
+        stale_repo.clone(),
+        stale_repo.join(".orbit"),
+    );
+    let registry_path = registry_path_for(&global);
+    save_registry_to(
+        &WorkspaceRegistry {
+            workspaces: vec![stale_workspace],
+            checkouts: vec![stale_checkout],
+            ..Default::default()
+        },
+        &registry_path,
+    )
+    .expect("initial registry");
+
+    let (started_tx, started_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let resolver_global = global.clone();
+    let (new_workspace, new_checkout) =
+        registered_workspace(root.path(), "ws_new", "new", "hm_owner");
+    let mut resolver = None;
+    workspace_registry::with_registry_lock(&registry_path, || {
+        resolver = Some(std::thread::spawn(move || {
+            started_tx.send(()).expect("announce resolution");
+            let result =
+                RegisteredRuntimeFactory::resolve_workspace_selector(&resolver_global, "ws_new");
+            finished_tx.send(()).expect("announce completion");
+            result
+        }));
+        started_rx.recv().expect("resolution started");
+        assert!(
+            finished_rx
+                .recv_timeout(Duration::from_millis(500))
+                .is_err(),
+            "selector resolution must wait for the registry lock"
+        );
+
+        let mut registry = load_registry_from(&registry_path)?;
+        registry.workspaces.push(new_workspace);
+        registry.checkouts.push(new_checkout);
+        save_registry_to(&registry, &registry_path)
+    })
+    .expect("register workspace while resolution waits");
+
+    let selected = resolver
+        .expect("selector thread started")
+        .join()
+        .expect("selector thread")
+        .expect("new workspace resolves after registration");
+    assert_eq!(selected.workspace.id, "ws_new");
+
+    let registry = load_registry_from(&registry_path).expect("final registry");
+    assert!(
+        registry
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.id == "ws_new"),
+        "validation save must retain the concurrently registered workspace"
+    );
+    assert_eq!(
+        registry
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == "ws_stale")
+            .map(|workspace| workspace.status.clone()),
+        Some(WorkspaceStatus::Invalid),
+        "resolution must exercise and persist the validation write"
+    );
 }
 
 #[test]

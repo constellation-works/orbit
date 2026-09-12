@@ -17,10 +17,13 @@ impl Execute for WorkspaceListArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let global_root = runtime.global_root();
         let registry_path = workspace_registry::registry_path_for(&global_root);
-        let mut registry = workspace_registry::load_registry_from(&registry_path)?;
-        if workspace_registry::validate_workspaces(&mut registry) {
-            workspace_registry::save_registry_to(&registry, &registry_path)?;
-        }
+        let registry = workspace_registry::with_registry_lock(&registry_path, || {
+            let mut registry = workspace_registry::load_registry_from(&registry_path)?;
+            if workspace_registry::validate_workspaces(&mut registry) {
+                workspace_registry::save_registry_to(&registry, &registry_path)?;
+            }
+            Ok(registry)
+        })?;
         Ok(Payload::detail(
             workspace_list_json(&registry, self.all),
             format_workspace_list(&registry, self.all),
