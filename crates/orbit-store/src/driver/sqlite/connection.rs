@@ -131,14 +131,17 @@ impl Store {
                 "connection refresh requires a writable file-backed store".to_string(),
             )
         })?;
-        let fresh = Self::open(path)?;
-        fresh.check_writable()?;
 
         {
+            // Serialize before the fresh handle's write probe. Otherwise a
+            // sibling transaction can exhaust SQLite's independent busy
+            // timeout even though the shared writer would safely wait for it.
             let mut current = self
                 .conn
                 .lock()
                 .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+            let fresh = Self::open(path)?;
+            fresh.check_writable()?;
             let mut replacement = fresh
                 .conn
                 .lock()
