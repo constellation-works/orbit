@@ -84,20 +84,22 @@ Environment:
   workspace   Manage workspaces
   host        Register and manage hub hosts
   config      Show or update Orbit configuration
-  semantic    Manage local orbit-search indexing
   migrate     Apply or inspect pending .orbit layout/schema migrations
   update      Install a published Orbit release and converge to it
 
+Knowledge:
+  task        Create, update, and manage tasks
+  friction    Report, list, and triage friction records
+  docs        Search and manage the indexed docs corpus
+  search      Search tasks, docs, and frictions
+  semantic    Manage local orbit-search indexing
+
 Operate:
   run         Run a workflow (ship, job)
-  gc          Inspect and explicitly reap Orbit-managed garbage
-  task        Create, update, and manage tasks
-  docs        Search and manage the indexed docs corpus
-  friction    Report, list, and triage friction records
   operation   Explain, enable, stop, and revoke scoped operation-mode automation
+  gc          Inspect and explicitly reap Orbit-managed garbage
 
 Observe:
-  search      Search tasks, docs, and frictions
   audit       Query the audit event log
   log         Tail the unified Orbit log feed
   doctor      Diagnose workspace health (config, database, disk, indexes)
@@ -145,21 +147,23 @@ pub enum Commands {
     Workspace(workspace::WorkspaceCommand),
     Host(host::HostCommand),
     Config(config::ConfigCommand),
-    Semantic(semantic::SemanticCommand),
     Migrate(migrate::MigrateCommand),
     Update(update::UpdateCommand),
 
+    // ── Knowledge ──
+    Task(Box<task::TaskCommand>),
+    Friction(friction::FrictionCommand),
+    Docs(docs::DocsCommand),
+    Search(search::SearchCommand),
+    Semantic(semantic::SemanticCommand),
+
     // ── Operate ──
     Run(run::RunCommand),
-    Gc(gc::GcCommand),
-    Task(Box<task::TaskCommand>),
-    Docs(docs::DocsCommand),
-    Friction(friction::FrictionCommand),
     #[command(name = "operation")]
     Operation(operation_mode::OperationModeCommand),
+    Gc(gc::GcCommand),
 
     // ── Observe ──
-    Search(search::SearchCommand),
     Audit(audit::AuditCommand),
     Log(log::LogCommand),
     Doctor(doctor::DoctorCommand),

@@ -149,8 +149,9 @@ impl Workspace {
             "fixture must bind the disposable checkout: {shown}"
         );
         assert_eq!(
-            checkout["orbit_dir"].as_str(),
-            self.orbit_root().to_str(),
+            fs::canonicalize(checkout["orbit_dir"].as_str().expect("orbit_dir"))
+                .expect("canonicalize bound orbit dir"),
+            self.orbit_root(),
             "fixture must bind the shared Orbit data directory: {shown}"
         );
         assert!(!self.repo.join(".orbit").exists());

@@ -1848,7 +1848,10 @@ fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
         std::fs::canonicalize(&child_checkout.repo_root).expect("canonical child checkout"),
         std::fs::canonicalize(&child).expect("canonical child repo")
     );
-    assert_eq!(child_checkout.orbit_dir, child_orbit);
+    assert_eq!(
+        std::fs::canonicalize(&child_checkout.orbit_dir).expect("canonical child orbit dir"),
+        std::fs::canonicalize(&child_orbit).expect("canonical child orbit dir")
+    );
 
     let parent_workspace_after = serde_json::to_vec(
         registry_after

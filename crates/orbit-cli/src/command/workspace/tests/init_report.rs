@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -94,12 +92,14 @@ fn force_init_json_is_one_object_with_identity_and_explicit_mcp() {
     assert_eq!(doc["id"], "ws_report");
     assert_eq!(doc["name"], "report");
     assert_eq!(
-        Path::new(doc["root"].as_str().expect("root")),
-        isolated.workspace.path()
+        std::fs::canonicalize(doc["root"].as_str().expect("root")).expect("canonical root"),
+        std::fs::canonicalize(isolated.workspace.path()).expect("canonical workspace root")
     );
     assert_eq!(
-        Path::new(doc["orbit_dir"].as_str().expect("orbit_dir")),
-        isolated.workspace.path().join(".orbit")
+        std::fs::canonicalize(doc["orbit_dir"].as_str().expect("orbit_dir"))
+            .expect("canonical orbit_dir"),
+        std::fs::canonicalize(isolated.workspace.path().join(".orbit"))
+            .expect("canonical workspace orbit dir")
     );
     assert_eq!(doc["mcp"]["status"], "skipped");
     assert!(doc["mcp"]["providers"].is_null());
@@ -111,11 +111,10 @@ fn force_init_json_is_one_object_with_identity_and_explicit_mcp() {
         "human view lost workspace identification: {text}"
     );
     assert!(text.contains("id:        ws_report"), "{text}");
+    let canonical_root =
+        std::fs::canonicalize(isolated.workspace.path()).expect("canonical workspace root");
     assert!(
-        text.contains(&format!(
-            "root:      {}",
-            isolated.workspace.path().display()
-        )),
+        text.contains(&format!("root:      {}", canonical_root.display())),
         "{text}"
     );
     assert!(

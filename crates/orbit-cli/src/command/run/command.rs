@@ -20,9 +20,9 @@ use super::triage;
 
 const RUN_AFTER_HELP: &str = "\
 Workflow entrypoints:
-  orbit run auto [--for 30m]
+  orbit run auto [--for 30m] [--concurrency <N>] [--complete]
   orbit run auto --stop
-  orbit run ship [task_id ...]
+  orbit run ship [task_id ...] [--complete]
   orbit run ship-sweep [--dry-run] [--json]
   orbit run triage [task_id ...]
   orbit run job <job_id> [--input key=value] [--json] [--debug]
@@ -54,11 +54,10 @@ Maintenance:
 {usage-heading} {usage}
 
 Workflows:
-  auto        Drain the workspace backlog for a window (loose leaves, plus one epic); --stop ends new admissions
+  auto        Drain the workspace backlog for a window; --stop ends new admissions
   ship        Ship backlog or explicitly selected tasks through the gated task pipeline
   ship-sweep  Dispatch ship runs in every registered workspace with ready backlog tasks
   triage      Triage tasks blocked by failed runs; re-backlog environmental failures
-  readiness   Explain why backlog tasks are waiting in auto-drain
   job         Run an arbitrary job by ID
   agent       Invoke an agent on the host for exploration or debugging (operator only)
 
@@ -72,6 +71,7 @@ Audits:
 Maintenance:
   cancel       Cancel a pending or running job run
   concurrency  Change how many tasks a running drain keeps in flight
+  readiness    Explain why backlog tasks are waiting in auto-drain
 
 Options:
 {options}
