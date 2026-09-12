@@ -8,8 +8,8 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskAddParams;
 
 use super::super::locks::{
-    TaskLockIndex, TaskLockReservationScope, parse_task_lock_reservation_scope,
-    requested_task_files_indexed, task_lock_conflicts_indexed,
+    MAX_TASK_RESERVATION_TTL_SECONDS, TaskLockIndex, TaskLockReservationScope,
+    parse_task_lock_reservation_scope, requested_task_files_indexed, task_lock_conflicts_indexed,
 };
 use crate::adapter::tool_host::test_support::{
     create_context_task, invalid_input_message, run_tool_as_operator, test_runtime,
@@ -78,6 +78,38 @@ fn parse_task_lock_reservation_scope_validates_file_selectors() {
         "files": ["command:task.update"],
     })));
     assert!(command.contains("selectors are not supported for task locks"));
+}
+
+#[test]
+fn task_lock_reservation_ttl_accepts_its_finite_delivery_limit_only() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, _repo_root) = test_runtime();
+
+    let reserved = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "files": ["file:src/lib.rs"],
+            "ttl_seconds": MAX_TASK_RESERVATION_TTL_SECONDS,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("reserve at the supported delivery limit");
+    assert_eq!(reserved["reserved"], true);
+
+    let error = invalid_input_message(run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "files": ["file:src/other.rs"],
+            "ttl_seconds": MAX_TASK_RESERVATION_TTL_SECONDS + 1,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    ));
+    assert!(
+        error.contains(&MAX_TASK_RESERVATION_TTL_SECONDS.to_string()),
+        "{error}"
+    );
 }
 
 #[test]

@@ -31,7 +31,7 @@ spec:
       ttl_seconds:
         type: number
         minimum: 1
-        maximum: 7200
+        maximum: 14400
   output_schema_json:
     type: object
     required: [reserved]

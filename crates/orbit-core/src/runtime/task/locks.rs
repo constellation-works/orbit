@@ -25,6 +25,8 @@ use crate::OrbitRuntime;
 use crate::runtime::coordination_audit::{CoordinationAuditEvent, record_coordination_audit_event};
 use crate::runtime::task::canonicalize_context_files_for_read;
 
+pub(crate) const MAX_TASK_RESERVATION_TTL_SECONDS: u32 = 14400;
+
 pub(crate) fn list(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
     let workspace_id = workspace_task_reservation_id(runtime)?;
     let reservation_result = runtime
@@ -250,10 +252,10 @@ pub(crate) fn reserve_with_index(
     let reservation_scope = parse_task_lock_reservation_scope(&input)?;
     let ttl_seconds =
         optional_u32_alias(&input, &["ttl_seconds", "ttlSeconds", "ttl-seconds"])?.unwrap_or(1800);
-    if !(1..=7200).contains(&ttl_seconds) {
-        return Err(OrbitError::InvalidInput(
-            "`ttl_seconds` must be between 1 and 7200 seconds".to_string(),
-        ));
+    if !(1..=MAX_TASK_RESERVATION_TTL_SECONDS).contains(&ttl_seconds) {
+        return Err(OrbitError::InvalidInput(format!(
+            "`ttl_seconds` must be between 1 and {MAX_TASK_RESERVATION_TTL_SECONDS} seconds"
+        )));
     }
 
     let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref())?;

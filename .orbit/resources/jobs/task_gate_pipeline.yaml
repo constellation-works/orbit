@@ -23,8 +23,10 @@
 #   budget is enforced by `input.max_wait_seconds`, which the
 #   `starvation_check` step surfaces via the `gate.starvation` audit
 #   event when the loop exits without a reservation.
-# - The default reservation TTL intentionally covers the child dispatch wait
-#   budget. Keep `ttl_seconds >= dispatch_timeout_seconds` when overriding
+# - The child wait covers the longest supported implementation activity (3h)
+#   plus a bounded delivery/review tail (1h). The default reservation TTL
+#   intentionally covers that full child dispatch wait budget. Keep
+#   `ttl_seconds >= dispatch_timeout_seconds` when overriding
 #   these inputs; otherwise a second gate can reserve the same context before
 #   the first child pipeline finishes.
 # - The dispatched child pipeline runs while the reservation is still valid;
@@ -80,8 +82,8 @@ spec:
     allowed_crews: []
     max_wait_seconds: 3600
     poll_interval_seconds: 30
-    ttl_seconds: 7200
-    dispatch_timeout_seconds: 7200
+    ttl_seconds: 14400
+    dispatch_timeout_seconds: 14400
 
   steps:
     - id: wait_for_window

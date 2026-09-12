@@ -13,7 +13,9 @@ use tempfile::tempdir;
 
 use super::super::catalog::{DEFAULT_JOB_FILES, JobCatalogFilter, seed_default_jobs};
 use crate::OrbitRuntime;
+use crate::application::job::pipeline::PIPELINE_WAIT_MAX_TIMEOUT_SECONDS;
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
+use crate::runtime::task::locks::MAX_TASK_RESERVATION_TTL_SECONDS;
 
 fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf, PathBuf) {
     let root = tempdir().expect("create tempdir");
@@ -1313,7 +1315,7 @@ fn auto_pipeline_list_backlog_step_forwards_allowed_crews() {
 }
 
 #[test]
-fn gate_pipeline_default_reservation_ttl_covers_child_wait_budget() {
+fn shipped_supervision_budgets_are_composed_bounded_and_mirrored() {
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "task_gate_pipeline").then_some(*yaml))
@@ -1331,10 +1333,111 @@ fn gate_pipeline_default_reservation_ttl_covers_child_wait_budget() {
         .as_u64()
         .expect("numeric dispatch_timeout_seconds");
 
+    let admission_timeout_seconds = default_input["max_wait_seconds"]
+        .as_u64()
+        .expect("numeric max_wait_seconds");
+    assert_eq!(admission_timeout_seconds, 3_600);
+    assert_eq!(dispatch_timeout_seconds, 14_400);
+    assert!(ttl_seconds >= dispatch_timeout_seconds);
+
+    let auto_yaml = DEFAULT_JOB_FILES
+        .iter()
+        .find_map(|(name, yaml)| (*name == "task_auto_pipeline").then_some(*yaml))
+        .expect("task auto pipeline default exists");
+    let auto = load_job_asset(auto_yaml).expect("parse task auto pipeline");
+    let JobV2StepBody::FanOut { fan_out, .. } = &auto.spec.steps[2].body else {
+        panic!("task auto dispatch must fan out");
+    };
+    let JobV2StepBody::TargetRef(gate_invoke) = &fan_out.worker.body else {
+        panic!("task auto worker must invoke a gate");
+    };
+    let outer_timeout_seconds = gate_invoke
+        .default_input
+        .as_ref()
+        .expect("gate invocation input")["timeout_seconds"]
+        .as_u64()
+        .expect("numeric outer timeout_seconds");
+    assert_eq!(outer_timeout_seconds, PIPELINE_WAIT_MAX_TIMEOUT_SECONDS);
+    assert!(outer_timeout_seconds >= admission_timeout_seconds + dispatch_timeout_seconds);
     assert!(
-        ttl_seconds >= dispatch_timeout_seconds,
-        "reservation TTL must cover the child dispatch wait budget"
+        outer_timeout_seconds - admission_timeout_seconds - dispatch_timeout_seconds >= 3_600,
+        "outer supervision must retain a bounded tail after all inner budgets"
     );
+
+    let implementation_yaml = DEFAULT_ACTIVITY_FILES
+        .iter()
+        .find_map(|(name, yaml)| (*name == "agent_implement").then_some(*yaml))
+        .expect("agent_implement activity exists");
+    let implementation = load_activity_asset(implementation_yaml).expect("parse agent_implement");
+    let ActivityV2Spec::AgentLoop(implementation) = implementation.spec.spec else {
+        panic!("agent_implement must be an agent loop");
+    };
+    assert!(
+        dispatch_timeout_seconds >= implementation.wall_clock_timeout_seconds + 3_600,
+        "gate supervision must cover the supported implementation plus delivery tail"
+    );
+
+    let assert_mirrored_budget = |canonical: &str, workspace: &str, fields: &[&str]| {
+        let canonical: serde_yaml::Value = serde_yaml::from_str(canonical).expect("canonical YAML");
+        let workspace: serde_yaml::Value = serde_yaml::from_str(workspace).expect("workspace YAML");
+        for field in fields {
+            assert_eq!(
+                canonical["spec"]["default_input"][*field],
+                workspace["spec"]["default_input"][*field],
+                "workspace {field} must mirror the shipped budget"
+            );
+        }
+    };
+    assert_mirrored_budget(
+        yaml,
+        include_str!("../../../../../../.orbit/resources/jobs/task_gate_pipeline.yaml"),
+        &[
+            "max_wait_seconds",
+            "ttl_seconds",
+            "dispatch_timeout_seconds",
+        ],
+    );
+
+    let workspace_auto =
+        include_str!("../../../../../../.orbit/resources/jobs/task_auto_pipeline.yaml");
+    let workspace_auto: serde_yaml::Value =
+        serde_yaml::from_str(workspace_auto).expect("workspace auto YAML");
+    assert_eq!(
+        workspace_auto["spec"]["steps"][2]["fan_out"]["worker"]["default_input"]["timeout_seconds"],
+        outer_timeout_seconds
+    );
+
+    for (name, workspace_yaml, maximum) in [
+        (
+            "invoke_and_wait",
+            include_str!("../../../../../../.orbit/resources/activities/invoke_and_wait.yaml"),
+            PIPELINE_WAIT_MAX_TIMEOUT_SECONDS,
+        ),
+        (
+            "reserve_locks",
+            include_str!("../../../../../../.orbit/resources/activities/reserve_locks.yaml"),
+            u64::from(MAX_TASK_RESERVATION_TTL_SECONDS),
+        ),
+    ] {
+        let canonical_yaml = DEFAULT_ACTIVITY_FILES
+            .iter()
+            .find_map(|(activity, yaml)| (*activity == name).then_some(*yaml))
+            .unwrap_or_else(|| panic!("{name} activity exists"));
+        let canonical = load_activity_asset(canonical_yaml).expect("parse canonical activity");
+        let workspace = load_activity_asset(workspace_yaml).expect("parse workspace activity");
+        assert_eq!(
+            canonical.spec, workspace.spec,
+            "workspace {name} activity must mirror the shipped contract"
+        );
+        assert_eq!(
+            canonical.spec.input_schema_json["properties"][if name == "invoke_and_wait" {
+                "timeout_seconds"
+            } else {
+                "ttl_seconds"
+            }]["maximum"],
+            maximum
+        );
+    }
 }
 
 /// [ORB-12102] The gate forwards its own `auto_push` value instead of pinning

@@ -460,6 +460,7 @@ backend = "cli"
     /// `pipeline_wait_status_is_success`, not an advertised enum value.
     #[test]
     fn invoke_and_wait_status_enum_matches_job_run_state_display() {
+        use crate::application::job::pipeline::PIPELINE_WAIT_MAX_TIMEOUT_SECONDS;
         use crate::application::job::pipeline::pipeline_wait_status_is_success;
 
         let (_, wait_yaml) = DEFAULT_ACTIVITY_FILES
@@ -467,6 +468,10 @@ backend = "cli"
             .find(|(name, _)| *name == "invoke_and_wait")
             .expect("invoke_and_wait activity is seeded");
         let wait = load_activity_asset(wait_yaml).expect("parse invoke_and_wait");
+        assert_eq!(
+            wait.spec.input_schema_json["properties"]["timeout_seconds"]["maximum"],
+            PIPELINE_WAIT_MAX_TIMEOUT_SECONDS
+        );
         let statuses = wait.spec.output_schema_json["properties"]["status"]["enum"]
             .as_array()
             .expect("invoke_and_wait status enum");

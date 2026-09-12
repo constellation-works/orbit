@@ -76,6 +76,8 @@ spec:
           target: activity:invoke_and_wait
           default_input:
             job_name: task_gate_pipeline
+            # Gate admission (1h) + child delivery (4h) + a bounded 1h tail.
+            timeout_seconds: 21600
             run_input:
               task_ids: "{{ item }}"
               mode: "{{ input.mode }}"
