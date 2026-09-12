@@ -48,6 +48,46 @@ struct ValidatedTask {
 
 const STORAGE_APPLY_ATTEMPTS: usize = 3;
 
+/// Field carrying the deterministic over-attachment finding this boundary
+/// injects into an applied assessment [ORB-12228]. It sits beside
+/// [`VALIDATION_TOOL_WARNINGS`] so the orchestrator reads the agent's findings
+/// and the host's in the same assessment.
+const CONTEXT_ATTACHMENT_WARNINGS: &str = "context_attachment_warnings";
+
+/// Selector budget for a proposal at each recommended complexity.
+///
+/// Context selectors are both the executor's reading list and the task's lock
+/// reservations, so a proposal far larger than the assessed repair serializes
+/// unrelated work on the same files and hides the real modification targets.
+/// Each budget sits well above the largest honest attachment observed for its
+/// tier, which makes exceeding it a signal that the pilot swept a directory
+/// instead of deriving targets from references. `unassessed` shares the
+/// strictest budget: a pilot that could not size the repair has no evidence
+/// for reserving a wide surface either.
+fn context_selector_cap(complexity: TaskComplexity) -> usize {
+    match complexity {
+        TaskComplexity::Unassessed | TaskComplexity::Low => 10,
+        TaskComplexity::Medium => 20,
+        TaskComplexity::Hard => 40,
+    }
+}
+
+/// Report an over-budget proposal without refusing it. Genuinely large-surface
+/// work must stay applyable, so this returns a finding for the orchestrator to
+/// weigh rather than a validation error [ORB-12228].
+fn over_attachment_findings(complexity: TaskComplexity, after: &[String]) -> Vec<String> {
+    let cap = context_selector_cap(complexity);
+    if after.len() <= cap {
+        return Vec::new();
+    }
+    vec![format!(
+        "over-attached context: {} selectors proposed for {complexity} complexity, above the \
+         {cap}-selector budget for that tier; context selectors are lock reservations and the \
+         executor's reading list, so each one should be a file this task modifies",
+        after.len()
+    )]
+}
+
 pub(in super::super) fn apply(
     runtime: &OrbitRuntime,
     action: &str,
@@ -423,10 +463,12 @@ pub(in super::super) fn apply(
                     continue;
                 }
             };
-            // The pilot never sees the deterministic feasibility findings, so
-            // apply attaches them here: every downstream readiness and
-            // admission rule then reads one assessment that carries both the
-            // agent's findings and the lane's [ORB-11980].
+            // The pilot never sees the deterministic findings — the lane's
+            // validation-tool feasibility [ORB-11980] and this boundary's
+            // over-attachment budget [ORB-12228] — so apply attaches them
+            // here: every downstream readiness and admission rule then reads
+            // one assessment carrying both the agent's findings and the
+            // host's.
             let mut assessment = (*assessment).clone();
             if let Value::Object(fields) = &mut assessment {
                 fields.insert(
@@ -437,6 +479,10 @@ pub(in super::super) fn apply(
                 fields.insert(
                     "selector_normalizations".to_string(),
                     json!(selectors.normalizations),
+                );
+                fields.insert(
+                    CONTEXT_ATTACHMENT_WARNINGS.to_string(),
+                    json!(over_attachment_findings(complexity, &after)),
                 );
             }
 

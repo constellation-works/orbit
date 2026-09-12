@@ -181,6 +181,15 @@ spec:
        `workspace_path` at `source_revision` when that field is set; omit
        read-for-context files and working-tree-only or later-commit paths.
        Preserve the exact current list as `context_files_before`.
+       Derive the modification targets from evidence, never by sweeping a
+       directory or a crate. For a removal or a rename, the targets are the
+       files that actually reference the symbol — enumerate them
+       (`rg -l '<symbol>'` at `source_revision`) and propose those — not every
+       module in the crate that owns it. Deterministic apply attaches an
+       over-attachment finding when a proposal exceeds the selector budget for
+       its recommended complexity, and still applies the list: a genuinely
+       wide repair stays proposable, while a swept one is visible to the
+       orchestrator.
     4. If the task genuinely requires no repository diff, return an empty
        `context_files_after`, disposition `verified_no_diff`, and concrete
        `evidence`. For host-operational work use `host_operational` with
@@ -232,6 +241,14 @@ spec:
        through selectors and validation approach. Missing validation authority
        belongs in `utility_warnings` as a readiness blocker. Complexity,
        urgency, and readiness are separate decisions.
+       This lane is a read-only preflight and never builds, tests, or runs a
+       validation command; `proc.spawn` is CLI-only, so an MCP-transport
+       session does not advertise it at all. That absence of `proc.spawn` is
+       structural to the pilot lane and is not by itself an evidence gap: do
+       not return `unassessed` merely because you could not execute a build or
+       a test here. Name the check that would establish the repair in
+       `validation_approach` instead, and reserve `unassessed` for evidence
+       the pilot could have read at `source_revision` but did not find.
     7. Report recommendations only; do not apply them:
        `recommended_crew`, `recommended_complexity`, real `blocked_by` task IDs,
        `duplicate_of`, `already_landed`, `release_action_required`,

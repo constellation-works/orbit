@@ -118,6 +118,19 @@ fn partition_result(partition_index: usize, task_ids: &[String], tasks: Vec<Valu
     })
 }
 
+/// Materialize `count` workspace files and return the canonical `file:`
+/// selectors naming them, so an over-attachment fixture proposes selectors
+/// that all resolve.
+fn workspace_selectors(repo_root: &std::path::Path, count: usize) -> Vec<String> {
+    (0..count)
+        .map(|index| {
+            let relative = format!("src/module_{index:02}.rs");
+            write_workspace_file(repo_root, &relative);
+            format!("file:{relative}")
+        })
+        .collect()
+}
+
 #[test]
 fn automatic_readiness_requires_selectors_and_no_deferring_finding() {
     let mut assessment = json!({
@@ -1181,4 +1194,128 @@ fn out_of_workspace_selector_is_rejected_before_mutation() {
             .contains("inside workspace")
     );
     assert!(runtime.get_task(&task.id).unwrap().context_files.is_empty());
+}
+
+/// [ORB-12228] Reproduces F2026-09-137: the pilot swept every module in a
+/// crate instead of deriving targets from the references to the symbol, and
+/// apply accepted the oversized list silently. Apply must keep applying it —
+/// a genuinely wide repair has to stay proposable — while attaching a finding
+/// that names the proposed count and the budget it exceeded.
+#[test]
+fn over_attached_proposal_is_reported_and_still_applied() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let selectors = workspace_selectors(&repo_root, 12);
+    let task = seed_task(&runtime, "swept-crate", TaskStatus::Backlog, &[], &[]);
+    let task_ids = vec![task.id.clone()];
+    let prepared_snapshot = prepared(&runtime, &repo_root, &task_ids);
+    let mut assessment = selector_assessment_with_complexity(
+        &task,
+        selectors.iter().map(String::as_str).collect(),
+        "unassessed",
+    );
+    assessment["evidence_gaps"] = json!(["the caller set for the removed symbol is unverified"]);
+    let result = partition_result(0, &task_ids, vec![assessment]);
+
+    let output = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": prepared_snapshot,
+            "results": [result],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("an over-attached proposal is reported, not refused");
+
+    assert_eq!(output["status"], "succeeded");
+    assert_eq!(output["tasks"][0]["context_files_after"], json!(selectors));
+    assert_eq!(
+        runtime
+            .get_task(&task.id)
+            .expect("task after apply")
+            .context_files,
+        selectors
+    );
+    let findings = output["tasks"][0]["context_attachment_warnings"]
+        .as_array()
+        .expect("context_attachment_warnings array");
+    assert_eq!(findings.len(), 1);
+    let finding = findings[0].as_str().expect("finding string");
+    assert!(
+        finding.contains("12 selectors") && finding.contains("10-selector budget"),
+        "finding must name the proposed count and the cap: {finding}"
+    );
+    assert!(
+        finding.contains("unassessed"),
+        "finding must name the tier whose budget was exceeded: {finding}"
+    );
+}
+
+/// [ORB-12228] The budget is per recommended complexity, and staying inside it
+/// attaches nothing: the same twelve selectors are ordinary for a `medium`
+/// repair, and a proposal exactly at the strictest budget is still inside it.
+#[test]
+fn proposal_within_its_complexity_budget_attaches_no_finding() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let selectors = workspace_selectors(&repo_root, 12);
+    let medium = seed_task(&runtime, "wide-medium", TaskStatus::Backlog, &[], &[]);
+    let unassessed = seed_task(&runtime, "at-budget", TaskStatus::Backlog, &[], &[]);
+    let task_ids = vec![medium.id.clone(), unassessed.id.clone()];
+    let prepared_snapshot = prepared(&runtime, &repo_root, &task_ids);
+    let mut at_budget = selector_assessment_with_complexity(
+        &unassessed,
+        selectors[..10].iter().map(String::as_str).collect(),
+        "unassessed",
+    );
+    at_budget["evidence_gaps"] = json!(["the reproduction for the failure is not yet known"]);
+    let result = partition_result(
+        0,
+        &task_ids,
+        vec![
+            selector_assessment_with_complexity(
+                &medium,
+                selectors.iter().map(String::as_str).collect(),
+                "medium",
+            ),
+            at_budget,
+        ],
+    );
+
+    let output = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": prepared_snapshot,
+            "results": [result],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("apply proposals inside their budgets");
+
+    assert_eq!(output["status"], "succeeded");
+    let applied = |task_id: &str| -> Value {
+        output["tasks"]
+            .as_array()
+            .expect("applied assessments")
+            .iter()
+            .find(|assessment| assessment["task_id"] == task_id)
+            .expect("assessment for task")
+            .clone()
+    };
+    for task_id in [&medium.id, &unassessed.id] {
+        assert_eq!(
+            applied(task_id)["context_attachment_warnings"],
+            json!([]),
+            "task {task_id} must carry no over-attachment finding"
+        );
+    }
+    assert_eq!(
+        applied(&medium.id)["context_files_after"],
+        json!(selectors),
+        "the wider medium proposal still applies in full"
+    );
+    assert_eq!(
+        applied(&unassessed.id)["context_files_after"],
+        json!(selectors[..10])
+    );
 }
