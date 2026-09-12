@@ -525,7 +525,6 @@ fn task_mutation_schemas_use_model_only_identity() {
     for tool_name in [
         "orbit.task.add",
         "orbit.task.update",
-        "orbit.task.start",
         "orbit.task.artifact.put",
     ] {
         let schema = registry

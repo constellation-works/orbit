@@ -36,7 +36,7 @@ It adds `qa` on Terra when Codex is available, otherwise on Sonnet when Claude i
 
 ## 3. Task and Tool Surface
 
-`Task` has an optional `crew` field. `orbit.task.add` and `orbit.task.update` validate authored crew names against the current workspace registry, and `orbit.task.start` accepts a one-run `crew` override. The runtime re-validates at start time because the config registry can change between task creation and execution.
+`Task` has an optional `crew` field. `orbit.task.add` and `orbit.task.update` validate authored crew names against the current workspace registry, and an `orbit.task.update` transition to `in_progress` accepts a one-run `crew` override. The runtime re-validates at start time because the config registry can change between task creation and execution.
 
 The precedence chain is:
 
@@ -46,7 +46,7 @@ The precedence chain is:
 
 This chain resolves the run crew. At activity dispatch there is one additional, explicit authoring choice: a rendered `crew` input selects a different named crew for that activity. With no such input, the run crew is the fallback. No role-keyed lookup participates in either selection.
 
-`orbit.task.show` surfaces the task field and, when the current registry resolves it, the effective crew name plus one `crew_model` string. Crew configuration is host-local, so a read surface never fails on a crew this host cannot resolve: the stored `crew` is returned verbatim, `resolved_crew`/`crew_model` are withheld, and `crew_unresolved` carries the reason as a non-fatal warning [ORB-10968]. Listing and the global id lookup follow the same contract; `orbit.task.start` and dispatch still resolve strictly and fail with the crew-validation error.
+`orbit.task.show` surfaces the task field and, when the current registry resolves it, the effective crew name plus one `crew_model` string. Crew configuration is host-local, so a read surface never fails on a crew this host cannot resolve: the stored `crew` is returned verbatim, `resolved_crew`/`crew_model` are withheld, and `crew_unresolved` carries the reason as a non-fatal warning [ORB-10968]. Listing and the global id lookup follow the same contract; `orbit.task.update` transitions to `in_progress` and dispatch still resolve strictly and fail with the crew-validation error.
 
 ## 4. Run Records
 

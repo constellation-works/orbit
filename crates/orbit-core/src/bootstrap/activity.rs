@@ -202,7 +202,7 @@ backend = "cli"
                     "context_files",
                     "eperm",
                     "orbit.friction.add",
-                    "orbit.task.start",
+                    "orbit.task.update",
                     "move the task to `review`",
                     "execution_summary",
                 ] {
@@ -565,8 +565,6 @@ backend = "cli"
                     "orbit.pipeline.wait",
                     // task lifecycle writes
                     "orbit.task.update",
-                    "orbit.task.start",
-                    "orbit.task.approve",
                     "orbit.task.reject",
                     "orbit.task.add",
                     "orbit.task.delete",

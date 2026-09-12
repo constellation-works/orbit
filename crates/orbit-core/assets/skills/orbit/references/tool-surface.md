@@ -31,7 +31,7 @@ records in a second store merely to get past a connection error.
 | Need | MCP / registered tool | CLI administration |
 |---|---|---|
 | Workspace discovery | `orbit_workspace_list` | `orbit workspace list/show` |
-| Task create/read/update/start/approve | `orbit_task_add/list/show/update/start/approve` | Registered `orbit.task.*` tools preserve agent attribution |
+| Task create/read/update | `orbit_task_add/list/show/update` | Registered `orbit.task.*` tools preserve agent attribution; lifecycle writes use `orbit.task.update` with `status` |
 | Task attachments | `orbit_task_artifact_put` | Task artifact commands; source path is on the executing host and must resolve inside the workspace checkout |
 | Retrieval | `orbit_search` | `orbit search`; semantic install/index is separate |
 | Friction | `orbit_friction_add/list/update` | Additional show/stats/tags/resolve commands |

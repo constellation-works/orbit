@@ -65,10 +65,7 @@ pub fn tool_input_schema_for(tool_name: &str, params: &[ToolParam]) -> Map<Strin
 /// they grow the same check. Transport wrappers (`_meta`, `workspace`) are
 /// not modeled as additional argument properties.
 pub fn tool_arguments_allow_additional_properties(tool_name: &str) -> bool {
-    !matches!(
-        tool_name,
-        "orbit.task.add" | "orbit.task.update" | "orbit.task.approve" | "orbit.task.start"
-    )
+    !matches!(tool_name, "orbit.task.add" | "orbit.task.update")
 }
 
 /// Build the canonical JSON-Schema fragment for one tool parameter.

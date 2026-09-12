@@ -1,5 +1,4 @@
 pub mod add;
-pub mod approve;
 pub mod artifact_get;
 pub mod artifact_put;
 pub mod delete;
@@ -10,7 +9,6 @@ pub mod locks_release;
 pub mod locks_reserve;
 pub mod reject;
 pub mod show;
-pub mod start;
 pub mod update;
 
 #[cfg(test)]

@@ -49,6 +49,56 @@ struct StartTaskOptions {
 }
 
 impl OrbitRuntime {
+    /// Move a task to backlog through the approval body when its current
+    /// state is proposed, otherwise through the ordinary governed update.
+    /// The outer lock keeps the dispatch decision and the selected transition
+    /// body on one task snapshot.
+    pub(crate) fn transition_task_to_backlog_with_identity(
+        &self,
+        id: &str,
+        note: Option<String>,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        let mut result = None;
+        self.stores().tasks().with_task_write_lock(id, &mut || {
+            let task = self.get_task(id)?;
+            result = Some(if task.status == TaskStatus::Proposed {
+                self.approve_task_with_identity(
+                    id,
+                    note.clone(),
+                    comment.clone(),
+                    agent.clone(),
+                    model.clone(),
+                )?
+            } else {
+                if note.is_some() {
+                    return Err(OrbitError::InvalidInput(
+                        "`note` on a backlog transition is only valid when approving a proposed task"
+                            .to_string(),
+                    ));
+                }
+                self.update_task_with_identity(
+                    id,
+                    TaskUpdateParams {
+                        comment: comment.clone(),
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    },
+                    agent.clone(),
+                    model.clone(),
+                )?
+            });
+            Ok(())
+        })?;
+        result.ok_or_else(|| {
+            OrbitError::Execution(
+                "task backlog transition body did not run under the task lock".to_string(),
+            )
+        })
+    }
+
     pub fn approve_task(
         &self,
         id: &str,
@@ -446,7 +496,7 @@ impl OrbitRuntime {
     ///
     /// [ORB-11305] The set is exactly `backlog` (fresh authorized work) and
     /// `in-progress` (this run's own idempotent retry, or work a human
-    /// explicitly restarted through `orbit.task.start`). Every other status is
+    /// explicitly restarted through `orbit.task.update`). Every other status is
     /// somebody's decision that this task should not be running right now, and
     /// automation must not overturn it:
     ///

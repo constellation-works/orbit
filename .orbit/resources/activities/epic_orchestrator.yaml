@@ -123,8 +123,8 @@ spec:
     10. For a real blocker (missing dependency, contradictory requirements,
         or an unresolvable conflict), use `orbit.task.update` to set
         `blocked` with a reason.
-    11. The pipeline owns the epic root's lifecycle. Do not call
-        `orbit.task.start`, and do not move the epic to `review` or `done`.
+    11. Other than recording a real blocker as above, the pipeline owns the
+        epic root's lifecycle. Do not move the epic to `review` or `done`.
         Before returning, REQUIRED: persist a meaningful `execution_summary`
         with `orbit.task.update`; downstream delivery reads that task field,
         not your response. Return a short `summary` and include `diff` only

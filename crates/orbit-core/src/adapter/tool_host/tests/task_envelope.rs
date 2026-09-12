@@ -135,12 +135,12 @@ fn task_add_update_approve_start_match_show_and_cli_mcp_envelopes() {
     );
     let approved = execute(
         &runtime,
-        "orbit.task.approve",
-        json!({ "id": proposed.id, "note": "ready" }),
+        "orbit.task.update",
+        json!({ "id": proposed.id, "status": "backlog", "note": "ready" }),
     );
     let shown_after_approve = execute(&runtime, "orbit.task.show", json!({ "id": proposed.id }));
     assert_same_task_record(
-        "orbit.task.approve",
+        "orbit.task.update",
         &approved,
         "orbit.task.show",
         &shown_after_approve,
@@ -156,12 +156,12 @@ fn task_add_update_approve_start_match_show_and_cli_mcp_envelopes() {
     );
     let started = execute(
         &runtime,
-        "orbit.task.start",
-        json!({ "id": ready.id, "note": "picking up" }),
+        "orbit.task.update",
+        json!({ "id": ready.id, "status": "in_progress", "note": "picking up" }),
     );
     let shown_after_start = execute(&runtime, "orbit.task.show", json!({ "id": ready.id }));
     assert_same_task_record(
-        "orbit.task.start",
+        "orbit.task.update",
         &started,
         "orbit.task.show",
         &shown_after_start,

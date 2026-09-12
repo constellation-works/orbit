@@ -12,7 +12,6 @@ pub(crate) mod output;
 mod publication;
 mod reindex;
 pub(crate) mod show;
-mod start;
 mod update;
 
 pub use command::{TaskCommand, TaskSubcommand};

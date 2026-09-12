@@ -10,7 +10,8 @@ const EXPECTED_TASK_SUBCOMMANDS: [&str; 11] = [
     "reindex",
 ];
 
-const REMOVED_TASK_SUBCOMMANDS: [&str; 7] = [
+const REMOVED_TASK_SUBCOMMANDS: [&str; 8] = [
+    "start",
     "approve",
     "reject",
     "unarchive",
@@ -51,24 +52,6 @@ fn task_help_lists_exactly_the_trimmed_subcommand_set() {
             "task help missing `{subcommand}`:\n{help}"
         );
     }
-}
-
-/// `start` still parses — callers that predate `task update` owning approval
-/// keep working for a couple of releases — but it is off the help surface, so
-/// nothing new discovers it.
-#[test]
-fn deprecated_task_start_still_parses_but_is_hidden_from_help() {
-    Cli::try_parse_from(["orbit", "task", "start", "ORB-00001"])
-        .expect("deprecated `task start` still parses");
-    let help = task_help();
-    assert!(
-        !help.lines().any(|line| {
-            line.trim_start()
-                .strip_prefix("start")
-                .is_some_and(|rest| rest.is_empty() || rest.starts_with(' '))
-        }),
-        "task help should not advertise `start`:\n{help}"
-    );
 }
 
 #[test]

@@ -4678,7 +4678,7 @@ fn task_show_is_global_by_default_across_tool_run_and_mcp() {
 /// Crew configuration is host-local, so the same task is routinely served by a
 /// machine that never defined its crew — over SSH-marked MCP most of all. The
 /// read surfaces render the raw `crew` and mark the projection unresolved; only
-/// paths that must actually dispatch (`orbit.task.start`) still fail closed.
+/// paths that must actually dispatch (`orbit.task.update` to `in_progress`) still fail closed.
 #[test]
 fn task_read_surfaces_tolerate_a_crew_this_host_does_not_define() {
     let workspace = McpWorkspace::init();
@@ -4793,8 +4793,9 @@ fn task_read_surfaces_tolerate_a_crew_this_host_does_not_define() {
 
     // Execution still fails closed: starting the task needs a crew this host
     // can actually dispatch to.
+    let start_input = format!(r#"{{"id":"{}","status":"in_progress"}}"#, task_id);
     let started = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
-        .args(["tool", "run", "orbit.task.start", "--input", &show_input])
+        .args(["tool", "run", "orbit.task.update", "--input", &start_input])
         .output()
         .expect("run task start");
     assert!(

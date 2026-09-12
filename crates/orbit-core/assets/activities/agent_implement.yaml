@@ -131,9 +131,9 @@ spec:
         record the bounded leftover. Independently run `git diff --check` and
         `git status --short`, even after a cleanup denial; account for every
         change. Preserve pre-existing contents and legitimate task outputs.
-    11. Workflow admission already set `in-progress`: do not call
-        `orbit.task.start`, and do not move the task to `review` (the pipeline
-        owns that transition). Before returning, REQUIRED: persist a meaningful
+    11. Workflow admission already set `in-progress`: do not redundantly set
+        that status, and do not move the task to `review` (the pipeline owns
+        that transition). Before returning, REQUIRED: persist a meaningful
         `execution_summary` with `orbit.task.update`; downstream delivery reads
         that task field, not your response. Return a short result summary and
         include `diff` only when cheap and accurate.

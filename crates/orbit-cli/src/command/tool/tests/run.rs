@@ -126,7 +126,7 @@ fn list_output_projects_explicit_fields_inside_envelope() {
 }
 
 #[test]
-fn add_update_approve_start_preserve_full_task_by_default() {
+fn add_and_update_preserve_full_task_by_default() {
     let output = json!({
         "id": "T20260422-0001",
         "title": "Full record",
@@ -148,12 +148,7 @@ fn add_update_approve_start_preserve_full_task_by_default() {
         "updated_at": "2026-04-22T00:00:00Z"
     });
 
-    for tool in [
-        "orbit.task.add",
-        "orbit.task.update",
-        "orbit.task.approve",
-        "orbit.task.start",
-    ] {
+    for tool in ["orbit.task.add", "orbit.task.update"] {
         assert_eq!(
             shape_tool_output(tool, output.clone(), false, &[]),
             output,

@@ -556,7 +556,6 @@ impl Commands {
                     TaskSubcommand::Update(args) => {
                         ("update", Some("task"), Some(args.id.as_str()))
                     }
-                    TaskSubcommand::Start(args) => ("start", Some("task"), Some(args.id.as_str())),
                     TaskSubcommand::Archive(args) => {
                         ("archive", Some("task"), Some(args.id.as_str()))
                     }

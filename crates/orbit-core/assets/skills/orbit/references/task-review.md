@@ -1,6 +1,6 @@
 # Reviewing a task
 
-Review someone else's work and surface issues in your review summary. Read-only: **never** transition the reviewed task's lifecycle, and never call `orbit.task.approve` — approval requires the authorized operator or human decision, not the reviewing agent.
+Review someone else's work and surface issues in your review summary. Read-only: **never** use `orbit.task.update` to transition the reviewed task's lifecycle — approval requires the authorized operator or human decision, not the reviewing agent.
 
 ## Load context
 

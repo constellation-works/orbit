@@ -314,7 +314,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::SemanticUninstall
         | OrbitBuiltinAction::StateGet
         | OrbitBuiltinAction::StateSet
-        | OrbitBuiltinAction::TaskApprove
         | OrbitBuiltinAction::TaskArtifactGet
         | OrbitBuiltinAction::TaskDelete
         | OrbitBuiltinAction::TaskLint
@@ -323,7 +322,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::TaskLocksRelease
         | OrbitBuiltinAction::TaskLocksReserve
         | OrbitBuiltinAction::TaskShow
-        | OrbitBuiltinAction::TaskStart
         | OrbitBuiltinAction::WorkflowRunList
         | OrbitBuiltinAction::WorkflowRunResume
         | OrbitBuiltinAction::WorkflowRunShow
