@@ -71,10 +71,6 @@ pub(super) fn try_audit_argv_for_dispatch(
     }
 }
 
-/// Pin codex's `--sandbox` to `danger-full-access`, drop gemini's `-s` /
-/// `--sandbox` toggle, and drop grok's `--sandbox <profile>` value so the
-/// inner CLI sandbox does not double-encode the outer orbit-exec sandbox.
-/// Claude has no native sandbox flag — nothing to neutralize.
 /// Apply a trusted-host `provider_sandbox` label to the provider CLI config.
 ///
 /// Codex is the only provider whose inner sandbox is a dynamic `--sandbox`
@@ -96,6 +92,10 @@ pub(super) fn apply_trusted_host_provider_sandbox(
     }
 }
 
+/// Pin codex's `--sandbox` to `danger-full-access`, drop gemini's `-s` /
+/// `--sandbox` toggle, and drop grok's `--sandbox <profile>` value so the
+/// inner CLI sandbox does not double-encode the outer orbit-exec sandbox.
+/// Claude has no native sandbox flag — nothing to neutralize.
 pub(super) fn neutralize_inner_sandbox(
     provider: &str,
     provider_config: &mut HashMap<String, String>,
