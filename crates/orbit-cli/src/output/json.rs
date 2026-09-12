@@ -90,6 +90,7 @@ fn error_code(error: &OrbitError) -> &str {
         OrbitError::TaskStatusTransition(_) => "task_status_transition",
         OrbitError::JobRunStateTransition(_) => "job_run_state_transition",
         OrbitError::JobRunStartConflict(_) => "job_run_start_conflict",
+        OrbitError::JobRunControlConflict(_) => "conflict",
         OrbitError::WorkspaceError(_) => "workspace_error",
         OrbitError::Io(_) => "io_error",
         OrbitError::AdrInvalidTransition(_) => "adr_invalid_transition",

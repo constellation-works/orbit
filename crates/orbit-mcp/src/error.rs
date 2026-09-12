@@ -94,6 +94,9 @@ fn error_code(err: &OrbitError) -> &str {
         // incumbent owner is an expected race, and the caller yields rather
         // than treating its own request as malformed.
         OrbitError::JobRunStartConflict(_) => "job_run_start_conflict",
+        // [ORB-11253, ORB-12260] A compare-and-set revision conflict on a
+        // run-control update or operation grant transition.
+        OrbitError::JobRunControlConflict(_) => "conflict",
         OrbitError::DependencyNotDelivered { .. } => "dependency_not_delivered",
         OrbitError::ShipRunInFlight { .. } => "ship_run_in_flight",
         OrbitError::WorkspaceClaimHeld(_) => "workspace_claim_held",

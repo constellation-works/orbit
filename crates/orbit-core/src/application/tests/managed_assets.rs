@@ -815,7 +815,7 @@ mod artifacts {
         assert_eq!(finding.condition, ArtifactCondition::Stale);
         assert_eq!(finding.provenance, ArtifactProvenance::OrbitWritten);
         assert!(
-            finding.remediation.contains("orbit workspace init"),
+            finding.remediation.contains("orbit workspace sync"),
             "{}",
             finding.remediation
         );

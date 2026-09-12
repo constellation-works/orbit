@@ -1,6 +1,9 @@
 use orbit_core::JobRun;
 use orbit_core::application::job::{JobCatalogEntry, JobCatalogFilter};
-use orbit_types::workflow::{ActivityV2Spec, JobKind, JobV2Step, JobV2StepBody};
+use orbit_types::workflow::{
+    ActivityV2Spec, BackoffStrategy, FanInSpec, JobKind, JobV2Step, JobV2StepBody, JoinMode,
+    RetrySpec,
+};
 use serde_json::{Value, json};
 
 pub(super) fn format_last_run(last_run: Option<&JobRun>) -> String {
@@ -130,7 +133,7 @@ pub(super) fn write_v2_step(step: &JobV2Step, indent: usize, out: &mut String) {
         let _ = writeln!(out, "{pad}{} {}", bold("When:"), when);
     }
     if let Some(retry) = &step.retry {
-        let _ = writeln!(out, "{pad}{} {:?}", bold("Retry:"), retry);
+        let _ = writeln!(out, "{pad}{} {}", bold("Retry:"), format_retry(retry));
     }
     match &step.body {
         JobV2StepBody::TargetRef(target) => {
@@ -176,7 +179,12 @@ pub(super) fn write_v2_step(step: &JobV2Step, indent: usize, out: &mut String) {
         }
         JobV2StepBody::Parallel { parallel } => {
             let _ = writeln!(out, "{pad}{} parallel", bold("Body:"));
-            let _ = writeln!(out, "{pad}{} {:?}", bold("Join:"), parallel.join);
+            let _ = writeln!(
+                out,
+                "{pad}{} {}",
+                bold("Join:"),
+                format_join_mode(&parallel.join)
+            );
             let _ = writeln!(
                 out,
                 "{pad}{} {}",
@@ -191,7 +199,7 @@ pub(super) fn write_v2_step(step: &JobV2Step, indent: usize, out: &mut String) {
             let _ = writeln!(out, "{pad}{} fan_out", bold("Body:"));
             let _ = writeln!(out, "{pad}{} {}", bold("Items:"), fan_out.items.as_str());
             let _ = writeln!(out, "{pad}{} {}", bold("Max Workers:"), fan_out.max_workers);
-            let _ = writeln!(out, "{pad}{} {:?}", bold("Fan In:"), fan_in);
+            let _ = writeln!(out, "{pad}{} {}", bold("Fan In:"), format_fan_in(fan_in));
             write_v2_step(&fan_out.worker, indent + 2, out);
         }
         JobV2StepBody::Loop { loop_ } => {
@@ -230,4 +238,32 @@ fn v2_step_target_summary(step: &JobV2Step) -> (String, String) {
         JobV2StepBody::FanOut { .. } => ("fan_out".to_string(), step.id.clone()),
         JobV2StepBody::Loop { .. } => ("loop".to_string(), step.id.clone()),
     }
+}
+
+pub(super) fn format_join_mode(mode: &JoinMode) -> String {
+    match mode {
+        JoinMode::All => "all".to_string(),
+        JoinMode::Any => "any".to_string(),
+        JoinMode::Quorum { n } => format!("quorum({n})"),
+    }
+}
+
+pub(super) fn format_fan_in(fan_in: &FanInSpec) -> String {
+    let join = format_join_mode(&fan_in.join);
+    if let Some(collect) = &fan_in.collect {
+        format!("join={join} collect={collect}")
+    } else {
+        format!("join={join}")
+    }
+}
+
+pub(super) fn format_retry(retry: &RetrySpec) -> String {
+    let strategy = match retry.backoff_strategy {
+        BackoffStrategy::Exponential => "exponential",
+        BackoffStrategy::Linear => "linear",
+    };
+    format!(
+        "max_attempts={} initial_backoff_ms={} backoff_cap_ms={} strategy={strategy}",
+        retry.max_attempts, retry.initial_backoff_ms, retry.backoff_cap_ms
+    )
 }
