@@ -60,6 +60,18 @@ empty** — the list is what conflict detection reads, so a wrong entry actively
 misleads. When an orchestrator needs selectors prepared at scale, the task-pilot
 job fills them from real inspection. → [orchestration.md](orchestration.md)
 
+### Acceptance criteria outside the workspace
+
+An acceptance criterion cannot require a change outside the task's own
+workspace. A managed run mounts everything outside its own worktree
+read-only, and the delivery boundary refuses untracked paths — so there is no
+place for a cross-workspace edit to land, no matter how the criterion is
+worded. This holds for any out-of-workspace path, not one particular
+companion repository. If the work genuinely spans two workspaces, file the
+companion change as its own task in its own workspace and relate the two
+(for example, a `related_to` relation) instead of asking one task to reach
+outside its root.
+
 ## Operating rules
 
 - Never edit task files directly; never invent task IDs (`orbit.task.add`
