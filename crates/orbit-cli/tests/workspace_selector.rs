@@ -316,6 +316,117 @@ fn global_workspace_flag_fails_closed_on_unknown_selector() {
 }
 
 #[test]
+fn global_workspace_flag_on_deleted_checkout_reports_inactive_status_and_recorded_path() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let survivor_repo = temp.path().join("survivor");
+    let deleted_repo = temp.path().join("deleted");
+    fs::create_dir_all(&home).expect("home");
+    init_git_repo(&survivor_repo);
+    init_git_repo(&deleted_repo);
+
+    run_orbit(
+        &survivor_repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--host-name",
+            "selector-host",
+            "--task-prefix",
+            "DEL",
+        ],
+    )
+    .success();
+    run_orbit(
+        &survivor_repo,
+        &home,
+        &["workspace", "init", "--name", "survivor"],
+    )
+    .success();
+    run_orbit(
+        &deleted_repo,
+        &home,
+        &["workspace", "init", "--name", "deleted-ws"],
+    )
+    .success();
+
+    let created = run_orbit_json(
+        &deleted_repo,
+        &home,
+        &[
+            "task",
+            "add",
+            "--title",
+            "Task in deleted workspace",
+            "--complexity",
+            "low",
+            "--json",
+        ],
+    );
+    let task_id = created["id"].as_str().expect("task id").to_string();
+
+    let deleted_path_str = deleted_repo.to_str().expect("utf8");
+
+    // Delete checkout directory without teardown
+    fs::remove_dir_all(&deleted_repo).expect("delete checkout directory");
+
+    let selectors = [
+        ("registered name", "deleted-ws"),
+        ("logical id", "ws_deleted-ws"),
+        ("checkout path", deleted_path_str),
+    ];
+
+    for (label, selector) in selectors {
+        // Read-only verbs across task list, task show, workspace show, and doctor
+        let commands: &[&[&str]] = &[
+            &["--workspace", selector, "task", "list"],
+            &["--workspace", selector, "task", "show", &task_id],
+            &["--workspace", selector, "workspace", "show"],
+            &["--workspace", selector, "doctor"],
+        ];
+
+        for cmd in commands {
+            let assert = run_orbit(&survivor_repo, &home, cmd).failure();
+            let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+            assert!(
+                stderr
+                    .contains("workspace 'deleted-ws' (ws_deleted-ws) is invalid on this machine"),
+                "command {:?} with {label} selector must report name, id, and invalid status: {stderr}",
+                cmd
+            );
+            assert!(
+                stderr.contains(deleted_path_str),
+                "command {:?} with {label} selector must report recorded checkout path: {stderr}",
+                cmd
+            );
+            assert!(
+                !stderr.contains("unknown workspace selector"),
+                "command {:?} with {label} selector must not report unknown workspace selector: {stderr}",
+                cmd
+            );
+        }
+    }
+
+    // Contrast with an unknown workspace selector
+    let unknown_assert = run_orbit(
+        &survivor_repo,
+        &home,
+        &["--workspace", "unknown-workspace", "task", "list"],
+    )
+    .failure();
+    let unknown_stderr = String::from_utf8_lossy(&unknown_assert.get_output().stderr);
+    assert!(
+        unknown_stderr.contains("unknown workspace selector 'unknown-workspace'"),
+        "unknown selector must report unknown workspace selector: {unknown_stderr}"
+    );
+    assert!(
+        !unknown_stderr.contains("is invalid on this machine"),
+        "unknown selector must not report invalid workspace: {unknown_stderr}"
+    );
+}
+
+#[test]
 fn migrate_dry_run_honors_selected_checkout_and_confirm_uses_the_same_one() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");

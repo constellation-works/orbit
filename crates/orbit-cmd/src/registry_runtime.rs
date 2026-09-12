@@ -188,16 +188,24 @@ impl RegisteredRuntimeFactory {
     /// This is the shared server/CLI bootstrap seam. It performs correctness
     /// checks needed to construct a runtime, but makes no transport,
     /// authorization, or cross-machine routing decision.
+    ///
+    /// Non-active workspaces (such as a workspace whose checkout directory was
+    /// deleted without teardown) cannot be bound by any CLI verb, including
+    /// read-only inspection commands (`task list`, `task show`, `workspace show`,
+    /// `doctor`), even if the Orbit root is still readable. The command fails
+    /// closed naming the status and recorded checkout path.
     pub fn resolve_workspace_selector(
         global_root: &Path,
         selector: &str,
     ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
-        let registry = workspace_registry::load_registry_from(
-            &workspace_registry::registry_path_for(global_root),
-        )?;
+        let registry_path = workspace_registry::registry_path_for(global_root);
+        let mut registry = workspace_registry::load_registry_from(&registry_path)?;
+        if workspace_registry::validate_workspaces(&mut registry) {
+            let _ = workspace_registry::save_registry_to(&registry, &registry_path);
+        }
         let (workspace, checkout) = resolve_cli_workspace_binding(&registry, selector)?;
         if workspace.status != WorkspaceStatus::Active {
-            return Err(unsupported_cli_workspace(selector));
+            return Err(inactive_cli_workspace(workspace, checkout));
         }
         Ok(ResolvedWorkspaceSelection {
             workspace: workspace.clone(),
@@ -331,9 +339,11 @@ impl RegisteredRuntimeFactory {
             return Ok(None);
         };
         let global_root = runtime.global_root();
-        let registry = workspace_registry::load_registry_from(
-            &workspace_registry::registry_path_for(&global_root),
-        )?;
+        let registry_path = workspace_registry::registry_path_for(&global_root);
+        let mut registry = workspace_registry::load_registry_from(&registry_path)?;
+        if workspace_registry::validate_workspaces(&mut registry) {
+            let _ = workspace_registry::save_registry_to(&registry, &registry_path);
+        }
         match resolve_cli_workspace_target(&registry, runtime, &selector)? {
             CliWorkspaceTarget::CurrentRuntime => Ok(None),
             CliWorkspaceTarget::Checkout {
@@ -342,7 +352,7 @@ impl RegisteredRuntimeFactory {
                 rewrite_to_repo_root,
             } => {
                 if workspace.status != WorkspaceStatus::Active {
-                    return Err(unsupported_cli_workspace(&selector));
+                    return Err(inactive_cli_workspace(workspace, checkout));
                 }
                 if rewrite_to_repo_root {
                     set_input_workspace(input, &checkout.repo_root)?;
@@ -468,15 +478,28 @@ fn resolve_cli_workspace_path<'a>(
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(raw)
     };
-    let canonical = candidate
-        .canonicalize()
-        .map_err(|_| unsupported_cli_workspace(selector))?;
-    if !canonical.is_dir() {
-        return Err(unsupported_cli_workspace(selector));
-    }
-    if let Some(checkout) = find_checkout_for_canonical_path(registry, &canonical)
-        .or_else(|| find_checkout_for_git_common_dir(registry, &canonical))
+    if let Ok(canonical) = candidate.canonicalize()
+        && canonical.is_dir()
     {
+        if let Some(checkout) = find_checkout_for_canonical_path(registry, &canonical)
+            .or_else(|| find_checkout_for_git_common_dir(registry, &canonical))
+        {
+            let workspace =
+                workspace_registry::find_workspace_by_id(registry, &checkout.workspace_id)
+                    .ok_or_else(|| unsupported_cli_workspace(selector))?;
+            return Ok(CliWorkspaceTarget::Checkout {
+                workspace,
+                checkout,
+                rewrite_to_repo_root: false,
+            });
+        }
+        if let Some(runtime) = runtime
+            && path_is_inside(&runtime.paths().repo_root, &canonical)
+        {
+            return Ok(CliWorkspaceTarget::CurrentRuntime);
+        }
+    }
+    if let Some(checkout) = find_checkout_for_raw_path(registry, &candidate) {
         let workspace = workspace_registry::find_workspace_by_id(registry, &checkout.workspace_id)
             .ok_or_else(|| unsupported_cli_workspace(selector))?;
         return Ok(CliWorkspaceTarget::Checkout {
@@ -484,11 +507,6 @@ fn resolve_cli_workspace_path<'a>(
             checkout,
             rewrite_to_repo_root: false,
         });
-    }
-    if let Some(runtime) = runtime
-        && path_is_inside(&runtime.paths().repo_root, &canonical)
-    {
-        return Ok(CliWorkspaceTarget::CurrentRuntime);
     }
     Err(unsupported_cli_workspace(selector))
 }
@@ -505,6 +523,15 @@ fn find_checkout_for_canonical_path<'a>(
                 .iter()
                 .any(|override_path| canonical_path(override_path) == canonical)
     })
+}
+
+fn find_checkout_for_raw_path<'a>(
+    registry: &'a WorkspaceRegistry,
+    candidate: &Path,
+) -> Option<&'a WorkspaceCheckout> {
+    let normalized = normalize_path(candidate);
+    find_checkout_for_canonical_path(registry, &normalized)
+        .or_else(|| workspace_registry::find_checkout_by_path(registry, &normalized))
 }
 
 fn find_checkout_for_git_common_dir<'a>(
@@ -574,9 +601,34 @@ fn set_input_workspace(input: &mut Value, repo_root: &Path) -> Result<(), OrbitE
     Ok(())
 }
 
+fn normalize_path(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn unsupported_cli_workspace(selector: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(
         "unknown workspace selector '{selector}'; pass a registered workspace name, a logical workspace ID, or an absolute local checkout path"
+    ))
+}
+
+fn inactive_cli_workspace(workspace: &Workspace, checkout: &WorkspaceCheckout) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "workspace '{}' ({}) is {} on this machine; recorded checkout path: {}",
+        workspace.name,
+        workspace.id,
+        workspace.status,
+        checkout.repo_root.display(),
     ))
 }
 
