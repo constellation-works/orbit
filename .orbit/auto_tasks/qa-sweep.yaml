@@ -1,7 +1,7 @@
 schemaVersion: 1
 name: qa-sweep
 description: Hands-on validation of recent workspace changes
-enabled: true
+enabled: false
 schedule:
   every_minutes: 120
 template:

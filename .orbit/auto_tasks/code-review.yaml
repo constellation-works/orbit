@@ -1,7 +1,7 @@
 schemaVersion: 1
 name: code-review
 description: Post-merge code review of changes merged since the last completed sweep
-enabled: true
+enabled: false
 schedule:
   every_minutes: 60
 template:
