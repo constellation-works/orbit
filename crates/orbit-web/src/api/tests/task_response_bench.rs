@@ -52,8 +52,8 @@ async fn task_response_benchmark() {
                 repo_root: repo_root.clone(),
                 active: true,
                 binding: Some(WorkspaceRuntimeBinding {
-                    workspace_id: id.clone(),
-                    logical_workspace_id: id,
+                    logical_workspace_id: id.clone(),
+                    task_partition_id: id,
                     owner_machine_id: None,
                     repo_root,
                     ship_mode: ShipMode::Local,

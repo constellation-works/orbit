@@ -123,7 +123,7 @@ fn bind_task_partition_at(
         TaskRegistryStore::open(&task_registry_path(global_root)).expect("open task registry");
     tasks
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some(workspace_id.to_string()),
+            partition_id: Some(workspace_id.to_string()),
             slug: slug.to_string(),
             repo_root: repo_root.to_path_buf(),
             workspace_path: repo_root.to_path_buf(),
@@ -138,7 +138,7 @@ fn register_task_workspace(global_root: &Path, workspace_id: &str, slug: &str) {
         TaskRegistryStore::open(&task_registry_path(global_root)).expect("open task registry");
     tasks
         .register_workspace(RegisterWorkspaceParams {
-            workspace_id: workspace_id.to_string(),
+            partition_id: workspace_id.to_string(),
             slug: slug.to_string(),
             repo_fingerprint: None,
         })

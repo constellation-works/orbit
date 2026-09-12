@@ -75,7 +75,7 @@ pub(crate) fn bundle_store(temp: &TempDir) -> TaskBundleStoreV2 {
     fs::create_dir_all(&orbit_dir).expect("create orbit dir");
     let binding = registry
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some("orbit-test-123456".to_string()),
+            partition_id: Some("orbit-test-123456".to_string()),
             slug: "Orbit Test".to_string(),
             repo_root: temp.path().join("repo"),
             workspace_path: temp.path().join("repo"),
@@ -83,7 +83,7 @@ pub(crate) fn bundle_store(temp: &TempDir) -> TaskBundleStoreV2 {
             repo_fingerprint: None,
         })
         .expect("bind workspace");
-    TaskBundleStoreV2::new(registry, binding.workspace_id)
+    TaskBundleStoreV2::new(registry, binding.partition_id)
 }
 
 pub(crate) fn task_lock_path(bundle_dir: &Path) -> PathBuf {

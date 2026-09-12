@@ -79,7 +79,7 @@ impl OrbitRuntime {
             .unwrap_or("workspace")
             .to_string();
         registry.bind_workspace(BindWorkspaceParams {
-            workspace_id: Some(workspace_id.to_string()),
+            partition_id: Some(workspace_id.to_string()),
             slug,
             repo_root: binding.repo_root.clone(),
             workspace_path: binding.repo_root.clone(),

@@ -395,7 +395,7 @@ fn selected_workspace_id(runtime: &OrbitRuntime) -> Result<String, orbit_core::O
 fn selected_task_workspace_id(runtime: &OrbitRuntime) -> Result<String, orbit_core::OrbitError> {
     runtime
         .workspace_runtime_binding()
-        .map(|binding| binding.workspace_id.clone())
+        .map(|binding| binding.task_partition_id.clone())
         .map_or_else(|| runtime.workspace_id(), Ok)
 }
 

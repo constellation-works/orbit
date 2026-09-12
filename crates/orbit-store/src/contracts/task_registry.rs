@@ -6,7 +6,10 @@ use orbit_types::task::{TaskPriority, TaskStatus};
 
 #[derive(Debug, Clone)]
 pub struct BindWorkspaceParams {
-    pub workspace_id: Option<String>,
+    /// Task-store partition id to bind the checkout to, or `None` to mint one.
+    /// A distinct namespace from the workspace-registry id, even when a caller
+    /// passes a `ws_*` id in; see `task_workspaces_dir`.
+    pub partition_id: Option<String>,
     pub slug: String,
     pub repo_root: PathBuf,
     pub workspace_path: PathBuf,
@@ -17,14 +20,18 @@ pub struct BindWorkspaceParams {
 /// Path-free coordination record for a logical workspace.
 #[derive(Debug, Clone)]
 pub struct RegisterWorkspaceParams {
-    pub workspace_id: String,
+    /// Task-store partition the imported workspace's bundles live in.
+    pub partition_id: String,
     pub slug: String,
     pub repo_fingerprint: Option<String>,
 }
 
+/// Logical task-registry row for one task-store partition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceBinding {
-    pub workspace_id: String,
+    /// Names the partition directory under `tasks/workspaces/`, not a
+    /// workspace-registry row.
+    pub partition_id: String,
     pub slug: String,
     pub repo_fingerprint: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -34,7 +41,8 @@ pub struct WorkspaceBinding {
 /// Machine-local checkout attached to a logical workspace, when one exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceCheckoutBinding {
-    pub workspace_id: String,
+    /// Partition this checkout's task bundles live in.
+    pub partition_id: String,
     pub repo_root: PathBuf,
     pub workspace_path: PathBuf,
     pub orbit_dir: PathBuf,
@@ -45,7 +53,7 @@ pub struct WorkspaceCheckoutBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskBundleBinding {
     pub task_id: String,
-    pub workspace_id: String,
+    pub partition_id: String,
     pub canonical_path: PathBuf,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -72,7 +80,7 @@ pub struct TaskIndexFilter {
 /// never reported here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DanglingRelationTarget {
-    pub workspace_id: String,
+    pub partition_id: String,
     pub source_task_id: String,
     pub relation_type: String,
     pub target_task_id: String,

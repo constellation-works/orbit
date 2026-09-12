@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use serde::{Deserialize, Serialize};
 
-use crate::fs::path_safety::validate_workspace_id;
+use crate::fs::path_safety::validate_partition_id;
 use crate::fs::yaml::{parse_yaml_with, write_yaml_atomic_with};
 
 use crate::contracts::WorkspaceConfig;
@@ -84,7 +84,7 @@ pub fn write_workspace_config(
     orbit_dir: &Path,
     config: &WorkspaceConfig,
 ) -> Result<(), OrbitError> {
-    let workspace_id = validate_workspace_id(&config.workspace_id)?;
+    let workspace_id = validate_partition_id(&config.workspace_id)?;
     if config.schema_version != CONFIG_SCHEMA_VERSION {
         return Err(OrbitError::InvalidInput(format!(
             "unsupported workspace config schema_version {}",
@@ -110,6 +110,6 @@ fn validate_workspace_config_doc(doc: WorkspaceConfigDoc) -> Result<WorkspaceCon
     }
     Ok(WorkspaceConfig {
         schema_version: doc.schema_version,
-        workspace_id: validate_workspace_id(&doc.workspace_id)?,
+        workspace_id: validate_partition_id(&doc.workspace_id)?,
     })
 }

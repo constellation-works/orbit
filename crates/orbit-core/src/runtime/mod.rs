@@ -68,7 +68,7 @@ pub use resolve::{
 pub use resolve::{is_global_orbit_root, resolve_global_root, try_resolve_initialized_roots};
 // `pub` for host task-store maintenance in `orbit-cmd`, which must recognize
 // the one partition id no registry claims [ORB-12119].
-pub use builder::UNBOUND_DATA_DIR_WORKSPACE_ID;
+pub use builder::UNBOUND_DATA_DIR_PARTITION_ID;
 pub use run_input::managed_workspace_selector_from_env;
 pub(crate) use task::{failed_run_error_context, is_workflow_failure_state};
 
@@ -132,9 +132,13 @@ pub struct WorkspaceRuntimeBinding {
     /// Logical catalog ID (`ws_*`). Nested managed CLI/MCP calls use this
     /// selector instead of rediscovering ownership from a linked-worktree cwd.
     pub logical_workspace_id: String,
-    /// Checkout identity from `.orbit/config.yaml`, which the task registry
-    /// partitions by (L-0098: it may differ from `logical_workspace_id`).
-    pub workspace_id: String,
+    /// Task-store partition id: the checkout identity from
+    /// `.orbit/config.yaml` that the task registry partitions task bundles by
+    /// (`workspace_bindings.workspace_id`). A different namespace from
+    /// `logical_workspace_id` above, which the workspace registry mints, and
+    /// the two genuinely differ for any checkout bound before `workspace init`
+    /// supplied an id (L-0098).
+    pub task_partition_id: String,
     /// Registered owner of the logical workspace. Automation resolves the
     /// default owner of a delivery definition from it, so an unambiguously
     /// owned workspace needs no redundant per-definition configuration.
@@ -153,7 +157,7 @@ pub fn workspace_runtime_binding(
 ) -> Result<WorkspaceRuntimeBinding, OrbitError> {
     Ok(WorkspaceRuntimeBinding {
         logical_workspace_id: workspace.id.clone(),
-        workspace_id: workspace_id_for_orbit_dir(&checkout.orbit_dir)?,
+        task_partition_id: workspace_id_for_orbit_dir(&checkout.orbit_dir)?,
         owner_machine_id: workspace.owner_machine_id.clone(),
         repo_root: checkout.repo_root.clone(),
         ship_mode: resolved_ship_mode(workspace),
@@ -204,7 +208,7 @@ impl OrbitRuntime {
         // those were already initialized by workspace init.
         let binding = WorkspaceRuntimeBinding {
             logical_workspace_id: "ws_memory".to_string(),
-            workspace_id: "ws_memory".to_string(),
+            task_partition_id: "ws_memory".to_string(),
             owner_machine_id: None,
             repo_root: data_root.to_path_buf(),
             ship_mode: ShipMode::Local,

@@ -79,7 +79,7 @@ fn owned_workspace(
     let repo_root = orbit_dir.parent().unwrap().to_path_buf();
     registry
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some(workspace_id.to_string()),
+            partition_id: Some(workspace_id.to_string()),
             slug: "sample".to_string(),
             repo_root: repo_root.clone(),
             workspace_path: repo_root,

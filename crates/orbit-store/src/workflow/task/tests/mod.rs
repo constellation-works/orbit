@@ -210,7 +210,7 @@ fn bind(registry: &TaskRegistryStore, global: &Path, ws_id: &str) -> WorkspaceCh
     fs::create_dir_all(&orbit_dir).expect("create orbit dir");
     registry
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some(ws_id.to_string()),
+            partition_id: Some(ws_id.to_string()),
             slug: "sample".to_string(),
             repo_root: orbit_dir.parent().unwrap().to_path_buf(),
             workspace_path: orbit_dir.parent().unwrap().to_path_buf(),
@@ -224,7 +224,7 @@ fn bundle_store(
     registry: &TaskRegistryStore,
     binding: &WorkspaceCheckoutBinding,
 ) -> TaskBundleStoreV2 {
-    TaskBundleStoreV2::new(registry.clone(), binding.workspace_id.clone())
+    TaskBundleStoreV2::new(registry.clone(), binding.partition_id.clone())
 }
 
 fn make_bundle(id: &str, title: &str, relations: Vec<TaskRelation>) -> TaskBundleV2 {

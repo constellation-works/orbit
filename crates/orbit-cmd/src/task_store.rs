@@ -2,26 +2,34 @@
 //! and `doctor`'s orphan-partition check/fix [ORB-12109].
 //!
 //! `orbit-store` owns the per-workspace bundle layout
-//! (`<global_root>/tasks/workspaces/<workspace_id>/`) but knows nothing
+//! (`<global_root>/tasks/workspaces/<partition_id>/`) but knows nothing
 //! about the workspace registry; this module is the composition seam that
 //! lets a caller resolve or remove one workspace's partition without
 //! reaching around `orbit-store` from `orbit-cli`.
 //!
-//! The partition directory name is a *task-registry* workspace id
+//! A partition directory is named for a *task-store partition id*
 //! (`workspace_bindings.workspace_id` in `<global_root>/tasks/index.sqlite`),
-//! which is minted as `<slug>-<hash>` whenever a checkout binds without an
-//! explicit id. `orbit workspace init` may instead bind the catalog's `ws_*`
-//! id directly. The task registry and the workspace catalog therefore both
-//! contribute claims, using checkout evidence to distinguish live, stale, and
-//! unreachable state [ORB-12119]. `workspace remove` drops catalog rows only;
-//! it retains the task-registry binding and copies catalog checkout evidence
-//! so a leftover partition stays classifiable [ORB-12223].
+//! which the task registry mints as `<slug>-<hash>` whenever a checkout binds
+//! without an explicit id. That is a different namespace from the
+//! *workspace-registry id* (`Workspace.id` in `<global_root>/workspaces.json`,
+//! minted as `ws_<slug>`), which this module always spells
+//! `catalog_workspace_id`: a legacy `<slug>-<hash>` partition and the
+//! synthetic `ws_unbound-data-dir` partition have no catalog row at all, and
+//! only a workspace whose `orbit workspace init` bound the catalog id as its
+//! partition id spells the two the same. Reading a partition id as a catalog
+//! id is what made 18 of 22 live partitions look orphaned [ORB-12109].
+//!
+//! The task registry and the workspace catalog therefore both contribute
+//! claims, using checkout evidence to distinguish live, stale, and unreachable
+//! state [ORB-12119]. `workspace remove` drops catalog rows only; it retains
+//! the task-registry binding and copies catalog checkout evidence so a
+//! leftover partition stays classifiable [ORB-12223].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_core::runtime::UNBOUND_DATA_DIR_WORKSPACE_ID;
+use orbit_core::runtime::UNBOUND_DATA_DIR_PARTITION_ID;
 use orbit_registry::workspace_registry;
 pub use orbit_store::maintenance::task_registry::task_workspaces_dir;
 use orbit_store::maintenance::task_registry::{
@@ -31,9 +39,9 @@ use orbit_types::task::is_valid_orb_task_id;
 use orbit_types::workspace::WorkspaceCheckout;
 
 /// Path to one workspace's task-store partition under
-/// `<global_root>/tasks/workspaces/<workspace_id>/`.
-pub fn task_store_partition_path(global_root: &Path, workspace_id: &str) -> PathBuf {
-    task_workspaces_dir(global_root).join(workspace_id)
+/// `<global_root>/tasks/workspaces/<partition_id>/`.
+pub fn task_store_partition_path(global_root: &Path, partition_id: &str) -> PathBuf {
+    task_workspaces_dir(global_root).join(partition_id)
 }
 
 /// One partition directory that no registry claims, with the amount of task
@@ -102,7 +110,7 @@ pub fn inspect_task_store_partitions(
     let mut unowned = Vec::new();
     let mut unreachable = Vec::new();
     for path in partitions {
-        let Some(id) = partition_id(&path).map(str::to_owned) else {
+        let Some(id) = partition_id_of(&path).map(str::to_owned) else {
             continue;
         };
         if claims.claimed.contains(&id) {
@@ -187,18 +195,18 @@ pub fn remove_unclaimed_task_stores(global_root: &Path) -> Result<RemovedTaskSto
 
     let mut removed = RemovedTaskStores::default();
     for partition in partitions.stale {
-        let Some(workspace_id) = partition_id(&partition.path) else {
+        let Some(partition_id) = partition_id_of(&partition.path) else {
             continue;
         };
-        if remove_partition(&tasks, global_root, workspace_id)? {
+        if remove_partition(&tasks, global_root, partition_id)? {
             removed.stale.push(partition);
         }
     }
     for partition in partitions.removable {
-        let Some(workspace_id) = partition_id(&partition.path) else {
+        let Some(partition_id) = partition_id_of(&partition.path) else {
             continue;
         };
-        if remove_partition(&tasks, global_root, workspace_id)? {
+        if remove_partition(&tasks, global_root, partition_id)? {
             removed.empty.push(partition.path);
         }
     }
@@ -223,7 +231,7 @@ pub fn remove_checkout_task_stores(
     let mut targets: Vec<String> = Vec::new();
 
     if let Some(bound) = tasks.find_checkout_by_orbit_dir(orbit_dir)? {
-        targets.push(bound.workspace_id);
+        targets.push(bound.partition_id);
     }
     if let Some(catalog_id) = catalog_workspace_id
         && !targets.iter().any(|id| id == catalog_id)
@@ -233,9 +241,9 @@ pub fn remove_checkout_task_stores(
     }
 
     let mut removed = Vec::new();
-    for workspace_id in targets {
-        if remove_partition(&tasks, global_root, &workspace_id)? {
-            removed.push(task_store_partition_path(global_root, &workspace_id));
+    for partition_id in targets {
+        if remove_partition(&tasks, global_root, &partition_id)? {
+            removed.push(task_store_partition_path(global_root, &partition_id));
         }
     }
     Ok(removed)
@@ -250,14 +258,14 @@ pub fn bound_partition_id(
 ) -> Result<Option<String>, OrbitError> {
     Ok(open_task_registry(global_root)?
         .find_checkout_by_orbit_dir(orbit_dir)?
-        .map(|binding| binding.workspace_id))
+        .map(|binding| binding.partition_id))
 }
 
-/// Whether the task registry still binds `workspace_id` as a partition.
-pub fn partition_is_bound(global_root: &Path, workspace_id: &str) -> Result<bool, OrbitError> {
+/// Whether the task registry still binds `partition_id` as a partition.
+pub fn partition_is_bound(global_root: &Path, partition_id: &str) -> Result<bool, OrbitError> {
     Ok(open_task_registry(global_root)?
-        .workspace_ids()?
-        .contains(workspace_id))
+        .partition_ids()?
+        .contains(partition_id))
 }
 
 /// Copy a catalog checkout into the task registry before `workspace remove`
@@ -275,23 +283,27 @@ pub fn partition_is_bound(global_root: &Path, workspace_id: &str) -> Result<bool
 /// shared external root), evidence is stored under the per-checkout
 /// `repo_root` instead of stealing that binding. `checkout_evidence` reads
 /// `repo_root`.
+///
+/// Only a workspace that bound its catalog id as its partition id has a
+/// leftover to retain here; a checkout on a legacy `<slug>-<hash>` partition
+/// has none under this name and this call does nothing.
 pub fn retain_task_store_on_catalog_remove(
     global_root: &Path,
-    workspace_id: &str,
+    catalog_workspace_id: &str,
     slug: &str,
     catalog_checkout: Option<&WorkspaceCheckout>,
 ) -> Result<Option<UnclaimedPartition>, OrbitError> {
-    let leftover = leftover_task_partition(global_root, workspace_id);
+    let leftover = leftover_task_partition(global_root, catalog_workspace_id);
     if leftover.is_some()
         && let Some(checkout) = catalog_checkout
     {
-        ensure_checkout_evidence(global_root, workspace_id, slug, checkout)?;
+        ensure_checkout_evidence(global_root, catalog_workspace_id, slug, checkout)?;
     }
     Ok(leftover)
 }
 
-fn leftover_task_partition(global_root: &Path, workspace_id: &str) -> Option<UnclaimedPartition> {
-    let path = task_store_partition_path(global_root, workspace_id);
+fn leftover_task_partition(global_root: &Path, partition_id: &str) -> Option<UnclaimedPartition> {
+    let path = task_store_partition_path(global_root, partition_id);
     if !path.is_dir() {
         return None;
     }
@@ -303,21 +315,21 @@ fn leftover_task_partition(global_root: &Path, workspace_id: &str) -> Option<Unc
 
 fn ensure_checkout_evidence(
     global_root: &Path,
-    workspace_id: &str,
+    partition_id: &str,
     slug: &str,
     checkout: &WorkspaceCheckout,
 ) -> Result<(), OrbitError> {
     let tasks = open_task_registry(global_root)?;
-    if tasks.find_workspace_checkout(workspace_id)?.is_some() {
+    if tasks.find_workspace_checkout(partition_id)?.is_some() {
         return Ok(());
     }
 
     let orbit_dir = match tasks.find_checkout_by_orbit_dir(&checkout.orbit_dir)? {
-        Some(existing) if existing.workspace_id != workspace_id => checkout.repo_root.clone(),
+        Some(existing) if existing.partition_id != partition_id => checkout.repo_root.clone(),
         _ => checkout.orbit_dir.clone(),
     };
     tasks.bind_workspace(BindWorkspaceParams {
-        workspace_id: Some(workspace_id.to_string()),
+        partition_id: Some(partition_id.to_string()),
         slug: slug.to_string(),
         repo_root: checkout.repo_root.clone(),
         workspace_path: checkout.repo_root.clone(),
@@ -328,6 +340,9 @@ fn ensure_checkout_evidence(
 }
 
 /// Who claims each partition on this host, and why the rest do not.
+///
+/// Every set is keyed by *partition id*. A catalog workspace contributes a
+/// claim only where its id is also a partition id — never the other way round.
 struct PartitionClaims {
     /// Registered task workspaces, live workspace catalog ids, and the
     /// synthetic partition every `--root <data-dir>` write lands in.
@@ -352,30 +367,30 @@ fn partition_claims(global_root: &Path) -> Result<PartitionClaims, OrbitError> {
         gone: BTreeSet::new(),
         unreachable: BTreeMap::new(),
     };
-    for workspace_id in tasks.workspace_ids()? {
-        let Some(checkout) = tasks.find_workspace_checkout(&workspace_id)? else {
+    for partition_id in tasks.partition_ids()? {
+        let Some(checkout) = tasks.find_workspace_checkout(&partition_id)? else {
             // Imported task archives register their source workspace without a
             // machine-local checkout. That logical registration still owns its
             // partition on this host.
-            claims.claimed.insert(workspace_id);
+            claims.claimed.insert(partition_id);
             continue;
         };
-        claims.checkout_bound.insert(workspace_id.clone());
+        claims.checkout_bound.insert(partition_id.clone());
         match checkout_evidence(&checkout.repo_root) {
             CheckoutEvidence::Present => {
-                claims.claimed.insert(workspace_id);
+                claims.claimed.insert(partition_id);
             }
             CheckoutEvidence::Gone => {
-                claims.gone.insert(workspace_id);
+                claims.gone.insert(partition_id);
             }
             CheckoutEvidence::Unreachable(reason) => {
-                claims.unreachable.insert(workspace_id, reason);
+                claims.unreachable.insert(partition_id, reason);
             }
         }
     }
     claims
         .claimed
-        .insert(UNBOUND_DATA_DIR_WORKSPACE_ID.to_string());
+        .insert(UNBOUND_DATA_DIR_PARTITION_ID.to_string());
 
     let registry_path = workspace_registry::registry_path_for(global_root);
     if registry_path.exists() {
@@ -402,34 +417,40 @@ fn partition_claims(global_root: &Path) -> Result<PartitionClaims, OrbitError> {
 }
 
 /// Add a catalog checkout's claim when the task registry has only a path-free
-/// logical registration for the same partition id.
+/// logical registration for the partition of the same name.
+///
+/// `catalog_workspace_id` comes from the workspace registry, so it claims a
+/// partition only when `workspace init` named that partition after it. It is
+/// never evidence about any other partition.
 fn record_catalog_checkout_evidence(
     claims: &mut PartitionClaims,
-    workspace_id: &str,
+    catalog_workspace_id: &str,
     checkout: &WorkspaceCheckout,
 ) {
     // A task-registry checkout binding has a more specific identity than the
     // catalog fallback. This matters when legacy or reindexed state names the
     // same partition with different path metadata.
-    if claims.checkout_bound.contains(workspace_id) {
+    if claims.checkout_bound.contains(catalog_workspace_id) {
         return;
     }
 
     match checkout_evidence(&checkout.repo_root) {
         CheckoutEvidence::Present => {
-            claims.claimed.insert(workspace_id.to_string());
-            claims.gone.remove(workspace_id);
-            claims.unreachable.remove(workspace_id);
+            claims.claimed.insert(catalog_workspace_id.to_string());
+            claims.gone.remove(catalog_workspace_id);
+            claims.unreachable.remove(catalog_workspace_id);
         }
         CheckoutEvidence::Gone => {
-            claims.claimed.remove(workspace_id);
-            claims.gone.insert(workspace_id.to_string());
-            claims.unreachable.remove(workspace_id);
+            claims.claimed.remove(catalog_workspace_id);
+            claims.gone.insert(catalog_workspace_id.to_string());
+            claims.unreachable.remove(catalog_workspace_id);
         }
         CheckoutEvidence::Unreachable(reason) => {
-            claims.claimed.remove(workspace_id);
-            claims.gone.remove(workspace_id);
-            claims.unreachable.insert(workspace_id.to_string(), reason);
+            claims.claimed.remove(catalog_workspace_id);
+            claims.gone.remove(catalog_workspace_id);
+            claims
+                .unreachable
+                .insert(catalog_workspace_id.to_string(), reason);
         }
     }
 }
@@ -541,8 +562,8 @@ fn task_store_partitions(global_root: &Path) -> Result<Option<Vec<PathBuf>>, Orb
     ))
 }
 
-/// Workspace id a partition directory is named for.
-pub fn partition_id(partition: &Path) -> Option<&str> {
+/// Task-store partition id a partition directory is named for.
+pub fn partition_id_of(partition: &Path) -> Option<&str> {
     partition.file_name().and_then(|name| name.to_str())
 }
 
@@ -563,17 +584,17 @@ fn count_task_bundles(partition: &Path) -> usize {
         .count()
 }
 
-/// Whether `workspace_id`'s partition holds *another* checkout's task state,
+/// Whether `partition_id`'s partition holds *another* checkout's task state,
 /// and so is not this checkout's to delete. The registry normalizes the paths
 /// it stores, so the comparison canonicalizes too.
 fn bound_to_another_checkout(
     tasks: &TaskRegistryStore,
-    workspace_id: &str,
+    partition_id: &str,
     orbit_dir: &Path,
 ) -> Result<bool, OrbitError> {
-    let binding = match tasks.find_workspace_checkout(workspace_id) {
+    let binding = match tasks.find_workspace_checkout(partition_id) {
         Ok(binding) => binding,
-        // Not a well-formed workspace id, so no binding can name it.
+        // Not a well-formed partition id, so no binding can name it.
         Err(OrbitError::InvalidInput(_)) => return Ok(false),
         Err(error) => return Err(error),
     };
@@ -589,17 +610,17 @@ fn bound_to_another_checkout(
 fn remove_partition(
     tasks: &TaskRegistryStore,
     global_root: &Path,
-    workspace_id: &str,
+    partition_id: &str,
 ) -> Result<bool, OrbitError> {
-    // A directory name that is not a well-formed workspace id can hold no
+    // A directory name that is not a well-formed partition id can hold no
     // bindings; its directory is still this function's to remove.
-    if let Err(error) = tasks.unbind_workspace(workspace_id)
+    if let Err(error) = tasks.unbind_workspace(partition_id)
         && !matches!(error, OrbitError::InvalidInput(_))
     {
         return Err(error);
     }
 
-    let path = task_store_partition_path(global_root, workspace_id);
+    let path = task_store_partition_path(global_root, partition_id);
     if !path.is_dir() {
         return Ok(false);
     }

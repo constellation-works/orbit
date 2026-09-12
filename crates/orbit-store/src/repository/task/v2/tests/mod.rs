@@ -22,7 +22,7 @@ pub(super) fn store(temp: &TempDir) -> TaskV2Store {
     std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
     let binding = registry
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some("orbit-test-123456".to_string()),
+            partition_id: Some("orbit-test-123456".to_string()),
             slug: "Orbit Test".to_string(),
             repo_root: repo_dir.clone(),
             workspace_path: repo_dir.clone(),
@@ -30,7 +30,7 @@ pub(super) fn store(temp: &TempDir) -> TaskV2Store {
             repo_fingerprint: None,
         })
         .expect("bind workspace");
-    TaskV2Store::new(registry, binding.workspace_id)
+    TaskV2Store::new(registry, binding.partition_id)
 }
 
 pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {

@@ -51,7 +51,7 @@ fn binding_preserves_logical_and_runtime_ids_and_ship_mode() {
     let resolved = resolved_workspace_binding(&workspace, &checkout).expect("resolved binding");
     assert_eq!(resolved.logical_workspace_id, "logical-abc123");
     assert_eq!(resolved.runtime.logical_workspace_id, "logical-abc123");
-    assert_eq!(resolved.runtime.workspace_id, "ws_runtime_config");
+    assert_eq!(resolved.runtime.task_partition_id, "ws_runtime_config");
     assert_eq!(
         resolved.runtime.owner_machine_id.as_deref(),
         Some("hm_owner")
@@ -93,7 +93,7 @@ fn registered_checkout_opens_a_bound_runtime() {
     let binding = runtime
         .workspace_runtime_binding()
         .expect("runtime binding");
-    assert_eq!(binding.workspace_id, "ws_runtime");
+    assert_eq!(binding.task_partition_id, "ws_runtime");
     assert_eq!(binding.repo_root, repo);
     assert_eq!(binding.ship_mode.as_input_value(), "local");
     assert_eq!(
@@ -160,7 +160,7 @@ fn explicit_shared_root_selects_checkout_by_cwd_and_does_not_fall_back() {
     assert_eq!(
         workspace_runtime_binding(&selected.workspace, &selected.checkout)
             .expect("runtime binding")
-            .workspace_id,
+            .task_partition_id,
         "ws_shared_runtime"
     );
 

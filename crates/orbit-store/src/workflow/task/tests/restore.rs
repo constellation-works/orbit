@@ -53,7 +53,7 @@ fn bind_restore(
     fs::create_dir_all(&orbit_dir).unwrap();
     registry
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some(workspace_id.to_string()),
+            partition_id: Some(workspace_id.to_string()),
             slug: "restore".to_string(),
             repo_root: orbit_dir.parent().unwrap().to_path_buf(),
             workspace_path: orbit_dir.parent().unwrap().to_path_buf(),

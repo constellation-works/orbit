@@ -66,7 +66,7 @@ fn registry_neutral_binding_controls_workspace_id_repo_root_and_ship_mode() {
 
     let binding = WorkspaceRuntimeBinding {
         logical_workspace_id: "ws_bound".to_string(),
-        workspace_id: "ws_bound".to_string(),
+        task_partition_id: "ws_bound".to_string(),
         owner_machine_id: None,
         repo_root: custom_repo_root.clone(),
         ship_mode: ShipMode::Pr,
@@ -102,7 +102,7 @@ fn registry_neutral_binding_rejects_a_conflicting_workspace_config() {
         &workspace_root,
         WorkspaceRuntimeBinding {
             logical_workspace_id: "ws_other".to_string(),
-            workspace_id: "ws_other".to_string(),
+            task_partition_id: "ws_other".to_string(),
             owner_machine_id: None,
             repo_root: root.path().join("repo"),
             ship_mode: ShipMode::Local,
@@ -340,7 +340,7 @@ fn explicit_data_dir_runtime_recovers_the_stored_checkout_repo_root() {
         TaskRegistryStore::open(&task_registry_path(&data_dir)).expect("open task registry");
     let bound = registry
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some("ws_repo".to_string()),
+            partition_id: Some("ws_repo".to_string()),
             slug: "repo".to_string(),
             repo_root: repo_root.clone(),
             workspace_path: repo_root.clone(),

@@ -92,13 +92,13 @@ pub fn resolve_task_owner(
     let binding = tasks
         .find_task_binding(task_id)?
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
-    let partition = binding.workspace_id;
+    let partition = binding.partition_id;
 
     let registry = workspace_registry::load_registry_from(&workspace_registry::registry_path_for(
         global_root,
     ))?;
     let owner = workspace_registry::local_workspaces(&registry).find(|(workspace, checkout)| {
-        checkout_identity(&checkout.orbit_dir).is_some_and(|identity| identity == partition)
+        checkout_partition_id(&checkout.orbit_dir).is_some_and(|id| id == partition)
             || (checkout.orbit_dir == global_root && workspace.id == partition)
     });
     let Some((workspace, checkout)) = owner else {
@@ -143,11 +143,12 @@ pub fn bound_workspace_identity(runtime: &OrbitRuntime) -> Option<WorkspaceIdent
         .map(WorkspaceIdentity::of)
 }
 
-/// Checkout identity recorded in `<orbit_dir>/config.yaml`, which is the key
-/// the task registry partitions by (L-0098: it may differ from the logical
-/// registry ID). A checkout that has been deleted or never initialized has
-/// none, and is simply not a candidate owner.
-fn checkout_identity(orbit_dir: &Path) -> Option<String> {
+/// Task-store partition id recorded in `<orbit_dir>/config.yaml`, which is the
+/// key the task registry partitions by (L-0098: it is a different namespace
+/// from the workspace-registry id and may differ from it). A checkout that has
+/// been deleted or never initialized has none, and is simply not a candidate
+/// owner.
+fn checkout_partition_id(orbit_dir: &Path) -> Option<String> {
     read_workspace_config_optional(orbit_dir)
         .ok()
         .flatten()

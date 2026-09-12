@@ -37,7 +37,7 @@ pub fn reindex_workspace(
                 "workspace '{workspace_id}' is not registered in the coordination registry"
             ))
         })?;
-    let workspace_id = binding.workspace_id.clone();
+    let workspace_id = binding.partition_id.clone();
 
     let workspace_dir = registry.workspaces_dir().join(&workspace_id);
     let mut candidates = on_disk_task_ids(&workspace_dir)?;

@@ -242,7 +242,7 @@ pub fn export_tasks(
                 "workspace '{workspace_id}' is not registered in the coordination registry"
             ))
         })?;
-    let workspace_id = binding.workspace_id.clone();
+    let workspace_id = binding.partition_id.clone();
 
     let registered: BTreeSet<String> = registry
         .tasks_for_workspace(&workspace_id)?
@@ -405,7 +405,7 @@ pub fn import_tasks(
                 }
             }
             Some(existing) => {
-                let identical = existing.workspace_id == target.workspace_id
+                let identical = existing.partition_id == target.workspace_id
                     && read_bundle_at(&existing.canonical_path)
                         .ok()
                         .is_some_and(|current| current == staged.bundle);
@@ -634,10 +634,10 @@ fn owner_wins_verdict(
     // Replacing in place keeps the mirror where the registry already binds it;
     // moving a task between workspaces is a reconciliation this rule cannot
     // decide from the id.
-    if existing.workspace_id != target_workspace_id {
+    if existing.partition_id != target_workspace_id {
         return Err(OrbitError::InvalidInput(format!(
             "task id '{source_id}' is registered to workspace '{}' locally but this archive lands in '{target_workspace_id}'; resolve the workspace before syncing",
-            existing.workspace_id
+            existing.partition_id
         )));
     }
     Ok(MirrorVerdict::Replace(existing.canonical_path.clone()))
@@ -732,14 +732,14 @@ fn resolve_target(
             ))
         })?;
         return Ok(ImportTarget {
-            workspace_id: binding.workspace_id,
+            workspace_id: binding.partition_id,
             register: None,
         });
     }
 
     if let Some(binding) = registry.find_workspace_binding(&manifest.source_workspace_id)? {
         return Ok(ImportTarget {
-            workspace_id: binding.workspace_id,
+            workspace_id: binding.partition_id,
             register: None,
         });
     }
@@ -748,7 +748,7 @@ fn resolve_target(
     // only its logical coordination identity. A later checkout link may add a
     // checkout binding; migration must never fabricate checkout paths.
     let params = RegisterWorkspaceParams {
-        workspace_id: manifest.source_workspace_id.clone(),
+        partition_id: manifest.source_workspace_id.clone(),
         slug: manifest.source_workspace_slug.clone(),
         repo_fingerprint: None,
     };
@@ -844,12 +844,12 @@ impl<'a> WriteGuard<'a> {
             let _ = self.registry.unbind_workspace(&workspace_id);
         }
         for id in self.registered_ids.drain(..) {
-            // workspace_id is not needed to look up the (global) binding, but the
-            // API takes it; recover it from the binding.
+            // The partition id is not needed to look up the (global) binding,
+            // but the API takes it; recover it from the binding.
             if let Ok(Some(binding)) = self.registry.find_task_binding(&id) {
                 let _ = self
                     .registry
-                    .unregister_task_bundle(&id, &binding.workspace_id);
+                    .unregister_task_bundle(&id, &binding.partition_id);
             }
         }
         for dir in self.written_dirs.drain(..) {

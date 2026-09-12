@@ -101,10 +101,13 @@ individual flag; neither command upgrades the binary or pulls a remote repositor
 `.orbit/` and the global task-store partition its task state is bound to, retiring that
 partition's rows in `~/.orbit/tasks/index.sqlite` in the same step.
 
-A partition directory is normally named for a **task-registry** workspace id
+A partition directory is named for a **task-store partition id**
 (`workspace_bindings.workspace_id` in `~/.orbit/tasks/index.sqlite`), minted as `<slug>-<hash>`
-for a checkout that binds without an explicit id. `orbit workspace init` may instead use its
-catalog `ws_*` id directly. A task-registry checkout claim is live while its recorded `repo_root`
+for a checkout that binds without an explicit id. That is a different namespace from the
+workspace-registry id in `~/.orbit/workspaces.json`: `orbit workspace init` passes its catalog
+`ws_*` id in as the partition id, so those workspaces spell both the same, while a legacy
+`<slug>-<hash>` partition and the synthetic `ws_unbound-data-dir` partition have no catalog row at
+all. Partition ownership is therefore always resolved through the task registry. A task-registry checkout claim is live while its recorded `repo_root`
 is present on disk; a catalog checkout supplies the same per-checkout evidence when `workspace init`
 has only a path-free task-registry registration. The shared external Orbit root (`--root
 <data-dir>`) is not used as checkout evidence because several checkouts may share it. A missing

@@ -4586,7 +4586,7 @@ fn readonly_state_mount_keeps_cli_and_mcp_reads_observational() {
 
     // `TaskUpdateParams` has no workspace selector, so `--root canonical_root`
     // is the only routing this mutation gets: it always lands in the unbound
-    // canonical partition (`UNBOUND_DATA_DIR_WORKSPACE_ID`), not the checkout's
+    // canonical partition (`UNBOUND_DATA_DIR_PARTITION_ID`), not the checkout's
     // bound workspace. The denial below must therefore name that partition.
     let mutation = readonly_orbit_command(
         &worktree,
@@ -5160,7 +5160,7 @@ fn assert_readonly_mutation_failed(
 
 /// Both CLI and MCP mutations above route through `--root canonical_root`
 /// with no workspace selector, so the denial must name the unbound canonical
-/// partition (`UNBOUND_DATA_DIR_WORKSPACE_ID` in `orbit-core`'s runtime
+/// partition (`UNBOUND_DATA_DIR_PARTITION_ID` in `orbit-core`'s runtime
 /// builder) that write actually targeted, not a stale pre-layout-v3 lock path.
 #[cfg(target_os = "linux")]
 fn assert_readonly_diagnostic(label: &str, canonical_root: &Path, diagnostic: &str) {

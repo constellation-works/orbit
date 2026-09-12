@@ -11,6 +11,7 @@ use orbit_types::task::{
 };
 use rusqlite::{Connection, TransactionBehavior, params, params_from_iter};
 
+use super::partition_id::{next_partition_id_candidate, sanitize_slug, validate_partition_id};
 use super::queries::{
     decode_task_bundle_binding, decode_workspace_checkout_binding, task_bundle_by_id,
     task_ids_for_workspace, workspace_by_id, workspace_by_orbit_dir, workspace_checkout_by_id,
@@ -21,7 +22,6 @@ use super::schema::{
     registry_user_version,
 };
 use super::util::{now_string, parse_relation_type_name, path_to_string, relation_type_name};
-use super::workspace_id::{next_workspace_id_candidate, sanitize_slug, validate_workspace_id};
 use crate::contracts::{
     AllocatorSeedOutcome, BindWorkspaceParams, DanglingRelationTarget, RegisterWorkspaceParams,
     TaskBundleBinding, TaskCompletionByComplexity, TaskIndexFilter, WorkspaceBinding,
@@ -89,6 +89,18 @@ impl TaskRegistryStore {
         })
     }
 
+    /// Bind one checkout to its task-store partition, minting the partition id
+    /// when the caller supplies none.
+    ///
+    /// The id this returns names the directory under
+    /// [`task_workspaces_dir`](super::task_workspaces_dir) that holds the
+    /// checkout's task bundles, and is stored in
+    /// `workspace_bindings.workspace_id`. It is *not* a workspace-registry id:
+    /// a caller that passes `params.partition_id` decides which namespace the
+    /// partition is named in, and a caller that passes `None` gets a minted
+    /// `<slug>-<hash>` id that no workspace registry knows. See
+    /// [`task_workspaces_dir`](super::task_workspaces_dir) for the two id
+    /// spaces in full.
     pub fn bind_workspace(
         &self,
         params: BindWorkspaceParams,
@@ -97,10 +109,10 @@ impl TaskRegistryStore {
         let workspace_path = normalize_path(&params.workspace_path);
         let orbit_dir = normalize_path(&params.orbit_dir);
         let slug = sanitize_slug(&params.slug);
-        let requested_workspace_id = params
-            .workspace_id
+        let requested_partition_id = params
+            .partition_id
             .as_deref()
-            .map(validate_workspace_id)
+            .map(validate_partition_id)
             .transpose()?;
 
         // Runtime construction asks for the same binding on every command.
@@ -113,13 +125,13 @@ impl TaskRegistryStore {
                 .lock()
                 .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
             if let Some(existing) = workspace_by_orbit_dir(&conn, &orbit_dir)? {
-                if let Some(requested) = &requested_workspace_id
-                    && requested != &existing.workspace_id
+                if let Some(requested) = &requested_partition_id
+                    && requested != &existing.partition_id
                 {
                     return Err(OrbitError::InvalidInput(format!(
                         "orbit dir '{}' is already bound to workspace '{}', not '{}'",
                         orbit_dir.display(),
-                        existing.workspace_id,
+                        existing.partition_id,
                         requested
                     )));
                 }
@@ -136,13 +148,13 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(e.to_string()))?;
 
         if let Some(existing) = workspace_by_orbit_dir(&tx, &orbit_dir)? {
-            if let Some(requested) = &requested_workspace_id
-                && requested != &existing.workspace_id
+            if let Some(requested) = &requested_partition_id
+                && requested != &existing.partition_id
             {
                 return Err(OrbitError::InvalidInput(format!(
                     "orbit dir '{}' is already bound to workspace '{}', not '{}'",
                     orbit_dir.display(),
-                    existing.workspace_id,
+                    existing.partition_id,
                     requested
                 )));
             }
@@ -150,19 +162,19 @@ impl TaskRegistryStore {
             return Ok(existing);
         }
 
-        let workspace_id = match requested_workspace_id {
+        let partition_id = match requested_partition_id {
             Some(id) => id,
             // A checkout is identified by its repo root and workspace path, not
             // by the orbit dir the caller happens to be running with. Reusing
             // the id already bound to those paths keeps a repeat bind from
             // minting a second logical workspace for the same checkout.
             None => match workspace_checkout_by_paths(&tx, &repo_root, &workspace_path)? {
-                Some(existing) => existing.workspace_id,
-                None => next_workspace_id_candidate(&tx, &slug, &workspace_path)?,
+                Some(existing) => existing.partition_id,
+                None => next_partition_id_candidate(&tx, &slug, &workspace_path)?,
             },
         };
         let now = now_string();
-        if let Some(existing) = workspace_checkout_by_id(&tx, &workspace_id)? {
+        if let Some(existing) = workspace_checkout_by_id(&tx, &partition_id)? {
             // The logical workspace already has a checkout, and it is bound to
             // a different orbit dir (a matching one returned above). When the
             // checkout paths are unchanged this is the same checkout whose
@@ -174,7 +186,7 @@ impl TaskRegistryStore {
                 || normalize_path(&existing.workspace_path) != workspace_path
             {
                 return Err(OrbitError::Store(format!(
-                    "workspace id '{workspace_id}' already has a local checkout at '{}'",
+                    "workspace id '{partition_id}' already has a local checkout at '{}'",
                     existing.orbit_dir.display()
                 )));
             }
@@ -182,22 +194,22 @@ impl TaskRegistryStore {
                 "UPDATE workspace_checkout_bindings
                  SET orbit_dir = ?2, updated_at = ?3
                  WHERE workspace_id = ?1",
-                params![workspace_id, path_to_string(&orbit_dir), now],
+                params![partition_id, path_to_string(&orbit_dir), now],
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
-            let binding = workspace_checkout_by_id(&tx, &workspace_id)?.ok_or_else(|| {
+            let binding = workspace_checkout_by_id(&tx, &partition_id)?.ok_or_else(|| {
                 OrbitError::Store("failed to read rebound workspace checkout binding".into())
             })?;
             tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
             return Ok(binding);
         }
 
-        if workspace_by_id(&tx, &workspace_id)?.is_none() {
+        if workspace_by_id(&tx, &partition_id)?.is_none() {
             tx.execute(
                 "INSERT INTO workspace_bindings (
                     workspace_id, slug, repo_fingerprint, created_at, updated_at
                 ) VALUES (?1, ?2, ?3, ?4, ?4)",
-                params![workspace_id, slug, params.repo_fingerprint, now],
+                params![partition_id, slug, params.repo_fingerprint, now],
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         }
@@ -206,7 +218,7 @@ impl TaskRegistryStore {
                 workspace_id, repo_root, workspace_path, orbit_dir, created_at, updated_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
             params![
-                workspace_id,
+                partition_id,
                 path_to_string(&repo_root),
                 path_to_string(&workspace_path),
                 path_to_string(&orbit_dir),
@@ -215,14 +227,14 @@ impl TaskRegistryStore {
         )
         .map_err(|e| OrbitError::Store(e.to_string()))?;
 
-        let binding = workspace_checkout_by_id(&tx, &workspace_id)?.ok_or_else(|| {
+        let binding = workspace_checkout_by_id(&tx, &partition_id)?.ok_or_else(|| {
             OrbitError::Store("failed to read inserted workspace checkout binding".into())
         })?;
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
         Ok(binding)
     }
 
-    /// Move `orbit_dir` onto `params.workspace_id`, replacing any checkout
+    /// Move `orbit_dir` onto `params.partition_id`, replacing any checkout
     /// currently bound to that directory.
     ///
     /// `bind_workspace` fails closed when the orbit dir already belongs to a
@@ -238,8 +250,8 @@ impl TaskRegistryStore {
         let workspace_path = normalize_path(&params.workspace_path);
         let orbit_dir = normalize_path(&params.orbit_dir);
         let slug = sanitize_slug(&params.slug);
-        let workspace_id =
-            validate_workspace_id(params.workspace_id.as_deref().ok_or_else(|| {
+        let partition_id =
+            validate_partition_id(params.partition_id.as_deref().ok_or_else(|| {
                 OrbitError::InvalidInput("rebind_checkout requires an explicit workspace id".into())
             })?)?;
 
@@ -252,18 +264,18 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         let now = now_string();
 
-        if workspace_by_id(&tx, &workspace_id)?.is_none() {
+        if workspace_by_id(&tx, &partition_id)?.is_none() {
             tx.execute(
                 "INSERT INTO workspace_bindings (
                     workspace_id, slug, repo_fingerprint, created_at, updated_at
                 ) VALUES (?1, ?2, ?3, ?4, ?4)",
-                params![workspace_id, slug, params.repo_fingerprint, now],
+                params![partition_id, slug, params.repo_fingerprint, now],
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         }
 
         if let Some(existing) = workspace_by_orbit_dir(&tx, &orbit_dir)?
-            && existing.workspace_id != workspace_id
+            && existing.partition_id != partition_id
         {
             tx.execute(
                 "DELETE FROM workspace_checkout_bindings WHERE orbit_dir = ?1",
@@ -272,13 +284,13 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         }
 
-        if workspace_checkout_by_id(&tx, &workspace_id)?.is_some() {
+        if workspace_checkout_by_id(&tx, &partition_id)?.is_some() {
             tx.execute(
                 "UPDATE workspace_checkout_bindings
                  SET repo_root = ?2, workspace_path = ?3, orbit_dir = ?4, updated_at = ?5
                  WHERE workspace_id = ?1",
                 params![
-                    workspace_id,
+                    partition_id,
                     path_to_string(&repo_root),
                     path_to_string(&workspace_path),
                     path_to_string(&orbit_dir),
@@ -292,7 +304,7 @@ impl TaskRegistryStore {
                     workspace_id, repo_root, workspace_path, orbit_dir, created_at, updated_at
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
                 params![
-                    workspace_id,
+                    partition_id,
                     path_to_string(&repo_root),
                     path_to_string(&workspace_path),
                     path_to_string(&orbit_dir),
@@ -302,7 +314,7 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         }
 
-        let binding = workspace_checkout_by_id(&tx, &workspace_id)?.ok_or_else(|| {
+        let binding = workspace_checkout_by_id(&tx, &partition_id)?.ok_or_else(|| {
             OrbitError::Store("failed to read rebound workspace checkout binding".into())
         })?;
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -315,7 +327,7 @@ impl TaskRegistryStore {
         &self,
         params: RegisterWorkspaceParams,
     ) -> Result<WorkspaceBinding, OrbitError> {
-        let workspace_id = validate_workspace_id(&params.workspace_id)?;
+        let partition_id = validate_partition_id(&params.partition_id)?;
         let slug = sanitize_slug(&params.slug);
         let mut conn = self
             .conn
@@ -324,10 +336,10 @@ impl TaskRegistryStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| OrbitError::Store(e.to_string()))?;
-        if let Some(existing) = workspace_by_id(&tx, &workspace_id)? {
+        if let Some(existing) = workspace_by_id(&tx, &partition_id)? {
             if existing.slug != slug || existing.repo_fingerprint != params.repo_fingerprint {
                 return Err(OrbitError::InvalidInput(format!(
-                    "logical workspace '{workspace_id}' is already registered with different metadata"
+                    "logical workspace '{partition_id}' is already registered with different metadata"
                 )));
             }
             tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -339,10 +351,10 @@ impl TaskRegistryStore {
             "INSERT INTO workspace_bindings(
                 workspace_id, slug, repo_fingerprint, created_at, updated_at
              ) VALUES (?1, ?2, ?3, ?4, ?4)",
-            params![workspace_id, slug, params.repo_fingerprint, now],
+            params![partition_id, slug, params.repo_fingerprint, now],
         )
         .map_err(|e| OrbitError::Store(e.to_string()))?;
-        let binding = workspace_by_id(&tx, &workspace_id)?.ok_or_else(|| {
+        let binding = workspace_by_id(&tx, &partition_id)?.ok_or_else(|| {
             OrbitError::Store("failed to read inserted logical workspace binding".into())
         })?;
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -358,10 +370,10 @@ impl TaskRegistryStore {
     /// never an implicit source move.
     pub fn record_workspace_repo_fingerprint(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
         repo_fingerprint: &str,
     ) -> Result<WorkspaceBinding, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         if repo_fingerprint.trim() != repo_fingerprint || repo_fingerprint.is_empty() {
             return Err(OrbitError::InvalidInput(
                 "workspace repository fingerprint must be non-empty and trimmed".to_string(),
@@ -374,13 +386,13 @@ impl TaskRegistryStore {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| OrbitError::Store(error.to_string()))?;
-        let existing = workspace_by_id(&tx, &workspace_id)?
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, workspace_id.clone()))?;
+        let existing = workspace_by_id(&tx, &partition_id)?
+            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Workspace, partition_id.clone()))?;
         match existing.repo_fingerprint.as_deref() {
             Some(current) if current == repo_fingerprint => {}
             Some(_) => {
                 return Err(OrbitError::InvalidInput(format!(
-                    "workspace '{workspace_id}' is registered with a different source-repository fingerprint"
+                    "workspace '{partition_id}' is registered with a different source-repository fingerprint"
                 )));
             }
             None => {
@@ -388,12 +400,12 @@ impl TaskRegistryStore {
                     "UPDATE workspace_bindings
                      SET repo_fingerprint = ?2, updated_at = ?3
                      WHERE workspace_id = ?1",
-                    params![workspace_id, repo_fingerprint, now_string()],
+                    params![partition_id, repo_fingerprint, now_string()],
                 )
                 .map_err(|error| OrbitError::Store(error.to_string()))?;
             }
         }
-        let binding = workspace_by_id(&tx, &workspace_id)?.ok_or_else(|| {
+        let binding = workspace_by_id(&tx, &partition_id)?.ok_or_else(|| {
             OrbitError::Store("failed to read fingerprinted workspace binding".to_string())
         })?;
         tx.commit()
@@ -406,8 +418,8 @@ impl TaskRegistryStore {
     /// Allocation commits independently from bundle registration. A crash between
     /// allocation and registration can leave numeric holes; those holes are expected
     /// and are not reused.
-    pub fn allocate_task_id(&self, workspace_id: &str) -> Result<String, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+    pub fn allocate_task_id(&self, partition_id: &str) -> Result<String, OrbitError> {
+        let partition_id = validate_partition_id(partition_id)?;
         let mut conn = self
             .conn
             .lock()
@@ -416,8 +428,8 @@ impl TaskRegistryStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| OrbitError::Store(e.to_string()))?;
 
-        if workspace_by_id(&tx, &workspace_id)?.is_none() {
-            return Err(OrbitError::not_found(NotFoundKind::Workspace, workspace_id));
+        if workspace_by_id(&tx, &partition_id)?.is_none() {
+            return Err(OrbitError::not_found(NotFoundKind::Workspace, partition_id));
         }
 
         let (next, task_prefix): (i64, String) = tx
@@ -536,28 +548,28 @@ impl TaskRegistryStore {
 
     pub fn canonical_task_bundle_path(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
         task_id: &str,
     ) -> Result<PathBuf, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         validate_orb_task_id(task_id)?;
-        Ok(self.workspaces_dir.join(workspace_id).join(task_id))
+        Ok(self.workspaces_dir.join(partition_id).join(task_id))
     }
 
     pub fn register_task_bundle(
         &self,
         task_id: &str,
-        workspace_id: &str,
+        partition_id: &str,
         canonical_path: &Path,
     ) -> Result<TaskBundleBinding, OrbitError> {
         validate_orb_task_id(task_id)?;
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         let canonical_path = normalize_path(canonical_path);
         let expected_path =
-            normalize_path(&self.canonical_task_bundle_path(&workspace_id, task_id)?);
+            normalize_path(&self.canonical_task_bundle_path(&partition_id, task_id)?);
         if canonical_path != expected_path {
             return Err(OrbitError::InvalidInput(format!(
-                "canonical path for task '{task_id}' in workspace '{workspace_id}' must be '{}', got '{}'",
+                "canonical path for task '{task_id}' in workspace '{partition_id}' must be '{}', got '{}'",
                 expected_path.display(),
                 canonical_path.display()
             )));
@@ -571,8 +583,8 @@ impl TaskRegistryStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| OrbitError::Store(e.to_string()))?;
 
-        if workspace_by_id(&tx, &workspace_id)?.is_none() {
-            return Err(OrbitError::not_found(NotFoundKind::Workspace, workspace_id));
+        if workspace_by_id(&tx, &partition_id)?.is_none() {
+            return Err(OrbitError::not_found(NotFoundKind::Workspace, partition_id));
         }
 
         let now = now_string();
@@ -584,7 +596,7 @@ impl TaskRegistryStore {
                 workspace_id = excluded.workspace_id,
                 canonical_path = excluded.canonical_path,
                 updated_at = excluded.updated_at",
-            params![task_id, workspace_id, path_to_string(&canonical_path), now],
+            params![task_id, partition_id, path_to_string(&canonical_path), now],
         )
         .map_err(|e| OrbitError::Store(e.to_string()))?;
 
@@ -598,10 +610,10 @@ impl TaskRegistryStore {
     pub fn unregister_task_bundle(
         &self,
         task_id: &str,
-        workspace_id: &str,
+        partition_id: &str,
     ) -> Result<bool, OrbitError> {
         validate_orb_task_id(task_id)?;
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         let mut conn = self
             .conn
             .lock()
@@ -613,7 +625,7 @@ impl TaskRegistryStore {
         let Some(binding) = task_bundle_by_id(&tx, task_id)? else {
             return Ok(false);
         };
-        if binding.workspace_id != workspace_id {
+        if binding.partition_id != partition_id {
             return Ok(false);
         }
 
@@ -634,7 +646,7 @@ impl TaskRegistryStore {
             .execute(
                 "DELETE FROM task_bundle_bindings
                  WHERE task_id = ?1 AND workspace_id = ?2",
-                params![task_id, workspace_id],
+                params![task_id, partition_id],
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -643,9 +655,9 @@ impl TaskRegistryStore {
 
     pub fn tasks_for_workspace(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
     ) -> Result<Vec<TaskBundleBinding>, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         let conn = self
             .conn
             .lock()
@@ -659,7 +671,7 @@ impl TaskRegistryStore {
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         let rows = stmt
-            .query_map([workspace_id], decode_task_bundle_binding)
+            .query_map([partition_id], decode_task_bundle_binding)
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| OrbitError::Store(e.to_string()))
@@ -667,10 +679,10 @@ impl TaskRegistryStore {
 
     pub fn replace_task_index(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
         envelope: &TaskEnvelopeV2,
     ) -> Result<(), OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         envelope.validate()?;
 
         let mut conn = self
@@ -683,16 +695,16 @@ impl TaskRegistryStore {
 
         let binding = task_bundle_by_id(&tx, &envelope.id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, envelope.id.clone()))?;
-        if binding.workspace_id != workspace_id {
+        if binding.partition_id != partition_id {
             return Err(OrbitError::InvalidInput(format!(
                 "task '{}' is registered to workspace '{}', not '{}'",
-                envelope.id, binding.workspace_id, workspace_id
+                envelope.id, binding.partition_id, partition_id
             )));
         }
 
         validate_relations_in_registry(
             &tx,
-            &workspace_id,
+            &partition_id,
             &envelope.id,
             &envelope.relations,
             std::slice::from_ref(&envelope.id),
@@ -710,16 +722,16 @@ impl TaskRegistryStore {
         )
         .map_err(|e| OrbitError::Store(e.to_string()))?;
 
-        write_task_index_rows(&tx, &workspace_id, envelope)?;
+        write_task_index_rows(&tx, &partition_id, envelope)?;
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
     }
 
     pub fn replace_workspace_task_indexes(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
         envelopes: &[TaskEnvelopeV2],
     ) -> Result<(), OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         for envelope in envelopes {
             envelope.validate()?;
         }
@@ -732,7 +744,7 @@ impl TaskRegistryStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| OrbitError::Store(e.to_string()))?;
 
-        let registered = task_ids_for_workspace(&tx, &workspace_id)?;
+        let registered = task_ids_for_workspace(&tx, &partition_id)?;
         let requested = envelopes
             .iter()
             .map(|envelope| envelope.id.clone())
@@ -740,7 +752,7 @@ impl TaskRegistryStore {
         if registered != requested {
             return Err(OrbitError::Store(format!(
                 "task index rebuild for workspace '{}' expected registered ids {:?}, got {:?}",
-                workspace_id, registered, requested
+                partition_id, registered, requested
             )));
         }
 
@@ -755,7 +767,7 @@ impl TaskRegistryStore {
         for envelope in envelopes {
             validate_relations_in_registry(
                 &tx,
-                &workspace_id,
+                &partition_id,
                 &envelope.id,
                 &envelope.relations,
                 &replacement_sources,
@@ -765,31 +777,31 @@ impl TaskRegistryStore {
 
         tx.execute(
             "DELETE FROM task_bundle_tags WHERE workspace_id = ?1",
-            [&workspace_id],
+            [&partition_id],
         )
         .map_err(|e| OrbitError::Store(e.to_string()))?;
         tx.execute(
             "DELETE FROM task_bundle_relations WHERE workspace_id = ?1",
-            [&workspace_id],
+            [&partition_id],
         )
         .map_err(|e| OrbitError::Store(e.to_string()))?;
         tx.execute(
             "DELETE FROM task_bundle_index WHERE workspace_id = ?1",
-            [&workspace_id],
+            [&partition_id],
         )
         .map_err(|e| OrbitError::Store(e.to_string()))?;
 
         for envelope in envelopes {
-            write_task_index_rows(&tx, &workspace_id, envelope)?;
+            write_task_index_rows(&tx, &partition_id, envelope)?;
         }
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
     }
 
     pub fn indexed_task_versions_for_workspace(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
     ) -> Result<BTreeMap<String, String>, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         let conn = self
             .conn
             .lock()
@@ -802,7 +814,7 @@ impl TaskRegistryStore {
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         let rows = stmt
-            .query_map([workspace_id], |row| {
+            .query_map([partition_id], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -812,9 +824,9 @@ impl TaskRegistryStore {
 
     pub fn indexed_task_count_for_workspace(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
     ) -> Result<usize, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         let conn = self
             .conn
             .lock()
@@ -822,7 +834,7 @@ impl TaskRegistryStore {
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM task_bundle_index WHERE workspace_id = ?1",
-                [workspace_id],
+                [partition_id],
                 |row| row.get(0),
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -862,9 +874,9 @@ impl TaskRegistryStore {
     /// was added by migration and has not been written yet (`NULL`).
     pub fn workspace_index_has_null_complexity(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
     ) -> Result<bool, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         let conn = self
             .conn
             .lock()
@@ -875,7 +887,7 @@ impl TaskRegistryStore {
                     SELECT 1 FROM task_bundle_index
                     WHERE workspace_id = ?1 AND complexity IS NULL
                  )",
-                [workspace_id],
+                [partition_id],
                 |row| row.get(0),
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -887,9 +899,9 @@ impl TaskRegistryStore {
     /// [`complexity_bucket`].
     pub fn completion_by_complexity(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
     ) -> Result<Vec<TaskCompletionByComplexity>, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         let conn = self
             .conn
             .lock()
@@ -903,7 +915,7 @@ impl TaskRegistryStore {
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         let rows = stmt
-            .query_map([&workspace_id], |row| {
+            .query_map([&partition_id], |row| {
                 Ok((
                     row.get::<_, Option<String>>(0)?,
                     row.get::<_, String>(1)?,
@@ -946,9 +958,9 @@ impl TaskRegistryStore {
     /// task reports `unset` here too.
     pub fn complexity_by_task_id(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
     ) -> Result<BTreeMap<String, String>, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         let conn = self
             .conn
             .lock()
@@ -961,7 +973,7 @@ impl TaskRegistryStore {
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         let rows = stmt
-            .query_map([workspace_id], |row| {
+            .query_map([partition_id], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
             })
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -977,11 +989,11 @@ impl TaskRegistryStore {
     /// registry without mutating allocator, bundle, or index state.
     pub fn validate_task_relations(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
         source_task_id: &str,
         relations: &[TaskRelation],
     ) -> Result<(), OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         validate_orb_task_id(source_task_id)?;
         let conn = self
             .conn
@@ -989,7 +1001,7 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
         validate_relations_in_registry(
             &conn,
-            &workspace_id,
+            &partition_id,
             source_task_id,
             relations,
             &[source_task_id.to_string()],
@@ -1002,22 +1014,22 @@ impl TaskRegistryStore {
     /// cannot consume an ID or write a partial bundle.
     pub fn validate_new_task_relation_targets(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
         relations: &[TaskRelation],
     ) -> Result<(), OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         let conn = self
             .conn
             .lock()
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        validate_relation_targets_exist(&conn, &workspace_id, None, relations)
+        validate_relation_targets_exist(&conn, &partition_id, None, relations)
     }
 
     /// Audit the coordination registry for relation edges whose target is a
     /// valid `ORB-` task id with no registered task bundle — the "grandfathered"
     /// relations that make [`validate_relation_targets_exist`] reject an index
     /// rebuild (ORB-10305). Scans indexed relation rows across the whole
-    /// registry, or a single workspace when `workspace_id` is set, so these
+    /// registry, or a single workspace when `partition_id` is set, so these
     /// targets can be surfaced (and cleaned) proactively instead of only when a
     /// rebuild trips over them.
     ///
@@ -1026,9 +1038,9 @@ impl TaskRegistryStore {
     /// edges legitimately allow to dangle are excluded.
     pub fn dangling_relation_targets(
         &self,
-        workspace_id: Option<&str>,
+        partition_id: Option<&str>,
     ) -> Result<Vec<DanglingRelationTarget>, OrbitError> {
-        let workspace_id = workspace_id.map(validate_workspace_id).transpose()?;
+        let partition_id = partition_id.map(validate_partition_id).transpose()?;
         let conn = self
             .conn
             .lock()
@@ -1041,9 +1053,9 @@ impl TaskRegistryStore {
              WHERE b.task_id IS NULL",
         );
         let mut values: Vec<String> = Vec::new();
-        if let Some(workspace_id) = &workspace_id {
+        if let Some(partition_id) = &partition_id {
             sql.push_str(" AND r.workspace_id = ?1");
-            values.push(workspace_id.clone());
+            values.push(partition_id.clone());
         }
         sql.push_str(
             " ORDER BY r.workspace_id, r.source_task_id, r.relation_type, r.target_task_id",
@@ -1066,7 +1078,7 @@ impl TaskRegistryStore {
         let mut dangling = Vec::new();
         let known_prefixes = known_task_prefixes(&conn)?;
         for row in rows {
-            let (workspace_id, source_task_id, relation_type, target_task_id) =
+            let (partition_id, source_task_id, relation_type, target_task_id) =
                 row.map_err(|e| OrbitError::Store(e.to_string()))?;
             // Non-task artifact targets and foreign-prefix task references are
             // both allowed to remain unresolved here. Only a locally known
@@ -1081,7 +1093,7 @@ impl TaskRegistryStore {
                 continue;
             }
             dangling.push(DanglingRelationTarget {
-                workspace_id,
+                partition_id,
                 source_task_id,
                 relation_type,
                 target_task_id,
@@ -1092,13 +1104,13 @@ impl TaskRegistryStore {
 
     pub fn indexed_task_ids_filtered(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
         filter: &TaskIndexFilter,
     ) -> Result<Vec<String>, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         let required_tags = normalize_task_tags(filter.tags.clone());
         let mut sql = String::from("SELECT task_id FROM task_bundle_index WHERE workspace_id = ?");
-        let mut values = vec![workspace_id.clone()];
+        let mut values = vec![partition_id.clone()];
         if let Some(status) = filter.status {
             sql.push_str(" AND status = ?");
             values.push(status.to_string());
@@ -1143,7 +1155,7 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         for tag in required_tags {
             let rows = tag_stmt
-                .query_map(params![&workspace_id, &tag], |row| row.get::<_, String>(0))
+                .query_map(params![&partition_id, &tag], |row| row.get::<_, String>(0))
                 .map_err(|e| OrbitError::Store(e.to_string()))?;
             let set = rows
                 .collect::<Result<BTreeSet<_>, _>>()
@@ -1157,11 +1169,11 @@ impl TaskRegistryStore {
 
     pub fn indexed_relation_targets(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
         source_task_id: &str,
         relation_type: TaskRelationType,
     ) -> Result<Vec<String>, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         validate_orb_task_id(source_task_id)?;
         let conn = self
             .conn
@@ -1177,7 +1189,7 @@ impl TaskRegistryStore {
         let rows = stmt
             .query_map(
                 params![
-                    workspace_id,
+                    partition_id,
                     source_task_id,
                     relation_type_name(relation_type)
                 ],
@@ -1190,11 +1202,11 @@ impl TaskRegistryStore {
 
     pub fn indexed_relation_sources(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
         target_task_id: &str,
         relation_type: TaskRelationType,
     ) -> Result<Vec<String>, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         validate_orb_task_id(target_task_id)?;
         let conn = self
             .conn
@@ -1210,7 +1222,7 @@ impl TaskRegistryStore {
         let rows = stmt
             .query_map(
                 params![
-                    workspace_id,
+                    partition_id,
                     target_task_id,
                     relation_type_name(relation_type)
                 ],
@@ -1263,14 +1275,14 @@ impl TaskRegistryStore {
         &self.workspaces_dir
     }
 
-    /// Every logical workspace id the registry binds.
+    /// Every task-store partition id the registry binds.
     ///
     /// This is the id space the on-disk partitions under
     /// `<global>/tasks/workspaces/` are named after, so a caller deciding
     /// whether a partition directory is still claimed asks here rather than
     /// inferring an owner from the workspace catalog, whose `ws_*` ids are a
     /// different namespace [ORB-12119].
-    pub fn workspace_ids(&self) -> Result<BTreeSet<String>, OrbitError> {
+    pub fn partition_ids(&self) -> Result<BTreeSet<String>, OrbitError> {
         let conn = self
             .conn
             .lock()
@@ -1294,8 +1306,8 @@ impl TaskRegistryStore {
     /// dependent rows are deleted explicitly rather than left to
     /// `ON DELETE CASCADE`, which a connection without `foreign_keys=ON` would
     /// silently skip.
-    pub fn unbind_workspace(&self, workspace_id: &str) -> Result<bool, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+    pub fn unbind_workspace(&self, partition_id: &str) -> Result<bool, OrbitError> {
+        let partition_id = validate_partition_id(partition_id)?;
         let mut conn = self
             .conn
             .lock()
@@ -1318,13 +1330,13 @@ impl TaskRegistryStore {
             "DELETE FROM task_bundle_bindings WHERE workspace_id = ?1",
             "DELETE FROM workspace_checkout_bindings WHERE workspace_id = ?1",
         ] {
-            tx.execute(statement, [&workspace_id])
+            tx.execute(statement, [&partition_id])
                 .map_err(|e| OrbitError::Store(e.to_string()))?;
         }
         let deleted = tx
             .execute(
                 "DELETE FROM workspace_bindings WHERE workspace_id = ?1",
-                [&workspace_id],
+                [&partition_id],
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
 
@@ -1337,28 +1349,28 @@ impl TaskRegistryStore {
     /// SQLite connection directly.
     pub fn find_workspace_binding(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
     ) -> Result<Option<WorkspaceBinding>, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         let conn = self
             .conn
             .lock()
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        workspace_by_id(&conn, &workspace_id)
+        workspace_by_id(&conn, &partition_id)
     }
 
     /// Look up the machine-local checkout for a logical workspace, if this
     /// machine has one.
     pub fn find_workspace_checkout(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
     ) -> Result<Option<WorkspaceCheckoutBinding>, OrbitError> {
-        let workspace_id = validate_workspace_id(workspace_id)?;
+        let partition_id = validate_partition_id(partition_id)?;
         let conn = self
             .conn
             .lock()
             .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
-        workspace_checkout_by_id(&conn, &workspace_id)
+        workspace_checkout_by_id(&conn, &partition_id)
     }
 
     /// Look up the checkout bound to an orbit dir, if one is bound.
@@ -1381,11 +1393,11 @@ impl TaskRegistryStore {
     /// Resolve a checkout before a task operation touches checkout-local files.
     pub fn require_workspace_checkout(
         &self,
-        workspace_id: &str,
+        partition_id: &str,
     ) -> Result<WorkspaceCheckoutBinding, OrbitError> {
-        self.find_workspace_checkout(workspace_id)?.ok_or_else(|| {
+        self.find_workspace_checkout(partition_id)?.ok_or_else(|| {
             OrbitError::InvalidInput(format!(
-                "workspace '{workspace_id}' has no local checkout binding; link or initialize a checkout before running this file operation"
+                "workspace '{partition_id}' has no local checkout binding; link or initialize a checkout before running this file operation"
             ))
         })
     }

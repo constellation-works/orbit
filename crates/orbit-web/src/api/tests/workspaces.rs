@@ -65,7 +65,7 @@ pub(super) fn workspace_entry(
 ) -> WsEntry {
     let binding = active.then(|| WorkspaceRuntimeBinding {
         logical_workspace_id: format!("ws_{id}"),
-        workspace_id: format!("ws_{id}"),
+        task_partition_id: format!("ws_{id}"),
         owner_machine_id: None,
         repo_root: repo_root.clone(),
         ship_mode: ShipMode::Local,
@@ -1014,7 +1014,7 @@ async fn refresh_rebinds_workspace_to_new_checkout() {
         before
             .workspace_runtime_binding()
             .expect("dashboard runtime binding")
-            .workspace_id,
+            .task_partition_id,
         "ws_alpha"
     );
 
@@ -1037,7 +1037,7 @@ async fn refresh_rebinds_workspace_to_new_checkout() {
         after
             .workspace_runtime_binding()
             .expect("dashboard runtime binding")
-            .workspace_id,
+            .task_partition_id,
         "ws_alpha_v2",
         "logical registry id may differ from the runtime's configured id"
     );

@@ -23,7 +23,7 @@ fn bind(global_root: &Path, workspace_id: &str, slug: &str, repo_root: &Path) {
         TaskRegistryStore::open(&task_registry_path(global_root)).expect("open task registry");
     tasks
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some(workspace_id.to_string()),
+            partition_id: Some(workspace_id.to_string()),
             slug: slug.to_string(),
             repo_root: repo_root.to_path_buf(),
             workspace_path: repo_root.to_path_buf(),
@@ -38,7 +38,7 @@ fn register_logical_workspace(global_root: &Path, workspace_id: &str, slug: &str
         TaskRegistryStore::open(&task_registry_path(global_root)).expect("open task registry");
     tasks
         .register_workspace(RegisterWorkspaceParams {
-            workspace_id: workspace_id.to_string(),
+            partition_id: workspace_id.to_string(),
             slug: slug.to_string(),
             repo_fingerprint: None,
         })
@@ -278,7 +278,12 @@ fn write_catalog_workspace(global_root: &Path, workspace_id: &str, name: &str) {
     workspace_registry::save_registry_to(&registry, &registry_path).expect("save catalog");
 }
 
-fn write_catalog_shared_root_checkout(global_root: &Path, workspace_id: &str, repo_root: &Path) {
+fn write_catalog_checkout(
+    global_root: &Path,
+    workspace_id: &str,
+    repo_root: &Path,
+    orbit_dir: &Path,
+) {
     let registry_path = workspace_registry::registry_path_for(global_root);
     let mut registry =
         workspace_registry::load_registry_from(&registry_path).expect("load catalog");
@@ -287,11 +292,17 @@ fn write_catalog_shared_root_checkout(global_root: &Path, workspace_id: &str, re
         WorkspaceCheckout::owner(
             workspace_id.to_string(),
             repo_root.to_path_buf(),
-            global_root.to_path_buf(),
+            orbit_dir.to_path_buf(),
         ),
     )
-    .expect("register shared-root catalog checkout");
+    .expect("register catalog checkout");
     workspace_registry::save_registry_to(&registry, &registry_path).expect("save catalog");
+}
+
+/// A checkout whose orbit dir is the shared external root the catalog records
+/// for every workspace on it.
+fn write_catalog_shared_root_checkout(global_root: &Path, workspace_id: &str, repo_root: &Path) {
+    write_catalog_checkout(global_root, workspace_id, repo_root, global_root);
 }
 
 fn drop_catalog_workspace(global_root: &Path, workspace_id: &str) {
@@ -389,7 +400,7 @@ fn bind_at(global_root: &Path, workspace_id: &str, slug: &str, repo_root: &Path,
         TaskRegistryStore::open(&task_registry_path(global_root)).expect("open task registry");
     tasks
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some(workspace_id.to_string()),
+            partition_id: Some(workspace_id.to_string()),
             slug: slug.to_string(),
             repo_root: repo_root.to_path_buf(),
             workspace_path: repo_root.to_path_buf(),
@@ -397,6 +408,61 @@ fn bind_at(global_root: &Path, workspace_id: &str, slug: &str, repo_root: &Path,
             repo_fingerprint: None,
         })
         .expect("bind task-registry workspace");
+}
+
+/// [ORB-12109] The task-store partition id and the workspace-registry id are
+/// two namespaces. A checkout the catalog knows as `ws_repo` keeps its task
+/// state in the legacy `repo-a1b2c3` partition the task registry minted for
+/// it, and no partition is ever named for the catalog id. Resolving ownership
+/// through the catalog therefore reports a live partition as orphaned — the
+/// defect that made the repair capable of deleting a whole host's tasks.
+#[test]
+fn a_live_checkout_keeps_its_legacy_partition_despite_a_ws_catalog_id() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let repo_root = temp.path().join("repo");
+    let orbit_dir = repo_root.join(".orbit");
+    fs::create_dir_all(&global_root).expect("create global root");
+    fs::create_dir_all(&orbit_dir).expect("create checkout");
+
+    bind(&global_root, "repo-a1b2c3", "repo", &repo_root);
+    write_task_bundle(&global_root, "repo-a1b2c3", "ORB-1");
+    write_catalog_workspace(&global_root, "ws_repo", "repo");
+    write_catalog_checkout(&global_root, "ws_repo", &repo_root, &orbit_dir);
+
+    assert_eq!(
+        bound_partition_id(&global_root, &orbit_dir).expect("resolve bound partition"),
+        Some("repo-a1b2c3".to_string()),
+        "the checkout's task state lives under the minted partition id, not its catalog id"
+    );
+    assert!(
+        !task_store_partition_path(&global_root, "ws_repo").exists(),
+        "no partition is named for the catalog id"
+    );
+
+    let partitions = inspect_task_store_partitions(&global_root)
+        .expect("inspect partitions")
+        .expect("partitions directory exists");
+    assert_eq!(partitions.scanned, 1);
+    assert!(
+        partitions.unowned.is_empty(),
+        "a partition claimed by the task registry must not be read as unowned \
+         because the workspace catalog spells its workspace id differently: {partitions:?}"
+    );
+    assert!(partitions.removable.is_empty(), "{partitions:?}");
+    assert!(partitions.stale.is_empty(), "{partitions:?}");
+    assert!(partitions.unreachable.is_empty(), "{partitions:?}");
+
+    let removed = remove_unclaimed_task_stores(&global_root).expect("run the repair");
+    assert!(removed.is_empty(), "the repair removed {removed:?}");
+    assert!(
+        task_workspaces_dir(&global_root)
+            .join("repo-a1b2c3")
+            .join("ORB-1")
+            .is_dir(),
+        "the live checkout's task bundle must survive the repair"
+    );
+    assert!(partition_is_bound(&global_root, "repo-a1b2c3").expect("read bindings"));
 }
 
 /// Residue with no task bundles carries nothing `orbit task reindex` could
