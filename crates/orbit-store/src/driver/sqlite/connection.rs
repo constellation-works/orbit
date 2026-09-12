@@ -118,6 +118,38 @@ impl Store {
         })
     }
 
+    /// Rebind this handle and all of its writer clones to the current files at
+    /// `path`, then discard idle readers that may retain retired WAL identity.
+    ///
+    /// The runtime uses this at the external-provider return boundary. Those
+    /// children can legitimately open the granted database and its sidecars;
+    /// after they exit, completion accounting must use the authoritative path
+    /// rather than a connection retained from before the child ran.
+    pub fn refresh_file_connections(&self, path: &Path) -> Result<(), OrbitError> {
+        let readers = self.readers.as_ref().ok_or_else(|| {
+            OrbitError::Store(
+                "connection refresh requires a writable file-backed store".to_string(),
+            )
+        })?;
+        let fresh = Self::open(path)?;
+        fresh.check_writable()?;
+
+        {
+            let mut current = self
+                .conn
+                .lock()
+                .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+            let mut replacement = fresh
+                .conn
+                .lock()
+                .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+            std::mem::swap(&mut *current, &mut *replacement);
+        }
+
+        readers.clear_idle()?;
+        Ok(())
+    }
+
     /// Open an existing database for an observational probe, without creating
     /// the database, applying migrations, or changing database pragmas. Use a fresh
     /// connection so a cached runtime handle cannot hide a replaced path.
@@ -184,7 +216,10 @@ impl Store {
     /// deadlock, exactly as the old direct `conn.lock()` did.
     pub(crate) fn read(&self) -> Result<ReadGuard<'_>, OrbitError> {
         match &self.readers {
-            Some(pool) => Ok(ReadGuard::pooled(pool.checkout()?, pool)),
+            Some(pool) => {
+                let (generation, connection) = pool.checkout()?;
+                Ok(ReadGuard::pooled(generation, connection, pool))
+            }
             None => {
                 let guard = self
                     .conn

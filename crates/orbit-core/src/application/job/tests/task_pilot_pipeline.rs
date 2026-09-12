@@ -1,13 +1,17 @@
 //! Shipped task-pilot job boundary regressions [ORB-11411].
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
+use chrono::Utc;
 use orbit_engine::{DispatchError, JobOutcome, ResolvedCliExecutor, RuntimeHost};
+use orbit_store::V2AuditEventFilter;
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
+use orbit_types::workflow::{ExecutorDef, ExecutorType, JobRunState, JobRunTrigger};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -368,4 +372,234 @@ spec:
             Some(orbit_types::task::TaskComplexity::Medium)
         );
     }
+}
+
+#[cfg(unix)]
+fn task_pilot_provider_stdout(task_id: &str) -> String {
+    let response = json!({
+        "schemaVersion": 1,
+        "status": "success",
+        "result": {
+            "partition_index": 0,
+            "task_ids": [task_id],
+            "tasks": [{
+                "task_id": task_id,
+                "context_files_before": [],
+                "context_files_after": ["file:src/remote.rs"],
+                "disposition": "selectors",
+                "recommended_crew": "system",
+                "recommended_complexity": "medium",
+                "assessment_rationale": "The real CLI fixture identified one existing source file.",
+                "confidence": "high",
+                "evidence_gaps": [],
+                "validation_approach": "Assert the worker terminal audit trail.",
+                "reassessment_triggers": ["the source revision changes"],
+                "blocked_by": [],
+                "duplicate_of": null,
+                "already_landed": null,
+                "release_action_required": null,
+                "adr_conflicts": [],
+                "utility_warnings": [],
+                "surface_warnings": [],
+            }],
+            "summary": "real CLI fixture",
+        },
+        "error": null,
+    });
+    [
+        json!({"type": "thread.started", "thread_id": "task-pilot-fixture"}).to_string(),
+        json!({
+            "type": "item.completed",
+            "item": {
+                "id": "answer",
+                "type": "agent_message",
+                "text": response.to_string(),
+            },
+        })
+        .to_string(),
+        json!({
+            "type": "turn.completed",
+            "usage": {"input_tokens": 17, "cached_input_tokens": 0, "output_tokens": 5},
+        })
+        .to_string(),
+    ]
+    .join("\n")
+        + "\n"
+}
+
+#[cfg(unix)]
+fn install_store_replacing_provider(fixture: &TaskPilotJobFixture, stdout: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fake_provider = fixture.repo_root.join("claude");
+    fs::write(fake_provider.with_extension("stdout"), stdout).expect("write provider stdout");
+    let database = fixture.global_root.join("orbit.db");
+    fs::write(
+        &fake_provider,
+        format!(
+            "#!/bin/sh\n\
+             cat >/dev/null\n\
+             database='{}'\n\
+             cp \"$database\" \"$database.rebound\"\n\
+             cp \"$database-wal\" \"$database.rebound-wal\"\n\
+             cp \"$database-shm\" \"$database.rebound-shm\"\n\
+             mv \"$database\" \"$database.retired\"\n\
+             mv \"$database-wal\" \"$database.retired-wal\"\n\
+             mv \"$database-shm\" \"$database.retired-shm\"\n\
+             mv \"$database.rebound\" \"$database\"\n\
+             mv \"$database.rebound-wal\" \"$database-wal\"\n\
+             mv \"$database.rebound-shm\" \"$database-shm\"\n\
+             cat \"$0.stdout\"\n",
+            database.display(),
+        ),
+    )
+    .expect("write provider executable");
+    let mut permissions = fs::metadata(&fake_provider)
+        .expect("provider metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_provider, permissions).expect("make provider executable");
+
+    let now = Utc::now();
+    fixture
+        .runtime
+        .upsert_executor_def(&ExecutorDef {
+            name: "claude".to_string(),
+            executor_type: ExecutorType::DirectAgent,
+            command: Some(fake_provider.display().to_string()),
+            args: Vec::new(),
+            stdout_format: None,
+            model_pair_override: None,
+            model_flag: None,
+            timeout_seconds: None,
+            env: HashMap::new(),
+            sandbox: None,
+            allow_fallback: false,
+            created_at: Some(now),
+            updated_at: Some(now),
+        })
+        .expect("seed real CLI provider");
+}
+
+#[cfg(unix)]
+#[test]
+fn real_cli_task_pilot_worker_persists_apply_and_terminal_completion_audit() {
+    let fixture = task_pilot_job_fixture("agent-main", "agent-main");
+    let task = fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Real CLI task-pilot completion fixture".to_string(),
+            description: "Exercise provider completion through the detached worker path."
+                .to_string(),
+            acceptance_criteria: vec!["pilot result is applied durably".to_string()],
+            priority: TaskPriority::High,
+            task_type: Some(TaskType::Bug),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("seed task-pilot target");
+    let stdout = task_pilot_provider_stdout(&task.id);
+    install_store_replacing_provider(&fixture, &stdout);
+
+    let input = json!({"task_ids": [task.id], "base_branch": "agent-main"});
+    let run = fixture
+        .runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            "task_pilot_pipeline",
+            1,
+            Utc::now(),
+            Some(input.clone()),
+            None,
+        )
+        .expect("insert task-pilot run");
+    fixture
+        .runtime
+        .seed_v2_pipeline_run(&run, &input, None, JobRunTrigger::cli())
+        .expect("seed task-pilot run state");
+    fixture
+        .runtime
+        .execute_pipeline_run_worker(&run.run_id)
+        .expect("real CLI task-pilot worker succeeds");
+
+    // Reopen from the authoritative paths instead of trusting the worker's
+    // cached handles. Without the provider-return rebind, the old connection
+    // can report a self-consistent success that no post-exit observer sees.
+    let reopened =
+        OrbitRuntime::from_roots(&fixture.global_root, &fixture.repo_root.join(".orbit"))
+            .expect("reopen authoritative runtime");
+    let stored = reopened.show_job_run(&run.run_id).expect("show run");
+    assert_eq!(stored.state, JobRunState::Success);
+    assert!(!stored.steps.is_empty(), "terminal steps must be durable");
+    let state = reopened
+        .read_run_state(&run.run_id)
+        .expect("read completed pipeline state")
+        .expect("completed pipeline state exists");
+    let applied = reopened.get_task(&task.id).expect("read applied task");
+    assert_eq!(
+        applied.context_files,
+        vec!["file:src/remote.rs"],
+        "pipeline: {}",
+        state.pipeline
+    );
+    assert!(
+        reopened
+            .get_task_history(&task.id)
+            .expect("read task history")
+            .iter()
+            .any(|entry| entry.event == "task_pilot_applied"),
+        "successful provider output must cross the real apply boundary"
+    );
+
+    let mut events = reopened
+        .list_v2_audit_events(V2AuditEventFilter {
+            workspace_id: String::new(),
+            run_id: Some(run.run_id.clone()),
+            ..Default::default()
+        })
+        .expect("read terminal audit trail");
+    events.sort_by_key(|event| event.ts);
+    let event_types = events
+        .iter()
+        .map(|event| event.event_type.as_str())
+        .collect::<Vec<_>>();
+    let provider_finished = event_types
+        .iter()
+        .position(|event| *event == "cli.invocation.finished")
+        .expect("provider-finished audit");
+    let activity_finished = event_types[provider_finished + 1..]
+        .iter()
+        .position(|event| *event == "activity.finished")
+        .map(|offset| provider_finished + 1 + offset)
+        .expect("activity-finished audit after provider exit");
+    let step_finished = event_types[activity_finished + 1..]
+        .iter()
+        .position(|event| *event == "step.finished")
+        .map(|offset| activity_finished + 1 + offset)
+        .expect("step-finished audit after activity completion");
+    assert!(
+        event_types[step_finished + 1..].contains(&"run.finished"),
+        "run-finished audit must follow the provider/activity/step completion chain"
+    );
+
+    let finished: Value = serde_json::from_str(&events[provider_finished].payload_json)
+        .expect("parse provider-finished audit");
+    assert_eq!(finished["exit_code"], 0);
+    assert_eq!(finished["timed_out"], false);
+    let stdout_ref = finished["stdout_blob_ref"]
+        .as_str()
+        .expect("stdout blob reference");
+    let stderr_ref = finished["stderr_blob_ref"]
+        .as_str()
+        .expect("stderr blob reference");
+    let blobs = fixture.runtime.paths().audit_dir.join("blobs");
+    assert_eq!(
+        fs::read(blobs.join(&stdout_ref[..2]).join(stdout_ref)).expect("read stdout blob"),
+        stdout.as_bytes()
+    );
+    assert_eq!(
+        fs::read(blobs.join(&stderr_ref[..2]).join(stderr_ref)).expect("read stderr blob"),
+        b""
+    );
 }
