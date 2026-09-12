@@ -10,7 +10,7 @@ Options:
       --for <WINDOW>
           Admission window from now, e.g. `30m`, `2h` (at most 24h)
       --workspace <SELECTOR>
-          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory
+          Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
       --right <RIGHTS>
           Right to grant: prepare, promote, or complete; repeat or comma-separate
       --preset <PRESET>

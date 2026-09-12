@@ -28,7 +28,7 @@ fn checkout(workspace_id: &str, root: &Path, name: &str) -> WorkspaceCheckout {
     WorkspaceCheckout::owner(workspace_id.to_string(), repo, orbit_dir)
 }
 
-/// A two-workspace registry plus one entry the registry marked invalid.
+/// A two-workspace registry plus one entry whose missing checkout is invalid.
 fn seeded_catalog() -> (tempfile::TempDir, RegistryWorkspaceCatalog) {
     let root = tempfile::tempdir().expect("root");
     let global = root.path().join("global");
@@ -37,10 +37,12 @@ fn seeded_catalog() -> (tempfile::TempDir, RegistryWorkspaceCatalog) {
     let alpha = workspace("ws_alpha", "alpha", WorkspaceStatus::Active);
     let beta = workspace("ws_beta", "beta", WorkspaceStatus::Active);
     let invalid = workspace("ws_invalid", "invalid-ws", WorkspaceStatus::Invalid);
+    let invalid_repo = root.path().join("invalid-ws");
+    let invalid_orbit_dir = invalid_repo.join(".orbit");
     let checkouts = vec![
         checkout(&alpha.id, root.path(), "alpha"),
         checkout(&beta.id, root.path(), "beta"),
-        checkout(&invalid.id, root.path(), "invalid-ws"),
+        WorkspaceCheckout::owner(invalid.id.clone(), invalid_repo, invalid_orbit_dir),
     ];
     save_registry_to(
         &WorkspaceRegistry {

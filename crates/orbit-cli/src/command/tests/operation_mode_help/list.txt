@@ -6,5 +6,5 @@ Options:
       --limit <LIMIT>         Maximum number of grants to return (default 20)
       --root <ROOT>           Override the Orbit root directory (highest precedence)
       --json                  Output as JSON
-      --workspace <SELECTOR>  Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory
+      --workspace <SELECTOR>  Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
   -h, --help                  Print help
