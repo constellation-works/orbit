@@ -319,7 +319,7 @@ fn recovery_cannot_skip_debt_or_advance_coverage() {
     covered.pending_commits.clear();
 
     let mut waived = adopted(&previous);
-    waived.waived = waived.pending.drain(..).collect();
+    waived.waived = std::mem::take(&mut waived.pending);
 
     let mut discarded = adopted(&previous);
     discarded.active = None;
