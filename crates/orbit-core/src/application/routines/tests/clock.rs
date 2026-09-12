@@ -818,6 +818,30 @@ fn missing_systemd_unit_is_disabled_but_manager_transport_failure_is_unavailable
 }
 
 #[test]
+fn systemd_bus_missing_socket_is_unavailable_not_disabled() {
+    let root = tempdir().expect("create global root");
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        vec![Err(OrbitError::Execution(
+            "show failed: Failed to connect to bus: No such file or directory".to_string(),
+        ))],
+        vec![Ok(manager_output(
+            false,
+            "",
+            "Failed to connect to bus: No such file or directory",
+        ))],
+    );
+
+    let error = clock_status_with(root.path(), ClockPlatform::Systemd, &runner)
+        .expect_err("a missing user bus socket must fail status, not report a paused clock");
+    let message = error.to_string();
+
+    assert!(message.contains("systemd clock manager is unavailable"));
+    assert!(message.contains("Failed to connect to bus: No such file or directory"));
+    assert!(!message.contains("paused"));
+}
+
+#[test]
 fn enabled_systemd_with_unavailable_details_remains_enabled_but_unverifiable() {
     let root = tempdir().expect("create global root");
     let runner = MockRunner::with_outputs(
@@ -1078,6 +1102,47 @@ fn unavailable_launchd_state_refuses_pause_before_mutation() {
 }
 
 #[test]
+fn systemd_bus_missing_socket_refuses_pause() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    let settings_before = fs::read_to_string(root.path().join("clock.toml")).ok();
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![Ok(manager_output(
+            false,
+            "",
+            "Failed to connect to bus: No such file or directory",
+        ))],
+    );
+
+    let error = set_clock_enabled_with(
+        root.path(),
+        false,
+        ClockPlatform::Systemd,
+        &runner,
+        home.path(),
+    )
+    .expect_err("an unreachable user bus must refuse pause instead of claiming it succeeded");
+
+    assert!(
+        error
+            .to_string()
+            .contains("systemd clock manager is unavailable")
+    );
+    assert_eq!(
+        runner.commands(),
+        vec!["systemctl --user is-enabled orbit-sweep.timer"],
+        "no manager mutation is issued when the timer state is unobservable"
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("clock.toml")).ok(),
+        settings_before,
+        "clock settings are untouched by a refused pause"
+    );
+}
+
+#[test]
 fn recognized_inactive_manager_states_keep_pause_idempotent() {
     let root = tempdir().expect("create global root");
     let home = tempdir().expect("create home");
@@ -1085,6 +1150,7 @@ fn recognized_inactive_manager_states_keep_pause_idempotent() {
     for diagnostic in [
         "disabled",
         "Failed to get unit file state: No such file or directory",
+        "Unit orbit-sweep.timer could not be found.",
     ] {
         let runner = MockRunner::with_probes(
             Vec::new(),
