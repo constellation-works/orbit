@@ -42,8 +42,6 @@ fn task_context_selector_round_trips_from_repository_root() {
             title: "Read back a subdirectory selector".to_string(),
             description: "Keep the selector rooted at the repository.".to_string(),
             context_files: vec!["file:docs/readme.md".to_string()],
-            // Retained for internal parameter compatibility; it must not
-            // change the canonical root used by task selectors.
             ..Default::default()
         })
         .expect("create task with repository-relative context selector");
