@@ -58,51 +58,6 @@ fn mk_ctx(host: RecordingHost) -> ToolContext {
     }
 }
 
-fn capture_warnings<F, T>(f: F) -> (T, String)
-where
-    F: FnOnce() -> T,
-{
-    use std::io::{self, Write};
-    use tracing_subscriber::filter::LevelFilter;
-    use tracing_subscriber::fmt::MakeWriter;
-
-    #[derive(Clone)]
-    struct CaptureMakeWriter(Arc<Mutex<Vec<u8>>>);
-    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
-
-    impl<'a> MakeWriter<'a> for CaptureMakeWriter {
-        type Writer = CaptureWriter;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            CaptureWriter(Arc::clone(&self.0))
-        }
-    }
-
-    impl Write for CaptureWriter {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.lock().expect("capture lock").extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    let buffer = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::fmt()
-        .with_writer(CaptureMakeWriter(Arc::clone(&buffer)))
-        .with_max_level(LevelFilter::WARN)
-        .with_target(true)
-        .with_ansi(false)
-        .without_time()
-        .finish();
-    let result = tracing::subscriber::with_default(subscriber, f);
-    let logs =
-        String::from_utf8(buffer.lock().expect("capture buffer lock").clone()).expect("utf8 logs");
-    (result, logs)
-}
-
 fn capture_info<F, T>(f: F) -> (T, String)
 where
     F: FnOnce() -> T,
@@ -233,16 +188,47 @@ fn schema_exposes_only_trimmed_create_task_fields() {
 }
 
 #[test]
-fn add_call_with_retired_fields_reports_and_ignores_them() {
+fn add_call_rejects_retired_fields() {
+    for field in RETIRED_TASK_ADD_INPUT_FIELDS {
+        let host = RecordingHost::default();
+        let ctx = mk_ctx(host.clone());
+        let mut input = json!({
+            "title": "Retired field must fail",
+            "description": "orbit.task.add no longer strips extras",
+            "workspace": "/tmp/test-ws",
+            "complexity": "low",
+            "model": "grok",
+        });
+        input
+            .as_object_mut()
+            .expect("object")
+            .insert((*field).to_string(), json!("ignored"));
+
+        let error = OrbitTaskAddTool
+            .execute(&ctx, input)
+            .expect_err("retired add fields must be refused");
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!("unknown field '{field}'")),
+            "{field}: {message}"
+        );
+        assert!(message.contains("orbit.task.update"), "{field}: {message}");
+        assert!(
+            host.call.lock().expect("lock").is_none(),
+            "host must not run when {field} is present"
+        );
+    }
+}
+
+#[test]
+fn add_call_forwards_supported_fields() {
     let host = RecordingHost::default();
     let ctx = mk_ctx(host.clone());
-    let tool = OrbitTaskAddTool;
-
     let input = json!({
-        "title": "Trimmed add fields test",
-        "description": "Compatibility coverage for ORB-00255",
+        "title": "Supported add fields",
+        "description": "Canonical create payload",
         "workspace": "/tmp/test-ws",
-        "acceptance_criteria": ["MCP schema is trimmed", "retired fields are ignored"],
+        "acceptance_criteria": ["MCP schema is trimmed"],
         "tags": ["mcp", "schema"],
         "context_files": ["file:crates/orbit-tools/src/builtin/orbit/task/add.rs"],
         "priority": "medium",
@@ -250,32 +236,14 @@ fn add_call_with_retired_fields_reports_and_ignores_them() {
         "type": "chore",
         "relations": [{"type": "related_to", "target": "ORB-00002"}],
         "model": "grok",
-        "plan": "ignored plan",
-        "status": "done",
         "crew": "release-crew",
-        "parent_id": "ORB-00003",
-        "source_task_id": "ORB-00004",
-        "external_refs": [{"system": "ENG", "id": "123"}],
-        "context": "file:legacy-alias.rs",
-        "comment": "ignored comment",
-        "dependencies": ["ORB-00001"]
     });
 
-    let (res, logs) = capture_warnings(|| tool.execute(&ctx, input).expect("execute succeeds"));
+    let res = OrbitTaskAddTool
+        .execute(&ctx, input)
+        .expect("supported add fields succeed");
     assert_eq!(res["id"], "ORB-TEST");
-    assert_eq!(res["ignored_fields"], json!(RETIRED_TASK_ADD_INPUT_FIELDS));
-    assert_eq!(
-        logs.matches("ignored retired orbit.task.add fields")
-            .count(),
-        1,
-        "compatibility warning must fire once per execute call: {logs}"
-    );
-    for removed in RETIRED_TASK_ADD_INPUT_FIELDS {
-        assert!(
-            logs.contains(*removed),
-            "compatibility warning must name retired field {removed}: {logs}"
-        );
-    }
+    assert!(res.get("ignored_fields").is_none());
 
     let recorded = host
         .call
@@ -284,42 +252,10 @@ fn add_call_with_retired_fields_reports_and_ignores_them() {
         .take()
         .expect("host was called");
     assert_eq!(recorded.action, OrbitBuiltinAction::TaskAdd);
-    assert_eq!(recorded.agent.as_deref(), None);
     assert_eq!(recorded.model.as_deref(), Some("grok"));
-
-    let rec_input = recorded.input;
-    for removed in RETIRED_TASK_ADD_INPUT_FIELDS {
-        assert!(
-            rec_input.get(*removed).is_none(),
-            "retired field {removed} must be stripped before host execution"
-        );
-    }
-    for kept in [
-        "title",
-        "description",
-        "workspace",
-        "acceptance_criteria",
-        "tags",
-        "context_files",
-        "priority",
-        "complexity",
-        "type",
-        "relations",
-        "crew",
-        "model",
-    ] {
-        assert!(
-            rec_input.get(kept).is_some(),
-            "kept field {kept} must survive host execution"
-        );
-    }
-    assert_eq!(rec_input["complexity"], "medium");
+    assert_eq!(recorded.input["crew"], "release-crew");
     assert_eq!(
-        rec_input["crew"], "release-crew",
-        "crew must survive host execution and reach the create path"
-    );
-    assert_eq!(
-        rec_input["context_files"][0],
+        recorded.input["context_files"][0],
         "file:crates/orbit-tools/src/builtin/orbit/task/add.rs"
     );
 }

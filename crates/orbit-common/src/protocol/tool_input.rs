@@ -13,18 +13,149 @@ pub const RETIRED_TASK_ADD_INPUT_FIELDS: &[&str] = &[
     "dependencies",
 ];
 
-pub fn strip_retired_task_add_input_fields(input: &mut Value) -> Vec<&'static str> {
-    let Some(object) = input.as_object_mut() else {
-        return Vec::new();
+/// Top-level keys that are transport/session wrappers, not tool arguments.
+///
+/// MCP `_meta` and the workspace routing selector may appear beside the
+/// advertised parameters. They stay allowed even when the tool's JSON Schema
+/// sets `additionalProperties: false` on the argument object.
+pub const TOOL_INPUT_TRANSPORT_WRAPPER_KEYS: &[&str] = &["_meta", "workspace"];
+
+/// Refuse unknown top-level tool-argument keys with a did-you-mean hint.
+///
+/// Transport wrappers in [`TOOL_INPUT_TRANSPORT_WRAPPER_KEYS`] are ignored.
+/// The first unknown key is reported; a close match against `allowed` is
+/// included in the message and on [`OrbitError::did_you_mean`].
+pub fn reject_unknown_tool_fields(input: &Value, allowed: &[&str]) -> Result<(), OrbitError> {
+    let Some(object) = input.as_object() else {
+        return Ok(());
     };
 
-    let mut ignored = Vec::new();
+    let unknown = object
+        .keys()
+        .filter(|key| {
+            let key = key.as_str();
+            !TOOL_INPUT_TRANSPORT_WRAPPER_KEYS.contains(&key) && !allowed.contains(&key)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+
+    let first = &unknown[0];
+    let suggestion = suggest_tool_field(first, allowed);
+    let message = unknown_tool_field_message(&unknown, suggestion);
+    Err(OrbitError::invalid_input_with_suggestions(
+        message,
+        suggestion
+            .map(|name| vec![name.to_string()])
+            .unwrap_or_default(),
+    ))
+}
+
+/// Refuse retired `orbit.task.add` fields that used to be stripped silently.
+///
+/// These names are not misspellings of add parameters; they belong on
+/// `orbit.task.update` (or a later follow-up). The error names the field and
+/// the tool that accepts it.
+pub fn reject_retired_task_add_input_fields(input: &Value) -> Result<(), OrbitError> {
+    let Some(object) = input.as_object() else {
+        return Ok(());
+    };
+
     for field in RETIRED_TASK_ADD_INPUT_FIELDS {
-        if object.remove(*field).is_some() {
-            ignored.push(*field);
+        if object.contains_key(*field) {
+            return Err(OrbitError::InvalidInput(format!(
+                "unknown field '{field}' (orbit.task.add does not accept '{field}'; \
+                 set it with orbit.task.update)"
+            )));
         }
     }
-    ignored
+    Ok(())
+}
+
+fn unknown_tool_field_message(unknown: &[String], suggestion: Option<&str>) -> String {
+    let hint = suggestion
+        .map(|name| format!(" (did you mean '{name}'?)"))
+        .unwrap_or_default();
+    if unknown.len() == 1 {
+        format!("unknown field '{}'{}", unknown[0], hint)
+    } else {
+        format!("unknown fields '{}'{}", unknown.join("', '"), hint)
+    }
+}
+
+fn suggest_tool_field<'a>(unknown: &str, allowed: &[&'a str]) -> Option<&'a str> {
+    let normalized = normalize_tool_field_name(unknown);
+    if let Some(name) = allowed.iter().find(|name| **name == normalized) {
+        return Some(*name);
+    }
+    if let Some(canonical) = synonym_tool_field(unknown).or_else(|| synonym_tool_field(&normalized))
+        && allowed.contains(&canonical)
+    {
+        return Some(canonical);
+    }
+
+    let mut best: Option<(&'a str, usize)> = None;
+    for name in allowed {
+        let distance = levenshtein(unknown, name).min(levenshtein(&normalized, name));
+        if best.is_none_or(|(_, best_distance)| distance < best_distance) {
+            best = Some((*name, distance));
+        }
+    }
+    best.and_then(|(name, distance)| {
+        let threshold = unknown.len().max(name.len()).div_ceil(3).max(1);
+        (distance <= threshold).then_some(name)
+    })
+}
+
+fn synonym_tool_field(unknown: &str) -> Option<&'static str> {
+    match unknown {
+        "note" | "notes" | "message" | "msg" => Some("comment"),
+        "deps" | "depends_on" | "depends-on" => Some("dependencies"),
+        "acceptancecriteria" => Some("acceptance_criteria"),
+        "contextfiles" => Some("context_files"),
+        "requiredtools" => Some("required_tools"),
+        _ => None,
+    }
+}
+
+fn normalize_tool_field_name(raw: &str) -> String {
+    let mut normalized = String::with_capacity(raw.len() + 4);
+    for (index, ch) in raw.chars().enumerate() {
+        if ch == '-' {
+            if !normalized.ends_with('_') {
+                normalized.push('_');
+            }
+            continue;
+        }
+        if ch.is_ascii_uppercase() {
+            if index > 0 && !normalized.ends_with('_') {
+                normalized.push('_');
+            }
+            normalized.push(ch.to_ascii_lowercase());
+            continue;
+        }
+        normalized.push(ch);
+    }
+    normalized
+}
+
+fn levenshtein(left: &str, right: &str) -> usize {
+    let right_chars = right.chars().collect::<Vec<_>>();
+    let mut previous = (0..=right_chars.len()).collect::<Vec<_>>();
+    let mut current = vec![0; right_chars.len() + 1];
+    for (i, left_ch) in left.chars().enumerate() {
+        current[0] = i + 1;
+        for (j, right_ch) in right_chars.iter().enumerate() {
+            let cost = usize::from(left_ch != *right_ch);
+            current[j + 1] = (previous[j + 1] + 1)
+                .min(current[j] + 1)
+                .min(previous[j] + cost);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right_chars.len()]
 }
 
 pub fn required_string(

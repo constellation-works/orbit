@@ -3,4 +3,5 @@
 mod add;
 mod artifact_put;
 mod list;
+mod strict_input;
 mod update;

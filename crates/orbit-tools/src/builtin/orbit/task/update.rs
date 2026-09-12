@@ -190,6 +190,7 @@ impl Tool for OrbitTaskUpdateTool {
                     .to_string(),
             ));
         }
+        super::super::reject_unknown_tool_arguments(&input, &self.schema())?;
         super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskUpdate)
     }
 }

@@ -164,9 +164,9 @@ pub(super) struct CreateTaskBody {
     /// Retired create input, declared so it stays *knowingly* tolerated rather
     /// than falling into [`CreateTaskBody::unsupported`]. `comment` is one of
     /// [`RETIRED_TASK_ADD_INPUT_FIELDS`](orbit_common::protocol::tool_input::RETIRED_TASK_ADD_INPUT_FIELDS):
-    /// the native `orbit.task.add` tool strips it with a warning instead of
-    /// failing, and this endpoint keeps that contract. Comment on a task with
-    /// `POST /tasks/:id/comments`.
+    /// the native `orbit.task.add` tool now rejects it with `invalid_input`.
+    /// This HTTP body still accepts the key so existing dashboard clients are
+    /// not broken; comment on a task with `POST /tasks/:id/comments`.
     #[serde(default)]
     comment: Option<String>,
     /// Trap field (ORB-10648): attribution was consolidated to `model`-only, so
