@@ -14,7 +14,7 @@ use orbit_common::governance::authorization::{
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::application::routines::{
     ClockStatus, RoutineStatus, RoutineStatusReport, RoutineToggleOutcome, ScheduleDisplayState,
-    clock_status, set_clock_cadence, set_clock_enabled, set_routine_enabled,
+    set_clock_cadence, set_clock_enabled, set_routine_enabled,
 };
 use orbit_core::{AuditEventInsertParams, OrbitRuntime, RoutineFireRecord, RoutineFireState};
 use orbit_types::telemetry::AuditEventStatus;
@@ -66,7 +66,7 @@ pub(super) async fn list_routine_health(State(state): State<DashboardState>) -> 
         Ok(report) => report,
         Err(error) => return map_runtime_error(error),
     };
-    let clock = match clock_status(state.global_root()) {
+    let clock = match state.clock_status() {
         Ok(clock) => clock,
         Err(error) => return map_runtime_error(error),
     };
@@ -226,7 +226,7 @@ pub(super) async fn control_clock(
         }
     };
     let started = Instant::now();
-    let before = match clock_status(state.global_root()) {
+    let before = match state.clock_status() {
         Ok(status) => status,
         Err(error) => return map_runtime_error(error),
     };
@@ -283,7 +283,7 @@ pub(super) async fn control_clock(
         );
         return map_runtime_error(error);
     }
-    let after = match clock_status(state.global_root()) {
+    let after = match state.clock_status() {
         Ok(status) => status,
         Err(error) => return map_runtime_error(error),
     };

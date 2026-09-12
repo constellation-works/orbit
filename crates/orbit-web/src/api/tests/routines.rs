@@ -1,12 +1,13 @@
 //! Tests for the routine-health JSON API [ORB-10138].
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV;
 use orbit_core::application::routines::{ClockStatus, ScheduleDisplayState};
-use orbit_core::{OrbitRuntime, RoutineFireRecord, RoutineFireState};
+use orbit_core::{OrbitError, OrbitRuntime, RoutineFireRecord, RoutineFireState};
 use orbit_registry::{NewHostIdentity, ensure_host_identity};
 use tower::ServiceExt;
 
@@ -14,6 +15,25 @@ use super::super::router;
 use super::super::routines::{clock_json, duration_ms, fire_json, fire_ok, next_evaluation_json};
 use super::test_support::body_json;
 use crate::state::DashboardState;
+
+fn clock_status(enabled: bool) -> ClockStatus {
+    ClockStatus {
+        configured_cadence_seconds: 300,
+        effective_cadence_seconds: enabled.then_some(300),
+        enabled,
+        loaded: true,
+        running: Some(enabled),
+        schedulable: enabled,
+        health_issue: None,
+        last_tick_at: None,
+        next_tick_at: enabled.then(|| "2026-09-12T13:00:00+00:00".to_string()),
+        platform: "systemd",
+    }
+}
+
+fn with_clock_status(state: DashboardState, status: ClockStatus) -> DashboardState {
+    state.with_clock_status_observer(Arc::new(move |_| Ok(status.clone())))
+}
 
 fn fire(state: RoutineFireState, created_at: &str, updated_at: &str) -> RoutineFireRecord {
     RoutineFireRecord {
@@ -152,7 +172,13 @@ async fn routines_endpoint_returns_envelope_for_empty_host() {
         })
     })
     .expect("seed host identity");
-    let state = DashboardState::global(temp.path().to_path_buf(), Vec::new(), None);
+    let observations = Arc::new(AtomicUsize::new(0));
+    let observed = observations.clone();
+    let state = DashboardState::global(temp.path().to_path_buf(), Vec::new(), None)
+        .with_clock_status_observer(Arc::new(move |_| {
+            observed.fetch_add(1, Ordering::Relaxed);
+            Ok(clock_status(true))
+        }));
 
     let response = router()
         .with_state(state)
@@ -173,8 +199,64 @@ async fn routines_endpoint_returns_envelope_for_empty_host() {
     assert!(json["clock"]["provider"].is_string());
     assert!(json["clock"]["configured_cadence_seconds"].is_number());
     assert!(json["clock"]["enabled"].is_boolean());
+    assert_eq!(json["clock"]["enabled"], true);
     assert_eq!(json["routines"], serde_json::json!([]));
     assert_eq!(json["load_errors"], serde_json::json!([]));
+    assert_eq!(observations.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn routines_endpoint_preserves_disabled_clock_observation() {
+    let temp = tempfile::tempdir().expect("temp global root");
+    ensure_host_identity(temp.path(), || {
+        Ok(NewHostIdentity {
+            host_id: "dashboard-test".to_string(),
+            task_prefix: "DA".to_string(),
+        })
+    })
+    .expect("seed host identity");
+    let state = with_clock_status(
+        DashboardState::global(temp.path().to_path_buf(), Vec::new(), None),
+        clock_status(false),
+    );
+
+    let response = routine_request(state, "/routines", None).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["clock"]["enabled"], false);
+    assert_eq!(json["clock"]["health"], "paused");
+    assert_eq!(
+        json["clock"]["effective_cadence_seconds"],
+        serde_json::Value::Null
+    );
+}
+
+#[tokio::test]
+async fn routines_endpoint_preserves_unavailable_clock_manager_error() {
+    let temp = tempfile::tempdir().expect("temp global root");
+    ensure_host_identity(temp.path(), || {
+        Ok(NewHostIdentity {
+            host_id: "dashboard-test".to_string(),
+            task_prefix: "DA".to_string(),
+        })
+    })
+    .expect("seed host identity");
+    let state = DashboardState::global(temp.path().to_path_buf(), Vec::new(), None)
+        .with_clock_status_observer(Arc::new(|_| {
+            Err(OrbitError::Execution(
+                "systemd clock manager is unavailable; fixture transport failure".to_string(),
+            ))
+        }));
+
+    let response = routine_request(state, "/routines", None).await;
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["error"],
+        "execution failed: systemd clock manager is unavailable; fixture transport failure"
+    );
 }
 
 /// Pin the process signals `CallerCapabilities::resolve` reads, for the whole
@@ -368,10 +450,13 @@ async fn authorized_routine_toggle_reads_back_and_rejects_stale_or_wrong_selecti
         &workspace_registry::registry_path_for(&global),
     )
     .expect("registry");
-    let state = DashboardState::global(
-        global,
-        vec![workspace_entry("alpha", repo, orbit_dir, true)],
-        Some("alpha".to_string()),
+    let state = with_clock_status(
+        DashboardState::global(
+            global,
+            vec![workspace_entry("alpha", repo, orbit_dir, true)],
+            Some("alpha".to_string()),
+        ),
+        clock_status(true),
     );
 
     with_caller_env([(OPERATOR_OVERRIDE_ENV, Some("1"))], async {
