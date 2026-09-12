@@ -41,7 +41,9 @@ Three security-sensitive settings deliberately do not inherit from global whenev
 
 If the workspace file omits one of these, Orbit uses that setting's built-in default. This keeps repository agent sandboxing, approval, and environment passthrough deterministic instead of depending on a user's global policy. `execution.env.inherit` is not a configurable key: an agent subprocess environment is always composed from an allowlist — see [`[execution.env]` — the agent subprocess environment](#executionenv--the-agent-subprocess-environment).
 
-Run `orbit config show` for the effective merged view. Every setting is annotated as `workspace`, `global`, `built-in`, or `environment`, including the source file path where one applies. `orbit config show --json` exposes the same attribution in its `provenance` object. Use `--scope global` or `--scope workspace` to inspect either physical file alone.
+Run `orbit config show` for the effective merged view. Every setting is annotated as `workspace`, `global`, `built-in`, or `environment`, including the source file path where one applies. `orbit config show --json` exposes the same attribution in its `provenance` object.
+
+Use `--scope global` or `--scope workspace` to resolve either physical file in isolation, without values from the other file. Both `config show --scope <scope>` and `config get --scope <scope> <key>` include built-in defaults for keys omitted from the selected file, so they report the same value for a given key. In scoped `config get --json`, the top-level `exists` field instead reports whether that key is explicitly present in the selected file; it can be `false` while `value` contains a default. In scoped `config show --json`, `source.exists` reports whether the selected file itself exists. Settings are still resolved when the file is absent.
 
 The workspace identity file `.orbit/config.yaml` is a separate artifact (it stores `workspace_id` for the canonical task store binding) and is unrelated to runtime config.
 
