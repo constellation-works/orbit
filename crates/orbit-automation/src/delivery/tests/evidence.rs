@@ -10,7 +10,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -59,6 +59,8 @@ pub(super) struct Host {
     fail_admit: AtomicBool,
     pub(super) failed: AtomicBool,
     admission_deferred: AtomicBool,
+    fail_head: AtomicBool,
+    head_calls: AtomicUsize,
 }
 
 impl Host {
@@ -79,6 +81,8 @@ impl Host {
             fail_admit: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             admission_deferred: AtomicBool::new(false),
+            fail_head: AtomicBool::new(false),
+            head_calls: AtomicUsize::new(0),
         }
     }
 
@@ -131,6 +135,10 @@ impl DeliveryHost for Host {
     }
 
     fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
+        self.head_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_head.load(Ordering::SeqCst) {
+            return Err(AutomationError::Deferred("evidence_unavailable".into()));
+        }
         Ok(("owner/repo".into(), revision(0)))
     }
 
@@ -205,6 +213,113 @@ pub(super) fn setup() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger
         "baselined"
     );
     (store, host, trigger)
+}
+
+#[test]
+fn disabled_preview_without_state_matches_real_pass_and_does_not_probe_git() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = Host::new();
+    host.fail_head.store(true, Ordering::SeqCst);
+    let trigger = trigger();
+
+    let preview = delivery::evaluate(
+        store.as_ref(),
+        &host,
+        Evaluation {
+            consumer: "ws/qa",
+            epoch: "v1",
+            trigger: &trigger,
+            enabled: false,
+            dry_run: true,
+            now: now(),
+        },
+    )
+    .unwrap();
+    assert_eq!(preview.reason, "disabled");
+    assert!(preview.state.is_none());
+    assert_eq!(host.head_calls.load(Ordering::SeqCst), 0);
+    assert!(store.automation_state("ws/qa").unwrap().is_none());
+
+    let real = delivery::evaluate(
+        store.as_ref(),
+        &host,
+        Evaluation {
+            consumer: "ws/qa",
+            epoch: "v1",
+            trigger: &trigger,
+            enabled: false,
+            dry_run: false,
+            now: now(),
+        },
+    )
+    .unwrap();
+    assert_eq!(real.reason, "disabled");
+    assert!(real.state.is_none());
+    assert_eq!(host.head_calls.load(Ordering::SeqCst), 0);
+    assert!(store.automation_state("ws/qa").unwrap().is_none());
+
+    host.fail_head.store(false, Ordering::SeqCst);
+    let preview_with_head = delivery::evaluate(
+        store.as_ref(),
+        &host,
+        Evaluation {
+            consumer: "ws/qa",
+            epoch: "v1",
+            trigger: &trigger,
+            enabled: false,
+            dry_run: true,
+            now: now(),
+        },
+    )
+    .unwrap();
+    assert_eq!(preview_with_head.reason, "disabled");
+    assert_eq!(host.head_calls.load(Ordering::SeqCst), 0);
+    assert!(store.automation_state("ws/qa").unwrap().is_none());
+}
+
+#[test]
+fn enabled_preview_without_state_still_requires_branch_head() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = Host::new();
+    let trigger = trigger();
+
+    let would_baseline = delivery::evaluate(
+        store.as_ref(),
+        &host,
+        Evaluation {
+            consumer: "ws/qa",
+            epoch: "v1",
+            trigger: &trigger,
+            enabled: true,
+            dry_run: true,
+            now: now(),
+        },
+    )
+    .unwrap();
+    assert_eq!(would_baseline.reason, "would_baseline");
+    assert_eq!(host.head_calls.load(Ordering::SeqCst), 1);
+    assert!(store.automation_state("ws/qa").unwrap().is_none());
+
+    host.fail_head.store(true, Ordering::SeqCst);
+    let error = delivery::evaluate(
+        store.as_ref(),
+        &host,
+        Evaluation {
+            consumer: "ws/qa",
+            epoch: "v1",
+            trigger: &trigger,
+            enabled: true,
+            dry_run: true,
+            now: now(),
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        AutomationError::Deferred(reason) if reason == "evidence_unavailable"
+    ));
+    assert_eq!(host.head_calls.load(Ordering::SeqCst), 2);
+    assert!(store.automation_state("ws/qa").unwrap().is_none());
 }
 
 #[test]
