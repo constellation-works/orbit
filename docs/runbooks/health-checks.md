@@ -4,8 +4,8 @@ summary: Check Orbit workspace, database, dashboard, log-sink, job-run, and rout
 tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-cmd/src/doctor.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
-related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109]
-last_validated: 2026-09-11
+related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223]
+last_validated: 2026-09-12
 ---
 
 # Check Orbit Health
@@ -145,20 +145,29 @@ readable becomes a confirmed-stale binding, which the repair can then remove.
 
 For a partition whose binding is confirmed stale, the missing `repo_root` is the evidence that the
 checkout is gone. The confirmed repair removes that partition, including its task bundles, and
-retires the stale registry rows — as it does for every empty unclaimed partition. If the deleted
-checkout is still listed in the workspace catalog, first deregister it with its name, `ws_*` id, or
-recorded absolute checkout path:
+retires the stale registry rows — as it does for every empty unclaimed partition.
+
+**Recovery ordering for a deleted checkout.** Doctor can already classify the partition as stale
+while the workspace is still in the catalog (the catalog checkout's `repo_root` is the evidence).
+You may then either run the repair immediately, or first deregister the dead workspace:
 
 ```sh
 ORBIT_OPERATOR=1 orbit workspace remove <workspace-name-or-id-or-absolute-checkout-path>
 ```
 
-That command changes only the catalog; it does not delete `.orbit` or task bundles. The subsequent
-doctor repair removes the now-confirmed stale task-store partition:
+`workspace remove` changes only the catalog; it does not delete `.orbit` or task bundles. It
+**retains** the task-registry workspace binding and copies the catalog checkout into that
+registry so the leftover partition stays stale rather than flipping back to a claimed imported
+archive. A populated leftover is reported with its path, bundle count, and the reclaim command
+below. After removal, `orbit doctor` still warns on that partition; it must not report `ok`.
 
 ```sh
 orbit doctor --fix-orphan-task-stores --confirm
 ```
+
+Either order works: repair while the catalog still lists the checkout, or `workspace remove`
+then the same repair. Skipping the repair after `workspace remove` leaves the bundles on disk
+and unreachable through workspace selectors.
 
 Do not use that repair for an unknown or unreachable populated partition; reindex or restore it
 first. One residual limitation: a volume unmounted from a mountpoint that is itself still present

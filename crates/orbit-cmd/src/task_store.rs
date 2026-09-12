@@ -13,7 +13,9 @@
 //! explicit id. `orbit workspace init` may instead bind the catalog's `ws_*`
 //! id directly. The task registry and the workspace catalog therefore both
 //! contribute claims, using checkout evidence to distinguish live, stale, and
-//! unreachable state [ORB-12119].
+//! unreachable state [ORB-12119]. `workspace remove` drops catalog rows only;
+//! it retains the task-registry binding and copies catalog checkout evidence
+//! so a leftover partition stays classifiable [ORB-12223].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -22,7 +24,9 @@ use orbit_common::OrbitError;
 use orbit_core::runtime::UNBOUND_DATA_DIR_WORKSPACE_ID;
 use orbit_registry::workspace_registry;
 pub use orbit_store::maintenance::task_registry::task_workspaces_dir;
-use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_store::maintenance::task_registry::{
+    BindWorkspaceParams, TaskRegistryStore, task_registry_path,
+};
 use orbit_types::task::is_valid_orb_task_id;
 use orbit_types::workspace::WorkspaceCheckout;
 
@@ -254,6 +258,73 @@ pub fn partition_is_bound(global_root: &Path, workspace_id: &str) -> Result<bool
     Ok(open_task_registry(global_root)?
         .workspace_ids()?
         .contains(workspace_id))
+}
+
+/// Copy a catalog checkout into the task registry before `workspace remove`
+/// drops the catalog rows, and describe any leftover partition directory.
+///
+/// Catalog removal is not teardown: task bundles stay on disk. The
+/// task-registry workspace binding is retained so `partition_claims` can
+/// still classify that leftover. Dropping the binding would make a populated
+/// partition `unowned`, which the confirmed repair refuses to delete
+/// [ORB-12131]. A path-free binding — the shared-root `workspace init` shape —
+/// is otherwise treated as an imported-archive claim once the catalog
+/// checkout that proved the directory gone is removed [ORB-12223].
+///
+/// When the catalog `orbit_dir` is already bound to another workspace (the
+/// shared external root), evidence is stored under the per-checkout
+/// `repo_root` instead of stealing that binding. `checkout_evidence` reads
+/// `repo_root`.
+pub fn retain_task_store_on_catalog_remove(
+    global_root: &Path,
+    workspace_id: &str,
+    slug: &str,
+    catalog_checkout: Option<&WorkspaceCheckout>,
+) -> Result<Option<UnclaimedPartition>, OrbitError> {
+    let leftover = leftover_task_partition(global_root, workspace_id);
+    if leftover.is_some()
+        && let Some(checkout) = catalog_checkout
+    {
+        ensure_checkout_evidence(global_root, workspace_id, slug, checkout)?;
+    }
+    Ok(leftover)
+}
+
+fn leftover_task_partition(global_root: &Path, workspace_id: &str) -> Option<UnclaimedPartition> {
+    let path = task_store_partition_path(global_root, workspace_id);
+    if !path.is_dir() {
+        return None;
+    }
+    Some(UnclaimedPartition {
+        task_bundles: count_task_bundles(&path),
+        path,
+    })
+}
+
+fn ensure_checkout_evidence(
+    global_root: &Path,
+    workspace_id: &str,
+    slug: &str,
+    checkout: &WorkspaceCheckout,
+) -> Result<(), OrbitError> {
+    let tasks = open_task_registry(global_root)?;
+    if tasks.find_workspace_checkout(workspace_id)?.is_some() {
+        return Ok(());
+    }
+
+    let orbit_dir = match tasks.find_checkout_by_orbit_dir(&checkout.orbit_dir)? {
+        Some(existing) if existing.workspace_id != workspace_id => checkout.repo_root.clone(),
+        _ => checkout.orbit_dir.clone(),
+    };
+    tasks.bind_workspace(BindWorkspaceParams {
+        workspace_id: Some(workspace_id.to_string()),
+        slug: slug.to_string(),
+        repo_root: checkout.repo_root.clone(),
+        workspace_path: checkout.repo_root.clone(),
+        orbit_dir,
+        repo_fingerprint: None,
+    })?;
+    Ok(())
 }
 
 /// Who claims each partition on this host, and why the rest do not.

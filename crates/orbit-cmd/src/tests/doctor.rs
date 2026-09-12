@@ -22,7 +22,7 @@ use crate::doctor::{
     DoctorCommands, OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus,
     collect_lock_files, disk_space_check, process_is_alive,
 };
-use crate::task_store::partition_is_bound;
+use crate::task_store::{partition_is_bound, retain_task_store_on_catalog_remove};
 
 fn status_of<'a>(results: &'a [WorkspaceDoctorResult], name: &str) -> &'a WorkspaceDoctorResult {
     results
@@ -1206,6 +1206,160 @@ fn deleted_shared_root_catalog_checkout_partition_is_reported_and_removed() {
             .exists()
     );
     assert!(!partition_is_bound(&global_root, "ws_shared_deleted").expect("read binding"));
+}
+
+/// [ORB-12223] Shared external-root layout: deleted checkout → doctor warns →
+/// catalog `workspace remove` → doctor still reports the partition stale →
+/// the confirmed repair reclaims it. A path-free task-registry binding plus a
+/// survivor occupying the shared `orbit_dir` is the production shape.
+#[test]
+fn catalog_remove_keeps_a_deleted_shared_root_partition_stale_and_reclaimable() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    let survivor_root = temp.path().join("survivor");
+    let deleted_root = temp.path().join("deleted");
+    fs::create_dir_all(&survivor_root).expect("create survivor checkout");
+    fs::create_dir_all(&deleted_root).expect("create deleted checkout");
+
+    write_registered_workspace(&global_root, "ws_survivor", "survivor");
+    write_registered_shared_root_checkout(&global_root, "ws_survivor", &survivor_root);
+    bind_task_partition_at(
+        &global_root,
+        "ws_survivor",
+        "survivor",
+        &survivor_root,
+        &global_root,
+    );
+    write_task_bundle(&global_root, "ws_survivor", "ORB-1");
+
+    write_registered_workspace(&global_root, "ws_shared_deleted", "shared-deleted");
+    write_registered_shared_root_checkout(&global_root, "ws_shared_deleted", &deleted_root);
+    register_task_workspace(&global_root, "ws_shared_deleted", "shared-deleted");
+    write_task_bundle(&global_root, "ws_shared_deleted", "ORB-5");
+    fs::remove_dir_all(&deleted_root).expect("delete checkout");
+
+    let results = runtime.doctor_workspace().expect("doctor before remove");
+    let row = status_of(&results, "orphan-task-stores");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    assert!(row.message.contains("ws_shared_deleted"), "{}", row.message);
+    assert!(
+        row.message.contains("missing checkout directories"),
+        "{}",
+        row.message
+    );
+
+    let registry_path = workspace_registry::registry_path_for(&global_root);
+    let mut registry =
+        workspace_registry::load_registry_from(&registry_path).expect("load catalog");
+    let checkout = registry
+        .checkouts
+        .iter()
+        .find(|checkout| checkout.workspace_id == "ws_shared_deleted")
+        .cloned()
+        .expect("catalog checkout");
+    let leftover = retain_task_store_on_catalog_remove(
+        &global_root,
+        "ws_shared_deleted",
+        "shared-deleted",
+        Some(&checkout),
+    )
+    .expect("retain leftover");
+    assert_eq!(leftover.expect("leftover partition").task_bundles, 1);
+    workspace_registry::remove_workspace(&mut registry, "ws_shared_deleted")
+        .expect("drop catalog workspace");
+    workspace_registry::save_registry_to(&registry, &registry_path).expect("save catalog");
+
+    let results = runtime.doctor_workspace().expect("doctor after remove");
+    let row = status_of(&results, "orphan-task-stores");
+    assert_eq!(
+        row.status,
+        WorkspaceDoctorStatus::Warning,
+        "catalog removal must not re-hide the partition as claimed: {row:?}"
+    );
+    assert!(row.message.contains("ws_shared_deleted"), "{}", row.message);
+    assert!(
+        row.message.contains("missing checkout directories"),
+        "{}",
+        row.message
+    );
+
+    let removed = runtime
+        .remove_orphan_task_stores()
+        .expect("remove stale shared-root partition after catalog drop");
+    assert_eq!(removed.populated_partitions, 1, "{removed:?}");
+    assert_eq!(removed.task_bundles, 1, "{removed:?}");
+    assert!(
+        !task_workspaces_dir(&global_root)
+            .join("ws_shared_deleted")
+            .exists()
+    );
+    assert!(
+        task_workspaces_dir(&global_root)
+            .join("ws_survivor")
+            .join("ORB-1")
+            .is_dir(),
+        "the live shared-root checkout's bundles must survive"
+    );
+    assert!(!partition_is_bound(&global_root, "ws_shared_deleted").expect("read binding"));
+    assert!(partition_is_bound(&global_root, "ws_survivor").expect("read survivor binding"));
+}
+
+/// [ORB-12223] Repo-local layout: dropping the catalog entry after a deleted
+/// checkout must not hide the already-bound stale partition.
+#[test]
+fn catalog_remove_keeps_a_deleted_repo_local_partition_stale_and_reclaimable() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    let deleted_root = temp.path().join("deleted");
+    fs::create_dir_all(deleted_root.join(".orbit")).expect("create deleted checkout");
+
+    write_registered_workspace(&global_root, "ws_deleted", "deleted");
+    write_registered_checkout(&global_root, "ws_deleted", &deleted_root);
+    bind_task_partition(&global_root, "ws_deleted", "deleted", &deleted_root);
+    write_task_bundle(&global_root, "ws_deleted", "ORB-3");
+    fs::remove_dir_all(&deleted_root).expect("delete checkout");
+
+    let results = runtime.doctor_workspace().expect("doctor before remove");
+    let row = status_of(&results, "orphan-task-stores");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+
+    let registry_path = workspace_registry::registry_path_for(&global_root);
+    let mut registry =
+        workspace_registry::load_registry_from(&registry_path).expect("load catalog");
+    let checkout = registry
+        .checkouts
+        .iter()
+        .find(|checkout| checkout.workspace_id == "ws_deleted")
+        .cloned()
+        .expect("catalog checkout");
+    retain_task_store_on_catalog_remove(&global_root, "ws_deleted", "deleted", Some(&checkout))
+        .expect("retain leftover");
+    workspace_registry::remove_workspace(&mut registry, "ws_deleted").expect("drop catalog");
+    workspace_registry::save_registry_to(&registry, &registry_path).expect("save catalog");
+
+    let results = runtime.doctor_workspace().expect("doctor after remove");
+    let row = status_of(&results, "orphan-task-stores");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    assert!(row.message.contains("ws_deleted"), "{}", row.message);
+    assert!(
+        row.message.contains("missing checkout directories"),
+        "{}",
+        row.message
+    );
+
+    let removed = runtime
+        .remove_orphan_task_stores()
+        .expect("remove stale repo-local partition after catalog drop");
+    assert_eq!(removed.populated_partitions, 1, "{removed:?}");
+    assert_eq!(removed.task_bundles, 1, "{removed:?}");
+    assert!(
+        !task_workspaces_dir(&global_root)
+            .join("ws_deleted")
+            .exists()
+    );
+    assert!(!partition_is_bound(&global_root, "ws_deleted").expect("read binding"));
 }
 
 /// A catalog checkout that cannot be stat-ed is not evidence of deletion. Its
