@@ -26,6 +26,8 @@ use super::{
     web::WebSubcommand,
 };
 
+const UPDATE_HELP_GOLDENS_ENV: &str = "ORBIT_UPDATE_HELP_GOLDENS";
+
 fn assert_cli_rejects(args: &[&str], kind: ErrorKind, expected: &str) {
     let error = match Cli::try_parse_from(args.iter().copied()) {
         Ok(_) => panic!("form should be rejected"),
@@ -66,6 +68,38 @@ fn assert_help_tree_has_no_concrete_artifact_ids(command: &Command) {
     for subcommand in command.get_subcommands() {
         assert_help_tree_has_no_concrete_artifact_ids(subcommand);
     }
+}
+
+/// Render `--help` for an argv prefix, exactly as the binary prints it.
+fn help_for(args: &[&str]) -> String {
+    let mut argv = args.to_vec();
+    argv.push("--help");
+    match Cli::try_parse_from(argv) {
+        Ok(_) => panic!("--help exits before parsing"),
+        Err(error) => error.to_string(),
+    }
+}
+
+/// Compare rendered help against a checked-in golden, or overwrite it when
+/// `ORBIT_UPDATE_HELP_GOLDENS=1`.
+fn assert_help_matches_golden(args: &[&str], relative: &str, expected: &str) {
+    let actual = help_for(args);
+    if std::env::var(UPDATE_HELP_GOLDENS_ENV).as_deref() == Ok("1") {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/command/tests")
+            .join(relative);
+        std::fs::write(&path, &actual)
+            .unwrap_or_else(|err| panic!("write help golden {}: {err}", path.display()));
+        return;
+    }
+    assert_eq!(
+        actual,
+        expected,
+        "`{} --help` drifted from {relative}. If the new help is intentional, regenerate with \
+         `{UPDATE_HELP_GOLDENS_ENV}=1 cargo test -p orbit-cli --bin orbit help_matches_the_shipped_surface` \
+         or `make goldens UPDATE=1`, then review the diff.",
+        args.join(" ")
+    );
 }
 
 #[test]

@@ -1,4 +1,4 @@
-.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-lint stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test
+.PHONY: help build release run check test fmt fmt-check clippy clean install uninstall dev watch audit tree ci ci-fast ci-lint goldens stability release-check docs-index cleanup-branches build-budget-test build-budget-bench compiler-cache-status compiler-cache-setup compiler-cache-bench cross-revision-check-test
 
 # ------------------------------------------------------------
 # Config
@@ -31,6 +31,11 @@ else
 	INSTALL_TARGET_DIR := target/debug
 endif
 
+GOLDENS_FLAGS :=
+ifeq ($(UPDATE),1)
+	GOLDENS_FLAGS := --update
+endif
+
 # ------------------------------------------------------------
 # Help
 # ------------------------------------------------------------
@@ -51,6 +56,7 @@ help:
 	@echo "  make ci           Full CI pass (clippy + tests + doc + guardrails; also runs on PRs)"
 	@echo "  make ci-fast      Pre-handoff gate for agents (fast guardrail mode; skips full workspace compile/test/doc steps)"
 	@echo "  make ci-lint      Pre-handoff clippy gate for agents (compiles all workspace targets)"
+	@echo "  make goldens      Pre-handoff golden gate (orbit-cli help/description snapshots; UPDATE=1 regenerates)"
 	@echo "  make docs-index   Regenerate docs/INDEX.md"
 	@echo "  make stability    Verify per-crate stability tier markers"
 	@echo "  make release-check  Verify Cargo/npm/release version lockstep (see docs/runbooks/release.md)"
@@ -154,6 +160,11 @@ ci-fast:
 # the default workspace clippy pass in scripts/ci-guardrails.sh.
 ci-lint:
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings
+
+# Focused pre-review golden gate: CLI long-help text, output_goldens, and the
+# MCP tools/list snapshot. Compiles orbit-cli tests only. UPDATE=1 regenerates.
+goldens:
+	$(BUILD_BUDGET) -- ./scripts/check-goldens.sh $(GOLDENS_FLAGS)
 
 # Verify every workspace crate declares its stability tier
 stability:

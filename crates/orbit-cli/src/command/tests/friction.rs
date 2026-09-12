@@ -1,10 +1,10 @@
 //! The friction CLI is derived from the operation registry [ORB-10358]; these
 //! tests are the proof it stayed argv- and output-compatible.
 //!
-//! `friction_help/*.txt` were captured from the binary built at the commit
-//! before the migration. They are the shipped `--help` contract: if a change
-//! here makes them fail, the CLI surface moved and that is a consumer-visible
-//! break, not a test to re-bless.
+//! `friction_help/*.txt` freeze the shipped `--help` contract. Drift is a
+//! consumer-visible CLI surface change. If the new help is intentional,
+//! regenerate with `ORBIT_UPDATE_HELP_GOLDENS=1` (or `make goldens UPDATE=1`)
+//! and review the diff.
 
 use clap::Parser;
 use orbit_common::governance::friction::FrictionVerb;
@@ -20,60 +20,53 @@ fn invocation(args: &[&str]) -> super::super::friction::FrictionInvocation {
     }
 }
 
-/// Render `--help` for an argv prefix, exactly as the binary prints it.
-fn help_for(args: &[&str]) -> String {
-    let mut argv = args.to_vec();
-    argv.push("--help");
-    match Cli::try_parse_from(argv) {
-        Ok(_) => panic!("--help exits before parsing"),
-        Err(error) => error.to_string(),
-    }
-}
-
 #[test]
 fn friction_help_matches_the_shipped_surface() {
-    let cases: &[(&[&str], &str)] = &[
+    let cases: &[(&[&str], &str, &str)] = &[
         (
             &["orbit", "friction"],
+            "friction_help/root.txt",
             include_str!("friction_help/root.txt"),
         ),
         (
             &["orbit", "friction", "add"],
+            "friction_help/add.txt",
             include_str!("friction_help/add.txt"),
         ),
         (
             &["orbit", "friction", "list"],
+            "friction_help/list.txt",
             include_str!("friction_help/list.txt"),
         ),
         (
             &["orbit", "friction", "show"],
+            "friction_help/show.txt",
             include_str!("friction_help/show.txt"),
         ),
         (
             &["orbit", "friction", "stats"],
+            "friction_help/stats.txt",
             include_str!("friction_help/stats.txt"),
         ),
         (
             &["orbit", "friction", "tags"],
+            "friction_help/tags.txt",
             include_str!("friction_help/tags.txt"),
         ),
         (
             &["orbit", "friction", "update"],
+            "friction_help/update.txt",
             include_str!("friction_help/update.txt"),
         ),
         (
             &["orbit", "friction", "resolve"],
+            "friction_help/resolve.txt",
             include_str!("friction_help/resolve.txt"),
         ),
     ];
 
-    for (args, expected) in cases {
-        assert_eq!(
-            help_for(args),
-            *expected,
-            "`{} --help` drifted from the shipped surface",
-            args.join(" ")
-        );
+    for (args, relative, expected) in cases {
+        super::assert_help_matches_golden(args, relative, expected);
     }
 }
 

@@ -27,7 +27,9 @@ Project instructions for agents working on Orbit (loaded as both `AGENTS.md` and
 
 ## Build / Lint
 
-`make ci-fast` (fmt-check + guardrail scripts; no compile) and `make ci-lint` (the same workspace-wide, all-target clippy pass as CI, with warnings denied) must both pass before a task moves to `review`. Each task therefore pays for one workspace clippy compile; cold runs can take several minutes, while warm runs reuse Cargo's incremental cache. The full `make ci` is the canonical merge gate via [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every PR — don't run it per task locally.
+`make ci-fast` (fmt-check + guardrail scripts; no compile), `make ci-lint` (the same workspace-wide, all-target clippy pass as CI, with warnings denied), and `make goldens` (orbit-cli help/description snapshot tests; compiles `orbit-cli` only) must all pass before a task moves to `review`. Each task therefore pays for one workspace clippy compile plus a focused `orbit-cli` golden compile; cold runs can take several minutes, while warm runs reuse Cargo's incremental cache. `make ci-fast` does not compile. The full `make ci` is the canonical merge gate via [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every PR — don't run it per task locally.
+
+`make goldens` covers the checked-in CLI long-help text files under `crates/orbit-cli/src/command/tests/`, `crates/orbit-cli/tests/output_goldens/` (including `tool_list.json`), and `crates/orbit-cli/tests/snapshots/mcp_tools_list.json`. A Clap `///` help edit or MCP parameter-description change that leaves those files stale fails this gate locally. To regenerate after an intentional surface change, run `make goldens UPDATE=1`, which sets `ORBIT_UPDATE_HELP_GOLDENS=1`, `ORBIT_UPDATE_OUTPUT_GOLDENS=1`, and `ORBIT_MCP_UPDATE_SNAPSHOT=1` — the same variables the failing tests print. Review the diff before handing off.
 
 ## Mutable Fixture Operations
 
