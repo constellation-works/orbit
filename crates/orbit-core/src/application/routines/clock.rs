@@ -267,6 +267,24 @@ impl ManagerCommand {
 pub(super) trait ClockCommandRunner {
     fn run(&self, command: &ManagerCommand) -> Result<bool, OrbitError>;
     fn stdout(&self, command: &ManagerCommand) -> Result<Option<String>, OrbitError>;
+
+    fn probe(&self, command: &ManagerCommand) -> Result<ManagerCommandOutput, OrbitError> {
+        let success = self.run(command)?;
+        Ok(ManagerCommandOutput {
+            success,
+            exit_code: Some(if success { 0 } else { 1 }),
+            stdout: String::new(),
+            stderr: String::new(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ManagerCommandOutput {
+    pub(super) success: bool,
+    pub(super) exit_code: Option<i32>,
+    pub(super) stdout: String,
+    pub(super) stderr: String,
 }
 
 struct NativeClockCommandRunner;
@@ -281,14 +299,23 @@ impl ClockCommandRunner for NativeClockCommandRunner {
     }
 
     fn stdout(&self, command: &ManagerCommand) -> Result<Option<String>, OrbitError> {
+        let output = self.probe(command)?;
+        if output.success {
+            Ok(Some(output.stdout))
+        } else {
+            Err(manager_probe_failure(command, &output))
+        }
+    }
+
+    fn probe(&self, command: &ManagerCommand) -> Result<ManagerCommandOutput, OrbitError> {
         Command::new(command.program)
             .args(&command.args)
             .output()
-            .map(|output| {
-                output
-                    .status
-                    .success()
-                    .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+            .map(|output| ManagerCommandOutput {
+                success: output.status.success(),
+                exit_code: output.status.code(),
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             })
             .map_err(|error| OrbitError::Execution(format!("run {}: {error}", command.display())))
     }
@@ -670,6 +697,13 @@ fn manager_status_command(platform: ClockPlatform) -> ManagerCommand {
     }
 }
 
+fn launchd_manager_probe_command() -> ManagerCommand {
+    ManagerCommand {
+        program: "launchctl",
+        args: vec!["list".into()],
+    }
+}
+
 fn systemd_next_trigger_command() -> ManagerCommand {
     ManagerCommand {
         program: "systemctl",
@@ -802,9 +836,34 @@ pub(super) fn clock_status_with(
     runner: &dyn ClockCommandRunner,
 ) -> Result<ClockStatus, OrbitError> {
     let settings = load_clock_settings(global_root)?;
-    let enabled = runner
-        .run(&manager_status_command(platform))
-        .unwrap_or(false);
+    let status_command = manager_status_command(platform);
+    let status_output = runner
+        .probe(&status_command)
+        .map_err(|error| clock_manager_probe_error(platform, &status_command, &error))?;
+    let enabled = match platform {
+        ClockPlatform::Launchd if !status_output.success => {
+            if launchd_reports_not_loaded(&status_output) {
+                false
+            } else {
+                let manager_command = launchd_manager_probe_command();
+                let manager_output = runner.probe(&manager_command).map_err(|error| {
+                    clock_manager_probe_error(platform, &manager_command, &error)
+                })?;
+                if !manager_output.success {
+                    return Err(clock_manager_unavailable_error(
+                        platform,
+                        [
+                            (&status_command, &status_output),
+                            (&manager_command, &manager_output),
+                        ],
+                        None,
+                    ));
+                }
+                false
+            }
+        }
+        _ => status_output.success,
+    };
     let mut manager_details = None;
     let (schedulable, health_issue) = if platform == ClockPlatform::Systemd {
         match query_systemd_clock_details(runner) {
@@ -825,14 +884,20 @@ pub(super) fn clock_status_with(
                     )
                 }
             }
-            Err(_) if enabled => (
+            Err(error) if enabled => (
                 false,
-                Some(
-                    "systemd timer is enabled but its next trigger could not be verified; recovery: inspect `systemctl --user status orbit-sweep.timer`, then run `orbit clock enable` to rewrite a stale unit if needed, re-arm, and verify it"
-                        .to_string(),
-                ),
+                Some(format!(
+                    "systemd timer is enabled but its next trigger could not be verified ({error}); recovery: inspect `systemctl --user status orbit-sweep.timer`, then run `orbit clock enable` to rewrite a stale unit if needed, re-arm, and verify it"
+                )),
             ),
-            Err(_) => (false, None),
+            Err(_) if systemd_reports_disabled_or_missing(&status_output) => (false, None),
+            Err(error) => {
+                return Err(clock_manager_unavailable_error(
+                    platform,
+                    [(&status_command, &status_output)],
+                    Some(&error),
+                ));
+            }
         }
     } else {
         (enabled, None)
@@ -845,6 +910,114 @@ pub(super) fn clock_status_with(
         health_issue,
         manager_details,
     ))
+}
+
+fn systemd_reports_disabled_or_missing(output: &ManagerCommandOutput) -> bool {
+    let diagnostic = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
+    [
+        "disabled",
+        "masked",
+        "static",
+        "indirect",
+        "generated",
+        "transient",
+        "not-found",
+        "not found",
+        "no such file or directory",
+        "could not be found",
+    ]
+    .iter()
+    .any(|marker| diagnostic.contains(marker))
+}
+
+fn launchd_reports_not_loaded(output: &ManagerCommandOutput) -> bool {
+    let diagnostic = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
+    [
+        "could not find service",
+        "service not found",
+        "no such process",
+    ]
+    .iter()
+    .any(|marker| diagnostic.contains(marker))
+}
+
+fn clock_manager_unavailable_error<'a, const N: usize>(
+    platform: ClockPlatform,
+    attempts: [(&'a ManagerCommand, &'a ManagerCommandOutput); N],
+    detail_error: Option<&OrbitError>,
+) -> OrbitError {
+    let mut diagnostics = attempts
+        .into_iter()
+        .map(|(command, output)| manager_probe_diagnostic(command, output))
+        .collect::<Vec<_>>();
+    if let Some(error) = detail_error {
+        diagnostics.push(bounded_manager_text(&error.to_string()));
+    }
+    OrbitError::Execution(format!(
+        "{} clock manager is unavailable; {}. Check that the per-user {} manager is running and that this process can query it",
+        platform.name(),
+        diagnostics.join("; "),
+        platform.name(),
+    ))
+}
+
+fn manager_probe_failure(command: &ManagerCommand, output: &ManagerCommandOutput) -> OrbitError {
+    OrbitError::Execution(manager_probe_diagnostic(command, output))
+}
+
+fn clock_manager_probe_error(
+    platform: ClockPlatform,
+    command: &ManagerCommand,
+    error: &OrbitError,
+) -> OrbitError {
+    OrbitError::Execution(format!(
+        "{} clock manager is unavailable; `{}` could not run: {}. Check that the per-user {} manager is installed and running and that this process can query it",
+        platform.name(),
+        command.display(),
+        bounded_manager_text(&error.to_string()),
+        platform.name(),
+    ))
+}
+
+fn manager_probe_diagnostic(command: &ManagerCommand, output: &ManagerCommandOutput) -> String {
+    let exit = output.exit_code.map_or_else(
+        || "by signal".to_string(),
+        |code| format!("with exit code {code}"),
+    );
+    let stdout = bounded_manager_text(&output.stdout);
+    let stderr = bounded_manager_text(&output.stderr);
+    let mut detail = Vec::new();
+    if !stdout.is_empty() {
+        detail.push(format!("stdout: {stdout}"));
+    }
+    if !stderr.is_empty() {
+        detail.push(format!("stderr: {stderr}"));
+    }
+    if detail.is_empty() {
+        format!("`{}` failed {exit} without output", command.display())
+    } else {
+        format!(
+            "`{}` failed {exit} ({})",
+            command.display(),
+            detail.join(", ")
+        )
+    }
+}
+
+fn bounded_manager_text(value: &str) -> String {
+    const MAX_DIAGNOSTIC_CHARS: usize = 512;
+
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = collapsed.chars();
+    let bounded = chars
+        .by_ref()
+        .take(MAX_DIAGNOSTIC_CHARS)
+        .collect::<String>();
+    if chars.next().is_some() {
+        format!("{bounded}…")
+    } else {
+        bounded
+    }
 }
 
 #[derive(Debug, Default)]

@@ -7,14 +7,16 @@ use tempfile::tempdir;
 use orbit_common::OrbitError;
 
 use super::super::clock::{
-    ClockCommandRunner, ClockPlatform, ClockSettings, ManagerCommand, clock_status_with,
-    install_clock_with, load_clock_settings, render_systemd_service, render_systemd_timer,
-    save_clock_settings, set_clock_cadence_with, set_clock_enabled_with, validated_sweep_log_path,
+    ClockCommandRunner, ClockPlatform, ClockSettings, ManagerCommand, ManagerCommandOutput,
+    clock_status_with, install_clock_with, load_clock_settings, render_systemd_service,
+    render_systemd_timer, save_clock_settings, set_clock_cadence_with, set_clock_enabled_with,
+    validated_sweep_log_path,
 };
 
 struct MockRunner {
     results: Mutex<Vec<Result<bool, OrbitError>>>,
     outputs: Mutex<Vec<Result<Option<String>, OrbitError>>>,
+    probes: Mutex<Vec<Result<ManagerCommandOutput, OrbitError>>>,
     commands: Mutex<Vec<String>>,
 }
 
@@ -23,6 +25,7 @@ impl MockRunner {
         Self {
             results: Mutex::new(results.into_iter().rev().collect()),
             outputs: Mutex::new(Vec::new()),
+            probes: Mutex::new(Vec::new()),
             commands: Mutex::new(Vec::new()),
         }
     }
@@ -34,6 +37,20 @@ impl MockRunner {
         Self {
             results: Mutex::new(results.into_iter().rev().collect()),
             outputs: Mutex::new(outputs.into_iter().rev().collect()),
+            probes: Mutex::new(Vec::new()),
+            commands: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn with_probes(
+        results: Vec<Result<bool, OrbitError>>,
+        outputs: Vec<Result<Option<String>, OrbitError>>,
+        probes: Vec<Result<ManagerCommandOutput, OrbitError>>,
+    ) -> Self {
+        Self {
+            results: Mutex::new(results.into_iter().rev().collect()),
+            outputs: Mutex::new(outputs.into_iter().rev().collect()),
+            probes: Mutex::new(probes.into_iter().rev().collect()),
             commands: Mutex::new(Vec::new()),
         }
     }
@@ -66,6 +83,37 @@ impl ClockCommandRunner for MockRunner {
             .expect("test output queue lock")
             .pop()
             .expect("test configured output for every manager query")
+    }
+
+    fn probe(&self, command: &ManagerCommand) -> Result<ManagerCommandOutput, OrbitError> {
+        self.commands
+            .lock()
+            .expect("test command log lock")
+            .push(command.display());
+        if let Some(output) = self.probes.lock().expect("test probe queue lock").pop() {
+            return output;
+        }
+        let success = self
+            .results
+            .lock()
+            .expect("test result queue lock")
+            .pop()
+            .expect("test configured a result for every manager command")?;
+        Ok(ManagerCommandOutput {
+            success,
+            exit_code: Some(if success { 0 } else { 1 }),
+            stdout: String::new(),
+            stderr: String::new(),
+        })
+    }
+}
+
+fn manager_output(success: bool, stdout: &str, stderr: &str) -> ManagerCommandOutput {
+    ManagerCommandOutput {
+        success,
+        exit_code: Some(if success { 0 } else { 1 }),
+        stdout: stdout.to_string(),
+        stderr: stderr.to_string(),
     }
 }
 
@@ -700,6 +748,138 @@ fn disabled_systemd_timer_reports_loaded_state_without_becoming_schedulable() {
     assert!(!status.schedulable);
     assert_eq!(status.effective_cadence_seconds, None);
     assert!(status.health_issue.is_none());
+}
+
+#[test]
+fn unavailable_systemd_manager_fails_status_with_bounded_diagnostics() {
+    let root = tempdir().expect("create global root");
+    let repeated = "manager transport unavailable ".repeat(100);
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        vec![Err(OrbitError::Execution(format!(
+            "systemctl show failed: {repeated}"
+        )))],
+        vec![Ok(manager_output(
+            false,
+            "",
+            "Failed to connect to bus: No medium found",
+        ))],
+    );
+
+    let error = clock_status_with(root.path(), ClockPlatform::Systemd, &runner)
+        .expect_err("unavailable user manager must fail status");
+    let message = error.to_string();
+
+    assert!(message.contains("systemd clock manager is unavailable"));
+    assert!(message.contains("Failed to connect to bus: No medium found"));
+    assert!(message.contains("systemctl show failed"));
+    assert!(message.len() < 1_500, "manager diagnostics stay bounded");
+    for misleading in [
+        "paused",
+        "effectively inactive",
+        "orbit clock enable",
+        "pause",
+    ] {
+        assert!(!message.contains(misleading));
+    }
+}
+
+#[test]
+fn missing_systemd_unit_is_disabled_but_manager_transport_failure_is_unavailable() {
+    let root = tempdir().expect("create global root");
+    let missing = MockRunner::with_probes(
+        Vec::new(),
+        vec![Err(OrbitError::Execution(
+            "show failed: Unit orbit-sweep.timer could not be found".to_string(),
+        ))],
+        vec![Ok(manager_output(
+            false,
+            "",
+            "Failed to get unit file state: No such file or directory",
+        ))],
+    );
+
+    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &missing)
+        .expect("a missing unit is a recognized disabled clock");
+    assert!(!status.enabled);
+    assert!(!status.loaded);
+    assert!(!status.schedulable);
+
+    let unavailable = MockRunner::with_probes(
+        Vec::new(),
+        vec![Err(OrbitError::Execution(
+            "show failed: Access denied".to_string(),
+        ))],
+        vec![Ok(manager_output(false, "", "Access denied"))],
+    );
+    let error = clock_status_with(root.path(), ClockPlatform::Systemd, &unavailable)
+        .expect_err("permission failure is not a disabled clock");
+    assert!(error.to_string().contains("manager is unavailable"));
+}
+
+#[test]
+fn enabled_systemd_with_unavailable_details_remains_enabled_but_unverifiable() {
+    let root = tempdir().expect("create global root");
+    let runner = MockRunner::with_outputs(
+        vec![Ok(true)],
+        vec![Err(OrbitError::Execution(
+            "systemctl show failed: temporary manager error".to_string(),
+        ))],
+    );
+
+    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &runner)
+        .expect("enabled state remains authoritative when only details fail");
+
+    assert!(status.enabled);
+    assert!(!status.schedulable);
+    assert_eq!(status.effective_cadence_seconds, None);
+    assert!(status.health_issue.as_deref().is_some_and(|issue| {
+        issue.contains("could not be verified") && issue.contains("temporary manager error")
+    }));
+}
+
+#[test]
+fn launchd_not_loaded_is_disabled_but_transport_failure_is_unavailable() {
+    let root = tempdir().expect("create global root");
+    let not_loaded = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![Ok(manager_output(
+            false,
+            "",
+            "Could not find service com.orbit.sweep in domain for user",
+        ))],
+    );
+
+    let status = clock_status_with(root.path(), ClockPlatform::Launchd, &not_loaded)
+        .expect("a recognized not-loaded agent is disabled");
+    assert!(!status.enabled);
+    assert!(!status.loaded);
+    assert!(!status.schedulable);
+    assert_eq!(
+        not_loaded.commands(),
+        vec!["launchctl list com.orbit.sweep"]
+    );
+
+    let unavailable = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![
+            Ok(manager_output(false, "", "Operation not permitted")),
+            Ok(manager_output(false, "", "Operation not permitted")),
+        ],
+    );
+    let error = clock_status_with(root.path(), ClockPlatform::Launchd, &unavailable)
+        .expect_err("failure at the label and manager probes is unavailable");
+    let message = error.to_string();
+    assert!(message.contains("launchd clock manager is unavailable"));
+    assert!(message.contains("launchctl list com.orbit.sweep"));
+    assert!(message.contains("launchctl list`"));
+    assert!(!message.contains("pause"));
+    assert_eq!(
+        unavailable.commands(),
+        vec!["launchctl list com.orbit.sweep", "launchctl list"]
+    );
 }
 
 #[test]
