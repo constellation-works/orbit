@@ -773,9 +773,15 @@ pub(super) fn set_clock_enabled_with(
     home: &Path,
 ) -> Result<ClockStatus, OrbitError> {
     let settings = load_clock_settings(global_root)?;
-    let current = runner
-        .run(&manager_status_command(platform))
-        .unwrap_or(false);
+    let current = if enabled {
+        // Preserve the enable/rearm path: systemd always repairs and verifies
+        // the unit below, while launchd keeps its existing idempotent load.
+        runner
+            .run(&manager_status_command(platform))
+            .unwrap_or(false)
+    } else {
+        observe_clock_enabled_for_pause(platform, runner)?
+    };
     if platform == ClockPlatform::Systemd && enabled {
         migrate_stale_systemd_service(home)?;
         migrate_stale_systemd_timer(home, settings)?;
@@ -820,6 +826,51 @@ pub(super) fn set_clock_enabled_with(
     Ok(clock_status_from(
         settings, enabled, enabled, platform, None, None,
     ))
+}
+
+/// Observe enough native-manager state to make pause safe and idempotent.
+/// A failed status command is inactive only when the manager's diagnostic is
+/// a recognized disabled/not-loaded state; transport and ambiguous failures
+/// must stop before the control path can mutate the manager.
+fn observe_clock_enabled_for_pause(
+    platform: ClockPlatform,
+    runner: &dyn ClockCommandRunner,
+) -> Result<bool, OrbitError> {
+    let status_command = manager_status_command(platform);
+    let status_output = runner
+        .probe(&status_command)
+        .map_err(|error| clock_manager_probe_error(platform, &status_command, &error))?;
+    if status_output.success {
+        return Ok(true);
+    }
+
+    match platform {
+        ClockPlatform::Systemd if systemd_reports_disabled_or_missing(&status_output) => Ok(false),
+        ClockPlatform::Systemd => Err(clock_manager_unavailable_error(
+            platform,
+            [(&status_command, &status_output)],
+            None,
+        )),
+        ClockPlatform::Launchd if launchd_reports_not_loaded(&status_output) => Ok(false),
+        ClockPlatform::Launchd => {
+            let manager_command = launchd_manager_probe_command();
+            let manager_output = runner
+                .probe(&manager_command)
+                .map_err(|error| clock_manager_probe_error(platform, &manager_command, &error))?;
+            if manager_output.success {
+                Ok(false)
+            } else {
+                Err(clock_manager_unavailable_error(
+                    platform,
+                    [
+                        (&status_command, &status_output),
+                        (&manager_command, &manager_output),
+                    ],
+                    None,
+                ))
+            }
+        }
+    }
 }
 
 pub fn clock_status(global_root: &Path) -> Result<ClockStatus, OrbitError> {

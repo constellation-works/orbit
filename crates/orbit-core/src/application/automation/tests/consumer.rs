@@ -55,76 +55,88 @@ fn runtime() -> OrbitRuntime {
 
 #[test]
 fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
-    use std::io::Write as _;
-
-    const ORPHAN: &str = "52d691ba6c58457cc472e181b1fee14f9276d274";
-    const CANONICAL: &str = "50798789c17ba09ba3a8a057b3f80f76dde23733";
-    const INSERTED: &str = "69555b04ba41578ca6a1643f8f8829c2b29736eb";
-    const BASE: &str = "da21eb15b02f6d9a06833c835ea42780f5dbcc3b";
-    const COVERED: &str = "7f3a8f5fabd24030bba30ec9035849ba7d323d2e";
-    const HEAD: &str = "ac0429ba52a7cbddd493a0d98d4b4f19fd57740d";
-
-    let source_checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .unwrap();
     let fixture = tempfile::tempdir().unwrap();
     let fixture_root = fixture.path().join("repo");
-    let cloned = Command::new("git")
-        .args(["clone", "--quiet", "--shared"])
-        .arg(&source_checkout)
-        .arg(&fixture_root)
-        .status()
-        .unwrap();
-    assert!(cloned.success());
-    git(&fixture_root, &["checkout", "--quiet", "--detach", BASE]);
-    git(&fixture_root, &["cherry-pick", "--no-commit", CANONICAL]);
-    let tree = git(&fixture_root, &["write-tree"]);
-    let mut child = Command::new("git")
-        .args(["commit-tree", &tree, "-p", BASE])
-        .current_dir(&fixture_root)
-        .env("GIT_AUTHOR_NAME", "codex")
-        .env("GIT_AUTHOR_EMAIL", "codex@openai.local")
-        .env("GIT_AUTHOR_DATE", "1788824962 +0000")
-        .env("GIT_COMMITTER_NAME", "codex")
-        .env("GIT_COMMITTER_EMAIL", "codex@openai.local")
-        .env("GIT_COMMITTER_DATE", "1788825279 +0000")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(b"auto-commit: 2026-09-07 23:49:21\n")
-        .unwrap();
-    let recreated = String::from_utf8(child.wait_with_output().unwrap().stdout)
-        .unwrap()
-        .trim()
-        .to_string();
-    assert_eq!(recreated, ORPHAN, "fixture recreates the incident object");
-    git(&fixture_root, &["branch", "-f", "agent-main", HEAD]);
+    std::fs::create_dir_all(fixture_root.join(".orbit")).unwrap();
+    git(&fixture_root, &["init", "--initial-branch=agent-main"]);
+    git(&fixture_root, &["config", "user.name", "Test"]);
+    git(
+        &fixture_root,
+        &["config", "user.email", "test@example.invalid"],
+    );
+
+    std::fs::write(fixture_root.join(".orbit/stable.toml"), "version = 1\n").unwrap();
+    std::fs::write(fixture_root.join("ordinary.txt"), "base\n").unwrap();
+    git(
+        &fixture_root,
+        &["add", ".orbit/stable.toml", "ordinary.txt"],
+    );
+    git(&fixture_root, &["commit", "-m", "base"]);
+    let base = git(&fixture_root, &["rev-parse", "HEAD"]);
+
+    git(&fixture_root, &["checkout", "-b", "orphan"]);
+    std::fs::write(fixture_root.join("payload.txt"), b"payload\0P\n").unwrap();
+    git(&fixture_root, &["add", "payload.txt"]);
+    git(&fixture_root, &["commit", "-m", "payload"]);
+    let orphan = git(&fixture_root, &["rev-parse", "HEAD"]);
+
+    git(&fixture_root, &["checkout", "agent-main"]);
+    std::fs::write(fixture_root.join("inserted.txt"), "disjoint Q\n").unwrap();
+    git(&fixture_root, &["add", "inserted.txt"]);
+    git(&fixture_root, &["commit", "-m", "inserted"]);
+    let inserted = git(&fixture_root, &["rev-parse", "HEAD"]);
+
+    std::fs::write(fixture_root.join("payload.txt"), b"payload\0P\n").unwrap();
+    git(&fixture_root, &["add", "payload.txt"]);
+    git(&fixture_root, &["commit", "-m", "payload"]);
+    let canonical = git(&fixture_root, &["rev-parse", "HEAD"]);
+
     git(
         &fixture_root,
         &[
             "remote",
-            "set-url",
+            "add",
             "origin",
             "https://github.com/constellation-works/orbit.git",
         ],
     );
 
+    assert_eq!(
+        git(&fixture_root, &["diff", "--binary", &base, &orphan]),
+        git(&fixture_root, &["diff", "--binary", &inserted, &canonical]),
+        "the orphan and canonical commits have the same full parent-relative patch"
+    );
+    assert_eq!(
+        git(&fixture_root, &["rev-parse", &format!("{orphan}:.orbit")]),
+        git(
+            &fixture_root,
+            &["rev-parse", &format!("{canonical}:.orbit")]
+        ),
+        "the replay candidates have the same stable Orbit tree"
+    );
+    assert_eq!(
+        git(&fixture_root, &["rev-parse", &format!("{orphan}^")]),
+        base
+    );
+    assert_eq!(
+        git(&fixture_root, &["rev-parse", &format!("{canonical}^")]),
+        inserted
+    );
+    assert_eq!(
+        git(&fixture_root, &["merge-base", &orphan, &canonical]),
+        base
+    );
+
     let source = super::super::source::Source::new(&fixture_root);
-    let old = source.revision(ORPHAN).unwrap();
-    let covered = source.revision(COVERED).unwrap();
+    let old = source.revision(&orphan).unwrap();
+    let covered = source.revision(&base).unwrap();
     let old_delivery = Delivery {
         key: "direct:sep-8-settings".into(),
         repository: "constellation-works/orbit".into(),
         branch: "agent-main".into(),
-        before: source.revision(BASE).unwrap(),
+        before: covered.clone(),
         after: old.clone(),
-        commits: vec![ORPHAN.into()],
+        commits: vec![orphan.clone()],
         task_ids: vec![],
         evidence_reference: "incident:sep-8-settings".into(),
         evidence_digest: "persisted-proof".into(),
@@ -140,8 +152,8 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
         generation: 41,
         baseline: covered.clone(),
         observed: old,
-        covered,
-        pending_commits: vec![ORPHAN.into()],
+        covered: covered.clone(),
+        pending_commits: vec![orphan.clone()],
         pending: vec![old_delivery],
         waived: vec![],
         excluded: vec![],
@@ -149,12 +161,14 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
         associations: Default::default(),
         active: None,
     };
+    let provider_lookups = std::cell::RefCell::new(Vec::new());
     let provider = |_: &str, sha: &str| {
-        assert_eq!(sha, INSERTED, "mapped commit reuses persisted identity");
+        provider_lookups.borrow_mut().push(sha.to_owned());
+        assert_eq!(sha, inserted, "mapped commit reuses persisted identity");
         Ok(json!([{
             "number": 1586,
             "html_url": "https://github.com/constellation-works/orbit/pull/1586",
-            "merge_commit_sha": INSERTED,
+            "merge_commit_sha": inserted,
             "merged_at": "2026-09-08T00:00:00Z",
             "base": {"ref": "agent-main", "repo": {"full_name": "constellation-works/orbit"}}
         }])
@@ -165,17 +179,47 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
         .replay_history_with_lookup("agent-main", &state, &provider, 0)
         .unwrap();
     assert_eq!(proof.captured_generation, 41);
-    assert_eq!(proof.captured_head.commit, HEAD);
-    assert_eq!(proof.old_observed.commit, ORPHAN);
-    assert_eq!(proof.new_observed.commit, CANONICAL);
-    assert_eq!(proof.mappings[0].orphan.commit, ORPHAN);
-    assert_eq!(proof.mappings[0].canonical.commit, CANONICAL);
-    assert_eq!(page.commits, vec![INSERTED, CANONICAL]);
-    assert!(
-        page.deliveries
-            .iter()
-            .any(|delivery| delivery.key == "pr:constellation-works/orbit:agent-main:1586")
+    assert_eq!(proof.captured_head.commit, canonical);
+    assert_eq!(proof.common_base.commit, base);
+    assert_eq!(proof.old_observed.commit, orphan);
+    assert_eq!(proof.new_observed.commit, canonical);
+    assert_eq!(proof.mappings.len(), 1);
+    assert_eq!(proof.mappings[0].orphan.commit, orphan);
+    assert_eq!(proof.mappings[0].canonical.commit, canonical);
+    assert_eq!(proof.unchanged_baseline, covered);
+    assert_eq!(proof.unchanged_covered, covered);
+    assert_eq!(page.commits, vec![inserted.clone(), canonical.clone()]);
+    assert_eq!(
+        provider_lookups.borrow().as_slice(),
+        [inserted.clone()].as_slice()
     );
+    assert_eq!(page.deliveries.len(), 2);
+    assert!(page.deliveries.iter().any(|delivery| {
+        delivery.key == "pr:constellation-works/orbit:agent-main:1586"
+            && delivery.commits == vec![inserted.clone()]
+    }));
+    assert!(page.deliveries.iter().any(|delivery| {
+        delivery.key == "direct:sep-8-settings"
+            && delivery.commits == vec![canonical.clone()]
+            && delivery.task_ids.is_empty()
+            && delivery.evidence_reference == "incident:sep-8-settings"
+    }));
+    assert_eq!(
+        page.unresolved,
+        [(inserted.clone(), "landing_span_pending".into())]
+            .into_iter()
+            .collect(),
+        "the provider-resolved inserted span retains its ordinary pending reason"
+    );
+
+    git(&fixture_root, &["checkout", "--detach", &canonical]);
+    git(&fixture_root, &["branch", "-f", "agent-main", &inserted]);
+    let (_, changed_head) = source.head("agent-main").unwrap();
+    assert_ne!(
+        changed_head, proof.captured_head,
+        "a moved configured head is detected by the replay apply fence"
+    );
+    git(&fixture_root, &["branch", "-f", "agent-main", &canonical]);
 
     let mut missing = state.clone();
     missing.observed.commit = "0000000000000000000000000000000000000000".into();
@@ -189,7 +233,7 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
     ));
 
     let mut unreachable = state;
-    unreachable.covered = source.revision(ORPHAN).unwrap();
+    unreachable.covered = source.revision(&orphan).unwrap();
     unreachable.baseline = unreachable.covered.clone();
     let error = super::super::source::Source::new(&fixture_root)
         .replay_history_with_lookup("agent-main", &unreachable, &provider, 0)

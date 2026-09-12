@@ -886,14 +886,18 @@ fn launchd_not_loaded_is_disabled_but_transport_failure_is_unavailable() {
 fn pause_and_enable_are_idempotent_for_launchd() {
     let root = tempdir().expect("create global root");
     let home = tempdir().expect("create home");
-    let runner = MockRunner::new(vec![
-        Ok(true),
-        Ok(true),
-        Ok(false),
-        Ok(false),
-        Ok(true),
-        Ok(true),
-    ]);
+    let runner = MockRunner::with_probes(
+        vec![Ok(true), Ok(false), Ok(true), Ok(true)],
+        Vec::new(),
+        vec![
+            Ok(manager_output(true, "", "")),
+            Ok(manager_output(
+                false,
+                "",
+                "Could not find service com.orbit.sweep in domain for user",
+            )),
+        ],
+    );
     assert!(
         !set_clock_enabled_with(
             root.path(),
@@ -939,6 +943,188 @@ fn pause_and_enable_are_idempotent_for_launchd() {
         .enabled
     );
     assert_eq!(runner.commands().len(), 6);
+}
+
+#[test]
+fn unavailable_or_unknown_systemd_state_refuses_pause_before_mutation() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    save_clock_settings(
+        root.path(),
+        ClockSettings {
+            cadence_seconds: 300,
+        },
+    )
+    .expect("write clock settings");
+    let settings_before = fs::read_to_string(root.path().join("clock.toml"))
+        .expect("read clock settings before pause");
+    let unit_dir = home.path().join(".config/systemd/user");
+    fs::create_dir_all(&unit_dir).expect("create systemd unit directory");
+    let timer_path = unit_dir.join("orbit-sweep.timer");
+    fs::write(&timer_path, "sentinel timer\n").expect("write sentinel timer");
+
+    let unavailable = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![Err(OrbitError::Execution(
+            "systemctl transport unavailable".to_string(),
+        ))],
+    );
+    let error = set_clock_enabled_with(
+        root.path(),
+        false,
+        ClockPlatform::Systemd,
+        &unavailable,
+        home.path(),
+    )
+    .expect_err("unavailable systemd manager must refuse pause");
+    assert!(
+        error
+            .to_string()
+            .contains("systemd clock manager is unavailable")
+    );
+    assert_eq!(
+        unavailable.commands(),
+        vec!["systemctl --user is-enabled orbit-sweep.timer"]
+    );
+
+    let unknown = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![Ok(manager_output(false, "", "Access denied"))],
+    );
+    let error = set_clock_enabled_with(
+        root.path(),
+        false,
+        ClockPlatform::Systemd,
+        &unknown,
+        home.path(),
+    )
+    .expect_err("unknown systemd state must refuse pause");
+    assert!(
+        error
+            .to_string()
+            .contains("systemd clock manager is unavailable")
+    );
+    assert!(error.to_string().contains("Access denied"));
+    assert_eq!(
+        unknown.commands(),
+        vec!["systemctl --user is-enabled orbit-sweep.timer"]
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("clock.toml"))
+            .expect("read clock settings after pause"),
+        settings_before
+    );
+    assert_eq!(
+        fs::read_to_string(timer_path).expect("read timer after pause"),
+        "sentinel timer\n"
+    );
+}
+
+#[test]
+fn unavailable_launchd_state_refuses_pause_before_mutation() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    save_clock_settings(
+        root.path(),
+        ClockSettings {
+            cadence_seconds: 300,
+        },
+    )
+    .expect("write clock settings");
+    let settings_before = fs::read_to_string(root.path().join("clock.toml"))
+        .expect("read clock settings before pause");
+    let agents_dir = home.path().join("Library/LaunchAgents");
+    fs::create_dir_all(&agents_dir).expect("create launchd agent directory");
+    let plist_path = agents_dir.join("com.orbit.sweep.plist");
+    fs::write(&plist_path, "sentinel plist\n").expect("write sentinel plist");
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![
+            Ok(manager_output(false, "", "Operation not permitted")),
+            Ok(manager_output(false, "", "Operation not permitted")),
+        ],
+    );
+
+    let error = set_clock_enabled_with(
+        root.path(),
+        false,
+        ClockPlatform::Launchd,
+        &runner,
+        home.path(),
+    )
+    .expect_err("unavailable launchd manager must refuse pause");
+
+    assert!(
+        error
+            .to_string()
+            .contains("launchd clock manager is unavailable")
+    );
+    assert_eq!(
+        runner.commands(),
+        vec!["launchctl list com.orbit.sweep", "launchctl list"]
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("clock.toml"))
+            .expect("read clock settings after pause"),
+        settings_before
+    );
+    assert_eq!(
+        fs::read_to_string(plist_path).expect("read plist after pause"),
+        "sentinel plist\n"
+    );
+}
+
+#[test]
+fn recognized_inactive_manager_states_keep_pause_idempotent() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+
+    for diagnostic in [
+        "disabled",
+        "Failed to get unit file state: No such file or directory",
+    ] {
+        let runner = MockRunner::with_probes(
+            Vec::new(),
+            Vec::new(),
+            vec![Ok(manager_output(false, "", diagnostic))],
+        );
+        let status = set_clock_enabled_with(
+            root.path(),
+            false,
+            ClockPlatform::Systemd,
+            &runner,
+            home.path(),
+        )
+        .expect("recognized inactive systemd state is idempotent");
+        assert!(!status.enabled);
+        assert_eq!(
+            runner.commands(),
+            vec!["systemctl --user is-enabled orbit-sweep.timer"]
+        );
+    }
+
+    let launchd = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![Ok(manager_output(
+            false,
+            "",
+            "Could not find service com.orbit.sweep in domain for user",
+        ))],
+    );
+    let status = set_clock_enabled_with(
+        root.path(),
+        false,
+        ClockPlatform::Launchd,
+        &launchd,
+        home.path(),
+    )
+    .expect("recognized not-loaded launchd state is idempotent");
+    assert!(!status.enabled);
+    assert_eq!(launchd.commands(), vec!["launchctl list com.orbit.sweep"]);
 }
 
 #[test]

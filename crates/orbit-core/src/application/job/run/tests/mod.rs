@@ -9,6 +9,7 @@ mod conflict;
 mod owner;
 mod projection;
 mod reconcile;
+mod reconcile_provider;
 mod worker_limit;
 
 use chrono::{DateTime, Utc};
