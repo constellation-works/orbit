@@ -172,7 +172,7 @@ fn scheduling_reason(
     if active_is_settled {
         "needs_attention"
     } else if claim_awaiting_admission
-        .is_some_and(|active| active.attempt > 1 && now > active.batch.retry_until)
+        .is_some_and(|active| active.attempt > 1 && now > active.deadline())
     {
         "retry_deadline_expired"
     } else if claim_awaiting_admission

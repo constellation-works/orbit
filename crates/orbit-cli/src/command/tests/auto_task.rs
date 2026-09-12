@@ -270,3 +270,90 @@ fn delivery_schedule_summary_uses_coverage_wire_names() {
         );
     }
 }
+
+#[test]
+fn auto_task_recover_parses_both_operations_and_their_reason() {
+    let cli = Cli::try_parse_from([
+        "orbit",
+        "auto-task",
+        "recover",
+        "delivery-qa",
+        "--adopt-settings",
+        "--reissue-action",
+        "--reason",
+        "adopt tonight's threshold and re-examine the unpaid landing",
+    ])
+    .expect("parse auto-task recover");
+
+    let Commands::AutoTask(auto_task) = cli.command else {
+        panic!("expected auto-task command");
+    };
+    let AutoTaskSubcommand::Recover(args) = auto_task.command else {
+        panic!("expected auto-task recover command");
+    };
+
+    assert_eq!(args.name, "delivery-qa");
+    assert!(args.adopt_settings);
+    assert!(args.reissue_action);
+    assert_eq!(
+        args.reason.as_deref(),
+        Some("adopt tonight's threshold and re-examine the unpaid landing")
+    );
+}
+
+#[test]
+fn auto_task_recover_defaults_to_a_preview_and_needs_a_delivery_definition() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    runtime
+        .auto_task_add(AutoTaskAddParams {
+            name: "interval".to_string(),
+            description: "Not a delivery consumer.".to_string(),
+            schedule: AutoTaskSchedule::Interval { every_minutes: 5 },
+            template: AutoTaskTemplate {
+                title: "Sweep".to_string(),
+                description: String::new(),
+                acceptance_criteria: vec![],
+                task_type: TaskType::Chore,
+                tags: vec![],
+                required_tools: vec![],
+                priority: TaskPriority::Medium,
+                crew: None,
+                status: TaskStatus::Backlog,
+            },
+            dedupe: DedupePolicy::SkipIfOpen,
+        })
+        .expect("add interval auto-task");
+
+    let cli = Cli::try_parse_from(["orbit", "auto-task", "recover", "interval"])
+        .expect("parse auto-task recover");
+    let Commands::AutoTask(auto_task) = cli.command else {
+        panic!("expected auto-task command");
+    };
+    let AutoTaskSubcommand::Recover(args) = auto_task.command else {
+        panic!("expected auto-task recover command");
+    };
+    assert!(!args.adopt_settings && !args.reissue_action && args.reason.is_none());
+
+    let error = args
+        .execute(&runtime)
+        .expect_err("only delivery consumers accumulate coverage debt");
+    assert!(
+        error.to_string().contains("not a delivery definition"),
+        "{error}"
+    );
+
+    let missing = Cli::try_parse_from(["orbit", "auto-task", "recover", "ghost"])
+        .expect("parse auto-task recover");
+    let Commands::AutoTask(auto_task) = missing.command else {
+        panic!("expected auto-task command");
+    };
+    let AutoTaskSubcommand::Recover(args) = auto_task.command else {
+        panic!("expected auto-task recover command");
+    };
+    assert!(
+        args.execute(&runtime)
+            .expect_err("unknown definition")
+            .to_string()
+            .contains("no such auto-task 'ghost'")
+    );
+}

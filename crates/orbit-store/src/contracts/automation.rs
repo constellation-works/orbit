@@ -1,6 +1,7 @@
 //! Atomic scheduler checkpoints and immutable accepted coverage.
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::automation::recovery::RecoveryRecord;
 use orbit_types::workflow::automation::{AcceptedCoverage, AutomationState, BatchWaiver, Delivery};
 
 pub trait AutomationStoreBackend: Send + Sync {
@@ -20,6 +21,30 @@ pub trait AutomationStoreBackend: Send + Sync {
         _consumer: &str,
         _limit: usize,
     ) -> Result<Vec<BatchWaiver>, OrbitError> {
+        Ok(vec![])
+    }
+
+    /// Adopt a new configuration identity and/or an authorized reissue under
+    /// the same generation fence, writing the audit record in one transaction.
+    /// The checkpoint may move nothing else: every cursor, obligation and
+    /// accepted fact is carried over unchanged.
+    fn automation_recover(
+        &self,
+        _previous: &AutomationState,
+        _next: &AutomationState,
+        _record: &RecoveryRecord,
+    ) -> Result<bool, OrbitError> {
+        Err(OrbitError::Store(
+            "consumer recovery persistence unavailable".into(),
+        ))
+    }
+
+    /// Audited recoveries for a consumer, newest first.
+    fn automation_recoveries(
+        &self,
+        _consumer: &str,
+        _limit: usize,
+    ) -> Result<Vec<RecoveryRecord>, OrbitError> {
         Ok(vec![])
     }
 

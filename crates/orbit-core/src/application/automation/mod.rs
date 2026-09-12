@@ -15,6 +15,7 @@ pub(crate) mod members;
 mod ownership;
 pub(crate) mod preparation;
 mod provider;
+mod recovery;
 pub(crate) mod source;
 mod task;
 #[cfg(test)]
@@ -22,6 +23,7 @@ mod tests;
 
 pub(crate) use direct::record_direct_landing_intent;
 pub use inspect::{inspect_auto_task, inspect_routine};
+pub use recovery::recover_auto_task;
 
 pub const COVERAGE_ARTIFACT: &str = "automation-coverage.json";
 

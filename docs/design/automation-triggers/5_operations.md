@@ -2,7 +2,7 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_validated: 2026-09-07
+last_validated: 2026-09-12
 ---
 
 # Delivery automation operations [ORB-11330]
@@ -197,7 +197,8 @@ the frozen batch and become the next obligations.
 
 Disablement retains debt and still permits reconciliation of an already admitted
 action. Definition edits retain the old epoch/input and pause new admission; restore
-the original definition to resume that epoch. Do not delete state to clear an error.
+the original definition to resume that epoch, or adopt the new one through the
+audited recovery below. Do not delete state to clear an error.
 Unreadable existing task bundles are retained for repair rather than erased during
 key replay. Restore missing source objects or repair the recorded bundle before
 retrying. Exhausted, failed and waived states are distinct from coverage; waivers are explicit through the existing definition update:
@@ -210,8 +211,73 @@ orbit tool run orbit.auto_task.update --input '{"name":"delivery-qa","waive_batc
 Only the current settled failed/exhausted batch may be waived. The archived
 disposition removes its landings from threshold eligibility, retains the full
 code gap and never advances coverage. A later examination can still cover that
-code as neighboring context. General epoch-transfer/reset workflows remain
-separately scoped.
+code as neighboring context.
+
+### Recovering a consumer stalled by a settings change [ORB-12295]
+
+Retuning a threshold, wait, batch size, retry count, template or crew moves the
+definition's epoch, so the consumer reports `definition_changed` and admits
+nothing while every obligation it already holds stays retained. `orbit auto-task
+recover` is the supported way forward for a delivery auto-task. It never waives
+a batch, advances the covered cursor, reopens a terminal task or edits a state
+file.
+
+Preview first; with neither operation flag the command only reads:
+
+```sh
+orbit auto-task recover delivery-qa --json
+```
+
+The preview reports the consumer key, the recorded and configured epoch, the
+settings that differ by name, the retained debt (covered/observed boundaries,
+pending landings and commits, unresolved evidence, waived and excluded landings,
+accepted receipts), the frozen obligations of any stalled action, the refusals
+that apply, and the audited recoveries already recorded.
+
+Adopt the retuned settings, then reissue an action that closed without accepted
+evidence, in one explicitly authorized request:
+
+```sh
+orbit auto-task recover delivery-qa \
+  --adopt-settings --reissue-action \
+  --reason "adopt tonight's QA threshold and re-examine the unpaid landing"
+```
+
+Adoption replaces only the recorded configuration identity. The covered cursor,
+pending window, unresolved evidence, waived and excluded landings, accepted
+receipt bytes and the frozen batch all arrive unchanged, and the replaced
+identity is retained in an immutable recovery record.
+
+A reissue authorizes exactly one further attempt over the *same* frozen batch:
+the next evaluation admits a new task under a new action key, carrying the
+identical obligations and naming the action it replaces. The closed task is left
+exactly as it settled — nothing reopens it — and the authorized attempt has its
+own 24-hour admission deadline rather than a widened retry policy. Coverage
+still requires complete evidence from the reissued task's assigned executor;
+evidence frozen against the replaced attempt cannot certify it, and a second
+failure settles the batch again until another explicit reissue.
+
+Any refusal aborts the whole request before the write, naming every reason that
+applied: `unknown_consumer`, `member_consumer`, `owned_elsewhere`,
+`branch_changed`, `repository_changed`, `owner_changed`, `coverage_changed`,
+`coverage_unverifiable`, `active_execution`, `settings_unchanged`,
+`no_settled_action`, `action_evidenced`, `definition_changed` (a reissue that
+does not also adopt the identity it would run under) or `missing_authorization`
+(no reason or actor). A change of workspace, owner machine, repository, branch
+or coverage class is never adopted: those change what the retained debt means,
+so settle the old consumer's debt and preview a new baseline instead. An action
+that is claimed or admitted has to settle first.
+
+Only this host, as the resolved owner, may recover its own consumer, and only
+delivery auto-tasks are covered: delivery routines and state-member consumers
+still follow the restore-the-definition path. A consumer baselined before its
+resolved trigger was recorded proves its examination contract from the frozen
+batch instead; one with neither is refused as `coverage_unverifiable`.
+
+Verify a recovery from its own response, whose `applied` names exactly what
+changed, and afterwards from a fresh preview: `history` carries the audit
+record, and `orbit auto-task show delivery-qa --json` must still report the same
+covered boundary and pending membership as before.
 
 ## Rollback and limits
 

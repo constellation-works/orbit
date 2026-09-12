@@ -43,6 +43,7 @@ fn automation_state(consumer: &str) -> AutomationState {
         members: None,
         consumer: consumer.into(),
         epoch: "epoch".into(),
+        trigger: None,
         repository: "repo".into(),
         branch: "agent-main".into(),
         generation: 0,

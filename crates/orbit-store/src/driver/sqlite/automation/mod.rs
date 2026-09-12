@@ -4,6 +4,7 @@ use crate::Store;
 use crate::contracts::AutomationStoreBackend;
 use crate::driver::sqlite::migration::FeatureMigration;
 use orbit_common::OrbitError;
+use orbit_types::workflow::automation::recovery::RecoveryRecord;
 use orbit_types::workflow::automation::{AcceptedCoverage, AutomationState, Delivery};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
@@ -24,6 +25,13 @@ pub(crate) fn initialize(store: &Store) -> Result<(), OrbitError> {
             FeatureMigration::new(2, "retry_lineage_index", |conn| {
                 conn.execute_batch(
                     "CREATE INDEX IF NOT EXISTS job_runs_retry_lineage ON job_runs(workspace_id,retry_source_run_id)",
+                )
+                .map_err(|error| OrbitError::Store(error.to_string()))
+            }),
+            FeatureMigration::new(3, "consumer_recovery_records", |conn| {
+                conn.execute_batch(
+                    "CREATE TABLE automation_recoveries (record_id TEXT PRIMARY KEY, consumer TEXT NOT NULL, recorded_at TEXT NOT NULL, record_json TEXT NOT NULL);
+            CREATE INDEX automation_recoveries_consumer ON automation_recoveries(consumer, recorded_at);",
                 )
                 .map_err(|error| OrbitError::Store(error.to_string()))
             }),
@@ -56,6 +64,23 @@ impl AutomationStoreBackend for Store {
         limit: usize,
     ) -> Result<Vec<orbit_types::workflow::automation::BatchWaiver>, OrbitError> {
         waivers::list(self, consumer, limit)
+    }
+
+    fn automation_recover(
+        &self,
+        previous: &AutomationState,
+        next: &AutomationState,
+        record: &RecoveryRecord,
+    ) -> Result<bool, OrbitError> {
+        recovery::commit(self, previous, next, record)
+    }
+
+    fn automation_recoveries(
+        &self,
+        consumer: &str,
+        limit: usize,
+    ) -> Result<Vec<RecoveryRecord>, OrbitError> {
+        recovery::list(self, consumer, limit)
     }
 
     fn automation_receipt(
@@ -246,6 +271,7 @@ fn validate_transition(
 
     if previous.consumer != next.consumer
         || previous.epoch != next.epoch
+        || previous.trigger != next.trigger
         || previous.repository != next.repository
         || previous.branch != next.branch
         || previous.baseline != next.baseline
@@ -266,6 +292,7 @@ fn validate_transition(
         if let Some(new) = &next.active {
             if old.batch != new.batch
                 || old.input_digest != new.input_digest
+                || old.reissue != new.reissue
                 || new.attempt < old.attempt
             {
                 return Err(invalid());
@@ -484,6 +511,7 @@ fn validate_excluded_prefix_retirement(
 }
 
 mod intents;
+mod recovery;
 #[cfg(test)]
 mod tests;
 mod waivers;
