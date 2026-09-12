@@ -963,8 +963,18 @@ pub(super) fn clock_status_with(
     ))
 }
 
+/// A failed `is-enabled` probe is a recognized disabled or missing unit only
+/// when the diagnostic names a unit state. A manager transport failure is
+/// ruled out first because systemd reuses the same errno text for both: a
+/// missing unit file reports `Failed to get unit file state: No such file or
+/// directory`, while an unreachable user bus reports `Failed to connect to
+/// bus: No such file or directory`. Only the former is a disabled clock.
 fn systemd_reports_disabled_or_missing(output: &ManagerCommandOutput) -> bool {
     let diagnostic = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
+    if systemd_reports_transport_failure(&diagnostic) {
+        return false;
+    }
+
     [
         "disabled",
         "masked",
@@ -974,11 +984,19 @@ fn systemd_reports_disabled_or_missing(output: &ManagerCommandOutput) -> bool {
         "transient",
         "not-found",
         "not found",
-        "no such file or directory",
+        "failed to get unit file state",
         "could not be found",
     ]
     .iter()
     .any(|marker| diagnostic.contains(marker))
+}
+
+/// systemctl prefixes every bus-connection failure with `Failed to connect to`
+/// (`... bus: No medium found`, `... bus: No such file or directory`,
+/// `... user scope bus via local transport: ...`), regardless of the errno
+/// that follows.
+fn systemd_reports_transport_failure(lowercase_diagnostic: &str) -> bool {
+    lowercase_diagnostic.contains("failed to connect to")
 }
 
 fn launchd_reports_not_loaded(output: &ManagerCommandOutput) -> bool {
