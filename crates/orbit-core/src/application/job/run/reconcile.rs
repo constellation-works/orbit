@@ -2,6 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::process::identity::{ProcessLiveness, is_stable_token, probe_process_liveness};
 use orbit_store::contracts::TaskReservationReleaseReason;
 use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::{JobRun, JobRunState};
@@ -30,6 +31,13 @@ struct OwnerSnapshotKey {
     state: JobRunState,
     pid: Option<u32>,
     pid_start_time: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderFinalizationGuard {
+    Clear,
+    Alive,
+    Unknown,
 }
 
 impl ReconcilePass {
@@ -157,6 +165,25 @@ impl OrbitRuntime {
     where
         F: FnOnce(),
     {
+        self.reconcile_stale_job_run_before_revalidation_with_provider_probe(
+            run,
+            pass,
+            probe_process_liveness,
+            before_revalidation,
+        )
+    }
+
+    fn reconcile_stale_job_run_before_revalidation_with_provider_probe<F, P>(
+        &self,
+        run: &JobRun,
+        pass: &mut ReconcilePass,
+        provider_probe: P,
+        before_revalidation: F,
+    ) -> Result<bool, OrbitError>
+    where
+        F: FnOnce(),
+        P: Fn(u32, Option<&str>) -> ProcessLiveness,
+    {
         if terminal_run_timing_is_incomplete(run) {
             return self.repair_terminal_job_run_timing(run);
         }
@@ -169,9 +196,12 @@ impl OrbitRuntime {
             }
             return Ok(false);
         }
+        if !self.provider_evidence_allows_orphan_finalization(&run.run_id, &provider_probe) {
+            return Ok(false);
+        }
 
         before_revalidation();
-        self.finalize_orphaned_job_run(&run.run_id)
+        self.finalize_orphaned_job_run_with_provider_probe(&run.run_id, &provider_probe)
     }
 
     /// Deterministic seam for reproducing a terminal writer winning after the
@@ -192,11 +222,39 @@ impl OrbitRuntime {
         )
     }
 
+    /// Deterministic seam for provider evidence changing after the candidate
+    /// snapshot is classified but before the final write-boundary reread.
+    #[cfg(test)]
+    pub(super) fn reconcile_stale_job_run_with_provider_probe_after_classification<F, P>(
+        &self,
+        run: &JobRun,
+        provider_probe: P,
+        concurrent_provider_change: F,
+    ) -> Result<bool, OrbitError>
+    where
+        F: FnOnce(),
+        P: Fn(u32, Option<&str>) -> ProcessLiveness,
+    {
+        self.reconcile_stale_job_run_before_revalidation_with_provider_probe(
+            run,
+            &mut ReconcilePass::default(),
+            provider_probe,
+            concurrent_provider_change,
+        )
+    }
+
     /// [ORB-10002] Orphaned runs (owner process conclusively gone) become
     /// `interrupted`, not `failed`: the job did not fail, its worker died.
     /// Interrupted runs are resumable from their step checkpoints via
     /// `orbit job resume <run_id>`.
-    fn finalize_orphaned_job_run(&self, run_id: &str) -> Result<bool, OrbitError> {
+    fn finalize_orphaned_job_run_with_provider_probe<P>(
+        &self,
+        run_id: &str,
+        provider_probe: &P,
+    ) -> Result<bool, OrbitError>
+    where
+        P: Fn(u32, Option<&str>) -> ProcessLiveness,
+    {
         // [ORB-11116] The scan's candidate snapshot can go stale while a real
         // worker is terminalizing. Re-read at the interruption boundary and
         // re-run both state and owner classification so a completed run never
@@ -207,6 +265,9 @@ impl OrbitRuntime {
         let Some((error_code, message)) = stale_job_run_diagnostic(&current) else {
             return Ok(false);
         };
+        if !self.provider_evidence_allows_orphan_finalization(&current.run_id, provider_probe) {
+            return Ok(false);
+        }
 
         let finished_at = self.orphaned_run_finished_at(&current);
         let duration_ms = current.started_at.map(|started_at| {
@@ -248,6 +309,84 @@ impl OrbitRuntime {
             state: JobRunState::Interrupted.to_string(),
         })?;
         Ok(true)
+    }
+
+    /// A stale owner is not sufficient to condemn a run while any durable,
+    /// still-open provider child is alive or cannot be verified. The audit
+    /// collector reads the complete trail and process probing verifies the
+    /// recorded start token and PID namespace before returning `Alive`.
+    fn provider_evidence_allows_orphan_finalization<P>(
+        &self,
+        run_id: &str,
+        provider_probe: &P,
+    ) -> bool
+    where
+        P: Fn(u32, Option<&str>) -> ProcessLiveness,
+    {
+        let processes = match self.collect_run_provider_processes_with(run_id, provider_probe) {
+            Ok(processes) => processes,
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.core.job_run",
+                    run_id,
+                    owner = "stale",
+                    error = %error,
+                    decision = "defer",
+                    reason = "provider_evidence_unreadable",
+                    "orphan finalization provider guard deferred",
+                );
+                return false;
+            }
+        };
+
+        let mut open = 0usize;
+        let mut alive = 0usize;
+        let mut unknown = 0usize;
+        for process in &processes {
+            if process.finished {
+                continue;
+            }
+            open += 1;
+            match process.liveness {
+                ProcessLiveness::Alive
+                    if process
+                        .pid_start_time
+                        .as_deref()
+                        .is_some_and(is_stable_token) =>
+                {
+                    alive += 1;
+                }
+                ProcessLiveness::Alive => unknown += 1,
+                ProcessLiveness::Unknown => unknown += 1,
+                ProcessLiveness::Exited => {}
+            }
+        }
+        let guard = if alive > 0 {
+            ProviderFinalizationGuard::Alive
+        } else if unknown > 0 {
+            ProviderFinalizationGuard::Unknown
+        } else {
+            ProviderFinalizationGuard::Clear
+        };
+        let (decision, reason) = match guard {
+            ProviderFinalizationGuard::Clear => ("finalize", "providers_closed_or_absent"),
+            ProviderFinalizationGuard::Alive => ("defer", "provider_alive"),
+            ProviderFinalizationGuard::Unknown => ("defer", "provider_liveness_unknown"),
+        };
+        tracing::debug!(
+            target: "orbit.core.job_run",
+            run_id,
+            owner = "stale",
+            providers = processes.len(),
+            open,
+            alive,
+            unknown,
+            decision,
+            reason,
+            "orphan finalization provider guard classified durable evidence",
+        );
+
+        guard == ProviderFinalizationGuard::Clear
     }
 
     /// When an orphaned run actually stopped doing work.
