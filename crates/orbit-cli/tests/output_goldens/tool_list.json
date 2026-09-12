@@ -471,6 +471,12 @@
         "name": "claim_token",
         "param_type": "string",
         "required": false
+      },
+      {
+        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+        "name": "model",
+        "param_type": "string",
+        "required": false
       }
     ],
     "status": "active"
@@ -567,6 +573,12 @@
         "name": "claim_token",
         "param_type": "string",
         "required": false
+      },
+      {
+        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+        "name": "model",
+        "param_type": "string",
+        "required": false
       }
     ],
     "status": "active"
@@ -599,6 +611,12 @@
       {
         "description": "Token for this workspace's exclusive claim, when another operator holds one",
         "name": "claim_token",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+        "name": "model",
         "param_type": "string",
         "required": false
       }

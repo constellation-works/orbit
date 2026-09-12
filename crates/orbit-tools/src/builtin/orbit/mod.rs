@@ -13,9 +13,7 @@ pub mod workflow;
 pub mod workspace_claim;
 
 use orbit_common::OrbitError;
-use orbit_types::identity::{
-    normalize_agent_family_for_model, normalize_optional_attribution_label,
-};
+use orbit_types::identity::{normalize_agent_family_for_model, require_canonical_agent_family};
 use orbit_types::tool::{McpToolScope, ToolParam};
 use serde_json::Value;
 
@@ -138,10 +136,6 @@ pub fn register(registry: &mut ToolRegistry) {
     registry.register_inactive(semantic::index::OrbitSemanticIndexTool);
 }
 
-fn build_actor_label(agent: Option<&str>, model: Option<&str>) -> Option<String> {
-    normalize_optional_attribution_label(model.or(agent), model)
-}
-
 fn trimmed_optional(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
@@ -177,12 +171,11 @@ pub(super) fn resolve_identity(
     } else {
         (None, None)
     };
-    let agent = normalize_agent_family_for_model(agent.as_deref(), model.as_deref())?;
-    let actor_label = build_actor_label(agent.as_deref(), model.as_deref());
+    let family = require_canonical_agent_family(agent.as_deref(), model.as_deref())?;
     Ok(OrbitIdentity {
-        agent,
-        model,
-        actor_label,
+        agent: family.clone(),
+        model: family.clone(),
+        actor_label: family,
     })
 }
 

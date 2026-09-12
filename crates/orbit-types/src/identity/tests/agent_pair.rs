@@ -96,6 +96,52 @@ mod resolution {
             infer_agent_family_from_model("gemini-3.8-flash-high").as_deref(),
             Some("gemini")
         );
+        for family in ["codex", "claude", "gemini", "grok"] {
+            assert_eq!(
+                infer_agent_family_from_model(family).as_deref(),
+                Some(family),
+                "{family} is itself a canonical family"
+            );
+        }
+        assert_eq!(infer_agent_family_from_model("llama"), None);
+    }
+
+    #[test]
+    fn require_canonical_agent_family_normalizes_or_refuses() {
+        assert_eq!(
+            require_canonical_agent_family(None, Some("gpt-5.5"))
+                .expect("full model string")
+                .as_deref(),
+            Some("codex")
+        );
+        assert_eq!(
+            require_canonical_agent_family(None, Some("claude-opus-4-7"))
+                .expect("full model string")
+                .as_deref(),
+            Some("claude")
+        );
+        assert_eq!(
+            require_canonical_agent_family(None, Some("codex"))
+                .expect("canonical family")
+                .as_deref(),
+            Some("codex")
+        );
+        assert_eq!(
+            require_canonical_agent_family(None, None).expect("absent identity"),
+            None
+        );
+
+        let error = require_canonical_agent_family(None, Some("llama"))
+            .expect_err("unrecognized model is refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("llama"),
+            "names the refused value: {message}"
+        );
+        assert!(
+            message.contains("canonical agent family"),
+            "explains the contract: {message}"
+        );
     }
 
     #[test]

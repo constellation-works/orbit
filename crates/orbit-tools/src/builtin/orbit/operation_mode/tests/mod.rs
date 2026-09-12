@@ -53,6 +53,7 @@ fn derived_schema_carries_the_declared_parameters_in_order() {
             "recovery_minutes",
             "review_policy",
             "claim_token",
+            "model",
         ]
     );
     assert_eq!(schema.parameters[0].param_type, "string_list");

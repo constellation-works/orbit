@@ -88,13 +88,55 @@ fn cli_agent_envelope_records_canonical_actor_family() {
 }
 
 #[test]
-fn cli_without_agent_envelope_records_unknown_actor() {
-    let _env = test_env::unset(AGENT_IDENTITY_ENV.iter().copied().chain(["ORBIT_OPERATOR"]));
+fn cli_without_agent_envelope_records_os_user_actor() {
+    let _env = test_env::scoped(AGENT_IDENTITY_ENV.iter().map(|name| (*name, None)).chain([
+        ("ORBIT_OPERATOR", None),
+        ("USER", Some("qa-operator")),
+        ("USERNAME", None),
+        ("LOGNAME", None),
+    ]));
+
+    let actor = ActorIdentity::from_env();
+    assert_eq!(actor.kind, ActorKind::Human);
+    assert_eq!(actor.label, "human:qa-operator");
+    assert_eq!(actor.audit_role(), "human");
+    assert_eq!(audit_event_for_actor(actor).role, "human");
+}
+
+#[test]
+fn cli_without_any_identity_signal_records_unknown_actor() {
+    let _env = test_env::scoped(AGENT_IDENTITY_ENV.iter().map(|name| (*name, None)).chain([
+        ("ORBIT_OPERATOR", None),
+        ("USER", None),
+        ("USERNAME", None),
+        ("LOGNAME", None),
+    ]));
 
     let actor = ActorIdentity::from_env();
     assert_eq!(actor.kind, ActorKind::Unknown);
     assert_eq!(actor.label, "unknown");
+    assert_eq!(actor.audit_role(), "unknown");
     assert_eq!(audit_event_for_actor(actor).role, "unknown");
+}
+
+#[test]
+fn cli_orbit_actor_override_records_configured_identity() {
+    let _env = test_env::scoped(
+        AGENT_IDENTITY_ENV
+            .iter()
+            .filter(|name| **name != "ORBIT_ACTOR")
+            .map(|name| (*name, None))
+            .chain([
+                ("ORBIT_OPERATOR", None),
+                ("ORBIT_ACTOR", Some("human:desk")),
+                ("USER", Some("ignored")),
+            ]),
+    );
+
+    let actor = ActorIdentity::from_env();
+    assert_eq!(actor.kind, ActorKind::Human);
+    assert_eq!(actor.label, "human:desk");
+    assert_eq!(actor.audit_role(), "human");
 }
 
 #[test]

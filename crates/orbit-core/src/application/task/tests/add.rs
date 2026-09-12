@@ -1,3 +1,4 @@
+use crate::ActorIdentity;
 use crate::application::task::{TaskAddParams, compute_task_add_warnings};
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskStatus, TaskType};
@@ -28,6 +29,67 @@ fn task_add_enters_proposed_and_requires_approval_before_backlog() {
         .start_task(&task.id, Some("start approved task".to_string()), None)
         .expect("backlog task starts directly");
     assert_eq!(started.status, TaskStatus::InProgress);
+}
+
+#[test]
+fn task_add_records_process_actor_when_no_model_is_supplied() {
+    let (_root, runtime) = test_runtime();
+    let runtime = runtime.with_actor(ActorIdentity::human("human:qa"));
+
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Bare CLI provenance".to_string(),
+            description: "Record the process actor.".to_string(),
+            ..Default::default()
+        })
+        .expect("task add succeeds");
+
+    assert_eq!(task.created_by.as_deref(), Some("human:qa"));
+    let history = runtime.get_task_history(&task.id).expect("load history");
+    assert_eq!(history[0].by, "human:qa");
+}
+
+#[test]
+fn task_add_normalizes_full_model_string_to_a_canonical_family() {
+    let (_root, runtime) = test_runtime();
+
+    let task = runtime
+        .add_task_with_identity(
+            TaskAddParams {
+                title: "Model family provenance".to_string(),
+                description: "Normalize gpt-5.5 to codex.".to_string(),
+                ..Default::default()
+            },
+            None,
+            Some("gpt-5.5".to_string()),
+        )
+        .expect("task add succeeds");
+
+    assert_eq!(task.created_by.as_deref(), Some("codex"));
+}
+
+#[test]
+fn task_add_refuses_an_unrecognized_model() {
+    let (_root, runtime) = test_runtime();
+
+    let error = runtime
+        .add_task_with_identity(
+            TaskAddParams {
+                title: "Refuse llama".to_string(),
+                description: "llama is not a family.".to_string(),
+                ..Default::default()
+            },
+            None,
+            Some("llama".to_string()),
+        )
+        .expect_err("llama is invalid_input");
+
+    match error {
+        OrbitError::InvalidInput(message) => {
+            assert!(message.contains("llama"), "{message}");
+        }
+        other => panic!("expected invalid_input, got {other}"),
+    }
 }
 
 #[test]

@@ -74,7 +74,7 @@ impl OrbitRuntime {
             &actor.label,
             canonical_agent.as_deref(),
             canonical_model.as_deref(),
-        );
+        )?;
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
         let mut result = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
@@ -297,13 +297,14 @@ impl OrbitRuntime {
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
         let actor = self.actor().clone();
-        let effective_label = actor_label_override.unwrap_or_else(|| {
-            effective_actor_label(
+        let effective_label = match actor_label_override {
+            Some(label) => label,
+            None => effective_actor_label(
                 &actor.label,
                 canonical_agent.as_deref(),
                 canonical_model.as_deref(),
-            )
-        });
+            )?,
+        };
         let append_comments = build_task_comments(comment, effective_label.as_str())?;
         let mut started = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
@@ -626,7 +627,7 @@ impl OrbitRuntime {
             &actor.label,
             canonical_agent.as_deref(),
             canonical_model.as_deref(),
-        );
+        )?;
         let reason = note.trim();
         if reason.is_empty() {
             return Err(OrbitError::InvalidInput(

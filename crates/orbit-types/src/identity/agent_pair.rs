@@ -270,6 +270,10 @@ pub fn infer_agent_family_from_model(model: &str) -> Option<String> {
         return None;
     }
 
+    if all_agent_families().iter().any(|family| model == *family) {
+        return Some(model);
+    }
+
     if model.starts_with("gpt-") || model.starts_with("o1") || model.starts_with("o3") {
         return Some("codex".to_string());
     }
@@ -322,6 +326,34 @@ pub fn normalize_agent_family_for_model(
     }
 
     Ok(agent.or(inferred))
+}
+
+/// Resolve an optional agent/model pair to a canonical write-attribution family.
+///
+/// A present `model` (or `agent`) must name `codex`, `claude`, `gemini`, or
+/// `grok`, or be a full model string those families can infer. Unrecognized
+/// values such as `llama` are refused rather than stored verbatim.
+pub fn require_canonical_agent_family(
+    agent_cli: Option<&str>,
+    model: Option<&str>,
+) -> Result<Option<String>, IdentityError> {
+    let family = normalize_agent_family_for_model(agent_cli, model)?;
+    let shown = model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| agent_cli.map(str::trim).filter(|value| !value.is_empty()));
+    let Some(shown) = shown else {
+        return Ok(None);
+    };
+
+    match family {
+        Some(family) if all_agent_families().iter().any(|known| family == *known) => {
+            Ok(Some(family))
+        }
+        _ => Err(IdentityError::Invalid(format!(
+            "`model` '{shown}' is not a canonical agent family (codex, claude, gemini, grok) or a recognized full model string"
+        ))),
+    }
 }
 
 fn is_antigravity_cli(name: &str) -> bool {

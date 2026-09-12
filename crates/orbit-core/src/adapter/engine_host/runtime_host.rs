@@ -910,7 +910,7 @@ fn apply_task_automation_update_under_lock(
             explicit_planned_by: None,
             explicit_implemented_by: None,
         },
-    );
+    )?;
     runtime.with_mutation(|| {
         let external_refs = if update.external_refs.is_empty() {
             None

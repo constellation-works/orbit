@@ -17,7 +17,6 @@ use orbit_store::contracts::{
 };
 use orbit_store::maintenance::task_registry::read_workspace_config_optional;
 use orbit_tools::ReservationOwnerContext;
-use orbit_types::identity::normalize_optional_attribution_label;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
@@ -144,7 +143,7 @@ pub(crate) fn release(
                         runtime,
                         agent.as_deref(),
                         model.as_deref(),
-                    ),
+                    )?,
                 })
                 .to_string(),
             ),
@@ -175,7 +174,7 @@ pub(crate) fn release(
                     runtime,
                     agent.as_deref(),
                     model.as_deref(),
-                ),
+                )?,
             }),
         )?;
     }
@@ -257,7 +256,7 @@ pub(crate) fn reserve_with_index(
         ));
     }
 
-    let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref());
+    let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref())?;
     let workspace_id = workspace_task_reservation_id(runtime)?;
     let repo_root = runtime.paths().repo_root.as_path();
     let (task_ids, requested_files) = match &reservation_scope {
@@ -804,9 +803,8 @@ fn reservation_actor_label(
     runtime: &OrbitRuntime,
     agent: Option<&str>,
     model: Option<&str>,
-) -> String {
-    normalize_optional_attribution_label(model.or(agent), model)
-        .unwrap_or_else(|| runtime.actor_label().to_string())
+) -> Result<String, OrbitError> {
+    runtime.actor().resolve_write_label(agent, model)
 }
 
 fn record_task_lock_audit_event(

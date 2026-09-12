@@ -17,6 +17,35 @@ fn runtime_identity_overwrites_self_reported_model_at_tool_boundary() {
     assert_eq!(identity.actor_label.as_deref(), Some("claude"));
 }
 
+#[test]
+fn input_model_normalizes_full_strings_and_refuses_unrecognized_families() {
+    let ctx = ToolContext {
+        cwd: None,
+        session_context: Default::default(),
+        allowed_tools: Vec::new(),
+        workspace_root: None,
+        agent_name: None,
+        model_name: None,
+        proc_allowed_programs: Vec::new(),
+        proc_spawn_environment: None,
+        proc_spawn_activity_scoped: false,
+        policy_engine: None,
+        fs_profile: None,
+        fs_audit: None,
+        reservation_owner: None,
+        orbit_host: None,
+    };
+
+    let identity = resolve_identity(&ctx, &json!({ "model": "gpt-5.5" })).expect("normalize");
+    assert_eq!(identity.agent.as_deref(), Some("codex"));
+    assert_eq!(identity.model.as_deref(), Some("codex"));
+    assert_eq!(identity.actor_label.as_deref(), Some("codex"));
+
+    let error = resolve_identity(&ctx, &json!({ "model": "llama" })).expect_err("llama refused");
+    let message = error.to_string();
+    assert!(message.contains("llama"), "{message}");
+}
+
 fn tool_context(agent: &str, model: &str) -> ToolContext {
     ToolContext {
         cwd: None,

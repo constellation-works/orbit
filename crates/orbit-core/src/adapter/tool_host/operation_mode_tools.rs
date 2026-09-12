@@ -12,7 +12,6 @@ use orbit_common::protocol::tool_input::{
     optional_u32_alias, required_string,
 };
 use orbit_config::{CompletionPreference, OperationLayer, OperationPreset, ReviewPolicy};
-use orbit_types::identity::normalize_optional_attribution_label;
 use orbit_types::workflow::{GrantRights, OperationGrant};
 use serde_json::{Value, json};
 
@@ -29,11 +28,9 @@ pub(super) fn dispatch(
     agent: Option<String>,
     model: Option<String>,
 ) -> Result<Value, OrbitError> {
-    let actor = normalize_optional_attribution_label(
-        model.as_deref().or(agent.as_deref()),
-        model.as_deref(),
-    )
-    .unwrap_or_else(|| runtime.actor_label().to_string());
+    let actor = runtime
+        .actor()
+        .resolve_write_label(agent.as_deref(), model.as_deref())?;
     match verb {
         OperationModeVerb::Explain => explain(runtime, &input),
         OperationModeVerb::Enable => enable(runtime, &input, &actor),

@@ -32,7 +32,7 @@ use orbit_store::contracts::{
     WorkspaceClaimAcquireParams, WorkspaceClaimCheckParams, WorkspaceClaimHolder,
     WorkspaceClaimReleaseParams,
 };
-use orbit_types::identity::normalize_optional_attribution_label;
+
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 
@@ -62,7 +62,7 @@ pub(crate) fn acquire(
             "`ttl_seconds` must be between 1 and {MAX_CLAIM_TTL_SECONDS} seconds"
         )));
     }
-    let actor = claim_actor_label(runtime, agent.as_deref(), model.as_deref());
+    let actor = claim_actor_label(runtime, agent.as_deref(), model.as_deref())?;
     let result = runtime
         .stores()
         .task_reservations()
@@ -139,7 +139,7 @@ pub(crate) fn release(
                 .to_string(),
         ));
     }
-    let released_by = claim_actor_label(runtime, agent.as_deref(), model.as_deref());
+    let released_by = claim_actor_label(runtime, agent.as_deref(), model.as_deref())?;
     let result = runtime
         .stores()
         .task_reservations()
@@ -306,9 +306,12 @@ fn holder_json(claim: &WorkspaceClaimHolder) -> Value {
     })
 }
 
-fn claim_actor_label(runtime: &OrbitRuntime, agent: Option<&str>, model: Option<&str>) -> String {
-    normalize_optional_attribution_label(model.or(agent), model)
-        .unwrap_or_else(|| runtime.actor_label().to_string())
+fn claim_actor_label(
+    runtime: &OrbitRuntime,
+    agent: Option<&str>,
+    model: Option<&str>,
+) -> Result<String, OrbitError> {
+    runtime.actor().resolve_write_label(agent, model)
 }
 
 fn record_expired_claims(
