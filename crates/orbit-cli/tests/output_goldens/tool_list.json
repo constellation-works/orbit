@@ -188,6 +188,12 @@
         "required": false
       },
       {
+        "description": "Per-invocation inner-sandbox override for the selected crew's provider (Codex: `read-only`, `workspace-write`, or `danger-full-access`). Tightens or names the provider sandbox for this run only; values the provider does not support are refused. The submission result reports the effective mode as `provider:mode`.",
+        "name": "provider_sandbox",
+        "param_type": "string",
+        "required": false
+      },
+      {
         "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
         "name": "model",
         "param_type": "string",

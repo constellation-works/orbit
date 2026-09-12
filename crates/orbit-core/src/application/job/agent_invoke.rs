@@ -33,7 +33,12 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::JobRun;
-use orbit_types::workflow::activity_job::{TRUSTED_HOST_ADMISSION_KEY, TrustedHostAdmission};
+use orbit_types::workflow::Provider;
+use orbit_types::workflow::activity_job::{
+    DEFAULT_PROVIDER_SANDBOX, TRUSTED_HOST_ADMISSION_KEY, TrustedHostAdmission,
+    admit_provider_sandbox_mode, format_provider_sandbox, is_least_restrictive_provider_sandbox,
+    least_restrictive_provider_sandbox_warning,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -74,6 +79,10 @@ pub struct AgentInvokeRequest<'a> {
     /// Caller-supplied retry key. Two submissions carrying the same key resolve
     /// to the same run rather than starting a second subprocess.
     pub idempotency_key: Option<&'a str>,
+    /// Per-invocation inner-sandbox override (`read-only`, `workspace-write`,
+    /// `danger-full-access` for Codex). `None` uses the crew provider's
+    /// configured default. Values the provider does not support are refused.
+    pub provider_sandbox: Option<&'a str>,
     /// Attribution label for the authorizing operator.
     pub actor: Option<&'a str>,
     /// The caller's session, resolved at the admission chokepoint.
@@ -96,6 +105,12 @@ pub struct AgentInvokeSubmission {
     pub admission: TrustedHostAdmission,
     /// Effective wall-clock bound for the invocation.
     pub timeout_seconds: u64,
+    /// Effective provider inner sandbox, as `provider:mode` (for example
+    /// `codex:danger-full-access`). Distinct from Orbit's executor sandbox.
+    pub provider_sandbox: String,
+    /// Operator-facing warnings. Non-empty when `provider_sandbox` is the
+    /// provider's least-restrictive inner sandbox.
+    pub warnings: Vec<String>,
 }
 
 /// A finished (or running) invocation, rendered for an operator.
@@ -127,6 +142,9 @@ pub struct AgentInvokeResult {
     /// Durable reference to the complete captured stdout, readable with
     /// `orbit run logs <RUN_ID>` after the preview is exhausted.
     pub stdout_blob_ref: Option<String>,
+    /// Effective provider inner sandbox persisted at submission, as
+    /// `provider:mode`. Absent on runs submitted before this field existed.
+    pub provider_sandbox: Option<String>,
 }
 
 impl OrbitRuntime {
@@ -145,6 +163,8 @@ impl OrbitRuntime {
         let cwd = self.resolve_workspace_cwd("cwd", request.cwd)?;
         let crew = self.canonical_crew_name(request.crew)?;
         let timeout_seconds = resolve_timeout(request.timeout_seconds)?;
+        let provider_sandbox =
+            self.resolve_invocation_provider_sandbox(request.crew, request.provider_sandbox)?;
         let requested_actor = request
             .actor
             .map(str::trim)
@@ -181,6 +201,7 @@ impl OrbitRuntime {
             "cwd": cwd.display().to_string(),
             "crew": crew,
             "timeout_seconds": timeout_seconds,
+            "provider_sandbox": provider_sandbox.label,
             TRUSTED_HOST_ADMISSION_KEY: serde_json::to_value(&admission)
                 .map_err(|error| OrbitError::Execution(format!("encode admission: {error}")))?,
         });
@@ -194,9 +215,18 @@ impl OrbitRuntime {
             authorized_by = %admission.authorized_by,
             authorizer_provenance = %admission.authorizer_provenance,
             cwd = %admission.cwd,
+            provider_sandbox = %provider_sandbox.label,
             deduplicated,
             "admitted an operator agent invocation outside the executor sandbox"
         );
+        if let Some(warning) = provider_sandbox.warning.as_deref() {
+            tracing::warn!(
+                target: "orbit.trusted_host",
+                run_id = %invoke.run_id,
+                provider_sandbox = %provider_sandbox.label,
+                "{warning}"
+            );
+        }
 
         Ok(AgentInvokeSubmission {
             run_id: invoke.run_id,
@@ -206,8 +236,52 @@ impl OrbitRuntime {
             deduplicated,
             admission,
             timeout_seconds,
+            provider_sandbox: provider_sandbox.label,
+            warnings: provider_sandbox.warning.into_iter().collect(),
         })
     }
+
+    /// Resolve the provider inner sandbox for this invocation.
+    ///
+    /// The crew selects the provider; Codex then reads
+    /// `[execution.codex].sandbox` unless the caller overrode the mode.
+    /// Other providers have no configurable inner sandbox, so the label is
+    /// `{provider}:default` and any other override is refused.
+    fn resolve_invocation_provider_sandbox(
+        &self,
+        crew: Option<&str>,
+        override_mode: Option<&str>,
+    ) -> Result<ResolvedProviderSandbox, OrbitError> {
+        let resolved_crew = self.resolve_crew_for_task(crew, None)?;
+        let provider = Provider::parse(&resolved_crew.assignment.provider).map_err(|error| {
+            OrbitError::InvalidInput(format!(
+                "crew '{}' names an unknown provider: {error}",
+                resolved_crew.name
+            ))
+        })?;
+        let default_mode = match provider {
+            Provider::Codex => self.codex_execution_policy().sandbox().to_string(),
+            _ => DEFAULT_PROVIDER_SANDBOX.to_string(),
+        };
+        let mode = match override_mode
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(requested) => admit_provider_sandbox_mode(provider, requested)
+                .map(str::to_string)
+                .map_err(OrbitError::InvalidInput)?,
+            None => default_mode,
+        };
+        let label = format_provider_sandbox(provider, &mode);
+        let warning = is_least_restrictive_provider_sandbox(provider, &mode)
+            .then(|| least_restrictive_provider_sandbox_warning(&label));
+        Ok(ResolvedProviderSandbox { label, warning })
+    }
+}
+
+struct ResolvedProviderSandbox {
+    label: String,
+    warning: Option<String>,
 }
 
 /// Read a finished or in-flight invocation for an operator [ORB-11354].
@@ -263,6 +337,12 @@ pub fn agent_invoke_result(
         preview,
         preview_truncated,
         stdout_blob_ref: field("stdout_blob_ref")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        provider_sandbox: run
+            .input
+            .as_ref()
+            .and_then(|input| input.get("provider_sandbox"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
     })

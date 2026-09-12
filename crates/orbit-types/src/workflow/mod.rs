@@ -20,7 +20,8 @@ mod tests;
 
 pub use activity_job::{
     AUDIT_ENVELOPE_SCHEMA_VERSION, ActivityV2, ActivityV2Spec, AgentLoopSpec, BackoffStrategy,
-    BranchOutcome, CoreDeterministicAction, DeterministicAction, DeterministicSpec,
+    BranchOutcome, CODEX_LEAST_RESTRICTIVE_SANDBOX, CODEX_PROVIDER_SANDBOX_MODES,
+    CoreDeterministicAction, DEFAULT_PROVIDER_SANDBOX, DeterministicAction, DeterministicSpec,
     EngineDeterministicAction, FanInSpec, FanOutBlock, JobActivityRoles, JobKind, JobV2, JobV2Step,
     JobV2StepBody, JoinMode, LoopBlock, OnDenial, ParallelBlock, PipelineRef, Provider,
     ProviderAlias, ProviderDeprecation, ProviderDiagnostic, ProviderEntryPoint, ProviderIdentity,
@@ -29,7 +30,10 @@ pub use activity_job::{
     TargetRef, TargetStep, ToolAllowlistError, V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED,
     V2_EVENT_TYPE_STEP_DENIED, V2_EVENT_TYPE_TOOL_DENIED,
     V2_INTENTIONALLY_EMPTY_TOOL_WILDCARD_ROOTS, V2_TOOL_WILDCARD_ROOTS, V2AuditEnvelope,
-    V2AuditEvent, V2AuditEventKind, check_retired_backend_value, tool_allowed,
+    V2AuditEvent, V2AuditEventKind, admit_provider_sandbox_mode, check_retired_backend_value,
+    format_provider_sandbox, is_least_restrictive_provider_sandbox,
+    least_restrictive_provider_sandbox, least_restrictive_provider_sandbox_warning,
+    parse_provider_sandbox_label, provider_sandbox_modes, tool_allowed,
     validate_activity_tool_allowlist, validate_activity_tool_allowlist_against_registered_tools,
     validate_job_retired_sessions, validate_tool_allowlist,
     validate_tool_allowlist_against_registered_tools,

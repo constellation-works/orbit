@@ -30,6 +30,10 @@
           "description": "What to investigate. The invoked agent reports back; it makes no Orbit task, lifecycle, commit, or pull-request change.",
           "type": "string"
         },
+        "provider_sandbox": {
+          "description": "Per-invocation inner-sandbox override for the selected crew's provider (Codex: `read-only`, `workspace-write`, or `danger-full-access`). Tightens or names the provider sandbox for this run only; values the provider does not support are refused. The submission result reports the effective mode as `provider:mode`.",
+          "type": "string"
+        },
         "timeout_seconds": {
           "description": "Wall-clock bound for the invocation. Defaults to 1800 and may not exceed 7200.",
           "type": "integer"

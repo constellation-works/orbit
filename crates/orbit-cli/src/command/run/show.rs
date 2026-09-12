@@ -138,7 +138,7 @@ fn agent_invocation_lines(value: &Value) -> String {
     };
     let text = |key: &str| result.get(key).and_then(Value::as_str);
     let mut lines = format!(
-        "\n{} outcome={} envelope_completed={} timed_out={} exit_code={}",
+        "\n{} outcome={} envelope_completed={} timed_out={} exit_code={} provider_sandbox={}",
         crate::output::color::bold("Invocation:"),
         text("outcome").unwrap_or("-"),
         result
@@ -153,6 +153,7 @@ fn agent_invocation_lines(value: &Value) -> String {
             .get("exit_code")
             .and_then(Value::as_i64)
             .map_or_else(|| "-".to_string(), |code| code.to_string()),
+        text("provider_sandbox").unwrap_or("-"),
     );
     if let Some(reason) = text("failure_reason") {
         lines.push_str(&format!("\n  reason: {reason}"));

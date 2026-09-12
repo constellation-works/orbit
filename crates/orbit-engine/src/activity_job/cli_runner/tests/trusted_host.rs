@@ -4,6 +4,7 @@
 //! submission admits it — and these tests pin each combination, because only
 //! one of them may run an unsandboxed process.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -284,6 +285,58 @@ fn an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox() {
         })
         .expect("started event");
     assert_eq!(backend, None);
+}
+
+/// A persisted Codex override reaches `--sandbox` instead of the host default.
+#[test]
+fn a_trusted_host_codex_override_reaches_the_provider_argv() {
+    let temp = tempdir().expect("tempdir");
+    let script = echoing_provider(temp.path());
+    let mut provider_config = HashMap::new();
+    provider_config.insert("sandbox".to_string(), "danger-full-access".to_string());
+    let host = TestHost {
+        command: script.clone(),
+        executor_args: Vec::new(),
+        provider_config,
+        sandbox: None,
+        task_context: None,
+        workspace_root: None,
+        orbit_registry_root: None,
+        orbit_workspace_selector: None,
+    };
+    let mut spec = test_agent_loop_spec(Duration::from_secs(10));
+    spec.trusted_host_execution = true;
+    let (audit, _sink) = writer("job-trusted-sandbox-override");
+    let mut input = admitted_input();
+    input["provider_sandbox"] = serde_json::json!("codex:read-only");
+
+    run_cli_backend(
+        &host,
+        &spec,
+        "agent_invoke",
+        "job-trusted-sandbox-override",
+        audit.clone(),
+        &input,
+        None,
+    )
+    .expect("admitted invocation runs");
+
+    let argv = audit
+        .events_snapshot()
+        .expect("events snapshot")
+        .iter()
+        .find_map(|event| match &event.kind {
+            V2AuditEventKind::CliInvocationStarted { argv_redacted, .. } => {
+                Some(argv_redacted.clone())
+            }
+            _ => None,
+        })
+        .expect("started event");
+    assert!(
+        argv.windows(2)
+            .any(|pair| pair[0] == "--sandbox" && pair[1] == "read-only"),
+        "expected --sandbox read-only in {argv:?}"
+    );
 }
 
 /// An operator may shorten the activity's bound, never extend it.

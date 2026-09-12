@@ -23,8 +23,8 @@ use super::super::workspace::{
     WorktreeBoundaryGuard, resolve_subprocess_cwd, validate_declared_worktree_pair,
 };
 use super::argv::{
-    apply_provider_runtime_arg_fixups, apply_provider_static_arg_fixups, neutralize_inner_sandbox,
-    try_audit_argv_for_dispatch,
+    apply_provider_runtime_arg_fixups, apply_provider_static_arg_fixups,
+    apply_trusted_host_provider_sandbox, neutralize_inner_sandbox, try_audit_argv_for_dispatch,
 };
 use super::envelope::{
     cli_agent_envelope_json, parse_cli_invocation_trace, parse_cli_response_result,
@@ -188,6 +188,9 @@ pub fn run_cli_backend(
     )?;
 
     let mut provider_config = host.provider_cli_config(&provider);
+    if trusted_host.is_some() {
+        apply_trusted_host_provider_sandbox(&provider, input, &mut provider_config);
+    }
 
     // Provider-specific static-arg fixups that are independent of whether the
     // outer sandbox is active. Today this only rewrites Claude's `--debug-file`

@@ -87,12 +87,25 @@ checkout or a linked worktree under `.orbit/state/worktrees/`. `crew` selects th
 (default 1800, maximum 7200), and `idempotency_key` makes a resubmission resolve
 the run the first attempt created rather than starting a second agent.
 
+`provider_sandbox` is an optional per-invocation override of the provider's own
+inner sandbox (not Orbit's executor sandbox — that is already off, reported as
+`sandboxed: false`). Pass a mode the provider accepts, such as Codex
+`read-only` or `workspace-write`, to run an exploration tighter than the crew
+default without editing config. Values the provider does not support are
+refused. The submission result and `orbit run show` report the effective mode
+as `provider:mode` (for example `codex:danger-full-access`, `claude:default`).
+When that mode is the provider's least-restrictive inner sandbox
+(`danger-full-access` for Codex), the result includes a `warnings` entry and
+Orbit logs the same at WARN: the provider may use host integrations (browser,
+computer use, …) beyond the working directory.
+
 Track it with the ordinary run surfaces — `orbit_workflow_run_show`, or
 `orbit run show|logs|cancel <RUN_ID>`. `show` carries the invocation's outcome,
 whether it terminated its response envelope, a bounded preview of the answer,
-and a durable reference to the full captured output. A provider that exits zero
-without terminating its envelope stopped mid-turn: the run records `failed`, and
-the exit code alone is never evidence the investigation succeeded.
+the effective `provider_sandbox`, and a durable reference to the full captured
+output. A provider that exits zero without terminating its envelope stopped
+mid-turn: the run records `failed`, and the exit code alone is never evidence
+the investigation succeeded.
 
 Remote sessions are additionally capped by the destination's caller policy.
 The durable admission and `trusted_host.execution_admitted` event retain the

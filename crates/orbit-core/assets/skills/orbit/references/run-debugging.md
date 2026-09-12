@@ -146,6 +146,9 @@ tail when triaging one.
 `--json` carries the same facts under `agent_invocation`:
 
 - `outcome` is the run's own state, never the provider's exit code.
+- `provider_sandbox` is the provider's own inner sandbox at submission
+  (`codex:danger-full-access`, `claude:default`, …), distinct from Orbit's
+  executor sandbox (`sandboxed: false` on the submit result).
 - `envelope_completed: false` on an otherwise-clean exit means the agent stopped
   mid-turn: exit zero is not evidence the investigation succeeded.
 - `timed_out: true` means the wall-clock bound killed it — resubmit with a

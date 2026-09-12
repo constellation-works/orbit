@@ -34,4 +34,5 @@ spec:
         cwd: "{{ input.cwd }}"
         crew: "{{ input.crew }}"
         timeout_seconds: "{{ input.timeout_seconds }}"
+        provider_sandbox: "{{ input.provider_sandbox }}"
         trusted_host_admission: "{{ input.trusted_host_admission }}"

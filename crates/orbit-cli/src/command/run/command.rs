@@ -26,7 +26,7 @@ Workflow entrypoints:
   orbit run ship-sweep [--dry-run] [--json]
   orbit run triage [task_id ...]
   orbit run job <job_id> [--input key=value] [--json] [--debug]
-  orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS]
+  orbit run agent <prompt> [--cwd DIR] [--crew NAME] [--timeout SECONDS] [--provider-sandbox MODE]
 
 Run history:
   orbit run history [--limit 50]
