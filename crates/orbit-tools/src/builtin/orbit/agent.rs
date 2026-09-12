@@ -36,7 +36,8 @@ impl Tool for OrbitAgentInvokeTool {
             ToolParam {
                 name: "cwd".to_string(),
                 description: "Absolute working directory the agent starts in. Must exist and be \
-                     inside this workspace's checkout; it is never inferred from the caller."
+                     inside this workspace's checkout or a linked worktree under \
+                     `.orbit/state/worktrees/`; it is never inferred from the caller."
                     .to_string(),
                 param_type: "string".to_string(),
                 required: true,

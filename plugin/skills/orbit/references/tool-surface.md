@@ -39,7 +39,7 @@ records in a second store merely to get past a connection error.
 | Observe/resume workflows | `orbit_workflow_run_show/list/resume` | `orbit run show/history/events/trace/logs/cancel`; job replay/resume |
 | Operation mode | `orbit_operation_explain/list` (read); `orbit_operation_enable/stop/revoke` (operator-governed) | `orbit operation explain/enable/list/show/stop/revoke`, `orbit run auto --grant` |
 | Auto-tasks | `orbit_auto_task_list/mint` | Definition add/show/update/toggle are CLI operations; do not assume they are advertised over MCP |
-| Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and working directory, never a shell string |
+| Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
 | Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; asynchronous, returns a run ID |
 | Setup and maintenance | Discover any server extensions; do not guess | config, doctor, semantic, docs, audit, GC, policy, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
 
@@ -83,7 +83,7 @@ What it is not:
   now; submit a new invocation instead.
 
 Required arguments are the `prompt` and an absolute `cwd` inside the workspace's
-checkout. `crew` selects the provider/model, `timeout_seconds` bounds the run
+checkout or a linked worktree under `.orbit/state/worktrees/`. `crew` selects the provider/model, `timeout_seconds` bounds the run
 (default 1800, maximum 7200), and `idempotency_key` makes a resubmission resolve
 the run the first attempt created rather than starting a second agent.
 
