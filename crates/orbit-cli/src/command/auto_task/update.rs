@@ -143,6 +143,17 @@ impl Execute for AutoTaskUpdateArgs {
             },
         )?;
 
-        Ok(Payload::detail(definition_to_json(&definition), definition.name).into())
+        let required_tool_warnings =
+            runtime.validate_required_tools(&definition.template.required_tools)?;
+        let mut document = definition_to_json(&definition);
+        if !required_tool_warnings.is_empty()
+            && let Some(object) = document.as_object_mut()
+        {
+            object.insert(
+                "warnings".to_string(),
+                serde_json::json!(required_tool_warnings),
+            );
+        }
+        Ok(Payload::detail(document, definition.name).into())
     }
 }

@@ -69,6 +69,7 @@ pub struct AutoTaskAddArgs {
 impl Execute for AutoTaskAddArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let schedule = require_schedule(self.cron, self.every_minutes, self.deliveries_landed)?;
+        let required_tool_warnings = runtime.validate_required_tools(&self.required_tools)?;
         // Minted tasks receive TaskComplexity::Unassessed (not a real
         // assessment). Definitions do not carry complexity; the mint path
         // stamps the explicit non-answer so create never produces a gap.
@@ -91,6 +92,15 @@ impl Execute for AutoTaskAddArgs {
             dedupe: self.dedupe,
         })?;
 
-        Ok(Payload::detail(definition_to_json(&definition), definition.name).into())
+        let mut document = definition_to_json(&definition);
+        if !required_tool_warnings.is_empty()
+            && let Some(object) = document.as_object_mut()
+        {
+            object.insert(
+                "warnings".to_string(),
+                serde_json::json!(required_tool_warnings),
+            );
+        }
+        Ok(Payload::detail(document, definition.name).into())
     }
 }

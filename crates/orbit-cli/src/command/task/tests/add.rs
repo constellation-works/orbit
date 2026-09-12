@@ -1,7 +1,9 @@
 use clap::{CommandFactory, Parser};
+use orbit_core::OrbitRuntime;
 
 use crate::command::task::TaskSubcommand;
 use crate::command::{Cli, Commands};
+use crate::command::{CommandOutput, Execute};
 
 #[test]
 fn task_add_parses_repeat_and_comma_delimited_lists() {
@@ -252,4 +254,79 @@ fn removed_task_flags_are_rejected() {
         argv.extend(args);
         assert!(Cli::try_parse_from(argv).is_err());
     }
+}
+
+#[test]
+fn task_add_execution_rejects_unknown_required_tools() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let cli = Cli::try_parse_from([
+        "orbit",
+        "task",
+        "add",
+        "--title",
+        "Unknown tool",
+        "--complexity",
+        "low",
+        "--required-tools",
+        "orbit.task.shwo",
+    ])
+    .expect("parse task add");
+    let Commands::Task(task) = cli.command else {
+        panic!("expected task command");
+    };
+    let TaskSubcommand::Add(args) = task.command else {
+        panic!("expected task add command");
+    };
+
+    let error = args
+        .execute(&runtime)
+        .expect_err("unknown required tool must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("unregistered tool 'orbit.task.shwo'")
+    );
+    assert!(
+        error
+            .did_you_mean()
+            .is_some_and(|names| { names.iter().any(|name| name == "orbit.task.show") })
+    );
+}
+
+#[test]
+fn task_add_execution_reports_disabled_required_tool_warning() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    runtime
+        .disable_tool("orbit.task.list")
+        .expect("disable tool");
+    let cli = Cli::try_parse_from([
+        "orbit",
+        "task",
+        "add",
+        "--title",
+        "Disabled tool",
+        "--complexity",
+        "low",
+        "--required-tools",
+        "orbit.task.list",
+    ])
+    .expect("parse task add");
+    let Commands::Task(task) = cli.command else {
+        panic!("expected task command");
+    };
+    let TaskSubcommand::Add(args) = task.command else {
+        panic!("expected task add command");
+    };
+
+    let CommandOutput::Payload(payload) = args.execute(&runtime).expect("task add") else {
+        panic!("task add should return a payload");
+    };
+    let (document, _) = payload.into_view();
+    assert!(document["warnings"].as_array().is_some_and(|warnings| {
+        warnings.iter().any(|warning| {
+            warning.as_str().is_some_and(|message| {
+                message.contains("orbit.task.list") && message.contains("disabled")
+            })
+        })
+    }));
 }

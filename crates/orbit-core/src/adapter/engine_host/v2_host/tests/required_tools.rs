@@ -1,18 +1,44 @@
 use orbit_engine::{DispatchError, RuntimeHost};
+use orbit_store::contracts::TaskCreateParams;
+use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskAddParams;
 
+// These tests exercise admission of legacy persisted tasks, so they bypass
+// the current creation boundary to retain deliberately invalid requirements.
 fn add_task(runtime: &OrbitRuntime, title: &str, required_tools: &[&str]) -> String {
     runtime
-        .add_task(TaskAddParams {
+        .stores()
+        .task_records()
+        .create(TaskCreateParams {
+            actor: "test".to_string(),
+            parent_id: None,
             title: title.to_string(),
             description: "Exercise task-scoped activity tools.".to_string(),
+            acceptance_criteria: Vec::new(),
+            dependencies: Vec::new(),
+            relations: Vec::new(),
+            tags: Vec::new(),
             required_tools: required_tools
                 .iter()
                 .map(|tool| (*tool).to_string())
                 .collect(),
-            ..Default::default()
+            plan: String::new(),
+            execution_summary: String::new(),
+            context_files: Vec::new(),
+            repo_root: None,
+            created_by: Some("test".to_string()),
+            planned_by: None,
+            implemented_by: None,
+            status: TaskStatus::Backlog,
+            priority: TaskPriority::Medium,
+            complexity: None,
+            task_type: TaskType::Chore,
+            external_refs: Vec::new(),
+            source_task_id: None,
+            crew: None,
+            orchestrator: None,
+            comments: Vec::new(),
         })
         .expect("add task")
         .id

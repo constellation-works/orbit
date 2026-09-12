@@ -440,3 +440,49 @@ fn task_add_accepts_valid_context_selectors() {
         ]
     );
 }
+
+#[test]
+fn task_add_rejects_a_requirement_agents_can_never_be_granted() {
+    let (_root, runtime) = test_runtime();
+
+    // `orbit.auto_task.add` is registered but admin/human-only, so activity
+    // admission refuses it and `required_tools` cannot be edited afterwards.
+    let error = runtime
+        .add_task(TaskAddParams {
+            title: "Require a human-only tool".to_string(),
+            required_tools: vec!["orbit.auto_task.add".to_string()],
+            ..Default::default()
+        })
+        .expect_err("a never-grantable requirement must be rejected at creation");
+
+    let OrbitError::InvalidInputDiagnostic {
+        message,
+        did_you_mean,
+    } = error
+    else {
+        panic!("expected an invalid-input diagnostic with suggestions");
+    };
+    assert!(message.contains("orbit.auto_task.add"), "{message}");
+    assert!(message.contains("admin/human-only"), "{message}");
+    assert!(
+        !did_you_mean.contains(&"orbit.auto_task.add".to_string()),
+        "suggestions must only offer agent-facing tools: {did_you_mean:?}"
+    );
+    assert!(did_you_mean.contains(&"orbit.task.show".to_string()));
+}
+
+#[test]
+fn task_add_keeps_a_disabled_requirement_with_a_warning() {
+    let (_root, runtime) = test_runtime();
+    runtime
+        .disable_tool("github.run.list")
+        .expect("disable a registered agent-facing tool");
+
+    let warnings = runtime
+        .validate_required_tools(&["github.run.list".to_string()])
+        .expect("an operator-disabled requirement stays durable");
+
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("github.run.list"), "{warnings:?}");
+    assert!(warnings[0].contains("disabled"), "{warnings:?}");
+}
