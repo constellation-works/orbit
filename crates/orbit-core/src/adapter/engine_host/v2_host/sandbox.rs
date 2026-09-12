@@ -406,25 +406,42 @@ pub(super) fn append_runtime_sidecar_grant(
     resolved: &mut ResolvedFsProfile,
     authority: &mut Vec<LinuxRuntimeWriteAuthority>,
 ) -> Result<(), DispatchError> {
-    append_runtime_sidecar_grant_with_lease(root, relative, resolved, authority, None)
+    append_runtime_sidecar_grant_with_lease(root, &root.join(relative), resolved, authority, None)
 }
 
+/// Grant a runtime SQLite database and the sidecars belonging to its accepted
+/// canonical path.
+///
+/// Containment must be decided before SQLite opens the lease: an authorized
+/// in-root alias is resolved away before `SQLITE_OPEN_NOFOLLOW` reaches the
+/// trust boundary, while an escaping alias is dropped without opening it.
+// pub(super) widened for the sibling tests/ layout.
 #[cfg(target_os = "linux")]
-fn append_runtime_sqlite_grants(
+pub(super) fn append_runtime_sqlite_grants(
     root: &Path,
     relative: &str,
     resolved: &mut ResolvedFsProfile,
     authority: &mut Vec<LinuxRuntimeWriteAuthority>,
 ) -> Result<(), DispatchError> {
-    let database = root.join(relative);
+    let Some(database) = validated_linux_runtime_descendant(root, relative)? else {
+        tracing::warn!(
+            runtime_root = %root.display(),
+            database = relative,
+            "skipping sandbox grants for a database that resolves outside its runtime root"
+        );
+        return Ok(());
+    };
+
     let lease = orbit_common::storage::sqlite::lease_wal_file_set(&database)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?
         .map(std::sync::Arc::new);
 
     for suffix in ["", "-wal", "-shm"] {
+        let mut sidecar = database.as_os_str().to_os_string();
+        sidecar.push(suffix);
         append_runtime_sidecar_grant_with_lease(
             root,
-            &format!("{relative}{suffix}"),
+            Path::new(&sidecar),
             resolved,
             authority,
             lease.clone(),
@@ -436,15 +453,15 @@ fn append_runtime_sqlite_grants(
 #[cfg(target_os = "linux")]
 fn append_runtime_sidecar_grant_with_lease(
     root: &Path,
-    relative: &str,
+    candidate: &Path,
     resolved: &mut ResolvedFsProfile,
     authority: &mut Vec<LinuxRuntimeWriteAuthority>,
     wal_file_set_lease: Option<std::sync::Arc<orbit_common::storage::sqlite::WalFileSetLease>>,
 ) -> Result<(), DispatchError> {
-    let Some(file) = validated_linux_runtime_descendant(root, relative)? else {
+    let Some(file) = validated_linux_runtime_path(root, candidate)? else {
         tracing::warn!(
             runtime_root = %root.display(),
-            sidecar = relative,
+            sidecar = %candidate.display(),
             "skipping sandbox grant for a database sidecar that resolves outside its runtime root"
         );
         return Ok(());
@@ -586,7 +603,15 @@ pub(super) fn validated_linux_runtime_descendant(
     root: &Path,
     relative: &str,
 ) -> Result<Option<PathBuf>, DispatchError> {
-    let Some(resolved) = resolved_existing_ancestor(&root.join(relative))? else {
+    validated_linux_runtime_path(root, &root.join(relative))
+}
+
+#[cfg(target_os = "linux")]
+fn validated_linux_runtime_path(
+    root: &Path,
+    candidate: &Path,
+) -> Result<Option<PathBuf>, DispatchError> {
+    let Some(resolved) = resolved_existing_ancestor(candidate)? else {
         return Ok(None);
     };
     Ok(resolved.starts_with(root).then_some(resolved))

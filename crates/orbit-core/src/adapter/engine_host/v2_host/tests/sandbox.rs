@@ -1384,9 +1384,10 @@ mod runtime_store_grants {
     use std::path::Path;
 
     use orbit_types::policy::ResolvedFsProfile;
+    use rusqlite::Connection;
 
     use crate::adapter::engine_host::v2_host::sandbox::{
-        append_runtime_directory_grant, append_runtime_sidecar_grant,
+        append_runtime_directory_grant, append_runtime_sidecar_grant, append_runtime_sqlite_grants,
         open_or_create_runtime_directory, validated_linux_runtime_descendant,
     };
 
@@ -1560,6 +1561,86 @@ mod runtime_store_grants {
             vec![root.join("orbit.db-wal").display().to_string()]
         );
         assert_eq!(authority[0].path, root.join("orbit.db-wal"));
+    }
+
+    #[test]
+    fn sqlite_grants_resolve_an_in_root_database_alias_before_leasing() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let root = canonical_root(root.path());
+        let database = root.join("real-orbit.db");
+        let writer = Connection::open(&database).expect("create database");
+        writer
+            .pragma_update(None, "journal_mode", "WAL")
+            .expect("enable WAL");
+        writer
+            .execute_batch("CREATE TABLE fixture(value INTEGER); INSERT INTO fixture VALUES (1);")
+            .expect("seed database");
+        symlink(&database, root.join("orbit.db")).expect("alias database inside root");
+        let mut profile = empty_profile();
+        let mut authority = Vec::new();
+
+        append_runtime_sqlite_grants(&root, "orbit.db", &mut profile, &mut authority)
+            .expect("grant canonical database file set");
+
+        let expected_paths = [
+            database.clone(),
+            root.join("real-orbit.db-wal"),
+            root.join("real-orbit.db-shm"),
+        ];
+        assert_eq!(
+            authority
+                .iter()
+                .map(|grant| grant.path.clone())
+                .collect::<Vec<_>>(),
+            expected_paths
+        );
+        assert_eq!(
+            profile.modify,
+            expected_paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+        );
+        let lease = authority[0]
+            .wal_file_set_lease
+            .as_ref()
+            .expect("database lease");
+        assert!(authority.iter().all(|grant| {
+            std::sync::Arc::ptr_eq(
+                lease,
+                grant.wal_file_set_lease.as_ref().expect("sidecar lease"),
+            )
+        }));
+
+        drop(writer);
+        assert!(
+            expected_paths[1..].iter().all(|path| path.exists()),
+            "the shared lease must keep both canonical sidecars linked"
+        );
+    }
+
+    #[test]
+    fn sqlite_grants_reject_an_escaping_alias_without_touching_its_target() {
+        let root = tempfile::tempdir().expect("runtime root");
+        let outside = tempfile::tempdir().expect("outside");
+        let root = canonical_root(root.path());
+        let target = canonical_root(outside.path()).join("external.db");
+        std::fs::write(&target, b"not an Orbit database").expect("create external target");
+        symlink(&target, root.join("orbit.db")).expect("redirect database outside root");
+        let mut profile = empty_profile();
+        let mut authority = Vec::new();
+
+        append_runtime_sqlite_grants(&root, "orbit.db", &mut profile, &mut authority)
+            .expect("an escaping database is skipped before SQLite opens it");
+
+        assert!(profile.modify.is_empty(), "grants: {:?}", profile.modify);
+        assert!(authority.is_empty());
+        assert_eq!(
+            std::fs::read(&target).expect("read external target"),
+            b"not an Orbit database"
+        );
+        assert!(!outside.path().join("external.db-wal").exists());
+        assert!(!outside.path().join("external.db-shm").exists());
     }
 
     /// SQLite writes its sidecars next to the database it opens, so a sidecar
