@@ -629,6 +629,10 @@ pub trait AuditEventStoreBackend: Send + Sync {
         &self,
         since: Option<&DateTime<Utc>>,
     ) -> Result<Vec<(String, i64)>, OrbitError>;
+    fn get_audit_denials_by_operation(
+        &self,
+        since: Option<&DateTime<Utc>>,
+    ) -> Result<Vec<(String, i64)>, OrbitError>;
     fn get_audit_tool_call_counts_by_role(
         &self,
         since: Option<&DateTime<Utc>>,

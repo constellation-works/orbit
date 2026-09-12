@@ -197,3 +197,106 @@ fn a_denial_is_recorded_as_denied_not_failed() {
         record.error_message
     );
 }
+
+/// [ORB-12257]: a denied `orbit.task.locks.release` — the operation named in
+/// the bug report's 1,727 unexplained denials — must write an audit row that
+/// actually explains itself: the operation name, the denial message, the
+/// resolved role, and the capability the caller was missing.
+#[test]
+fn a_denied_task_locks_release_records_operation_message_role_and_capability() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+
+    let error = runtime
+        .run_tool_with_context_and_role(
+            "orbit.task.locks.release",
+            json!({ "reservation_id": "reservation-no-such-reservation" }),
+            Role::Admin,
+            context_with([McpCapability::Agent]),
+        )
+        .expect_err("an agent holds neither operator nor runner");
+    assert!(
+        matches!(error, OrbitError::CapabilityDenied(_)),
+        "expected a capability denial, got: {error}"
+    );
+
+    let events = runtime
+        .list_audit_events(None, None, Some(AuditEventStatus::Denied), None, 50)
+        .expect("list audit events");
+    let record = events
+        .iter()
+        .find(|event| event.command == "authorization")
+        .expect("the decision persists its own audit row");
+
+    // Operation name. `tool_name` stays unset on this row: the tool-dispatch
+    // chokepoint that runs the authorization check already wrote its own
+    // entry-point row with `tool_name` set, and `target_id` is this row's
+    // operation-name column (see `record_authorization_event`).
+    assert_eq!(
+        record.target_id.as_deref(),
+        Some("orbit.task.locks.release")
+    );
+    // Denial message.
+    let message = record
+        .error_message
+        .as_deref()
+        .expect("a denied row carries the denial message");
+    assert!(message.contains("orbit.task.locks.release"), "{message}");
+    assert!(
+        message.contains("operator") || message.contains("runner"),
+        "{message}"
+    );
+    // Resolved role.
+    assert!(!record.role.is_empty());
+    // Missing capability: the caller held `agent`, not the `operator`/`runner`
+    // the operation required.
+    assert_eq!(
+        record.effective_capabilities,
+        BTreeSet::from([McpCapability::Agent])
+    );
+}
+
+/// [ORB-12257] `orbit audit stats` must break `denied` down by operation
+/// rather than collapsing every refusal into one opaque total.
+#[test]
+fn audit_stats_denials_break_down_by_operation() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let task_id = seed_task(&runtime);
+
+    let _ = runtime.run_tool_with_context_and_role(
+        "orbit.task.delete",
+        json!({ "id": task_id, "force": true }),
+        Role::Admin,
+        context_with([McpCapability::Agent]),
+    );
+    let _ = runtime.run_tool_with_context_and_role(
+        "orbit.task.locks.release",
+        json!({ "reservation_id": "reservation-no-such-reservation" }),
+        Role::Admin,
+        context_with([McpCapability::Agent]),
+    );
+    let _ = runtime.run_tool_with_context_and_role(
+        "orbit.task.locks.release",
+        json!({ "reservation_id": "reservation-still-no-such-reservation" }),
+        Role::Admin,
+        context_with([McpCapability::Agent]),
+    );
+
+    let breakdown = runtime
+        .audit_denials_by_operation(None)
+        .expect("denials by operation");
+
+    assert_eq!(
+        breakdown
+            .iter()
+            .find(|(operation, _)| operation == "orbit.task.delete")
+            .map(|(_, count)| *count),
+        Some(1)
+    );
+    assert_eq!(
+        breakdown
+            .iter()
+            .find(|(operation, _)| operation == "orbit.task.locks.release")
+            .map(|(_, count)| *count),
+        Some(2)
+    );
+}

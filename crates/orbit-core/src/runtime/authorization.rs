@@ -19,8 +19,8 @@
 
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
-    CallerCapabilities, CallerEnvelope, CallerProvenance, GovernedOperation, authorize,
-    governed_command, governed_tool,
+    CallerCapabilities, CallerEnvelope, CallerProvenance, GovernedOperation, OperationSurface,
+    authorize, governed_command, governed_tool,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_store::contracts::AuditEventInsertParams;
@@ -121,6 +121,7 @@ impl OrbitRuntime {
         );
         self.record_authorization_event(
             tool_name,
+            OperationSurface::Tool,
             caller,
             AuditEventStatus::Denied,
             Some(message.clone()),
@@ -216,6 +217,7 @@ impl OrbitRuntime {
         );
         self.record_authorization_event(
             AGENT_INVOKE_OPERATION_ID,
+            OperationSurface::Tool,
             caller,
             AuditEventStatus::Denied,
             Some(message.clone()),
@@ -267,6 +269,7 @@ impl OrbitRuntime {
                     );
                     self.record_authorization_event(
                         operation.id,
+                        operation.surface,
                         &caller,
                         AuditEventStatus::Success,
                         Some("authorized through the operator override".to_string()),
@@ -289,6 +292,7 @@ impl OrbitRuntime {
                 let message = denial.to_string();
                 self.record_authorization_event(
                     operation.id,
+                    operation.surface,
                     &caller,
                     AuditEventStatus::Denied,
                     Some(message.clone()),
@@ -311,15 +315,32 @@ impl OrbitRuntime {
     fn record_authorization_event(
         &self,
         operation_id: &str,
+        surface: OperationSurface,
         caller: &CallerCapabilities,
         status: AuditEventStatus,
         error_message: Option<String>,
     ) {
+        // A `Tool`-surface operation is authorized from inside
+        // `execute_registered_tool`, itself running inside
+        // `execute_tool_dispatch_with_audit_store`'s audited closure — that
+        // wrapper already writes its own row with `tool_name` set to the same
+        // operation ID on the same denial. Setting it here too would make
+        // `orbit audit list --tool <name>` and the denial-by-operation
+        // breakdown double-count every tool-surface refusal. A
+        // `CliCommand`/`Dashboard`-surface operation performs its own
+        // destruction directly and never gets that second row, so it needs
+        // this one to carry the operation name.
+        let tool_name = match surface {
+            OperationSurface::Tool => None,
+            OperationSurface::CliCommand | OperationSurface::Dashboard => {
+                Some(operation_id.to_string())
+            }
+        };
         let params = AuditEventInsertParams {
             execution_id: audit_execution_id("authz"),
             command: "authorization".to_string(),
             subcommand: Some(caller.provenance().to_string()),
-            tool_name: None,
+            tool_name,
             target_type: Some("operation".to_string()),
             target_id: Some(operation_id.to_string()),
             role: self.actor_label().to_string(),

@@ -22,8 +22,9 @@ impl Execute for AuditStatsArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let since = self.since.map(|s| parse_since(&s)).transpose()?;
         let stats = runtime.audit_event_stats(since, self.tool)?;
+        let denied_by_operation = runtime.audit_denials_by_operation(since.as_ref())?;
 
-        let text = format!(
+        let mut text = format!(
             "Total:             {}\nSuccess:           {}\nFailure:           {}\nDenied:            {}\nAvg duration (ms): {:.1}\nP95 duration (ms): {}\nMax duration (ms): {}",
             stats.total,
             stats.success_count,
@@ -33,11 +34,18 @@ impl Execute for AuditStatsArgs {
             stats.p95_duration_ms,
             stats.max_duration_ms
         );
-        Ok(Payload::detail(stats_to_json(&stats), text).into())
+        if !denied_by_operation.is_empty() {
+            use std::fmt::Write as _;
+            let _ = write!(text, "\nDenied by operation:");
+            for (operation, count) in &denied_by_operation {
+                let _ = write!(text, "\n  {count:>6}  {operation}");
+            }
+        }
+        Ok(Payload::detail(stats_to_json(&stats, &denied_by_operation), text).into())
     }
 }
 
-fn stats_to_json(stats: &AuditStats) -> Value {
+fn stats_to_json(stats: &AuditStats, denied_by_operation: &[(String, i64)]) -> Value {
     json!({
         "total": stats.total,
         "success_count": stats.success_count,
@@ -46,5 +54,9 @@ fn stats_to_json(stats: &AuditStats) -> Value {
         "avg_duration_ms": stats.avg_duration_ms,
         "p95_duration_ms": stats.p95_duration_ms,
         "max_duration_ms": stats.max_duration_ms,
+        "denied_by_operation": denied_by_operation
+            .iter()
+            .map(|(operation, count)| json!({ "operation": operation, "count": count }))
+            .collect::<Vec<_>>(),
     })
 }

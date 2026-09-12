@@ -188,6 +188,18 @@ impl OrbitRuntime {
             .get_audit_denials_by_role(since)
     }
 
+    /// `(operation, count)` for `status='denied'` audit events at or after
+    /// `since`, sorted desc by count. Backs `orbit audit stats`'s denial
+    /// breakdown [ORB-12257].
+    pub fn audit_denials_by_operation(
+        &self,
+        since: Option<&DateTime<Utc>>,
+    ) -> Result<Vec<(String, i64)>, OrbitError> {
+        self.stores()
+            .audit_events()
+            .get_audit_denials_by_operation(since)
+    }
+
     /// Per-role counts for audited tool invocations. `failed` counts every
     /// non-success tool run (`failure` and `denied` statuses).
     pub fn audit_tool_call_counts_by_role(
