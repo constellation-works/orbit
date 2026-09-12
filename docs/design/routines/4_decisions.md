@@ -11,7 +11,7 @@ summary: Decision log for the routines scheduler — OS clock, one host tick for
 tags: [routines, scheduler]
 paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry, task-migration]
-related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10739, ORB-10986, ORB-11082, ORB-12233]
+related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10739, ORB-10986, ORB-11082, ORB-12236, ORB-12237]
 ---
 
 # Routines — Decisions
@@ -183,7 +183,7 @@ Store the supported whole-minute cadence in host-local `~/.orbit/clock.toml` and
 
 ## One host tick evaluates routines and auto-task definitions in-process
 
-**Recorded:** 2026-09-12 · [ORB-12233]
+**Recorded:** 2026-09-12 · [ORB-12237]
 **Code anchors:** `crates/orbit-core/src/application/routines/sweep.rs`, `crates/orbit-core/src/application/auto_tasks/scheduler.rs::run_auto_task_scheduler_at`, `crates/orbit-cli/src/command/clock/**`
 
 ### Context
@@ -206,7 +206,7 @@ The clock is host infrastructure shared by both evaluators, so its CLI moves to 
 
 ## Definitions carry no host pin: every owner checkout is an independent schedule
 
-**Recorded:** 2026-09-12 · [ORB-12233]
+**Recorded:** 2026-09-12 · [ORB-12236]
 
 ### Context
 
@@ -230,7 +230,7 @@ Migration: `hosts:` is accepted and ignored with a load warning for one release,
 
 ## Registration is the automation opt-in; there is no routine-source role
 
-**Recorded:** 2026-09-12 · [ORB-12233]
+**Recorded:** 2026-09-12 · [ORB-12236]
 **Code anchors:** `crates/orbit-config/src/{raw,resolved}.rs` (the `[routines] role` key, removed), `crates/orbit-core/src/application/routines/loader.rs`
 
 ### Context
@@ -249,7 +249,8 @@ Remove the `[routines]` config section. The tick evaluates definitions from ever
 
 ## Task References
 
-- [ORB-12233] — implements the clock consolidation recorded in the three 2026-09-12 entries.
+- [ORB-12236] — removes `hosts:` pins and `[routines] role = "source"` (the second and third 2026-09-12 entries).
+- [ORB-12237] — moves auto-task evaluation into the host tick, adds `orbit clock`, retires the scheduler routine/job/activity (the first 2026-09-12 entry); depends on [ORB-12236].
 - [ORB-10001] — authored this design-doc folder (proposal).
 - [ORB-10021] — implemented routines v1; allocated and accepted [The OS owns the clock: stateless orbit sweep under launchd/systemd, no resident daemon](#the-os-owns-the-clock-stateless-orbit-sweep-under-launchdsystemd-no-resident-daemon)..[Routine definitions are git-shared; scheduler state is host-local and never synced](#routine-definitions-are-git-shared-scheduler-state-is-host-local-and-never-synced).
 - [ORB-10129] — shipped the default triage routine; allocated and accepted [Default routines seed per-workspace at init with host and name resolved at seed time](#default-routines-seed-per-workspace-at-init-with-host-and-name-resolved-at-seed-time).
