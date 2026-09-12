@@ -48,21 +48,22 @@ transitions to the pipeline. Direct execution below applies only when the user
 and repository policy authorize it; a technical lifecycle transition is not a
 substitute for human approval.
 
-For first-time pickup or resuming eligible work, use `orbit.task.start` with a
-`note`. It moves `proposed`, `backlog`, `someday`, or `blocked` → `in-progress`
-and records approval. Starting from `proposed` still requires a real plan:
+For first-time pickup or resuming eligible work, use `orbit.task.update` with
+`status: "in-progress"` and a `note`. It moves `proposed`, `backlog`, `someday`,
+or `blocked` → `in-progress` and records approval. Starting from `proposed`
+still requires a real plan:
 
 ```bash
-orbit tool run orbit.task.start --input '{"id":"<task-id>","note":"<why work is starting or resuming>","model":"<agent-family>"}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"in-progress","note":"<why work is starting or resuming>","model":"<agent-family>"}'
 ```
 
-`rejected` is not a pickup state for `orbit.task.start`. Reconsider it only
-when a reviewer or other authorized decision explicitly requests a revision;
-use `orbit.task.update` to move the task to `in-progress`, recording that
-authorization in the update:
+`rejected` is not a pickup state. Reconsider it only when a reviewer or other
+authorized decision explicitly requests a revision; first use
+`orbit.task.update` to move the task to `backlog`, recording that authorization,
+then take it from the backlog in a separate update:
 
 ```bash
-orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"in-progress","comment":"Authorized revision: <reviewer decision>","model":"<agent-family>"}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"backlog","comment":"Authorized revision: <reviewer decision>","model":"<agent-family>"}'
 ```
 
 ## Step 4 — Implement and validate
@@ -154,13 +155,14 @@ Justification), `Recommended follow-ups:`.
 
 One task per activity invocation — no multiplexing. Ask clarifying questions
 before implementing if material ambiguity remains. If approval for `proposed`
-work can't be obtained, stop after recording that state. Use `orbit.task.start`
-only for `proposed`, `backlog`, `someday`, or `blocked` pickup; an authorized
-`rejected` revision uses `orbit.task.update` to `in-progress` instead. Direct
+work can't be obtained, stop after recording that state. Use `orbit.task.update`
+with `status: "in-progress"` only for `proposed`, `backlog`, `someday`, or
+`blocked` pickup; an authorized `rejected` revision must return to `backlog`
+first. Direct
 execution must persist a non-empty `execution_summary` before or with the
 review transition.
 
-Exit: eligible work started via `orbit.task.start`, or an authorized rejected
-revision moved to `in-progress` via `orbit.task.update`; execution summary
+Exit: eligible work started via `orbit.task.update`, or an authorized rejected
+revision returned to `backlog` before pickup; execution summary
 persisted; friction checkpoint considered; direct execution advanced to
 `review`.

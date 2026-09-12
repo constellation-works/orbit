@@ -371,6 +371,7 @@ fn unconfigured_host_does_not_report_no_workspace_loaded() {
 
 #[test]
 fn tick_mints_due_auto_task_without_creating_a_job_run_and_dry_run_is_inert() {
+    let _tz = orbit_common::test_env::unset(["TZ"]);
     let root = tempfile::tempdir().expect("root");
     let global = root.path().join("global");
     let orbit_dir = root.path().join("repo/.orbit");
@@ -459,16 +460,17 @@ fn tick_mints_due_auto_task_without_creating_a_job_run_and_dry_run_is_inert() {
 
 #[test]
 fn one_tick_fires_a_routine_and_auto_task_and_isolates_another_workspace_error() {
+    let _tz = orbit_common::test_env::unset(["TZ"]);
     let root = tempfile::tempdir().expect("root");
     let global = root.path().join("global");
     let healthy_dir = root.path().join("healthy/.orbit");
     let broken_dir = root.path().join("broken/.orbit");
     for orbit_dir in [&healthy_dir, &broken_dir] {
-        std::fs::create_dir_all(orbit_dir.join("resources/jobs")).expect("jobs dir");
         std::fs::create_dir_all(orbit_dir.join("routines")).expect("routines dir");
         std::fs::create_dir_all(orbit_dir.join("auto_tasks")).expect("auto-tasks dir");
     }
-    std::fs::write(healthy_dir.join("resources/jobs/noop.yaml"), NOOP_JOB).expect("job");
+    std::fs::create_dir_all(global.join("resources/jobs")).expect("global jobs dir");
+    std::fs::write(global.join("resources/jobs/noop.yaml"), NOOP_JOB).expect("job");
     std::fs::write(
         healthy_dir.join("routines/minutely.yaml"),
         "schemaVersion: 1\nname: minutely\nenabled: true\ntrigger:\n  cron: '* * * * *'\ntarget: job:noop\n",

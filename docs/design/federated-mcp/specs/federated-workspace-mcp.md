@@ -64,7 +64,7 @@ Capability class is assigned by **what the tool does**, not by a per-tool regist
 
 | Class | Rule | Examples (not an exhaustive registry) |
 |---|---|---|
-| `control_plane` | Task issuance and coordination-store writes | `orbit_task_add`, `orbit.task.update`, `orbit.task.start` |
+| `control_plane` | Task issuance and coordination-store writes | `orbit_task_add`, `orbit.task.update` |
 | `execute` | Anything that touches runs, logs, or scheduler state | job-run inspect/cancel, log read, routine/scheduler mutations |
 | unclassified | Discovery and list tools | `orbit_workspace_list` (federated), other list/discovery tools |
 

@@ -538,49 +538,6 @@
     "name": "orbit_task_add"
   },
   {
-    "description": "Approve an Orbit task and return the updated task JSON",
-    "inputSchema": {
-      "additionalProperties": false,
-      "properties": {
-        "agent": {
-          "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
-          "type": "string"
-        },
-        "comment": {
-          "description": "Optional task comment to append",
-          "type": "string"
-        },
-        "id": {
-          "description": "task ID",
-          "type": "string"
-        },
-        "model": {
-          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
-          "enum": [
-            "codex",
-            "claude",
-            "gemini",
-            "grok"
-          ],
-          "type": "string"
-        },
-        "note": {
-          "description": "Optional approval note",
-          "type": "string"
-        },
-        "workspace": {
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id"
-      ],
-      "type": "object"
-    },
-    "name": "orbit_task_approve"
-  },
-  {
     "description": "Read one stored task artifact by owning task ID and artifact path. Returns `media_type`, `size`, and the bytes: UTF-8 text as `content`, and everything else as base64 in `content_base64`. Supported raster images (PNG, JPEG, GIF, WebP) whose bytes match their declared type are additionally returned as a viewable image on transports that carry image content, so a multimodal client can inspect a stored visual reference directly. SVG, HTML, and any payload whose bytes contradict its media type are returned as opaque base64 and are never rendered. List available artifacts first with `orbit.task.show` and `field: \"artifacts\"`; payloads are fetched only through this call. Reads are bounded to 1048576 bytes.",
     "inputSchema": {
       "additionalProperties": true,
@@ -802,49 +759,6 @@
     "name": "orbit_task_show"
   },
   {
-    "description": "Start work on an Orbit task and return the updated task JSON",
-    "inputSchema": {
-      "additionalProperties": false,
-      "properties": {
-        "comment": {
-          "description": "Optional task comment to append",
-          "type": "string"
-        },
-        "crew": {
-          "description": "Optional crew override for this start",
-          "type": "string"
-        },
-        "id": {
-          "description": "task ID",
-          "type": "string"
-        },
-        "model": {
-          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, or grok); full model strings are accepted and auto-normalized.",
-          "enum": [
-            "codex",
-            "claude",
-            "gemini",
-            "grok"
-          ],
-          "type": "string"
-        },
-        "note": {
-          "description": "Optional lifecycle note for the start transition",
-          "type": "string"
-        },
-        "workspace": {
-          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id"
-      ],
-      "type": "object"
-    },
-    "name": "orbit_task_start"
-  },
-  {
     "description": "Update an Orbit task and return the fresh task JSON",
     "inputSchema": {
       "additionalProperties": false,
@@ -939,6 +853,10 @@
             "gemini",
             "grok"
           ],
+          "type": "string"
+        },
+        "note": {
+          "description": "Optional lifecycle note for an approval or start transition",
           "type": "string"
         },
         "orchestrator": {

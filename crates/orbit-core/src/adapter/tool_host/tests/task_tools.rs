@@ -814,8 +814,8 @@ fn task_read_tools_render_a_task_whose_stored_crew_is_undefined_here() {
     // Execution still resolves strictly: start must fail with the actionable
     // crew-validation error rather than inherit a fallback.
     let started = runtime.execute_tool_command(
-        "orbit.task.start",
-        json!({ "id": task.id }),
+        "orbit.task.update",
+        json!({ "id": task.id, "status": "in_progress" }),
         Some("codex".to_string()),
         Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
     );
@@ -827,6 +827,100 @@ fn task_read_tools_render_a_task_whose_stored_crew_is_undefined_here() {
         message.contains("all-grok") && message.contains("not defined"),
         "starting an unresolvable crew must stay a crew-validation error: {message}"
     );
+}
+
+#[test]
+fn task_update_routes_approval_start_and_blocked_restart_through_transition_bodies() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let task = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Lifecycle update task".to_string(),
+            description: "Exercise the single registered lifecycle surface.".to_string(),
+            plan: "Run the lifecycle checks.".to_string(),
+            ..Default::default()
+        })
+        .expect("add proposed task");
+    let agent = Some("codex".to_string());
+    let model = Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string());
+
+    let approved = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": task.id,
+                "status": "backlog",
+                "note": "approved through update"
+            }),
+            agent.clone(),
+            model.clone(),
+        )
+        .expect("approve through update");
+    assert_eq!(approved["status"], "backlog");
+    assert!(approved["history"].as_array().is_some_and(|history| {
+        history.iter().any(|entry| {
+            entry["event"] == "proposal_approved" && entry["note"] == "approved through update"
+        })
+    }));
+
+    runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": task.id,
+                "status": "in_progress",
+                "note": "picked up through update"
+            }),
+            agent.clone(),
+            model.clone(),
+        )
+        .expect("start through update");
+    assert!(
+        runtime
+            .list_session_events(20)
+            .expect("events")
+            .iter()
+            .any(
+                |event| event.event_type == "TaskStarted" && event.payload["data"]["id"] == task.id
+            )
+    );
+
+    runtime
+        .update_task(
+            &task.id,
+            crate::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            },
+        )
+        .expect("seed blocked status");
+    let restarted = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({ "id": task.id, "status": "in_progress" }),
+            agent.clone(),
+            model.clone(),
+        )
+        .expect("restart blocked task through update");
+    assert_eq!(restarted["status"], "in-progress");
+
+    runtime
+        .update_task(
+            &task.id,
+            crate::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Rejected),
+                ..Default::default()
+            },
+        )
+        .expect("seed rejected status");
+    let error = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({ "id": task.id, "status": "in_progress" }),
+            agent,
+            model,
+        )
+        .expect_err("rejected is not a pickup state");
+    assert!(error.to_string().contains("start requires"), "{error}");
 }
 
 /// ORB-10648: `priority` is an advertised and applied update field. The record

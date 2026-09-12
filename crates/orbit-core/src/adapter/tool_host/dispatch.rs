@@ -82,7 +82,6 @@ pub(super) fn execute(
         OrbitBuiltinAction::StateGet => super::state_tools::get(task_scope, input),
         OrbitBuiltinAction::StateSet => super::state_tools::set(task_scope, input),
         OrbitBuiltinAction::TaskAdd => super::task_tools::add(runtime, input, agent, model),
-        OrbitBuiltinAction::TaskApprove => super::task_tools::approve(runtime, input, agent, model),
         OrbitBuiltinAction::TaskArtifactGet => super::task_tools::artifact_get(runtime, input),
         OrbitBuiltinAction::TaskDelete => super::task_tools::delete(runtime, input),
         OrbitBuiltinAction::TaskLint => super::task_tools::lint(runtime, input),
@@ -96,7 +95,6 @@ pub(super) fn execute(
         }
         OrbitBuiltinAction::TaskReject => super::task_tools::reject(runtime, input, agent, model),
         OrbitBuiltinAction::TaskShow => super::task_tools::show(runtime, input),
-        OrbitBuiltinAction::TaskStart => super::task_tools::start(runtime, input, agent, model),
         OrbitBuiltinAction::TaskUpdate => {
             super::task_tools::update(runtime, input, agent, model, reservation_owner)
         }

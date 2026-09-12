@@ -65,10 +65,6 @@ pub fn register(registry: &mut ToolRegistry) {
         task::artifact_put::OrbitTaskArtifactPutTool,
         McpToolScope::WorkspaceRequired,
     );
-    registry.register_mcp(
-        task::approve::OrbitTaskApproveTool,
-        McpToolScope::WorkspaceRequired,
-    );
     // Destructive administration remains reachable through non-MCP surfaces.
     registry.register_inactive(task::delete::OrbitTaskDeleteTool);
     registry.register_inactive(task::lint::OrbitTaskLintTool);
@@ -87,10 +83,6 @@ pub fn register(registry: &mut ToolRegistry) {
     // validation.
     registry.register_mcp(
         command::OrbitCommandExecTool,
-        McpToolScope::WorkspaceRequired,
-    );
-    registry.register_mcp(
-        task::start::OrbitTaskStartTool,
         McpToolScope::WorkspaceRequired,
     );
     // Task rejection is a human/operator decision — CLI / dashboard only.

@@ -15,7 +15,6 @@ use super::list::TaskListArgs;
 use super::publication::TaskPublicationCommand;
 use super::reindex::TaskReindexArgs;
 use super::show::TaskShowArgs;
-use super::start::TaskStartArgs;
 use super::update::TaskUpdateArgs;
 
 /// Grouped `orbit task` help, rendered the same way `orbit run` and the root
@@ -85,10 +84,6 @@ pub enum TaskSubcommand {
     /// Update task fields, or take the next approval step with `--approve`
     /// (proposed -> backlog, review -> done)
     Update(TaskUpdateArgs),
-    /// Deprecated alias kept for callers that predate `orbit task update`
-    /// owning approval; hidden from help and removed after a couple releases
-    #[command(hide = true)]
-    Start(TaskStartArgs),
     /// Archive a task
     Archive(TaskArchiveArgs),
     /// List tasks with optional filters
@@ -119,7 +114,6 @@ impl Execute for TaskSubcommand {
         match self {
             TaskSubcommand::Add(args) => args.execute(runtime),
             TaskSubcommand::Update(args) => args.execute(runtime),
-            TaskSubcommand::Start(args) => args.execute(runtime),
             TaskSubcommand::Archive(args) => args.execute(runtime),
             TaskSubcommand::List(args) => args.execute(runtime),
             TaskSubcommand::Show(args) => args.execute(runtime),

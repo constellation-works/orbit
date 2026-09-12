@@ -15,12 +15,7 @@ fn param(name: &str) -> ToolParam {
 
 #[test]
 fn task_mutation_argument_schemas_forbid_additional_properties() {
-    for tool_name in [
-        "orbit.task.add",
-        "orbit.task.update",
-        "orbit.task.approve",
-        "orbit.task.start",
-    ] {
+    for tool_name in ["orbit.task.add", "orbit.task.update"] {
         assert!(
             !tool_arguments_allow_additional_properties(tool_name),
             "{tool_name} arguments must be closed"

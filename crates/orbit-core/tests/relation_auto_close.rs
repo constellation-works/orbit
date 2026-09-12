@@ -88,8 +88,8 @@ fn add_task_with_resolves(
     if status == "backlog" {
         runtime
             .run_tool(
-                "orbit.task.approve",
-                json!({ "id": task_id, "model": "codex" }),
+                "orbit.task.update",
+                json!({ "id": task_id, "status": "backlog", "model": "codex" }),
             )
             .expect("approve task into backlog");
     }
@@ -99,8 +99,8 @@ fn add_task_with_resolves(
 fn move_backlog_task_to_review(runtime: &OrbitRuntime, task_id: &str) {
     runtime
         .run_tool(
-            "orbit.task.start",
-            json!({ "id": task_id, "model": "codex" }),
+            "orbit.task.update",
+            json!({ "id": task_id, "status": "in_progress", "model": "codex" }),
         )
         .expect("start task");
     runtime
@@ -134,8 +134,8 @@ fn review_approval_resolves_related_friction_and_surfaces_json_fields() {
 
     runtime
         .run_tool(
-            "orbit.task.approve",
-            json!({ "id": task_id, "model": "codex" }),
+            "orbit.task.update",
+            json!({ "id": task_id, "status": "done", "model": "codex" }),
         )
         .expect("approve task");
 
@@ -197,8 +197,8 @@ fn approving_task_with_dangling_friction_relation_records_event_but_succeeds() {
 
     let approved = runtime
         .run_tool(
-            "orbit.task.approve",
-            json!({ "id": task_id, "model": "codex" }),
+            "orbit.task.update",
+            json!({ "id": task_id, "status": "done", "model": "codex" }),
         )
         .expect("approve task");
     assert_eq!(approved["status"], json!("done"));
@@ -236,8 +236,8 @@ fn approving_task_does_not_overwrite_existing_friction_resolution() {
     move_backlog_task_to_review(&runtime, &task_id);
     runtime
         .run_tool(
-            "orbit.task.approve",
-            json!({ "id": task_id, "model": "codex" }),
+            "orbit.task.update",
+            json!({ "id": task_id, "status": "done", "model": "codex" }),
         )
         .expect("approve task");
 
@@ -258,8 +258,8 @@ fn approving_proposed_task_does_not_resolve_friction() {
 
     let approved = runtime
         .run_tool(
-            "orbit.task.approve",
-            json!({ "id": task_id, "model": "codex" }),
+            "orbit.task.update",
+            json!({ "id": task_id, "status": "backlog", "model": "codex" }),
         )
         .expect("approve proposed task");
     assert_eq!(approved["status"], json!("backlog"));
@@ -367,8 +367,8 @@ fn cross_workspace_resolves_review_approval_is_rejected() {
 
     let error = runtime_b
         .run_tool(
-            "orbit.task.approve",
-            json!({ "id": task_id, "model": "codex" }),
+            "orbit.task.update",
+            json!({ "id": task_id, "status": "done", "model": "codex" }),
         )
         .expect_err("cross-workspace resolves must not approve into done");
     assert_friction_not_local(&error, &friction_id, &owner);

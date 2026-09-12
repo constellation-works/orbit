@@ -12,7 +12,7 @@
 //! `blocked` is a deliberate dead end for automation: `Blocked` is not in the
 //! workflow-admission allowlist, so the ship
 //! sweep skips these tasks. The only way out is a human/orchestrator decision
-//! (the `orbit.task.start` tool, which accepts `Blocked` and leaves the task
+//! (`orbit.task.update` with `status: in_progress`, which accepts `Blocked` and leaves the task
 //! `in-progress` — a status workflow admission does accept — or moving it back
 //! to backlog with `orbit task update <id> --status backlog`).
 

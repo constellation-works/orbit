@@ -49,38 +49,6 @@ impl Drop for ReapingChild {
     }
 }
 
-static TZ_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[cfg(unix)]
-struct TzGuard {
-    prior: Option<String>,
-}
-
-#[cfg(unix)]
-impl TzGuard {
-    fn set(value: &str) -> Self {
-        let prior = std::env::var("TZ").ok();
-        // SAFETY: All TZ-mutating tests in this module take TZ_TEST_LOCK
-        // before constructing a TzGuard, serializing env mutation across
-        // threads; the guard restores the previous value on drop.
-        unsafe { std::env::set_var("TZ", value) };
-        Self { prior }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for TzGuard {
-    fn drop(&mut self) {
-        // SAFETY: see TzGuard::set.
-        unsafe {
-            match &self.prior {
-                Some(value) => std::env::set_var("TZ", value),
-                None => std::env::remove_var("TZ"),
-            }
-        }
-    }
-}
-
 #[cfg(unix)]
 fn spawn_sentinel() -> ReapingChild {
     ReapingChild(
@@ -137,9 +105,6 @@ fn live_isolated_group_returns_typed_cancellation_evidence() {
 #[cfg(unix)]
 #[test]
 fn live_owner_survives_tz_change_across_read_paths() {
-    let _tz_lock = TZ_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let (_root, runtime) = test_runtime();
     let run = insert_pending_run(&runtime, "qa_tz_change");
     let mut sentinel = spawn_sentinel();
@@ -150,7 +115,7 @@ fn live_owner_survives_tz_change_across_read_paths() {
     // carry the versioned prefix and remain identical across caller
     // environments.
     let persisted_token = {
-        let _tz = TzGuard::set("America/Los_Angeles");
+        let _tz = orbit_common::test_env::scoped([("TZ", Some("America/Los_Angeles"))]);
         runtime
             .stores()
             .jobs()
@@ -169,7 +134,7 @@ fn live_owner_survives_tz_change_across_read_paths() {
 
     // Switch TZ before driving the read paths. Pre-fix this is exactly
     // when reconciliation falsely finalized the still-running worker.
-    let _tz = TzGuard::set("UTC");
+    let _tz = orbit_common::test_env::scoped([("TZ", Some("UTC"))]);
 
     let shown = runtime.show_job_run(&run.run_id).expect("show under UTC");
     assert_eq!(shown.state, JobRunState::Running);
@@ -223,18 +188,15 @@ fn live_owner_survives_tz_change_across_read_paths() {
 #[cfg(unix)]
 #[test]
 fn versioned_token_is_stable_across_tz_change() {
-    let _tz_lock = TZ_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut sentinel = spawn_sentinel();
     let pid = sentinel.id();
 
     let utc_token = {
-        let _tz = TzGuard::set("UTC");
+        let _tz = orbit_common::test_env::scoped([("TZ", Some("UTC"))]);
         process_start_identity_token(pid).expect("token under UTC")
     };
     let la_token = {
-        let _tz = TzGuard::set("America/Los_Angeles");
+        let _tz = orbit_common::test_env::scoped([("TZ", Some("America/Los_Angeles"))]);
         process_start_identity_token(pid).expect("token under LA")
     };
 

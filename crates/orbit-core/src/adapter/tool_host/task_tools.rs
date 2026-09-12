@@ -3,7 +3,7 @@ use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_raw_string, optional_string, optional_string_alias,
     optional_string_list_alias, required_string,
 };
-use orbit_types::task::{TaskPriority, validate_relative_artifact_path};
+use orbit_types::task::{TaskPriority, TaskStatus, validate_relative_artifact_path};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -94,23 +94,6 @@ pub(super) fn add(
         obj.insert("warnings".to_string(), json!(warnings));
     }
     Ok(response)
-}
-
-pub(super) fn approve(
-    runtime: &OrbitRuntime,
-    input: Value,
-    agent: Option<String>,
-    model: Option<String>,
-) -> Result<Value, OrbitError> {
-    let id = required_string(&input, &["id"], "id")?;
-    let task = runtime.approve_task_with_identity(
-        &id,
-        optional_string(&input, "note")?,
-        optional_string(&input, "comment")?,
-        agent,
-        model,
-    )?;
-    serialize_task(runtime, &task)
 }
 
 pub(super) fn delete(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
@@ -274,24 +257,6 @@ pub(super) fn artifact_get(runtime: &OrbitRuntime, input: Value) -> Result<Value
     serialize_task_artifact_read(&task.id, &artifact)
 }
 
-pub(super) fn start(
-    runtime: &OrbitRuntime,
-    input: Value,
-    agent: Option<String>,
-    model: Option<String>,
-) -> Result<Value, OrbitError> {
-    let id = required_string(&input, &["id"], "id")?;
-    let task = runtime.start_task_with_identity_and_crew(
-        &id,
-        optional_string(&input, "note")?,
-        optional_string(&input, "comment")?,
-        agent,
-        model,
-        optional_string(&input, "crew")?,
-    )?;
-    serialize_task(runtime, &task)
-}
-
 pub(super) fn update(
     runtime: &OrbitRuntime,
     input: Value,
@@ -315,6 +280,40 @@ pub(super) fn update(
         ));
     }
     let id = required_string(&input, &["id"], "id")?;
+    let requested_status = optional_string(&input, "status")?
+        .map(|value| parse_task_status("status", &value))
+        .transpose()?;
+    let is_backlog = requested_status == Some(TaskStatus::Backlog);
+    if requested_status == Some(TaskStatus::InProgress) || is_backlog {
+        let transition_status = requested_status.ok_or_else(|| {
+            OrbitError::Execution("lifecycle transition is missing its target status".to_string())
+        })?;
+        reject_fields_for_lifecycle_transition(&input, transition_status, is_backlog)?;
+        let task = if is_backlog {
+            runtime.transition_task_to_backlog_with_identity(
+                &id,
+                optional_string(&input, "note")?,
+                optional_string(&input, "comment")?,
+                agent,
+                model,
+            )?
+        } else {
+            runtime.start_task_with_identity_and_crew(
+                &id,
+                optional_string(&input, "note")?,
+                optional_string(&input, "comment")?,
+                agent,
+                model,
+                optional_string(&input, "crew")?,
+            )?
+        };
+        return serialize_task(runtime, &task);
+    }
+    if input.get("note").is_some() {
+        return Err(OrbitError::InvalidInput(
+            "`note` is only accepted with status 'backlog' or 'in-progress'".to_string(),
+        ));
+    }
     let context_files = optional_csv_or_string_list_alias(&input, &["context_files", "context"])?;
     if !allows_missing_context(&input)?
         && let Some(candidates) = context_files.as_deref()
@@ -354,9 +353,7 @@ pub(super) fn update(
                 .transpose()?,
             execution_summary: optional_raw_string(&input, "execution_summary")?,
             comment: optional_string(&input, "comment")?,
-            status: optional_string(&input, "status")?
-                .map(|value| parse_task_status("status", &value))
-                .transpose()?,
+            status: requested_status,
             priority: optional_string(&input, "priority")?
                 .map(|value| parse_task_priority("priority", &value))
                 .transpose()?,
@@ -386,6 +383,46 @@ pub(super) fn update(
         owner.map(|owner| owner.owner_run_id),
     )?;
     serialize_task(runtime, &task)
+}
+
+fn reject_fields_for_lifecycle_transition(
+    input: &Value,
+    requested_status: TaskStatus,
+    approval: bool,
+) -> Result<(), OrbitError> {
+    let allowed = if approval {
+        &["id", "status", "note", "comment", "model", "workspace"][..]
+    } else {
+        &[
+            "id",
+            "status",
+            "note",
+            "comment",
+            "crew",
+            "model",
+            "workspace",
+        ][..]
+    };
+    let Some(fields) = input.as_object() else {
+        return Err(OrbitError::InvalidInput(
+            "orbit.task.update input must be an object".to_string(),
+        ));
+    };
+    let extras = fields
+        .keys()
+        .filter(|field| !allowed.contains(&field.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if extras.is_empty() {
+        return Ok(());
+    }
+
+    Err(OrbitError::InvalidInput(format!(
+        "status '{}' runs the guarded {} transition and cannot be combined with field edits: {}",
+        requested_status,
+        if approval { "approval" } else { "start" },
+        extras.join(", ")
+    )))
 }
 
 /// Whether the caller explicitly opted out of the operator-surface check that

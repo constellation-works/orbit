@@ -90,7 +90,7 @@ fn representative_activity_prompts_fit_budget_and_preserve_contracts() {
         "git rev-parse --show-toplevel",
         "context_files",
         "not as a perfect inventory",
-        "orbit.task.start",
+        "orbit.task.update",
         "move the task to `review`",
         "EPERM",
         "orbit.friction.add",
