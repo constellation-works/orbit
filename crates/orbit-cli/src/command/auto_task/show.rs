@@ -29,7 +29,7 @@ impl Execute for AutoTaskShowArgs {
             orbit_core::AutoTaskSchedule::Deliveries { .. }
         ) {
             doc["automation"] =
-                serde_json::to_value(orbit_core::application::automation::inspect_auto_task(
+                serde_json::to_value(orbit_automation::consumers::inspect_auto_task(
                     runtime,
                     &definition,
                     chrono::Utc::now(),
@@ -44,7 +44,7 @@ impl Execute for AutoTaskShowArgs {
             )
         {
             doc["automation"] =
-                serde_json::to_value(orbit_core::application::automation::evaluate_auto_task(
+                serde_json::to_value(orbit_automation::consumers::evaluate_auto_task(
                     runtime,
                     &definition,
                     true,

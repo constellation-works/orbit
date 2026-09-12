@@ -17,8 +17,8 @@ use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::{RoutineFireIntentParams, RoutineFireState, Store};
 use orbit_types::workflow::{JobRunState, RoutineDefinition};
 
+use crate::host::RunOwnerLiveness;
 use crate::routines::loader::{LoadedRoutine, RoutineCollection, RoutineOrigin};
-use crate::routines::sweep::RunOwnerLiveness;
 use crate::routines::sweep::{RoutineDispatch, SweepOptions, run_sweep_core};
 
 const SOURCE_DIR: &str = "/ws/.orbit";

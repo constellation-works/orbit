@@ -143,7 +143,7 @@ pub(in super::super) fn apply(
         })
         .transpose()?
         .unwrap_or_default();
-    let claim = crate::application::automation::members::claim(runtime, prepared_value)
+    let claim = orbit_automation::consumers::members::claim(runtime, prepared_value)
         .map_err(|error| action_failed(action, error.to_string()))?;
     let source = SourceSnapshot::from_prepared(prepared_value, action)?;
     if let Some(source) = &source {
@@ -832,7 +832,7 @@ fn apply_task(
     lock_ids.dedup();
     let mut outcome = None;
     let mut operation = || {
-        crate::application::automation::members::claim(runtime, prepared)?;
+        orbit_automation::consumers::members::claim(runtime, prepared)?;
         let receipt = format!("operation_id={}", task.operation_id);
         if runtime
             .get_task_history(&task.task_id)?
@@ -959,7 +959,7 @@ fn resulting_fingerprint(
         return Ok(None);
     };
     let current = runtime.get_task(task_id)?;
-    crate::application::automation::preparation::fingerprint(runtime, &current, revision)
+    orbit_automation::consumers::preparation::fingerprint(runtime, &current, revision)
         .map(Some)
         .map_err(orbit_automation::automation_error_to_orbit)
 }
@@ -1023,7 +1023,7 @@ fn task_snapshot_drift(
         .material
         .as_ref()
         .is_some_and(|(expected, revision)| {
-            crate::application::automation::preparation::fingerprint(runtime, current, revision)
+            orbit_automation::consumers::preparation::fingerprint(runtime, current, revision)
                 .map_or(true, |fingerprint| &fingerprint != expected)
         })
     {

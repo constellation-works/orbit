@@ -9,8 +9,8 @@ use orbit_types::workflow::auto_task_tag;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::auto_tasks::crud::AutoTaskAddParams;
-use crate::application::auto_tasks::state::cursor_state_path;
+use orbit_automation::auto_tasks::crud::AutoTaskAddParams;
+use orbit_automation::auto_tasks::cursor_state_path;
 
 use super::super::test_support::{invalid_input_message, run_tool_as_operator, test_runtime};
 

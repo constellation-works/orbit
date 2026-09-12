@@ -7,15 +7,15 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
+use orbit_automation::auto_tasks::schedule::next_scheduled_slot;
+use orbit_automation::auto_tasks::{
+    AutoTaskCursor, collect_auto_tasks, cursor_state_path, load_cursor_state,
+};
+use orbit_automation::routines::ScheduleDisplayState;
 use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_TOGGLE,
 };
 use orbit_core::OrbitRuntime;
-use orbit_core::application::auto_tasks::schedule::next_scheduled_slot;
-use orbit_core::application::auto_tasks::{
-    AutoTaskCursor, collect_auto_tasks, cursor_state_path, load_cursor_state,
-};
-use orbit_core::application::routines::ScheduleDisplayState;
 use orbit_types::workflow::{
     AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag,
 };
@@ -383,13 +383,13 @@ fn list_json(
 fn definition_json(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
-    cursor: Option<&orbit_core::application::auto_tasks::AutoTaskCursor>,
+    cursor: Option<&orbit_automation::auto_tasks::AutoTaskCursor>,
     cursor_state_unavailable: bool,
     now: DateTime<Utc>,
 ) -> Value {
     let automation = match &definition.schedule {
         AutoTaskSchedule::Deliveries { .. } => Some(
-            match orbit_core::application::automation::inspect_auto_task(runtime, definition, now) {
+            match orbit_automation::consumers::inspect_auto_task(runtime, definition, now) {
                 Ok(diagnostic) => json!(diagnostic),
                 Err(error) => json!({"reason":"state_unavailable","error":error.to_string()}),
             },

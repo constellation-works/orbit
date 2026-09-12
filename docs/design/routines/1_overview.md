@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: Durable, git-versioned scheduler primitive that fires catalog jobs/activities on cron triggers, per host, with local state.
 tags: [routines, scheduler]
-paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/sqlite/routine_store/**"]
+paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-automation/src/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/sqlite/routine_store/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry]
 related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10739, ORB-12236]
 ---
@@ -100,13 +100,14 @@ fragmentation this feature exists to end.
 | Concern | File | Task |
 |---------|------|------|
 | Routine definition type + fail-closed YAML parse | `crates/orbit-types/src/workflow/routine.rs` | [ORB-10021] |
-| Registry-neutral loading, due computation, dispatch, and status | `crates/orbit-core/src/application/routines/` | [ORB-10021], [ORB-12236] |
+| Registry-neutral loading, due computation, dispatch, and status | `crates/orbit-automation/src/routines/` | [ORB-10021], [ORB-12236], [ORB-12262] |
+| Host port the scheduler evaluates against (`AutomationHost`) | `crates/orbit-automation/src/host.rs` + `crates/orbit-core/src/adapter/automation_host/` | [ORB-12262] |
 | Local identity/catalog composition, workspace discovery, and runtime construction | `crates/orbit-cmd/src/registry_routines.rs`, `crates/orbit-cmd/src/registry_runtime.rs`, `crates/orbit-registry/src/` | [ORB-10270], [ORB-10319] |
 | Host-local scheduler state (fires, pauses) | `crates/orbit-store/src/sqlite/routine_store/` | [ORB-10021] |
 | Sweep advisory lock (flock, host-global) | `crates/orbit-store/src/sqlite/routine_store/mod.rs` | [ORB-10021] |
 | `orbit sweep` CLI entrypoint | `crates/orbit-cli/src/command/sweep.rs` | [ORB-10021] |
 | `orbit routine` CLI (`list/show/pause/resume/init/clock`; `clock` slated to move to `orbit clock`) | `crates/orbit-cli/src/command/routine/` | [ORB-10021] |
-| launchd/systemd unit templates + installer | `crates/orbit-core/assets/clock/` + `crates/orbit-core/src/application/routines/clock.rs` | [ORB-10021] |
+| launchd/systemd unit templates + installer | `crates/orbit-automation/assets/clock/` + `crates/orbit-automation/src/routines/clock.rs` | [ORB-10021] |
 | Disabled default routine seeding + workspace ship wrapper | `crates/orbit-core/assets/{routines,jobs}/` | [ORB-10207] / [Delegate workspace ship routines through a synchronous wrapper job](./4_decisions.md#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job) |
 
 ---
@@ -132,5 +133,7 @@ fragmentation this feature exists to end.
   and fails visibly if any nonempty pilot batch contains a failed child result.
 - [ORB-00374] — removed the `shell` activity variant and `run_shell` dispatch (fail-closed);
   routines inherit this constraint.
+- [ORB-12262] — moved the scheduler out of `orbit-core` into `orbit-automation` behind the
+  `AutomationHost` port; behavior, output, and store contracts are unchanged.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1473,7 +1473,7 @@ Persist a per-resource-kind managed manifest containing the SHA-256 digest last 
 ## All five definition-artifact kinds carry managed provenance, and doctor reports it
 
 **Recorded:** 2026-08 · [ORB-10800]
-**Code anchors:** `crates/orbit-core/src/application/mod.rs::ManagedAssetLayout`, `crates/orbit-core/src/application/skill.rs::seed_default_skills`, `crates/orbit-core/src/application/routine.rs::seed_default_routines`, `crates/orbit-core/src/application/auto_tasks/mod.rs::seed_default_auto_tasks`, `crates/orbit-core/src/application/artifact_health.rs`
+**Code anchors:** `crates/orbit-core/src/application/mod.rs::ManagedAssetLayout`, `crates/orbit-core/src/application/skill.rs::seed_default_skills`, `crates/orbit-core/src/application/routine.rs::seed_default_routines`, `crates/orbit-automation/src/auto_tasks/mod.rs::DEFAULT_AUTO_TASK_FILES`, `crates/orbit-core/src/application/artifact_health.rs`
 
 ### Context
 

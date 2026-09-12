@@ -6,11 +6,12 @@
 use std::path::Path;
 
 use chrono::Utc;
-use orbit_common::OrbitError;
-use orbit_core::application::routines::{
+use orbit_automation::routines::{
     DiscoveredWorkspaces, RoutineHostIdentity, RoutineLoadError, RoutineStatusReport,
     RoutineWorkspaceProvider, SweepOptions, SweepOutcome,
 };
+use orbit_common::OrbitError;
+use orbit_core::OrbitRuntime;
 use orbit_types::workspace::{WorkspaceCheckoutRole, WorkspaceStatus};
 
 use orbit_registry::host_identity::{HostIdentity, load_host_identity};
@@ -51,7 +52,12 @@ impl RegistryRoutineEnvironment {
 }
 
 impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
-    fn discover_workspaces(&self, global_root: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
+    type Host = OrbitRuntime;
+
+    fn discover_workspaces(
+        &self,
+        global_root: &Path,
+    ) -> Result<DiscoveredWorkspaces<OrbitRuntime>, OrbitError> {
         discover_registered_workspaces(global_root, self.workspace_filter.as_deref())
     }
 }
@@ -65,7 +71,7 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
 pub(crate) fn discover_registered_workspaces(
     global_root: &Path,
     workspace_filter: Option<&str>,
-) -> Result<DiscoveredWorkspaces, OrbitError> {
+) -> Result<DiscoveredWorkspaces<OrbitRuntime>, OrbitError> {
     let registry_path = workspace_registry::registry_path_for(global_root);
     let registry = workspace_registry::with_registry_lock(&registry_path, || {
         let mut registry = workspace_registry::load_registry_from(&registry_path)?;
@@ -99,7 +105,7 @@ pub(crate) fn discover_registered_workspaces(
 
 pub fn routine_statuses(global_root: &Path) -> Result<RoutineStatusReport, OrbitError> {
     let environment = RegistryRoutineEnvironment::load(global_root, None)?;
-    orbit_core::application::routines::routine_statuses_with_providers(
+    orbit_automation::routines::routine_statuses_with_providers(
         global_root,
         environment.local_host(),
         &environment,
@@ -115,7 +121,10 @@ pub fn run_sweep(
 ) -> Result<SweepOutcome, OrbitError> {
     let global_root = workspace_registry::global_orbit_dir()?;
     let environment = RegistryRoutineEnvironment::load(&global_root, workspace_selector)?;
-    orbit_core::application::routines::run_sweep_with_providers(
+    // The pass itself runs against the root Core resolves, which inside a
+    // managed run may be an explicit registry root rather than `~/.orbit`.
+    orbit_automation::routines::run_sweep_with_providers(
+        &orbit_core::runtime::resolve_global_root()?,
         options,
         environment.local_host(),
         &environment,
@@ -129,7 +138,7 @@ pub fn run_sweep_at(
     workspace_selector: Option<&str>,
 ) -> Result<SweepOutcome, OrbitError> {
     let environment = RegistryRoutineEnvironment::load(global_root, workspace_selector)?;
-    orbit_core::application::routines::run_sweep_at_with_providers(
+    orbit_automation::routines::run_sweep_at_with_providers(
         global_root,
         options,
         environment.local_host(),

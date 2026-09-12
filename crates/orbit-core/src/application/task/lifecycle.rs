@@ -15,7 +15,7 @@ use orbit_types::workflow::JobRunState;
 
 use crate::OrbitRuntime;
 
-use super::params::TaskUpdateParams;
+use orbit_types::task::TaskUpdateParams;
 
 const UNAUTHORED_TASK_PLAN_PLACEHOLDER: &str = "To be authored by executing agent at start time.";
 

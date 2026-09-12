@@ -90,9 +90,9 @@ pub use application::workspace_sync::{
 };
 pub use context::ActorIdentity;
 pub use runtime::workspace_catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
-// Shared domain types (owned by orbit-common) that the CLI and dashboard
-// render or construct.
-pub use application::auto_tasks::{AutoTaskAddParams, AutoTaskUpdateParams};
+// Shared domain types owned by a lower crate that the CLI and dashboard render
+// or construct.
+pub use orbit_automation::auto_tasks::{AutoTaskAddParams, AutoTaskUpdateParams};
 pub use orbit_common::security::redaction::redact_sensitive_env_text;
 pub use orbit_common::{NotFoundKind, OrbitError};
 pub use orbit_store::{

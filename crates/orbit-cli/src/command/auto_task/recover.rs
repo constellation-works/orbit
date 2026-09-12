@@ -49,7 +49,7 @@ impl Execute for AutoTaskRecoverArgs {
             reason: self.reason.unwrap_or_default(),
         };
 
-        let preview = orbit_core::application::automation::recover_auto_task(
+        let preview = orbit_automation::consumers::recover_auto_task(
             runtime,
             &definition,
             &request,

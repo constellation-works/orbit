@@ -20,13 +20,13 @@ use serde_json::{Value, json};
 
 use super::{Fixture, MACHINE, WorkerOverride, fixture, git, seed_task};
 use crate::OrbitRuntime;
-use crate::application::automation::preparation;
 use crate::application::job::DrainWorkerLimitRequest;
 use crate::application::job::pipeline::{ChildPipelineAdmission, ChildSubmission};
 use crate::application::operation::{
     EnableOperationGrantRequest, OperationDrainRequest, OperationGrantControlRequest,
     triage_recovery_reservation,
 };
+use orbit_automation::consumers::preparation;
 
 const AUTONOMOUS_DONE: &str = "[operation]\npreset = \"autonomous\"\ndelivery_cap = \"done\"\n";
 

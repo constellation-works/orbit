@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: Proposed bounded state-driven triggers for routines and auto-tasks with durable work identity and honest coverage.
 tags: [automation-triggers, routines, auto-tasks, scheduling]
-paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/adapter/engine_host/v2_host/task_pilot/**", "crates/orbit-core/src/adapter/engine_host/v2_host/triage.rs"]
+paths: ["crates/orbit-automation/src/routines/**", "crates/orbit-automation/src/auto_tasks/**", "crates/orbit-core/src/adapter/engine_host/v2_host/task_pilot/**", "crates/orbit-core/src/adapter/engine_host/v2_host/triage.rs"]
 related_features: [routines, auto-tasks, operation-mode]
 related_artifacts: [ORB-11315, ORB-11295, ORB-11314, ORB-11316]
 ---

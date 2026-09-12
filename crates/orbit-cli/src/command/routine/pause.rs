@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::command::{CommandOut, CommandOutput};
 use clap::Args;
-use orbit_core::application::routines::pause_routine;
+use orbit_automation::routines::pause_routine;
 
 #[derive(Args)]
 pub struct RoutinePauseArgs {

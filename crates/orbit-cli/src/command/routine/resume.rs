@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::command::{CommandOut, CommandOutput};
 use clap::Args;
-use orbit_core::application::routines::resume_routine;
+use orbit_automation::routines::resume_routine;
 
 #[derive(Args)]
 pub struct RoutineResumeArgs {

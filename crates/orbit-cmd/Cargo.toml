@@ -15,6 +15,7 @@ workspace = true
 chrono.workspace = true
 flate2.workspace = true
 fs2.workspace = true
+orbit-automation = { path = "../orbit-automation" }
 orbit-common = { path = "../orbit-common" }
 orbit-config = { path = "../orbit-config" }
 orbit-types = { path = "../orbit-types" }

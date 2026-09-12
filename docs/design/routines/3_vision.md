@@ -9,7 +9,7 @@ doc_role: vision
 type: design
 summary: Open questions and prior art for possible routines evolution beyond the current contract.
 tags: [routines, scheduler]
-paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/**"]
+paths: ["crates/orbit-automation/src/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry, task-migration]
 related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-11315, ORB-12236, ORB-12237]
 ---

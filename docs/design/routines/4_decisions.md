@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Decision log for the routines scheduler — OS clock, one host tick for routines and auto-tasks, no host pins, registration as the automation opt-in, default seeding, workspace-local shipment.
 tags: [routines, scheduler]
-paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/**"]
+paths: ["crates/orbit-automation/src/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry, task-migration]
 related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10739, ORB-10986, ORB-11082, ORB-12236, ORB-12237]
 ---
@@ -23,7 +23,7 @@ related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-1
 ## The OS owns the clock: stateless orbit sweep under launchd/systemd, no resident daemon
 
 **Recorded:** 2026-07-04 21:14:40.327750Z · [ORB-10021]
-**Paths:** `docs/design/routines/**`, `crates/orbit-core/src/application/routines/**`
+**Paths:** `docs/design/routines/**`, `crates/orbit-automation/src/routines/**`
 
 ### Context
 
@@ -42,7 +42,7 @@ launchd (`StartInterval` 60s) and a systemd timer (`OnActiveSec` plus `OnUnitAct
 ## Routine discovery via the workspace registry and a versioned [routines] role=source config key
 
 **Recorded:** 2026-07-04 21:14:40.332406Z · [ORB-10021]
-**Paths:** `docs/design/routines/**`, `crates/orbit-core/src/application/routines/**`
+**Paths:** `docs/design/routines/**`, `crates/orbit-automation/src/routines/**`
 **Superseded by:** [Registration is the automation opt-in; there is no routine-source role](#registration-is-the-automation-opt-in-there-is-no-routine-source-role) — discovery through the workspace registry stands; the `[routines] role = "source"` key does not.
 
 ### Context
@@ -62,7 +62,7 @@ Sweep enumerates `~/.orbit/workspaces.json` and collects `.orbit/routines/*.yaml
 ## Routine targets are catalog references only — no inline command payloads
 
 **Recorded:** 2026-07-04 21:14:40.329169Z · [ORB-10021]
-**Paths:** `docs/design/routines/**`, `crates/orbit-core/src/application/routines/**`
+**Paths:** `docs/design/routines/**`, `crates/orbit-automation/src/routines/**`
 
 ### Context
 
@@ -81,7 +81,7 @@ The original sketch allowed a `run: {type: shell, command: ...}` payload for sma
 ## Routines pin hosts explicitly; no cross-host coordination in v1
 
 **Recorded:** 2026-07-04 21:14:40.332307Z · [ORB-10021]
-**Paths:** `docs/design/routines/**`, `crates/orbit-core/src/application/routines/**`
+**Paths:** `docs/design/routines/**`, `crates/orbit-automation/src/routines/**`
 **Superseded by:** [Definitions carry no host pin: every owner checkout is an independent schedule](#definitions-carry-no-host-pin-every-owner-checkout-is-an-independent-schedule). The "no cross-host coordination" half survives; the pin does not.
 
 ### Context
@@ -101,7 +101,7 @@ Each routine carries a `hosts:` list matched against the host-local `host_id`; t
 ## Routine definitions are git-shared; scheduler state is host-local and never synced
 
 **Recorded:** 2026-07-04 21:14:40.331256Z · [ORB-10021]
-**Paths:** `docs/design/routines/**`, `crates/orbit-core/src/application/routines/**`
+**Paths:** `docs/design/routines/**`, `crates/orbit-automation/src/routines/**`
 
 ### Context
 
@@ -165,7 +165,7 @@ Seed a workspace-local ship-sweep routine targeting a shipped wrapper job. The w
 ## Host-local sweep clock configuration
 
 **Recorded:** 2026-08-11 03:29:01.559340Z · [ORB-10720]
-**Paths:** `crates/orbit-core/src/application/routines/**`, `crates/orbit-cli/src/command/routine/**`, `docs/design/routines/**`
+**Paths:** `crates/orbit-automation/src/routines/**`, `crates/orbit-cli/src/command/routine/**`, `docs/design/routines/**`
 **Superseded in part by:** [One host tick evaluates routines and auto-task definitions in-process](#one-host-tick-evaluates-routines-and-auto-task-definitions-in-process) — the clock's storage, cadence rules, and native-manager health checks are unchanged; its controls now live at top-level `orbit clock`.
 
 ### Context
@@ -184,7 +184,7 @@ Store the supported whole-minute cadence in host-local `~/.orbit/clock.toml`. Na
 ## One host tick evaluates routines and auto-task definitions in-process
 
 **Recorded:** 2026-09-12 · [ORB-12237]
-**Code anchors:** `crates/orbit-core/src/application/routines/sweep.rs`, `crates/orbit-core/src/application/auto_tasks/scheduler.rs::run_auto_task_scheduler_at`, `crates/orbit-cli/src/command/clock/**`
+**Code anchors:** `crates/orbit-automation/src/routines/tick.rs`, `crates/orbit-automation/src/routines/sweep.rs`, `crates/orbit-automation/src/auto_tasks/scheduler.rs::run_auto_task_scheduler_at`, `crates/orbit-cli/src/command/clock/**`
 
 ### Context
 
@@ -231,7 +231,7 @@ Migration: `hosts:` is accepted and ignored with a load warning for one release,
 ## Registration is the automation opt-in; there is no routine-source role
 
 **Recorded:** 2026-09-12 · [ORB-12236]
-**Code anchors:** `crates/orbit-config/src/{raw,resolved}.rs` (the `[routines] role` key, removed), `crates/orbit-core/src/application/routines/loader.rs`
+**Code anchors:** `crates/orbit-config/src/{raw,resolved}.rs` (the `[routines] role` key, removed), `crates/orbit-automation/src/routines/loader.rs`
 
 ### Context
 

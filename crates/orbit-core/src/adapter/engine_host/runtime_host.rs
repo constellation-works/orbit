@@ -40,7 +40,7 @@ impl RuntimeHost for OrbitRuntime {
         &self,
         request: &orbit_types::workflow::automation::DirectLandingRequest,
     ) -> Result<(), OrbitError> {
-        crate::application::automation::record_direct_landing_intent(self, request)
+        orbit_automation::consumers::record_direct_landing_intent(self, request)
     }
 
     fn insert_job_run(

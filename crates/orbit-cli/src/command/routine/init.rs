@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::command::{CommandOut, CommandOutput};
 use clap::Args;
-use orbit_core::application::routines::install_clock;
+use orbit_automation::routines::install_clock;
 use orbit_registry::load_host_identity;
 
 #[derive(Args)]

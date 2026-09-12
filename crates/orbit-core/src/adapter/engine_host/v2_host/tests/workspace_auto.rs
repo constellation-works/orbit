@@ -13,8 +13,8 @@ use crate::adapter::engine_host::v2_host::test_support::{
     runtime_with_workspace_config, runtime_with_workspace_layout, seed_list_backlog_task,
     write_workspace_file,
 };
-use crate::application::auto_tasks::AutoTaskAddParams;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_automation::auto_tasks::AutoTaskAddParams;
 
 fn classify(runtime: &OrbitRuntime) -> Value {
     classify_with(runtime, json!({}))

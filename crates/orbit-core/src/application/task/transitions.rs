@@ -14,7 +14,7 @@ use super::helpers::{
     SYSTEM_ACTOR_LABEL, build_task_comments, effective_actor_label, implementation_label,
 };
 use super::lifecycle::{ensure_task_has_execution_plan, in_progress_transition_requires_plan};
-use super::params::TaskUpdateParams;
+use orbit_types::task::TaskUpdateParams;
 
 #[cfg(test)]
 use std::sync::Mutex;

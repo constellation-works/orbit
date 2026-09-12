@@ -58,7 +58,7 @@ pub(super) fn prepare(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     let workspace_root = requested_workspace_root(runtime, action, input)?;
-    let claim = crate::application::automation::members::claim(runtime, input)
+    let claim = orbit_automation::consumers::members::claim(runtime, input)
         .map_err(|error| action_failed(action, error.to_string()))?;
     let source = resolve_source_snapshot(runtime, action, input, &workspace_root)?;
     if let Some(claim) = &claim
@@ -229,7 +229,7 @@ pub(super) fn prepare(
         let Some(source) = &source else {
             continue;
         };
-        let fingerprint = crate::application::automation::preparation::fingerprint(
+        let fingerprint = orbit_automation::consumers::preparation::fingerprint(
             runtime,
             &task,
             &source.source_revision,

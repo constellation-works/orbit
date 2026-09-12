@@ -3,6 +3,7 @@
 mod artifacts;
 mod error;
 mod model;
+mod params;
 mod plan;
 mod show_fields;
 pub use error::TaskError;
@@ -38,6 +39,7 @@ pub use model::{
     unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
     unsatisfiable_task_dependencies_with_index, validate_task_dependencies,
 };
+pub use params::{TaskAddParams, TaskUpdateParams};
 pub use plan::{TaskPlan, TaskPlanCheckpoint, TaskPlanSuccessCriterion};
 pub use show_fields::{
     TASK_SHOW_DERIVED_RESPONSE_FIELDS, TASK_SHOW_PROJECTION_FIELDS,

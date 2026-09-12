@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
+use orbit_automation::auto_tasks::cursor_state_path;
 use orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV;
-use orbit_core::application::auto_tasks::cursor_state_path;
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::{AutoTaskAddParams, OrbitRuntime};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
@@ -373,7 +373,7 @@ async fn list_projects_the_next_interval_slot_not_the_owed_catch_up_slot() {
     // The scheduler, meanwhile, still owes a fire for a boundary years in the
     // past. The two answers are different by design, so the row must not claim
     // the owed slot as its next evaluation.
-    let owed = orbit_core::application::auto_tasks::schedule::decide_due(
+    let owed = orbit_automation::auto_tasks::schedule::decide_due(
         &runtime
             .auto_task_show("stale")
             .expect("show")
@@ -384,8 +384,7 @@ async fn list_projects_the_next_interval_slot_not_the_owed_catch_up_slot() {
         now,
     )
     .expect("due decision");
-    let orbit_core::application::auto_tasks::AutoTaskDueDecision::Fire { slot: owed_slot } = owed
-    else {
+    let orbit_automation::auto_tasks::AutoTaskDueDecision::Fire { slot: owed_slot } = owed else {
         panic!("a years-old cursor must still owe a catch-up fire");
     };
     let owed_slot = chrono::DateTime::parse_from_rfc3339(&owed_slot)

@@ -12,12 +12,12 @@ use orbit_automation::AutomationError;
 use orbit_automation::review::{
     LandingFacts, combined_task_meaning_digest, exclusion, task_meaning_digest,
 };
+use orbit_automation::source::Source;
 use orbit_store::contracts::ReviewStoreBackend;
 use orbit_types::workflow::ReviewCertificate;
 use orbit_types::workflow::automation::{AutomationState, SourcePage};
 
 use crate::OrbitRuntime;
-use crate::application::automation::source::Source;
 
 /// Certificates considered per landing; one candidate tree rarely has more.
 const CERTIFICATES_PER_LANDING: usize = 5;

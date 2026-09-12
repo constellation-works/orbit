@@ -4,6 +4,7 @@ use super::due::{
     DueDecision, due_decision_with_grace, natural_slot_grace_for_cadence, parse_cron,
 };
 use super::loader::{LoadedRoutine, RoutineCollection, RoutineLoadError};
+use crate::host::RunOwnerLiveness;
 use chrono::{DateTime, Duration, Local, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
@@ -13,19 +14,11 @@ use orbit_types::workflow::{JobRunState, OverlapPolicy};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// Core-supplied owner facts, independent of persisted run status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunOwnerLiveness {
-    Alive,
-    Stopped,
-    Unknown,
-}
-
-/// Dispatch seam for the sweep. The production impl
-/// (in Core) wraps one `OrbitRuntime` per source workspace and
-/// dispatches through `submit_pipeline_run` / `show_job_run`; tests supply a
-/// fake so the sweep's fire / retry / overlap / outcome-sync orchestration is
-/// exercised deterministically without spawning pipeline workers.
+/// Dispatch seam for the sweep. The production impl ([`super::tick`]) wraps
+/// one [`AutomationHost`](crate::host::AutomationHost) per source workspace;
+/// tests supply a fake so the sweep's fire / retry / overlap / outcome-sync
+/// orchestration is exercised deterministically without spawning pipeline
+/// workers.
 pub trait RoutineDispatch {
     fn evaluate_delivery(
         &self,
@@ -140,9 +133,10 @@ pub struct SweepOutcome {
 
 /// The dispatch-agnostic core of one sweep pass: outcome-sync
 /// (unless dry-run), then per-routine due evaluation and fire/skip. Split out
-/// from Core assembly — which owns the lock, store, and workspace discovery
-/// — so the orchestration can be driven against a temp store, a hand-built
-/// [`RoutineCollection`], a fake [`RoutineDispatch`], and an explicit `now`.
+/// from the host pass in [`super::tick`] — which owns the lock, store, and
+/// workspace discovery — so the orchestration can be driven against a temp
+/// store, a hand-built [`RoutineCollection`], a fake [`RoutineDispatch`], and
+/// an explicit `now`.
 pub fn run_sweep_core(
     store: &dyn RoutineStoreBackend,
     collection: &RoutineCollection,

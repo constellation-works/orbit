@@ -692,7 +692,6 @@ fn sha256_hex(content: &[u8]) -> String {
 pub(crate) mod activity_catalog_health;
 pub mod artifact_health;
 pub mod audit_event;
-pub mod auto_tasks;
 pub(crate) mod docs;
 pub(crate) mod executor;
 pub mod gc;
@@ -700,7 +699,6 @@ pub mod job;
 pub mod operation;
 pub mod review;
 pub(crate) mod routine;
-pub mod routines;
 pub(crate) mod search;
 pub mod semantic;
 pub mod skill;
@@ -711,4 +709,13 @@ pub mod workspace_sync;
 #[cfg(test)]
 mod tests;
 
-pub mod automation;
+// The scheduling domain moved down into `orbit-automation` [ORB-12262], which
+// owns it behind `AutomationHost`. These aliases keep one release of
+// source compatibility for out-of-tree callers of the old paths; in-tree
+// callers use the `orbit_automation` paths directly.
+#[deprecated(since = "0.22.0", note = "use orbit_automation::auto_tasks")]
+pub use orbit_automation::auto_tasks;
+#[deprecated(since = "0.22.0", note = "use orbit_automation::consumers")]
+pub use orbit_automation::consumers as automation;
+#[deprecated(since = "0.22.0", note = "use orbit_automation::routines")]
+pub use orbit_automation::routines;

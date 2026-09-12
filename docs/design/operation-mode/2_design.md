@@ -167,7 +167,7 @@ activity contract**, not permission implied by today's reviewer label/profile.
 Existing `allowed_crews` propagation in the PR job is a constraint to preserve;
 it does not select a distinct review crew today.
 
-The seeded [code-review auto-task](../../../crates/orbit-core/assets/auto_tasks/code-review.yaml)
+The seeded [code-review auto-task](../../../crates/orbit-automation/assets/auto_tasks/code-review.yaml)
 is disabled, scheduled by cron, and assigned to `system`. Its prompt finds the
 newest completed current/legacy sweep, reads the cursor from its execution
 summary, reviews the integration-branch range, and files confirmed findings.
@@ -176,16 +176,16 @@ across merged changes; it neither directly repairs them nor filters by a
 before-PR coverage record. These are portable defaults, not a claim about live
 workspace enablement or user-edited definitions.
 
-The [auto-task scheduler](../../../crates/orbit-core/src/application/auto_tasks/scheduler.rs)
-mints tasks when the [time schedule](../../../crates/orbit-core/src/application/auto_tasks/schedule.rs)
+The [auto-task scheduler](../../../crates/orbit-automation/src/auto_tasks/scheduler.rs)
+mints tasks when the [time schedule](../../../crates/orbit-automation/src/auto_tasks/schedule.rs)
 is due, with `skip_if_open` dedupe. Its
-[cursor state](../../../crates/orbit-core/src/application/auto_tasks/state.rs)
+[cursor state](../../../crates/orbit-automation/src/auto_tasks/scheduler.rs)
 records baseline, last slot/fire, and last minted task. A fire checkpoint is
 not successful review coverage; task creation and cursor update are separate
 operations, with checkpoint errors reported. Delivery thresholds, immutable
 review batches, and atomic review-coverage acceptance are proposed work.
 
-The independently seeded [QA sweep](../../../crates/orbit-core/assets/auto_tasks/qa-sweep.yaml)
+The independently seeded [QA sweep](../../../crates/orbit-automation/assets/auto_tasks/qa-sweep.yaml)
 is also disabled and time-scheduled. It asks workers to build/run affected user
 paths and file real issues; rerunning existing tests alone is insufficient.
 Review coverage must not suppress that distinct integrated-behavior check.

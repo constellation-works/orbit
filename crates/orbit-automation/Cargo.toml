@@ -11,18 +11,27 @@ stability = "internal"
 [lints]
 workspace = true
 
+[features]
+# Observation counters and work statistics the host's own integration tests
+# assert on. Off in production builds.
+test-support = []
+
 [dependencies]
 orbit-common = { path = "../orbit-common" }
+orbit-config = { path = "../orbit-config" }
 orbit-types = { path = "../orbit-types" }
 orbit-store = { path = "../orbit-store" }
 chrono.workspace = true
 croner.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
+# Bounded source observation captures child-process output through a temp file.
+tempfile.workspace = true
+toml.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
 chrono-tz.workspace = true
-tempfile.workspace = true

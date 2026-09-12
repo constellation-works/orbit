@@ -2,7 +2,7 @@
 //! filtering that keeps the once-a-minute clock from growing its log, and the
 //! stable `--json` shape machine consumers depend on.
 
-use orbit_core::application::routines::{AutoTaskSweepReport, RoutineSweepReport, SweepOutcome};
+use orbit_automation::routines::{AutoTaskSweepReport, RoutineSweepReport, SweepOutcome};
 
 use crate::command::clock::tick::{
     format_auto_task_report_line, format_routine_report_line, outcome_json, report_is_noteworthy,

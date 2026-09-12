@@ -38,14 +38,20 @@ fails the build on a violation:
 - [`bootstrap/`](src/bootstrap) — initialization, managed-asset seeding, policy
   seeding, forward-only startup migrations. Runs once, at open.
 
-`auto_tasks` and `routines` compose the scheduling domain in `orbit-automation`
-with Core task/job lifecycle adapters [ORB-11330]. `metrics` owns derived
-measurement. All use the existing v2 job machinery.
+The scheduling domain (routines, auto-tasks, delivery/state automation) lives in
+`orbit-automation` and evaluates against its `AutomationHost` port
+[ORB-11330, ORB-12262]. Core's side of that port is
+[`adapter/automation_host`](src/adapter/automation_host) — the only
+`impl AutomationHost for OrbitRuntime`, plus the thin `runtime.auto_task_*`
+facade. Add a capability there by adding a port method, never by moving a
+scheduling decision back into Core. `metrics` owns derived measurement. All use
+the existing v2 job machinery.
 
 The guardrail also fails if a retired path reappears: `src/command`,
-`src/runtime/orbit_tool_host`, `src/runtime/engine/runtime_host.rs`. Do not
-recreate them; their successors are `orbit-cmd`, `adapter/tool_host`, and
-`adapter/engine_host`.
+`src/runtime/orbit_tool_host`, `src/runtime/engine/runtime_host.rs`, and the
+scheduling glue that moved down — `src/application/{automation,auto_tasks,routines}`.
+Do not recreate them; their successors are `orbit-cmd`, `adapter/tool_host`,
+`adapter/engine_host`, and `orbit-automation`.
 
 ## Root re-exports are justified, not convenient
 

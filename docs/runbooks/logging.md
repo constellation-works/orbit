@@ -2,7 +2,7 @@
 type: runbook
 summary: Locate, filter, rotate, and retain Orbit process and routine-sweep logs.
 tags: [operations, logs, tracing, rotation, routines]
-paths: ["crates/orbit-common/src/observability/log_rotation.rs", "crates/orbit-core/src/application/routines/sweep.rs"]
+paths: ["crates/orbit-common/src/observability/log_rotation.rs", "crates/orbit-automation/src/routines/tick.rs"]
 related_features: [auditability, routines]
 related_artifacts: [ORB-00423]
 last_validated: 2026-08-22

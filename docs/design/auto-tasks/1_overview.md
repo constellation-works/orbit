@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code.
 tags: [auto-tasks]
-paths: ["crates/orbit-core/src/application/auto_tasks/**"]
+paths: ["crates/orbit-automation/src/auto_tasks/**"]
 related_features: [auto-tasks, routines]
 related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095]
 ---
@@ -75,19 +75,19 @@ becomes just the first definition.
 | Concern | File | Task |
 |---|---|---|
 | Definition schema | `crates/orbit-types/src/workflow/auto_task.rs` | ORB-10149 |
-| Discovery (fail-closed) | `crates/orbit-core/src/application/auto_tasks/loader.rs` | ORB-10149 |
-| Due-math + catch-up | `crates/orbit-core/src/application/auto_tasks/schedule.rs` | ORB-10149 |
-| Host-local cursor | `crates/orbit-core/src/application/auto_tasks/state.rs` | ORB-10149 |
-| Scheduler pass | `crates/orbit-core/src/application/auto_tasks/scheduler.rs` | ORB-10149 |
-| CRUD (CLI + MCP shared) | `crates/orbit-core/src/application/auto_tasks/crud.rs` | ORB-10149 |
-| Manual mint (`mint`, CLI + MCP) | `crates/orbit-core/src/application/auto_tasks/crud.rs` | ORB-10439, ORB-10798 |
+| Discovery (fail-closed) | `crates/orbit-automation/src/auto_tasks/loader.rs` | ORB-10149 |
+| Due-math + catch-up | `crates/orbit-automation/src/auto_tasks/schedule.rs` | ORB-10149 |
+| Host-local cursor | `crates/orbit-automation/src/auto_tasks/mod.rs` (projection) + `crates/orbit-store/src/compose/` (persistence) | ORB-10149 |
+| Scheduler pass | `crates/orbit-automation/src/auto_tasks/scheduler.rs` | ORB-10149 |
+| CRUD (CLI + MCP shared) | `crates/orbit-automation/src/auto_tasks/crud.rs`, bound to the runtime in `crates/orbit-core/src/adapter/automation_host/` | ORB-10149, ORB-12262 |
+| Manual mint (`mint`, CLI + MCP) | `crates/orbit-automation/src/auto_tasks/crud.rs` | ORB-10439, ORB-10798 |
 | Deterministic action (slated for retirement) | `crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs` | ORB-10149 |
 | Seeded assets (scheduler routine/job/activity slated for retirement) | `crates/orbit-core/assets/{activities,jobs,routines}/…` | ORB-10149 |
-| Default auto-task catalog | `crates/orbit-core/assets/auto_tasks/…` | ORB-10549, ORB-10550, ORB-10950 |
+| Default auto-task catalog | `crates/orbit-automation/assets/auto_tasks/…` | ORB-10549, ORB-10550, ORB-10950 |
 
 ## Embedded default catalog
 
-These four YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These four YAML files live under `crates/orbit-automation/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -135,5 +135,9 @@ encode this repository's branches and gates. Re-init preserves them:
 - ORB-11115 / ORB-11383 — Retired the shipped CI-failure auto-task;
   runner workflows only emit fail-open run/job/commit provenance, while the
   host-owned `ci_failure_sweep` routine performs durable CI-failure filing.
+
+- ORB-12262 — Moved the auto-task domain (loader, schedule, scheduler, CRUD, shipped
+  defaults) out of `orbit-core` into `orbit-automation` behind the `AutomationHost` port;
+  `runtime.auto_task_*` and the MCP/CLI surfaces are unchanged.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -44,6 +44,7 @@ tracing.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+orbit-automation = { path = "../orbit-automation", features = ["test-support"] }
 orbit-common = { path = "../orbit-common", features = ["test-util"] }
 tracing-subscriber.workspace = true
 orbit-engine = { path = "../orbit-engine", features = ["test-support"] }

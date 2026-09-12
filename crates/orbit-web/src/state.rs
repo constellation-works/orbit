@@ -38,10 +38,10 @@ use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, workspace_runtime_binding};
-use orbit_core::application::routines::ClockStatus;
+use orbit_automation::routines::ClockStatus;
 #[cfg(test)]
-use orbit_core::application::routines::clock_status;
+use orbit_automation::routines::clock_status;
+use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, workspace_runtime_binding};
 use orbit_core::runtime::{HostLifetime, WorkspaceRuntimeBinding};
 use orbit_core::{OrbitError, OrbitRuntime, ShipMode};
 use orbit_registry::workspace_registry;
@@ -589,7 +589,7 @@ impl DashboardState {
         }
         #[cfg(not(test))]
         {
-            orbit_core::application::routines::clock_status(&self.inner.global_root)
+            orbit_automation::routines::clock_status(&self.inner.global_root)
         }
     }
 

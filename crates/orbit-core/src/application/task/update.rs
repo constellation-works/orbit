@@ -15,11 +15,11 @@ use super::helpers::{
     describe_optional_field_value,
 };
 use super::lifecycle::{FORCED_STATUS_EVENT, ensure_status_change_allowed};
-use super::params::TaskUpdateParams;
 use super::paths::{
     canonicalize_context_files_for_read, context_files_pruned_history_entry,
     context_workspace_root, normalize_context_files_for_write,
 };
+use orbit_types::task::TaskUpdateParams;
 
 /// Which lifecycle rules a status change on this write must satisfy
 /// [ORB-12245].

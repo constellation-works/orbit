@@ -23,7 +23,7 @@ pub(super) async fn accepted_evidence(
         Err(reason) => return not_found(reason),
     };
     let result = (|| {
-        let consumer = orbit_core::application::automation::consumer_key(&runtime, &kind, &name)?;
+        let consumer = orbit_automation::consumers::consumer_key(runtime.as_ref(), &kind, &name)?;
         runtime
             .automation_store()?
             .automation_receipt(&consumer, &batch)

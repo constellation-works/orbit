@@ -188,7 +188,7 @@ pub(super) fn list_triage_candidates(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
-    let claim = crate::application::automation::members::claim(runtime, input)
+    let claim = orbit_automation::consumers::members::claim(runtime, input)
         .map_err(|error| action_failed(action, error.to_string()))?;
     let max_rebacklogs = rebacklog_budget(input);
     let max_tasks = input
@@ -247,7 +247,7 @@ pub(super) fn list_triage_candidates(
             continue;
         }
         if claim.is_some() {
-            match crate::application::automation::incidents::observe(runtime, task) {
+            match orbit_automation::consumers::incidents::observe(runtime, task) {
                 Ok((key, _)) if claim.as_ref().is_some_and(|claim| claim.member.key == key) => {}
                 _ => continue,
             }
@@ -365,7 +365,7 @@ pub(super) fn apply_triage_dispositions(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
-    let claim = crate::application::automation::members::claim(runtime, input)
+    let claim = orbit_automation::consumers::members::claim(runtime, input)
         .map_err(|error| action_failed(action, error.to_string()))?;
     let dispositions = input
         .get("dispositions")
@@ -579,11 +579,7 @@ fn apply_one_disposition_locked(
     }) {
         return DispositionOutcome::skipped("task changed since candidate capture");
     }
-    match crate::application::automation::incidents::failure_coupled(
-        runtime,
-        &task,
-        expected_run_id,
-    ) {
+    match orbit_automation::consumers::incidents::failure_coupled(runtime, &task, expected_run_id) {
         Ok(true) => {}
         _ => return DispositionOutcome::skipped("failure coupling or human intent changed"),
     }
@@ -603,11 +599,11 @@ fn apply_one_disposition_locked(
     }
 
     if let Some(expected) = &candidate.incident {
-        match crate::application::automation::incidents::members(runtime) {
+        match orbit_automation::consumers::incidents::members(runtime) {
             Ok(inventory) if inventory.contains_key(expected) => {}
             _ => return DispositionOutcome::skipped("incident recovery or membership changed"),
         }
-        match crate::application::automation::incidents::observe(runtime, &task) {
+        match orbit_automation::consumers::incidents::observe(runtime, &task) {
             Ok((key, _)) if &key == expected => {}
             _ => return DispositionOutcome::skipped("incident recovery or eligibility changed"),
         }

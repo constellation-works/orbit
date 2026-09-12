@@ -16,7 +16,7 @@ use tempfile::tempdir;
 use crate::auto_tasks::loader::auto_tasks_dir;
 use crate::auto_tasks::scheduler::{
     AutoTaskDispatch, SchedulerFault, SchedulerOptions, inject_scheduler_fault,
-    run_auto_task_scheduler_at, set_admission_overlap_barrier,
+    run_auto_task_scheduler_with_dispatch, set_admission_overlap_barrier,
 };
 
 struct TestDispatch {
@@ -152,8 +152,9 @@ template:
     .expect("definition fixture");
 
     let dispatch = TestDispatch::new(definition_root, state_dir);
-    let outcome = run_auto_task_scheduler_at(&dispatch, Utc::now(), SchedulerOptions::default())
-        .expect("scheduler pass");
+    let outcome =
+        run_auto_task_scheduler_with_dispatch(&dispatch, Utc::now(), SchedulerOptions::default())
+            .expect("scheduler pass");
 
     assert!(outcome.reports.is_empty());
     assert_eq!(outcome.errors.len(), 1);
@@ -177,7 +178,7 @@ fn overlapping_due_passes_mint_one_task() {
             let barrier = Arc::clone(&barrier);
             scope.spawn(move || {
                 set_admission_overlap_barrier(Some(barrier));
-                let outcome = run_auto_task_scheduler_at(
+                let outcome = run_auto_task_scheduler_with_dispatch(
                     dispatch.as_ref(),
                     t0 + Duration::minutes(65),
                     SchedulerOptions::default(),
@@ -202,7 +203,7 @@ fn mint_failure_does_not_consume_the_slot_and_retry_can_fire() {
     let (_root, dispatch, t0) = due_fixture("chore");
     dispatch.mint_should_fail.store(true, Ordering::SeqCst);
 
-    let outcome = run_auto_task_scheduler_at(
+    let outcome = run_auto_task_scheduler_with_dispatch(
         &dispatch,
         t0 + Duration::minutes(65),
         SchedulerOptions::default(),
@@ -223,7 +224,7 @@ fn mint_failure_does_not_consume_the_slot_and_retry_can_fire() {
     assert!(state.definitions["chore"].pending.is_none());
 
     dispatch.mint_should_fail.store(false, Ordering::SeqCst);
-    let retry = run_auto_task_scheduler_at(
+    let retry = run_auto_task_scheduler_with_dispatch(
         &dispatch,
         t0 + Duration::minutes(65),
         SchedulerOptions::default(),
@@ -238,7 +239,7 @@ fn interruption_after_claim_reports_unresolved_and_does_not_remint() {
     let (_root, dispatch, t0) = due_fixture("chore");
     inject_scheduler_fault(Some(SchedulerFault::AfterClaim));
 
-    let interrupted = run_auto_task_scheduler_at(
+    let interrupted = run_auto_task_scheduler_with_dispatch(
         &dispatch,
         t0 + Duration::minutes(65),
         SchedulerOptions::default(),
@@ -255,7 +256,7 @@ fn interruption_after_claim_reports_unresolved_and_does_not_remint() {
         Some(None)
     );
 
-    let retry = run_auto_task_scheduler_at(
+    let retry = run_auto_task_scheduler_with_dispatch(
         &dispatch,
         t0 + Duration::minutes(65),
         SchedulerOptions::default(),
@@ -280,7 +281,7 @@ fn interruption_after_mint_reconciles_on_retry_without_reminting() {
     let (_root, dispatch, t0) = due_fixture("chore");
     inject_scheduler_fault(Some(SchedulerFault::AfterMintBeforeCheckpoint));
 
-    let interrupted = run_auto_task_scheduler_at(
+    let interrupted = run_auto_task_scheduler_with_dispatch(
         &dispatch,
         t0 + Duration::minutes(65),
         SchedulerOptions::default(),
@@ -298,7 +299,7 @@ fn interruption_after_mint_reconciles_on_retry_without_reminting() {
     );
     assert!(state.definitions["chore"].last_slot.is_none());
 
-    let retry = run_auto_task_scheduler_at(
+    let retry = run_auto_task_scheduler_with_dispatch(
         &dispatch,
         t0 + Duration::minutes(65),
         SchedulerOptions::default(),
@@ -325,7 +326,7 @@ fn checkpoint_write_failure_records_mint_evidence_and_retry_reconciles() {
     let (_root, dispatch, t0) = due_fixture("chore");
     inject_scheduler_fault(Some(SchedulerFault::CheckpointWrite));
 
-    let failed = run_auto_task_scheduler_at(
+    let failed = run_auto_task_scheduler_with_dispatch(
         &dispatch,
         t0 + Duration::minutes(65),
         SchedulerOptions::default(),
@@ -351,7 +352,7 @@ fn checkpoint_write_failure_records_mint_evidence_and_retry_reconciles() {
     );
     assert!(state.definitions["chore"].last_slot.is_none());
 
-    let retry = run_auto_task_scheduler_at(
+    let retry = run_auto_task_scheduler_with_dispatch(
         &dispatch,
         t0 + Duration::minutes(65),
         SchedulerOptions::default(),
@@ -371,14 +372,16 @@ fn dry_run_creates_nothing_and_persists_no_cursor() {
     let dispatch = TestDispatch::new(definition_root, state_dir);
     let t0 = at(2026, 1, 1, 0, 0);
 
-    let outcome = run_auto_task_scheduler_at(&dispatch, t0, SchedulerOptions { dry_run: true })
-        .expect("dry run");
+    let outcome =
+        run_auto_task_scheduler_with_dispatch(&dispatch, t0, SchedulerOptions { dry_run: true })
+            .expect("dry run");
     assert_eq!(outcome.reports[0].action, "would_baseline");
     assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
     assert!(!cursor_state_path(&dispatch.state_dir).exists());
 
-    let again = run_auto_task_scheduler_at(&dispatch, t0, SchedulerOptions { dry_run: true })
-        .expect("dry run 2");
+    let again =
+        run_auto_task_scheduler_with_dispatch(&dispatch, t0, SchedulerOptions { dry_run: true })
+            .expect("dry run 2");
     assert_eq!(again.reports[0].action, "would_baseline");
 }
 
@@ -398,7 +401,7 @@ fn skip_if_open_does_not_claim_or_mint() {
     )
     .expect("baseline");
 
-    let outcome = run_auto_task_scheduler_at(
+    let outcome = run_auto_task_scheduler_with_dispatch(
         &dispatch,
         t0 + Duration::minutes(65),
         SchedulerOptions::default(),
@@ -419,7 +422,7 @@ fn skip_if_open_does_not_claim_or_mint() {
 #[test]
 fn dry_run_would_fire_without_writing_when_due() {
     let (_root, dispatch, t0) = due_fixture("chore");
-    let outcome = run_auto_task_scheduler_at(
+    let outcome = run_auto_task_scheduler_with_dispatch(
         &dispatch,
         t0 + Duration::minutes(65),
         SchedulerOptions { dry_run: true },
@@ -443,9 +446,12 @@ fn malformed_cursor_is_not_baselined_or_rewritten() {
     fs::create_dir_all(&dispatch.state_dir).expect("state dir");
     fs::write(&path, "{not json").expect("corrupt");
 
-    let outcome =
-        run_auto_task_scheduler_at(&dispatch, at(2026, 1, 1, 0, 0), SchedulerOptions::default())
-            .expect("pass");
+    let outcome = run_auto_task_scheduler_with_dispatch(
+        &dispatch,
+        at(2026, 1, 1, 0, 0),
+        SchedulerOptions::default(),
+    )
+    .expect("pass");
     assert_eq!(outcome.reports[0].action, "error");
     assert!(
         outcome.reports[0]
@@ -468,8 +474,8 @@ fn missing_state_still_baselines_on_first_observation() {
     let dispatch = TestDispatch::new(definition_root, state_dir);
     let t0 = at(2026, 1, 1, 0, 0);
 
-    let outcome =
-        run_auto_task_scheduler_at(&dispatch, t0, SchedulerOptions::default()).expect("pass");
+    let outcome = run_auto_task_scheduler_with_dispatch(&dispatch, t0, SchedulerOptions::default())
+        .expect("pass");
     assert_eq!(outcome.reports[0].action, "baselined");
     assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
     let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
@@ -494,7 +500,7 @@ fn seeded_pending_without_task_id_is_unresolved() {
     )
     .expect("seed pending");
 
-    let outcome = run_auto_task_scheduler_at(
+    let outcome = run_auto_task_scheduler_with_dispatch(
         &dispatch,
         t0 + Duration::minutes(65),
         SchedulerOptions::default(),
@@ -529,7 +535,7 @@ fn skip_if_open_dry_run_reports_dedupe_without_writing() {
     .expect("baseline");
     let before = fs::read_to_string(cursor_state_path(&dispatch.state_dir)).expect("before");
 
-    let outcome = run_auto_task_scheduler_at(
+    let outcome = run_auto_task_scheduler_with_dispatch(
         &dispatch,
         t0 + Duration::minutes(65),
         SchedulerOptions { dry_run: true },

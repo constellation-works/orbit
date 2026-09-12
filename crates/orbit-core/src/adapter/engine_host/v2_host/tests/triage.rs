@@ -632,7 +632,7 @@ fn later_human_block_with_same_run_id_is_not_rebacklogged() {
 #[test]
 #[cfg(unix)]
 fn state_incident_waits_for_exact_retry_lineage_and_retains_episode_identity() {
-    use crate::application::automation::incidents::observe;
+    use orbit_automation::consumers::incidents::observe;
     let (_root, runtime, repo) = test_runtime();
     let task = create_backlog_task(&runtime, &repo, "state-retry");
     let first = fail_pipeline_attempt(&runtime, &task, None, i32::MAX as u32);
@@ -680,7 +680,7 @@ fn state_incident_waits_for_exact_retry_lineage_and_retains_episode_identity() {
 #[test]
 #[cfg(unix)]
 fn state_incident_collapses_parent_child_and_withholds_live_parent() {
-    use crate::application::automation::incidents::observe;
+    use orbit_automation::consumers::incidents::observe;
     use orbit_types::workflow::{ChildDispatch, ChildDispatchPhase, PipelineState};
     let (_root, runtime, repo) = test_runtime();
     let child_task = create_backlog_task(&runtime, &repo, "child");
@@ -714,7 +714,7 @@ fn state_incident_collapses_parent_child_and_withholds_live_parent() {
             expected_members.push(parent_task);
             expected_members.sort();
             assert_eq!(
-                crate::application::automation::incidents::members(&runtime).unwrap()[&expected],
+                orbit_automation::consumers::incidents::members(&runtime).unwrap()[&expected],
                 expected_members
             );
         } else {
@@ -722,7 +722,7 @@ fn state_incident_collapses_parent_child_and_withholds_live_parent() {
         }
     }
     assert!(
-        !crate::application::automation::incidents::members(&runtime)
+        !orbit_automation::consumers::incidents::members(&runtime)
             .unwrap()
             .contains_key(&expected)
     );

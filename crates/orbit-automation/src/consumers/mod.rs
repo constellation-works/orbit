@@ -1,0 +1,255 @@
+//! One delivery or state consumer, composed from host facts.
+//!
+//! The shared evaluators in [`crate::delivery`] and [`crate::members`] decide;
+//! this module supplies them with the source, ownership, lifecycle and
+//! evidence facts one [`AutomationHost`] can answer for, and translates their
+//! results back into host lifecycle actions.
+
+use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
+use orbit_types::workflow::automation::*;
+use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, RoutineDefinition};
+
+use crate::delivery::{self, ActionOutcome, DeliveryHost};
+use crate::host::AutomationHost;
+use crate::source::Source;
+use crate::{AutomationError, automation_error_to_orbit};
+
+mod direct;
+pub mod incidents;
+mod inspect;
+pub mod members;
+mod ownership;
+pub mod preparation;
+pub mod recovery;
+mod task;
+
+pub use direct::record_direct_landing_intent;
+pub use inspect::{inspect_auto_task, inspect_routine};
+pub use recovery::recover_auto_task;
+
+/// The task and job lifecycle adapters one admission drives, exposed so the
+/// host's integration tests can assert mint provenance and job evidence
+/// directly against a live runtime.
+#[cfg(any(test, feature = "test-support"))]
+pub use task::{job_outcome, mint};
+
+pub const COVERAGE_ARTIFACT: &str = "automation-coverage.json";
+
+/// Identity is machine/workspace-qualified in the authoritative host database.
+pub fn consumer_key<H: AutomationHost>(
+    host: &H,
+    kind: &str,
+    name: &str,
+) -> Result<String, OrbitError> {
+    let machine = host.machine_identity().ok_or_else(|| {
+        OrbitError::InvalidInput(
+            "delivery automation requires a registered machine identity".into(),
+        )
+    })?;
+    Ok(format!("{machine}/{}/{kind}/{name}", host.workspace_id()?))
+}
+
+pub fn evaluate_auto_task<H: AutomationHost>(
+    host: &H,
+    definition: &AutoTaskDefinition,
+    dry_run: bool,
+    now: DateTime<Utc>,
+) -> Result<AutomationDiagnostic, OrbitError> {
+    let AutoTaskSchedule::Deliveries {
+        deliveries_landed: declared,
+    } = &definition.schedule
+    else {
+        return Err(OrbitError::InvalidInput("not a delivery definition".into()));
+    };
+
+    let ownership = ownership::resolve(host, declared.owner_machine.as_deref());
+    let trigger = ownership::with_resolved_owner(declared, &ownership);
+    let epoch = ownership::auto_task_epoch(definition, &trigger)?;
+
+    evaluate(
+        host,
+        Action::Task(definition),
+        ownership,
+        delivery::Evaluation {
+            consumer: &consumer_key(host, "auto-task", &definition.name)?,
+            epoch: &epoch,
+            trigger: &trigger,
+            enabled: definition.enabled,
+            dry_run,
+            now,
+        },
+    )
+}
+
+pub fn evaluate_routine<H: AutomationHost>(
+    host: &H,
+    definition: &RoutineDefinition,
+    dry_run: bool,
+    now: DateTime<Utc>,
+) -> Result<AutomationDiagnostic, OrbitError> {
+    if definition.trigger.state.is_some() {
+        return members::evaluate(host, definition, dry_run, now);
+    }
+
+    let declared = definition
+        .trigger
+        .deliveries_landed
+        .as_ref()
+        .ok_or_else(|| OrbitError::InvalidInput("not a delivery routine".into()))?;
+
+    let ownership = ownership::resolve(host, declared.owner_machine.as_deref());
+    let mut effective_trigger = ownership::with_resolved_owner(declared, &ownership);
+    let epoch = ownership::routine_epoch(definition, &effective_trigger)?;
+
+    // The routine's retry policy caps whatever the trigger asks for.
+    effective_trigger.retries = effective_trigger.retries.min(definition.policy.retries.max);
+
+    evaluate(
+        host,
+        Action::Job(definition),
+        ownership,
+        delivery::Evaluation {
+            consumer: &consumer_key(host, "routine", &definition.name)?,
+            epoch: &epoch,
+            trigger: &effective_trigger,
+            enabled: definition.enabled,
+            dry_run,
+            now,
+        },
+    )
+}
+
+fn evaluate<H: AutomationHost>(
+    host: &H,
+    action: Action<'_>,
+    ownership: DeliveryOwnership,
+    mut request: delivery::Evaluation<'_>,
+) -> Result<AutomationDiagnostic, OrbitError> {
+    let configured_enabled = request.enabled;
+    // Only the owner admits new work; any other host still reconciles what it
+    // already admitted. Preview remains read-only and exposes the actual
+    // consumer/baseline.
+    request.enabled &= ownership.owned_here;
+
+    let store = host.automation_store()?;
+    let consumer = DeliveryConsumer {
+        host,
+        action,
+        source: Source::new(host.repo_root()),
+    };
+
+    let mut diagnostic = delivery::evaluate(store.as_ref(), &consumer, request)
+        .map_err(automation_error_to_orbit)?;
+
+    // An enabled definition this host cannot admit for reports why, so
+    // `disabled` keeps meaning the operator disabled it. Preview reports the
+    // same refusal rather than promising an admission that cannot happen.
+    if configured_enabled
+        && diagnostic.reason != delivery::DEFINITION_CHANGED
+        && let Some(refusal) = ownership.refusal()
+    {
+        diagnostic.reason = refusal.into();
+    }
+    diagnostic.ownership = Some(ownership);
+
+    Ok(diagnostic)
+}
+
+enum Action<'a> {
+    Task(&'a AutoTaskDefinition),
+    Job(&'a RoutineDefinition),
+}
+
+/// One delivery consumer as the shared evaluator drives it: the host it asks,
+/// the action an admission takes, and the source observation both share.
+struct DeliveryConsumer<'a, H> {
+    host: &'a H,
+    action: Action<'a>,
+    source: Source<'a>,
+}
+
+impl<H: AutomationHost> DeliveryHost for DeliveryConsumer<'_, H> {
+    fn admission_deferral(&self) -> Result<Option<String>, AutomationError> {
+        if let Action::Task(definition) = self.action {
+            return auto_task_admission_deferral(self.host, definition).map_err(Into::into);
+        }
+
+        Ok(None)
+    }
+
+    fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
+        self.source.head(branch)
+    }
+
+    fn observe(
+        &self,
+        branch: &str,
+        state: &AutomationState,
+    ) -> Result<SourcePage, AutomationError> {
+        let mut page = self.source.observe(self.host, branch, state)?;
+        direct::observe(
+            &self.source,
+            self.host.automation_store()?.as_ref(),
+            state,
+            &mut page,
+        )?;
+        // [ORB-11333] Accepted before-PR certificates become exclusions only
+        // after the shared rule proves the landed trees; the evaluator then
+        // applies them for review consumers alone.
+        self.host
+            .review_exclusions(&self.source, state, &mut page)?;
+
+        Ok(page)
+    }
+
+    fn admit(&self, attempt: &BatchAttempt) -> Result<String, AutomationError> {
+        self.host.ensure_coordination_task_write_permitted()?;
+
+        // The claim this host was handed must still be the one recorded.
+        let state = self
+            .host
+            .automation_store()?
+            .automation_state(&attempt.batch.consumer)?
+            .ok_or_else(|| AutomationError::Deferred("claim_missing".into()))?;
+        if state.active.as_ref() != Some(attempt) {
+            return Err(AutomationError::Deferred("claim_superseded".into()));
+        }
+
+        self.source.retain_batch(&attempt.batch)?;
+
+        match self.action {
+            Action::Task(definition) => {
+                task::mint(self.host, definition, attempt).map_err(Into::into)
+            }
+            Action::Job(definition) => self
+                .host
+                .submit_automation_run(
+                    definition.target.job_name(),
+                    serde_json::json!({"automation":attempt}),
+                    &attempt.action_key,
+                )
+                .map_err(Into::into),
+        }
+    }
+
+    fn outcome(&self, attempt: &BatchAttempt) -> Result<ActionOutcome, AutomationError> {
+        match self.action {
+            Action::Task(_) => task::outcome(self.host, &self.source, attempt),
+            Action::Job(_) => task::job_outcome(self.host, &self.source, attempt),
+        }
+    }
+}
+
+fn auto_task_admission_deferral<H: AutomationHost>(
+    host: &H,
+    definition: &AutoTaskDefinition,
+) -> Result<Option<String>, OrbitError> {
+    if definition.dedupe == orbit_types::workflow::DedupePolicy::SkipIfOpen
+        && crate::auto_tasks::scheduler::open_auto_task_instance(host, definition)?.is_some()
+    {
+        return Ok(Some("open_instance".into()));
+    }
+
+    Ok(None)
+}

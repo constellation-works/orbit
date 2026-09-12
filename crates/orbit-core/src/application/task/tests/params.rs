@@ -1,6 +1,7 @@
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 
-use super::super::params::{TaskAddParams, TaskRecordUpdateParams, TaskUpdateParams};
+use super::super::params::TaskRecordUpdateParams;
+use orbit_types::task::{TaskAddParams, TaskUpdateParams};
 
 #[test]
 fn task_add_params_preserve_defaults() {

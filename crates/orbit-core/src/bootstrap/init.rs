@@ -936,7 +936,7 @@ mod tests {
             .expect("initialize fresh workspace");
         assert_eq!(
             initial.seeded_default_auto_tasks,
-            crate::application::auto_tasks::DEFAULT_AUTO_TASK_FILES.len()
+            orbit_automation::auto_tasks::DEFAULT_AUTO_TASK_FILES.len()
         );
         let friction_path = orbit_root.join("auto_tasks/friction-curation.yaml");
         let qa_path = orbit_root.join("auto_tasks/qa-sweep.yaml");
@@ -1003,14 +1003,14 @@ mod tests {
             orbit_types::workflow::DedupePolicy::SkipIfOpen
         ));
         assert!(!orbit_root.join("state/auto-tasks.json").exists());
-        let loaded = crate::application::auto_tasks::collect_auto_tasks(&orbit_root);
+        let loaded = orbit_automation::auto_tasks::collect_auto_tasks(&orbit_root);
         assert!(
             loaded.errors.is_empty(),
             "seeded definition must load cleanly"
         );
         assert_eq!(
             loaded.definitions.len(),
-            crate::application::auto_tasks::DEFAULT_AUTO_TASK_FILES.len()
+            orbit_automation::auto_tasks::DEFAULT_AUTO_TASK_FILES.len()
         );
         assert!(
             loaded

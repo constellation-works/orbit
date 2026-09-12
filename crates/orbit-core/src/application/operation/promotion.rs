@@ -11,6 +11,7 @@
 //! recorded so "why did this task start?" has a durable answer.
 
 use chrono::Utc;
+use orbit_automation::consumers::preparation::{self, InstructionSnapshot};
 use orbit_common::OrbitError;
 use orbit_config::PromotionPreference;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
@@ -22,7 +23,6 @@ use serde_json::json;
 
 use super::{PROMOTION_AUDIT, captured_policy};
 use crate::OrbitRuntime;
-use crate::application::automation::preparation::{self, InstructionSnapshot};
 
 /// History event recorded on a task promoted under a grant.
 pub(crate) const PROMOTION_EVENT: &str = "operation_promoted";

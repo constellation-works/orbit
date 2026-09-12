@@ -796,7 +796,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         commit: fixture.stale_sha.clone(),
         tree: git(&fixture.repo, &["rev-parse", "HEAD^{tree}"]),
     };
-    let fingerprint = crate::application::automation::preparation::fingerprint(
+    let fingerprint = orbit_automation::consumers::preparation::fingerprint(
         &fixture.runtime,
         &fixture.task,
         &source.commit,
@@ -813,7 +813,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         changed_at: now,
     };
     let consumer =
-        crate::application::automation::consumer_key(&fixture.runtime, "routine", "pilot").unwrap();
+        orbit_automation::consumers::consumer_key(&fixture.runtime, "routine", "pilot").unwrap();
     let trigger = StateTrigger {
         kind: StateTriggerKind::PreparationEligible,
         owner_machine: "fixture".into(),
@@ -940,7 +940,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
     assert_eq!(task.status, TaskStatus::Backlog);
     assert_eq!(
         evidence.resulting_fingerprint,
-        crate::application::automation::preparation::fingerprint(
+        orbit_automation::consumers::preparation::fingerprint(
             &fixture.runtime,
             &task,
             &fixture.stale_sha
@@ -979,7 +979,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
             orbit_store::TaskReservationReleaseReason::RunTerminal,
         )
         .unwrap();
-    let diagnostic = crate::application::automation::evaluate_routine(
+    let diagnostic = orbit_automation::consumers::evaluate_routine(
         &fixture.runtime,
         &definition,
         false,

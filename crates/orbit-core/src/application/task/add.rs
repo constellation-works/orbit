@@ -10,8 +10,8 @@ use orbit_types::task::{
 use crate::OrbitRuntime;
 
 use super::helpers::{authored_role_value, build_task_comments, effective_actor_label};
-use super::params::TaskAddParams;
 use super::paths::normalize_context_files_for_write;
+use orbit_types::task::TaskAddParams;
 
 const AUTO_TASK_TITLE_PREFIX: &str = "[auto-task] ";
 

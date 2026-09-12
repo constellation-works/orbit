@@ -63,7 +63,7 @@ pub(crate) fn run_deterministic(
             | CoreDeterministicAction::ApplyTriageDispositions
     ) {
         let claim_input = input.get("prepared").unwrap_or(input);
-        if let Some(claim) = crate::application::automation::members::claim(runtime, claim_input)
+        if let Some(claim) = orbit_automation::consumers::members::claim(runtime, claim_input)
             .map_err(|error| DispatchError::DeterministicActionFailed {
                 action: action.into(),
                 message: error.to_string(),

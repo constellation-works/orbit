@@ -4,7 +4,7 @@ use orbit_core::OrbitRuntime;
 
 use std::path::PathBuf;
 
-use orbit_core::application::routines::{ClockUnitInspection, ClockUnitVerdict};
+use orbit_automation::routines::{ClockUnitInspection, ClockUnitVerdict};
 
 use super::super::doctor::{
     clock_unit_row_from_inspection, doctor_row_json, human_detail,

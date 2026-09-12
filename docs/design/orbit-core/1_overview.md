@@ -69,6 +69,7 @@ owners without externalizing it as new crates.
 | Runtime mechanisms | `crates/orbit-core/src/runtime/` | [ORB-10886] |
 | Application operations and DTOs | `crates/orbit-core/src/application/` | [ORB-10886] |
 | Tool/engine/command adapters | `crates/orbit-core/src/adapter/` | [ORB-10886] |
+| Scheduling-domain host port (`AutomationHost`) | `crates/orbit-core/src/adapter/automation_host/` | [ORB-12262] |
 | Initialization and managed defaults | `crates/orbit-core/src/bootstrap/` | [ORB-10886] |
 | Config loading and runtime assembly | `crates/orbit-core/src/composition.rs` | [ORB-10886] |
 | Context assembly | `crates/orbit-core/src/context.rs` | — |
@@ -94,5 +95,7 @@ stores or side effects belongs to the owning application operation.
 - [ORB-10016] — extracted `orbit-cmd` from orbit-core and trimmed the root re-export surface.
 - [ORB-10355] — removed the hand-maintained store delegation layer in favor of direct typed backend access.
 - [ORB-10886] — removed the internal command/runtime cycle and established the directional module graph.
+- [ORB-12262] — moved the scheduling domain (`application/{automation,auto_tasks,routines}`) down into
+  `orbit-automation`; Core's remaining share is the `adapter/automation_host` port implementation.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

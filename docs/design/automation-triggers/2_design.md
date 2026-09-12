@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: Proposed trigger contract for immutable delivery batches, separate coverage checkpoints, preparation freshness, and correlated failure triage.
 tags: [automation-triggers, scheduling, coverage, pilot, triage]
-paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-store/src/contracts/**", "crates/orbit-types/src/workflow/**", "crates/orbit-core/src/adapter/engine_host/v2_host/**"]
+paths: ["crates/orbit-automation/src/routines/**", "crates/orbit-automation/src/auto_tasks/**", "crates/orbit-store/src/contracts/**", "crates/orbit-types/src/workflow/**", "crates/orbit-core/src/adapter/engine_host/v2_host/**"]
 related_features: [routines, auto-tasks, operation-mode, activity-job]
 related_artifacts: [ORB-11315, ORB-11314, ORB-11316]
 ---

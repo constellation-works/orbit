@@ -8,6 +8,7 @@ use chrono::Utc;
 use orbit_automation::review::{
     combined_task_meaning_digest, task_meaning_digest, validation_evidence, validation_role_counts,
 };
+use orbit_automation::source::Source;
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::overlaps;
 use orbit_engine::DispatchError;
@@ -30,7 +31,6 @@ use serde_json::{Value, json};
 use super::admission::run_review_admission;
 use super::{REVIEW_AUDIT, automation_error, lineage_key};
 use crate::OrbitRuntime;
-use crate::application::automation::source::Source;
 use crate::application::task::TaskUpdateParams;
 use crate::runtime::engine::crew::enforce_crew_allowlist;
 

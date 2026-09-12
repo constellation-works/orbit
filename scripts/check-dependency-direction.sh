@@ -41,7 +41,10 @@ allowed_internal_deps() {
       echo "orbit-agent orbit-common orbit-exec orbit-store orbit-tools orbit-types"
       ;;
     orbit-automation)
-      echo "orbit-common orbit-store orbit-types"
+      # ORB-12262 moved the scheduling domain down here behind
+      # `AutomationHost`; Config resolves the host-local scheduler database
+      # path the routine store opens. Still never Core, Engine or Registry.
+      echo "orbit-common orbit-config orbit-store orbit-types"
       ;;
     orbit-core)
       # ORB-10617: Linux sandbox regression tests compose Core with Exec; this
@@ -50,20 +53,23 @@ allowed_internal_deps() {
       ;;
     orbit-cmd)
       # The shared application composition layer joins Core runtime kernels to
-      # machine-local Registry state for CLI and dashboard consumers.
-      echo "orbit-common orbit-config orbit-core orbit-engine orbit-registry orbit-store orbit-types"
+      # machine-local Registry state for CLI and dashboard consumers. It calls
+      # the scheduling domain's sweep and status entry points directly
+      # [ORB-12262].
+      echo "orbit-automation orbit-common orbit-config orbit-core orbit-engine orbit-registry orbit-store orbit-types"
       ;;
     orbit-mcp)
       # MCP owns framing, canonical discovery, and direct SSH stdio transport.
       echo "orbit-common orbit-registry orbit-tools orbit-types"
       ;;
     orbit-web)
-      echo "orbit-common orbit-cmd orbit-core orbit-registry orbit-types"
+      echo "orbit-automation orbit-common orbit-cmd orbit-core orbit-registry orbit-types"
       ;;
     orbit-cli)
       # The executable assembles MCP and Web feature crates with Registry state
-      # and Core's authoritative runtime dispatcher.
-      echo "orbit-common orbit-cmd orbit-config orbit-core orbit-mcp orbit-registry orbit-web orbit-types"
+      # and Core's authoritative runtime dispatcher. Its sweep, routine and
+      # auto-task commands call the scheduling domain directly [ORB-12262].
+      echo "orbit-automation orbit-common orbit-cmd orbit-config orbit-core orbit-mcp orbit-registry orbit-web orbit-types"
       ;;
     *)
       return 1
@@ -248,7 +254,10 @@ done
 for retired_path in \
   "$repo_root/crates/orbit-core/src/command" \
   "$repo_root/crates/orbit-core/src/runtime/orbit_tool_host" \
-  "$repo_root/crates/orbit-core/src/runtime/engine/runtime_host.rs"; do
+  "$repo_root/crates/orbit-core/src/runtime/engine/runtime_host.rs" \
+  "$repo_root/crates/orbit-core/src/application/automation" \
+  "$repo_root/crates/orbit-core/src/application/auto_tasks" \
+  "$repo_root/crates/orbit-core/src/application/routines"; do
   if [[ -e "$retired_path" ]]; then
     echo "retired orbit-core ownership path still exists: $retired_path"
     fail=1
@@ -256,12 +265,22 @@ for retired_path in \
 done
 
 # State consumers share Automation's evaluator and Store checkpoint owner.
-# Core may gather authoritative facts, but must not grow a second checkpoint
-# implementation or hashing/coverage acceptance path [ORB-11331].
+# The consumer composition now lives in Automation [ORB-12262]; it must still
+# not grow a second checkpoint implementation or hashing/coverage acceptance
+# path [ORB-11331].
 if rg -n 'automation_commit\(|Sha256' \
-  "$repo_root/crates/orbit-core/src/application/automation" \
+  "$repo_root/crates/orbit-automation/src/consumers" \
   --glob '*.rs' --glob '!**/tests/**'; then
-  echo "Core automation must use the shared scheduling/checkpoint contract"
+  echo "automation consumers must use the shared scheduling/checkpoint contract"
+  fail=1
+fi
+
+# Core's host adapter answers the port and translates; it must not re-implement
+# the scheduling rules that moved down [ORB-12262].
+if rg -n 'fn evaluate\b|fn due_decision\b|definition_epoch|automation_commit\(' \
+  "$repo_root/crates/orbit-core/src/adapter/automation_host" \
+  --glob '*.rs' --glob '!**/tests/**'; then
+  echo "Core's AutomationHost adapter must delegate to orbit-automation, not re-decide"
   fail=1
 fi
 

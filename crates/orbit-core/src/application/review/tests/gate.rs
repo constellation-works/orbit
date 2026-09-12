@@ -19,9 +19,9 @@ use super::{
     Fixture, GATED_CONFIG, admit_input, admitted_run, fixture, git, implement_candidate, report,
     seed_task, settle_input, validation, write_report,
 };
-use crate::application::automation::source::Source;
 use crate::application::review::{exclusions, lineage_key, review_gate_admit, review_gate_settle};
 use crate::application::task::TaskUpdateParams;
+use orbit_automation::source::Source;
 
 /// Fixture with a task, its admitted run, and a checked-out candidate.
 struct Gated {

@@ -2,6 +2,7 @@
 //! referenced diagnostics, command results, delivery state and Git must agree.
 //! No command from an artifact or a CI log is executed here.
 
+use orbit_automation::source::Source;
 use orbit_types::task::{Task, TaskArtifact, TaskStatus};
 use orbit_types::workflow::JobRunState;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -10,7 +11,6 @@ use sha2::{Digest, Sha256};
 
 use super::{CI_FAILURE_KEY_TAG_PREFIX, FailureCluster, selected_diagnostic, value_string};
 use crate::OrbitRuntime;
-use crate::application::automation::source::Source;
 use crate::application::task::{TaskListFilter, TaskUpdateParams};
 
 const MAX_OWNERS: usize = 8;

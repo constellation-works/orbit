@@ -6,10 +6,13 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_types::workflow::RoutineDefinition;
+use orbit_types::workspace::Workspace;
 
 use super::due::parse_cron;
+use crate::host::AutomationHost;
 
 /// Directory under a source workspace's `.orbit/` holding routine YAML files.
 pub const ROUTINES_DIR: &str = "routines";
@@ -321,4 +324,56 @@ fn drop_name_collisions(collection: &mut RoutineCollection) {
         }
     }
     collection.routines = kept;
+}
+
+/// Registered workspaces with their hosts, ready for routine discovery and
+/// dispatch, plus the workspaces that failed to open (reported loudly —
+/// registry hygiene must not silently shrink the source set).
+pub struct DiscoveredWorkspaces<H> {
+    /// Active, openable owner checkouts with their hosts.
+    pub entries: Vec<(Workspace, H)>,
+    /// Registered workspaces that could not be opened.
+    pub errors: Vec<RoutineLoadError>,
+}
+
+impl<H> Default for DiscoveredWorkspaces<H> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+}
+
+/// Registry-neutral source of workspace hosts for routine status and sweep.
+/// Implementations may consult a catalog; this crate only observes the
+/// prepared workspaces and fail-closed discovery errors.
+pub trait RoutineWorkspaceProvider {
+    /// The host type this provider opens per registered checkout.
+    type Host: AutomationHost;
+
+    fn discover_workspaces(
+        &self,
+        global_root: &Path,
+    ) -> Result<DiscoveredWorkspaces<Self::Host>, OrbitError>;
+}
+
+/// Discover routines across the workspaces one pass opened, resolving each
+/// definition's target against its own workspace catalog.
+pub fn collect_workspace_routines<H: AutomationHost>(
+    workspaces: &[(Workspace, H)],
+) -> RoutineCollection {
+    let sources = workspaces
+        .iter()
+        .map(|(workspace, host)| RoutineSource {
+            workspace: workspace.name.clone(),
+            orbit_dir: host.shared_orbit_dir(),
+        })
+        .collect::<Vec<_>>();
+    collect_routines(&sources, &|root, job| {
+        workspaces
+            .iter()
+            .find(|(_, host)| host.shared_orbit_dir() == root)
+            .is_some_and(|(_, host)| host.job_target_resolves(job))
+    })
 }

@@ -3,11 +3,11 @@
 use std::path::Path;
 
 use clap::Args;
-use orbit_cmd::registry_routines::{run_sweep, run_sweep_at};
-use orbit_core::{
-    OrbitError, OrbitRuntime,
-    application::routines::{AutoTaskSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome},
+use orbit_automation::routines::{
+    AutoTaskSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
 };
+use orbit_cmd::registry_routines::{run_sweep, run_sweep_at};
+use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Payload};

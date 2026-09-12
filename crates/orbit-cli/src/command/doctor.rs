@@ -291,7 +291,7 @@ fn caller_authorization_rows() -> Vec<WorkspaceDoctorResult> {
 
 /// Whether the OS sweep-clock unit invokes this binary [ORB-12244].
 fn clock_unit_row() -> WorkspaceDoctorResult {
-    match orbit_core::application::routines::inspect_clock_unit() {
+    match orbit_automation::routines::inspect_clock_unit() {
         Ok(inspection) => clock_unit_row_from_inspection(&inspection),
         Err(error) => WorkspaceDoctorResult {
             check_name: "clock-unit".to_string(),
@@ -306,9 +306,9 @@ fn clock_unit_row() -> WorkspaceDoctorResult {
 }
 
 pub(crate) fn clock_unit_row_from_inspection(
-    inspection: &orbit_core::application::routines::ClockUnitInspection,
+    inspection: &orbit_automation::routines::ClockUnitInspection,
 ) -> WorkspaceDoctorResult {
-    use orbit_core::application::routines::ClockUnitVerdict;
+    use orbit_automation::routines::ClockUnitVerdict;
 
     let status = match inspection.verdict {
         ClockUnitVerdict::Matching => WorkspaceDoctorStatus::Ok,
