@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-09-08
-last_validated: 2026-09-08
+last_updated: 2026-09-12
+last_validated: 2026-09-12
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -10,7 +10,7 @@ type: design
 summary: Current implementation of the auto-task record, due-math, host-local cursor, generic scheduler, CRUD surfaces, the on-demand manual mint, and the dashboard Operations surface.
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/operations.js"]
-related_features: [auto-tasks]
+related_features: [auto-tasks, routines]
 related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730]
 ---
 
@@ -20,6 +20,15 @@ This doc covers the shipped implementation: the definition record, discovery,
 due computation, cursor state, the scheduler pass, and the CRUD surfaces. The
 routine machinery it rides on (cron eval, fire records, dashboard health) is
 documented under `docs/design/routines/`.
+
+> **Pending change — clock consolidation (decided 2026-09-12, unimplemented).** §4's
+> routine → job → activity wrapping is replaced by a direct call from the host clock tick;
+> the `auto_task_scheduler` routine, `auto_task_scheduler_pipeline` job, and
+> `run_auto_task_scheduler` activity are retired. Definitions gain no host field: every
+> registered owner checkout with an enabled clock evaluates every enabled definition
+> against its own store. See
+> [Auto-task definitions are evaluated by the host tick, not fired by a routine](./4_decisions.md#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine)
+> and [routines/3_vision.md §0](../routines/3_vision.md#0-graduating-clock-consolidation).
 
 The [shared automation-trigger proposal](../automation-triggers/1_overview.md)
 from [ORB-11315] specifies delivery thresholds, preparation/failure eligibility,
@@ -137,6 +146,9 @@ The pass is the deterministic `run_auto_task_scheduler` action
 1`), fired by the seeded `auto_task_scheduler` routine (`overlap: forbid`,
 minutely). Those job/routine knobs reduce overlap; they are not storage-level
 idempotency. Because it is a routine, its fires flow to `GET /api/routines`.
+**[slated to change]** — the tick calls `run_auto_task_scheduler_at` directly
+under the host sweep lock; the job/routine knobs go away (the sidecar lock is
+the exclusion, as it already was) and fires stop appearing on `/api/routines`.
 
 ## 5. CRUD surfaces
 
@@ -309,8 +321,16 @@ accurate.
   YAML is not in a SQLite/search index; discovery is a directory scan. Acceptable
   at the expected cardinality (a handful of chores per workspace).
 - **Workspace-scoped.** The scheduler processes the definitions of the workspace
-  whose routine fired it, not a cross-workspace sweep. Multi-workspace fan-out is
-  a future direction (see 3_vision.md).
+  whose routine fired it, not a cross-workspace sweep. **[slated to change]** —
+  the tick fans out over every registered owner checkout on the host; each
+  checkout's definitions are still evaluated against that checkout's own store.
+- **Repo-global chores run once per owner** (pending change). Everything the
+  scheduler touches is host-local, so N owner checkouts of one repository are N
+  independent schedules by design. A definition whose effect lands on the shared
+  remote (a dependency bump, a release chore) is minted by each owner's clock;
+  `skip_if_open` sees only the local store and cannot dedupe that. Such a
+  definition must dedupe against the remote itself or must not ship as an
+  embedded default.
 - **Description secrets are not redacted** in the definition YAML (task creation
   still redacts when minting). Definitions are operator-authored, so this is
   low-risk, but not zero.

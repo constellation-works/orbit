@@ -1,8 +1,8 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-09-10
-last_validated: 2026-09-10
+last_updated: 2026-09-12
+last_validated: 2026-09-12
 status: Accepted
 feature: routines
 doc_role: design
@@ -10,7 +10,7 @@ type: design
 summary: Proposed contract for routine definitions, sweep dispatch, host-local state, and OS clock integration.
 tags: [routines, scheduler]
 paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/sqlite/routine_store/**"]
-related_features: [routines, activity-job, host-registry]
+related_features: [routines, auto-tasks, activity-job, host-registry]
 related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10800, ORB-10986, ORB-11082, ORB-11315]
 ---
 
@@ -21,6 +21,15 @@ how definitions are discovered, what `orbit sweep` does on each invocation, wher
 lives, and how the OS clock drives it. Cross-host coordination, event triggers, and everything else deferred is
 in [3_vision.md](./3_vision.md). Decision rationale lives in [4_decisions.md](./4_decisions.md).
 
+> **Pending change — clock consolidation (decided 2026-09-12, unimplemented).** The OS
+> clock will drive one host tick that evaluates both routines and auto-task definitions
+> in-process; `orbit routine clock` becomes top-level `orbit clock`; the `hosts:` field and
+> the `[routines] role = "source"` key are removed, and eligibility becomes *registered
+> owner checkout + clock enabled + definition enabled*. Sections below marked **[slated for
+> removal]** describe what ships today and go away with that change. The target contract is
+> [3_vision.md §0](./3_vision.md#0-graduating-clock-consolidation); the reasoning is in
+> [4_decisions.md](./4_decisions.md#one-host-tick-evaluates-routines-and-auto-task-definitions-in-process).
+
 ## OS sweep clock controls
 
 There are two independent scheduling layers. The per-user OS clock wakes Orbit and
@@ -28,6 +37,9 @@ invokes the stateless `orbit sweep` pass; each versioned routine's cron expressi
 decides whether that pass fires work. The OS clock is host-local infrastructure, not a
 routine definition. Its durable configuration is `~/.orbit/clock.toml`, defaults to a
 60-second cadence, and accepts only whole-minute values from 60 through 3600 seconds.
+
+**[CLI home slated to move]** — every `orbit routine clock <verb>` below becomes
+`orbit clock <verb>`; storage, cadence rules, and health semantics are unchanged.
 
 `orbit routine clock status` reports configured cadence, native-manager enabled state,
 and whether an enabled Linux timer is active with a finite next trigger. An enabled timer
@@ -102,7 +114,9 @@ Field semantics:
 - **`name`** — unique across all routine sources on a host; collision is a load-time error.
 - **`enabled` / `hosts`** — the two *versioned* toggle layers. A routine fires on a host only
   if `enabled: true` and the host's `host_id` appears in `hosts`. Effective state also
-  requires no host-local pause (§4).
+  requires no host-local pause (§4). **[`hosts` slated for removal]** — under the pending
+  change a routine has no host field; every registered owner checkout with an enabled clock
+  evaluates it against its own store ([Definitions carry no host pin](./4_decisions.md#definitions-carry-no-host-pin-every-owner-checkout-is-an-independent-schedule)).
 - **`trigger.cron`** — when the routine is due. `missed_run` governs fires that fall in a
   window when the host was asleep or powered off: `catch_up_once` fires a single make-up run
   on the next sweep (never one per missed slot); `skip` waits for the next natural slot.
@@ -133,7 +147,9 @@ as absent; it never degrades into "fire with defaults".
 `orbit workspace init` seeds `auto_task_scheduler.yaml`, `task_triage.yaml`,
 `task_pilot.yaml`, `ship_sweep.yaml`, `worktree_gc.yaml`, and `ci_failure_sweep.yaml`
 with a workspace-unique name, the resolved host pin, and
-`enabled: false`. The definition's versioned `enabled` field is the opt-in: changing it
+`enabled: false`. **[slated to change]** — `auto_task_scheduler.yaml` leaves the default
+set (auto-task definitions are evaluated by the tick directly) and no host pin is rendered,
+so seeded bytes become machine-independent. The definition's versioned `enabled` field is the opt-in: changing it
 to `true` deliberately grants that scheduled capability in the workspace.
 
 Seeded files become workspace-authored immediately. Plain re-init is create-if-missing:
@@ -254,7 +270,9 @@ Discovery reuses the global workspace registry (`~/.orbit/workspaces.json`) rath
 new pointer mechanism — the same shape `orbit run ship-sweep` established for unattended
 cross-workspace dispatch.
 
-A workspace becomes a routine source with one versioned config key:
+A workspace becomes a routine source with one versioned config key **[slated for
+removal — registration of an owner checkout is the opt-in; see
+[Registration is the automation opt-in](./4_decisions.md#registration-is-the-automation-opt-in-there-is-no-routine-source-role)]**:
 
 ```toml
 # <workspace>/.orbit/config.toml
@@ -305,8 +323,8 @@ Per pass:
    updates, and build runtimes for active local checkouts whose `.orbit/` directory exists.
    Collect routines from those whose config declares `role = "source"`, failing closed per
    source or definition without stopping other valid sources.
-3. Validate every committed routine pin before scheduler mutation. An exact match for this
-   machine's `host_id` is eligible. A name used by another workspace owner's local
+3. **[slated for removal]** Validate every committed routine pin before scheduler mutation.
+   An exact match for this machine's `host_id` is eligible. A name used by another workspace owner's local
    `owner_host_ids` projection reports `host_belongs_elsewhere`; any other name reports
    `host_unresolvable`. Machine-local definitions under `.orbit/routines/local/` are bound
    to this host by their loader and bypass this committed-pin check. No aliases, liveness,
@@ -354,7 +372,9 @@ Per pass:
    is not expected to satisfy the gate unless the worker's resolved `orbit_dir` is exactly
    the declared `.orbit` path. The gate deliberately refuses that redirected-root case so
    routine provenance cannot silently resolve to a different store.
-10. Record outcomes and exit.
+10. Record outcomes and exit. **[slated to change]** — the tick then runs the auto-task
+    evaluator over the same runtimes before exiting
+    ([3_vision.md §0.2](./3_vision.md#02-the-tick)).
 
 The global `--workspace <selector>` narrows one pass to a single registered
 workspace: discovery visits only that workspace, so nothing outside it is
@@ -435,6 +455,9 @@ out of v1 scope for this reason.
 - **No cross-host coordination.** `hosts` pins explicitly; a routine listed on both hosts
   runs on both, independently. "Exactly one of N hosts" requires a lease protocol across a
   tailnet that only exposes 22/443 between these machines — deferred, additive if needed.
+  **[slated to change]** — with pins removed, every owner checkout runs every enabled
+  definition against its own store by design; the only residual is a definition with a
+  repo-global side effect, which the author must dedupe ([3_vision.md §1](./3_vision.md#1-open-questions)).
 - **Definition staleness.** Sweep reads whatever revision of the source workspace is on
   disk; definitions are only as fresh as the last `git pull`. A pull-the-sources routine
   can narrow the window but cannot fix its own staleness (it, too, is a definition). Editing
