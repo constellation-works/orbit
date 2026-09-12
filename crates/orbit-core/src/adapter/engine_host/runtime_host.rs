@@ -894,8 +894,8 @@ fn apply_task_automation_update_under_lock(
     if update.status == Some(TaskStatus::Done) && existing_task.status != TaskStatus::Done {
         runtime.ensure_resolves_are_workspace_local(&existing_task)?;
     }
-    let (agent, model) = runtime
-        .try_canonical_agent_model_identity(update.agent.as_deref(), update.model.as_deref())?;
+    let (agent, model) =
+        crate::context::trusted_write_identity(update.agent.as_deref(), update.model.as_deref());
     let runtime_model_identity = <OrbitRuntime as RuntimeHost>::actor_model_identity(runtime);
     let attribution = assemble_task_attribution(
         &existing_task,

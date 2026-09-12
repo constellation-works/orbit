@@ -13,6 +13,21 @@ impl OrbitRuntime {
         self.run_tool_with_role(name, input, Role::Admin)
     }
 
+    /// Run a registered tool for a human-operated in-process adapter.
+    /// The trusted label lives in `ToolContext`, never in agent-controlled
+    /// input, so the ordinary public tool path remains family-validated.
+    pub fn run_tool_as_human(&self, name: &str, input: Value) -> Result<Value, OrbitError> {
+        self.run_tool_with_context_and_role(
+            name,
+            input,
+            Role::Admin,
+            ToolContext {
+                trusted_actor_label: Some("human".to_string()),
+                ..Default::default()
+            },
+        )
+    }
+
     pub(crate) fn run_tool_with_role(
         &self,
         name: &str,

@@ -42,6 +42,7 @@ enum StatusAuthority {
 #[derive(Default)]
 struct TaskUpdateContext {
     status_note: Option<String>,
+    actor_override: Option<String>,
     agent: Option<String>,
     model: Option<String>,
     artifact_owner: Option<String>,
@@ -77,6 +78,27 @@ impl OrbitRuntime {
             TaskUpdateContext {
                 agent,
                 model,
+                status_authority: StatusAuthority::Lifecycle,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Apply a dashboard-authored mutation under an explicit human label.
+    /// Agent-facing callers use `update_task_with_identity`, whose provenance
+    /// is validated as a canonical agent family.
+    pub fn update_task_as_human(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        actor_label: String,
+    ) -> Result<Task, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.update_task_with_context(
+            id,
+            params,
+            TaskUpdateContext {
+                actor_override: Some(actor_label),
                 status_authority: StatusAuthority::Lifecycle,
                 ..Default::default()
             },
@@ -156,7 +178,8 @@ impl OrbitRuntime {
             },
             TaskUpdateContext {
                 status_note: note,
-                agent: agent.or_else(|| model.is_none().then(|| SYSTEM_ACTOR_LABEL.to_string())),
+                actor_override: Some(SYSTEM_ACTOR_LABEL.to_string()),
+                agent,
                 model,
                 expected_status: Some(expected_status),
                 ..Default::default()
@@ -212,14 +235,17 @@ impl OrbitRuntime {
     ) -> Result<Task, OrbitError> {
         let TaskUpdateContext {
             status_note,
+            actor_override,
             agent,
             model,
             artifact_owner,
             expected_status,
             status_authority,
         } = context;
-        let (canonical_agent, canonical_model) =
-            self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
+        let (canonical_agent, canonical_model) = match actor_override.as_ref() {
+            Some(_) => crate::context::trusted_write_identity(agent.as_deref(), model.as_deref()),
+            None => self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?,
+        };
         let task = self.get_task(id)?;
         if let Some(expected_status) = expected_status
             && task.status != expected_status
@@ -287,7 +313,7 @@ impl OrbitRuntime {
             &task,
             TaskAttributionInput {
                 default_actor_label: &actor.label,
-                actor_override: None,
+                actor_override: actor_override.as_deref(),
                 agent: canonical_agent.as_deref(),
                 model: canonical_model.as_deref(),
                 runtime_model_identity: None,
@@ -303,14 +329,16 @@ impl OrbitRuntime {
                 explicit_implemented_by: params.implemented_by.as_ref(),
             },
         )?;
-        let effective_label = attribution.actor;
+        let effective_label = attribution.actor.clone();
         let status_note = status_note
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
-        let append_comments =
-            build_task_comments(params.comment.clone(), effective_label.as_str())?;
+        let append_comments = build_task_comments(
+            params.comment.clone(),
+            attribution.authored_role_label.as_str(),
+        )?;
         // ORB-10311: a persisted task comment no longer emits a bare `commented`
         // history stub; the comment itself (append_comments) is the record.
         let source_task_id_replacement = params

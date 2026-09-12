@@ -85,7 +85,11 @@ async fn run_friction(
 ) -> Result<Value, Box<Response>> {
     blocking("friction tool", move || {
         let (tool, input) = call.into_tool_call();
-        runtime.run_tool(&tool, input)
+        if input.get("model").and_then(Value::as_str) == Some(HUMAN_ACTOR_LABEL) {
+            runtime.run_tool_as_human(&tool, input)
+        } else {
+            runtime.run_tool(&tool, input)
+        }
     })
     .await
 }

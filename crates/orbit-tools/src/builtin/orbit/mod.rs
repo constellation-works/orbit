@@ -147,6 +147,14 @@ pub(super) fn resolve_identity(
     ctx: &ToolContext,
     input: &Value,
 ) -> Result<OrbitIdentity, OrbitError> {
+    if let Some(actor_label) = trimmed_optional(ctx.trusted_actor_label.clone()) {
+        return Ok(OrbitIdentity {
+            agent: None,
+            model: Some(actor_label.clone()),
+            actor_label: Some(actor_label),
+        });
+    }
+
     let input_agent = optional_string_alias(input, &["agent"])?;
     let input_model = optional_string_alias(input, &["model"])?;
     let context_agent = trimmed_optional(ctx.agent_name.clone());
@@ -173,9 +181,14 @@ pub(super) fn resolve_identity(
         (None, None)
     };
     let family = require_canonical_agent_family(agent.as_deref(), model.as_deref())?;
+    let model = if context_has_identity {
+        family.clone()
+    } else {
+        model.or_else(|| family.clone())
+    };
     Ok(OrbitIdentity {
         agent: family.clone(),
-        model: family.clone(),
+        model,
         actor_label: family,
     })
 }
@@ -263,13 +276,22 @@ pub(super) fn execute_host_action(
     action: OrbitBuiltinAction,
 ) -> Result<Value, OrbitError> {
     let identity = resolve_identity(ctx, &input)?;
-    require_orbit_host(ctx)?.execute(
-        action,
-        input,
-        identity.agent,
-        identity.model,
-        ctx.reservation_owner.clone(),
-    )
+    let host = require_orbit_host(ctx)?;
+    match ctx.trusted_actor_label.as_deref() {
+        Some(actor_label) => host.execute_with_trusted_actor(
+            action,
+            input,
+            actor_label.to_string(),
+            ctx.reservation_owner.clone(),
+        ),
+        None => host.execute(
+            action,
+            input,
+            identity.agent,
+            identity.model,
+            ctx.reservation_owner.clone(),
+        ),
+    }
 }
 
 pub(super) fn resolve_workspace_argument(

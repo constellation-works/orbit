@@ -21,6 +21,7 @@ pub(crate) struct TaskAttributionInput<'a> {
 
 pub(crate) struct TaskAttribution {
     pub(crate) actor: String,
+    pub(crate) authored_role_label: String,
     pub(crate) planned_by: Option<Option<String>>,
     pub(crate) implemented_by: Option<Option<String>>,
 }
@@ -62,6 +63,7 @@ pub(crate) fn assemble_task_attribution(
 
     Ok(TaskAttribution {
         actor,
+        authored_role_label,
         planned_by,
         implemented_by,
     })
