@@ -283,35 +283,36 @@ pub(super) fn update(
     let requested_status = optional_string(&input, "status")?
         .map(|value| parse_task_status("status", &value))
         .transpose()?;
-    let is_backlog = requested_status == Some(TaskStatus::Backlog);
-    if requested_status == Some(TaskStatus::InProgress) || is_backlog {
-        let transition_status = requested_status.ok_or_else(|| {
-            OrbitError::Execution("lifecycle transition is missing its target status".to_string())
-        })?;
-        reject_fields_for_lifecycle_transition(&input, transition_status, is_backlog)?;
-        let task = if is_backlog {
-            runtime.transition_task_to_backlog_with_identity(
-                &id,
-                optional_string(&input, "note")?,
-                optional_string(&input, "comment")?,
-                agent,
-                model,
-            )?
-        } else {
-            runtime.start_task_with_identity_and_crew(
-                &id,
-                optional_string(&input, "note")?,
-                optional_string(&input, "comment")?,
-                agent,
-                model,
-                optional_string(&input, "crew")?,
-            )?
-        };
-        return serialize_task(runtime, &task);
+    if let Some(target) = requested_status
+        && matches!(target, TaskStatus::Backlog | TaskStatus::InProgress)
+    {
+        let current = runtime.get_task(&id)?;
+        if let Some(kind) = guarded_lifecycle_write(current.status, target, &input)? {
+            let task = match kind {
+                GuardedLifecycleWrite::Approve => runtime
+                    .transition_task_to_backlog_with_identity(
+                        &id,
+                        optional_string(&input, "note")?,
+                        optional_string(&input, "comment")?,
+                        agent,
+                        model,
+                    )?,
+                GuardedLifecycleWrite::Start => runtime.start_task_with_identity_and_crew(
+                    &id,
+                    optional_string(&input, "note")?,
+                    optional_string(&input, "comment")?,
+                    agent,
+                    model,
+                    optional_string(&input, "crew")?,
+                    optional_plan(&input)?,
+                )?,
+            };
+            return serialize_task(runtime, &task);
+        }
     }
     if input.get("note").is_some() {
         return Err(OrbitError::InvalidInput(
-            "`note` is only accepted with status 'backlog' or 'in-progress'".to_string(),
+            "`note` is only accepted on the guarded approval (proposed → backlog) or start (pickup → in-progress) transition".to_string(),
         ));
     }
     let context_files = optional_csv_or_string_list_alias(&input, &["context_files", "context"])?;
@@ -343,14 +344,7 @@ pub(super) fn update(
             dependencies: optional_csv_or_string_list_alias(&input, &["dependencies"])?,
             relations: parse_relations(&input)?,
             tags: optional_csv_or_string_list_alias(&input, &["tags", "tag"])?,
-            plan: input
-                .get("plan")
-                .map(|value| {
-                    value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
-                        OrbitError::InvalidInput("`plan` must be a string".to_string())
-                    })
-                })
-                .transpose()?,
+            plan: optional_plan(&input)?,
             execution_summary: optional_raw_string(&input, "execution_summary")?,
             comment: optional_string(&input, "comment")?,
             status: requested_status,
@@ -385,32 +379,64 @@ pub(super) fn update(
     serialize_task(runtime, &task)
 }
 
-fn reject_fields_for_lifecycle_transition(
+enum GuardedLifecycleWrite {
+    Approve,
+    Start,
+}
+
+/// Fields the start body can apply on the same write that moves a task to
+/// in-progress: identity/routing, the lifecycle note, crew resolution, and
+/// the plan `ensure_status_change_allowed` already accepts in a transitioning
+/// write.
+const START_ABSORBABLE_FIELDS: &[&str] = &[
+    "id",
+    "status",
+    "note",
+    "comment",
+    "crew",
+    "model",
+    "workspace",
+    "plan",
+];
+
+const APPROVAL_ALLOWED_FIELDS: &[&str] = &["id", "status", "note", "comment", "model", "workspace"];
+
+/// Choose the special transition body only when this write actually needs it.
+///
+/// `proposed → backlog` is approval. A start-shaped `in-progress` write (no
+/// field edits beyond `plan`/`crew`/`note`/`comment`) still goes through
+/// `start_task` so crew resolution and `TaskStarted` survive. Any other
+/// `backlog` / `in-progress` combination — including `someday → backlog`
+/// plus a field edit — falls through to the ordinary governed update.
+fn guarded_lifecycle_write(
+    from: TaskStatus,
+    to: TaskStatus,
     input: &Value,
-    requested_status: TaskStatus,
-    approval: bool,
-) -> Result<(), OrbitError> {
-    let allowed = if approval {
-        &["id", "status", "note", "comment", "model", "workspace"][..]
-    } else {
-        &[
-            "id",
-            "status",
-            "note",
-            "comment",
-            "crew",
-            "model",
-            "workspace",
-        ][..]
-    };
-    let Some(fields) = input.as_object() else {
-        return Err(OrbitError::InvalidInput(
-            "orbit.task.update input must be an object".to_string(),
-        ));
-    };
+) -> Result<Option<GuardedLifecycleWrite>, OrbitError> {
+    match (from, to) {
+        (TaskStatus::Proposed, TaskStatus::Backlog) => {
+            reject_fields_for_approval_transition(input)?;
+            Ok(Some(GuardedLifecycleWrite::Approve))
+        }
+        (_, TaskStatus::InProgress) if start_fields_are_absorbable(input)? => {
+            Ok(Some(GuardedLifecycleWrite::Start))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn start_fields_are_absorbable(input: &Value) -> Result<bool, OrbitError> {
+    let fields = update_object_fields(input)?;
+    Ok(fields
+        .keys()
+        .all(|field| START_ABSORBABLE_FIELDS.contains(&field.as_str())))
+}
+
+fn reject_fields_for_approval_transition(input: &Value) -> Result<(), OrbitError> {
+    let fields = update_object_fields(input)?;
     let extras = fields
         .keys()
-        .filter(|field| !allowed.contains(&field.as_str()))
+        .filter(|field| !APPROVAL_ALLOWED_FIELDS.contains(&field.as_str()))
         .cloned()
         .collect::<Vec<_>>();
     if extras.is_empty() {
@@ -418,11 +444,25 @@ fn reject_fields_for_lifecycle_transition(
     }
 
     Err(OrbitError::InvalidInput(format!(
-        "status '{}' runs the guarded {} transition and cannot be combined with field edits: {}",
-        requested_status,
-        if approval { "approval" } else { "start" },
+        "status 'backlog' on a proposed task runs the guarded approval transition and cannot be combined with field edits: {}",
         extras.join(", ")
     )))
+}
+
+fn update_object_fields(input: &Value) -> Result<&serde_json::Map<String, Value>, OrbitError> {
+    input.as_object().ok_or_else(|| {
+        OrbitError::InvalidInput("orbit.task.update input must be an object".to_string())
+    })
+}
+
+fn optional_plan(input: &Value) -> Result<Option<String>, OrbitError> {
+    match input.get("plan") {
+        None => Ok(None),
+        Some(Value::String(raw)) => Ok(Some(raw.to_string())),
+        Some(_) => Err(OrbitError::InvalidInput(
+            "`plan` must be a string".to_string(),
+        )),
+    }
 }
 
 /// Whether the caller explicitly opted out of the operator-surface check that

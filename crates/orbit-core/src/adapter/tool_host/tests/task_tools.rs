@@ -923,6 +923,123 @@ fn task_update_routes_approval_start_and_blocked_restart_through_transition_bodi
     assert!(error.to_string().contains("start requires"), "{error}");
 }
 
+/// ORB-12338: a non-approval `status: backlog` write is an ordinary governed
+/// update. Intercepting every backlog request as approval refused field edits
+/// on `someday → backlog` and named a transition that body would not run.
+#[test]
+fn task_update_combines_non_approval_backlog_with_field_edits() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let task = create_task(
+        &runtime,
+        &repo_root,
+        "Someday task",
+        "Needs a combined backlog + priority write.",
+        TaskStatus::Someday,
+        &[],
+    );
+    let agent = Some("codex".to_string());
+    let model = Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string());
+
+    let updated = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": task.id,
+                "status": "backlog",
+                "priority": "high",
+                "tags": ["qa"],
+            }),
+            agent.clone(),
+            model.clone(),
+        )
+        .expect("someday → backlog may include field edits");
+    assert_eq!(updated["status"], "backlog");
+    assert_eq!(updated["priority"], "high");
+    assert_eq!(updated["tags"], json!(["qa"]));
+
+    let proposed = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Still proposed".to_string(),
+            description: "Approval still refuses extras.".to_string(),
+            ..Default::default()
+        })
+        .expect("add proposed task");
+    let message = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({
+            "id": proposed.id,
+            "status": "backlog",
+            "priority": "high",
+        }),
+        agent,
+        model,
+    ));
+    assert!(
+        message.contains("proposed")
+            && message.contains("approval")
+            && message.contains("priority"),
+        "approval extras must name the proposed → backlog transition: {message}"
+    );
+    assert!(
+        !message.contains("guarded start"),
+        "a backlog write must not be labelled a start: {message}"
+    );
+}
+
+/// ORB-12338: the start body must accept the plan the lifecycle precondition
+/// reads from the same write. A blocked task with an empty plan can move to
+/// in-progress in one call, and that write still records `TaskStarted`.
+#[test]
+fn task_update_start_accepts_plan_on_the_same_write() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let task = create_task(
+        &runtime,
+        &repo_root,
+        "Blocked without a plan",
+        "Needs plan + start in one tool call.",
+        TaskStatus::Blocked,
+        &[],
+    );
+    let agent = Some("codex".to_string());
+    let model = Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string());
+
+    let missing = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({ "id": task.id, "status": "in-progress" }),
+        agent.clone(),
+        model.clone(),
+    ));
+    assert!(
+        missing.contains("execution plan"),
+        "an empty plan still blocks start: {missing}"
+    );
+
+    let started = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": task.id,
+                "status": "in-progress",
+                "plan": "1. probe",
+            }),
+            agent,
+            model,
+        )
+        .expect("plan + in-progress is one start write");
+    assert_eq!(started["status"], "in-progress");
+    assert_eq!(started["plan"], "1. probe");
+    assert!(
+        runtime
+            .list_session_events(20)
+            .expect("events")
+            .iter()
+            .any(
+                |event| event.event_type == "TaskStarted" && event.payload["data"]["id"] == task.id
+            ),
+        "absorbing plan must still run the start body: {started}"
+    );
+}
+
 /// ORB-10648: `priority` is an advertised and applied update field. The record
 /// layer could always persist it, but neither the tool schema nor the update
 /// handler read it, so a caller's re-prioritization was discarded while the

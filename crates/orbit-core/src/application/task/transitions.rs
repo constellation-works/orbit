@@ -46,6 +46,7 @@ struct StartTaskOptions {
     model: Option<String>,
     actor_label_override: Option<String>,
     crew_override: Option<String>,
+    plan: Option<String>,
 }
 
 impl OrbitRuntime {
@@ -291,6 +292,7 @@ impl OrbitRuntime {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn start_task_with_identity_and_crew(
         &self,
         id: &str,
@@ -299,6 +301,7 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
         crew_override: Option<String>,
+        plan: Option<String>,
     ) -> Result<Task, OrbitError> {
         self.start_task_with_actor_label_override(
             id,
@@ -308,6 +311,7 @@ impl OrbitRuntime {
                 agent,
                 model,
                 crew_override,
+                plan,
                 ..Default::default()
             },
         )
@@ -343,6 +347,7 @@ impl OrbitRuntime {
             model,
             actor_label_override,
             crew_override,
+            plan,
         } = options;
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
@@ -387,8 +392,9 @@ impl OrbitRuntime {
             )?;
             let dependency_status_index = self.task_status_index()?;
             let unmet_dependencies = unmet_task_dependencies(&task, &dependency_status_index);
+            let effective_plan = plan.as_deref().unwrap_or(task.plan.as_str());
             if in_progress_transition_requires_plan(task.status) {
-                ensure_task_has_execution_plan(id, task.plan.as_str())?;
+                ensure_task_has_execution_plan(id, effective_plan)?;
             }
             let unmet_dependency_labels: Vec<String> = unmet_dependencies
                 .iter()
@@ -427,6 +433,7 @@ impl OrbitRuntime {
                             expected_status: Some(vec![task.status]),
                             ..StoreTaskUpdateParams::from(TaskUpdateParams {
                                 status: Some(TaskStatus::InProgress),
+                                plan: plan.clone(),
                                 ..Default::default()
                             })
                         },
@@ -455,6 +462,7 @@ impl OrbitRuntime {
                             expected_status: Some(vec![task.status]),
                             ..StoreTaskUpdateParams::from(TaskUpdateParams {
                                 status: Some(TaskStatus::InProgress),
+                                plan: plan.clone(),
                                 ..Default::default()
                             })
                         },
