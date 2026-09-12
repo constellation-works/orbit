@@ -8,9 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::fs::OpenOptions;
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_types::policy::{ResolvedFsProfile, compile_glob_regex};
@@ -40,9 +41,9 @@ pub struct LinuxBwrapPlan {
     /// because their anchor does not exist. Never silently discarded: the
     /// caller reports each one against the rule that granted it.
     pub dropped_grants: Vec<UnsatisfiedWriteGrant>,
-    /// Mount-source descriptors retained until Bubblewrap has consumed argv.
-    /// Empty for ordinary path-based plans and audit rendering.
-    mount_sources: Vec<File>,
+    /// Mount-source descriptors retained by the caller until the sandboxed
+    /// child exits. Empty for ordinary path-based plans and audit rendering.
+    mount_sources: Vec<Arc<File>>,
     mount_evidence: Vec<LinuxBwrapMountEvidence>,
 }
 
@@ -72,11 +73,13 @@ pub struct LinuxBwrapMountEvidence {
     pub inode: u64,
 }
 
-/// A host object already validated and opened by the runtime owner.
+/// A host object already validated and opened by the runtime owner. Sharing
+/// the handle avoids a parent-side `dup`: closing such a duplicate can release
+/// unrelated POSIX locks held by SQLite in the same process.
 #[derive(Debug)]
 pub struct LinuxBwrapMountAuthority {
     pub destination: PathBuf,
-    pub source: File,
+    pub source: Arc<File>,
 }
 
 #[derive(Debug)]
@@ -780,31 +783,26 @@ pub fn compile_linux_bwrap_argv_with_authority(
 }
 
 #[cfg(unix)]
-fn prepare_mount_source(source: File) -> Result<File, OrbitError> {
+fn prepare_mount_source(source: Arc<File>) -> Result<Arc<File>, OrbitError> {
     if source.as_raw_fd() >= 3 {
         return Ok(source);
     }
 
-    let descriptor = unsafe { libc::fcntl(source.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
-    if descriptor < 0 {
-        return Err(OrbitError::Execution(format!(
-            "duplicate Linux runtime grant descriptor: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-
-    Ok(unsafe { File::from_raw_fd(descriptor) })
+    Err(OrbitError::Execution(format!(
+        "Linux runtime grant descriptor {} conflicts with child standard I/O",
+        source.as_raw_fd()
+    )))
 }
 
 #[cfg(not(unix))]
-fn prepare_mount_source(_source: File) -> Result<File, OrbitError> {
+fn prepare_mount_source(_source: Arc<File>) -> Result<Arc<File>, OrbitError> {
     Err(OrbitError::Execution(
         "descriptor-backed Linux runtime grants require Unix file descriptors".to_string(),
     ))
 }
 
 #[cfg(unix)]
-fn inherit_mount_sources(command: &mut Command, mount_sources: &[File]) {
+fn inherit_mount_sources(command: &mut Command, mount_sources: &[Arc<File>]) {
     use std::os::unix::process::CommandExt;
 
     let source_fds = mount_sources

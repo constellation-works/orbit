@@ -231,14 +231,14 @@ fn managed_aliases_replay_denies_and_pin_replaceable_parents() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn descriptor_mount_plan_holds_the_validated_object_and_closes_it_on_drop() {
+fn descriptor_mount_plan_shares_the_validated_authority_without_duplication() {
     use super::{LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority};
 
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().canonicalize().expect("canonical root");
     let target = root.join("orbit.db-wal");
     fs::write(&target, b"validated").expect("sidecar");
-    let source = fs::File::open(&target).expect("open authority");
+    let source = std::sync::Arc::new(fs::File::open(&target).expect("open authority"));
     let source_fd = source.as_raw_fd();
     fs::rename(&target, root.join("validated-sidecar")).expect("replace name");
     fs::write(&target, b"replacement").expect("replacement");
@@ -252,11 +252,15 @@ fn descriptor_mount_plan_holds_the_validated_object_and_closes_it_on_drop() {
         false,
         vec![LinuxBwrapMountAuthority {
             destination: target.clone(),
-            source,
+            source: std::sync::Arc::clone(&source),
         }],
     )
     .expect("descriptor-backed plan");
     let retained_fd = plan.mount_sources[0].as_raw_fd();
+    assert_eq!(
+        retained_fd, source_fd,
+        "compilation must not create a parent-side duplicate descriptor"
+    );
     let evidence = &plan.mount_evidence()[0];
     let metadata = plan.mount_sources[0]
         .metadata()
@@ -274,6 +278,12 @@ fn descriptor_mount_plan_holds_the_validated_object_and_closes_it_on_drop() {
     assert!(unsafe { libc::fcntl(source_fd, libc::F_GETFD) } >= 0);
 
     drop(plan);
+    assert!(
+        unsafe { libc::fcntl(source_fd, libc::F_GETFD) } >= 0,
+        "dropping a mount plan must not close the runtime owner's authority"
+    );
+
+    drop(source);
     assert_eq!(unsafe { libc::fcntl(source_fd, libc::F_GETFD) }, -1);
     assert_eq!(
         std::io::Error::last_os_error().raw_os_error(),
@@ -328,7 +338,7 @@ fn descriptor_inheritance_preserves_the_command_exec_error_pipe() {
         modify.push(destination.display().to_string());
         authority.push(LinuxBwrapMountAuthority {
             destination,
-            source,
+            source: std::sync::Arc::new(source),
         });
     }
 
@@ -397,7 +407,7 @@ fn descriptor_mount_plan_rejects_an_external_symlink_replacement() {
         false,
         vec![LinuxBwrapMountAuthority {
             destination: target,
-            source,
+            source: std::sync::Arc::new(source),
         }],
     )
     .expect_err("replacement must fail closed");
@@ -466,7 +476,7 @@ fn descriptor_directory_mount_rejects_an_external_symlink_replacement() {
         false,
         vec![LinuxBwrapMountAuthority {
             destination: target,
-            source,
+            source: std::sync::Arc::new(source),
         }],
     )
     .expect_err("directory replacement must fail closed");

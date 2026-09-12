@@ -246,13 +246,20 @@ missing directory components with descriptor-relative `mkdirat`/`openat`
 operations that refuse symlinks, and opens the final directory or regular
 SQLite object. Engine retains those descriptors through dispatch. The actual
 Bubblewrap plan uses inherited `--bind-fd` mount sources; the mutable pathname
-is only the mount destination. Bubblewrap consumes and closes these setup
-descriptors rather than preserving them for the provider process. A path
+is only the mount destination. Bubblewrap consumes its inherited child copies
+of these setup descriptors rather than preserving them for the provider
+process. The engine shares the runtime owner's existing authority handle rather
+than creating a parent-side duplicate, and retains that shared handle until the
+provider exits: closing a duplicate main-database descriptor in the host
+process can release that process's POSIX SQLite locks and permit a second
+connection to unlink the leased WAL/SHM objects. A path
 replacement that prevents the descriptor grant from matching the final plan is
 rejected before spawn. This assumes the already-open runtime-root object and
 its ancestors cannot be remounted by an unprivileged concurrent writer; name
 renames and symlink replacement below that object do not change descriptor
-authority. Descriptor closure occurs when the plan is dropped after spawn.
+authority. The spawned-child guard releases its mount-plan ownership only
+after supervision and process-tree cleanup; the runtime owner controls final
+descriptor closure.
 
 This descriptor handoff is Linux-only. macOS continues to compile Seatbelt
 rules from canonical paths and other platforms reject a Linux Bubblewrap

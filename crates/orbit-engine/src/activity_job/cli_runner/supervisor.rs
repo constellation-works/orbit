@@ -207,6 +207,9 @@ pub(super) struct SpawnWithTimeoutRequest<'a> {
     /// lifetime of its thread so tests can observe finalization without
     /// sampling process-wide thread counts.
     pub(super) live_readers: Option<Arc<AtomicUsize>>,
+    /// Test seam for supervising an already-spawned child with its ownership
+    /// guards intact. Production always spawns from the request fields.
+    pub(super) spawned_child: Option<SpawnedChild>,
     /// Test seam for exercising output capture when the pollable cancellation
     /// channel cannot be constructed.
     #[cfg(unix)]
@@ -266,20 +269,28 @@ pub(super) fn spawn_with_timeout(
         on_spawn,
         wait,
         live_readers,
+        spawned_child,
         #[cfg(unix)]
         cancel_pair,
     } = request;
 
     let started = Instant::now();
+    let spawned = match spawned_child {
+        Some(spawned) => spawned,
+        None => spawn_child_with_optional_sandbox(program, args, env, cwd, sandbox, trace.provider)
+            .map_err(|err| SpawnError {
+                permanent: err.permanent,
+                message: format!("spawn {program}: {}", err.message),
+            })?,
+    };
     let SpawnedChild {
         mut child,
         // The temp profile must outlive the child — drop it after wait.
         _profile_temp,
-    } = spawn_child_with_optional_sandbox(program, args, env, cwd, sandbox, trace.provider)
-        .map_err(|err| SpawnError {
-            permanent: err.permanent,
-            message: format!("spawn {program}: {}", err.message),
-        })?;
+        // Linux mount descriptors also outlive the child. Dropping a cloned
+        // SQLite DB descriptor earlier can release the host's lease locks.
+        _linux_mount_plan,
+    } = spawned;
 
     // Report the PID before any blocking work: the whole point is to be
     // observable during a long invocation, and the child is already running.
