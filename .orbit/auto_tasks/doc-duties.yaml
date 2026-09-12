@@ -3,7 +3,7 @@ name: doc-duties
 description: Daily rolling documentation upkeep — validates the least-recently-validated docs and stamps last_validated
 enabled: true
 schedule:
-  cron: 30 * * * *
+  cron: 30 6 * * *
 template:
   title: Doc duties — validate the least-recently-validated docs
   description: |
