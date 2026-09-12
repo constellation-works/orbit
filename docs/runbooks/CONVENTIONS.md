@@ -5,7 +5,7 @@ tags: [docs, operations, runbooks]
 paths: ["docs/runbooks/**"]
 related_features: [orbit-docs]
 related_artifacts: []
-last_validated: 2026-08-22
+last_validated: 2026-09-12
 ---
 
 # Runbook Conventions
@@ -52,7 +52,7 @@ related_artifacts: ["<task-id>"]
 ```
 
 Use `paths` only for source areas to which the procedure genuinely applies. Use
-`related_artifacts` for the tasks, ADRs, learnings, or frictions that establish the behavior;
+`related_artifacts` for the tasks, retained ADR references, or frictions that establish the behavior;
 do not invent IDs for documentation-only edits.
 
 ## 3. Recommended structure

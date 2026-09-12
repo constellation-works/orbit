@@ -5,7 +5,7 @@ tags: [operations, sqlite, corruption, recovery]
 paths: ["crates/orbit-store/**", "crates/orbit-cmd/src/doctor.rs"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-10473]
-last_validated: 2026-08-22
+last_validated: 2026-09-12
 ---
 
 # Recover a Corrupted Database

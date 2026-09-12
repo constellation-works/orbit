@@ -4,12 +4,12 @@ type: design
 title: "MCP Session Context — Decisions"
 owner: codex
 last_updated: 2026-08-22
-last_validated: 2026-08-22
+last_validated: 2026-09-12
 status: Accepted
 feature: mcp-session-context
 doc_role: decisions
 tags: ["mcp-session-context", "mcp", "workspace", "audit"]
-paths: ["crates/orbit-common/src/types/tool.rs", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/command/tool/**"]
+paths: ["crates/orbit-types/src/tool/definition.rs", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/adapter/tool_host/**", "crates/orbit-core/src/runtime/**"]
 related_features: ["mcp-session-context"]
 related_artifacts: []
 ---
@@ -60,10 +60,10 @@ These are the current implementation choices for MCP v1.
 
 **Consequences.** Successes and failures can be correlated end to end. Cost: trace creation and propagation are mandatory for every MCP call.
 
-## V1 defers policy authorization
+## V1 centralizes policy at the runtime chokepoint
 
-**Context.** Identity transport and execution plumbing are useful before an Orbit authorization model is chosen.
+**Context.** Identity transport and execution plumbing need one authoritative authorization boundary, while caller-provided labels remain untrusted.
 
-**Decision.** MCP definitions carry only global-versus-workspace-required scope. MCP v1 does not authorize by capability, placement, lease, IP address, SSH label, or machine label. The kernel exposes the authoritative host's complete supported surface; Core remains the future policy seam.
+**Decision.** MCP definitions still distinguish global-versus-workspace-required scope, but governed tool calls pass through `OrbitRuntime::authorize_tool_operation`. MCP session capabilities and destination-granted remote-agent capability are checked there; on federated destination calls, the catalog-role gate also runs before the tool body. Caller and process machine labels, host labels, and IP addresses remain audit metadata rather than authenticated principals.
 
-**Consequences.** The skeleton stays small and avoids treating audit metadata as authority. Cost: deployments rely on access to the local process or SSH account until explicit Core authorization is designed.
+**Consequences.** The kernel advertises the canonical surface and Core/runtime owns the policy checks, so all entry surfaces share the same authorization seam. Cost: each adapter must preserve the trusted session/process context that the seam evaluates.

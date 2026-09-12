@@ -11,7 +11,7 @@ tags: ["worktree-artifacts"]
 paths: ["crates/orbit-core/**", "crates/orbit-store/**", "crates/orbit-engine/**", "crates/orbit-cli/**"]
 related_features: ["worktree-artifacts", "host-registry", "mcp-bridge"]
 related_artifacts: ["ORB-00199", "ORB-00200", "ORB-00201", "ORB-10272", "ORB-10297", "ORB-10330", "ORB-10501", "ORB-10535", "ORB-10545", "ORB-10668", "ORB-10669", "ORB-10725"]
-last_validated: 2026-08-22
+last_validated: 2026-09-12
 ---
 
 # Worktree Artifacts - Decisions
@@ -256,7 +256,7 @@ Add a second benign case, `primary_dirt_only_delta_is_benign`, that is deliberat
 3. no mutated path intersects `run_changed_paths` (the same gate ORB-10471 introduced);
 4. **every** mutated path lives under `.orbit/`, Orbit's own record store.
 
-Clause 4 is the load-bearing addition. `.orbit/` holds tasks, ADRs, learnings, frictions, and routines: content the engine driving the pipeline rewrites as a matter of course, and content that is never a run's code candidate. A primary mutation anywhere else — source, manifests, CI config — remains `primary_checkout_drift` regardless of disjointness, preserving ORB-10134 escape detection intact.
+Clause 4 is the load-bearing addition. `.orbit/` holds tasks, frictions, auto-tasks, and routines: content the engine driving the pipeline rewrites as a matter of course, and content that is never a run's code candidate. A primary mutation anywhere else — source, manifests, CI config — remains `primary_checkout_drift` regardless of disjointness, preserving ORB-10134 escape detection intact.
 
 Acceptance is logged at `info` on `orbit.engine.cli_runner` with the ignored paths, matching the fast-forward case. The guard never cleans or reconciles the dirt it ignores.
 
