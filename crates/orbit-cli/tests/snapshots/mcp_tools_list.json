@@ -324,6 +324,16 @@
           "description": "Run-layer ceiling on concurrently live leaf runs",
           "type": "integer"
         },
+        "model": {
+          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "type": "string"
+        },
         "preset": {
           "description": "Run-layer preset override: supervised or autonomous (resets the preset-managed fields)",
           "type": "string"
@@ -459,6 +469,16 @@
           "description": "Apply only if the grant is still at this revision",
           "type": "integer"
         },
+        "model": {
+          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "type": "string"
+        },
         "reason": {
           "description": "Reason recorded with the revocation",
           "type": "string"
@@ -488,6 +508,16 @@
         "if_revision": {
           "description": "Apply only if the grant is still at this revision",
           "type": "integer"
+        },
+        "model": {
+          "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok"
+          ],
+          "type": "string"
         },
         "reason": {
           "description": "Reason recorded with the stop",

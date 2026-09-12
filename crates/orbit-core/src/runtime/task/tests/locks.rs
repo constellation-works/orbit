@@ -797,6 +797,9 @@ fn reserve_audit_for_task_scope_records_first_task_id() {
     );
     assert_eq!(row.target_id.as_deref(), Some(reservation_id.as_str()));
     assert_eq!(row.task_id.as_deref(), Some(task.id.as_str()));
+    let payload: Value = serde_json::from_str(row.arguments_json.as_deref().expect("payload"))
+        .expect("parse reservation audit payload");
+    assert_eq!(payload["actor"], json!("codex"));
 }
 
 /// ORB-12251: a caller could `reserve` with no capability at all and then be

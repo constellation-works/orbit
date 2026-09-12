@@ -1487,8 +1487,29 @@ fn task_add_tool_infers_agent_from_model_only_input() {
     assert!(output.get("model").is_none_or(serde_json::Value::is_null));
     assert_eq!(
         output.get("created_by").and_then(Value::as_str),
-        Some(orbit_common::test_fixtures::TEST_CODEX_MODEL)
+        Some("codex")
     );
+}
+
+#[test]
+fn task_add_tool_refuses_unrecognized_model() {
+    let _env =
+        orbit_common::test_env::unset(orbit_common::test_env::AGENT_IDENTITY_ENV.iter().copied());
+    let (_root, runtime, _repo_root) = test_runtime();
+
+    let message = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.add",
+        json!({
+            "title": "Refuse llama provenance",
+            "description": "llama is not a family.",
+            "complexity": "low",
+            "workspace": ".",
+            "model": "llama",
+        }),
+        None,
+        None,
+    ));
+    assert!(message.contains("llama"), "{message}");
 }
 
 #[test]

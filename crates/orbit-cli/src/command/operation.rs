@@ -159,7 +159,7 @@ impl CommandOperation {
     /// direct commands must use the same actor identity as the runtime.
     pub fn attribute_to(mut self, actor: &ActorIdentity) -> Self {
         if let Some(meta) = self.audit_meta.as_mut() {
-            meta.role.clone_from(&actor.label);
+            meta.role = actor.audit_role().to_string();
         }
         self
     }

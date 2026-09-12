@@ -237,7 +237,7 @@ impl OrbitRuntime {
                 explicit_planned_by: params.planned_by.as_ref(),
                 explicit_implemented_by: params.implemented_by.as_ref(),
             },
-        );
+        )?;
         let effective_label = attribution.actor;
         let status_note = status_note
             .as_deref()

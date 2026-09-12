@@ -331,7 +331,7 @@ fn task_add_attributes_from_model_flag_and_managed_identity_env() {
         "gpt-5.6-sol",
         "--json",
     ]);
-    assert_eq!(explicit["created_by"], json!("gpt-5.6-sol"));
+    assert_eq!(explicit["created_by"], json!("codex"));
 
     let ambient_registry = ambient.home.join(".orbit");
     let ambient_registry = ambient_registry
@@ -378,7 +378,7 @@ fn task_add_attributes_from_model_flag_and_managed_identity_env() {
             String::from_utf8_lossy(&output.stderr)
         );
         let managed: Value = serde_json::from_slice(&output.stdout).expect("managed task JSON");
-        assert_eq!(managed["created_by"], json!("gpt-5.6-terra"));
+        assert_eq!(managed["created_by"], json!("codex"));
     }
 
     let after = ambient.task_json(&["task", "list", "--json"]);
@@ -387,12 +387,11 @@ fn task_add_attributes_from_model_flag_and_managed_identity_env() {
     let fixture_tasks = workspace.task_json(&["task", "list", "--json"]);
     let fixture_tasks = fixture_tasks.as_array().expect("fixture task list");
     assert_eq!(fixture_tasks.len(), 3);
-    assert_eq!(
+    assert!(
         fixture_tasks
             .iter()
-            .filter(|task| task["created_by"] == json!("gpt-5.6-terra"))
-            .count(),
-        2
+            .all(|task| task["created_by"] == json!("codex")),
+        "full model strings normalize to the canonical family"
     );
 }
 

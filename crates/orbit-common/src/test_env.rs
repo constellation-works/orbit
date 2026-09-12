@@ -30,7 +30,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// The identity pair consulted when a command carries no explicit
 /// `--agent`/`--model` and no input attribution.
-pub const AGENT_IDENTITY_ENV: &[&str] = &["ORBIT_AGENT_NAME", "ORBIT_AGENT_MODEL"];
+pub const AGENT_IDENTITY_ENV: &[&str] = &["ORBIT_AGENT_NAME", "ORBIT_AGENT_MODEL", "ORBIT_ACTOR"];
 
 /// The variables an `orbit-engine` managed run exports into every spawned
 /// activity (see `orbit-engine/src/context/env.rs`): job/task/session
@@ -92,6 +92,7 @@ pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
     // Actor identity and audit role attributed to the child's writes.
     "ORBIT_AGENT_NAME",
     "ORBIT_AGENT_MODEL",
+    "ORBIT_ACTOR",
     "ORBIT_OPERATOR",
     "ORBIT_TASK_ACTOR_KIND",
     // Sandbox and tool grants leased to the host activity, not to a fixture.

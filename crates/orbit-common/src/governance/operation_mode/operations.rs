@@ -77,6 +77,7 @@ const REVIEW_POLICY_HELP: &str = "Run-layer review policy: none, before-pr (hold
 const CLAIM_TOKEN_HELP: &str =
     "Token for this workspace's exclusive claim, when another operator holds one";
 const GRANT_ID_HELP: &str = "Grant ID; defaults to the workspace's active grant";
+const MODEL_HELP: &str = "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.";
 
 const RUN_LAYER_PARAMS: [ParamSpec; 6] = [
     text_param("preset", PRESET_HELP),
@@ -180,6 +181,7 @@ const ENABLE: OperationModeOperation = OperationModeOperation {
         RUN_LAYER_PARAMS[4],
         RUN_LAYER_PARAMS[5],
         text_param_long("claim_token", "claim-token", CLAIM_TOKEN_HELP),
+        mcp_model_param(),
     ],
     rejects_agent_field: false,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
@@ -243,6 +245,7 @@ const STOP: OperationModeOperation = OperationModeOperation {
             "Apply only if the grant is still at this revision",
         ),
         text_param_long("claim_token", "claim-token", CLAIM_TOKEN_HELP),
+        mcp_model_param(),
     ],
     rejects_agent_field: false,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
@@ -265,12 +268,24 @@ const REVOKE: OperationModeOperation = OperationModeOperation {
             "Apply only if the grant is still at this revision",
         ),
         text_param_long("claim_token", "claim-token", CLAIM_TOKEN_HELP),
+        mcp_model_param(),
     ],
     rejects_agent_field: false,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     cli_json_flag: true,
     cli_render: CliRender::Record,
 };
+
+/// MCP-only provenance field. CLI grant verbs record the process actor.
+const fn mcp_model_param() -> ParamSpec {
+    ParamSpec {
+        name: "model",
+        param_type: ParamType::String,
+        required: false,
+        mcp_description: Some(Description::Static(MODEL_HELP)),
+        cli: None,
+    }
+}
 
 /// A `--<name> <NAME>` string flag for a wire name without an underscore.
 const fn text_param(name: &'static str, description: &'static str) -> ParamSpec {

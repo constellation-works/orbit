@@ -20,7 +20,7 @@ pub use agent_family::AgentFamily;
 pub use agent_pair::{
     AgentModelPair, Crew, CrewAssignment, ReasoningEffort, agent_family_from_cli,
     all_agent_families, infer_agent_family_from_model, normalize_agent_family_for_model,
-    resolve_crew, validate_antigravity_model,
+    require_canonical_agent_family, resolve_crew, validate_antigravity_model,
 };
 pub use artifact_ids::{is_valid_adr_id, is_valid_friction_id, validate_friction_id};
 pub use host::{

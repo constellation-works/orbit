@@ -53,7 +53,7 @@ impl OrbitRuntime {
     ) -> Result<AutoTaskDefinition, OrbitError> {
         params.template.required_tools = normalize_required_tools(params.template.required_tools);
         let now = chrono::Utc::now().to_rfc3339();
-        let actor = self.actor_label().to_string();
+        let actor = self.actor().resolve_write_label(None, None)?;
         let definition = AutoTaskDefinition {
             schema_version: AUTO_TASK_SCHEMA_VERSION,
             name: params.name,
@@ -154,11 +154,12 @@ impl OrbitRuntime {
                 ));
             }
             let consumer = crate::application::automation::consumer_key(self, "auto-task", name)?;
+            let actor = self.actor().resolve_write_label(None, None)?;
             orbit_automation::delivery::waive(
                 self.automation_store()?.as_ref(),
                 &consumer,
                 request,
-                self.actor_label(),
+                &actor,
                 chrono::Utc::now(),
             )
             .map_err(orbit_automation::automation_error_to_orbit)?;
@@ -223,7 +224,7 @@ impl OrbitRuntime {
         &self,
         mut definition: AutoTaskDefinition,
     ) -> Result<AutoTaskDefinition, OrbitError> {
-        definition.updated_by = Some(self.actor_label().to_string());
+        definition.updated_by = Some(self.actor().resolve_write_label(None, None)?);
         definition.updated_at = chrono::Utc::now().to_rfc3339();
         self.validate_auto_task(&definition)?;
         self.write_auto_task(&definition)?;

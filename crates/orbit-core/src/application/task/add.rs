@@ -125,7 +125,7 @@ impl OrbitRuntime {
             &actor.label,
             canonical_agent.as_deref(),
             canonical_model.as_deref(),
-        );
+        )?;
         let (task_type, initial_status) = infer_task_create_type_and_status(
             params.task_type,
             params.status,
