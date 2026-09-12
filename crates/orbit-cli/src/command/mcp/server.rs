@@ -29,7 +29,13 @@ use serde_json::Value;
 /// [ORB-12254]. `orbit.task.artifact.get` reads a payload owned by a task, so
 /// it resolves the same way `orbit.task.show` does — its own schema advertises
 /// `workspace` as an optional filter, and behavior must agree.
-const ID_RESOLVED_WORKSPACE_TOOLS: &[&str] = &["orbit.task.show", "orbit.task.artifact.get"];
+///
+/// `pub(crate)` and re-exported through `command::mcp` so the CLI path in
+/// `command/tool/run.rs` (and `command/operation.rs`'s task-artifact routing)
+/// share this single list instead of keeping a second one that can drift
+/// [ORB-12263].
+pub(crate) const ID_RESOLVED_WORKSPACE_TOOLS: &[&str] =
+    &["orbit.task.show", "orbit.task.artifact.get"];
 
 /// Serve one stdio MCP session.
 ///

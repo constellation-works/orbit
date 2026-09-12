@@ -8,7 +8,7 @@ use super::super::run::{
 };
 
 #[test]
-fn task_show_id_is_read_only_from_orbit_task_show_input() {
+fn id_resolved_task_id_is_read_from_id_resolved_tool_input() {
     let show = ToolRunArgs {
         name: "orbit.task.show".to_string(),
         input: Some(r#"{"id":" ORB-10961 ","model":"codex"}"#.to_string()),
@@ -21,14 +21,31 @@ fn task_show_id_is_read_only_from_orbit_task_show_input() {
         pretty: false,
         parsed_input: OnceLock::new(),
     };
-    assert_eq!(show.task_show_id().as_deref(), Some("ORB-10961"));
+    assert_eq!(show.id_resolved_task_id().as_deref(), Some("ORB-10961"));
+
+    let artifact_get = ToolRunArgs {
+        name: "orbit.task.artifact.get".to_string(),
+        input: Some(r#"{"id":" ORB-12263 ","path":"qa/note.md"}"#.to_string()),
+        input_file: None,
+        agent: None,
+        model: None,
+        dry_run: false,
+        fields: Vec::new(),
+        full: false,
+        pretty: false,
+        parsed_input: OnceLock::new(),
+    };
+    assert_eq!(
+        artifact_get.id_resolved_task_id().as_deref(),
+        Some("ORB-12263")
+    );
 
     let list = ToolRunArgs {
         name: "orbit.task.list".to_string(),
         input: Some(r#"{"id":"ORB-10961"}"#.to_string()),
         ..show
     };
-    assert_eq!(list.task_show_id(), None);
+    assert_eq!(list.id_resolved_task_id(), None);
 }
 
 #[test]
