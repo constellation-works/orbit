@@ -295,12 +295,12 @@ const TASK_META_FIELDS = [
 ];
 
 const RELATION_GROUPS = [
-  ["blocked_by", "BlockedBy"],
-  ["child_of", "ChildOf"],
-  ["spawned_from", "SpawnedFrom"],
-  ["regression_from", "RegressionFrom"],
-  ["supersedes", "Supersedes"],
-  ["related_to", "RelatedTo"],
+  ["blocked_by", "blocked by"],
+  ["child_of", "child of"],
+  ["spawned_from", "spawned from"],
+  ["regression_from", "regression from"],
+  ["supersedes", "supersedes"],
+  ["related_to", "related to"],
 ];
 const RELATION_GROUP_LABELS = new Map(RELATION_GROUPS);
 
@@ -850,11 +850,22 @@ function buildCriteriaList(criteria) {
 }
 
 function buildFileList(paths) {
-  const ul = el("ul", { class: "file-list" });
+  const ul = el("ul", { class: "file-list mono" });
   for (const path of paths) {
-    ul.appendChild(el("li", { text: path }));
+    ul.appendChild(el("li", {}, selectorParts(path)));
   }
   return ul;
+}
+
+// A context selector is `kind:target`. The kind and, for path selectors, the
+// directory are dimmed so the basename — what an operator scans for — reads
+// first; the text content is still the whole selector.
+function selectorParts(selector) {
+  const match = /^([a-z]+):(.*)$/.exec(selector);
+  if (!match) return [selector];
+  const [, kind, target] = match;
+  const cut = kind === "file" || kind === "dir" ? target.lastIndexOf("/") + 1 : 0;
+  return [el("span", { class: "selector-dim", text: `${kind}:${target.slice(0, cut)}` }), target.slice(cut)];
 }
 
 function linesToText(values) {
@@ -899,7 +910,7 @@ function setDetailEditing(detail, field, open) {
   else delete detail.dataset.editing;
 }
 
-function buildTaskFieldEditor(task, field, detail, context) {
+function buildTaskFieldEditor(task, field, detail, context, editSlot = null) {
   const spec = TASK_FIELD_EDITORS[field];
   const mutable = canMutateTask(task);
   const editTitle = `Edit ${spec.label} for ${task.id}`;
@@ -919,6 +930,7 @@ function buildTaskFieldEditor(task, field, detail, context) {
       save: (text, options) => patchJson(taskMutationPath(task), spec.toPayload(text, options)),
       onSaved: (updatedTask) => completeFieldSave(task.id, field, updatedTask, context),
       onEditingChange: (open) => setDetailEditing(detail, field, open),
+      editSlot,
     }),
   );
   const feedback = fieldFeedback.get(fieldFeedbackKey(task.id, field));
@@ -1023,12 +1035,17 @@ function buildTaskDetail(task, context) {
   const leftCol = el("div", { class: "detail-main" });
   const rightCol = el("div", { class: "detail-side" });
 
-  const addField = (parent, title, child, collapsible = false, collapsed = false) => {
+  // The h4 carries the title in its own span so a header can also hold an
+  // action (the field's edit button) without the two reading as one label.
+  const addField = (parent, title, child, collapsible = false, collapsed = false, header = {}) => {
     let classes = "field-block";
     if (collapsible) classes += " collapsible";
     if (collapsed) classes += " collapsed";
     const block = el("div", { class: classes });
-    const h4 = el("h4", { text: title });
+    const heading = [el("span", { class: "field-title", text: title })];
+    if (header.count != null) heading.push(el("span", { class: "field-count", text: String(header.count) }));
+    if (header.actions) heading.push(header.actions);
+    const h4 = el("h4", {}, heading);
     if (collapsible) {
       makeToggleRow(h4, {
         expanded: !collapsed,
@@ -1043,12 +1060,13 @@ function buildTaskDetail(task, context) {
     block.appendChild(child);
     parent.appendChild(block);
   };
+  const actionSlot = () => el("span", { class: "field-actions" });
 
   // An editable field is shown even when it is empty — adding a missing
   // description is exactly the edit an operator comes here for — but only where
   // editing is actually allowed, so the read-only aggregate view stays as terse
   // as it was.
-  const editor = (field) => buildTaskFieldEditor(task, field, detail, context);
+  const editor = (field, editSlot = null) => buildTaskFieldEditor(task, field, detail, context, editSlot);
   const showsEditor = (field) =>
     canMutateTask(task) || taskFieldHasValue(task, TASK_FIELD_EDITORS[field]);
 
@@ -1076,14 +1094,11 @@ function buildTaskDetail(task, context) {
     addField(leftCol, "review gate", buildReviewGate(task.review), true, true);
   }
 
-  addField(rightCol, "complexity", buildComplexityUpdateControl(task, context));
-
-  if (showsEditor("tags")) {
-    addField(rightCol, "tags", editor("tags"));
-  }
+  // The side column leads with what identifies the task — who made it, which
+  // run, when — then the levers an operator sets, then the graph around it.
 
   // Provenance and timestamps: recorded by the pipeline, so read-only here even
-  // though the fields above are not.
+  // though the fields below are not.
   const meta = el("div", { class: "meta-list" });
   let metaCount = 0;
   for (const [key, label] of TASK_META_FIELDS) {
@@ -1115,6 +1130,20 @@ function buildTaskDetail(task, context) {
     addField(rightCol, "location", loc);
   }
 
+  // Complexity and tags are one card of properties: each is a label beside its
+  // control, and the tags edit button sits in the card header.
+  {
+    const properties = el("div", { class: "property-list" });
+    const property = (label, control) =>
+      el("div", { class: "property-row" }, [el("span", { class: "label", text: label }), control]);
+    properties.appendChild(property("complexity", buildComplexityUpdateControl(task, context)));
+    const actions = actionSlot();
+    if (showsEditor("tags")) {
+      properties.appendChild(property("tags", editor("tags", actions)));
+    }
+    addField(rightCol, "properties", properties, false, false, { actions });
+  }
+
   if (Array.isArray(task.external_refs) && task.external_refs.length > 0) {
     addField(rightCol, "external refs", buildExternalRefs(task.external_refs));
   }
@@ -1125,7 +1154,9 @@ function buildTaskDetail(task, context) {
   }
 
   if (showsEditor("context_files")) {
-    addField(rightCol, "context files", editor("context_files"));
+    const actions = actionSlot();
+    const count = Array.isArray(task.context_files) ? task.context_files.length : 0;
+    addField(rightCol, "context files", editor("context_files", actions), false, false, { actions, count });
   }
 
   if (Array.isArray(task.history) && task.history.length > 0) {

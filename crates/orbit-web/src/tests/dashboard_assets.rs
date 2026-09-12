@@ -2199,7 +2199,7 @@ const complexitySelect = find(body, (node) => node.className === "task-complexit
 if (!complexitySelect.disabled) throw new Error("the complexity select must be disabled in aggregate view");
 if (!frame(complexitySelect.title)) throw new Error(`complexity refusal reads differently: ${complexitySelect.title}`);
 
-for (const title of ["description", "acceptance criteria", "tags", "context files"]) {
+for (const title of ["description", "acceptance criteria", "properties", "context files"]) {
   const block = fieldBlock(title);
   if (!block) throw new Error(`${title} is missing from the detail`);
   const edit = find(block, (node) => node.className === "field-edit");
@@ -2261,7 +2261,7 @@ if (!fieldBlock("description").textContent.includes("rewritten body")) {
   throw new Error(`the saved description was not re-rendered: ${fieldBlock("description").textContent}`);
 }
 await saveField("acceptance criteria", "first\nsecond\n\n", { acceptance_criteria: ["first", "second"] });
-await saveField("tags", "dashboard, orbit-web", { tags: ["dashboard", "orbit-web"] });
+await saveField("properties", "dashboard, orbit-web", { tags: ["dashboard", "orbit-web"] });
 
 // A rejected context-files save keeps the editor, the text, and the server's reason.
 const block = openEditor("context files");
@@ -2447,7 +2447,10 @@ const fieldBlock = (title) => {
   const blocks = [];
   const visit = (node) => { for (const child of node.children) { if (child.className.split(/\s+/).includes("field-block")) blocks.push(child); visit(child); } };
   visit(detailNode());
-  return blocks.find((block) => block.children[0] && block.children[0].textContent === title) || null;
+  // The header carries its title in a span so it can also hold a count and the
+  // field's edit button; tags live in the `properties` card beside complexity.
+  const heading = (block) => find(block.children[0], (node) => node.className === "field-title");
+  return blocks.find((block) => heading(block) && heading(block).textContent === title) || null;
 };
 const editorInput = (block) => find(block, (node) => node.className === "field-editor-input mono");
 const openEditor = (title) => {
