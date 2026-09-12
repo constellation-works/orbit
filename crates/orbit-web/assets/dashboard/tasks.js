@@ -72,10 +72,14 @@ function statusOrder(context) {
   return context && Array.isArray(context.statusOrder) ? context.statusOrder : [];
 }
 
-function statusUpdateTargets(context) {
-  return context && Array.isArray(context.statusUpdateTargets)
-    ? context.statusUpdateTargets
+function statusTransitions(task) {
+  return Array.isArray(task && task.status_transitions)
+    ? task.status_transitions.filter((transition) => transition && transition.status)
     : [];
+}
+
+function statusTransition(task, targetStatus) {
+  return statusTransitions(task).find((transition) => transition.status === targetStatus) || null;
 }
 
 function fmtAbsTimeValue(context, value) {
@@ -1213,7 +1217,7 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
-  if (task.status !== "archived") {
+  if (statusTransition(task, "archived")) {
     const btn = el("button", { class: "action archive", text: "archive" });
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1228,7 +1232,7 @@ function buildActionsRow(task, detail, context) {
 
 function buildStatusUpdateControl(task, context) {
   const cell = el("span", { class: "status-cell" });
-  const targets = statusUpdateTargets(context).filter((status) => status !== task.status);
+  const targets = statusTransitions(task).map((transition) => transition.status);
   const color = `var(--status-${task.status}, var(--fg))`;
   const mutable = canMutateTask(task);
   const feedback = statusFeedback.get(task.id);
@@ -1341,17 +1345,45 @@ function buildCrewUpdateControl(task, context) {
 
 async function applyTaskStatusChange(task, nextStatus, context) {
   if (!nextStatus || nextStatus === task.status || !canMutateTask(task)) return;
+  const transition = statusTransition(task, nextStatus);
+  if (!transition) {
+    statusFeedback.set(task.id, {
+      kind: "error",
+      text: `status update unavailable: ${task.status} cannot move to ${nextStatus}`,
+    });
+    renderTasks(taskList(context), context);
+    return;
+  }
+
+  const payload = { status: nextStatus };
+  if (transition.required_field) {
+    const evidence = collectStatusTransitionEvidence(task, nextStatus, transition.required_field);
+    if (!evidence) {
+      statusFeedback.set(task.id, {
+        kind: "error",
+        text: statusTransitionEvidenceUnavailable(transition.required_field),
+      });
+      renderTasks(taskList(context), context);
+      return;
+    }
+    payload[transition.required_field] = evidence;
+  }
+
   const previousValue = task.status;
   statusFeedback.set(task.id, { kind: "pending", text: "saving…" });
   renderTasks(taskList(context), context);
   try {
-    const updatedTask = await patchJson(taskMutationPath(task), { status: nextStatus });
+    const updatedTask = await patchJson(taskMutationPath(task), payload);
     applyUpdatedTask(updatedTask, context);
-    statusFeedback.set(task.id, {
+    const feedback = {
       kind: "success",
       text: "status saved",
-      undo: { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS },
-    });
+    };
+    const reverse = statusTransition(updatedTask, previousValue);
+    if (reverse && !reverse.required_field) {
+      feedback.undo = { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS };
+    }
+    statusFeedback.set(task.id, feedback);
   } catch (error) {
     statusFeedback.set(task.id, {
       kind: "error",
@@ -1361,6 +1393,22 @@ async function applyTaskStatusChange(task, nextStatus, context) {
   }
   renderTasks(taskList(context), context);
   scheduleFeedbackExpiry(statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+}
+
+function collectStatusTransitionEvidence(task, nextStatus, requiredField) {
+  if (typeof window.prompt !== "function") return null;
+  const label = requiredField === "plan" ? "execution plan" : "completion summary";
+  const currentValue = requiredField === "plan" ? task.plan : task.execution_summary;
+  const value = window.prompt(
+    `A non-empty ${label} is required before moving ${task.id} to ${nextStatus}.`,
+    currentValue || "",
+  );
+  return value && value.trim() ? value.trim() : null;
+}
+
+function statusTransitionEvidenceUnavailable(requiredField) {
+  const label = requiredField === "plan" ? "execution plan" : "completion summary";
+  return `status update unavailable: a non-empty ${label} is required`;
 }
 
 async function applyTaskCrewChange(task, nextValue, context) {

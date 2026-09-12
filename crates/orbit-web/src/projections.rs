@@ -6,6 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_core::application::job::JobCatalogEntry;
+use orbit_core::application::task::{
+    task_status_transition_allowed, task_status_transition_required_field,
+};
 use orbit_core::{
     AuditEvent, JobRun, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus,
     resolve_task_dependencies,
@@ -203,6 +206,10 @@ pub(crate) fn task_row_to_json(
         "artifacts".to_string(),
         task_artifact_manifest_to_json(&row.artifacts),
     );
+    object.insert(
+        "status_transitions".to_string(),
+        dashboard_status_transitions(runtime, task)?,
+    );
     if let Some(projection) = dashboard_resolved_crew_projection(runtime, task)? {
         object.insert("resolved_crew".to_string(), Value::String(projection.name));
         object.insert("crew_model".to_string(), Value::String(projection.model));
@@ -213,6 +220,34 @@ pub(crate) fn task_row_to_json(
         object.insert("review".to_string(), review);
     }
     Ok(value)
+}
+
+fn dashboard_status_transitions(runtime: &OrbitRuntime, task: &Task) -> Result<Value, OrbitError> {
+    const STATUS_ORDER: [TaskStatus; 9] = [
+        TaskStatus::InProgress,
+        TaskStatus::Review,
+        TaskStatus::Blocked,
+        TaskStatus::Proposed,
+        TaskStatus::Backlog,
+        TaskStatus::Someday,
+        TaskStatus::Done,
+        TaskStatus::Rejected,
+        TaskStatus::Archived,
+    ];
+
+    STATUS_ORDER
+        .into_iter()
+        .filter(|target| {
+            *target != task.status && task_status_transition_allowed(task.status, *target)
+        })
+        .map(|target| {
+            Ok(json!({
+                "status": target.to_string(),
+                "required_field": task_status_transition_required_field(runtime, task, target)?,
+            }))
+        })
+        .collect::<Result<Vec<_>, OrbitError>>()
+        .map(Value::Array)
 }
 
 fn dashboard_resolved_crew_projection(

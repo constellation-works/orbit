@@ -216,6 +216,14 @@ async fn list_and_detail_reuse_bundle_sidecars_with_response_parity() {
     expected["artifacts"] = crate::projections::task_artifact_manifest_to_json(
         &runtime.get_task_artifact_manifest(&task.id).unwrap(),
     );
+    expected["status_transitions"] = json!([
+        { "status": "in-progress", "required_field": null },
+        { "status": "blocked", "required_field": null },
+        { "status": "proposed", "required_field": null },
+        { "status": "someday", "required_field": null },
+        { "status": "rejected", "required_field": null },
+        { "status": "archived", "required_field": null },
+    ]);
     if let Some(crew) = runtime.resolved_crew_projection(&task).unwrap() {
         expected["resolved_crew"] = json!(crew.name);
         expected["crew_model"] = json!(crew.model);

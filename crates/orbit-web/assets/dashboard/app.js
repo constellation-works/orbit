@@ -51,7 +51,6 @@ const STATUS_ORDER = [
 ];
 
 const DEFAULT_INACTIVE_STATUSES = new Set(["someday", "done", "rejected", "archived"]);
-const STATUS_UPDATE_TARGETS = STATUS_ORDER;
 // ORB-10874: the statuses shown when no `status` filter is represented in the
 // URL — a single source both the initial in-memory state and the hash-parsing
 // default (applyTasksHashQuery) read from, so they cannot drift apart.
@@ -126,7 +125,6 @@ function taskContext() {
     setActiveStatuses: (statuses) => { activeStatuses = statuses; },
     statusOrder: STATUS_ORDER,
     defaultActiveStatuses: DEFAULT_ACTIVE_STATUSES,
-    statusUpdateTargets: STATUS_UPDATE_TARGETS,
     fmtAbsTime,
     refreshDashboard,
   };

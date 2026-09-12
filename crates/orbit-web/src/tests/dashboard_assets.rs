@@ -1313,7 +1313,7 @@ fn dashboard_task_filter_hash_round_trips_default_all_someday_and_none() {
 }
 
 #[test]
-fn dashboard_renders_every_other_status_for_a_done_task() {
+fn dashboard_renders_only_projected_lifecycle_transitions() {
     let app = include_str!("../../assets/dashboard/app.js");
     for status in [
         "in-progress",
@@ -1360,25 +1360,159 @@ Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText
 globalThis.setTimeout = () => 0;
 
 const statuses = ["in-progress", "review", "blocked", "proposed", "backlog", "someday", "done", "rejected", "archived"];
-const task = { id: "ORB-1", title: "Done task", status: "done", history: [], artifacts: [] };
 const { renderTasks } = await import("./tasks.js");
-renderTasks([task], {
-  getTasks: () => [task], getTasksMeta: () => null, getSearchQuery: () => "",
-  getActiveStatuses: () => new Set(["done"]), statusOrder: statuses,
-  statusUpdateTargets: statuses, fmtAbsTime: (value) => value,
-  refreshDashboard: () => Promise.resolve(),
-});
 
 function find(node, predicate) {
   if (predicate(node)) return node;
   for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
   return null;
 }
-const select = find(get("tasks-body"), (node) => node.className === "task-status-select mono");
-if (!select) throw new Error("status select did not render");
-const values = select.children.map((option) => option.value).filter(Boolean);
-const expected = statuses.filter((status) => status !== "done");
-if (JSON.stringify(values) !== JSON.stringify(expected)) throw new Error(`status options ${JSON.stringify(values)} != ${JSON.stringify(expected)}`);
+
+const fixtures = [
+  ["proposed", ["in-progress", "blocked", "backlog", "someday", "rejected", "archived"]],
+  ["backlog", ["in-progress", "blocked", "proposed", "someday", "rejected", "archived"]],
+  ["blocked", ["in-progress", "backlog", "archived"]],
+  ["review", ["in-progress", "blocked", "backlog", "done", "rejected", "archived"]],
+  ["done", []],
+  ["archived", []],
+];
+for (const [status, targets] of fixtures) {
+  const task = {
+    id: `ORB-${status}`, title: `${status} task`, status, history: [], artifacts: [],
+    status_transitions: targets.map((target) => ({ status: target, required_field: null })),
+  };
+  renderTasks([task], {
+    getTasks: () => [task], getTasksMeta: () => null, getSearchQuery: () => "",
+    getActiveStatuses: () => new Set([status]), statusOrder: statuses,
+    fmtAbsTime: (value) => value, refreshDashboard: () => Promise.resolve(),
+  });
+  const select = find(get("tasks-body"), (node) => node.className === "task-status-select mono");
+  if (!select) throw new Error(`status select did not render for ${status}`);
+  const values = select.children.map((option) => option.value).filter(Boolean);
+  if (JSON.stringify(values) !== JSON.stringify(targets)) {
+    throw new Error(`${status} options ${JSON.stringify(values)} != ${JSON.stringify(targets)}`);
+  }
+  if ((status === "done" || status === "archived") && !select.disabled) {
+    throw new Error(`${status} status select must be disabled`);
+  }
+}
+"#,
+    );
+}
+
+#[test]
+fn dashboard_collects_status_evidence_and_suppresses_invalid_reverse_undo() {
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor() { this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { const old = child.parentNode; if (old) old.children = old.children.filter((candidate) => candidate !== child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get lastElementChild() { return this.children[this.children.length - 1]; }
+  get classList() { return { add: (...names) => { this.className = `${this.className} ${names.join(" ")}`.trim(); } }; }
+}
+const nodes = new Map();
+const get = (id) => nodes.get(id) || (nodes.set(id, new Node()), nodes.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: () => new Node(),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+};
+const location = new URL("http://dashboard.test/#tasks");
+let promptValue = "";
+globalThis.window = { location, addEventListener: () => {}, confirm: () => false, prompt: () => promptValue };
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+globalThis.setTimeout = () => 0;
+
+let task = {
+  id: "ORB-1", title: "Proposed task", status: "proposed", plan: "", execution_summary: "",
+  history: [], artifacts: [],
+  status_transitions: [{ status: "in-progress", required_field: "plan" }],
+};
+const requests = [];
+globalThis.fetch = async (_path, options) => {
+  const request = JSON.parse(options.body);
+  requests.push(request);
+  const statusTransitions = request.status === "blocked"
+    ? [{ status: "backlog", required_field: null }]
+    : [];
+  task = {
+    ...task, status: request.status, status_transitions: statusTransitions,
+  };
+  return { ok: true, text: async () => JSON.stringify(task) };
+};
+const statuses = ["in-progress", "review", "blocked", "proposed", "backlog", "someday", "done", "rejected", "archived"];
+const context = {
+  getTasks: () => [task], getTasksMeta: () => null, getSearchQuery: () => "",
+  getActiveStatuses: () => new Set([task.status]), statusOrder: statuses,
+  replaceTask: (updated) => { task = updated; }, fmtAbsTime: (value) => value,
+  refreshDashboard: () => Promise.resolve(),
+};
+const { renderTasks } = await import("./tasks.js");
+
+function find(node, predicate) {
+  if (predicate(node)) return node;
+  for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
+  return null;
+}
+function selectStatus(target) {
+  const select = find(get("tasks-body"), (node) => node.className === "task-status-select mono");
+  select.value = target;
+  select.listeners.change({ stopPropagation: () => {} });
+}
+
+renderTasks([task], context);
+selectStatus("in-progress");
+if (requests.length !== 0) throw new Error("missing plan must not be submitted");
+const unavailable = find(get("tasks-body"), (node) => node.className.includes("mutation-feedback error"));
+if (!unavailable || !unavailable.textContent.includes("execution plan is required")) {
+  throw new Error("missing plan reason was not shown");
+}
+
+promptValue = "1. implement and verify";
+selectStatus("in-progress");
+await new Promise(setImmediate);
+if (requests.length !== 1 || requests[0].plan !== promptValue) {
+  throw new Error(`plan evidence was not submitted: ${JSON.stringify(requests)}`);
+}
+if (find(get("tasks-body"), (node) => node.className === "mutation-undo")) {
+  throw new Error("undo was offered for an invalid in-progress to proposed reverse transition");
+}
+
+task = {
+  ...task, status: "review", execution_summary: "",
+  status_transitions: [{ status: "done", required_field: "execution_summary" }],
+};
+promptValue = "Completed and verified";
+renderTasks([task], context);
+selectStatus("done");
+await new Promise(setImmediate);
+if (requests.length !== 2 || requests[1].execution_summary !== promptValue) {
+  throw new Error(`completion evidence was not submitted: ${JSON.stringify(requests)}`);
+}
+if (find(get("tasks-body"), (node) => node.className === "mutation-undo")) {
+  throw new Error("undo was offered for a terminal done task");
+}
+
+task = {
+  ...task, status: "backlog",
+  status_transitions: [{ status: "blocked", required_field: null }],
+};
+renderTasks([task], context);
+selectStatus("blocked");
+await new Promise(setImmediate);
+if (requests.length !== 3 || requests[2].status !== "blocked") {
+  throw new Error(`valid status change was not submitted: ${JSON.stringify(requests)}`);
+}
+if (!find(get("tasks-body"), (node) => node.className === "mutation-undo")) {
+  throw new Error("undo was not offered for a valid blocked to backlog reverse transition");
+}
 "#,
     );
 }
@@ -1889,6 +2023,10 @@ fn dashboard_inline_task_edits_report_pending_success_failure_and_offer_undo() {
     assert!(
         tasks.contains("(feedback && feedback.kind === \"pending\")"),
         "the control must disable itself while its own change is pending"
+    );
+    assert!(
+        tasks.contains("if (statusTransition(task, \"archived\"))"),
+        "archive must be offered only when the canonical projection allows it"
     );
 }
 
