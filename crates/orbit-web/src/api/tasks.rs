@@ -677,7 +677,7 @@ pub(super) async fn add_task_comment_action(
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task comment", move |runtime| {
-        runtime.update_task_with_identity(&id, params, Some(author), None)
+        runtime.update_task_as_human(&id, params, author)
     })
     .await
 }

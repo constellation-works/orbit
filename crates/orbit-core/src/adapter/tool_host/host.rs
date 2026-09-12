@@ -69,6 +69,27 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
     fn task_scope(&self) -> OrbitTaskScope {
         self.task_scope.clone()
     }
+
+    fn execute_with_trusted_actor(
+        &self,
+        action: OrbitBuiltinAction,
+        input: Value,
+        actor_label: String,
+        reservation_owner: Option<ReservationOwnerContext>,
+    ) -> Result<Value, OrbitError> {
+        super::dispatch::execute(
+            &self.runtime,
+            &self.task_scope,
+            super::dispatch::ToolCaller {
+                session_context: &self.session_context,
+                agent: None,
+                model: Some(actor_label),
+                reservation_owner,
+            },
+            action,
+            input,
+        )
+    }
 }
 
 fn trusted_env_run_id() -> Option<String> {

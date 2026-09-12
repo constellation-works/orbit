@@ -337,7 +337,7 @@ fn mcp_task_add_uses_session_workspace_from_worktree_cwd() {
 }
 
 #[test]
-fn task_add_tool_rejects_dropped_task_types_and_ignores_retired_status() {
+fn task_add_tool_rejects_dropped_task_types_and_retired_status() {
     let (_root, runtime, _repo_root) = test_runtime();
 
     for dropped_type in ["task", "epic", "issue", "friction"] {
@@ -360,26 +360,20 @@ fn task_add_tool_rejects_dropped_task_types_and_ignores_retired_status() {
         );
     }
 
-    // ORB-00255 retired `status` from the `orbit.task.add` schema; an input
-    // value is silently stripped and the task lands as `proposed`.
-    let output = runtime
-        .execute_tool_command(
-            "orbit.task.add",
-            json!({
-                "title": "Retired task-add status",
-                "description": "Should ignore retired task-add status.",
-                "complexity": "low",
-                "workspace": ".",
-                "status": "done",
-            }),
-            Some("codex".to_string()),
-            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
-        )
-        .expect("retired status field is ignored");
-    assert_eq!(
-        output.get("status").and_then(Value::as_str),
-        Some("proposed")
-    );
+    let message = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.add",
+        json!({
+            "title": "Retired task-add status",
+            "description": "Should ignore retired task-add status.",
+            "complexity": "low",
+            "workspace": ".",
+            "status": "done",
+        }),
+        Some("codex".to_string()),
+        Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+    ));
+    assert!(message.contains("status"), "{message}");
+    assert!(message.contains("orbit.task.update"), "{message}");
 }
 
 #[test]
@@ -594,9 +588,7 @@ fn task_delete_tool_allows_forced_protected_statuses() {
 }
 
 #[test]
-fn task_add_tool_ignores_retired_dependencies() {
-    // ORB-00255 retired `dependencies` from the `orbit.task.add` schema; any
-    // value supplied is silently stripped before persistence.
+fn task_add_tool_rejects_retired_dependencies() {
     let (_root, runtime, repo_root) = test_runtime();
     let dependency = create_task(
         &runtime,
@@ -607,22 +599,20 @@ fn task_add_tool_ignores_retired_dependencies() {
         &[],
     );
 
-    let output = runtime
-        .execute_tool_command(
-            "orbit.task.add",
-            json!({
-                "title": "Dependent task from tool",
-                "description": "Exercise dependency input on the agent-facing task creation path.",
-                "complexity": "low",
-                "workspace": ".",
-                "dependencies": [dependency.id.clone()],
-            }),
-            Some("codex".to_string()),
-            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
-        )
-        .expect("task add tool succeeds");
-
-    assert_eq!(output.get("dependencies"), Some(&json!([])));
+    let message = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.add",
+        json!({
+            "title": "Dependent task from tool",
+            "description": "Exercise dependency input on the agent-facing task creation path.",
+            "complexity": "low",
+            "workspace": ".",
+            "dependencies": [dependency.id.clone()],
+        }),
+        Some("codex".to_string()),
+        Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+    ));
+    assert!(message.contains("dependencies"), "{message}");
+    assert!(message.contains("orbit.task.update"), "{message}");
 }
 
 #[test]
@@ -1393,30 +1383,26 @@ fn task_add_tool_normalizes_tags_at_write_time() {
 }
 
 #[test]
-fn task_add_tool_ignores_retired_external_refs() {
-    // ORB-00255 retired `external_refs` from the `orbit.task.add` schema; any
-    // value supplied is silently stripped before persistence.
+fn task_add_tool_rejects_retired_external_refs() {
     let (_root, runtime, _repo_root) = test_runtime();
 
-    let output = runtime
-        .execute_tool_command(
-            "orbit.task.add",
-            json!({
-                "title": "External ref task",
-                "description": "Exercise external ref input on the agent-facing task creation path.",
-                "complexity": "low",
-                "workspace": ".",
-                "external_refs": [
-                    {"system": "jira", "id": "ENG-1234", "url": "https://example.com/browse/ENG-1234"},
-                    {"system": "linear", "id": "LIN-567"}
-                ],
-            }),
-            Some("codex".to_string()),
-            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
-        )
-        .expect("task add tool succeeds");
-
-    assert_eq!(output.get("external_refs"), Some(&json!([])));
+    let message = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.add",
+        json!({
+            "title": "External ref task",
+            "description": "Exercise external ref input on the agent-facing task creation path.",
+            "complexity": "low",
+            "workspace": ".",
+            "external_refs": [
+                {"system": "jira", "id": "ENG-1234", "url": "https://example.com/browse/ENG-1234"},
+                {"system": "linear", "id": "LIN-567"}
+            ],
+        }),
+        Some("codex".to_string()),
+        Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+    ));
+    assert!(message.contains("external_refs"), "{message}");
+    assert!(message.contains("orbit.task.update"), "{message}");
 }
 
 #[test]
@@ -1936,8 +1922,7 @@ fn task_update_tool_clears_source_task_id_with_empty_string() {
 
 #[test]
 fn task_update_tool_rejects_unresolved_source_task_id_atomically() {
-    // ORB-00255 retired `source_task_id` from the `orbit.task.add` schema,
-    // so an unresolved ID must travel via `orbit.task.update`.
+    // `source_task_id` is update-only; seed the update target without it.
     let (_root, runtime, _repo_root) = test_runtime();
     let unresolved_from_update = "ORB-99999";
 
@@ -1946,21 +1931,15 @@ fn task_update_tool_rejects_unresolved_source_task_id_atomically() {
             "orbit.task.add",
             json!({
                 "title": "Bug without resolved source",
-                "description": "A bug whose retired add-side source ID should be ignored.",
+                "description": "A bug whose unresolved source ID should be rejected atomically.",
                 "complexity": "low",
                 "workspace": ".",
                 "type": "bug",
-                "source_task_id": "ORB-99998",
             }),
             Some("codex".to_string()),
             Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
         )
         .expect("task add tool succeeds");
-    assert_eq!(
-        update_target.get("source_task_id"),
-        Some(&Value::Null),
-        "retired add-side source_task_id must be ignored"
-    );
     let error = runtime
         .execute_tool_command(
             "orbit.task.update",

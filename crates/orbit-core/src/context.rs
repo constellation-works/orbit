@@ -158,6 +158,21 @@ pub(crate) fn resolve_write_actor_label(
     }
 }
 
+/// Preserve attribution supplied by a trusted in-process workflow boundary.
+/// Public agent surfaces must use [`resolve_write_actor_label`] instead.
+pub(crate) fn trusted_write_identity(
+    agent: Option<&str>,
+    model: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let trim = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    (trim(agent), trim(model))
+}
+
 fn os_user_name() -> Option<String> {
     OS_USER_ENV.iter().find_map(|key| {
         std::env::var(key).ok().and_then(|value| {

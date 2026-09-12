@@ -163,6 +163,18 @@ pub trait OrbitToolHost: Send + Sync {
         reservation_owner: Option<ReservationOwnerContext>,
     ) -> Result<Value, OrbitError>;
 
+    /// Execute with an actor asserted by the in-process host rather than tool
+    /// input. Implementations that do not distinguish trust reuse `execute`.
+    fn execute_with_trusted_actor(
+        &self,
+        action: OrbitBuiltinAction,
+        input: Value,
+        actor_label: String,
+        reservation_owner: Option<ReservationOwnerContext>,
+    ) -> Result<Value, OrbitError> {
+        self.execute(action, input, None, Some(actor_label), reservation_owner)
+    }
+
     fn task_scope(&self) -> OrbitTaskScope;
 }
 
@@ -209,6 +221,10 @@ pub struct ToolContext {
     /// Resolved model identifier (e.g. `"opus-4.6"`). Used alongside `agent_name`
     /// for the attribution footer.
     pub model_name: Option<String>,
+    /// Trusted actor supplied by an in-process host adapter. This is separate
+    /// from agent-controlled tool input so human and system writes do not
+    /// weaken canonical agent-family validation at the public tool boundary.
+    pub trusted_actor_label: Option<String>,
     /// Program allowlist for `proc.spawn`. When `proc_spawn_activity_scoped`
     /// is `true`, an empty list denies every program (fail-closed). When
     /// `proc_spawn_activity_scoped` is `false`, an empty list preserves the
@@ -249,6 +265,7 @@ impl std::fmt::Debug for ToolContext {
             .field("workspace_root", &self.workspace_root)
             .field("agent_name", &self.agent_name)
             .field("model_name", &self.model_name)
+            .field("trusted_actor_label", &self.trusted_actor_label)
             .field("proc_allowed_programs", &self.proc_allowed_programs)
             .field(
                 "has_proc_spawn_environment",
