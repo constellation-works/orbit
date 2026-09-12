@@ -21,6 +21,10 @@ pub(crate) fn apply_schema(conn: &Connection) -> Result<(), OrbitError> {
     ledger::run_migrations(conn, ledger::MIGRATIONS)
 }
 
+pub(crate) fn apply_schema_at_path(conn: &Connection, path: &Path) -> Result<(), OrbitError> {
+    ledger::run_migrations_at_path(conn, ledger::MIGRATIONS, path)
+}
+
 /// Registry metadata for one schema migration not yet recorded as applied,
 /// as surfaced by `orbit migrate --dry-run` (ORB-10012).
 #[derive(Debug, Clone, PartialEq, Eq)]

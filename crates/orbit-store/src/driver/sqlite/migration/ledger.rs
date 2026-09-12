@@ -23,7 +23,9 @@
 //!   idempotent schema code, so running it on an existing database is a
 //!   no-op that then records version 1.
 
-use orbit_common::OrbitError;
+use std::path::Path;
+
+use orbit_common::{OrbitError, SqliteContention};
 use rusqlite::{Connection, ErrorCode, Transaction, TransactionBehavior, params};
 
 /// One entry in the migration registry.
@@ -189,6 +191,22 @@ pub(crate) fn run_migrations(
     conn: &Connection,
     migrations: &[Migration],
 ) -> Result<(), OrbitError> {
+    run_migrations_inner(conn, migrations, None)
+}
+
+pub(crate) fn run_migrations_at_path(
+    conn: &Connection,
+    migrations: &[Migration],
+    path: &Path,
+) -> Result<(), OrbitError> {
+    run_migrations_inner(conn, migrations, Some(path))
+}
+
+fn run_migrations_inner(
+    conn: &Connection,
+    migrations: &[Migration],
+    path: Option<&Path>,
+) -> Result<(), OrbitError> {
     validate_registry(migrations)?;
     let current = current_schema_version(conn)?;
     let supported = migrations.last().map(|m| m.version).unwrap_or(0);
@@ -205,7 +223,7 @@ pub(crate) fn run_migrations(
     // re-reads the ledger under BEGIN IMMEDIATE and skips anything another
     // opener already committed while this connection waited.
     for migration in migrations.iter().filter(|m| m.version > current) {
-        apply_one(conn, migration, supported)?;
+        apply_one(conn, migration, supported, path)?;
     }
 
     Ok(())
@@ -256,19 +274,20 @@ pub(crate) fn applied_migrations(conn: &Connection) -> Result<Vec<AppliedMigrati
     Ok(applied)
 }
 
-fn apply_one(conn: &Connection, migration: &Migration, supported: u32) -> Result<(), OrbitError> {
+fn apply_one(
+    conn: &Connection,
+    migration: &Migration,
+    supported: u32,
+    path: Option<&Path>,
+) -> Result<(), OrbitError> {
     // BEGIN IMMEDIATE takes the reserved lock before any read so a WAL
     // snapshot cannot be pinned under DEFERRED while another opener
     // commits. `new_unchecked` is the `&Connection` form of
     // `transaction_with_behavior(TransactionBehavior::Immediate)`.
     // Drop rolls back, so a failure or panic leaves neither partial
     // schema nor a ledger row behind.
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate).map_err(|e| {
-        OrbitError::Migration(format!(
-            "failed to begin transaction for migration v{} ({}): {e}",
-            migration.version, migration.name
-        ))
-    })?;
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
+        .map_err(|error| migration_begin_error(path, migration, error))?;
 
     let current = current_schema_version(&tx)?;
     if current > supported {
@@ -313,6 +332,32 @@ fn apply_one(conn: &Connection, migration: &Migration, supported: u32) -> Result
         "applied store schema migration",
     );
     Ok(())
+}
+
+fn migration_begin_error(
+    path: Option<&Path>,
+    migration: &Migration,
+    error: rusqlite::Error,
+) -> OrbitError {
+    if matches!(
+        error.sqlite_error_code(),
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    ) && let Some(path) = path
+    {
+        return OrbitError::SqliteContention(Box::new(SqliteContention {
+            path: path.display().to_string(),
+            phase: format!(
+                "begin migration v{} ({})",
+                migration.version, migration.name
+            ),
+            detail: error.to_string(),
+        }));
+    }
+
+    OrbitError::Migration(format!(
+        "failed to begin transaction for migration v{} ({}): {error}",
+        migration.version, migration.name
+    ))
 }
 
 fn newer_than_supported(current: u32, supported: u32) -> OrbitError {

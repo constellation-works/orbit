@@ -94,16 +94,6 @@ pub fn open_private(path: &Path) -> Result<OpenedConnection, OrbitError> {
         drop(connection);
         return open_observational(&path, ObservationRequirement::PublishedMainFile);
     }
-    // Establish one typed write-admission boundary before store-specific
-    // bootstrap runs. Current-schema opens otherwise encounter contention in
-    // whichever later pragma, migration probe, or registry bind happens to
-    // need the writer, after the native SQLite code and database path have
-    // often been erased by several adapter layers.
-    connection
-        .execute_batch("BEGIN IMMEDIATE; ROLLBACK;")
-        .map_err(|error| {
-            sqlite_operation_error(Some(&path), "bootstrap write admission", &error)
-        })?;
     harden_sqlite_files(&path)?;
 
     Ok(OpenedConnection {

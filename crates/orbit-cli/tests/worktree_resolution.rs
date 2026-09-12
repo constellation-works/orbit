@@ -84,12 +84,11 @@ fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() 
     );
 }
 
-/// [ORB-10821] `orbit --root <custom> run job` must execute in that custom
-/// store. Before the fix the parent persisted the run under `--root` and
-/// reported `submitted`, then the detached worker rediscovered `$HOME/.orbit`
-/// and exited with `job run not found`, leaving the run pending forever.
+/// The real detached worker must bootstrap, claim, and finish its run while an
+/// unrelated WAL writer holds the already-current task registry. The parent
+/// keeps supervising the child; no fixture claims the run on its behalf.
 #[test]
-fn run_job_with_explicit_root_completes_instead_of_staying_pending() {
+fn detached_worker_bootstraps_and_claims_while_registry_writer_is_held() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
     let repo = temp.path().join("repo");
@@ -110,6 +109,12 @@ fn run_job_with_explicit_root_completes_instead_of_staying_pending() {
         None,
     );
     pin_default_crew_for_isolated_root(&custom_root);
+
+    let registry_path = custom_root.join("tasks/registry.db");
+    let registry_writer = rusqlite::Connection::open(&registry_path).expect("open registry writer");
+    registry_writer
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("hold registry WAL writer");
 
     let job_path = repo.join("root-override-smoke.yaml");
     fs::write(
@@ -135,6 +140,7 @@ spec:
 
     let custom_root_arg = custom_root.to_string_lossy().into_owned();
     let job_path_arg = job_path.to_string_lossy().into_owned();
+    let submitted_at = Instant::now();
     let submitted = run_orbit_json(
         &repo,
         &home,
@@ -148,11 +154,18 @@ spec:
         ],
         None,
     );
+    assert!(
+        submitted_at.elapsed() < Duration::from_secs(4),
+        "current-schema parent/worker bootstrap waited for the registry writer"
+    );
     let run_id = submitted["run_id"]
         .as_str()
         .unwrap_or_else(|| panic!("expected run_id in {submitted}"))
         .to_string();
     assert_eq!(submitted["state"].as_str(), Some("submitted"));
+    registry_writer
+        .execute_batch("ROLLBACK")
+        .expect("release registry writer");
 
     let shown = wait_for_run_terminal_state(&repo, &home, &custom_root, &run_id);
     let state = shown["run"]["state"].as_str().unwrap_or("missing");
@@ -161,6 +174,10 @@ spec:
         "success",
         "{}",
         detached_worker_diagnostic(&custom_root, &run_id, &shown)
+    );
+    assert!(
+        shown["run"]["pid"].as_u64().is_some(),
+        "the real worker must claim its persisted run: {shown}"
     );
 }
 

@@ -99,7 +99,7 @@ impl Store {
         let conn = opened.connection;
         let read_only = opened.read_only;
 
-        if let Err(error) = migration::apply_schema(&conn) {
+        if let Err(error) = migration::apply_schema_at_path(&conn, path) {
             if read_only && error.is_readonly_or_access_failure() {
                 orbit_common::tracing::warn!(
                     target: "orbit.store.sqlite",

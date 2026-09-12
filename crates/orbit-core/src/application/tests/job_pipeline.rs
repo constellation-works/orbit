@@ -630,68 +630,6 @@ fn routine_style_detached_worker_is_claimed_within_ownership_window() {
     assert_child_reaped(worker_pid);
 }
 
-/// Gate and leaf workers may both spend longer than SQLite's five-second busy
-/// timeout in bootstrap recovery. Their parent observers must keep supervising
-/// the still-live, unclaimed children and preserve each exact persisted owner.
-#[cfg(unix)]
-#[test]
-fn concurrent_gate_and_leaf_workers_claim_after_extended_bootstrap() {
-    let (_root, runtime) = test_runtime();
-    let gate = runtime
-        .stores()
-        .jobs()
-        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
-        .expect("insert gate run");
-    let leaf = runtime
-        .stores()
-        .jobs()
-        .insert_job_run("task_gate_pipeline", 1, Utc::now(), None, None)
-        .expect("insert leaf run");
-
-    let mut workers = Vec::new();
-    for run in [&gate, &leaf] {
-        let mut command = Command::new("sh");
-        command.args(["-c", "sleep 5.75"]);
-        let worker_log =
-            configure_pipeline_worker_stdio(&mut command, &runtime.paths().logs_dir, &run.run_id)
-                .expect("configure delayed worker log");
-        let pid = runtime
-            .spawn_pipeline_worker_process(
-                &run.run_id,
-                Some("nested-supervisor"),
-                command,
-                worker_log,
-            )
-            .expect("spawn delayed worker");
-        workers.push((run.run_id.clone(), pid));
-    }
-
-    thread::sleep(Duration::from_millis(5_250));
-    for (run_id, pid) in &workers {
-        assert!(
-            runtime
-                .stores()
-                .jobs()
-                .claim_pending_job_run_owner(run_id, *pid)
-                .expect("claim delayed worker exactly once")
-        );
-        let stored = wait_for_worker_ownership_outcome(&runtime, run_id);
-        assert_eq!(stored.state, JobRunState::Pending);
-        assert_eq!(stored.pid, Some(*pid));
-        wait_for_pipeline_audit_event(&runtime, None, "delayed worker claim", |audit| {
-            audit.tool_name.as_deref() == Some("pipeline.worker.claimed")
-                && audit.target_id.as_deref() == Some(run_id.as_str())
-        });
-    }
-
-    for (run_id, pid) in workers {
-        let terminal = wait_for_worker_terminal(&runtime, &run_id);
-        assert_eq!(terminal.state, JobRunState::Interrupted);
-        assert_eq!(terminal.pid, Some(pid));
-        assert_child_reaped(pid);
-    }
-}
-
 #[test]
 fn observer_read_counts_isolate_identical_run_ids_in_independent_stores() {
     let (_first_root, first) = test_runtime();
