@@ -4,7 +4,7 @@ type: design
 title: "Worktree Artifacts - Design"
 owner: codex
 last_updated: 2026-08-15
-last_validated: 2026-08-17
+last_validated: 2026-09-12
 status: Accepted
 feature: worktree-artifacts
 doc_role: design
@@ -25,7 +25,7 @@ related_artifacts: ["ORB-00199", "ORB-00200", "ORB-00201", "ORB-10272", "ORB-102
 > into feature decision docs; [ORB-10805] removed the redundant tracked store and
 > its IDs.
 
-The historical implementation treated decision and learning bodies as branch-local files with workspace-local IDs ([Workspace-scoped knowledge keys, no global knowledge IDs](../host-registry/4_decisions.md#workspace-scoped-knowledge-keys-no-global-knowledge-ids)). The root split remains relevant to task execution, while the artifact-specific mechanisms below document retired behavior.
+The historical implementation treated decision and learning bodies as branch-local files with workspace-local IDs (the workspace-scoped knowledge-key model from [ORB-10725]). The root split remains relevant to task execution, while the artifact-specific mechanisms below document retired behavior.
 
 ## 1. Runtime Roots
 
@@ -36,7 +36,7 @@ Explicit `--root` and `ORBIT_ROOT` overrides pin both roots to preserve the old 
 ## 2. Allocation Metadata
 
 In the retired standalone/worktree implementation, `id_allocations` lived in
-`shared_root/.orbit/state/semantic.db`. The allocator serializes ID creation with a
+`shared_root/state/semantic.db`. The allocator serializes ID creation with a
 shared lock, then body writes update the row with:
 
 - `worktree_root`: the recorded worktree root for the body.
@@ -45,8 +45,8 @@ shared lock, then body writes update the row with:
 
 Backfilled shared-root artifacts received `body_path` during allocator initialization so old ADRs and migrated learnings remained readable from any worktree. ORB-10736 removed this allocator and the native learning projections; current store migrations explicitly drop `id_allocations`, while any old `.orbit/learnings/` files remain inert historical data.
 
-The retired design had one allocator, and every create path used it. [Workspace-scoped knowledge keys, no global knowledge IDs](../host-registry/4_decisions.md#workspace-scoped-knowledge-keys-no-global-knowledge-ids) keyed
-knowledge `(workspace_id, artifact_key)`, so an ID was unique within its workspace
+The retired design had one allocator, and every create path used it. Under [ORB-10725],
+knowledge used `(workspace_id, artifact_key)` as its key, so an ID was unique within its workspace
 and made no claim outside it; [ORB-10725] deleted the hub-global sequence that
 §2.1 and §2.2 once described.
 
@@ -59,10 +59,10 @@ marker. [ORB-10330] added the owner-side `finalize_preallocated` paths and the
 gated broker composition that paired one hub allocation with one owner-checkout
 finalization, correlated by `mcp_call_id`.
 
-**Both are removed** ([ORB-10725], [Workspace-scoped knowledge keys, no global knowledge IDs](../host-registry/4_decisions.md#workspace-scoped-knowledge-keys-no-global-knowledge-ids)). Public issuance never activated, so
+**Both are removed** ([ORB-10725]). Public issuance never activated, so
 no ID was ever drawn from the sequence and nothing had to be renumbered; what the
 substrate encoded was a superseded model, which is why it was deleted rather than
-parked alongside the registry tables that [Defer fleet registration and execution placement to v2](../host-registry/4_decisions.md#defer-fleet-registration-and-execution-placement-to-v2) keeps dormant for v2. Remote
+parked alongside the registry tables that [V1 has no fleet control plane](../host-registry/4_decisions.md#v1-has-no-fleet-control-plane) keeps dormant for v2. Remote
 feature v2 keeps its ledger slot — feature-migration names are immutable, so a
 database that recorded it must still find it — but the slot is a no-op, and Remote
 feature v3 drops the tables `IF EXISTS` so a database that applied the original v2
@@ -198,7 +198,7 @@ The retired `worktree_root` column preserved historical rows from earlier phases
 - [ORB-10330] added the owner-side preallocated finalizers (`finalize_preallocated`
   on the ADR and learning stores) and the gated broker composition. Removed by
   [ORB-10725]: with no allocation step there is no preallocated ID to finalize.
-- [ORB-10725] deleted both substrates under [Workspace-scoped knowledge keys, no global knowledge IDs](../host-registry/4_decisions.md#workspace-scoped-knowledge-keys-no-global-knowledge-ids), turned Remote feature v2
+- [ORB-10725] deleted both substrates under the workspace-scoped knowledge-key model, turned Remote feature v2
   into a no-op slot, and added Remote feature v3 to drop its tables from databases
   that had applied it.
 - [ORB-10545] added exact-bundle reconciliation and made superseded ADR bodies

@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Canon Refined Theme"
 tags: ["user-interface"]
-last_validated: 2026-08-17
+last_validated: 2026-09-12
 ---
 
 # Spec: Canon Refined Theme
@@ -23,7 +23,8 @@ The theme uses a layered dark mode, relying on subtle lightness shifts rather th
 
 ### Borders
 Borders delineate structure without heavy contrast.
-- `--border`: `#333333` (Standard dividers)
+- `--border`: `#2a2a2e` (Panel and control edges)
+- `--hair`: `#17171a` (Dividers inside panels and controls)
 - Focused inputs use the `--accent` border; there is no dedicated `--border-strong` token.
 
 ### Typography
