@@ -91,6 +91,7 @@ impl OrbitRuntime {
                 kind: params.kind,
                 results: Vec::new(),
                 notes,
+                skipped_kinds: Vec::new(),
                 workspaces: Vec::new(),
             });
         }
@@ -105,24 +106,32 @@ impl OrbitRuntime {
 
         let mut branches = Vec::with_capacity(targets.len());
         let mut reports = Vec::with_capacity(targets.len());
+        let mut vector_ran = false;
         for target in &targets {
-            let (hits, report) = self.query_one_workspace(
+            let (hits, report, mode) = self.query_one_workspace(
                 catalog.as_ref(),
                 target,
                 &params,
                 query_model.as_deref(),
                 &mut notes,
             );
+            vector_ran |= mode == GlobalSearchMode::Hybrid;
             branches.push(hits);
             reports.push(report);
         }
 
         let results = merge_round_robin(branches, params.normalized_limit());
+        let mode = if params.hybrid && vector_ran {
+            GlobalSearchMode::Hybrid
+        } else {
+            GlobalSearchMode::Lexical
+        };
         Ok(GlobalSearchResponse {
-            mode: response_mode(params.hybrid, &results),
+            mode,
             kind: params.kind,
             results,
             notes,
+            skipped_kinds: Vec::new(),
             workspaces: reports,
         })
     }
@@ -131,7 +140,11 @@ impl OrbitRuntime {
     ///
     /// Returns no `Result`: a registered checkout can be stale, moved, or owned
     /// by another machine, and that must degrade exactly one workspace rather
-    /// than the query.
+    /// than the query. The reported [`GlobalSearchMode`] is the sub-runtime's
+    /// own — whether its vector branch ran — not a re-derivation from the hits
+    /// that survived filtering, so a workspace whose hybrid hits were all
+    /// hidden by a status filter still counts toward the fused `hybrid` mode
+    /// [ORB-12259].
     fn query_one_workspace(
         &self,
         catalog: &dyn WorkspaceCatalog,
@@ -139,7 +152,11 @@ impl OrbitRuntime {
         params: &GlobalSearchParams,
         query_model: Option<&str>,
         notes: &mut Vec<String>,
-    ) -> (Vec<GlobalSearchHit>, WorkspaceSearchReport) {
+    ) -> (
+        Vec<GlobalSearchHit>,
+        WorkspaceSearchReport,
+        GlobalSearchMode,
+    ) {
         let mut report = WorkspaceSearchReport {
             workspace_id: target.workspace_id.clone(),
             name: target.name.clone(),
@@ -158,7 +175,7 @@ impl OrbitRuntime {
             Ok(runtime) => runtime,
             Err(error) => {
                 record_note(&mut report, format!("skipped: {error}"));
-                return (Vec::new(), report);
+                return (Vec::new(), report, GlobalSearchMode::Lexical);
             }
         };
         if let Some(note) = query_model.and_then(|model| model_mismatch_note(&runtime, model)) {
@@ -174,17 +191,18 @@ impl OrbitRuntime {
                 for note in response.notes {
                     notes.push(workspace_note(&target.name, &note));
                 }
+                let mode = response.mode;
                 let hits = response
                     .results
                     .into_iter()
                     .map(|hit| attribute(hit, target))
                     .collect::<Vec<_>>();
                 report.hits = hits.len();
-                (hits, report)
+                (hits, report, mode)
             }
             Err(error) => {
                 record_note(&mut report, format!("skipped: {error}"));
-                (Vec::new(), report)
+                (Vec::new(), report, GlobalSearchMode::Lexical)
             }
         }
     }
@@ -292,16 +310,4 @@ pub(super) fn attribute(
         repo_root: target.repo_root.to_string_lossy().into_owned(),
     });
     hit
-}
-
-fn response_mode(hybrid: bool, results: &[GlobalSearchHit]) -> GlobalSearchMode {
-    if hybrid
-        && results
-            .iter()
-            .any(|hit| matches!(hit.source.as_str(), "hybrid" | "semantic"))
-    {
-        GlobalSearchMode::Hybrid
-    } else {
-        GlobalSearchMode::Lexical
-    }
 }

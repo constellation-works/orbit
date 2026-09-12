@@ -8,6 +8,7 @@
 mod add_root;
 mod artifact_ref;
 mod config;
+mod embedding_coverage;
 mod frontmatter;
 mod migrate;
 mod path_util;

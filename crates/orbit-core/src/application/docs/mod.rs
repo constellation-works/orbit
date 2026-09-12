@@ -25,7 +25,10 @@ use orbit_types::task::Task;
 use crate::OrbitRuntime;
 
 pub use config::{DocsRoot, DocsSearchConfig};
-pub use types::{DocAddOutcome, DocMigrationReport, DocRecord, DocShow, DocType, TaskRelatedDoc};
+pub use types::{
+    DocAddOutcome, DocMigrationReport, DocRecord, DocShow, DocType, DocsEmbeddingCoverage,
+    TaskRelatedDoc,
+};
 pub use walk::walk_docs_roots;
 
 // Bring helper fns into scope so the pasted impl block (lines 291-408 of original)
@@ -143,6 +146,30 @@ impl OrbitRuntime {
         let roots = self.docs_roots()?;
         let sources = doc_embedding_sources(&self.paths().repo_root, &roots)?;
         orbit_search::doc_index(self.stores().semantic_index().store()?, &sources, params)
+    }
+
+    /// How much of the live docs corpus has a doc embedding row.
+    ///
+    /// An index that was never built (no vector store yet) reports zero
+    /// coverage rather than an error: that is exactly the state `orbit doctor`
+    /// needs to name, not a failure to diagnose it [ORB-12259].
+    pub fn docs_embedding_coverage(&self) -> Result<DocsEmbeddingCoverage, OrbitError> {
+        let docs = self.list_docs(None, None)?;
+        let total_sources = docs.len();
+        let live_paths: std::collections::BTreeSet<&str> =
+            docs.iter().map(|doc| doc.path.as_str()).collect();
+        let embedded_sources = match self.stores().semantic_index().store() {
+            Ok(store) => store
+                .source_ids(orbit_search::SOURCE_KIND_DOC)?
+                .iter()
+                .filter(|source_id| live_paths.contains(source_id.as_str()))
+                .count(),
+            Err(_) => 0,
+        };
+        Ok(DocsEmbeddingCoverage {
+            total_sources,
+            embedded_sources,
+        })
     }
 
     pub fn migrate_docs(&self, dry_run: bool) -> Result<DocMigrationReport, OrbitError> {

@@ -60,6 +60,18 @@ struct HybridSearchScope<'a> {
     limit: usize,
 }
 
+/// The read-only inputs shared by every kind branch, grouped so `task_branch`
+/// and `doc_branch` stay under the arg-count lint even with the `notes` /
+/// `vector_ran` out-params each also carries [ORB-12259].
+#[derive(Debug, Clone, Copy)]
+struct BranchContext<'a> {
+    params: &'a GlobalSearchParams,
+    status_filters: &'a SearchStatusFilters,
+    query: Option<&'a str>,
+    tag_filter: &'a [String],
+    limit: usize,
+}
+
 impl OrbitRuntime {
     /// Unified search entry point.
     ///
@@ -123,6 +135,7 @@ impl OrbitRuntime {
                 kind: params.kind,
                 results,
                 notes,
+                skipped_kinds: Vec::new(),
                 workspaces: Vec::new(),
             });
         }
@@ -148,16 +161,24 @@ impl OrbitRuntime {
         }
 
         let mut branches = Vec::new();
+        let mut skipped_kinds = Vec::new();
+        // Set when a hybrid query's vector branch actually ran — distinct from
+        // whether any of its hits survived status/tag filtering, so a hybrid
+        // query whose only matches were hidden by the status filter still
+        // reports `mode: hybrid` rather than looking like plain lexical search
+        // ran [ORB-12259].
+        let mut vector_ran = false;
+
+        let branch_context = BranchContext {
+            params: &params,
+            status_filters: &status_filters,
+            query: query_owned.as_deref(),
+            tag_filter: &tag_filter,
+            limit,
+        };
 
         if params.kind.includes_tasks() {
-            branches.push(self.task_branch(
-                &params,
-                &status_filters,
-                query_owned.as_deref(),
-                &tag_filter,
-                limit,
-                &mut notes,
-            )?);
+            branches.push(self.task_branch(branch_context, &mut notes, &mut vector_ran)?);
         }
 
         if params.kind.includes_docs() {
@@ -167,15 +188,9 @@ impl OrbitRuntime {
                     "doc",
                     "--path is set; docs are not path-filtered yet",
                 );
+                skipped_kinds.push("doc".to_string());
             } else {
-                branches.push(self.doc_branch(
-                    &params,
-                    &status_filters,
-                    query_owned.as_deref(),
-                    &tag_filter,
-                    limit,
-                    &mut notes,
-                )?);
+                branches.push(self.doc_branch(branch_context, &mut notes, &mut vector_ran)?);
             }
         }
 
@@ -186,6 +201,7 @@ impl OrbitRuntime {
                     "friction",
                     "--path is set; frictions are not path-filtered",
                 );
+                skipped_kinds.push("friction".to_string());
             } else {
                 branches.push(self.friction_branch(
                     &params,
@@ -204,11 +220,7 @@ impl OrbitRuntime {
         {
             notes.push(note);
         }
-        let mode = if params.hybrid
-            && results
-                .iter()
-                .any(|hit| matches!(hit.source.as_str(), "hybrid" | "semantic"))
-        {
+        let mode = if params.hybrid && vector_ran {
             GlobalSearchMode::Hybrid
         } else {
             GlobalSearchMode::Lexical
@@ -218,19 +230,24 @@ impl OrbitRuntime {
             kind: params.kind,
             results,
             notes,
+            skipped_kinds,
             workspaces: Vec::new(),
         })
     }
 
     fn task_branch(
         &self,
-        params: &GlobalSearchParams,
-        status_filters: &SearchStatusFilters,
-        query: Option<&str>,
-        tag_filter: &[String],
-        limit: usize,
+        ctx: BranchContext<'_>,
         notes: &mut Vec<String>,
+        vector_ran: &mut bool,
     ) -> Result<Vec<GlobalSearchHit>, OrbitError> {
+        let BranchContext {
+            params,
+            status_filters,
+            query,
+            tag_filter,
+            limit,
+        } = ctx;
         let statuses = resolve_task_statuses(params, status_filters);
 
         let candidates = if params.hybrid
@@ -238,13 +255,15 @@ impl OrbitRuntime {
         {
             let semantic = self.task_semantic_hits(query, limit.saturating_mul(2).max(limit));
             match semantic {
-                Ok(hits) if !hits.is_empty() => hits
-                    .into_iter()
-                    .map(|hit| {
-                        let task = self.get_task(&hit.source_id).ok();
-                        (semantic_hit_to_global(hit), task)
-                    })
-                    .collect(),
+                Ok(hits) if !hits.is_empty() => {
+                    *vector_ran = true;
+                    hits.into_iter()
+                        .map(|hit| {
+                            let task = self.get_task(&hit.source_id).ok();
+                            (semantic_hit_to_global(hit), task)
+                        })
+                        .collect()
+                }
                 Ok(_) => {
                     hybrid::warn_task_hybrid_fallback(notes, "no task embeddings found");
                     self.lexical_task_candidates(query, limit)?
@@ -269,9 +288,13 @@ impl OrbitRuntime {
         let path = params.path.as_deref();
 
         let mut out = Vec::new();
+        let mut hidden_by_status = 0usize;
         for (mut hit, task) in candidates {
             let Some(task) = task else { continue };
             if !statuses.contains(&task.status) {
+                if hit.source == "semantic" {
+                    hidden_by_status += 1;
+                }
                 continue;
             }
             if !tag_filter.is_empty() && !task_has_all_tags(&task, tag_filter) {
@@ -289,6 +312,11 @@ impl OrbitRuntime {
             out.push(hit);
         }
         out.truncate(limit);
+        if *vector_ran && hidden_by_status > 0 {
+            notes.push(format!(
+                "{hidden_by_status} vector hits hidden by status filter (pass all:true)"
+            ));
+        }
         Ok(out)
     }
 
@@ -383,13 +411,17 @@ impl OrbitRuntime {
 
     fn doc_branch(
         &self,
-        params: &GlobalSearchParams,
-        status_filters: &SearchStatusFilters,
-        query: Option<&str>,
-        tag_filter: &[String],
-        limit: usize,
+        ctx: BranchContext<'_>,
         notes: &mut Vec<String>,
+        vector_ran: &mut bool,
     ) -> Result<Vec<GlobalSearchHit>, OrbitError> {
+        let BranchContext {
+            params,
+            status_filters,
+            query,
+            tag_filter,
+            limit,
+        } = ctx;
         let _doc_status_active = status_filters.doc_active.unwrap_or(true);
         let Some(query) = query else {
             if tag_filter.is_empty() {
@@ -431,6 +463,7 @@ impl OrbitRuntime {
                 docs,
                 HybridSearchScope { tag_filter, limit },
                 notes,
+                vector_ran,
             );
         }
 
@@ -460,6 +493,7 @@ impl OrbitRuntime {
         lexical_results: Vec<SearchResult>,
         scope: HybridSearchScope<'_>,
         notes: &mut Vec<String>,
+        vector_ran: &mut bool,
     ) -> Result<Vec<GlobalSearchHit>, OrbitError> {
         let docs_limit = doc_search_candidate_limit(scope.limit);
         let mut lexical_docs = Vec::<orbit_search::DocSearchResult>::new();
@@ -493,7 +527,10 @@ impl OrbitRuntime {
                 warn_doc_hybrid_fallback(notes, "no doc embeddings found");
                 return Ok(lexical_doc_hits(lexical_docs, scope.limit));
             }
-            Ok(result) => result,
+            Ok(result) => {
+                *vector_ran = true;
+                result
+            }
             Err(error) => {
                 let reason = fallback_reason(&error);
                 warn_doc_hybrid_fallback(notes, &reason);
