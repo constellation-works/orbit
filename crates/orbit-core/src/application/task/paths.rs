@@ -4,6 +4,7 @@ use orbit_common::fs::selector::{
     anchor_path, canonical_selector_in_workspace, exists_in_workspace,
 };
 use orbit_types::task::{TaskHistoryEntry, TaskType};
+use orbit_types::workspace::WorkspacePaths;
 use std::path::{Path, PathBuf};
 
 use crate::OrbitRuntime;
@@ -82,7 +83,18 @@ impl OrbitRuntime {
 
     /// Resolve the checkouts this call may validate selectors against.
     fn context_selector_roots(&self) -> Result<ContextSelectorRoots, OrbitError> {
-        let repo_root = &self.paths().repo_root;
+        let paths = self.paths();
+        if unbound_explicit_data_dir(paths, self.workspace_runtime_binding().is_some()) {
+            return Err(OrbitError::InvalidInput(format!(
+                "context selectors cannot be validated because this call has no checkout binding; \
+                 the current directory is not inside a registered workspace of Orbit root '{}'. \
+                 Supply a workspace selector (name, id, or checkout path) so selectors can be \
+                 checked against the workspace the task is stored in",
+                paths.orbit_dir.display()
+            )));
+        }
+
+        let repo_root = &paths.repo_root;
         let canonical_repo_root = repo_root.canonicalize().map_err(|error| {
             OrbitError::InvalidInput(format!(
                 "failed to resolve repository root '{}': {error}",
@@ -100,6 +112,27 @@ impl OrbitRuntime {
             workspace: canonical_repo_root,
             caller_worktree,
         })
+    }
+}
+
+/// True when this runtime opened an explicit data directory with no checkout
+/// to validate against. `repo_root` is the data dir itself, not a repository,
+/// so selector checks must refuse rather than treat Orbit state files as
+/// in-workspace targets.
+fn unbound_explicit_data_dir(paths: &WorkspacePaths, has_checkout_binding: bool) -> bool {
+    if has_checkout_binding {
+        return false;
+    }
+    same_path(&paths.repo_root, &paths.orbit_dir) && same_path(&paths.orbit_dir, &paths.global_dir)
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
     }
 }
 

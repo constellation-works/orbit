@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orbit_policy::PolicyEngine;
@@ -57,16 +57,13 @@ pub(crate) fn build_context_from_roots(
 
     let store = Store::open(&persistence.audit_db)?;
 
-    // workspace_root IS the .orbit dir. For custom roots outside the repo,
-    // prefer the registry's workspace root over the parent-directory fallback.
-    let repo_root = binding
-        .map(|binding| binding.repo_root.clone())
-        .unwrap_or_else(|| {
-            workspace_root
-                .parent()
-                .unwrap_or(workspace_root)
-                .to_path_buf()
-        });
+    // workspace_root IS the .orbit dir. A cwd checkout binding is authoritative.
+    // Without one, an explicit data dir must not mint parent(orbit-dir) as a
+    // synthetic repository: that root is not the workspace tasks are stored in,
+    // so every consumer of `repo_root` (including the context-selector guard)
+    // would validate against the wrong tree. Recover the stored checkout, and
+    // if none exists keep paths inside the data dir itself.
+    let repo_root = repo_root_for_runtime(global_root, workspace_root, binding)?;
     let paths = WorkspacePaths::new_with_local(
         repo_root,
         workspace_root.to_path_buf(),
@@ -372,6 +369,48 @@ fn rebind_candidate_workspace_id(
             paths.orbit_dir.display()
         ))),
     }
+}
+
+/// Resolve `paths.repo_root` for this runtime open.
+///
+/// Repo-local `.orbit` directories still fall back to their parent. Explicit
+/// `--root` data directories do not: `parent(data-dir)` is not a checkout.
+fn repo_root_for_runtime(
+    global_root: &Path,
+    workspace_root: &Path,
+    binding: Option<&WorkspaceRuntimeBinding>,
+) -> Result<PathBuf, OrbitError> {
+    if let Some(binding) = binding {
+        return Ok(binding.repo_root.clone());
+    }
+    if is_explicit_data_dir(global_root, workspace_root) {
+        if let Some(repo_root) = stored_checkout_repo_root(global_root, workspace_root)? {
+            return Ok(repo_root);
+        }
+        return Ok(workspace_root.to_path_buf());
+    }
+    Ok(workspace_root
+        .parent()
+        .unwrap_or(workspace_root)
+        .to_path_buf())
+}
+
+/// Checkout `repo_root` for the workspace this explicit data dir already
+/// stores tasks in (`config.yaml`), when a machine-local checkout exists.
+fn stored_checkout_repo_root(
+    global_root: &Path,
+    workspace_root: &Path,
+) -> Result<Option<PathBuf>, OrbitError> {
+    let Some(config) = read_workspace_config_optional(workspace_root)? else {
+        return Ok(None);
+    };
+    let registry = TaskRegistryStore::open(&task_registry_path(global_root))?;
+    if let Some(checkout) = registry.find_workspace_checkout(&config.workspace_id)? {
+        return Ok(Some(checkout.repo_root));
+    }
+    Ok(registry
+        .find_checkout_by_orbit_dir(workspace_root)?
+        .map(|checkout| checkout.repo_root))
 }
 
 fn is_explicit_data_dir(global_root: &Path, orbit_dir: &Path) -> bool {
