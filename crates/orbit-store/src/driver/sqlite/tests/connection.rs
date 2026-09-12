@@ -1,6 +1,9 @@
 //! Sibling tests for `sqlite/connection.rs` health probes [ORB-10005].
 
+use std::time::Duration;
+
 use orbit_common::OrbitError;
+use orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS;
 
 use crate::Store;
 use crate::driver::sqlite::migration::SUPPORTED_SCHEMA_VERSION;
@@ -113,7 +116,7 @@ fn refresh_file_connections_rebinds_clones_after_database_replacement() {
 }
 
 #[test]
-fn refresh_file_connections_fails_closed_during_a_writer_transaction() {
+fn refresh_file_connections_waits_for_the_shared_writer_transaction() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("store.db");
     let store = Store::open(&path).expect("open store");
@@ -123,7 +126,7 @@ fn refresh_file_connections_fails_closed_during_a_writer_transaction() {
     let writer = std::thread::spawn(move || {
         writer_store.with_transaction_behavior(rusqlite::TransactionBehavior::Immediate, |tx| {
             tx.connection()
-                .execute_batch("CREATE TABLE refresh_writer(value INTEGER);")
+                .execute_batch("CREATE TABLE completion_audit(value TEXT NOT NULL);")
                 .map_err(|error| OrbitError::Store(error.to_string()))?;
             started_tx
                 .send(())
@@ -136,19 +139,51 @@ fn refresh_file_connections_fails_closed_during_a_writer_transaction() {
     });
     started_rx.recv().expect("writer transaction started");
 
-    let error = store
-        .refresh_file_connections(&path)
-        .expect_err("refresh cannot bypass an active writer transaction");
-    assert!(error.to_string().contains("write probe failed"), "{error}");
+    let (refresh_started_tx, refresh_started_rx) = std::sync::mpsc::channel();
+    let (refreshed_tx, refreshed_rx) = std::sync::mpsc::channel();
+    let refresh_store = store.clone();
+    let refresh_path = path.clone();
+    let refresh = std::thread::spawn(move || {
+        refresh_started_tx.send(()).expect("start refresh");
+        refreshed_tx
+            .send(refresh_store.refresh_file_connections(&refresh_path))
+            .expect("report refresh result");
+    });
+    refresh_started_rx.recv().expect("refresh started");
+
+    let independent_busy_timeout = Duration::from_millis(u64::from(DEFAULT_BUSY_TIMEOUT_MS));
+    assert!(
+        matches!(
+            refreshed_rx.recv_timeout(independent_busy_timeout + Duration::from_secs(1)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
+        "refresh must wait on the shared writer mutex beyond SQLite's independent busy timeout"
+    );
 
     release_tx.send(()).expect("release writer transaction");
     writer
         .join()
         .expect("join writer")
         .expect("writer transaction commits");
+    refreshed_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("refresh completes after writer transaction")
+        .expect("refresh succeeds after established serialization");
+    refresh.join().expect("join refresh");
+
     store
-        .refresh_file_connections(&path)
-        .expect("refresh succeeds after transaction completion");
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute("INSERT INTO completion_audit VALUES ('finished')", [])
+                .map(|_| ())
+                .map_err(|error| OrbitError::Store(error.to_string()))
+        })
+        .expect("completion audit persists after refresh");
+    let persisted: String = rusqlite::Connection::open(&path)
+        .expect("reopen authoritative database")
+        .query_row("SELECT value FROM completion_audit", [], |row| row.get(0))
+        .expect("read completion audit");
+    assert_eq!(persisted, "finished");
 }
 
 #[test]
