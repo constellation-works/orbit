@@ -343,7 +343,9 @@ impl OrbitRuntime {
             tool_name,
             target_type: Some("operation".to_string()),
             target_id: Some(operation_id.to_string()),
-            role: self.actor_label().to_string(),
+            // Coarse actor kind (`human` / `operator` / family), not the
+            // `human:<os-user>` attribution label [ORB-12274].
+            role: self.actor().audit_role().to_string(),
             status,
             exit_code: i32::from(status != AuditEventStatus::Success),
             duration_ms: 1,
