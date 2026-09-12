@@ -295,9 +295,43 @@ fn auto_task_recover_parses_both_operations_and_their_reason() {
     assert_eq!(args.name, "delivery-qa");
     assert!(args.adopt_settings);
     assert!(args.reissue_action);
+    assert!(!args.replay_history);
     assert_eq!(
         args.reason.as_deref(),
         Some("adopt tonight's threshold and re-examine the unpaid landing")
+    );
+}
+
+#[test]
+fn auto_task_replay_history_is_a_separate_reason_gated_mode() {
+    let preview = Cli::try_parse_from([
+        "orbit",
+        "auto-task",
+        "recover",
+        "delivery-qa",
+        "--replay-history",
+    ])
+    .expect("parse history replay preview");
+    let Commands::AutoTask(auto_task) = preview.command else {
+        panic!("expected auto-task command");
+    };
+    let AutoTaskSubcommand::Recover(args) = auto_task.command else {
+        panic!("expected recover command");
+    };
+    assert!(args.replay_history);
+    assert!(args.reason.is_none());
+
+    assert!(
+        Cli::try_parse_from([
+            "orbit",
+            "auto-task",
+            "recover",
+            "delivery-qa",
+            "--replay-history",
+            "--adopt-settings",
+        ])
+        .is_err(),
+        "history replay cannot be combined with settings/action recovery"
     );
 }
 
@@ -332,7 +366,12 @@ fn auto_task_recover_defaults_to_a_preview_and_needs_a_delivery_definition() {
     let AutoTaskSubcommand::Recover(args) = auto_task.command else {
         panic!("expected auto-task recover command");
     };
-    assert!(!args.adopt_settings && !args.reissue_action && args.reason.is_none());
+    assert!(
+        !args.adopt_settings
+            && !args.reissue_action
+            && !args.replay_history
+            && args.reason.is_none()
+    );
 
     let error = args
         .execute(&runtime)

@@ -1,8 +1,8 @@
-//! Operator recovery contracts for a stalled delivery consumer [ORB-12295].
+//! Operator recovery contracts for a stalled delivery consumer.
 //!
 //! A delivery consumer stalls when its definition is edited: the persisted
-//! epoch no longer matches the configured one, so nothing is admitted and the
-//! retained obligations sit still. These types describe the explicit, audited
+//! epoch can no longer match configured settings, or a legitimate rebase can
+//! orphan its observed revision. These types describe the explicit, audited
 //! way out — what the operator asks for, what the consumer currently owes, and
 //! what was actually changed. Nothing here waives, covers or discards debt.
 
@@ -10,8 +10,9 @@ use super::{BatchState, DeliveryTrigger, SourceRevision};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-/// What an operator explicitly authorizes for one stalled consumer. Both
-/// operations are opt-in: an empty request previews and changes nothing.
+/// What an operator explicitly authorizes for one stalled consumer. Settings
+/// and action operations are opt-in; history replay previews until it carries
+/// an explicit reason.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryRequest {
@@ -23,6 +24,10 @@ pub struct RecoveryRequest {
     /// its existing frozen obligations.
     #[serde(default)]
     pub reissue_action: bool,
+    /// Reconcile an orphaned observed history with the configured branch after
+    /// a content-preserving rebase. Preview is inert; apply requires `reason`.
+    #[serde(default)]
+    pub replay_history: bool,
     /// Operator explanation, retained verbatim in the audit record.
     #[serde(default)]
     pub reason: String,
@@ -31,7 +36,9 @@ pub struct RecoveryRequest {
 impl RecoveryRequest {
     /// True when the request asks for a durable change rather than a preview.
     pub fn mutates(&self) -> bool {
-        self.adopt_settings || self.reissue_action
+        self.adopt_settings
+            || self.reissue_action
+            || (self.replay_history && !self.reason.trim().is_empty())
     }
 }
 
@@ -98,9 +105,39 @@ pub struct RecoveryRecord {
     pub adopted_settings: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reissued: Option<ReissuedAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replayed_history: Option<HistoryReplayRecord>,
     pub reason: String,
     pub by: String,
     pub at: DateTime<Utc>,
+}
+
+/// One deterministic orphan-to-canonical commit correspondence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryMapping {
+    pub orphan: SourceRevision,
+    pub canonical: SourceRevision,
+    /// Digest of the exact parent-relative binary patch plus the `.orbit` tree.
+    pub proof_digest: String,
+}
+
+/// Audited facts for a history replay. The captured head and generation are
+/// the compare-and-set fence; the coverage facts are intentionally repeated so
+/// an audit reader can see that replay did not manufacture examination.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryReplayRecord {
+    pub captured_generation: u64,
+    pub captured_head: SourceRevision,
+    pub common_base: SourceRevision,
+    pub old_observed: SourceRevision,
+    pub new_observed: SourceRevision,
+    pub mappings: Vec<HistoryMapping>,
+    pub added_obligations: Vec<String>,
+    pub unchanged_baseline: SourceRevision,
+    pub unchanged_covered: SourceRevision,
+    pub accepted_receipts: usize,
 }
 
 /// The settled action a recovery reissued, and the attempt it authorized.
@@ -128,6 +165,9 @@ pub struct RecoveryPreview {
     pub debt: CoverageDebt,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<StalledAction>,
+    /// Planned or applied history reconciliation, absent for ordinary recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_replay: Option<HistoryReplayRecord>,
     /// Named refusals blocking the requested recovery; empty means it may run.
     pub refusals: Vec<String>,
     /// What this call durably changed. Always empty for a preview.
@@ -141,6 +181,8 @@ impl RecoveryPreview {
     pub const ADOPTED_SETTINGS: &'static str = "adopted_settings";
     /// Label recorded in `applied` when the settled action was reissued.
     pub const REISSUED_ACTION: &'static str = "reissued_action";
+    /// Label recorded when an orphaned observation was replayed.
+    pub const REPLAYED_HISTORY: &'static str = "replayed_history";
 }
 
 /// Why a recovery cannot run. Each variant names one deterministic refusal so
@@ -174,4 +216,24 @@ pub mod refusal {
     pub const DEFINITION_CHANGED: &str = "definition_changed";
     /// A durable recovery requires a non-empty operator explanation and actor.
     pub const MISSING_AUTHORIZATION: &str = "missing_authorization";
+    /// History replay cannot be combined with configuration/action recovery.
+    pub const RECOVERY_MODE_CONFLICT: &str = "recovery_mode_conflict";
+    /// The observed revision is already ancestral to the configured head.
+    pub const HISTORY_NOT_DIVERGED: &str = "history_not_diverged";
+    /// A persisted orphan revision is no longer available from Git.
+    pub const HISTORY_OBJECT_MISSING: &str = "history_object_missing";
+    /// Content/topology proof found zero or multiple canonical counterparts.
+    pub const HISTORY_MAPPING_AMBIGUOUS: &str = "history_mapping_ambiguous";
+    /// Covered, baseline, or frozen batch boundaries do not reach the head.
+    pub const HISTORY_BOUNDARY_UNREACHABLE: &str = "history_boundary_unreachable";
+    /// The rebase exceeds the bounded first-parent proof window.
+    pub const HISTORY_TRAVERSAL_LIMIT: &str = "history_traversal_limit";
+    /// Inserted commits lack an unambiguous provider-owned delivery identity.
+    pub const PROVIDER_PROOF_UNAVAILABLE: &str = "provider_proof_unavailable";
+    /// Persisted logical identity differs from the canonical evidence.
+    pub const HISTORY_CONTRACT_DRIFT: &str = "history_contract_drift";
+    /// Reconciliation would remove an unpaid logical delivery.
+    pub const HISTORY_DEBT_LOST: &str = "history_debt_lost";
+    /// The configured branch moved after the preview facts were captured.
+    pub const HISTORY_HEAD_CHANGED: &str = "history_head_changed";
 }

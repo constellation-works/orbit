@@ -1,5 +1,5 @@
-//! Explicit, audited recovery for a delivery consumer stalled by a settings
-//! change [ORB-12295].
+//! Explicit, audited recovery for a delivery consumer stalled by settings or
+//! content-preserving rebased history.
 //!
 //! Editing a definition moves its epoch, so the consumer stops admitting work
 //! while every obligation it already holds stays retained. The supported way
@@ -8,6 +8,8 @@
 //! means, and it reissues an action that settled without accepted evidence
 //! over the exact obligations already frozen for it.
 //!
+//! History replay follows the same invariant: it changes source identities only
+//! after deterministic source/provider proof and adds newly inserted debt.
 //! Nothing here covers, waives or discards debt. Coverage still requires valid
 //! evidence from the assigned executor of an admitted action.
 
@@ -40,6 +42,13 @@ pub struct Recovery<'a> {
     pub request: &'a RecoveryRequest,
     pub by: &'a str,
     pub now: DateTime<Utc>,
+    /// Host-proven canonical page and audit proof for an explicit replay.
+    pub replay: Option<HistoryReplayInput>,
+}
+
+pub struct HistoryReplayInput {
+    pub page: SourcePage,
+    pub record: HistoryReplayRecord,
 }
 
 /// Project the consumer's recovery position without touching any state.
@@ -52,7 +61,13 @@ pub fn preview(
     request: &Recovery<'_>,
 ) -> Result<RecoveryPreview, AutomationError> {
     let state = load(store, request.consumer)?;
-    project(store, request, request.request, &state, vec![])
+    let (projected, replay) = if request.request.replay_history {
+        let (next, replay) = replay_plan(&state, request.replay.as_ref())?;
+        (next, Some(replay))
+    } else {
+        (state.clone(), None)
+    };
+    project(store, request, request.request, &projected, vec![], replay)
 }
 
 /// Apply the requested recovery under a generation fence, retaining every
@@ -66,7 +81,7 @@ pub fn apply(
     let state = load(store, request.consumer)?;
 
     if !request.request.mutates() {
-        return project(store, request, request.request, &state, vec![]);
+        return project(store, request, request.request, &state, vec![], None);
     }
 
     let refusals = refusals(store, request, request.request, &state)?;
@@ -87,10 +102,20 @@ pub fn apply(
     if record.reissued.is_some() {
         applied.push(RecoveryPreview::REISSUED_ACTION.to_string());
     }
+    if record.replayed_history.is_some() {
+        applied.push(RecoveryPreview::REPLAYED_HISTORY.to_string());
+    }
 
     // The applied document reports the position the recovery left behind, so
     // its refusals describe the consumer rather than the request just settled.
-    project(store, request, &RecoveryRequest::default(), &next, applied)
+    project(
+        store,
+        request,
+        &RecoveryRequest::default(),
+        &next,
+        applied,
+        record.replayed_history.clone(),
+    )
 }
 
 fn load(
@@ -132,6 +157,18 @@ fn plan(
         None
     };
 
+    let replayed_history = if request.request.replay_history {
+        let (replayed, record) = replay_plan(state, request.replay.as_ref())?;
+        next = replayed;
+        next.generation = state
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| AutomationError::Deferred("generation_exhausted".into()))?;
+        Some(record)
+    } else {
+        None
+    };
+
     let record = RecoveryRecord {
         consumer: state.consumer.clone(),
         previous_epoch: state.epoch.clone(),
@@ -140,6 +177,7 @@ fn plan(
         trigger: next.trigger.clone(),
         adopted_settings: request.request.adopt_settings,
         reissued,
+        replayed_history,
         reason: request.request.reason.trim().into(),
         by: request.by.trim().into(),
         at: request.now,
@@ -246,6 +284,10 @@ fn refusals(
         refuse(refusal::MISSING_AUTHORIZATION);
     }
 
+    if requested.replay_history && (requested.adopt_settings || requested.reissue_action) {
+        refuse(refusal::RECOVERY_MODE_CONFLICT);
+    }
+
     if requested.adopt_settings
         && state.epoch == request.epoch
         && state.trigger.as_ref() == Some(request.trigger)
@@ -293,6 +335,7 @@ fn project(
     requested: &RecoveryRequest,
     state: &AutomationState,
     applied: Vec<String>,
+    history_replay: Option<HistoryReplayRecord>,
 ) -> Result<RecoveryPreview, AutomationError> {
     let receipts = store.automation_receipts(request.consumer, 100)?;
     let reissuable = |active: &BatchAttempt| {
@@ -338,10 +381,138 @@ fn project(
             commits: active.batch.commits.len(),
             reissuable: reissuable(active),
         }),
+        history_replay,
         refusals: refusals(store, request, requested, state)?,
         applied,
         history: store.automation_recoveries(request.consumer, HISTORY_LIMIT)?,
     })
+}
+
+fn replay_plan(
+    state: &AutomationState,
+    input: Option<&HistoryReplayInput>,
+) -> Result<(AutomationState, HistoryReplayRecord), AutomationError> {
+    let input = input
+        .ok_or_else(|| AutomationError::Refused(refusal::PROVIDER_PROOF_UNAVAILABLE.into()))?;
+    if input.record.captured_generation != state.generation
+        || input.record.old_observed != state.observed
+        || input.record.unchanged_baseline != state.baseline
+        || input.record.unchanged_covered != state.covered
+        || input.page.from != input.record.common_base
+        || input.page.through != input.record.new_observed
+    {
+        return Err(AutomationError::Refused(
+            refusal::HISTORY_CONTRACT_DRIFT.into(),
+        ));
+    }
+
+    let mut canonical_seed = state.clone();
+    canonical_seed.observed = input.record.common_base.clone();
+    canonical_seed.pending_commits.clear();
+    canonical_seed.pending.clear();
+    canonical_seed.waived.clear();
+    canonical_seed.excluded.clear();
+    canonical_seed.unresolved.clear();
+    canonical_seed.associations.clear();
+    canonical_seed.active = None;
+    let canonical = super::observe::apply(
+        &canonical_seed,
+        input.page.clone(),
+        recorded_coverage(state)
+            .ok_or_else(|| AutomationError::Refused(refusal::COVERAGE_UNVERIFIABLE.into()))?,
+        DateTime::<Utc>::UNIX_EPOCH,
+    )?;
+    if !canonical.unresolved.is_empty() {
+        return Err(AutomationError::Refused(
+            refusal::PROVIDER_PROOF_UNAVAILABLE.into(),
+        ));
+    }
+
+    let mapped = input
+        .record
+        .mappings
+        .iter()
+        .map(|mapping| mapping.orphan.commit.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let stable = |old: &Delivery, new: &Delivery| {
+        old.key == new.key
+            && old.repository == new.repository
+            && old.branch == new.branch
+            && old.evidence_reference == new.evidence_reference
+            && old.landed_at == new.landed_at
+    };
+
+    let mut next = state.clone();
+    let mut pending = Vec::new();
+    for old in &state.pending {
+        if old
+            .commits
+            .iter()
+            .any(|commit| mapped.contains(commit.as_str()))
+        {
+            let new = canonical
+                .pending
+                .iter()
+                .find(|candidate| candidate.key == old.key)
+                .ok_or_else(|| AutomationError::Refused(refusal::HISTORY_DEBT_LOST.into()))?;
+            if !stable(old, new) {
+                return Err(AutomationError::Refused(
+                    refusal::HISTORY_CONTRACT_DRIFT.into(),
+                ));
+            }
+            let mut replacement = new.clone();
+            replacement.task_ids = old.task_ids.clone();
+            pending.push(replacement);
+        } else {
+            pending.push(old.clone());
+        }
+    }
+
+    let excluded_keys = state
+        .excluded
+        .iter()
+        .map(|item| item.delivery.key.as_str())
+        .chain(state.waived.iter().map(|item| item.key.as_str()))
+        .collect::<std::collections::HashSet<_>>();
+    let mut added = Vec::new();
+    for delivery in canonical.pending {
+        if pending.iter().any(|old| old.key == delivery.key)
+            || excluded_keys.contains(delivery.key.as_str())
+        {
+            continue;
+        }
+        added.push(delivery.key.clone());
+        pending.push(delivery);
+    }
+
+    let prefix = state
+        .pending_commits
+        .iter()
+        .filter(|commit| !mapped.contains(commit.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    next.pending_commits = prefix;
+    for commit in canonical.pending_commits {
+        if !next.pending_commits.contains(&commit) {
+            next.pending_commits.push(commit);
+        }
+    }
+    next.pending = pending;
+    next.pending.sort_by_key(|delivery| {
+        next.pending_commits
+            .iter()
+            .position(|commit| commit == &delivery.after.commit)
+    });
+    next.unresolved
+        .retain(|commit, _| !mapped.contains(commit.as_str()));
+    next.associations
+        .retain(|commit, _| !mapped.contains(commit.as_str()));
+    next.associations.extend(canonical.associations);
+    next.observed = input.record.new_observed.clone();
+
+    let mut record = input.record.clone();
+    record.added_obligations = added;
+    Ok((next, record))
 }
 
 /// Why this consumer is or is not stalled, in the evaluator's own precedence:

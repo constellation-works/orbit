@@ -7,7 +7,9 @@ use crate::{
     delivery::{self, Evaluation, recovery},
 };
 use orbit_store::contracts::AutomationStoreBackend;
-use orbit_types::workflow::automation::recovery::{RecoveryPreview, RecoveryRequest, refusal};
+use orbit_types::workflow::automation::recovery::{
+    HistoryMapping, HistoryReplayRecord, RecoveryPreview, RecoveryRequest, refusal,
+};
 use orbit_types::workflow::automation::*;
 use std::sync::atomic::Ordering;
 
@@ -17,6 +19,7 @@ fn request(adopt: bool, reissue: bool) -> RecoveryRequest {
     RecoveryRequest {
         adopt_settings: adopt,
         reissue_action: reissue,
+        replay_history: false,
         reason: "tonight's retuning keeps the same QA contract".into(),
     }
 }
@@ -35,6 +38,7 @@ fn recovery<'a>(
         request,
         by: "operator",
         now: now(),
+        replay: None,
     }
 }
 
@@ -462,4 +466,124 @@ fn an_unknown_consumer_and_a_host_refusal_stop_before_any_write() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn history_replay_preserves_frozen_coverage_and_adds_canonical_debt() {
+    let (store, _host, trigger, frozen_batch) = stalled();
+    let before = store.automation_state(CONSUMER).unwrap().unwrap();
+    let orphan = before.observed.clone();
+    let inserted = SourceRevision {
+        commit: "69555b04".into(),
+        tree: "inserted-tree".into(),
+    };
+    let canonical = SourceRevision {
+        commit: "50798789".into(),
+        tree: orphan.tree.clone(),
+    };
+    let mut replacement = landing(2);
+    replacement.before = inserted.clone();
+    replacement.after = canonical.clone();
+    replacement.commits = vec![canonical.commit.clone()];
+    replacement.evidence_digest = "canonical-proof".into();
+    let added = Delivery {
+        key: "pr:owner/repo:agent-main:1586".into(),
+        repository: before.repository.clone(),
+        branch: before.branch.clone(),
+        before: before.covered.clone(),
+        after: inserted.clone(),
+        commits: vec![inserted.commit.clone()],
+        task_ids: vec!["ORB-11751".into()],
+        evidence_reference: "https://example.test/1586".into(),
+        evidence_digest: "inserted-proof".into(),
+        landed_at: now(),
+    };
+    let page = SourcePage {
+        from: before.covered.clone(),
+        through: canonical.clone(),
+        commits: vec![inserted.commit.clone(), canonical.commit.clone()],
+        deliveries: vec![added.clone(), replacement],
+        unresolved: Default::default(),
+        associations: Default::default(),
+        exclusions: Default::default(),
+        complete: true,
+    };
+    let record = HistoryReplayRecord {
+        captured_generation: before.generation,
+        captured_head: SourceRevision {
+            commit: "ac0429ba".into(),
+            tree: "current-tree".into(),
+        },
+        common_base: before.covered.clone(),
+        old_observed: orphan.clone(),
+        new_observed: canonical.clone(),
+        mappings: vec![HistoryMapping {
+            orphan,
+            canonical: canonical.clone(),
+            proof_digest: "orbit-tree-and-binary-patch".into(),
+        }],
+        added_obligations: vec![],
+        unchanged_baseline: before.baseline.clone(),
+        unchanged_covered: before.covered.clone(),
+        accepted_receipts: 0,
+    };
+    let request = RecoveryRequest {
+        replay_history: true,
+        reason: "reconcile the verified Sep 8 rebase".into(),
+        ..Default::default()
+    };
+    let operation = recovery::Recovery {
+        consumer: CONSUMER,
+        epoch: "v1",
+        trigger: &trigger,
+        repository: "owner/repo",
+        host_refusal: None,
+        request: &request,
+        by: "operator",
+        now: now(),
+        replay: Some(recovery::HistoryReplayInput { page, record }),
+    };
+
+    let preview = recovery::preview(store.as_ref(), &operation).unwrap();
+    assert_eq!(
+        store.automation_state(CONSUMER).unwrap(),
+        Some(before.clone())
+    );
+    assert_eq!(
+        preview.history_replay.unwrap().added_obligations,
+        vec![added.key.clone()]
+    );
+
+    let applied = recovery::apply(store.as_ref(), &operation).unwrap();
+    assert_eq!(applied.applied, vec![RecoveryPreview::REPLAYED_HISTORY]);
+    let after = store.automation_state(CONSUMER).unwrap().unwrap();
+    assert_eq!(after.baseline, before.baseline);
+    assert_eq!(after.covered, before.covered);
+    assert_eq!(after.waived, before.waived);
+    assert_eq!(after.excluded, before.excluded);
+    assert_eq!(after.active, before.active);
+    assert_eq!(after.active.unwrap().batch, frozen_batch);
+    assert_eq!(after.observed, canonical);
+    assert!(
+        after
+            .pending
+            .iter()
+            .any(|delivery| delivery.key == added.key)
+    );
+    assert_eq!(
+        store.automation_recoveries(CONSUMER, 10).unwrap()[0]
+            .replayed_history
+            .as_ref()
+            .unwrap()
+            .added_obligations,
+        vec![added.key]
+    );
+
+    let settled = store.automation_state(CONSUMER).unwrap();
+    assert!(matches!(
+        recovery::apply(store.as_ref(), &operation),
+        Err(AutomationError::Refused(reason)) if reason == refusal::HISTORY_CONTRACT_DRIFT
+    ));
+    assert_eq!(store.automation_state(CONSUMER).unwrap(), settled);
+    assert_eq!(store.automation_recoveries(CONSUMER, 10).unwrap().len(), 1);
 }

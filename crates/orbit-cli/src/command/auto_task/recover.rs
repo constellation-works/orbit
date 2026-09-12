@@ -4,10 +4,10 @@ use orbit_types::workflow::automation::recovery::{RecoveryPreview, RecoveryReque
 
 use crate::command::{CommandOut, Execute, Payload};
 
-/// Recover a delivery consumer that stalled on a settings change.
+/// Recover a delivery consumer stalled by settings or rebased history.
 ///
-/// Without `--adopt-settings` or `--reissue-action` this is a read-only
-/// preview. Neither operation covers, waives or discards an obligation, and
+/// Without an applying operation this is a read-only
+/// preview. Recovery never covers, waives or discards an obligation, and
 /// state files are never edited by hand.
 #[derive(Args)]
 pub struct AutoTaskRecoverArgs {
@@ -23,8 +23,12 @@ pub struct AutoTaskRecoverArgs {
     /// exactly as it settled.
     #[arg(long)]
     pub reissue_action: bool,
+    /// Prove and reconcile a content-preserving branch rebase. Without
+    /// `--reason` this only previews the mapping and added obligations.
+    #[arg(long, conflicts_with_all = ["adopt_settings", "reissue_action"])]
+    pub replay_history: bool,
     /// Operator explanation, retained in the recovery audit record. Required
-    /// for either operation.
+    /// for settings adoption, action reissue, or history-replay apply.
     #[arg(long)]
     pub reason: Option<String>,
     /// Output as JSON
@@ -41,6 +45,7 @@ impl Execute for AutoTaskRecoverArgs {
         let request = RecoveryRequest {
             adopt_settings: self.adopt_settings,
             reissue_action: self.reissue_action,
+            replay_history: self.replay_history,
             reason: self.reason.unwrap_or_default(),
         };
 
@@ -75,6 +80,17 @@ fn summary(name: &str, preview: &RecoveryPreview) -> String {
 
     let debt = &preview.debt;
     let _ = writeln!(out, "  covered: {}", debt.covered.commit);
+    if let Some(replay) = &preview.history_replay {
+        let _ = writeln!(
+            out,
+            "  history: {} -> {} ({} mappings, {} added obligations, generation {})",
+            replay.old_observed.commit,
+            replay.new_observed.commit,
+            replay.mappings.len(),
+            replay.added_obligations.len(),
+            replay.captured_generation
+        );
+    }
     let _ = writeln!(
         out,
         "  debt: {} pending deliveries, {} pending commits, {} unresolved, {} waived, {} excluded, {} receipts",

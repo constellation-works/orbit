@@ -1,6 +1,7 @@
 //! Bounded source facts from Git and provider-owned PR identities.
 
 use orbit_automation::{AutomationError, delivery::digest};
+use orbit_types::workflow::automation::recovery::{HistoryMapping, HistoryReplayRecord, refusal};
 use orbit_types::workflow::automation::*;
 use serde_json::Value;
 use std::{
@@ -193,7 +194,20 @@ impl<'a> Source<'a> {
         state: &AutomationState,
         lookup: &dyn Fn(&str, &str) -> Result<String, AutomationError>,
     ) -> Result<SourcePage, AutomationError> {
-        let (repository, head) = self.head(branch)?;
+        self.observe_with_lookup_limit(branch, state, lookup, 10, None, false)
+    }
+
+    fn observe_with_lookup_limit(
+        &self,
+        branch: &str,
+        state: &AutomationState,
+        lookup: &dyn Fn(&str, &str) -> Result<String, AutomationError>,
+        lookup_limit: usize,
+        head_override: Option<SourceRevision>,
+        preserve_known_associations: bool,
+    ) -> Result<SourcePage, AutomationError> {
+        let (repository, configured_head) = self.head(branch)?;
+        let head = head_override.unwrap_or(configured_head);
 
         if repository != state.repository {
             return Err(AutomationError::Deferred("repository_changed".into()));
@@ -242,15 +256,21 @@ impl<'a> Source<'a> {
         // previously unresolved ones, so no commit is starved of retries.
         let old = state.unresolved.keys().collect::<Vec<_>>();
         let offset = (state.generation as usize) % old.len().max(1);
-        let candidates = commits.iter().take(10).chain(
-            old.iter()
-                .cycle()
-                .skip(offset)
-                .take(old.len().min(10))
-                .copied(),
-        );
+        let candidates = commits
+            .iter()
+            .take(lookup_limit)
+            .chain(
+                old.iter()
+                    .cycle()
+                    .skip(offset)
+                    .take(old.len().min(10))
+                    .copied(),
+            )
+            .filter(|sha| !preserve_known_associations || !associations.contains_key(*sha))
+            .cloned()
+            .collect::<Vec<_>>();
 
-        for sha in candidates {
+        for sha in &candidates {
             if self.started.elapsed() > Duration::from_secs(20) {
                 break;
             }
@@ -322,6 +342,253 @@ impl<'a> Source<'a> {
             exclusions: Default::default(),
             complete: count <= 200,
         })
+    }
+
+    /// Prove and collect a bounded canonical replay of a diverged consumer.
+    /// Provider association uses the same path as ordinary observation, but
+    /// every commit in the bounded repair range must be resolved in this pass.
+    pub(super) fn replay_history_with_lookup(
+        &self,
+        branch: &str,
+        state: &AutomationState,
+        lookup: &dyn Fn(&str, &str) -> Result<String, AutomationError>,
+        accepted_receipts: usize,
+    ) -> Result<(SourcePage, HistoryReplayRecord), AutomationError> {
+        let (repository, head) = self.head(branch)?;
+        if repository != state.repository {
+            return Err(AutomationError::Refused(refusal::REPOSITORY_CHANGED.into()));
+        }
+
+        let old_observed = self
+            .revision(&state.observed.commit)
+            .map_err(|_| AutomationError::Refused(refusal::HISTORY_OBJECT_MISSING.into()))?;
+        if old_observed != state.observed {
+            return Err(AutomationError::Refused(
+                refusal::HISTORY_CONTRACT_DRIFT.into(),
+            ));
+        }
+        if self
+            .git(&[
+                "merge-base",
+                "--is-ancestor",
+                &old_observed.commit,
+                &head.commit,
+            ])
+            .is_ok()
+        {
+            return Err(AutomationError::Refused(
+                refusal::HISTORY_NOT_DIVERGED.into(),
+            ));
+        }
+
+        for boundary in
+            [&state.covered, &state.baseline]
+                .into_iter()
+                .chain(state.active.iter().flat_map(|active| {
+                    [
+                        &active.batch.from_exclusive,
+                        &active.batch.through_inclusive,
+                    ]
+                }))
+        {
+            if !matches!(self.revision(&boundary.commit), Ok(actual) if actual == *boundary)
+                || self
+                    .git(&[
+                        "merge-base",
+                        "--is-ancestor",
+                        &boundary.commit,
+                        &head.commit,
+                    ])
+                    .is_err()
+            {
+                return Err(AutomationError::Refused(
+                    refusal::HISTORY_BOUNDARY_UNREACHABLE.into(),
+                ));
+            }
+        }
+
+        let base_commit = self.git(&["merge-base", &old_observed.commit, &head.commit])?;
+        if self
+            .git(&[
+                "merge-base",
+                "--is-ancestor",
+                &state.covered.commit,
+                &base_commit,
+            ])
+            .is_err()
+        {
+            return Err(AutomationError::Refused(
+                refusal::HISTORY_BOUNDARY_UNREACHABLE.into(),
+            ));
+        }
+        let common_base = self.revision(&base_commit)?;
+        let old_commits = self.first_parent_range(&base_commit, &old_observed.commit)?;
+        let canonical_commits = self.first_parent_range(&base_commit, &head.commit)?;
+        if old_commits.is_empty() || old_commits.len() > 1000 || canonical_commits.len() > 1000 {
+            return Err(AutomationError::Refused(
+                refusal::HISTORY_TRAVERSAL_LIMIT.into(),
+            ));
+        }
+
+        let mut candidates_by_proof = BTreeMap::<String, Vec<(usize, String)>>::new();
+        for (position, canonical) in canonical_commits.iter().enumerate() {
+            if let Ok(proof) = self.replay_signature(canonical) {
+                candidates_by_proof
+                    .entry(proof)
+                    .or_default()
+                    .push((position, canonical.clone()));
+            }
+        }
+
+        let mut mappings = Vec::with_capacity(old_commits.len());
+        let mut last_position = None;
+        for orphan in &old_commits {
+            let proof_digest = self.replay_signature(orphan)?;
+            let candidates = candidates_by_proof
+                .get(&proof_digest)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let [(position, canonical)] = candidates else {
+                return Err(AutomationError::Refused(
+                    refusal::HISTORY_MAPPING_AMBIGUOUS.into(),
+                ));
+            };
+            if last_position.is_some_and(|last| *position <= last) {
+                return Err(AutomationError::Refused(
+                    refusal::HISTORY_MAPPING_AMBIGUOUS.into(),
+                ));
+            }
+            last_position = Some(*position);
+            mappings.push(HistoryMapping {
+                orphan: self.revision(orphan)?,
+                canonical: self.revision(canonical)?,
+                proof_digest,
+            });
+        }
+
+        let mut probe = state.clone();
+        probe.observed = common_base.clone();
+        probe.pending_commits.clear();
+        probe.pending.clear();
+        probe.waived.clear();
+        probe.excluded.clear();
+        probe.unresolved.clear();
+        probe.associations.clear();
+        for mapping in &mappings {
+            if let Some(Some(association)) = state.associations.get(&mapping.orphan.commit) {
+                probe
+                    .associations
+                    .insert(mapping.canonical.commit.clone(), Some(association.clone()));
+                continue;
+            }
+            if let Some(delivery) = state
+                .pending
+                .iter()
+                .chain(&state.waived)
+                .find(|delivery| delivery.after.commit == mapping.orphan.commit)
+            {
+                probe.associations.insert(
+                    mapping.canonical.commit.clone(),
+                    Some(DeliveryAssociation {
+                        key: delivery.key.clone(),
+                        anchor: mapping.canonical.commit.clone(),
+                        reference: delivery.evidence_reference.clone(),
+                        landed_at: delivery.landed_at,
+                    }),
+                );
+            }
+        }
+        probe.active = None;
+        let replay_through = mappings
+            .last()
+            .map(|mapping| mapping.canonical.clone())
+            .ok_or_else(|| AutomationError::Refused(refusal::HISTORY_MAPPING_AMBIGUOUS.into()))?;
+        let page = self
+            .observe_with_lookup_limit(
+                branch,
+                &probe,
+                lookup,
+                200,
+                Some(replay_through.clone()),
+                true,
+            )
+            .map_err(|_| AutomationError::Refused(refusal::PROVIDER_PROOF_UNAVAILABLE.into()))?;
+
+        Ok((
+            page,
+            HistoryReplayRecord {
+                captured_generation: state.generation,
+                captured_head: head.clone(),
+                common_base,
+                old_observed,
+                new_observed: replay_through,
+                mappings,
+                added_obligations: vec![],
+                unchanged_baseline: state.baseline.clone(),
+                unchanged_covered: state.covered.clone(),
+                accepted_receipts,
+            },
+        ))
+    }
+
+    pub(super) fn replay_history(
+        &self,
+        branch: &str,
+        state: &AutomationState,
+        accepted_receipts: usize,
+    ) -> Result<(SourcePage, HistoryReplayRecord), AutomationError> {
+        self.replay_history_with_lookup(
+            branch,
+            state,
+            &|repository, sha| {
+                let request =
+                    orbit_tools::github_cli::commit_pull_requests_request(repository, sha)?;
+                self.command(
+                    "gh",
+                    &request.args.iter().map(String::as_str).collect::<Vec<_>>(),
+                )
+            },
+            accepted_receipts,
+        )
+    }
+
+    fn first_parent_range(
+        &self,
+        from: &str,
+        through: &str,
+    ) -> Result<Vec<String>, AutomationError> {
+        let range = format!("{from}..{through}");
+        Ok(self
+            .git(&[
+                "rev-list",
+                "--first-parent",
+                "--reverse",
+                "--max-count=1001",
+                &range,
+            ])?
+            .lines()
+            .map(str::to_owned)
+            .collect())
+    }
+
+    fn replay_signature(&self, commit: &str) -> Result<String, AutomationError> {
+        let orbit_tree = self.git(&[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{commit}:.orbit"),
+        ])?;
+        let patch = self.git(&[
+            "diff-tree",
+            "--binary",
+            "--full-index",
+            "--no-renames",
+            "--no-commit-id",
+            "-r",
+            &format!("{commit}^1"),
+            commit,
+        ])?;
+        Ok(digest(format!("{orbit_tree}\0{patch}").as_bytes()))
     }
 
     /// Pin the batch boundaries so the frozen input stays reachable during review.

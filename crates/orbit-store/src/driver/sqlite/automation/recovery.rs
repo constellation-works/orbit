@@ -1,5 +1,5 @@
-//! Audited configuration adoption and action reissue for a delivery consumer
-//! [ORB-12295]. The checkpoint and its immutable record commit together.
+//! Audited configuration, action, and history recovery for a delivery consumer.
+//! The checkpoint and its immutable record commit together.
 
 use super::{decode, encode};
 use crate::Store;
@@ -98,13 +98,8 @@ fn validate(
         || previous.branch != next.branch
         || previous.baseline != next.baseline
         || previous.covered != next.covered
-        || previous.observed != next.observed
-        || previous.pending != next.pending
-        || previous.pending_commits != next.pending_commits
         || previous.waived != next.waived
         || previous.excluded != next.excluded
-        || previous.unresolved != next.unresolved
-        || previous.associations != next.associations
     {
         return Err(invalid());
     }
@@ -118,6 +113,19 @@ fn validate(
         || record.epoch != next.epoch
         || record.previous_trigger != previous.trigger
         || record.trigger != next.trigger
+    {
+        return Err(invalid());
+    }
+
+    if let Some(replay) = &record.replayed_history {
+        return validate_history_replay(previous, next, record, replay);
+    }
+
+    if previous.observed != next.observed
+        || previous.pending != next.pending
+        || previous.pending_commits != next.pending_commits
+        || previous.unresolved != next.unresolved
+        || previous.associations != next.associations
     {
         return Err(invalid());
     }
@@ -138,6 +146,108 @@ fn validate(
         (settled, claim, None) if settled == claim => Ok(()),
         _ => Err(invalid()),
     }
+}
+
+fn validate_history_replay(
+    previous: &AutomationState,
+    next: &AutomationState,
+    record: &RecoveryRecord,
+    replay: &orbit_types::workflow::automation::recovery::HistoryReplayRecord,
+) -> Result<(), OrbitError> {
+    let invalid = || OrbitError::InvalidInput("invalid automation history replay".into());
+    if record.adopted_settings
+        || record.reissued.is_some()
+        || previous.epoch != next.epoch
+        || previous.trigger != next.trigger
+        || previous.active != next.active
+        || replay.captured_generation != previous.generation
+        || replay.old_observed != previous.observed
+        || replay.new_observed != next.observed
+        || replay.unchanged_baseline != previous.baseline
+        || replay.unchanged_covered != previous.covered
+        || replay.mappings.is_empty()
+        || replay.captured_head.commit.is_empty()
+        || replay.mappings.iter().any(|mapping| {
+            mapping.proof_digest.is_empty()
+                || mapping.orphan.commit.is_empty()
+                || mapping.canonical.commit.is_empty()
+        })
+        || replay
+            .mappings
+            .last()
+            .is_none_or(|mapping| mapping.orphan != previous.observed)
+    {
+        return Err(invalid());
+    }
+
+    let old_keys = previous
+        .pending
+        .iter()
+        .map(|delivery| delivery.key.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let new_keys = next
+        .pending
+        .iter()
+        .map(|delivery| delivery.key.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    if !old_keys.is_subset(&new_keys) || new_keys.len() != next.pending.len() {
+        return Err(invalid());
+    }
+    for old in &previous.pending {
+        let Some(new) = next
+            .pending
+            .iter()
+            .find(|candidate| candidate.key == old.key)
+        else {
+            return Err(invalid());
+        };
+        if old.repository != new.repository
+            || old.branch != new.branch
+            || old.task_ids != new.task_ids
+            || old.evidence_reference != new.evidence_reference
+            || old.landed_at != new.landed_at
+        {
+            return Err(invalid());
+        }
+    }
+    let added = new_keys
+        .difference(&old_keys)
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    let recorded = replay
+        .added_obligations
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    if added != recorded
+        || next.pending_commits.len() > 5000
+        || next.pending.len() > 1000
+        || next
+            .pending_commits
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != next.pending_commits.len()
+        || next.pending.iter().any(|delivery| {
+            delivery.commits.is_empty()
+                || !delivery
+                    .commits
+                    .iter()
+                    .all(|commit| next.pending_commits.contains(commit))
+        })
+        || next
+            .unresolved
+            .keys()
+            .any(|commit| !next.pending_commits.contains(commit))
+        || next
+            .associations
+            .keys()
+            .any(|commit| !next.pending_commits.contains(commit))
+    {
+        return Err(invalid());
+    }
+
+    Ok(())
 }
 
 /// The reissued attempt keeps the frozen batch and its obligations, takes the

@@ -53,6 +53,154 @@ fn runtime() -> OrbitRuntime {
     runtime
 }
 
+#[test]
+fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
+    use std::io::Write as _;
+
+    const ORPHAN: &str = "52d691ba6c58457cc472e181b1fee14f9276d274";
+    const CANONICAL: &str = "50798789c17ba09ba3a8a057b3f80f76dde23733";
+    const INSERTED: &str = "69555b04ba41578ca6a1643f8f8829c2b29736eb";
+    const BASE: &str = "da21eb15b02f6d9a06833c835ea42780f5dbcc3b";
+    const COVERED: &str = "7f3a8f5fabd24030bba30ec9035849ba7d323d2e";
+    const HEAD: &str = "ac0429ba52a7cbddd493a0d98d4b4f19fd57740d";
+
+    let source_checkout = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let fixture_root = fixture.path().join("repo");
+    let cloned = Command::new("git")
+        .args(["clone", "--quiet", "--shared"])
+        .arg(&source_checkout)
+        .arg(&fixture_root)
+        .status()
+        .unwrap();
+    assert!(cloned.success());
+    git(&fixture_root, &["checkout", "--quiet", "--detach", BASE]);
+    git(&fixture_root, &["cherry-pick", "--no-commit", CANONICAL]);
+    let tree = git(&fixture_root, &["write-tree"]);
+    let mut child = Command::new("git")
+        .args(["commit-tree", &tree, "-p", BASE])
+        .current_dir(&fixture_root)
+        .env("GIT_AUTHOR_NAME", "codex")
+        .env("GIT_AUTHOR_EMAIL", "codex@openai.local")
+        .env("GIT_AUTHOR_DATE", "1788824962 +0000")
+        .env("GIT_COMMITTER_NAME", "codex")
+        .env("GIT_COMMITTER_EMAIL", "codex@openai.local")
+        .env("GIT_COMMITTER_DATE", "1788825279 +0000")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"auto-commit: 2026-09-07 23:49:21\n")
+        .unwrap();
+    let recreated = String::from_utf8(child.wait_with_output().unwrap().stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+    assert_eq!(recreated, ORPHAN, "fixture recreates the incident object");
+    git(&fixture_root, &["branch", "-f", "agent-main", HEAD]);
+    git(
+        &fixture_root,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/constellation-works/orbit.git",
+        ],
+    );
+
+    let source = super::super::source::Source::new(&fixture_root);
+    let old = source.revision(ORPHAN).unwrap();
+    let covered = source.revision(COVERED).unwrap();
+    let old_delivery = Delivery {
+        key: "direct:sep-8-settings".into(),
+        repository: "constellation-works/orbit".into(),
+        branch: "agent-main".into(),
+        before: source.revision(BASE).unwrap(),
+        after: old.clone(),
+        commits: vec![ORPHAN.into()],
+        task_ids: vec![],
+        evidence_reference: "incident:sep-8-settings".into(),
+        evidence_digest: "persisted-proof".into(),
+        landed_at: Utc::now(),
+    };
+    let state = AutomationState {
+        members: None,
+        consumer: "ws/qa".into(),
+        epoch: "v1".into(),
+        trigger: None,
+        repository: "constellation-works/orbit".into(),
+        branch: "agent-main".into(),
+        generation: 41,
+        baseline: covered.clone(),
+        observed: old,
+        covered,
+        pending_commits: vec![ORPHAN.into()],
+        pending: vec![old_delivery],
+        waived: vec![],
+        excluded: vec![],
+        unresolved: Default::default(),
+        associations: Default::default(),
+        active: None,
+    };
+    let provider = |_: &str, sha: &str| {
+        assert_eq!(sha, INSERTED, "mapped commit reuses persisted identity");
+        Ok(json!([{
+            "number": 1586,
+            "html_url": "https://github.com/constellation-works/orbit/pull/1586",
+            "merge_commit_sha": INSERTED,
+            "merged_at": "2026-09-08T00:00:00Z",
+            "base": {"ref": "agent-main", "repo": {"full_name": "constellation-works/orbit"}}
+        }])
+        .to_string())
+    };
+
+    let (page, proof) = source
+        .replay_history_with_lookup("agent-main", &state, &provider, 0)
+        .unwrap();
+    assert_eq!(proof.captured_generation, 41);
+    assert_eq!(proof.captured_head.commit, HEAD);
+    assert_eq!(proof.old_observed.commit, ORPHAN);
+    assert_eq!(proof.new_observed.commit, CANONICAL);
+    assert_eq!(proof.mappings[0].orphan.commit, ORPHAN);
+    assert_eq!(proof.mappings[0].canonical.commit, CANONICAL);
+    assert_eq!(page.commits, vec![INSERTED, CANONICAL]);
+    assert!(
+        page.deliveries
+            .iter()
+            .any(|delivery| delivery.key == "pr:constellation-works/orbit:agent-main:1586")
+    );
+
+    let mut missing = state.clone();
+    missing.observed.commit = "0000000000000000000000000000000000000000".into();
+    let error = super::super::source::Source::new(&fixture_root)
+        .replay_history_with_lookup("agent-main", &missing, &provider, 0)
+        .expect_err("the orphan object is mandatory");
+    assert!(matches!(
+        error,
+        orbit_automation::AutomationError::Refused(reason)
+            if reason == orbit_types::workflow::automation::recovery::refusal::HISTORY_OBJECT_MISSING
+    ));
+
+    let mut unreachable = state;
+    unreachable.covered = source.revision(ORPHAN).unwrap();
+    unreachable.baseline = unreachable.covered.clone();
+    let error = super::super::source::Source::new(&fixture_root)
+        .replay_history_with_lookup("agent-main", &unreachable, &provider, 0)
+        .expect_err("an orphaned covered boundary cannot be replayed");
+    assert!(matches!(
+        error,
+        orbit_automation::AutomationError::Refused(reason)
+            if reason == orbit_types::workflow::automation::recovery::refusal::HISTORY_BOUNDARY_UNREACHABLE
+    ));
+}
+
 fn definition(
     runtime: &OrbitRuntime,
     name: &str,
@@ -912,6 +1060,7 @@ fn recovery_adopts_retuned_settings_and_reissues_an_archived_unevidenced_action(
         &RecoveryRequest {
             adopt_settings: true,
             reissue_action: true,
+            replay_history: false,
             reason: "adopt tonight's QA threshold and re-examine the unpaid landing".into(),
         },
         Utc::now(),
