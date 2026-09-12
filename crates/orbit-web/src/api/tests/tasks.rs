@@ -1591,6 +1591,28 @@ async fn update_task_refuses_to_fabricate_or_reopen_a_completion() {
     let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
     let task = seed_backlog_task(&runtime, "Dashboard status governance");
 
+    let proposed = seed_task_with_status(
+        &runtime,
+        "Proposed dashboard status governance",
+        TaskStatus::Proposed,
+    );
+    let skipped = patch_task(runtime.clone(), &proposed.id, json!({ "status": "done" })).await;
+    assert_eq!(skipped.status(), StatusCode::BAD_REQUEST);
+
+    let missing_plan = patch_task(
+        runtime.clone(),
+        &proposed.id,
+        json!({ "status": "in-progress" }),
+    )
+    .await;
+    assert_eq!(missing_plan.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_json(missing_plan).await["error"]
+            .as_str()
+            .expect("error message")
+            .contains("execution plan")
+    );
+
     let skipped = patch_task(runtime.clone(), &task.id, json!({ "status": "done" })).await;
     assert_eq!(skipped.status(), StatusCode::BAD_REQUEST);
     assert!(
@@ -1605,16 +1627,30 @@ async fn update_task_refuses_to_fabricate_or_reopen_a_completion() {
             "in-progress",
             json!({ "status": "in-progress", "plan": "1) do it" }),
         ),
-        (
-            "review",
-            json!({ "status": "review", "execution_summary": "did it" }),
-        ),
-        ("done", json!({ "status": "done" })),
+        ("review", json!({ "status": "review" })),
     ] {
         let response = patch_task(runtime.clone(), &task.id, body).await;
         assert_eq!(response.status(), StatusCode::OK, "{status}");
         assert_eq!(body_json(response).await["status"], json!(status));
     }
+
+    let missing_summary = patch_task(runtime.clone(), &task.id, json!({ "status": "done" })).await;
+    assert_eq!(missing_summary.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_json(missing_summary).await["error"]
+            .as_str()
+            .expect("error message")
+            .contains("execution summary")
+    );
+
+    let completed = patch_task(
+        runtime.clone(),
+        &task.id,
+        json!({ "status": "done", "execution_summary": "did it" }),
+    )
+    .await;
+    assert_eq!(completed.status(), StatusCode::OK);
+    assert_eq!(body_json(completed).await["status"], json!("done"));
 
     let reopened = patch_task(runtime.clone(), &task.id, json!({ "status": "backlog" })).await;
     assert_eq!(reopened.status(), StatusCode::BAD_REQUEST);
@@ -1633,6 +1669,80 @@ async fn update_task_refuses_to_fabricate_or_reopen_a_completion() {
             .iter()
             .any(|entry| { entry["from_status"] == "review" && entry["to_status"] == "done" })
     );
+}
+
+#[tokio::test]
+async fn task_projection_exposes_only_canonical_status_transitions_and_missing_evidence() {
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    let fixtures = [
+        (
+            TaskStatus::Proposed,
+            json!([
+                { "status": "in-progress", "required_field": "plan" },
+                { "status": "blocked", "required_field": null },
+                { "status": "backlog", "required_field": null },
+                { "status": "someday", "required_field": null },
+                { "status": "rejected", "required_field": null },
+                { "status": "archived", "required_field": null }
+            ]),
+        ),
+        (
+            TaskStatus::Backlog,
+            json!([
+                { "status": "in-progress", "required_field": null },
+                { "status": "blocked", "required_field": null },
+                { "status": "proposed", "required_field": null },
+                { "status": "someday", "required_field": null },
+                { "status": "rejected", "required_field": null },
+                { "status": "archived", "required_field": null }
+            ]),
+        ),
+        (
+            TaskStatus::Blocked,
+            json!([
+                { "status": "in-progress", "required_field": "plan" },
+                { "status": "backlog", "required_field": null },
+                { "status": "archived", "required_field": null }
+            ]),
+        ),
+        (
+            TaskStatus::Review,
+            json!([
+                { "status": "in-progress", "required_field": "plan" },
+                { "status": "blocked", "required_field": null },
+                { "status": "backlog", "required_field": null },
+                { "status": "done", "required_field": "execution_summary" },
+                { "status": "rejected", "required_field": null },
+                { "status": "archived", "required_field": null }
+            ]),
+        ),
+        (TaskStatus::Done, json!([])),
+        (TaskStatus::Archived, json!([])),
+    ];
+
+    for (status, expected) in fixtures {
+        let task = if status == TaskStatus::Archived {
+            let task = seed_task_with_status(
+                &runtime,
+                &format!("Projected {status}"),
+                TaskStatus::Backlog,
+            );
+            runtime
+                .archive_task(&task.id)
+                .expect("archive fixture task");
+            runtime.get_task(&task.id).expect("read archived fixture")
+        } else {
+            seed_task_with_status(&runtime, &format!("Projected {status}"), status)
+        };
+        let response = request_shared(runtime.clone(), &format!("/tasks/{}", task.id)).await;
+
+        assert_eq!(response.status(), StatusCode::OK, "{status}");
+        assert_eq!(
+            body_json(response).await["status_transitions"],
+            expected,
+            "{status}"
+        );
+    }
 }
 
 /// ORB-10648: `priority` is now a declared update field. It was undeclared

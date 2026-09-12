@@ -42,7 +42,7 @@ pub(crate) const FORCED_STATUS_EVENT: &str = "forced";
 /// quietly reopened — a regression gets a new task with a `regression_from`
 /// relation. Reconsidering a rejection is the single exception, because a
 /// rejection closes a proposal rather than recording delivery.
-pub(crate) fn task_status_transition_allowed(from: TaskStatus, to: TaskStatus) -> bool {
+pub fn task_status_transition_allowed(from: TaskStatus, to: TaskStatus) -> bool {
     use TaskStatus::{
         Archived, Backlog, Blocked, Done, InProgress, Proposed, Rejected, Review, Someday,
     };
@@ -63,6 +63,39 @@ pub(crate) fn task_status_transition_allowed(from: TaskStatus, to: TaskStatus) -
         (Someday, target) => matches!(target, Backlog | InProgress | Rejected),
         (InProgress, target) => matches!(target, Backlog | Someday | Review | Rejected),
         (Review, target) => matches!(target, Backlog | InProgress | Done | Rejected),
+    }
+}
+
+/// The companion field an otherwise-legal transition still needs from its
+/// caller, if the task does not already carry equivalent evidence.
+///
+/// This is the read-side counterpart of [`ensure_status_change_allowed`]. UI
+/// projections use it to collect evidence before submitting a mutation while
+/// the guarded update path remains the authority that accepts or refuses it.
+pub fn task_status_transition_required_field(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    target: TaskStatus,
+) -> Result<Option<&'static str>, OrbitError> {
+    if !task_status_transition_allowed(task.status, target) || task.status == target {
+        return Ok(None);
+    }
+
+    match target {
+        TaskStatus::InProgress if in_progress_transition_requires_plan(task.status) => {
+            let plan = task.plan.trim();
+            if plan.is_empty() || plan == UNAUTHORED_TASK_PLAN_PLACEHOLDER {
+                Ok(Some("plan"))
+            } else {
+                Ok(None)
+            }
+        }
+        TaskStatus::Done
+            if !completion_evidence_present(runtime, task, &TaskUpdateParams::default())? =>
+        {
+            Ok(Some("execution_summary"))
+        }
+        _ => Ok(None),
     }
 }
 
