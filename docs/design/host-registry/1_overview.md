@@ -9,7 +9,7 @@ status: Accepted
 feature: host-registry
 doc_role: overview
 tags: [host-registry, machine-identity, workspace-catalog]
-paths: ["crates/orbit-common/src/types/host.rs", "crates/orbit-common/src/types/workspace.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-cli/src/command/init.rs", "crates/orbit-cli/src/command/host/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/lib.rs", "crates/orbit-web/src/state.rs", "crates/orbit-mcp/src/remote/identity.rs", "crates/orbit-mcp/src/remote/discovery.rs"]
+paths: ["crates/orbit-types/src/identity/host.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-cli/src/command/init.rs", "crates/orbit-cli/src/command/host/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/lib.rs", "crates/orbit-web/src/state.rs", "crates/orbit-mcp/src/remote/identity.rs", "crates/orbit-mcp/src/remote/discovery.rs"]
 related_features: [host-registry, mcp-session-context, remote-access, federated-mcp]
 related_artifacts: [ORB-11009]
 ---
@@ -24,14 +24,14 @@ It is not a fleet router. V1 has no host-registration, host-list, host-retiremen
 
 | Layer | Current responsibility |
 |---|---|
-| orbit-common | Persistence-neutral host and workspace primitives: identifier validators and constants, workspace/catalog DTOs, roles, status, and schema constants |
+| orbit-types | Persistence-neutral host and workspace primitives: identifier validators and constants, workspace/catalog DTOs, roles, status, and schema constants |
 | orbit-registry | host.toml lifecycle, workspaces.json catalog operations, validation, atomic file persistence, and checkout-path health |
 | orbit-cmd | RegisteredRuntimeFactory and the composition that joins a selected registry checkout to a Core runtime |
 | orbit-cli | Global initialization, workspace mutations and display, local host rename, and MCP server bootstrap |
 | orbit-web | Registry-backed workspace snapshots, health projection, lazy runtime caching, and HTTP selection |
 | orbit-mcp plus the CLI MCP server | Server identity presentation, local workspace discovery, and authoritative per-call workspace resolution |
 
-orbit-common does not read machine files. orbit-registry does not dispatch Core tools or own MCP or Web transport. orbit-cmd does not own the catalog schema.
+orbit-types does not read machine files. orbit-registry does not dispatch Core tools or own MCP or Web transport. orbit-cmd does not own the catalog schema.
 
 ## Live artifacts
 
