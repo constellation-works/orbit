@@ -40,8 +40,8 @@ mod tests {
     use orbit_policy::PolicyEngine;
     use orbit_tools::{ToolContext, ToolRegistry};
     use orbit_types::policy::{FsProfile, PolicyDef};
-    use orbit_types::workflow::ActivityV2Spec;
     use orbit_types::workflow::activity_job::{OnDenial, tool_allowed};
+    use orbit_types::workflow::{ActivityV2Spec, JobRunState};
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -452,6 +452,75 @@ backend = "cli"
                 serde_json::json!("string")
             );
         }
+    }
+
+    /// [ORB-12275] The wait-envelope contract published to workflow authors
+    /// must spell terminal success as `JobRunState::Success` (`success`).
+    /// `succeeded` remains a compatibility token in
+    /// `pipeline_wait_status_is_success`, not an advertised enum value.
+    #[test]
+    fn invoke_and_wait_status_enum_matches_job_run_state_display() {
+        use crate::application::job::pipeline::pipeline_wait_status_is_success;
+
+        let (_, wait_yaml) = DEFAULT_ACTIVITY_FILES
+            .iter()
+            .find(|(name, _)| *name == "invoke_and_wait")
+            .expect("invoke_and_wait activity is seeded");
+        let wait = load_activity_asset(wait_yaml).expect("parse invoke_and_wait");
+        let statuses = wait.spec.output_schema_json["properties"]["status"]["enum"]
+            .as_array()
+            .expect("invoke_and_wait status enum");
+        let statuses: Vec<&str> = statuses
+            .iter()
+            .map(|value| value.as_str().expect("status enum values are strings"))
+            .collect();
+
+        let success = JobRunState::Success.to_string();
+        assert_eq!(success, "success");
+        assert!(
+            statuses.contains(&success.as_str()),
+            "wait contract must advertise the JobRunState Display spelling, got {statuses:?}"
+        );
+        assert!(
+            !statuses.contains(&"succeeded"),
+            "succeeded is a compatibility token, not a published wait status"
+        );
+        assert!(pipeline_wait_status_is_success(&success));
+
+        for status in &statuses {
+            let parsed = status.parse::<JobRunState>().unwrap_or_else(|err| {
+                panic!("declared wait status {status} is not a JobRunState rendering: {err}")
+            });
+            assert_eq!(
+                parsed.to_string(),
+                *status,
+                "declared wait status {status} drifted from JobRunState Display"
+            );
+        }
+
+        assert_eq!(
+            wait.spec.output_schema_json["properties"]["duration_ms"]["type"],
+            json!("integer")
+        );
+        assert!(
+            !wait.spec.description.contains("succeeded"),
+            "invoke_and_wait prose must not advertise status: succeeded"
+        );
+        assert!(wait.spec.description.contains("`success`"));
+
+        let (_, guard_yaml) = DEFAULT_ACTIVITY_FILES
+            .iter()
+            .find(|(name, _)| *name == "pipeline_success_guard")
+            .expect("pipeline_success_guard activity is seeded");
+        let guard = load_activity_asset(guard_yaml).expect("parse pipeline_success_guard");
+        assert!(
+            guard.spec.description.contains("`status: success`"),
+            "guard description must name the wait entry's success token"
+        );
+        assert!(
+            !guard.spec.description.contains("`status: succeeded`"),
+            "guard description must not keep the stale succeeded token"
+        );
     }
 
     /// [ORB-10129] The triage agent's hard bounds are structural: its tool
