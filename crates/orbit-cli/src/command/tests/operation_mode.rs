@@ -137,6 +137,15 @@ fn operation_commands_need_a_runtime_and_carry_admin_audit_metadata() {
 }
 
 #[test]
+fn hidden_pipeline_worker_uses_bounded_bootstrap_recovery() {
+    let cli = Cli::parse_from(["orbit", "job", "run-pipeline-worker", "jrun-child"]);
+    assert_eq!(
+        cli.command.operation().runtime_need,
+        RuntimeNeed::PipelineWorker
+    );
+}
+
+#[test]
 fn run_auto_grant_conflicts_with_blanket_completion() {
     assert!(
         Cli::try_parse_from(["orbit", "run", "auto", "--grant", "ogrant-1", "--complete"]).is_err()

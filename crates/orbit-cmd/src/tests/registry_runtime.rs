@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
@@ -17,9 +17,112 @@ use orbit_registry::workspace_registry::{
 };
 
 use crate::registry_runtime::{
-    RegisteredRuntimeFactory, resolved_workspace_binding, select_workspace_for_cwd_and_roots,
-    sync_task_prefix, workspace_runtime_binding,
+    RegisteredRuntimeFactory, resolved_workspace_binding, retry_pipeline_worker_bootstrap,
+    select_workspace_for_cwd_and_roots, sync_task_prefix, workspace_runtime_binding,
 };
+
+#[test]
+fn pipeline_worker_bootstrap_retries_only_typed_sqlite_contention() {
+    let contention = || {
+        OrbitError::SqliteContention(Box::new(orbit_common::SqliteContention {
+            path: "/isolated/audit.db".to_string(),
+            phase: "set synchronous=NORMAL".to_string(),
+            detail: "database is locked".to_string(),
+        }))
+    };
+    let mut attempts = 0;
+    let recovered = retry_pipeline_worker_bootstrap(
+        || {
+            attempts += 1;
+            if attempts < 3 {
+                Err(contention())
+            } else {
+                Ok("claimed-once")
+            }
+        },
+        Duration::from_secs(1),
+        Duration::from_millis(1),
+    )
+    .expect("contention released inside the worker budget");
+    assert_eq!(recovered, "claimed-once");
+    assert_eq!(attempts, 3);
+
+    let started = Instant::now();
+    let error = retry_pipeline_worker_bootstrap(
+        || Err::<(), _>(OrbitError::InvalidInput("unchanged".to_string())),
+        Duration::from_secs(1),
+        Duration::from_millis(50),
+    )
+    .expect_err("non-lock failures are not retried");
+    assert!(matches!(error, OrbitError::InvalidInput(message) if message == "unchanged"));
+    assert!(started.elapsed() < Duration::from_millis(500));
+}
+
+#[test]
+fn pipeline_worker_bootstrap_deadline_returns_precise_last_contention() {
+    let started = Instant::now();
+    let error = retry_pipeline_worker_bootstrap(
+        || {
+            Err::<(), _>(OrbitError::SqliteContention(Box::new(
+                orbit_common::SqliteContention {
+                    path: "/isolated/tasks/registry.db".to_string(),
+                    phase: "task prefix write admission".to_string(),
+                    detail: "database is busy".to_string(),
+                },
+            )))
+        },
+        Duration::from_millis(20),
+        Duration::from_millis(2),
+    )
+    .expect_err("deadline exhaustion returns the last typed failure");
+    assert!(started.elapsed() >= Duration::from_millis(20));
+    assert!(started.elapsed() < Duration::from_millis(500));
+    let message = error.to_string();
+    assert!(message.contains("/isolated/tasks/registry.db"), "{message}");
+    assert!(message.contains("task prefix write admission"), "{message}");
+}
+
+#[test]
+fn managed_worker_bootstrap_recovers_after_real_audit_store_busy_timeout() {
+    let fixture = managed_worktree_fixture();
+    let audit_db = fixture.registry_root.join("orbit.db");
+    let (locked, ready) = mpsc::sync_channel(1);
+    let blocker = std::thread::spawn(move || {
+        let store = orbit_store::Store::open(&audit_db).expect("open audit blocker");
+        store
+            .with_transaction(|tx| {
+                tx.connection()
+                    .execute(
+                        "UPDATE schema_meta SET value = value WHERE key = 'fixture-lock'",
+                        [],
+                    )
+                    .map_err(|error| OrbitError::Store(error.to_string()))?;
+                locked.send(()).expect("signal held audit lock");
+                std::thread::sleep(Duration::from_millis(5_250));
+                Ok(())
+            })
+            .expect("release audit writer");
+    });
+    ready.recv().expect("audit lock held");
+
+    let started = Instant::now();
+    let runtime = RegisteredRuntimeFactory::initialize_pipeline_worker_with_overrides(
+        Some(&fixture.registry_root),
+        Some(&fixture.repo_root.to_string_lossy()),
+    )
+    .expect("worker bootstrap recovers inside its bounded budget");
+    blocker.join().expect("audit blocker");
+
+    assert!(started.elapsed() > Duration::from_secs(5));
+    assert!(started.elapsed() < Duration::from_secs(20));
+    let shown = run_tool(
+        &runtime,
+        "orbit.task.show",
+        json!({ "id": fixture.task_id }),
+    )
+    .expect("recovered worker runtime retains authoritative task ownership");
+    assert_eq!(shown["id"], fixture.task_id);
+}
 
 fn workspace(id: &str, ship_mode: &str) -> Workspace {
     Workspace {

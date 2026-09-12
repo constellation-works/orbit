@@ -1,6 +1,8 @@
 //! Application composition over Registry's workspace catalog and Core's runtime seams.
 
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
@@ -64,7 +66,26 @@ pub fn resolved_workspace_binding(
 /// Core workspace binding.
 pub struct RegisteredRuntimeFactory;
 
+/// Admit retry attempts for fifteen seconds. An attempt already in SQLite may
+/// consume its five-second busy timeout, so wall-clock bootstrap is bounded to
+/// twenty seconds. The parent observer has no shorter kill deadline and keeps
+/// supervising an unclaimed pending child throughout this recovery window.
+const PIPELINE_WORKER_BOOTSTRAP_RETRY_DEADLINE: Duration = Duration::from_secs(15);
+const PIPELINE_WORKER_BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+
 impl RegisteredRuntimeFactory {
+    /// Bootstrap the hidden detached worker with lock-only bounded recovery.
+    pub fn initialize_pipeline_worker_with_overrides(
+        root_override: Option<&Path>,
+        workspace_selector: Option<&str>,
+    ) -> Result<OrbitRuntime, OrbitError> {
+        retry_pipeline_worker_bootstrap(
+            || Self::initialize_with_overrides(root_override, workspace_selector),
+            PIPELINE_WORKER_BOOTSTRAP_RETRY_DEADLINE,
+            PIPELINE_WORKER_BOOTSTRAP_RETRY_INTERVAL,
+        )
+    }
+
     pub fn resolve_roots_for_cwd(
         cwd: &Path,
         root_override: Option<&Path>,
@@ -356,6 +377,24 @@ impl RegisteredRuntimeFactory {
                 }
                 Self::open_registered_checkout(&global_root, workspace, checkout).map(Some)
             }
+        }
+    }
+}
+
+pub(crate) fn retry_pipeline_worker_bootstrap<T>(
+    mut bootstrap: impl FnMut() -> Result<T, OrbitError>,
+    timeout: Duration,
+    retry_interval: Duration,
+) -> Result<T, OrbitError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match bootstrap() {
+            Ok(runtime) => return Ok(runtime),
+            Err(error) if error.sqlite_contention().is_some() && Instant::now() < deadline => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                thread::sleep(retry_interval.min(remaining));
+            }
+            Err(error) => return Err(error),
         }
     }
 }

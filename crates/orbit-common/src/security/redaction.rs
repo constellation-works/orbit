@@ -252,6 +252,9 @@ pub fn redact_sensitive_env_error(error: OrbitError) -> OrbitError {
             redact_file_lock_timeout(*timeout, redact_sensitive_env_text),
         ),
         OrbitError::Store(m) => OrbitError::Store(redact_sensitive_env_text(&m)),
+        OrbitError::SqliteContention(contention) => OrbitError::SqliteContention(
+            redact_sqlite_contention(*contention, redact_sensitive_env_text),
+        ),
         OrbitError::TaskStatusTransition(m) => {
             OrbitError::TaskStatusTransition(redact_sensitive_env_text(&m))
         }
@@ -398,6 +401,9 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
             OrbitError::FileLockTimeout(redact_file_lock_timeout(*timeout, redact_all))
         }
         OrbitError::Store(m) => OrbitError::Store(redact_all(&m)),
+        OrbitError::SqliteContention(contention) => {
+            OrbitError::SqliteContention(redact_sqlite_contention(*contention, redact_all))
+        }
         OrbitError::TaskStatusTransition(m) => OrbitError::TaskStatusTransition(redact_all(&m)),
         OrbitError::DependencyNotDelivered(diagnostic) => OrbitError::DependencyNotDelivered(
             redact_dependency_not_delivered(*diagnostic, redact_all),
@@ -429,6 +435,16 @@ fn redact_file_lock_timeout(
         holder.label = redact(&holder.label);
     }
     Box::new(timeout)
+}
+
+fn redact_sqlite_contention(
+    mut contention: crate::SqliteContention,
+    redact: fn(&str) -> String,
+) -> Box<crate::SqliteContention> {
+    contention.path = redact(&contention.path);
+    contention.phase = redact(&contention.phase);
+    contention.detail = redact(&contention.detail);
+    Box::new(contention)
 }
 
 fn redact_friction_not_local(

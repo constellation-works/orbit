@@ -15,7 +15,7 @@ use std::path::{Component, Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::OrbitError;
+use crate::{OrbitError, SqliteContention};
 
 /// Default `busy_timeout` applied to every Orbit SQLite connection, in
 /// milliseconds. Writers under WAL still serialize; this bounds how long a
@@ -89,11 +89,21 @@ pub fn open_private(path: &Path) -> Result<OpenedConnection, OrbitError> {
             path.display()
         ))
     })?;
-    let pragmas = apply_default_pragmas(&connection)?;
+    let pragmas = apply_default_pragmas_for_path(&connection, &path)?;
     if pragmas.write_denied || filesystem_is_read_only(&path)? {
         drop(connection);
         return open_observational(&path, ObservationRequirement::PublishedMainFile);
     }
+    // Establish one typed write-admission boundary before store-specific
+    // bootstrap runs. Current-schema opens otherwise encounter contention in
+    // whichever later pragma, migration probe, or registry bind happens to
+    // need the writer, after the native SQLite code and database path have
+    // often been erased by several adapter layers.
+    connection
+        .execute_batch("BEGIN IMMEDIATE; ROLLBACK;")
+        .map_err(|error| {
+            sqlite_operation_error(Some(&path), "bootstrap write admission", &error)
+        })?;
     harden_sqlite_files(&path)?;
 
     Ok(OpenedConnection {
@@ -351,13 +361,27 @@ impl PragmaOutcome {
 ///   that need commit-durable acks (e.g. the task registry) override to
 ///   `FULL` after calling this.
 pub fn apply_default_pragmas(conn: &Connection) -> Result<PragmaOutcome, OrbitError> {
+    apply_default_pragmas_inner(conn, None)
+}
+
+fn apply_default_pragmas_for_path(
+    conn: &Connection,
+    path: &Path,
+) -> Result<PragmaOutcome, OrbitError> {
+    apply_default_pragmas_inner(conn, Some(path))
+}
+
+fn apply_default_pragmas_inner(
+    conn: &Connection,
+    path: Option<&Path>,
+) -> Result<PragmaOutcome, OrbitError> {
     let (journal_mode, mut write_denied) = request_wal_journal_mode(conn);
     conn.pragma_update(None, "busy_timeout", DEFAULT_BUSY_TIMEOUT_MS)
-        .map_err(|e| OrbitError::Store(format!("failed to set busy_timeout: {e}")))?;
+        .map_err(|error| sqlite_operation_error(path, "set busy_timeout", &error))?;
     conn.pragma_update(None, "foreign_keys", "ON")
-        .map_err(|e| OrbitError::Store(format!("failed to enable foreign keys: {e}")))?;
+        .map_err(|error| sqlite_operation_error(path, "enable foreign keys", &error))?;
     if let Err(error) = conn.pragma_update(None, "synchronous", "NORMAL") {
-        let mapped = OrbitError::Store(format!("failed to set synchronous=NORMAL: {error}"));
+        let mapped = sqlite_operation_error(path, "set synchronous=NORMAL", &error);
         if mapped.is_readonly_or_access_failure() {
             write_denied = true;
             tracing::warn!(
@@ -373,6 +397,30 @@ pub fn apply_default_pragmas(conn: &Connection) -> Result<PragmaOutcome, OrbitEr
         journal_mode,
         write_denied,
     })
+}
+
+fn sqlite_operation_error(path: Option<&Path>, phase: &str, error: &rusqlite::Error) -> OrbitError {
+    use rusqlite::ErrorCode;
+
+    let contention = matches!(
+        error.sqlite_error_code(),
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    );
+    if contention && let Some(path) = path {
+        return OrbitError::SqliteContention(Box::new(SqliteContention {
+            path: path.display().to_string(),
+            phase: phase.to_string(),
+            detail: error.to_string(),
+        }));
+    }
+
+    let message = match phase {
+        "set busy_timeout" => format!("failed to set busy_timeout: {error}"),
+        "enable foreign keys" => format!("failed to enable foreign keys: {error}"),
+        "set synchronous=NORMAL" => format!("failed to set synchronous=NORMAL: {error}"),
+        _ => error.to_string(),
+    };
+    OrbitError::Store(message)
 }
 
 /// What a caller needs from an observational open.

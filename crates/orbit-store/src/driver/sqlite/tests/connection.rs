@@ -190,6 +190,36 @@ fn schema_version_matches_binary_after_open() {
     );
 }
 
+#[test]
+fn current_store_bootstrap_names_locked_write_admission_after_busy_timeout() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("store.db");
+    drop(Store::open(&path).expect("initialize current store"));
+
+    let blocker = rusqlite::Connection::open(&path).expect("open blocker");
+    blocker
+        .execute_batch("BEGIN EXCLUSIVE")
+        .expect("hold SQLite write lock");
+    let started = std::time::Instant::now();
+    let error = match Store::open(&path) {
+        Ok(_) => panic!("bootstrap must exhaust the busy timeout"),
+        Err(error) => error,
+    };
+
+    assert!(
+        started.elapsed()
+            >= std::time::Duration::from_millis(u64::from(
+                orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS,
+            )),
+        "the regression must exercise SQLite's real busy timeout"
+    );
+    let contention = error
+        .sqlite_contention()
+        .expect("lock failure remains typed across the store boundary");
+    assert_eq!(contention.path, path.display().to_string());
+    assert_eq!(contention.phase, "bootstrap write admission");
+}
+
 #[cfg(unix)]
 #[test]
 fn file_store_is_private_under_permissive_umask() {

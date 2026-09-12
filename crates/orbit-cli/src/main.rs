@@ -254,6 +254,12 @@ fn main() {
             root_override.as_deref(),
             workspace_selector.as_deref(),
         ),
+        RuntimeNeed::PipelineWorker => {
+            RegisteredRuntimeFactory::initialize_pipeline_worker_with_overrides(
+                root_override.as_deref(),
+                workspace_selector.as_deref(),
+            )
+        }
         RuntimeNeed::ReadOnly => RegisteredRuntimeFactory::initialize_read_only_with_overrides(
             root_override.as_deref(),
             workspace_selector.as_deref(),

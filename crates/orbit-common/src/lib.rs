@@ -35,7 +35,7 @@ pub mod test_process;
 
 pub use error::{
     ArtifactOrigin, ArtifactOriginMode, DependencyNotDelivered, FrictionNotLocal, NotFoundKind,
-    OrbitError, RecoverableVcsConflict, WorkspaceClaimHeld,
+    OrbitError, RecoverableVcsConflict, SqliteContention, WorkspaceClaimHeld,
 };
 pub use fs::task_io::{prune_missing_context_files, task_artifact_from_source_file};
 pub use model::pricing::{derive_cost_usd, normalize_token_usage};
