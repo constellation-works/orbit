@@ -7,6 +7,7 @@ use orbit_types::workflow::automation::{CoverageClass, DeliveryTrigger};
 
 use crate::command::auto_task::AutoTaskSubcommand;
 use crate::command::{Cli, CommandOutput, Commands, Execute};
+use crate::output::payload::{Block, View};
 
 #[test]
 fn auto_task_add_accepts_required_tools_and_legacy_alias() {
@@ -139,6 +140,82 @@ fn auto_task_add_execution_reports_disabled_required_tool_warning() {
             })
         })
     }));
+}
+
+#[test]
+fn dedupe_accepts_both_spellings_and_agrees_across_file_json_and_show() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+
+    for (flag_value, name) in [
+        ("skip-if-open", "dedupe-kebab"),
+        ("skip_if_open", "dedupe-snake"),
+    ] {
+        let cli = Cli::try_parse_from([
+            "orbit",
+            "auto-task",
+            "add",
+            "--name",
+            name,
+            "--every-minutes",
+            "5",
+            "--title",
+            "Dedupe token",
+            "--dedupe",
+            flag_value,
+        ])
+        .unwrap_or_else(|error| panic!("parse auto-task add --dedupe {flag_value}: {error}"));
+        let Commands::AutoTask(auto_task) = cli.command else {
+            panic!("expected auto-task command");
+        };
+        let AutoTaskSubcommand::Add(args) = auto_task.command else {
+            panic!("expected auto-task add command");
+        };
+        assert_eq!(args.dedupe, DedupePolicy::SkipIfOpen);
+
+        let CommandOutput::Payload(payload) = args.execute(&runtime).expect("auto-task add") else {
+            panic!("auto-task add should return a payload");
+        };
+        let (document, _) = payload.into_view();
+        assert_eq!(document["dedupe"], "skip_if_open");
+
+        let file_path = runtime
+            .paths()
+            .local_dir
+            .join("auto_tasks")
+            .join(format!("{name}.yaml"));
+        let file_contents = std::fs::read_to_string(&file_path).expect("definition file");
+        assert!(
+            file_contents.contains("dedupe: skip_if_open"),
+            "{file_contents}"
+        );
+
+        let show_cli = Cli::try_parse_from(["orbit", "auto-task", "show", name])
+            .expect("parse auto-task show");
+        let Commands::AutoTask(auto_task) = show_cli.command else {
+            panic!("expected auto-task command");
+        };
+        let AutoTaskSubcommand::Show(show_args) = auto_task.command else {
+            panic!("expected auto-task show command");
+        };
+        let CommandOutput::Payload(show_payload) =
+            show_args.execute(&runtime).expect("auto-task show")
+        else {
+            panic!("auto-task show should return a payload");
+        };
+        let (_, view) = show_payload.into_view();
+        let View::Blocks(blocks) = view else {
+            panic!("expected block view");
+        };
+        let text = blocks
+            .into_iter()
+            .find_map(|block| match block {
+                Block::Text(text) => Some(text),
+                Block::Table(_) => None,
+            })
+            .expect("text block");
+        assert!(text.contains("dedupe: skip_if_open"), "{text}");
+        assert!(!text.contains("SkipIfOpen"), "{text}");
+    }
 }
 
 #[test]

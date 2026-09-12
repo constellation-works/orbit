@@ -45,7 +45,27 @@ review it in a PR like any other definition.
 | `--required-tool` | Repeatable exact canonical tool name. Scheduled fires and manual `mint` copy the normalized list onto each task. |
 | `--status` | Status the minted task enters. Defaults to `backlog`; use `proposed` when a human should approve each instance before it becomes shippable work. |
 | `--crew` | Crew override for minted tasks. |
-| `--dedupe` | `skip-if-open` (default) or `always`. |
+| `--dedupe` | `skip-if-open` (default) or `always`. `skip_if_open` is also accepted. The definition file, the JSON document, and `show` all print the canonical `skip_if_open` / `always` token. |
+
+## Minted tasks carry `complexity: "unassessed"`
+
+A definition's template does not carry `complexity` — minting is the one create
+path allowed to leave the assessment unset, and it always does, storing the
+explicit non-answer `unassessed` rather than defaulting to `medium` or leaving
+the field blank. `unassessed` is a full `TaskComplexity` value: it round-trips
+through `task.show`, `task.list`, and every persisted store, and it is exactly
+the value `task.add`/`task.update` reject on the `complexity` field — those two
+surfaces only accept `low`/`medium`/`hard`, so a human or agent can assess a
+minted task but can never re-clear that assessment. This does not block
+ordinary updates: `complexity` is patched only when a `task.update` call
+supplies it, so filing a comment, changing status, or any other no-op on
+`complexity` succeeds on a minted task exactly as it would on any other.
+
+Auto crew-pool selection (`workflow.*_complexity_crews`) has no pool for
+`unassessed`: the configured pools only cover `low` / `medium` / `hard`, so a
+minted task always falls through to the default crew, never a complexity-keyed
+pool. Assess the task through `task.update --complexity` first if it should
+draw from a pool.
 
 ## Dedupe is the important field
 

@@ -171,6 +171,13 @@ pub struct AutoTaskTemplate {
 
 /// Dedupe policy for firing while a prior instance created by this definition
 /// is still open.
+///
+/// The canonical spelling — on the wire, on disk, and in `show` — is
+/// `snake_case` (`skip_if_open`, `always`), matching every other persisted
+/// auto-task field. The CLI's `--dedupe` flag additionally accepts the
+/// `clap`-default kebab-case spelling (`skip-if-open`) as an alias, since that
+/// is what `--help` advertises as the possible values; it still normalizes to
+/// the snake_case token before anything is persisted.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "snake_case")]
@@ -178,9 +185,26 @@ pub enum DedupePolicy {
     /// Skip the fire while a previously-created instance is still open, so a
     /// stalled backlog never accumulates identical tasks (the default).
     #[default]
+    #[cfg_attr(feature = "clap", value(alias = "skip_if_open"))]
     SkipIfOpen,
     /// Always fire, even if a prior instance is still open.
     Always,
+}
+
+impl DedupePolicy {
+    /// The canonical `snake_case` token, matching the persisted/`show` form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DedupePolicy::SkipIfOpen => "skip_if_open",
+            DedupePolicy::Always => "always",
+        }
+    }
+}
+
+impl std::fmt::Display for DedupePolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
 }
 
 const fn default_true() -> bool {

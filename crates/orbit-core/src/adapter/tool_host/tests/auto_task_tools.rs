@@ -84,6 +84,36 @@ fn mint_returns_the_minted_task_with_its_provenance_tag() {
     );
 }
 
+/// ORB-12253: a minted task's `complexity: "unassessed"` must never block a
+/// later update that leaves complexity untouched — the value auto-task mint
+/// writes has to round-trip through ordinary `task.update` calls, since
+/// `complexity` on that surface is patched only when the caller supplies it
+/// (ORB-12116 rejects `unassessed` only when a caller explicitly names it).
+#[test]
+fn minted_tasks_unassessed_complexity_survives_a_later_no_op_update() {
+    let (_temp, runtime) = with_definition("chore");
+    runtime
+        .auto_task_toggle("chore", false)
+        .expect("disable the definition");
+
+    let minted = run_tool_as_operator(&runtime, "orbit.auto_task.mint", json!({ "name": "chore" }))
+        .expect("mint");
+    assert_eq!(minted["complexity"], json!("unassessed"));
+    let task_id = minted["id"].as_str().expect("task id").to_string();
+
+    let updated = run_tool_as_operator(
+        &runtime,
+        "orbit.task.update",
+        json!({ "id": task_id, "comment": "no-op touch" }),
+    )
+    .expect("an update that omits complexity must succeed on a minted task");
+    assert_eq!(updated["complexity"], json!("unassessed"));
+
+    let shown =
+        run_tool_as_operator(&runtime, "orbit.task.show", json!({ "id": task_id })).expect("show");
+    assert_eq!(shown["complexity"], json!("unassessed"));
+}
+
 #[test]
 fn mint_requires_a_definition_name_and_names_an_unknown_one() {
     let (_temp, runtime) = with_definition("chore");
