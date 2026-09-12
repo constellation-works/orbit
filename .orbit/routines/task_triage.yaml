@@ -15,8 +15,6 @@ description: >
   re-backlog environmental casualties, and leave everything else blocked
   with a diagnosis attached.
 enabled: false
-hosts:
-  - dk-server-1
 trigger:
   cron: "15 * * * *"
   missed_run: skip

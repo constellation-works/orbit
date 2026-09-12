@@ -6,8 +6,6 @@ description: >
   Hourly reclamation of worktrees whose associated task has settled to
   rejected, archived, or done.
 enabled: true
-hosts:
-  - dk-server-1
 trigger:
   cron: "1 * * * *"
   missed_run: skip

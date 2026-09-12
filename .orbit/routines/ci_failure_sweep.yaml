@@ -30,8 +30,6 @@ description: >
   a proposed task, and promote only pilot-validated current repairs to backlog.
   Deduped against still-open tasks by failure key.
 enabled: true
-hosts:
-  - dk-server-1
 trigger:
   cron: "5 * * * *"
   missed_run: skip

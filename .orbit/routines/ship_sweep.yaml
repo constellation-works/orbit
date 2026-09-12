@@ -14,8 +14,6 @@ description: >
   Disabled by default; set enabled to true in this versioned definition to
   opt this workspace into scheduled shipment.
 enabled: false
-hosts:
-  - dk-server-1
 trigger:
   cron: "30 * * * *"
   missed_run: skip

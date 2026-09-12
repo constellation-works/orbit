@@ -19,8 +19,6 @@ description: >
   pipeline. Disabled by default; set enabled to true in this versioned
   definition to opt this workspace into scheduled task preflight.
 enabled: true
-hosts:
-  - dk-server-1
 trigger:
   cron: "*/15 * * * *"
   missed_run: skip
