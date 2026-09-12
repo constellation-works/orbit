@@ -665,7 +665,7 @@ fn exists_on_disk_and_explicit_value_for_missing_and_present_keys() {
     let present_path = config_path(present_dir.path());
     fs::write(
         &present_path,
-        "[scoring]\nenabled = false\n\n[crews.sol]\nmodel = \"gpt-5.6-sol\"\n",
+        "[workflow]\ndefault_crew = \"sol\"\n\n[scoring]\nenabled = false\n\n[crews.sol]\nmodel = \"gpt-5.6-sol\"\nprovider = \"codex\"\n",
     )
     .expect("write config");
 
