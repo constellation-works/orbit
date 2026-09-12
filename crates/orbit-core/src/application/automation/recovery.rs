@@ -1,5 +1,5 @@
-//! Operator recovery for a delivery auto-task consumer stalled by a settings
-//! change [ORB-12295].
+//! Operator recovery for a delivery auto-task consumer stalled by settings or
+//! a content-preserving branch rebase.
 //!
 //! Core resolves the same ownership, epoch and source facts the evaluator uses
 //! and hands them to the shared rule; Automation decides what may be adopted
@@ -56,15 +56,43 @@ pub fn recover_auto_task(
         request,
         by: &by,
         now,
+        replay: None,
     };
 
     let store = runtime.automation_store()?;
+    let replay = if request.replay_history {
+        let state = store
+            .automation_state(&consumer)?
+            .ok_or_else(|| OrbitError::InvalidInput("unknown delivery consumer".into()))?;
+        let receipts = store.automation_receipts(&consumer, 100)?;
+        let (page, record) = source
+            .replay_history(&trigger.branch, &state, receipts.len())
+            .map_err(automation_error_to_orbit)?;
+        Some(recovery::HistoryReplayInput { page, record })
+    } else {
+        None
+    };
+    let operation = recovery::Recovery {
+        replay,
+        ..operation
+    };
 
     if !request.mutates() {
         return recovery::preview(store.as_ref(), &operation).map_err(automation_error_to_orbit);
     }
 
     runtime.ensure_coordination_task_write_permitted()?;
+
+    if let Some(replay) = &operation.replay {
+        let (_, current_head) = source
+            .head(&trigger.branch)
+            .map_err(automation_error_to_orbit)?;
+        if current_head != replay.record.captured_head {
+            return Err(OrbitError::InvalidInput(
+                orbit_types::workflow::automation::recovery::refusal::HISTORY_HEAD_CHANGED.into(),
+            ));
+        }
+    }
 
     recovery::apply(store.as_ref(), &operation).map_err(automation_error_to_orbit)
 }

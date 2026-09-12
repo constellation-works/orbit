@@ -279,6 +279,35 @@ changed, and afterwards from a fresh preview: `history` carries the audit
 record, and `orbit auto-task show delivery-qa --json` must still report the same
 covered boundary and pending membership as before.
 
+### Replaying a consumer after a legitimate branch rebase [ORB-12312]
+
+Use the separate replay mode only when evaluation reports `history_diverged`.
+The flag alone is an inert preview:
+
+```sh
+orbit auto-task recover delivery-qa --replay-history --json
+```
+
+The preview captures the configured branch head and consumer generation, shows
+the unique orphan-to-canonical mapping proof, and lists newly inserted delivery
+keys that will remain unpaid. Apply the already-previewed repair with an audit
+reason; settings adoption and action reissue cannot be combined with this mode:
+
+```sh
+orbit auto-task recover delivery-qa --replay-history \
+  --reason "reconcile the verified Sep 8 content-preserving rebase"
+```
+
+Replay never rewrites Git. It preserves the baseline, covered cursor, accepted
+receipts, waivers, exclusions, and the complete active batch/action/input digest.
+Pending deliveries, unresolved commits, and provider associations are replaced
+only through stable delivery keys and exact commit mapping; inserted commits use
+the normal provider association path. State and its immutable recovery record
+commit in one generation-fenced transaction. The command also compares the
+captured branch head immediately before that transaction and refuses a moved
+head. Restore unavailable objects or provider evidence and retry; do not reset
+the consumer or treat missing proof as coverage.
+
 ## Rollback and limits
 
 Disable delivery definitions and allow admitted work to settle before rolling back.
