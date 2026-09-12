@@ -16,40 +16,113 @@ use orbit_common::test_env;
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
+/// [ORB-12245] `done` and `archived` are terminal on the governed surface.
+/// A human on the bare CLI can still override the table with `--force`, and
+/// the override is named in the task's history.
 #[test]
-fn update_status_restores_archived_task_directly_to_any_status() {
+fn update_status_reopens_terminal_tasks_only_with_an_explicit_force() {
+    let workspace = TestWorkspace::new();
+    let id = workspace.add_task("Terminal task");
+    workspace.drive_to_done(&id);
+
+    let refused = workspace.run_raw(&["task", "update", &id, "--status", "rejected"]);
+    assert!(!refused.status.success(), "done must not reopen silently");
+    let refusal = String::from_utf8_lossy(&refused.stderr).to_string();
+    assert!(
+        refusal.contains("cannot move from 'done' to 'rejected'"),
+        "the refusal must name the pair: {refusal}"
+    );
+
+    let reopened = workspace.task_json(&[
+        "task", "update", &id, "--status", "rejected", "--force", "--json",
+    ]);
+    assert_eq!(reopened["status"], json!("rejected"));
+    assert!(!reopened["execution_summary"].as_str().unwrap().is_empty());
+
+    let forced = reopened["history"]
+        .as_array()
+        .expect("task history")
+        .last()
+        .expect("forced event")
+        .clone();
+    assert_eq!(forced["event"], json!("forced"));
+    assert_eq!(forced["from_status"], json!("done"));
+    assert_eq!(forced["to_status"], json!("rejected"));
+
+    // Reconsidering a rejection needs no override.
+    let reconsidered =
+        workspace.task_json(&["task", "update", &id, "--status", "backlog", "--json"]);
+    assert_eq!(reconsidered["status"], json!("backlog"));
+}
+
+/// `orbit task archive` shelves a task from any status; restoring it is the
+/// same human override as reopening a completed one.
+#[test]
+fn update_status_restores_an_archived_task_with_force() {
     let workspace = TestWorkspace::new();
     let id = workspace.add_task("Restore me");
     workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
     workspace.run(&["task", "archive", &id], "archive");
 
-    let restored =
-        workspace.task_json(&["task", "update", &id, "--status", "in-progress", "--json"]);
-    assert_eq!(restored["status"], json!("in-progress"));
+    let refused = workspace.run_raw(&["task", "update", &id, "--status", "backlog"]);
+    assert!(
+        !refused.status.success(),
+        "archived must not restore silently"
+    );
+
+    let restored = workspace.task_json(&[
+        "task", "update", &id, "--status", "backlog", "--force", "--json",
+    ]);
+    assert_eq!(restored["status"], json!("backlog"));
 }
 
+/// Completion evidence is required wherever the status is set: the CLI is no
+/// more able to mint a `done` task out of a proposal than an agent is.
 #[test]
-fn update_status_reopens_done_directly_and_accepts_accompanying_edits() {
+fn update_status_refuses_completion_without_review_and_evidence() {
     let workspace = TestWorkspace::new();
-    let id = workspace.add_task("Terminal task");
-    workspace.drive_to_done(&id);
+    let id = workspace.add_task("Fabricated completion");
 
-    let reopened = workspace.task_json(&[
+    let skipped = workspace.run_raw(&["task", "update", &id, "--status", "done"]);
+    assert!(!skipped.status.success());
+    assert!(
+        String::from_utf8_lossy(&skipped.stderr).contains("reachable only from 'review'"),
+        "completion must not skip review"
+    );
+
+    workspace.run(&["task", "update", &id, "--status", "backlog"], "approve");
+    workspace.run(
+        &[
+            "task",
+            "update",
+            &id,
+            "--plan",
+            "1) do it",
+            "--status",
+            "in-progress",
+        ],
+        "start",
+    );
+    workspace.run(&["task", "update", &id, "--status", "review"], "to review");
+
+    let unproven = workspace.run_raw(&["task", "update", &id, "--status", "done"]);
+    assert!(!unproven.status.success());
+    assert!(
+        String::from_utf8_lossy(&unproven.stderr).contains("execution summary"),
+        "completion must name its missing evidence"
+    );
+
+    let done = workspace.task_json(&[
         "task",
         "update",
         &id,
+        "--execution-summary",
+        "did it",
         "--status",
-        "rejected",
-        "--title",
-        "Reclassified task",
+        "done",
         "--json",
     ]);
-    assert_eq!(reopened["status"], json!("rejected"));
-    assert_eq!(reopened["title"], json!("Reclassified task"));
-    assert!(!reopened["execution_summary"].as_str().unwrap().is_empty());
-
-    let archived = workspace.task_json(&["task", "update", &id, "--status", "archived", "--json"]);
-    assert_eq!(archived["status"], json!("archived"));
+    assert_eq!(done["status"], json!("done"));
 }
 
 #[test]

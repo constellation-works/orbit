@@ -191,6 +191,36 @@ fn schema_and_handler_exclude_inline_artifacts() {
     assert!(error.to_string().contains("orbit.task.artifact.put"));
 }
 
+/// [ORB-12245] The lifecycle override is a human CLI action. The agent-facing
+/// schema does not advertise it, and the handler refuses it rather than
+/// silently ignoring it.
+#[test]
+fn schema_omits_and_handler_rejects_force() {
+    let schema = OrbitTaskUpdateTool.schema();
+    assert!(
+        schema
+            .parameters
+            .iter()
+            .all(|parameter| parameter.name != "force")
+    );
+
+    let error = OrbitTaskUpdateTool
+        .execute(
+            &update_tool_context(Arc::new(FakeTaskHost::seeded(None))),
+            json!({
+                "id": "ORB-00001",
+                "model": "codex",
+                "status": "done",
+                "force": true,
+            }),
+        )
+        .expect_err("agents cannot override the task lifecycle");
+    assert!(
+        error.to_string().contains("does not accept `force`"),
+        "{error}"
+    );
+}
+
 #[test]
 fn update_handler_persists_source_task_id() {
     let host = Arc::new(FakeTaskHost::seeded(None));

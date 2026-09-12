@@ -153,6 +153,7 @@ fn task_update_to_done_resolves_related_friction() {
     let (_root, runtime, repo_root) = test_runtime();
     let friction_id = add_test_friction(&runtime);
     let task_id = add_task_with_resolves(&runtime, &repo_root, &friction_id, "backlog");
+    move_backlog_task_to_review(&runtime, &task_id);
 
     let updated = runtime
         .run_tool(
@@ -336,6 +337,7 @@ fn cross_workspace_resolves_update_to_done_is_rejected() {
     let friction_id = add_test_friction(&runtime_a);
     let owner = runtime_a.workspace_id().expect("workspace a id");
     let task_id = add_task_with_resolves(&runtime_b, &repo_b, &friction_id, "backlog");
+    move_backlog_task_to_review(&runtime_b, &task_id);
 
     let error = runtime_b
         .run_tool(
@@ -351,7 +353,7 @@ fn cross_workspace_resolves_update_to_done_is_rejected() {
     assert_friction_still_open(&runtime_a, &friction_id);
     assert_eq!(
         runtime_b.get_task(&task_id).expect("get task").status,
-        TaskStatus::Backlog
+        TaskStatus::Review
     );
 }
 
@@ -409,6 +411,7 @@ fn same_workspace_resolves_still_wins_when_another_workspace_shares_the_id() {
     assert_eq!(foreign_id, local_id);
 
     let task_id = add_task_with_resolves(&runtime_b, &repo_b, &local_id, "backlog");
+    move_backlog_task_to_review(&runtime_b, &task_id);
     runtime_b
         .run_tool(
             "orbit.task.update",

@@ -14,11 +14,30 @@ use super::helpers::{
     SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution, build_task_comments,
     describe_optional_field_value,
 };
+use super::lifecycle::{FORCED_STATUS_EVENT, ensure_status_change_allowed};
 use super::params::TaskUpdateParams;
 use super::paths::{
     canonicalize_context_files_for_read, context_files_pruned_history_entry,
     context_workspace_root, normalize_context_files_for_write,
 };
+
+/// Which lifecycle rules a status change on this write must satisfy
+/// [ORB-12245].
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum StatusAuthority {
+    /// In-process callers that own their own transition rules: the delivery
+    /// pipeline's activities, which compare-and-set against the status they
+    /// observed, and Core use cases such as [`OrbitRuntime::archive_task`].
+    #[default]
+    Internal,
+    /// Attributed operator and agent surfaces — the CLI `task update`, the
+    /// dashboard, and the registered `orbit.task.update` tool. The lifecycle
+    /// table decides.
+    Lifecycle,
+    /// A human overriding the table on the bare CLI, recorded in task history
+    /// as [`FORCED_STATUS_EVENT`].
+    Forced,
+}
 
 #[derive(Default)]
 struct TaskUpdateContext {
@@ -27,11 +46,21 @@ struct TaskUpdateContext {
     model: Option<String>,
     artifact_owner: Option<String>,
     expected_status: Option<TaskStatus>,
+    status_authority: StatusAuthority,
 }
 
 impl OrbitRuntime {
-    pub fn update_task(&self, id: &str, params: TaskUpdateParams) -> Result<Task, OrbitError> {
-        self.update_task_with_identity(id, params, None, None)
+    /// The in-crate task setter. Status changes are *not* checked against the
+    /// lifecycle table here: callers are Core's own use cases, which either
+    /// change no status or own the transition themselves. Everything outside
+    /// this crate goes through a guarded entry point below.
+    pub(crate) fn update_task(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+    ) -> Result<Task, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.update_task_with_context(id, params, TaskUpdateContext::default())
     }
 
     pub fn update_task_with_identity(
@@ -48,6 +77,34 @@ impl OrbitRuntime {
             TaskUpdateContext {
                 agent,
                 model,
+                status_authority: StatusAuthority::Lifecycle,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// The human escape hatch behind `orbit task update --force`: apply the
+    /// update even when the lifecycle table refuses the status change, and
+    /// record the override in task history.
+    ///
+    /// Only the bare CLI reaches this. The registered `orbit.task.update` tool
+    /// refuses a `force` argument outright, so no agent can grant itself the
+    /// override.
+    pub fn force_update_task_with_identity(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.update_task_with_context(
+            id,
+            params,
+            TaskUpdateContext {
+                agent,
+                model,
+                status_authority: StatusAuthority::Forced,
                 ..Default::default()
             },
         )
@@ -69,6 +126,7 @@ impl OrbitRuntime {
                 agent,
                 model,
                 artifact_owner: owner,
+                status_authority: StatusAuthority::Lifecycle,
                 ..Default::default()
             },
         )
@@ -158,6 +216,7 @@ impl OrbitRuntime {
             model,
             artifact_owner,
             expected_status,
+            status_authority,
         } = context;
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
@@ -169,6 +228,12 @@ impl OrbitRuntime {
                 "task '{id}' status changed to '{}' before this activity write; expected '{expected_status}'",
                 task.status
             )));
+        }
+        let requested_status = params.status.filter(|status| *status != task.status);
+        if let Some(target) = requested_status
+            && status_authority == StatusAuthority::Lifecycle
+        {
+            ensure_status_change_allowed(self, &task, &params, target)?;
         }
         let prune_root = context_workspace_root(&self.paths().repo_root, None);
 
@@ -279,6 +344,11 @@ impl OrbitRuntime {
                 to_status: None,
             });
         }
+        // A forced transition is still a transition: naming it in history is
+        // what separates a human override from a governed lifecycle move.
+        let status_event = (status_authority == StatusAuthority::Forced
+            && requested_status.is_some())
+        .then(|| FORCED_STATUS_EVENT.to_string());
         let previous_status = task.status;
         let updated = self.with_mutation(|| {
             let updated = self.stores().task_records().update(
@@ -288,6 +358,7 @@ impl OrbitRuntime {
                     actor: effective_label.clone(),
                     planned_by: attribution.planned_by.clone(),
                     implemented_by: attribution.implemented_by.clone(),
+                    status_event: status_event.clone(),
                     status_note,
                     append_comments: append_comments.clone(),
                     append_history: append_history.clone(),

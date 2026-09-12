@@ -46,19 +46,32 @@ If an activity already injected a task snapshot, use that envelope first.
 proposed → backlog → in-progress → review → done
          ↘ rejected
 
-someday → in-progress
-blocked → in-progress
-
-review      → rejected
-rejected    → backlog | in-progress  (reconsider)
+someday  → backlog | in-progress
+blocked  → backlog | in-progress
+review   → backlog | in-progress | rejected
+rejected → backlog | in-progress   (reconsider)
+any open status → blocked | archived
 ```
 
+Every status change goes through this table, whether you send it as
+`orbit.task.update` or as `task.start`/`task.approve`. Two rules are enforced
+and cannot be worked around from a tool call:
+
+- **`in-progress` needs a plan.** Starting from `proposed`, `someday`, or
+  `blocked` requires a non-empty execution plan; send it on the same call.
+- **`done` is reachable only from `review`,** and needs completion evidence:
+  a non-empty `execution_summary`, or a `job_run_id` whose run succeeded.
+
+`done` and `archived` are terminal, and a `rejected` task may only be
+reconsidered back to `backlog` or `in-progress`. A regression in delivered work
+is a *new* task with a `regression_from` relation — not a reopened one.
+
 Creating a task does not authorize dispatch or completion. Follow the user's
-approval and repository delivery policy. The diagram summarizes common paths;
-`task.start` also supports authorized pickup from `proposed` with a real plan.
-Use `blocked` when execution cannot safely continue. Provenance follows the
-surface: `orbit tool run ...` is agent-driven, bare `orbit task ...` is
-human-driven.
+approval and repository delivery policy. Use `blocked` when execution cannot
+safely continue. Provenance follows the surface: `orbit tool run ...` is
+agent-driven, bare `orbit task ...` is human-driven — and only a human on the
+bare CLI can override the table, with `orbit task update <id> --status <status>
+--force`, which records the override in task history.
 
 ## Common Mistakes — DO NOT
 

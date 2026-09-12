@@ -196,12 +196,14 @@ async fn list_and_detail_reuse_bundle_sidecars_with_response_parity() {
     let runtime = Arc::new(OrbitRuntime::in_memory().unwrap());
     let task = seed_task_with_artifact(&runtime);
     runtime
-        .update_task(
+        .update_task_with_identity(
             &task.id,
             TaskUpdateParams {
                 comment: Some("Nonempty review evidence".to_string()),
                 ..Default::default()
             },
+            None,
+            None,
         )
         .unwrap();
     let statuses = runtime.task_status_index().unwrap();

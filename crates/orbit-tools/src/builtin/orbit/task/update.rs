@@ -184,6 +184,12 @@ impl Tool for OrbitTaskUpdateTool {
                     .to_string(),
             ));
         }
+        if input.get("force").is_some() {
+            return Err(OrbitError::InvalidInput(
+                "orbit.task.update does not accept `force`; lifecycle transitions are enforced for agents, and the override is a human CLI action"
+                    .to_string(),
+            ));
+        }
         if input.get("artifacts").is_some() {
             return Err(OrbitError::InvalidInput(
                 "orbit.task.update does not accept inline artifacts; use orbit.task.artifact.put"

@@ -62,21 +62,45 @@ defining one.
 | `backlog`     | Approved and queued for work. |
 | `someday`     | Future-scoped — wanted but not yet actionable. Agents skip `someday` tasks. |
 | `in-progress` | Actively being worked on. |
-| `review`      | Implementation complete; awaiting review/merge. Requires an `execution_summary`. |
-| `done`        | Accepted and closed. **Terminal** — no further transitions. |
+| `review`      | Implementation complete; awaiting review/merge. Completion out of `review` requires an `execution_summary` or a successful run. |
+| `done`        | Accepted and closed. **Terminal** — reopening needs an explicit human override. |
 | `blocked`     | Temporarily paused (waiting on a dependency or decision). |
-| `archived`    | Soft-deleted via the dedicated `orbit task archive` command. Restorable to `backlog` with `orbit task update <id> --status backlog`. |
+| `archived`    | Soft-deleted, with `orbit task archive` or a `--status archived` update. **Terminal** — restore it with `orbit task update <id> --status backlog --force`. |
 | `rejected`    | Declined. Can be re-opened to `backlog` or `in-progress`. |
 
 ### Transition rules
 
-Transitions are permissive by default — any move is allowed unless it violates one of these invariants:
+Every status change — `orbit task update`, the dashboard, and the
+`orbit.task.update` tool alike — is checked against one lifecycle table:
 
-1. **Done is terminal.** No transitions out of `done`.
-2. **Archived requires `orbit task archive`.** A bare `--status archived` update is rejected.
-3. **`in-progress → review` requires an `execution_summary`.**
+```text
+proposed → backlog → in-progress → review → done
+         ↘ rejected
+
+someday  → backlog | in-progress
+blocked  → backlog | in-progress
+review   → backlog | in-progress | rejected
+rejected → backlog | in-progress   (reconsider)
+any open status → blocked | archived
+```
+
+1. **Done is reachable only from `review`,** and needs completion evidence: a
+   non-empty `execution_summary`, or a `job_run_id` whose run succeeded. An
+   agent cannot mark unstarted work done.
+2. **`done` and `archived` are terminal.** A regression in delivered work is a
+   *new* task with a `regression_from` relation, not a reopened one. Only a
+   rejection may be reconsidered, back to `backlog` or `in-progress`.
+3. **`in-progress` requires a plan** when it is entered from `proposed`,
+   `someday`, or `blocked` — the same rule `orbit task start` enforces. Send
+   `--plan` on the same command.
 4. **Required tools freeze at execution admission.** They may be edited only
    before the task enters `in-progress`.
+
+A refused transition is an `invalid_input` error naming the from/to pair and
+the missing precondition. A human on the bare CLI can override the table with
+`orbit task update <id> --status <status> --force`, which records the change in
+the task's history as a `forced` event; the tool and MCP surfaces refuse a
+`force` argument outright.
 
 Friction reports use their own `orbit friction` surface and are not task
 statuses.
