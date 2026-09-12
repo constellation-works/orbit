@@ -6,10 +6,15 @@ use orbit_registry::{
     HostIdentityOutcome, HostIdentityState, NewHostIdentity, ensure_host_identity,
     inspect_host_identity, os_hostname, validate_new_task_prefix,
 };
-use std::io::{self, BufRead, Write};
+#[cfg(test)]
+use std::io::BufRead;
+use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use super::collect_config_seed_for_init;
+use super::prompt_stdin;
+#[cfg(test)]
+use super::prompt_stdin::STDIN_CLOSED_BEFORE_PROMPT;
 use crate::command::{CommandOut, CommandOutput, Execute};
 
 #[derive(Args)]
@@ -249,24 +254,30 @@ fn prompt_host_name() -> Result<String, OrbitError> {
 const MAX_TASK_PREFIX_ATTEMPTS: usize = 4;
 
 fn prompt_task_prefix() -> Result<String, OrbitError> {
-    let stdin = io::stdin();
-    let mut reader = stdin.lock();
     let stderr = io::stderr();
     let mut output = stderr.lock();
-
-    prompt_task_prefix_from(&mut reader, &mut output)
+    collect_task_prefix(&mut output, |prompt, output| {
+        prompt_stdin::read_trimmed_line(prompt, output).map_err(prompt_io_to_orbit)
+    })
 }
 
+#[cfg(test)]
 pub(super) fn prompt_task_prefix_from(
     reader: &mut impl BufRead,
     output: &mut impl Write,
 ) -> Result<String, OrbitError> {
+    collect_task_prefix(output, |prompt, output| {
+        read_line_from(prompt, reader, output)
+    })
+}
+
+fn collect_task_prefix<W, F>(output: &mut W, mut read_answer: F) -> Result<String, OrbitError>
+where
+    W: Write,
+    F: FnMut(&str, &mut W) -> Result<String, OrbitError>,
+{
     for _ in 0..MAX_TASK_PREFIX_ATTEMPTS {
-        let answer = read_line_from(
-            "Task prefix (2-5 uppercase ASCII letters): ",
-            reader,
-            output,
-        )?;
+        let answer = read_answer("Task prefix (2-5 uppercase ASCII letters): ", output)?;
         match validate_new_task_prefix(&answer) {
             Ok(prefix) => return Ok(prefix),
             Err(error) => {
@@ -281,14 +292,21 @@ pub(super) fn prompt_task_prefix_from(
 }
 
 fn read_line(prompt: &str) -> Result<String, OrbitError> {
-    let stdin = io::stdin();
-    let mut reader = stdin.lock();
     let stderr = io::stderr();
     let mut output = stderr.lock();
-
-    read_line_from(prompt, &mut reader, &mut output)
+    prompt_stdin::read_trimmed_line(prompt, &mut output).map_err(prompt_io_to_orbit)
 }
 
+fn prompt_io_to_orbit(error: io::Error) -> OrbitError {
+    match error.kind() {
+        ErrorKind::UnexpectedEof | ErrorKind::TimedOut => {
+            OrbitError::InvalidInput(error.to_string())
+        }
+        _ => OrbitError::Io(error.to_string()),
+    }
+}
+
+#[cfg(test)]
 fn read_line_from(
     prompt: &str,
     reader: &mut impl BufRead,
@@ -306,8 +324,7 @@ fn read_line_from(
 
     if bytes_read == 0 {
         return Err(OrbitError::InvalidInput(
-            "stdin closed before an interactive prompt was answered; pass --task-prefix/--host-name or --non-interactive"
-                .to_string(),
+            STDIN_CLOSED_BEFORE_PROMPT.to_string(),
         ));
     }
 

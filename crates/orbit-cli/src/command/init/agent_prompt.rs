@@ -1,11 +1,12 @@
 //! Interactive prompts that collect the default crew and, when more than one
 //! cheap-tier family is detected, the system crew during `orbit init`.
 
-use std::io::{self, BufRead, ErrorKind, Write};
+use std::io::{self, Write};
 
 use orbit_config::CrewSeed;
 
 use super::agent_detect::{DetectedAgents, default_model_for, default_provider};
+use super::prompt_stdin;
 
 pub trait Prompter {
     fn message(&mut self, text: &str) -> io::Result<()>;
@@ -25,20 +26,7 @@ impl Prompter for StdinPrompter {
     fn prompt(&mut self, prompt: &str) -> io::Result<String> {
         let stderr = io::stderr();
         let mut out = stderr.lock();
-        write!(out, "{prompt}")?;
-        out.flush()?;
-
-        let stdin = io::stdin();
-        let mut line = String::new();
-        let bytes_read = stdin.lock().read_line(&mut line)?;
-        if bytes_read == 0 {
-            return Err(io::Error::new(
-                ErrorKind::UnexpectedEof,
-                "stdin closed before an interactive prompt was answered; pass --task-prefix/--host-name or --non-interactive",
-            ));
-        }
-
-        Ok(line.trim().to_string())
+        prompt_stdin::read_trimmed_line(prompt, &mut out)
     }
 }
 
