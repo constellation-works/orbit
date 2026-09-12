@@ -27,38 +27,36 @@ const TASK_PROVENANCE_TITLE_PREFIXES: &[(&str, &str)] = &[
 impl OrbitRuntime {
     /// Validate task-scoped tool requirements against the current registry.
     ///
-    /// A requirement is durable metadata, so a registered tool may be kept
-    /// even when it is currently disabled or not exposed on the agent surface.
-    /// Those states are warnings; an unknown name is rejected before the task
-    /// record can become impossible to admit.
+    /// A requirement is durable metadata, so a name an operator has disabled is
+    /// kept: `orbit tool enable` restores it, so that state is only a warning.
+    /// An unknown name, and a registered tool that is not on the agent surface
+    /// at all, are both rejected — activity admission refuses them and
+    /// `required_tools` is immutable after creation, so the record would be
+    /// impossible to dispatch and impossible to repair.
     pub fn validate_required_tools(
         &self,
         required_tools: &[String],
     ) -> Result<Vec<String>, OrbitError> {
-        let mut registered_names = self
-            .tool_registry()
-            .all_schemas()
-            .into_iter()
-            .map(|schema| schema.name)
-            .collect::<Vec<_>>();
-        registered_names.sort();
-
         let mut warnings = Vec::new();
         for name in normalize_required_tools(required_tools.to_vec()) {
             if !self.tool_registry().has(&name) {
-                return Err(OrbitError::invalid_input_with_suggestions(
-                    format!("required_tools contains unregistered tool '{name}'"),
-                    registered_names,
-                ));
+                return Err(self.ungrantable_required_tool(format!(
+                    "required_tools contains unregistered tool '{name}'"
+                )));
+            }
+            if !self.tool_registry().is_active(&name) {
+                return Err(self.ungrantable_required_tool(format!(
+                    "required_tools contains tool '{name}', which is an admin/human-only \
+                     operation that is never granted to an agent"
+                )));
             }
 
-            let registry_inactive = !self.tool_registry().is_active(&name);
             let stored_disabled = self
                 .stores()
                 .tools()
                 .get_tool(&name)?
                 .is_some_and(|tool| !tool.enabled);
-            if registry_inactive || stored_disabled {
+            if stored_disabled {
                 warnings.push(format!(
                     "required_tools includes registered tool '{name}', which is currently disabled"
                 ));
@@ -66,6 +64,20 @@ impl OrbitRuntime {
         }
 
         Ok(warnings)
+    }
+
+    /// Reject one requirement an agent could never be granted, suggesting the
+    /// agent-facing tool names instead.
+    fn ungrantable_required_tool(&self, message: String) -> OrbitError {
+        let mut agent_facing_names = self
+            .tool_registry()
+            .schemas()
+            .into_iter()
+            .map(|schema| schema.name)
+            .collect::<Vec<_>>();
+        agent_facing_names.sort();
+
+        OrbitError::invalid_input_with_suggestions(message, agent_facing_names)
     }
 
     pub fn add_task(&self, params: TaskAddParams) -> Result<Task, OrbitError> {
