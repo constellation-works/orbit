@@ -31,18 +31,20 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
-use orbit_types::workflow::JobRun;
 use orbit_types::workflow::Provider;
 use orbit_types::workflow::activity_job::{
     DEFAULT_PROVIDER_SANDBOX, TRUSTED_HOST_ADMISSION_KEY, TrustedHostAdmission,
     admit_provider_sandbox_mode, format_provider_sandbox, is_least_restrictive_provider_sandbox,
     least_restrictive_provider_sandbox_warning,
 };
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission, input_hash};
 
 /// Catalog job that carries one agent invocation.
 pub const AGENT_INVOKE_JOB_ID: &str = "agent_invoke_pipeline";
@@ -56,6 +58,12 @@ pub const DEFAULT_AGENT_INVOKE_TIMEOUT_SECONDS: u64 = 1800;
 /// than silently clamped, so an operator who asked for a day-long unsandboxed
 /// process learns that they did.
 pub const MAX_AGENT_INVOKE_TIMEOUT_SECONDS: u64 = 7200;
+
+/// Run-input field carrying a caller's agent-invocation retry key [ORB-11354].
+const AGENT_INVOKE_IDEMPOTENCY_KEY_FIELD: &str = "idempotency_key";
+
+/// Cap on the run history scanned when matching an agent-invocation retry key.
+const AGENT_INVOKE_IDEMPOTENCY_SCAN_LIMIT: usize = 200;
 
 /// How much of the provider's captured output the operator-facing projection
 /// inlines. The full capture stays addressable through the durable blob
@@ -391,4 +399,92 @@ fn resolve_timeout(requested: Option<u64>) -> Result<u64, OrbitError> {
         )));
     }
     Ok(seconds)
+}
+
+impl OrbitRuntime {
+    /// Persist and dispatch one operator-admitted trusted-host invocation
+    /// [ORB-11354].
+    ///
+    /// The only submission permitted to write [`TRUSTED_HOST_ADMISSION_KEY`],
+    /// which is why it is here — on the module that owns the refusal — rather
+    /// than assembling a `PipelineSubmission` from outside.
+    ///
+    /// `idempotency_key` makes a retried submission resolve the run the first
+    /// attempt created instead of starting a second subprocess. Keys are
+    /// matched over a bounded window of this job's recent runs, the same shape
+    /// the ship guard uses: a key older than that window is not recognized and
+    /// submits again, which is why a key is a retry handle rather than a
+    /// permanent uniqueness constraint.
+    pub(super) fn submit_trusted_host_pipeline_run(
+        &self,
+        input: Value,
+        actor: &str,
+        idempotency_key: Option<&str>,
+    ) -> Result<(PipelineInvokeResult, bool), OrbitError> {
+        let job_name = crate::application::job::AGENT_INVOKE_JOB_ID;
+        let idempotency_key = idempotency_key
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let mut input = input;
+        if let Some(key) = idempotency_key {
+            if let Some(existing) = self.agent_invoke_run_for_key(job_name, key)? {
+                return Ok((
+                    PipelineInvokeResult {
+                        run_id: existing.run_id,
+                        job_name: job_name.to_string(),
+                        submitted_at: existing.scheduled_at.to_rfc3339(),
+                        queued: existing.state == JobRunState::Pending,
+                    },
+                    true,
+                ));
+            }
+            if let Some(object) = input.as_object_mut() {
+                object.insert(
+                    AGENT_INVOKE_IDEMPOTENCY_KEY_FIELD.to_string(),
+                    Value::String(key.to_string()),
+                );
+            }
+        }
+        let result = self.submit_persisted_pipeline_run(PipelineSubmission {
+            trusted_host: true,
+            ..PipelineSubmission::catalog(job_name, input.clone(), Some(actor))
+        });
+        self.record_pipeline_audit(
+            "agent.invoke",
+            result.as_ref().ok().map(|value| value.run_id.as_str()),
+            Some(actor),
+            match &result {
+                Ok(_) => AuditEventStatus::Success,
+                Err(_) => AuditEventStatus::Failure,
+            },
+            json!({
+                "actor": actor,
+                "job_name": job_name,
+                "run_id": result.as_ref().ok().map(|value| value.run_id.clone()),
+                "idempotency_key": idempotency_key,
+                "input_hash": input_hash(&input),
+            }),
+            result.as_ref().err().map(|error| error.to_string()),
+        )?;
+        result.map(|invoke| (invoke, false))
+    }
+    /// The newest recent run of `job_name` submitted under `key`, if any.
+    fn agent_invoke_run_for_key(
+        &self,
+        job_name: &str,
+        key: &str,
+    ) -> Result<Option<JobRun>, OrbitError> {
+        let runs = self.list_job_runs(crate::application::job::JobRunListParams {
+            job_id: Some(job_name.to_string()),
+            limit: Some(AGENT_INVOKE_IDEMPOTENCY_SCAN_LIMIT),
+            ..Default::default()
+        })?;
+        Ok(runs.into_iter().find(|run| {
+            run.input
+                .as_ref()
+                .and_then(|input| input.get(AGENT_INVOKE_IDEMPOTENCY_KEY_FIELD))
+                .and_then(Value::as_str)
+                == Some(key)
+        }))
+    }
 }

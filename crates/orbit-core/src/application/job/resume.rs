@@ -34,6 +34,7 @@ use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission};
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
 
 /// Maximum `retry_source_run_id` hops walked upward from the resume source.
@@ -334,4 +335,37 @@ pub(super) fn task_ids_from_input(input: &Value) -> Option<BTreeSet<String>> {
         .map(ToOwned::to_owned)
         .collect();
     (!ids.is_empty()).then_some(ids)
+}
+
+impl OrbitRuntime {
+    /// [ORB-10470] Submit a resume of a terminal run as a detached run.
+    ///
+    /// The non-blocking counterpart to
+    /// [`OrbitRuntime::resume_job_run`](crate::OrbitRuntime::resume_job_run):
+    /// it persists the resumed run (seeded with the source's checkpoints),
+    /// reconciles the retry lineage's task ownership, spawns the detached
+    /// pipeline worker, and returns the new run id as soon as the run is
+    /// durable. Nothing about the resumed execution happens on the caller's
+    /// thread, so run list / status / cancel stay answerable for its whole
+    /// duration (F2026-07-122 defect 3) and the run is cancellable by pid like
+    /// any other submitted run.
+    ///
+    /// [ORB-10709] Resuming creates another managed run, so it is a governed
+    /// workflow operation and takes the same workspace-claim gate as
+    /// [`Self::submit_ship_run`] — checked here, on the shared path, rather than
+    /// in the adapters.
+    pub fn submit_resume_run(
+        &self,
+        source_run_id: &str,
+        actor: Option<&str>,
+        claim_token: Option<&str>,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        self.require_workspace_claim("orbit.workflow.run.resume", claim_token)?;
+        let plan = self.plan_job_run_resume(source_run_id)?;
+        let job_id = plan.source.job_id.clone();
+        self.submit_persisted_pipeline_run(PipelineSubmission {
+            resume: Some(&plan),
+            ..PipelineSubmission::catalog(&job_id, plan.input.clone(), actor)
+        })
+    }
 }
