@@ -13,8 +13,9 @@ pub mod workflow;
 pub mod workspace_claim;
 
 use orbit_common::OrbitError;
+use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
 use orbit_types::identity::{normalize_agent_family_for_model, require_canonical_agent_family};
-use orbit_types::tool::{McpToolScope, ToolParam};
+use orbit_types::tool::{McpToolScope, ToolParam, ToolSchema};
 use serde_json::Value;
 
 use crate::{OrbitBuiltinAction, OrbitTaskScope, ToolContext, ToolRegistry};
@@ -221,6 +222,18 @@ pub(super) fn reject_agent_field(input: &Value, tool_name: &str) -> Result<(), O
         )));
     }
     Ok(())
+}
+
+pub(super) fn reject_unknown_tool_arguments(
+    input: &Value,
+    schema: &ToolSchema,
+) -> Result<(), OrbitError> {
+    let allowed = schema
+        .parameters
+        .iter()
+        .map(|param| param.name.as_str())
+        .collect::<Vec<_>>();
+    reject_unknown_tool_fields(input, &allowed)
 }
 
 pub(super) fn scored_identity_params() -> Vec<ToolParam> {

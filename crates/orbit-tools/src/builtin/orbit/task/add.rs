@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
-use orbit_common::protocol::tool_input::{required_string, strip_retired_task_add_input_fields};
+use orbit_common::protocol::tool_input::{reject_retired_task_add_input_fields, required_string};
 use orbit_types::tool::{ToolParam, ToolSchema};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{OrbitBuiltinAction, Tool, ToolContext};
 
@@ -121,32 +121,14 @@ impl Tool for OrbitTaskAddTool {
 
     fn execute(&self, ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
         super::super::reject_agent_field(&input, "orbit.task.add")?;
+        reject_retired_task_add_input_fields(&input)?;
+        super::super::reject_unknown_tool_arguments(&input, &self.schema())?;
         required_string(&input, &["title"], "title")?;
         required_string(&input, &["description"], "description")?;
         required_string(&input, &["complexity"], "complexity")?;
         super::super::resolve_workspace_argument(ctx, &mut input, "orbit.task.add")?;
         super::super::apply_session_orchestrator_default(ctx, &mut input);
 
-        let ignored_fields = strip_retired_task_add_input_fields(&mut input);
-        if !ignored_fields.is_empty() {
-            tracing::warn!(
-                target: "orbit.tools.task.add",
-                ignored_fields = ?ignored_fields,
-                "ignored retired orbit.task.add fields"
-            );
-        }
-
-        let mut response =
-            super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskAdd)?;
-        if !ignored_fields.is_empty() {
-            let response_object = response.as_object_mut().ok_or_else(|| {
-                OrbitError::Execution(
-                    "orbit.task.add host returned a non-object response".to_string(),
-                )
-            })?;
-            response_object.insert("ignored_fields".to_string(), json!(ignored_fields));
-        }
-
-        Ok(response)
+        super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskAdd)
     }
 }

@@ -51,8 +51,24 @@ pub fn tool_input_schema_for(tool_name: &str, params: &[ToolParam]) -> Map<Strin
     if !required.is_empty() {
         schema.insert("required".to_string(), Value::Array(required));
     }
-    schema.insert("additionalProperties".to_string(), Value::Bool(true));
+    schema.insert(
+        "additionalProperties".to_string(),
+        Value::Bool(tool_arguments_allow_additional_properties(tool_name)),
+    );
     schema
+}
+
+/// Whether the advertised argument object accepts undeclared keys.
+///
+/// Registered task mutation tools refuse extras at runtime; their schemas
+/// match that contract. Other tools keep `additionalProperties: true` until
+/// they grow the same check. Transport wrappers (`_meta`, `workspace`) are
+/// not modeled as additional argument properties.
+pub fn tool_arguments_allow_additional_properties(tool_name: &str) -> bool {
+    !matches!(
+        tool_name,
+        "orbit.task.add" | "orbit.task.update" | "orbit.task.approve" | "orbit.task.start"
+    )
 }
 
 /// Build the canonical JSON-Schema fragment for one tool parameter.

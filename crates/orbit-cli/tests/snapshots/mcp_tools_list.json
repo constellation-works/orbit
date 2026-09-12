@@ -633,7 +633,7 @@
   {
     "description": "Create an Orbit task and return the created task JSON",
     "inputSchema": {
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "acceptance_criteria": {
           "anyOf": [
@@ -765,7 +765,7 @@
   {
     "description": "Approve an Orbit task and return the updated task JSON",
     "inputSchema": {
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "agent": {
           "description": "Deprecated compatibility field. Prefer `model` with the agent family (`codex`, `claude`, `gemini`, or `grok`).",
@@ -1029,7 +1029,7 @@
   {
     "description": "Start work on an Orbit task and return the updated task JSON",
     "inputSchema": {
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "comment": {
           "description": "Optional task comment to append",
@@ -1072,7 +1072,7 @@
   {
     "description": "Update an Orbit task and return the fresh task JSON",
     "inputSchema": {
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "acceptance_criteria": {
           "anyOf": [

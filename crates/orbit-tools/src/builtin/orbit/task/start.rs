@@ -41,6 +41,7 @@ impl Tool for OrbitTaskStartTool {
 
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError> {
         super::super::reject_agent_field(&input, "orbit.task.start")?;
+        super::super::reject_unknown_tool_arguments(&input, &self.schema())?;
         super::super::execute_host_action(ctx, input, OrbitBuiltinAction::TaskStart)
     }
 }

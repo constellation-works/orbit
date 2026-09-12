@@ -126,6 +126,65 @@ fn list_output_projects_explicit_fields_inside_envelope() {
 }
 
 #[test]
+fn add_update_approve_start_preserve_full_task_by_default() {
+    let output = json!({
+        "id": "T20260422-0001",
+        "title": "Full record",
+        "status": "backlog",
+        "priority": "medium",
+        "type": "feature",
+        "complexity": "low",
+        "tags": ["qa"],
+        "context_files": ["file:src/lib.rs"],
+        "created_by": "codex",
+        "crew": "grok",
+        "orchestrator": null,
+        "plan": "keep the full envelope",
+        "comments": [],
+        "history": [],
+        "redactions": [],
+        "redactions_applied": false,
+        "created_at": "2026-04-22T00:00:00Z",
+        "updated_at": "2026-04-22T00:00:00Z"
+    });
+
+    for tool in [
+        "orbit.task.add",
+        "orbit.task.update",
+        "orbit.task.approve",
+        "orbit.task.start",
+    ] {
+        assert_eq!(
+            shape_tool_output(tool, output.clone(), false, &[]),
+            output,
+            "{tool} must default to the full task record"
+        );
+    }
+}
+
+#[test]
+fn add_output_still_projects_explicit_fields() {
+    let shaped = shape_tool_output(
+        "orbit.task.add",
+        json!({
+            "id": "T20260422-0001",
+            "title": "Full record",
+            "status": "proposed",
+            "complexity": "low"
+        }),
+        false,
+        &["id".to_string(), "title".to_string()],
+    );
+    assert_eq!(
+        shaped,
+        json!({
+            "id": "T20260422-0001",
+            "title": "Full record"
+        })
+    );
+}
+
+#[test]
 fn show_output_preserves_task_details_by_default() {
     let output = json!({
         "id": "T20260422-0001",
