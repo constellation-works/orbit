@@ -211,3 +211,50 @@ fn global_search_path_filter_notes_doc_branch_skip() {
             .any(|note| note.contains("doc branch skipped"))
     );
 }
+
+/// [ORB-12259] `--path` search carries the skipped kinds as structured data,
+/// not just prose in `notes`, so an agent reading an empty `results` array
+/// does not mistake "docs and frictions were never asked" for "nothing
+/// relevant exists".
+#[test]
+fn global_search_path_filter_lists_skipped_kinds_in_response() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+
+    let response = runtime
+        .global_search(GlobalSearchParams {
+            kind: GlobalSearchKind::All,
+            path: Some("src/check/rules.rs".to_string()),
+            ..Default::default()
+        })
+        .expect("path search");
+
+    assert_eq!(response.skipped_kinds, vec!["doc", "friction"]);
+
+    let json = serde_json::to_value(&response).expect("serialize response");
+    assert_eq!(
+        json["skipped_kinds"],
+        serde_json::json!(["doc", "friction"])
+    );
+}
+
+/// A query that does not set `--path` never skips a kind, and the field must
+/// stay absent rather than render as an empty array every caller now has to
+/// special-case.
+#[test]
+fn global_search_without_path_omits_skipped_kinds_from_json() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let id = add_task_with_status(&runtime, "no path filter here", TaskStatus::Backlog);
+
+    let response = runtime
+        .global_search(GlobalSearchParams {
+            query: Some("no path filter here".to_string()),
+            kind: GlobalSearchKind::Task,
+            ..Default::default()
+        })
+        .expect("plain query");
+
+    assert!(response.skipped_kinds.is_empty());
+    assert_eq!(response.results[0].id.as_deref(), Some(id.as_str()));
+    let json = serde_json::to_value(&response).expect("serialize response");
+    assert!(json.get("skipped_kinds").is_none());
+}

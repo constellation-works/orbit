@@ -3,8 +3,10 @@
 //! Complements the narrower `orbit skill doctor` / `orbit tool doctor`
 //! surfaces with whole-workspace checks: config validity, store database
 //! integrity and schema-ledger version, free disk space on the volume
-//! holding `.orbit`, semantic-index staleness, leftover lock files from
-//! crashed holders, orphaned `running`/`pending` job runs, task
+//! holding `.orbit`, semantic-index staleness, doc embedding coverage
+//! (ORB-12259 — `semantic-index` only sees aggregate row counts, so it
+//! cannot tell an unembedded docs corpus from a healthy one), leftover lock
+//! files from crashed holders, orphaned `running`/`pending` job runs, task
 //! reservations whose owner or terminal task association is conclusively
 //! inactive, task
 //! relation/dependency targets that no longer resolve in the registry
@@ -162,6 +164,7 @@ impl DoctorCommands for OrbitRuntime {
             doctor_check_database(self),
             doctor_check_disk_space(self),
             doctor_check_semantic_index(self),
+            doctor_check_docs_index(self),
             doctor_check_stale_locks(self),
             doctor_check_job_runs(self),
             doctor_check_task_reservations(self),
@@ -342,6 +345,43 @@ fn doctor_check_semantic_index(runtime: &OrbitRuntime) -> WorkspaceDoctorResult 
                 )
             }
         }
+    }
+}
+
+/// Doc embedding coverage, separate from `semantic-index`: that check only
+/// sees aggregate row counts, so a workspace whose task embeddings are
+/// healthy but whose docs were never embedded still reads `ok` there —
+/// `orbit docs index` is a step `workspace init` does not run automatically
+/// [ORB-12259].
+fn doctor_check_docs_index(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    match runtime.docs_embedding_coverage() {
+        Err(error) => check(
+            "docs-index",
+            WorkspaceDoctorStatus::Warning,
+            format!("cannot read docs embedding coverage: {error}"),
+        ),
+        Ok(coverage) if coverage.total_sources == 0 => check(
+            "docs-index",
+            WorkspaceDoctorStatus::Skipped,
+            "no docs corpus configured yet".to_string(),
+        ),
+        Ok(coverage) if coverage.embedded_sources < coverage.total_sources => actionable_check(
+            "docs-index",
+            WorkspaceDoctorStatus::Warning,
+            format!(
+                "docs: {} of {} sources embedded — run `orbit docs index`",
+                coverage.embedded_sources, coverage.total_sources
+            ),
+            "Run `orbit docs index`, then rerun `orbit doctor`.".to_string(),
+        ),
+        Ok(coverage) => check(
+            "docs-index",
+            WorkspaceDoctorStatus::Ok,
+            format!(
+                "docs: {} of {} sources embedded",
+                coverage.embedded_sources, coverage.total_sources
+            ),
+        ),
     }
 }
 

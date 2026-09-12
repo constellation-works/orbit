@@ -127,6 +127,13 @@ pub struct GlobalSearchResponse {
     pub kind: GlobalSearchKind,
     pub results: Vec<GlobalSearchHit>,
     pub notes: Vec<String>,
+    /// Kinds a `--path` query could not apply to (docs and frictions are not
+    /// path-filtered). Mirrors the "branch skipped" note in `notes`, but as a
+    /// structured field an agent can check without parsing prose, so an empty
+    /// `results` from a path query is not misread as "nothing relevant"
+    /// [ORB-12259].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped_kinds: Vec<String>,
     /// Per-workspace outcome of a federated query. Empty — and omitted from
     /// JSON — for the default single-workspace scope, so an existing caller
     /// sees the same response shape it always did.

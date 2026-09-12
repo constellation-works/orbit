@@ -43,6 +43,62 @@ fn global_search_task_hybrid_preserves_retriever_breakdown() {
     );
 }
 
+/// [ORB-12259] Every matching task sits in `done`, which the default status
+/// filter hides. The vector branch still ran and found the hit — reporting
+/// `mode: lexical` here would look identical to "hybrid search never ran",
+/// hiding that `all:true` is the fix.
+#[test]
+fn global_search_task_hybrid_reports_hybrid_mode_when_all_hits_are_status_filtered() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let id = add_task_with_status(&runtime, "shell completion", TaskStatus::Done);
+
+    let response = with_task_semantic_override(Ok(vec![task_semantic_hit(&id, 0.9)]), || {
+        runtime
+            .global_search(GlobalSearchParams {
+                query: Some("shell completion".to_string()),
+                hybrid: true,
+                kind: GlobalSearchKind::Task,
+                limit: 10,
+                ..Default::default()
+            })
+            .expect("hybrid search with every hit status-filtered")
+    });
+
+    assert!(
+        response.results.is_empty(),
+        "the done task stays hidden without all:true"
+    );
+    assert_eq!(
+        response.mode,
+        GlobalSearchMode::Hybrid,
+        "the vector branch ran; mode must say so even though its hits were filtered: notes={:?}",
+        response.notes
+    );
+    assert!(
+        response.notes.iter().any(|note| {
+            note.contains("vector hits hidden by status filter") && note.contains("all:true")
+        }),
+        "notes must explain why a hybrid search returned nothing: {:?}",
+        response.notes
+    );
+
+    let widened = with_task_semantic_override(Ok(vec![task_semantic_hit(&id, 0.9)]), || {
+        runtime
+            .global_search(GlobalSearchParams {
+                query: Some("shell completion".to_string()),
+                hybrid: true,
+                kind: GlobalSearchKind::Task,
+                limit: 10,
+                all: true,
+                ..Default::default()
+            })
+            .expect("hybrid search with all:true")
+    });
+    assert_eq!(widened.results.len(), 1);
+    assert_eq!(widened.results[0].id.as_deref(), Some(id.as_str()));
+    assert_eq!(widened.mode, GlobalSearchMode::Hybrid);
+}
+
 #[test]
 fn global_search_task_hybrid_falls_back_to_lexical_on_semantic_error() {
     let runtime = OrbitRuntime::in_memory().expect("runtime");

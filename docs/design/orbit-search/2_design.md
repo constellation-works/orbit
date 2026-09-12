@@ -331,6 +331,10 @@ Both indexing tools return `stale_sources`: the source IDs dropped because the l
 }
 ```
 
+`mode` names the retrieval that ran, not the retrieval that survived filtering: a `--hybrid` query whose vector branch returned hits reports `hybrid` even when the status filter then hid every one of them, and the task branch adds a note counting the hits it hid and naming `all:true`. A hybrid query that fell back to lexical — no embeddings, or an unavailable companion — reports `lexical` with the fallback note.
+
+`skipped_kinds` lists the corpora a `--path` query could not apply to (docs and frictions are not path-filtered), mirroring the existing prose notes as structured data so an agent does not read an empty `results` as "nothing relevant exists". Like the federated fields it is omitted from JSON when empty.
+
 The global search response exposes the score breakdown when semantic task search contributes a hit: agents can use it to distinguish a lexical-only hit from a semantic neighborhood and adapt downstream behavior. The internal `orbit-search` result also carries the active `model_id`, but the unified CLI/MCP response uses the global shape shown here.
 
 ### 6.4 Cross-workspace federated search

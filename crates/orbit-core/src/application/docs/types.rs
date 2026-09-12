@@ -140,6 +140,17 @@ pub struct TaskRelatedDoc {
     pub matched_by: Vec<String>,
 }
 
+/// How much of the docs corpus has an embedding row, from the last time the
+/// vector index was consulted. `total_sources` is the live corpus as
+/// discovered by [`walk_docs_roots`](super::walk_docs_roots); `embedded_sources`
+/// counts only the ones among them with a live `doc` embedding row — a stale
+/// row for a since-deleted doc is not counted as coverage [ORB-12259].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DocsEmbeddingCoverage {
+    pub total_sources: usize,
+    pub embedded_sources: usize,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DocAddOutcome {
     pub path: String,

@@ -17,6 +17,8 @@ mod walk;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeSet;
+
 use orbit_common::OrbitError;
 pub use orbit_search::{DocIndexParams, DocIndexResult, SearchResult};
 use orbit_search::{score_doc_record, sort_search_results};
@@ -25,7 +27,10 @@ use orbit_types::task::Task;
 use crate::OrbitRuntime;
 
 pub use config::{DocsRoot, DocsSearchConfig};
-pub use types::{DocAddOutcome, DocMigrationReport, DocRecord, DocShow, DocType, TaskRelatedDoc};
+pub use types::{
+    DocAddOutcome, DocMigrationReport, DocRecord, DocShow, DocType, DocsEmbeddingCoverage,
+    TaskRelatedDoc,
+};
 pub use walk::walk_docs_roots;
 
 // Bring helper fns into scope so the pasted impl block (lines 291-408 of original)
@@ -143,6 +148,33 @@ impl OrbitRuntime {
         let roots = self.docs_roots()?;
         let sources = doc_embedding_sources(&self.paths().repo_root, &roots)?;
         orbit_search::doc_index(self.stores().semantic_index().store()?, &sources, params)
+    }
+
+    /// How much of the live docs corpus has a doc embedding row.
+    ///
+    /// A corpus that was never indexed is zero coverage, not an error: the
+    /// store opens empty, which is exactly the state `orbit doctor` needs to
+    /// name. Storage that refuses the index altogether is a different fact —
+    /// `orbit docs index` cannot fix a read-only state directory — so that
+    /// error propagates instead of reading as "nothing is embedded"
+    /// [ORB-12259].
+    pub fn docs_embedding_coverage(&self) -> Result<DocsEmbeddingCoverage, OrbitError> {
+        let docs = self.list_docs(None, None)?;
+        let total_sources = docs.len();
+        let live_paths: BTreeSet<&str> = docs.iter().map(|doc| doc.path.as_str()).collect();
+        let embedded_sources = self
+            .stores()
+            .semantic_index()
+            .store()?
+            .source_ids(orbit_search::SOURCE_KIND_DOC)?
+            .iter()
+            .filter(|source_id| live_paths.contains(source_id.as_str()))
+            .count();
+
+        Ok(DocsEmbeddingCoverage {
+            total_sources,
+            embedded_sources,
+        })
     }
 
     pub fn migrate_docs(&self, dry_run: bool) -> Result<DocMigrationReport, OrbitError> {
