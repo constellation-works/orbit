@@ -878,7 +878,7 @@
   {
     "active": true,
     "builtin": true,
-    "description": "Update an Orbit task and return the fresh task JSON. Field edits may accompany a status change, except `status: backlog` on a proposed task (approval), which accepts only `note` and `comment`. Starting with `status: in-progress` may include `plan` and `crew` on the same write.",
+    "description": "Update an Orbit task and return the fresh task JSON. Field edits may accompany a status change, except `status: backlog` on a proposed task (approval), which accepts only `note` and `comment`. Starting with `status: in-progress` from a pickup state may include field edits on the same write.",
     "enabled": true,
     "name": "orbit.task.update",
     "parameters": [
@@ -931,7 +931,7 @@
         "required": false
       },
       {
-        "description": "New task status. `backlog` on a proposed task is the approval transition and cannot be combined with field edits (only `note` and `comment`). `in-progress` from a pickup state is the start transition; `plan` and `crew` may be supplied on that write. Other status changes are ordinary governed updates and may include field edits.",
+        "description": "New task status. `backlog` on a proposed task is the approval transition and cannot be combined with field edits (only `note` and `comment`). `in-progress` from a pickup state is the start transition and may include field edits on the same write; from any other status that start is refused whether or not extra fields are present. Other status changes are ordinary governed updates and may include field edits.",
         "name": "status",
         "param_type": "string",
         "required": false
