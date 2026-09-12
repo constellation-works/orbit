@@ -63,7 +63,7 @@ pub(super) fn seed(global: &Path, workspace: &str, count: usize) -> TaskV2Store 
     let registry = TaskRegistryStore::open(&task_registry_path(global)).unwrap();
     registry
         .register_workspace(RegisterWorkspaceParams {
-            workspace_id: workspace.to_string(),
+            partition_id: workspace.to_string(),
             slug: workspace.to_string(),
             repo_fingerprint: None,
         })
@@ -79,7 +79,7 @@ pub(super) fn seed(global: &Path, workspace: &str, count: usize) -> TaskV2Store 
     fs::write(orbit_dir.join("config.toml"), "").unwrap();
     registry
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some(workspace.to_string()),
+            partition_id: Some(workspace.to_string()),
             slug: workspace.to_string(),
             repo_root: repo.clone(),
             workspace_path: repo,

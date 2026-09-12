@@ -1288,7 +1288,7 @@ fn orbit_workspace_selector_reports_the_logical_catalog_id() {
         &orbit_dir,
         WorkspaceRuntimeBinding {
             logical_workspace_id: "ws_orbit".to_string(),
-            workspace_id: "daniel-e9c542".to_string(),
+            task_partition_id: "daniel-e9c542".to_string(),
             owner_machine_id: None,
             repo_root: repo,
             ship_mode: ShipMode::Local,

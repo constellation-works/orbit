@@ -40,7 +40,7 @@ use crate::skill_catalog::SkillCatalog;
 /// maintenance that decides whether a task-store partition is orphaned must
 /// recognize it rather than delete the tasks every `--root` write lands in
 /// [ORB-12119].
-pub const UNBOUND_DATA_DIR_WORKSPACE_ID: &str = "ws_unbound-data-dir";
+pub const UNBOUND_DATA_DIR_PARTITION_ID: &str = "ws_unbound-data-dir";
 
 /// Runtime builder. Global root provides activities, jobs, executors, policies,
 /// config, global skills, and SQLite. Shared root provides existing workspace
@@ -86,7 +86,7 @@ pub(crate) fn build_context_from_roots(
             .as_ref()
             .map(|config| config.workspace_id.clone())
     }
-    .unwrap_or_else(|| UNBOUND_DATA_DIR_WORKSPACE_ID.to_string());
+    .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
     let import_report = if configured.is_none() {
         orbit_store::workflow::legacy_state::ImportReport::skipped()
     } else {
@@ -227,6 +227,16 @@ pub(crate) fn build_context_from_roots(
     ))
 }
 
+/// Resolve the task-store partition this runtime reads and writes task
+/// bundles in.
+///
+/// The partition id is the task registry's own namespace
+/// (`workspace_bindings.workspace_id`, the directory name under
+/// `tasks/workspaces/`), not the workspace-registry `ws_*` id: a checkout
+/// bound before `workspace init` supplied an id keeps a minted
+/// `<slug>-<hash>` partition, and an unselected `--root` data directory lands
+/// in [`UNBOUND_DATA_DIR_PARTITION_ID`]. Only
+/// `binding.logical_workspace_id` names a workspace-registry row.
 fn build_v2_task_backends(
     global_root: &Path,
     paths: &WorkspacePaths,
@@ -249,20 +259,20 @@ fn build_v2_task_backends(
             binding.logical_workspace_id.clone(),
         ));
     }
-    let workspace_id_hint = runtime_binding.map(|binding| binding.workspace_id.as_str());
+    let partition_id_hint = runtime_binding.map(|binding| binding.task_partition_id.as_str());
     // An explicit `--root` data directory is not a checkout. Binding
     // `parent(data-dir)` as `repo_root` mints a synthetic workspace (e.g.
     // `tmp-XXXXXX` for `/tmp`) that later `workspace init --force` cannot
     // reclaim. Skip that mint unless a selected checkout supplied a hint.
-    if workspace_id_hint.is_none() && is_explicit_data_dir(global_root, &paths.orbit_dir) {
-        let workspace_id = config
+    if partition_id_hint.is_none() && is_explicit_data_dir(global_root, &paths.orbit_dir) {
+        let partition_id = config
             .as_ref()
             .map(|config| config.workspace_id.clone())
-            .unwrap_or_else(|| UNBOUND_DATA_DIR_WORKSPACE_ID.to_string());
-        return Ok(coordination_task_backends(registry, workspace_id));
+            .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
+        return Ok(coordination_task_backends(registry, partition_id));
     }
-    let configured_id = config.as_ref().map(|config| config.workspace_id.as_str());
-    if let (Some(hint), Some(configured)) = (workspace_id_hint, configured_id)
+    let configured_partition_id = config.as_ref().map(|config| config.workspace_id.as_str());
+    if let (Some(hint), Some(configured)) = (partition_id_hint, configured_partition_id)
         && configured != hint
     {
         return Err(OrbitError::WorkspaceError(format!(
@@ -274,26 +284,26 @@ fn build_v2_task_backends(
     // row instead of asking `bind_workspace` for the drifted id, which fails
     // closed and takes every command in the checkout down (ORB-10985). The
     // config write below reconciles the checkout identity back onto it.
-    let workspace_id = match registry.find_checkout_by_orbit_dir(&paths.orbit_dir)? {
+    let partition_id = match registry.find_checkout_by_orbit_dir(&paths.orbit_dir)? {
         Some(bound) => {
-            if configured_id.is_some_and(|configured| configured != bound.workspace_id) {
+            if configured_partition_id.is_some_and(|configured| configured != bound.partition_id) {
                 tracing::warn!(
                     target: "orbit.core.bootstrap",
                     orbit_dir = %paths.orbit_dir.display(),
-                    bound_workspace_id = %bound.workspace_id,
-                    configured_workspace_id = configured_id,
-                    "checkout identity diverged from its task-registry binding; adopting the bound workspace"
+                    bound_partition_id = %bound.partition_id,
+                    configured_partition_id = configured_partition_id,
+                    "checkout identity diverged from its task-registry binding; adopting the bound partition"
                 );
             }
-            Some(bound.workspace_id)
+            Some(bound.partition_id)
         }
-        None => match configured_id.or(workspace_id_hint) {
+        None => match configured_partition_id.or(partition_id_hint) {
             Some(id) => Some(id.to_string()),
-            None => rebind_candidate_workspace_id(&registry, paths)?,
+            None => rebind_candidate_partition_id(&registry, paths)?,
         },
     };
     let binding = registry.bind_workspace(BindWorkspaceParams {
-        workspace_id,
+        partition_id,
         slug: workspace_slug(&paths.repo_root),
         repo_root: paths.repo_root.clone(),
         workspace_path: paths.repo_root.clone(),
@@ -302,12 +312,12 @@ fn build_v2_task_backends(
     })?;
     if config
         .as_ref()
-        .is_none_or(|config| config.workspace_id != binding.workspace_id)
+        .is_none_or(|config| config.workspace_id != binding.partition_id)
         && let Err(error) = write_workspace_config(
             &paths.orbit_dir,
             &WorkspaceConfig {
                 schema_version: 1,
-                workspace_id: binding.workspace_id.clone(),
+                workspace_id: binding.partition_id.clone(),
             },
         )
     {
@@ -325,7 +335,7 @@ fn build_v2_task_backends(
         }
     }
 
-    Ok(workspace_task_backends(registry, binding.workspace_id))
+    Ok(workspace_task_backends(registry, binding.partition_id))
 }
 
 /// Recreate the selected checkout's task-registry binding after its index was
@@ -345,7 +355,7 @@ fn ensure_explicit_root_task_binding(
     }
 
     registry.bind_workspace(BindWorkspaceParams {
-        workspace_id: Some(binding.logical_workspace_id.clone()),
+        partition_id: Some(binding.logical_workspace_id.clone()),
         slug: workspace_slug(&binding.repo_root),
         repo_root: binding.repo_root.clone(),
         workspace_path: binding.repo_root.clone(),
@@ -355,7 +365,7 @@ fn ensure_explicit_root_task_binding(
     Ok(())
 }
 
-fn rebind_candidate_workspace_id(
+fn rebind_candidate_partition_id(
     registry: &TaskRegistryStore,
     paths: &WorkspacePaths,
 ) -> Result<Option<String>, OrbitError> {
@@ -363,7 +373,7 @@ fn rebind_candidate_workspace_id(
         registry.find_rebind_candidates(&paths.repo_root, &paths.repo_root, &paths.orbit_dir)?;
     match candidates.as_slice() {
         [] => Ok(None),
-        [candidate] => Ok(Some(candidate.workspace_id.clone())),
+        [candidate] => Ok(Some(candidate.partition_id.clone())),
         _ => Err(OrbitError::WorkspaceError(format!(
             "workspace config is missing and multiple task artifact bindings match '{}'; restore .orbit/config.yaml or choose a workspace binding",
             paths.orbit_dir.display()

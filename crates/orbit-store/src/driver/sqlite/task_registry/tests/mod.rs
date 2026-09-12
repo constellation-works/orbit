@@ -42,7 +42,7 @@ fn bind(store: &TaskRegistryStore, root: &Path) -> WorkspaceCheckoutBinding {
     fs::create_dir_all(&orbit_dir).expect("create orbit dir");
     store
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some("orbit-test-123456".into()),
+            partition_id: Some("orbit-test-123456".into()),
             slug: "Orbit Test".into(),
             repo_root: root.to_path_buf(),
             workspace_path: root.to_path_buf(),
@@ -58,7 +58,7 @@ fn create_canonical_bundle(
     task_id: &str,
 ) -> PathBuf {
     let bundle_dir = store
-        .canonical_task_bundle_path(&workspace.workspace_id, task_id)
+        .canonical_task_bundle_path(&workspace.partition_id, task_id)
         .expect("canonical bundle path");
     fs::create_dir_all(&bundle_dir).expect("create bundle");
     bundle_dir
@@ -124,11 +124,11 @@ fn allocator_returns_monotonic_orb_ids() {
     let workspace = bind(&store, temp.path());
 
     assert_eq!(
-        store.allocate_task_id(&workspace.workspace_id).expect("id"),
+        store.allocate_task_id(&workspace.partition_id).expect("id"),
         "ORB-00000"
     );
     assert_eq!(
-        store.allocate_task_id(&workspace.workspace_id).expect("id"),
+        store.allocate_task_id(&workspace.partition_id).expect("id"),
         "ORB-00001"
     );
 }
@@ -144,11 +144,11 @@ fn allocator_uses_host_prefix_and_expands_past_five_digits() {
     let workspace = bind(&store, temp.path());
 
     assert_eq!(
-        store.allocate_task_id(&workspace.workspace_id).expect("id"),
+        store.allocate_task_id(&workspace.partition_id).expect("id"),
         "DE-99999"
     );
     assert_eq!(
-        store.allocate_task_id(&workspace.workspace_id).expect("id"),
+        store.allocate_task_id(&workspace.partition_id).expect("id"),
         "DE-100000"
     );
 }
@@ -545,7 +545,7 @@ fn allocator_is_global_across_workspaces() {
     fs::create_dir_all(second_root.join(".orbit")).expect("create second orbit dir");
     let second = store
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some("second-abcdef".into()),
+            partition_id: Some("second-abcdef".into()),
             slug: "Second".into(),
             repo_root: second_root.clone(),
             workspace_path: second_root.clone(),
@@ -556,13 +556,13 @@ fn allocator_is_global_across_workspaces() {
 
     assert_eq!(
         store
-            .allocate_task_id(&first.workspace_id)
+            .allocate_task_id(&first.partition_id)
             .expect("first id"),
         "ORB-00000"
     );
     assert_eq!(
         store
-            .allocate_task_id(&second.workspace_id)
+            .allocate_task_id(&second.partition_id)
             .expect("second id"),
         "ORB-00001"
     );
@@ -574,14 +574,14 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
     let store = store(&temp);
     let first = store
         .register_workspace(RegisterWorkspaceParams {
-            workspace_id: "logical-first-aaaaaa".into(),
+            partition_id: "logical-first-aaaaaa".into(),
             slug: "Logical First".into(),
             repo_fingerprint: Some("first-fingerprint".into()),
         })
         .expect("register first logical workspace");
     let second = store
         .register_workspace(RegisterWorkspaceParams {
-            workspace_id: "logical-second-bbbbbb".into(),
+            partition_id: "logical-second-bbbbbb".into(),
             slug: "Logical Second".into(),
             repo_fingerprint: None,
         })
@@ -589,22 +589,22 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
 
     assert!(
         store
-            .find_workspace_checkout(&first.workspace_id)
+            .find_workspace_checkout(&first.partition_id)
             .expect("find first checkout")
             .is_none()
     );
     assert!(
         store
-            .find_workspace_checkout(&second.workspace_id)
+            .find_workspace_checkout(&second.partition_id)
             .expect("find second checkout")
             .is_none()
     );
 
     let target_id = store
-        .allocate_task_id(&second.workspace_id)
+        .allocate_task_id(&second.partition_id)
         .expect("allocate target");
     let source_id = store
-        .allocate_task_id(&first.workspace_id)
+        .allocate_task_id(&first.partition_id)
         .expect("allocate source");
     assert_eq!(
         (target_id.as_str(), source_id.as_str()),
@@ -612,8 +612,8 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
     );
 
     for (workspace_id, task_id) in [
-        (second.workspace_id.as_str(), target_id.as_str()),
-        (first.workspace_id.as_str(), source_id.as_str()),
+        (second.partition_id.as_str(), target_id.as_str()),
+        (first.partition_id.as_str(), source_id.as_str()),
     ] {
         let path = store
             .canonical_task_bundle_path(workspace_id, task_id)
@@ -625,13 +625,13 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
     }
     store
         .replace_task_index(
-            &second.workspace_id,
+            &second.partition_id,
             &envelope(&target_id, TaskStatus::Done, Vec::new(), Vec::new()),
         )
         .expect("index completed target");
     store
         .replace_task_index(
-            &first.workspace_id,
+            &first.partition_id,
             &envelope(
                 &source_id,
                 TaskStatus::Backlog,
@@ -659,19 +659,19 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
     );
     assert_eq!(
         store
-            .indexed_relation_targets(&first.workspace_id, &source_id, TaskRelationType::BlockedBy,)
+            .indexed_relation_targets(&first.partition_id, &source_id, TaskRelationType::BlockedBy,)
             .expect("cross-workspace dependency"),
         vec![target_id.clone()]
     );
     assert_eq!(
         store
-            .indexed_task_count_for_workspace(&first.workspace_id)
+            .indexed_task_count_for_workspace(&first.partition_id)
             .expect("first count"),
         1
     );
     assert_eq!(
         store
-            .indexed_task_count_for_workspace(&second.workspace_id)
+            .indexed_task_count_for_workspace(&second.partition_id)
             .expect("second count"),
         1
     );
@@ -680,7 +680,7 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
     let missing_target = "ORB-09999";
     let error = store
         .validate_new_task_relation_targets(
-            &first.workspace_id,
+            &first.partition_id,
             &[TaskRelation {
                 relation_type: TaskRelationType::BlockedBy,
                 target: missing_target.into(),
@@ -688,7 +688,7 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
         )
         .expect_err("missing global target");
     assert!(error.to_string().contains(missing_target));
-    assert!(error.to_string().contains(&first.workspace_id));
+    assert!(error.to_string().contains(&first.partition_id));
     assert_eq!(
         store.allocator_next_number().expect("allocator after"),
         before_allocator,
@@ -697,7 +697,7 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
 
     let error = store
         .replace_task_index(
-            &first.workspace_id,
+            &first.partition_id,
             &envelope(
                 &source_id,
                 TaskStatus::Review,
@@ -710,7 +710,7 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
         )
         .expect_err("missing relation target");
     assert!(error.to_string().contains(missing_target));
-    assert!(error.to_string().contains(&first.workspace_id));
+    assert!(error.to_string().contains(&first.partition_id));
     assert_eq!(
         store
             .global_task_status_index()
@@ -721,7 +721,7 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
     );
     assert_eq!(
         store
-            .indexed_relation_targets(&first.workspace_id, &source_id, TaskRelationType::BlockedBy,)
+            .indexed_relation_targets(&first.partition_id, &source_id, TaskRelationType::BlockedBy,)
             .expect("relation after rejected update"),
         vec![target_id]
     );
@@ -729,7 +729,7 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
     let foreign_target = "DK-00042";
     store
         .validate_new_task_relation_targets(
-            &first.workspace_id,
+            &first.partition_id,
             &[TaskRelation {
                 relation_type: TaskRelationType::BlockedBy,
                 target: foreign_target.into(),
@@ -738,7 +738,7 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
         .expect("foreign-prefix target cannot be verified locally");
     store
         .replace_task_index(
-            &first.workspace_id,
+            &first.partition_id,
             &envelope(
                 &source_id,
                 TaskStatus::Review,
@@ -758,13 +758,13 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
         .expect("index foreign-prefix relations");
     assert_eq!(
         store
-            .indexed_relation_targets(&first.workspace_id, &source_id, TaskRelationType::RelatedTo)
+            .indexed_relation_targets(&first.partition_id, &source_id, TaskRelationType::RelatedTo)
             .expect("foreign relation target"),
         vec![foreign_target.to_string()]
     );
     assert!(
         store
-            .dangling_relation_targets(Some(&first.workspace_id))
+            .dangling_relation_targets(Some(&first.partition_id))
             .expect("audit foreign target")
             .is_empty(),
         "allowed foreign references are not locally dangling"
@@ -779,23 +779,23 @@ fn dangling_relation_targets_reports_only_grandfathered_orb_targets() {
 
     // A resolvable target and the source both exist in the registry.
     let target_id = store
-        .allocate_task_id(&workspace.workspace_id)
+        .allocate_task_id(&workspace.partition_id)
         .expect("allocate target");
     let source_id = store
-        .allocate_task_id(&workspace.workspace_id)
+        .allocate_task_id(&workspace.partition_id)
         .expect("allocate source");
     for task_id in [target_id.as_str(), source_id.as_str()] {
         let path = store
-            .canonical_task_bundle_path(&workspace.workspace_id, task_id)
+            .canonical_task_bundle_path(&workspace.partition_id, task_id)
             .expect("canonical bundle path");
         fs::create_dir_all(&path).expect("create canonical bundle");
         store
-            .register_task_bundle(task_id, &workspace.workspace_id, &path)
+            .register_task_bundle(task_id, &workspace.partition_id, &path)
             .expect("register bundle");
     }
     store
         .replace_task_index(
-            &workspace.workspace_id,
+            &workspace.partition_id,
             &envelope(&target_id, TaskStatus::Done, Vec::new(), Vec::new()),
         )
         .expect("index target");
@@ -803,7 +803,7 @@ fn dangling_relation_targets_reports_only_grandfathered_orb_targets() {
     // target; the audit must flag neither.
     store
         .replace_task_index(
-            &workspace.workspace_id,
+            &workspace.partition_id,
             &envelope(
                 &source_id,
                 TaskStatus::Backlog,
@@ -842,7 +842,7 @@ fn dangling_relation_targets_reports_only_grandfathered_orb_targets() {
             ) VALUES (?1, ?2, ?3, ?4)",
             params![
                 source_id,
-                workspace.workspace_id,
+                workspace.partition_id,
                 "related_to",
                 missing_target
             ],
@@ -861,10 +861,10 @@ fn dangling_relation_targets_reports_only_grandfathered_orb_targets() {
     assert_eq!(dangling[0].source_task_id, source_id);
     assert_eq!(dangling[0].target_task_id, missing_target);
     assert_eq!(dangling[0].relation_type, "related_to");
-    assert_eq!(dangling[0].workspace_id, workspace.workspace_id);
+    assert_eq!(dangling[0].partition_id, workspace.partition_id);
     assert_eq!(
         store
-            .dangling_relation_targets(Some(&workspace.workspace_id))
+            .dangling_relation_targets(Some(&workspace.partition_id))
             .expect("scoped audit")
             .len(),
         1
@@ -877,7 +877,7 @@ fn dangling_relation_targets_reports_only_grandfathered_orb_targets() {
     fs::create_dir_all(&orbit_two).expect("create second orbit dir");
     let workspace_two = store
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some("orbit-two-654321".into()),
+            partition_id: Some("orbit-two-654321".into()),
             slug: "Orbit Two".into(),
             repo_root: repo_two.clone(),
             workspace_path: repo_two.clone(),
@@ -886,18 +886,18 @@ fn dangling_relation_targets_reports_only_grandfathered_orb_targets() {
         })
         .expect("bind second workspace");
     let source_two = store
-        .allocate_task_id(&workspace_two.workspace_id)
+        .allocate_task_id(&workspace_two.partition_id)
         .expect("allocate second source");
     let path_two = store
-        .canonical_task_bundle_path(&workspace_two.workspace_id, &source_two)
+        .canonical_task_bundle_path(&workspace_two.partition_id, &source_two)
         .expect("second canonical path");
     fs::create_dir_all(&path_two).expect("create second bundle");
     store
-        .register_task_bundle(&source_two, &workspace_two.workspace_id, &path_two)
+        .register_task_bundle(&source_two, &workspace_two.partition_id, &path_two)
         .expect("register second source");
     store
         .replace_task_index(
-            &workspace_two.workspace_id,
+            &workspace_two.partition_id,
             &envelope(&source_two, TaskStatus::Backlog, Vec::new(), Vec::new()),
         )
         .expect("index second source");
@@ -909,7 +909,7 @@ fn dangling_relation_targets_reports_only_grandfathered_orb_targets() {
             ) VALUES (?1, ?2, ?3, ?4)",
             params![
                 source_two,
-                workspace_two.workspace_id,
+                workspace_two.partition_id,
                 "blocked_by",
                 "ORB-08888"
             ],
@@ -927,14 +927,14 @@ fn dangling_relation_targets_reports_only_grandfathered_orb_targets() {
     );
     assert_eq!(
         store
-            .dangling_relation_targets(Some(&workspace_two.workspace_id))
+            .dangling_relation_targets(Some(&workspace_two.partition_id))
             .expect("scoped to second")
             .len(),
         1
     );
     assert_eq!(
         store
-            .dangling_relation_targets(Some(&workspace.workspace_id))
+            .dangling_relation_targets(Some(&workspace.partition_id))
             .expect("scoped to first")
             .len(),
         1
@@ -958,7 +958,7 @@ fn allocator_reports_exhaustion() {
     }
 
     assert!(matches!(
-        store.allocate_task_id(&workspace.workspace_id),
+        store.allocate_task_id(&workspace.partition_id),
         Err(OrbitError::Store(message)) if message.contains("exhausted")
     ));
 }
@@ -970,7 +970,7 @@ fn bind_workspace_is_idempotent_for_orbit_dir() {
     let first = bind(&store, temp.path());
     let second = store
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some(first.workspace_id.clone()),
+            partition_id: Some(first.partition_id.clone()),
             slug: "Changed".into(),
             repo_root: temp.path().join("."),
             workspace_path: temp.path().join("."),
@@ -979,8 +979,8 @@ fn bind_workspace_is_idempotent_for_orbit_dir() {
         })
         .expect("idempotent bind");
 
-    assert_eq!(first.workspace_id, second.workspace_id);
-    assert_eq!(first.workspace_id, second.workspace_id);
+    assert_eq!(first.partition_id, second.partition_id);
+    assert_eq!(first.partition_id, second.partition_id);
 }
 
 #[test]
@@ -990,7 +990,7 @@ fn publication_fingerprint_is_adopted_once_and_then_fails_closed() {
     let workspace = bind(&store, temp.path());
     assert_eq!(
         store
-            .find_workspace_binding(&workspace.workspace_id)
+            .find_workspace_binding(&workspace.partition_id)
             .expect("find workspace")
             .expect("workspace")
             .repo_fingerprint,
@@ -998,18 +998,18 @@ fn publication_fingerprint_is_adopted_once_and_then_fails_closed() {
     );
 
     let recorded = store
-        .record_workspace_repo_fingerprint(&workspace.workspace_id, "ssh://source.test/orbit.git")
+        .record_workspace_repo_fingerprint(&workspace.partition_id, "ssh://source.test/orbit.git")
         .expect("record fingerprint");
     assert_eq!(
         recorded.repo_fingerprint.as_deref(),
         Some("ssh://source.test/orbit.git")
     );
     store
-        .record_workspace_repo_fingerprint(&workspace.workspace_id, "ssh://source.test/orbit.git")
+        .record_workspace_repo_fingerprint(&workspace.partition_id, "ssh://source.test/orbit.git")
         .expect("idempotent recording");
 
     let error = store
-        .record_workspace_repo_fingerprint(&workspace.workspace_id, "ssh://source.test/other.git")
+        .record_workspace_repo_fingerprint(&workspace.partition_id, "ssh://source.test/other.git")
         .expect_err("mismatch must fail");
     assert!(error.to_string().contains("different source-repository"));
 }
@@ -1027,7 +1027,7 @@ fn bind_workspace_rebinds_same_checkout_under_a_new_orbit_dir() {
     fs::create_dir_all(&ephemeral_orbit_dir).expect("create ephemeral orbit dir");
     let second = store
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some(first.workspace_id.clone()),
+            partition_id: Some(first.partition_id.clone()),
             slug: "Orbit Test".into(),
             repo_root: temp.path().to_path_buf(),
             workspace_path: temp.path().to_path_buf(),
@@ -1036,11 +1036,11 @@ fn bind_workspace_rebinds_same_checkout_under_a_new_orbit_dir() {
         })
         .expect("rebind under a new orbit dir");
 
-    assert_eq!(second.workspace_id, first.workspace_id);
+    assert_eq!(second.partition_id, first.partition_id);
     assert_eq!(second.orbit_dir, normalize_path(&ephemeral_orbit_dir));
     assert_eq!(
         store
-            .find_workspace_checkout(&first.workspace_id)
+            .find_workspace_checkout(&first.partition_id)
             .expect("find checkout")
             .expect("checkout exists")
             .orbit_dir,
@@ -1057,7 +1057,7 @@ fn bind_workspace_reuses_derived_id_for_same_paths_under_a_new_orbit_dir() {
     let first_orbit_dir = repo_root.join(".orbit");
     fs::create_dir_all(&first_orbit_dir).expect("create orbit dir");
     let derive = |orbit_dir: PathBuf| BindWorkspaceParams {
-        workspace_id: None,
+        partition_id: None,
         slug: "Orbit Test".into(),
         repo_root: repo_root.clone(),
         workspace_path: repo_root.clone(),
@@ -1075,7 +1075,7 @@ fn bind_workspace_reuses_derived_id_for_same_paths_under_a_new_orbit_dir() {
         .expect("derive second binding");
 
     assert_eq!(
-        second.workspace_id, first.workspace_id,
+        second.partition_id, first.partition_id,
         "the same checkout paths resolve back to one logical workspace"
     );
     assert_eq!(second.orbit_dir, normalize_path(&ephemeral_orbit_dir));
@@ -1091,7 +1091,7 @@ fn bind_workspace_rejects_reusing_an_id_for_a_different_checkout() {
     let other_orbit_dir = other_root.join(".orbit");
     fs::create_dir_all(&other_orbit_dir).expect("create other orbit dir");
     let result = store.bind_workspace(BindWorkspaceParams {
-        workspace_id: Some(first.workspace_id.clone()),
+        partition_id: Some(first.partition_id.clone()),
         slug: "Orbit Test".into(),
         repo_root: other_root.clone(),
         workspace_path: other_root,
@@ -1112,7 +1112,7 @@ fn bind_workspace_rejects_explicit_workspace_id_conflict() {
     bind(&store, temp.path());
 
     let result = store.bind_workspace(BindWorkspaceParams {
-        workspace_id: Some("other-abcdef".into()),
+        partition_id: Some("other-abcdef".into()),
         slug: "Changed".into(),
         repo_root: temp.path().join("."),
         workspace_path: temp.path().join("."),
@@ -1132,7 +1132,7 @@ fn rebind_checkout_moves_orbit_dir_onto_the_requested_workspace() {
     fs::create_dir_all(&data_dir).expect("create data dir");
     let synthetic = store
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some("tmp-5b7149".into()),
+            partition_id: Some("tmp-5b7149".into()),
             slug: "tmp".into(),
             repo_root: parent.clone(),
             workspace_path: parent,
@@ -1145,7 +1145,7 @@ fn rebind_checkout_moves_orbit_dir_onto_the_requested_workspace() {
     fs::create_dir_all(&repo_root).expect("create repo");
     let rebound = store
         .rebind_checkout(BindWorkspaceParams {
-            workspace_id: Some("ws_qa".into()),
+            partition_id: Some("ws_qa".into()),
             slug: "qa".into(),
             repo_root: repo_root.clone(),
             workspace_path: repo_root.clone(),
@@ -1154,12 +1154,12 @@ fn rebind_checkout_moves_orbit_dir_onto_the_requested_workspace() {
         })
         .expect("rebind orbit dir");
 
-    assert_eq!(rebound.workspace_id, "ws_qa");
+    assert_eq!(rebound.partition_id, "ws_qa");
     assert_eq!(rebound.repo_root, normalize_path(&repo_root));
     assert_eq!(rebound.orbit_dir, normalize_path(&data_dir));
     assert!(
         store
-            .find_workspace_checkout(&synthetic.workspace_id)
+            .find_workspace_checkout(&synthetic.partition_id)
             .expect("lookup synthetic")
             .is_none(),
         "the synthetic checkout row must not keep the data dir"
@@ -1168,7 +1168,7 @@ fn rebind_checkout_moves_orbit_dir_onto_the_requested_workspace() {
         .find_rebind_candidates(&repo_root, &repo_root, &data_dir)
         .expect("lookup rebound orbit dir");
     assert_eq!(by_orbit.len(), 1);
-    assert_eq!(by_orbit[0].workspace_id, "ws_qa");
+    assert_eq!(by_orbit[0].partition_id, "ws_qa");
 }
 
 #[test]
@@ -1247,7 +1247,7 @@ fn persistence_consumers_share_workspace_id_grammar() {
         );
         let store = store(&temp);
         let registry_result = store.register_workspace(RegisterWorkspaceParams {
-            workspace_id: raw.into(),
+            partition_id: raw.into(),
             slug: "Workspace".into(),
             repo_fingerprint: None,
         });
@@ -1262,7 +1262,7 @@ fn persistence_consumers_share_workspace_id_grammar() {
                     expected
                 );
                 assert_eq!(
-                    registry_result.expect("registry accepts id").workspace_id,
+                    registry_result.expect("registry accepts id").partition_id,
                     expected
                 );
             }
@@ -1404,7 +1404,7 @@ fn rebind_candidates_match_normalized_paths() {
         .expect("candidates");
 
     assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].workspace_id, workspace.workspace_id);
+    assert_eq!(candidates[0].partition_id, workspace.partition_id);
 }
 
 #[test]
@@ -1416,7 +1416,7 @@ fn register_task_bundle_rejects_non_canonical_path() {
     fs::create_dir_all(&wrong_path).expect("create wrong bundle");
 
     assert!(matches!(
-        store.register_task_bundle("ORB-00000", &workspace.workspace_id, &wrong_path),
+        store.register_task_bundle("ORB-00000", &workspace.partition_id, &wrong_path),
         Err(OrbitError::InvalidInput(_))
     ));
 }
@@ -1430,13 +1430,13 @@ fn generated_task_index_filters_by_status_priority_and_tags() {
     for task_id in ["ORB-00000", "ORB-00001"] {
         let bundle_dir = create_canonical_bundle(&store, &workspace, task_id);
         store
-            .register_task_bundle(task_id, &workspace.workspace_id, &bundle_dir)
+            .register_task_bundle(task_id, &workspace.partition_id, &bundle_dir)
             .expect("register bundle");
     }
 
     store
         .replace_task_index(
-            &workspace.workspace_id,
+            &workspace.partition_id,
             &envelope(
                 "ORB-00000",
                 TaskStatus::Backlog,
@@ -1447,7 +1447,7 @@ fn generated_task_index_filters_by_status_priority_and_tags() {
         .expect("index first task");
     store
         .replace_task_index(
-            &workspace.workspace_id,
+            &workspace.partition_id,
             &envelope(
                 "ORB-00001",
                 TaskStatus::Review,
@@ -1459,14 +1459,14 @@ fn generated_task_index_filters_by_status_priority_and_tags() {
 
     assert_eq!(
         store
-            .indexed_task_count_for_workspace(&workspace.workspace_id)
+            .indexed_task_count_for_workspace(&workspace.partition_id)
             .expect("index count"),
         2
     );
     assert_eq!(
         store
             .indexed_task_ids_filtered(
-                &workspace.workspace_id,
+                &workspace.partition_id,
                 &TaskIndexFilter {
                     status: Some(TaskStatus::Review),
                     priority: Some(TaskPriority::High),
@@ -1480,7 +1480,7 @@ fn generated_task_index_filters_by_status_priority_and_tags() {
     assert_eq!(
         store
             .indexed_task_ids_filtered(
-                &workspace.workspace_id,
+                &workspace.partition_id,
                 &TaskIndexFilter {
                     status: None,
                     priority: None,
@@ -1501,13 +1501,13 @@ fn generated_relation_index_supports_forward_and_inverse_lookup() {
     for task_id in ["ORB-00000", "ORB-00001", "ORB-00002"] {
         let bundle_dir = create_canonical_bundle(&store, &workspace, task_id);
         store
-            .register_task_bundle(task_id, &workspace.workspace_id, &bundle_dir)
+            .register_task_bundle(task_id, &workspace.partition_id, &bundle_dir)
             .expect("register bundle");
     }
 
     store
         .replace_task_index(
-            &workspace.workspace_id,
+            &workspace.partition_id,
             &envelope(
                 "ORB-00000",
                 TaskStatus::Backlog,
@@ -1529,7 +1529,7 @@ fn generated_relation_index_supports_forward_and_inverse_lookup() {
     assert_eq!(
         store
             .indexed_relation_targets(
-                &workspace.workspace_id,
+                &workspace.partition_id,
                 "ORB-00000",
                 TaskRelationType::BlockedBy,
             )
@@ -1539,7 +1539,7 @@ fn generated_relation_index_supports_forward_and_inverse_lookup() {
     assert_eq!(
         store
             .indexed_relation_sources(
-                &workspace.workspace_id,
+                &workspace.partition_id,
                 "ORB-00001",
                 TaskRelationType::BlockedBy,
             )
@@ -1556,12 +1556,12 @@ fn unregister_task_bundle_removes_binding_indexes_and_relation_edges() {
     for task_id in ["ORB-00000", "ORB-00001"] {
         let bundle_dir = create_canonical_bundle(&store, &workspace, task_id);
         store
-            .register_task_bundle(task_id, &workspace.workspace_id, &bundle_dir)
+            .register_task_bundle(task_id, &workspace.partition_id, &bundle_dir)
             .expect("register bundle");
     }
     store
         .replace_task_index(
-            &workspace.workspace_id,
+            &workspace.partition_id,
             &envelope(
                 "ORB-00000",
                 TaskStatus::Backlog,
@@ -1576,12 +1576,12 @@ fn unregister_task_bundle_removes_binding_indexes_and_relation_edges() {
 
     assert!(
         store
-            .unregister_task_bundle("ORB-00000", &workspace.workspace_id)
+            .unregister_task_bundle("ORB-00000", &workspace.partition_id)
             .expect("unregister")
     );
     assert_eq!(
         store
-            .tasks_for_workspace(&workspace.workspace_id)
+            .tasks_for_workspace(&workspace.partition_id)
             .expect("tasks")
             .into_iter()
             .map(|binding| binding.task_id)
@@ -1590,14 +1590,14 @@ fn unregister_task_bundle_removes_binding_indexes_and_relation_edges() {
     );
     assert_eq!(
         store
-            .indexed_task_count_for_workspace(&workspace.workspace_id)
+            .indexed_task_count_for_workspace(&workspace.partition_id)
             .expect("index count"),
         0
     );
     assert_eq!(
         store
             .indexed_relation_sources(
-                &workspace.workspace_id,
+                &workspace.partition_id,
                 "ORB-00001",
                 TaskRelationType::BlockedBy,
             )
@@ -1617,7 +1617,7 @@ fn unregister_task_bundle_preserves_sibling_workspace_indexes() {
         fs::create_dir_all(&orbit_dir).expect("create orbit dir");
         store
             .bind_workspace(BindWorkspaceParams {
-                workspace_id: Some(workspace_id.into()),
+                partition_id: Some(workspace_id.into()),
                 slug: workspace_id.into(),
                 repo_root: root.to_path_buf(),
                 workspace_path: root.to_path_buf(),
@@ -1632,12 +1632,12 @@ fn unregister_task_bundle_preserves_sibling_workspace_indexes() {
     for task_id in ["ORB-1", "ORB-2"] {
         let bundle_dir = create_canonical_bundle(&store, &workspace_b, task_id);
         store
-            .register_task_bundle(task_id, &workspace_b.workspace_id, &bundle_dir)
+            .register_task_bundle(task_id, &workspace_b.partition_id, &bundle_dir)
             .expect("register bundle");
     }
     store
         .replace_task_index(
-            &workspace_b.workspace_id,
+            &workspace_b.partition_id,
             &envelope(
                 "ORB-1",
                 TaskStatus::Backlog,
@@ -1648,7 +1648,7 @@ fn unregister_task_bundle_preserves_sibling_workspace_indexes() {
         .expect("index tagged task");
     store
         .replace_task_index(
-            &workspace_b.workspace_id,
+            &workspace_b.partition_id,
             &envelope(
                 "ORB-2",
                 TaskStatus::Backlog,
@@ -1662,11 +1662,11 @@ fn unregister_task_bundle_preserves_sibling_workspace_indexes() {
         .expect("index inbound relation");
 
     let versions_before = store
-        .indexed_task_versions_for_workspace(&workspace_b.workspace_id)
+        .indexed_task_versions_for_workspace(&workspace_b.partition_id)
         .expect("versions before unregister");
     let tagged_before = store
         .indexed_task_ids_filtered(
-            &workspace_b.workspace_id,
+            &workspace_b.partition_id,
             &TaskIndexFilter {
                 status: None,
                 priority: None,
@@ -1677,7 +1677,7 @@ fn unregister_task_bundle_preserves_sibling_workspace_indexes() {
         .expect("tagged tasks before unregister");
     let relation_sources_before = store
         .indexed_relation_sources(
-            &workspace_b.workspace_id,
+            &workspace_b.partition_id,
             "ORB-1",
             TaskRelationType::BlockedBy,
         )
@@ -1685,19 +1685,19 @@ fn unregister_task_bundle_preserves_sibling_workspace_indexes() {
 
     assert!(
         !store
-            .unregister_task_bundle("ORB-1", &workspace_a.workspace_id)
+            .unregister_task_bundle("ORB-1", &workspace_a.partition_id)
             .expect("unregister sibling task")
     );
     assert_eq!(
         store
-            .indexed_task_versions_for_workspace(&workspace_b.workspace_id)
+            .indexed_task_versions_for_workspace(&workspace_b.partition_id)
             .expect("versions after unregister"),
         versions_before
     );
     assert_eq!(
         store
             .indexed_task_ids_filtered(
-                &workspace_b.workspace_id,
+                &workspace_b.partition_id,
                 &TaskIndexFilter {
                     status: None,
                     priority: None,
@@ -1711,7 +1711,7 @@ fn unregister_task_bundle_preserves_sibling_workspace_indexes() {
     assert_eq!(
         store
             .indexed_relation_sources(
-                &workspace_b.workspace_id,
+                &workspace_b.partition_id,
                 "ORB-1",
                 TaskRelationType::BlockedBy,
             )
@@ -1729,25 +1729,25 @@ fn completion_by_complexity_keeps_unset_as_its_own_bucket() {
     for task_id in ["ORB-00000", "ORB-00001", "ORB-00002", "ORB-00003"] {
         let bundle_dir = create_canonical_bundle(&store, &workspace, task_id);
         store
-            .register_task_bundle(task_id, &workspace.workspace_id, &bundle_dir)
+            .register_task_bundle(task_id, &workspace.partition_id, &bundle_dir)
             .expect("register bundle");
     }
 
     let mut hard_done = envelope("ORB-00000", TaskStatus::Done, Vec::new(), Vec::new());
     hard_done.complexity = Some(TaskComplexity::Hard);
     store
-        .replace_task_index(&workspace.workspace_id, &hard_done)
+        .replace_task_index(&workspace.partition_id, &hard_done)
         .expect("index hard");
 
     let mut medium_rejected = envelope("ORB-00001", TaskStatus::Rejected, Vec::new(), Vec::new());
     medium_rejected.complexity = Some(TaskComplexity::Medium);
     store
-        .replace_task_index(&workspace.workspace_id, &medium_rejected)
+        .replace_task_index(&workspace.partition_id, &medium_rejected)
         .expect("index medium");
 
     store
         .replace_task_index(
-            &workspace.workspace_id,
+            &workspace.partition_id,
             &envelope("ORB-00002", TaskStatus::Archived, Vec::new(), Vec::new()),
         )
         .expect("index unset");
@@ -1757,11 +1757,11 @@ fn completion_by_complexity_keeps_unset_as_its_own_bucket() {
     let mut unassessed_backlog = envelope("ORB-00003", TaskStatus::Backlog, Vec::new(), Vec::new());
     unassessed_backlog.complexity = Some(TaskComplexity::Unassessed);
     store
-        .replace_task_index(&workspace.workspace_id, &unassessed_backlog)
+        .replace_task_index(&workspace.partition_id, &unassessed_backlog)
         .expect("index unassessed");
 
     let rows = store
-        .completion_by_complexity(&workspace.workspace_id)
+        .completion_by_complexity(&workspace.partition_id)
         .expect("aggregate");
     assert_eq!(
         rows.iter()
@@ -1783,7 +1783,7 @@ fn completion_by_complexity_keeps_unset_as_its_own_bucket() {
     assert_eq!(hard.by_status.get("done").copied(), Some(1));
 
     let map = store
-        .complexity_by_task_id(&workspace.workspace_id)
+        .complexity_by_task_id(&workspace.partition_id)
         .expect("map");
     assert_eq!(map.get("ORB-00000").map(String::as_str), Some("hard"));
     assert_eq!(map.get("ORB-00002").map(String::as_str), Some(UNSET_BUCKET));
@@ -1826,7 +1826,7 @@ fn seeded_allocator_hands_out_seeded_id() {
     let workspace = bind(&store, temp.path());
     store.seed_allocator_start(10_000).expect("seed");
     let id = store
-        .allocate_task_id(&workspace.workspace_id)
+        .allocate_task_id(&workspace.partition_id)
         .expect("allocate");
     assert_eq!(id, "ORB-10000");
 }
@@ -1849,14 +1849,14 @@ fn workspace_ids_lists_every_bound_partition() {
     let workspace = bind(&store, temp.path());
     store
         .register_workspace(RegisterWorkspaceParams {
-            workspace_id: "ws_remote".into(),
+            partition_id: "ws_remote".into(),
             slug: "remote".into(),
             repo_fingerprint: None,
         })
         .expect("register logical workspace");
 
-    let ids = store.workspace_ids().expect("list workspace ids");
-    assert!(ids.contains(&workspace.workspace_id));
+    let ids = store.partition_ids().expect("list workspace ids");
+    assert!(ids.contains(&workspace.partition_id));
     assert!(ids.contains("ws_remote"));
 }
 
@@ -1870,11 +1870,11 @@ fn unbind_workspace_retires_the_checkout_and_its_task_bundles() {
     let workspace = bind(&store, temp.path());
     let bundle_dir = create_canonical_bundle(&store, &workspace, "ORB-00000");
     store
-        .register_task_bundle("ORB-00000", &workspace.workspace_id, &bundle_dir)
+        .register_task_bundle("ORB-00000", &workspace.partition_id, &bundle_dir)
         .expect("register bundle");
     store
         .replace_task_index(
-            &workspace.workspace_id,
+            &workspace.partition_id,
             &envelope(
                 "ORB-00000",
                 TaskStatus::Backlog,
@@ -1886,13 +1886,13 @@ fn unbind_workspace_retires_the_checkout_and_its_task_bundles() {
 
     assert!(
         store
-            .unbind_workspace(&workspace.workspace_id)
+            .unbind_workspace(&workspace.partition_id)
             .expect("unbind workspace")
     );
 
     assert!(
         store
-            .find_workspace_binding(&workspace.workspace_id)
+            .find_workspace_binding(&workspace.partition_id)
             .expect("read workspace binding")
             .is_none()
     );
@@ -1911,7 +1911,7 @@ fn unbind_workspace_retires_the_checkout_and_its_task_bundles() {
     );
     assert!(
         !store
-            .unbind_workspace(&workspace.workspace_id)
+            .unbind_workspace(&workspace.partition_id)
             .expect("second unbind is a no-op"),
         "unbinding an unknown workspace reports that nothing was retired"
     );
@@ -1930,7 +1930,7 @@ fn unbind_workspace_retires_relations_pointing_into_it() {
     fs::create_dir_all(&other_orbit_dir).expect("create other orbit dir");
     let other = store
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some("other-654321".into()),
+            partition_id: Some("other-654321".into()),
             slug: "Other".into(),
             repo_root: other_root.clone(),
             workspace_path: other_root,
@@ -1940,8 +1940,8 @@ fn unbind_workspace_retires_relations_pointing_into_it() {
         .expect("bind other workspace");
 
     for (workspace_id, task_id) in [
-        (&retired.workspace_id, "ORB-00000"),
-        (&other.workspace_id, "ORB-00001"),
+        (&retired.partition_id, "ORB-00000"),
+        (&other.partition_id, "ORB-00001"),
     ] {
         let bundle_dir = store
             .canonical_task_bundle_path(workspace_id, task_id)
@@ -1953,7 +1953,7 @@ fn unbind_workspace_retires_relations_pointing_into_it() {
     }
     store
         .replace_task_index(
-            &other.workspace_id,
+            &other.partition_id,
             &envelope(
                 "ORB-00001",
                 TaskStatus::Backlog,
@@ -1967,7 +1967,7 @@ fn unbind_workspace_retires_relations_pointing_into_it() {
         .expect("index the pointing task");
 
     store
-        .unbind_workspace(&retired.workspace_id)
+        .unbind_workspace(&retired.partition_id)
         .expect("unbind workspace");
 
     let conn = store.conn.lock().expect("lock registry");

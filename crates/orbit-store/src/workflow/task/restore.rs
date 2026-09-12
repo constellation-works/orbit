@@ -125,7 +125,7 @@ fn restore_publication_inner(
                 missing.push(published);
             }
             Some(binding) => {
-                let identical = binding.workspace_id == task_workspace_id
+                let identical = binding.partition_id == task_workspace_id
                     && read_bundle_at(&binding.canonical_path)
                         .is_ok_and(|bundle| bundle == published.bundle);
                 if request.mode != PublicationRestoreMode::AllowIdenticalRetry || !identical {
@@ -213,7 +213,7 @@ fn assert_destination_pairing(
                 request.task_workspace_id
             ))
         })?;
-    if binding.workspace_id != request.task_workspace_id {
+    if binding.partition_id != request.task_workspace_id {
         return Err(restore_error(
             "task workspace selector resolved to another workspace",
         ));

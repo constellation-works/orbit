@@ -205,7 +205,7 @@ fn explicit_root_runtime() -> (tempfile::TempDir, OrbitRuntime) {
     TaskRegistryStore::open(&task_registry_path(&data_dir))
         .expect("open task registry")
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some("ws_repo".to_string()),
+            partition_id: Some("ws_repo".to_string()),
             slug: "repo".to_string(),
             repo_root: repo,
             workspace_path: root.path().join("repo"),

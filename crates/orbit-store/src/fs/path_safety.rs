@@ -12,8 +12,10 @@ pub(crate) fn validate_path_stem(stem: &str, kind: &str) -> Result<(), OrbitErro
     )))
 }
 
-/// Validate persisted logical and legacy workspace identifiers.
-pub(crate) fn validate_workspace_id(raw: &str) -> Result<String, OrbitError> {
+/// Validate a persisted task-store partition id: the canonical `ws_<name>`
+/// form a workspace registration supplies, or the legacy `<slug>-<hash>` form
+/// the task registry mints for an unregistered checkout.
+pub(crate) fn validate_partition_id(raw: &str) -> Result<String, OrbitError> {
     let trimmed = raw.trim();
     let logical = trimmed.strip_prefix("ws_").is_some_and(|name| {
         !name.is_empty()

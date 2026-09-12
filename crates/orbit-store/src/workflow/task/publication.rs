@@ -330,10 +330,10 @@ pub(crate) fn build_publication_snapshot_from_task_workspace(
                 "task workspace '{task_workspace_id}' is not registered in the coordination registry"
             ))
         })?;
-    if binding.workspace_id != task_workspace_id {
+    if binding.partition_id != task_workspace_id {
         return Err(OrbitError::InvalidInput(format!(
             "task workspace selector '{task_workspace_id}' resolved to unexpected workspace '{}'",
-            binding.workspace_id
+            binding.partition_id
         )));
     }
 

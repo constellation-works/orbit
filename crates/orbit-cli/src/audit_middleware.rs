@@ -126,7 +126,7 @@ impl Drop for AuditGuard<'_> {
             workspace_id: self
                 .runtime
                 .workspace_runtime_binding()
-                .map(|binding| binding.workspace_id.clone()),
+                .map(|binding| binding.task_partition_id.clone()),
             caller_machine_id: None,
             caller_host_id: None,
             process_machine_id: None,

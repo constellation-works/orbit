@@ -5,9 +5,14 @@ use rusqlite::Connection;
 
 use super::queries::{workspace_by_id, workspace_checkout_by_id};
 use crate::fs::path_safety::normalize_path;
-pub(super) use crate::fs::path_safety::validate_workspace_id;
+pub(super) use crate::fs::path_safety::validate_partition_id;
 
-/// Allocate an unused logical workspace id for `slug` + `path`.
+/// Allocate an unused task-store partition id for `slug` + `path`.
+///
+/// The minted `<slug>-<hash>` form is this registry's own namespace: nothing
+/// in the workspace registry (`<global_root>/workspaces.json`) names it, and a
+/// caller that already has a `ws_*` workspace id passes it in instead of
+/// allocating here.
 ///
 /// A candidate counts as taken when *either* registry table already claims it:
 /// the logical `workspace_bindings` row or the machine-local
@@ -15,13 +20,13 @@ pub(super) use crate::fs::path_safety::validate_workspace_id;
 /// allocator hand back an id whose checkout row already existed, which then
 /// failed the caller's checkout-collision check instead of retrying with the
 /// next attempt (ORB-10507).
-pub(super) fn next_workspace_id_candidate(
+pub(super) fn next_partition_id_candidate(
     conn: &Connection,
     slug: &str,
     path: &Path,
 ) -> Result<String, OrbitError> {
     for attempt in 0..1000 {
-        let candidate = workspace_id_candidate(slug, path, attempt);
+        let candidate = partition_id_candidate(slug, path, attempt);
         if workspace_by_id(conn, &candidate)?.is_none()
             && workspace_checkout_by_id(conn, &candidate)?.is_none()
         {
@@ -29,11 +34,11 @@ pub(super) fn next_workspace_id_candidate(
         }
     }
     Err(OrbitError::Store(format!(
-        "could not allocate workspace id for slug '{slug}'"
+        "could not allocate a task-store partition id for slug '{slug}'"
     )))
 }
 
-pub(super) fn workspace_id_candidate(slug: &str, path: &Path, attempt: u32) -> String {
+pub(super) fn partition_id_candidate(slug: &str, path: &Path, attempt: u32) -> String {
     let input = format!("{}:{}:{attempt}", slug, normalize_path(path).display());
     let hash = blake3::hash(input.as_bytes()).to_hex();
     format!("{slug}-{}", &hash[..6])

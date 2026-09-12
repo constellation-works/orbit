@@ -588,7 +588,7 @@ fn describe_partitions(partitions: &[task_store::UnclaimedPartition]) -> String 
         .map(|partition| {
             format!(
                 "{} ({}, {} task bundle(s))",
-                task_store::partition_id(&partition.path).unwrap_or("<unnamed>"),
+                task_store::partition_id_of(&partition.path).unwrap_or("<unnamed>"),
                 partition.path.display(),
                 partition.task_bundles
             )

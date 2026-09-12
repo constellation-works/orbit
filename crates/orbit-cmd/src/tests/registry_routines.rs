@@ -129,6 +129,6 @@ fn workspace_discovery_builds_bound_runtimes() {
         .1
         .workspace_runtime_binding()
         .expect("binding");
-    assert_eq!(binding.workspace_id, "ws_runtime");
+    assert_eq!(binding.task_partition_id, "ws_runtime");
     assert_eq!(binding.ship_mode.as_input_value(), "pr");
 }

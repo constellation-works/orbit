@@ -50,7 +50,7 @@ fn workspace_task_backends_exposes_create_get_and_list_trait_surface() {
     std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
     let binding = registry
         .bind_workspace(BindWorkspaceParams {
-            workspace_id: Some("orbit-test-123456".to_string()),
+            partition_id: Some("orbit-test-123456".to_string()),
             slug: "Orbit Test".to_string(),
             repo_root: repo_dir.clone(),
             workspace_path: repo_dir.clone(),
@@ -58,7 +58,7 @@ fn workspace_task_backends_exposes_create_get_and_list_trait_surface() {
             repo_fingerprint: None,
         })
         .expect("bind workspace");
-    let backends = workspace_task_backends(registry, binding.workspace_id);
+    let backends = workspace_task_backends(registry, binding.partition_id);
 
     let created = backends
         .task
@@ -115,7 +115,7 @@ fn coordination_backends_create_and_schedule_across_checkoutless_workspaces() {
     ] {
         registry
             .register_workspace(RegisterWorkspaceParams {
-                workspace_id: workspace_id.to_string(),
+                partition_id: workspace_id.to_string(),
                 slug: slug.to_string(),
                 repo_fingerprint: None,
             })

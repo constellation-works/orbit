@@ -278,10 +278,10 @@ fn assert_registered_workspace(
                 request.task_workspace_id
             ))
         })?;
-    if binding.workspace_id != request.task_workspace_id {
+    if binding.partition_id != request.task_workspace_id {
         return Err(publish_error(format!(
             "task workspace selector '{}' resolved to unexpected workspace '{}'",
-            request.task_workspace_id, binding.workspace_id
+            request.task_workspace_id, binding.partition_id
         )));
     }
     match binding.repo_fingerprint.as_deref() {
