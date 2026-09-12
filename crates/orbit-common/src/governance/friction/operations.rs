@@ -43,6 +43,9 @@ pub enum FrictionVerb {
 /// A friction operation specification.
 pub type FrictionOperation = OperationSpec<FrictionVerb>;
 
+/// Opt-in `friction.list` response mode that returns records and guidance.
+pub const FRICTION_LIST_RESPONSE_MODE_WITH_NOTES: &str = "with_notes";
+
 impl FrictionVerb {
     /// This verb's specification.
     pub fn spec(self) -> &'static FrictionOperation {
@@ -154,7 +157,7 @@ const LIST: FrictionOperation = FrictionOperation {
     verb: FrictionVerb::List,
     name: "list",
     tool_name: "orbit.friction.list",
-    tool_description: "List friction records",
+    tool_description: "List friction records. Returns a JSON record array by default. Set `response_mode` to `with_notes` for a stable `{records, notes}` object.",
     cli_about: "List friction records",
     params: &[
         text_param("model", "Optional model filter"),
@@ -175,6 +178,15 @@ const LIST: FrictionOperation = FrictionOperation {
         text_param("to", "Optional RFC3339 upper bound for created_at"),
         count_param("limit", "Optional maximum number of records to return"),
         count_param("offset", "Optional number of records to skip"),
+        ParamSpec {
+            name: "response_mode",
+            param_type: ParamType::String,
+            required: false,
+            mcp_description: Some(Description::Static(
+                "Optional response shape: `with_notes` returns `{records, notes}`; omit for the legacy record array",
+            )),
+            cli: None,
+        },
     ],
     rejects_agent_field: false,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),

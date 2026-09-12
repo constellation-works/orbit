@@ -10,7 +10,9 @@ use clap::Parser;
 use orbit_common::governance::friction::FrictionVerb;
 use serde_json::{Value, json};
 
-use super::super::{Cli, Commands, operation::RuntimeNeed};
+use super::super::{Cli, Commands, Execute, operation::RuntimeNeed};
+use crate::command::CommandOutput;
+use crate::output::payload::{Block, View};
 
 /// Parse an argv and return the friction invocation it produced.
 fn invocation(args: &[&str]) -> super::super::friction::FrictionInvocation {
@@ -77,6 +79,46 @@ fn cli_parses_friction_list() {
     assert_eq!(parsed.input, json!({ "status": "open" }));
     assert!(!parsed.json);
     assert_eq!(parsed.target_id(), None);
+}
+
+#[test]
+fn cli_keeps_array_json_while_rendering_multi_word_guidance() {
+    let runtime = orbit_core::OrbitRuntime::in_memory().expect("runtime");
+    runtime
+        .run_tool(
+            "orbit.friction.add",
+            json!({
+                "body": "workspace_init lost the parallel env snapshot while EnvGuard was armed.",
+                "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+            }),
+        )
+        .expect("seed friction");
+    let command = super::super::friction::FrictionCommand {
+        command: invocation(&[
+            "orbit",
+            "friction",
+            "list",
+            "--q",
+            "EnvGuard workspace_init",
+        ]),
+    };
+
+    let CommandOutput::Payload(payload) = command.execute(&runtime).expect("list") else {
+        panic!("list returns a payload");
+    };
+    let (document, view) = payload.into_view();
+
+    assert_eq!(document, json!([]), "CLI JSON remains the legacy array");
+    let View::Blocks(blocks) = view else {
+        panic!("friction list has a human block view");
+    };
+    assert!(
+        blocks.iter().any(|block| matches!(
+            block,
+            Block::Text(text) if text.contains("single case-insensitive substring")
+        )),
+        "human output retains the multi-word guidance"
+    );
 }
 
 #[test]

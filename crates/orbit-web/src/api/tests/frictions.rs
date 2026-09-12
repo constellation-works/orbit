@@ -399,7 +399,15 @@ fn dashboard_friction_parameters_are_declared_by_the_registry() {
     let used: &[(FrictionVerb, &[&str])] = &[
         (
             FrictionVerb::List,
-            &["status", "tag", "month", "q", "limit", "offset"],
+            &[
+                "status",
+                "tag",
+                "month",
+                "q",
+                "limit",
+                "offset",
+                "response_mode",
+            ],
         ),
         (FrictionVerb::Add, &["model", "body", "tags", "during_task"]),
         (FrictionVerb::Show, &["id"]),

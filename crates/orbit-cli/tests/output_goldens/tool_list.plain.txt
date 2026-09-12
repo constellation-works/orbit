@@ -8,7 +8,7 @@ orbit.auto_task.list	active	yes	-	List every auto-task definition in this worksp
 orbit.auto_task.mint	active	yes	name:string	Mint one task now from an auto-task definition. Unconditional: the schedule, dedupe policy, and enabled flag are ignored, and the scheduler's own cursor is left untouched.
 orbit.command.exec	active	yes	argv:string|string[], working_directory:string	Execute a command as an explicit argv array in an explicit working directory and return its stdout, stderr, and exit status. Requires operator capability and the workspace claim; withheld from managed runs.
 orbit.friction.add	active	yes	body:string, model:string	Append a friction report
-orbit.friction.list	active	yes	-	List friction records
+orbit.friction.list	active	yes	-	List friction records. Returns a JSON record array by default. Set `response_mode` to `with_notes` for a stable `{records, notes}` object.
 orbit.friction.update	active	yes	id:string	Update triage metadata for a friction record
 orbit.pipeline.invoke	active	yes	job_name:string, input:object	Submit a durable pipeline run and return immediately with its run ID.
 orbit.pipeline.wait	active	yes	run_ids:string|string[]	Block until the supplied pipeline runs reach terminal state or timeout.

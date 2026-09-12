@@ -13,7 +13,7 @@ use crate::state::Ws;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_common::governance::friction::FrictionVerb;
+use orbit_common::governance::friction::{FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb};
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -158,7 +158,11 @@ pub(super) async fn list_frictions(
             "limit",
             Value::from(bounded_limit(query.limit, FRICTIONS_DEFAULT_LIMIT)),
         )?;
-        call.set("offset", Value::from(query.offset.unwrap_or(0)))
+        call.set("offset", Value::from(query.offset.unwrap_or(0)))?;
+        call.set(
+            "response_mode",
+            Value::String(FRICTION_LIST_RESPONSE_MODE_WITH_NOTES.to_string()),
+        )
     })();
     if let Err(e) = built {
         return map_runtime_error(e);

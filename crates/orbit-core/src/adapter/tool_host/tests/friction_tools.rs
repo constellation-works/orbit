@@ -148,7 +148,7 @@ fn an_empty_update_title_restores_derivation() {
 }
 
 #[test]
-fn list_notes_empty_multi_word_substring_miss() {
+fn list_default_is_always_the_legacy_array() {
     let (_temp, runtime, _repo) = test_runtime();
     let seeded = run_tool_as_operator(
         &runtime,
@@ -163,45 +163,94 @@ fn list_notes_empty_multi_word_substring_miss() {
     .expect("seed open friction");
     let id = seeded["id"].as_str().expect("record id");
 
-    let miss = run_tool_as_operator(
+    let month = seeded["created_at"]
+        .as_str()
+        .and_then(|created_at| created_at.get(..7))
+        .expect("record month");
+    let filtered_hit = run_tool_as_operator(
         &runtime,
         "orbit.friction.list",
-        json!({ "status": "open", "q": "EnvGuard workspace_init" }),
+        json!({
+            "model": TEST_CODEX_MODEL,
+            "status": "open",
+            "tag": "tooling",
+            "month": month,
+            "q": "EnvGuard",
+            "from": "2000-01-01T00:00:00Z",
+            "to": "2100-01-01T00:00:00Z",
+            "limit": 10,
+            "offset": 0,
+        }),
     )
-    .expect("multi-word list");
+    .expect("list with every filter");
+    let records = filtered_hit.as_array().expect("default record array");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0]["id"], json!(id));
 
-    assert_eq!(miss["records"], json!([]));
-    let notes = miss["notes"].as_array().expect("notes array");
-    assert_eq!(notes.len(), 1);
-    let note = notes[0].as_str().expect("note text");
-    assert!(note.contains("single case-insensitive substring"), "{note}");
-    assert!(note.contains("not proof the corpus is empty"), "{note}");
-    assert!(note.contains("EnvGuard"), "{note}");
-    assert!(note.contains("workspace_init"), "{note}");
+    for input in [
+        json!({ "q": "EnvGuardUniqueMiss" }),
+        json!({ "q": "EnvGuard workspace_init" }),
+        json!({ "status": "resolved" }),
+    ] {
+        let result = run_tool_as_operator(&runtime, "orbit.friction.list", input)
+            .expect("default empty list");
+        assert_eq!(result, json!([]), "every default empty result is an array");
+    }
+}
+
+#[test]
+fn list_with_notes_is_one_stable_envelope_for_hits_and_misses() {
+    let (_temp, runtime, _repo) = test_runtime();
+    let seeded = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.add",
+        json!({
+            "body": "workspace_init lost the parallel env snapshot while EnvGuard was armed.",
+            "model": TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("seed friction");
 
     let hit = run_tool_as_operator(
         &runtime,
         "orbit.friction.list",
-        json!({ "status": "open", "q": "EnvGuard" }),
+        json!({ "q": "EnvGuard", "response_mode": "with_notes" }),
     )
-    .expect("single-term list");
+    .expect("notes-mode hit");
+    assert_eq!(hit["records"][0]["id"], seeded["id"]);
+    assert_eq!(hit["notes"], json!([]));
 
-    let records = hit.as_array().expect("historical array shape");
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0]["id"], json!(id));
-
-    let unmatched = run_tool_as_operator(
+    let one_word_miss = run_tool_as_operator(
         &runtime,
         "orbit.friction.list",
-        json!({ "status": "open", "q": "EnvGuardUniqueMiss" }),
+        json!({ "q": "UniqueMiss", "response_mode": "with_notes" }),
     )
-    .expect("single-term miss");
-    assert!(
-        unmatched
-            .as_array()
-            .is_some_and(|records| records.is_empty()),
-        "single-term empty pages keep the array shape: {unmatched}"
-    );
+    .expect("notes-mode one-word miss");
+    assert_eq!(one_word_miss, json!({ "records": [], "notes": [] }));
+
+    let multi_word_miss = run_tool_as_operator(
+        &runtime,
+        "orbit.friction.list",
+        json!({ "q": "EnvGuard workspace_init", "response_mode": "with_notes" }),
+    )
+    .expect("notes-mode multi-word miss");
+    assert_eq!(multi_word_miss["records"], json!([]));
+    let note = multi_word_miss["notes"][0].as_str().expect("note text");
+    assert!(note.contains("single case-insensitive substring"), "{note}");
+    assert!(note.contains("not proof the corpus is empty"), "{note}");
+}
+
+#[test]
+fn list_rejects_unknown_response_modes() {
+    let (_temp, runtime, _repo) = test_runtime();
+    let message = invalid_input_message(run_tool_as_operator(
+        &runtime,
+        "orbit.friction.list",
+        json!({ "response_mode": "sometimes" }),
+    ));
+
+    assert!(message.contains("`response_mode`"), "{message}");
+    assert!(message.contains("`with_notes`"), "{message}");
 }
 
 #[test]

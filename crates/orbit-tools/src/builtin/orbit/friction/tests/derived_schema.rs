@@ -116,7 +116,8 @@ fn list_schema_matches_the_shipped_contract() {
     let schema = schema_for(FrictionVerb::List);
 
     assert_eq!(schema.name, "orbit.friction.list");
-    assert_eq!(schema.description, "List friction records");
+    assert!(schema.description.contains("JSON record array by default"));
+    assert!(schema.description.contains("`{records, notes}`"));
     assert_eq!(
         param_shape(&schema),
         vec![
@@ -129,7 +130,12 @@ fn list_schema_matches_the_shipped_contract() {
             ("to", "string", false),
             ("limit", "integer", false),
             ("offset", "integer", false),
+            ("response_mode", "string", false),
         ]
+    );
+    assert_eq!(
+        schema.parameters[9].description,
+        "Optional response shape: `with_notes` returns `{records, notes}`; omit for the legacy record array"
     );
 }
 

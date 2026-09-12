@@ -8,7 +8,8 @@ pub mod operations;
 pub mod title;
 
 pub use operations::{
-    FRICTION_OPERATIONS, FrictionOperation, FrictionVerb, friction_operation, friction_operations,
+    FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FRICTION_OPERATIONS, FrictionOperation, FrictionVerb,
+    friction_operation, friction_operations,
 };
 pub use title::{FRICTION_TITLE_MAX_CHARS, derive_title, effective_title, normalize_title};
 

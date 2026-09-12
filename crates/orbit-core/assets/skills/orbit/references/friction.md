@@ -56,6 +56,24 @@ section heading gets whatever that section's first sentence says.
 `orbit friction update <ID> --title <title>` retitles an existing record
 without replacing its body.
 
+## Listing and JSON response contract
+
+`orbit.friction.list` returns a JSON array of friction records by default,
+including when any combination of filters produces no records. This is the
+legacy contract and is stable for array consumers.
+
+Callers that want search guidance can explicitly send
+`"response_mode": "with_notes"`. That mode always returns an object with the
+same two fields: `records` is the record array and `notes` is a string array.
+An empty multi-word substring search may include guidance in `notes`; matches,
+one-word misses, and other empty filtered results return an empty `notes`
+array. Other `response_mode` values are rejected.
+
+The human `orbit friction list` command and the dashboard opt into notes so
+they can show that guidance. `orbit friction list --json` remains a bare record
+array for compatibility; the notes envelope is available through the tool/MCP
+input above.
+
 ## Tags
 
 ```bash
