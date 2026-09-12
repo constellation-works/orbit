@@ -227,13 +227,13 @@ pub struct ClockStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ClockPlatform {
+pub(crate) enum ClockPlatform {
     Launchd,
     Systemd,
 }
 
 impl ClockPlatform {
-    fn current() -> Self {
+    pub(crate) fn current() -> Self {
         if cfg!(target_os = "macos") {
             Self::Launchd
         } else {
@@ -430,7 +430,7 @@ fn install_launchd(
 
     let agents_dir = home.join("Library/LaunchAgents");
     fs::create_dir_all(&agents_dir).map_err(|error| OrbitError::Io(error.to_string()))?;
-    let plist_path = agents_dir.join(format!("{LAUNCHD_LABEL}.plist"));
+    let plist_path = launchd_plist_path(home);
     fs::write(&plist_path, plist).map_err(|error| {
         OrbitError::Io(format!(
             "failed to write '{}': {error}",
@@ -537,7 +537,14 @@ fn systemd_user_unit_dir(home: &Path) -> PathBuf {
     home.join(".config/systemd/user")
 }
 
-fn systemd_service_path(home: &Path) -> PathBuf {
+/// Per-user launchd agent path written by [`install_clock`].
+pub(crate) fn launchd_plist_path(home: &Path) -> PathBuf {
+    home.join("Library/LaunchAgents")
+        .join(format!("{LAUNCHD_LABEL}.plist"))
+}
+
+/// Per-user systemd service path written by [`install_clock`].
+pub(crate) fn systemd_service_path(home: &Path) -> PathBuf {
     systemd_user_unit_dir(home).join(format!("{SYSTEMD_UNIT}.service"))
 }
 
@@ -643,20 +650,14 @@ fn manager_set_enabled_command(
             program: "launchctl",
             args: vec![
                 "load".into(),
-                home.join("Library/LaunchAgents")
-                    .join(format!("{LAUNCHD_LABEL}.plist"))
-                    .display()
-                    .to_string(),
+                launchd_plist_path(home).display().to_string(),
             ],
         },
         (ClockPlatform::Launchd, false) => ManagerCommand {
             program: "launchctl",
             args: vec![
                 "unload".into(),
-                home.join("Library/LaunchAgents")
-                    .join(format!("{LAUNCHD_LABEL}.plist"))
-                    .display()
-                    .to_string(),
+                launchd_plist_path(home).display().to_string(),
             ],
         },
         (ClockPlatform::Systemd, true) => systemd_enable_command(),

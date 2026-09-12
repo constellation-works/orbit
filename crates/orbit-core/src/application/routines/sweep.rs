@@ -166,6 +166,7 @@ pub fn run_sweep_at_with_providers(
     let discovered = workspace_provider.discover_workspaces(global_root)?;
     refresh_discovered_token_scoreboards(&discovered.entries);
     let mut load_errors: Vec<RoutineLoadError> = discovered.errors.clone();
+    let no_workspace_loaded = no_workspace_loaded_row(&discovered);
 
     let mut collection = collect_routines(&discovered.entries);
     load_errors.append(&mut collection.errors);
@@ -186,7 +187,30 @@ pub fn run_sweep_at_with_providers(
         lock_busy: false,
         reports,
         load_errors,
+        no_workspace_loaded,
     })
+}
+
+/// One fail-loud row when discovery found workspaces but opened none.
+fn no_workspace_loaded_row(discovered: &super::loader::DiscoveredWorkspaces) -> Option<String> {
+    if !discovered.entries.is_empty() || discovered.errors.is_empty() {
+        return None;
+    }
+    let first = &discovered.errors[0];
+    let binary_version = env!("CARGO_PKG_VERSION");
+    tracing::error!(
+        target: "orbit.core.sweep",
+        binary_version,
+        source_workspace = first.source_workspace.as_str(),
+        first_error = first.message.as_str(),
+        "sweep.no_workspace_loaded"
+    );
+    Some(format!(
+        "sweep.no_workspace_loaded: orbit {binary_version} loaded 0/{} workspaces; first error [{}]: {}",
+        discovered.errors.len(),
+        first.source_workspace,
+        first.message
+    ))
 }
 
 /// Bind a routine sweep to the same cadence the host clock installer renders.

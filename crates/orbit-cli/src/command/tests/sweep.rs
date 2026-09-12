@@ -62,6 +62,7 @@ fn json_shape_is_stable() {
             run_id: Some("run-1".to_string()),
         }],
         load_errors: Vec::new(),
+        no_workspace_loaded: None,
     };
 
     let value = outcome_json(&outcome, false);
@@ -74,6 +75,7 @@ fn json_shape_is_stable() {
         "fired",
         "reports",
         "load_errors",
+        "no_workspace_loaded",
     ] {
         assert!(object.contains_key(key), "missing top-level key {key}");
     }
@@ -87,4 +89,26 @@ fn json_shape_is_stable() {
         assert!(report_obj.contains_key(key), "missing report key {key}");
     }
     assert_eq!(first["action"], "fired");
+    assert!(object["no_workspace_loaded"].is_null());
+}
+
+#[test]
+fn json_includes_the_no_workspace_loaded_row() {
+    let outcome = SweepOutcome {
+        host_id: "dk-mac".to_string(),
+        machine_id: "hm_dk_mac".to_string(),
+        lock_busy: false,
+        reports: Vec::new(),
+        load_errors: Vec::new(),
+        no_workspace_loaded: Some(
+            "sweep.no_workspace_loaded: orbit 0.21.0 loaded 0/2 workspaces; first error [nebula]: schema migration failed"
+                .to_string(),
+        ),
+    };
+
+    let value = outcome_json(&outcome, false);
+    assert_eq!(
+        value["no_workspace_loaded"],
+        "sweep.no_workspace_loaded: orbit 0.21.0 loaded 0/2 workspaces; first error [nebula]: schema migration failed"
+    );
 }

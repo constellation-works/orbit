@@ -133,6 +133,7 @@ impl Execute for DoctorCommand {
         // `orbit-cmd` does not know about MCP and must not learn, and this is
         // the one crate that already assembles both [ORB-11053].
         results.extend(caller_authorization_rows());
+        results.push(clock_unit_row());
         let failures = results
             .iter()
             .filter(|row| row.status == WorkspaceDoctorStatus::Error)
@@ -286,6 +287,43 @@ fn caller_authorization_rows() -> Vec<WorkspaceDoctorResult> {
         },
     };
     vec![callers, keys]
+}
+
+/// Whether the OS sweep-clock unit invokes this binary [ORB-12244].
+fn clock_unit_row() -> WorkspaceDoctorResult {
+    match orbit_core::application::routines::inspect_clock_unit() {
+        Ok(inspection) => clock_unit_row_from_inspection(&inspection),
+        Err(error) => WorkspaceDoctorResult {
+            check_name: "clock-unit".to_string(),
+            status: WorkspaceDoctorStatus::Warning,
+            message: format!("could not inspect the sweep clock unit: {error}"),
+            remediation: Some(
+                "Fix the home-directory or unit-file error named above, then rerun `orbit doctor`."
+                    .to_string(),
+            ),
+        },
+    }
+}
+
+pub(crate) fn clock_unit_row_from_inspection(
+    inspection: &orbit_core::application::routines::ClockUnitInspection,
+) -> WorkspaceDoctorResult {
+    use orbit_core::application::routines::ClockUnitVerdict;
+
+    let status = match inspection.verdict {
+        ClockUnitVerdict::Matching => WorkspaceDoctorStatus::Ok,
+        ClockUnitVerdict::NoUnitInstalled => WorkspaceDoctorStatus::Skipped,
+        ClockUnitVerdict::PathMismatch | ClockUnitVerdict::Unrunnable { .. } => {
+            WorkspaceDoctorStatus::Warning
+        }
+        ClockUnitVerdict::VersionMismatch => WorkspaceDoctorStatus::Error,
+    };
+    WorkspaceDoctorResult {
+        check_name: "clock-unit".to_string(),
+        status,
+        message: inspection.doctor_message(),
+        remediation: inspection.doctor_remediation(),
+    }
 }
 
 fn status_label(status: WorkspaceDoctorStatus) -> &'static str {

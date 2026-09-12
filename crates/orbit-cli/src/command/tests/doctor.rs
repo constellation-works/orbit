@@ -2,8 +2,108 @@ use clap::CommandFactory;
 use orbit_cmd::{OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use orbit_core::OrbitRuntime;
 
-use super::super::doctor::{doctor_row_json, human_detail, orphan_task_store_removal_message};
+use std::path::PathBuf;
+
+use orbit_core::application::routines::{ClockUnitInspection, ClockUnitVerdict};
+
+use super::super::doctor::{
+    clock_unit_row_from_inspection, doctor_row_json, human_detail,
+    orphan_task_store_removal_message,
+};
 use super::super::{Cli, CommandOutput, Execute};
+
+fn clock_unit_inspection(
+    verdict: ClockUnitVerdict,
+    program_version: Option<&str>,
+) -> ClockUnitInspection {
+    ClockUnitInspection {
+        unit_path: Some(PathBuf::from(
+            "/Users/daniel/Library/LaunchAgents/com.orbit.sweep.plist",
+        )),
+        program_path: Some(PathBuf::from("/opt/homebrew/bin/orbit")),
+        program_version: program_version.map(ToString::to_string),
+        running_path: PathBuf::from("/Users/daniel/.cargo/bin/orbit"),
+        running_version: "0.21.0".to_string(),
+        verdict,
+    }
+}
+
+#[test]
+fn clock_unit_version_mismatch_is_a_named_failure() {
+    let row = clock_unit_row_from_inspection(&clock_unit_inspection(
+        ClockUnitVerdict::VersionMismatch,
+        Some("0.20.0"),
+    ));
+    assert_eq!(row.check_name, "clock-unit");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Error);
+    assert!(
+        row.message.contains("/opt/homebrew/bin/orbit"),
+        "{}",
+        row.message
+    );
+    assert!(
+        row.message.contains("/Users/daniel/.cargo/bin/orbit"),
+        "{}",
+        row.message
+    );
+    assert!(row.message.contains("0.20.0"), "{}", row.message);
+    assert!(row.message.contains("0.21.0"), "{}", row.message);
+    assert!(
+        row.remediation
+            .as_deref()
+            .expect("remediation")
+            .contains("orbit routine init --install-clock")
+    );
+}
+
+#[test]
+fn clock_unit_path_only_mismatch_is_a_warning() {
+    let row = clock_unit_row_from_inspection(&clock_unit_inspection(
+        ClockUnitVerdict::PathMismatch,
+        Some("0.21.0"),
+    ));
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning);
+    assert!(row.message.contains("Two installs"), "{}", row.message);
+}
+
+#[test]
+fn clock_unit_matching_is_ok() {
+    let row = clock_unit_row_from_inspection(&clock_unit_inspection(
+        ClockUnitVerdict::Matching,
+        Some("0.21.0"),
+    ));
+    assert_eq!(row.status, WorkspaceDoctorStatus::Ok);
+    assert!(row.remediation.is_none());
+}
+
+#[test]
+fn clock_unit_absent_is_skipped() {
+    let row = clock_unit_row_from_inspection(&ClockUnitInspection {
+        unit_path: None,
+        program_path: None,
+        program_version: None,
+        running_path: PathBuf::from("/Users/daniel/.cargo/bin/orbit"),
+        running_version: "0.21.0".to_string(),
+        verdict: ClockUnitVerdict::NoUnitInstalled,
+    });
+    assert_eq!(row.status, WorkspaceDoctorStatus::Skipped);
+}
+
+#[test]
+fn clock_unit_unrunnable_is_a_warning() {
+    let row = clock_unit_row_from_inspection(&clock_unit_inspection(
+        ClockUnitVerdict::Unrunnable {
+            reason: "program does not exist: /opt/homebrew/bin/orbit".to_string(),
+        },
+        None,
+    ));
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning);
+    assert!(
+        row.message.contains("could not report a version"),
+        "{}",
+        row.message
+    );
+}
 
 #[test]
 fn doctor_warning_renders_structured_and_human_remediation() {
