@@ -677,6 +677,34 @@ fn keychain_auth_failure_marker(provider: &str) -> Option<&'static str> {
     }
 }
 
+/// Turn Copilot's rejected `--model` error into crew-scoped remediation.
+///
+/// The CLI's stderr names the unavailable id but does not identify the Orbit
+/// configuration that supplied it. The resolved crew is still present in the
+/// activity input, so join those facts before the generic exit-code path drops
+/// the actionable context.
+pub(super) fn copilot_model_unavailable_diagnostic(
+    provider: &str,
+    crew: &str,
+    output: &str,
+) -> Option<String> {
+    if Provider::parse(provider).ok()? != Provider::Copilot || crew.trim().is_empty() {
+        return None;
+    }
+
+    let (_, after_prefix) = output.split_once("Model \"")?;
+    let (model, _) = after_prefix.split_once("\" from --model flag is not available")?;
+    if model.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "Copilot rejected model `{model}` supplied by crew `{crew}`. Start `copilot` and enter \
+         `/model` to list the ids available to this account, then update \
+         `crews.{crew}.model` and retry."
+    ))
+}
+
 /// Distinguish a sandbox Keychain denial from a genuinely expired provider
 /// login.
 ///

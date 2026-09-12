@@ -8,8 +8,8 @@ use tempfile::tempdir;
 
 use super::super::super::dispatcher::ResolvedSandbox;
 use super::super::spawn::{
-    SUPPORTED_SYSTEM_BIN_DIRS, SpawnError, SpawnedChild, linux_bwrap_failed_write_diagnostic,
-    macos_keychain_auth_diagnostic_with, orbit_tool_env_with,
+    SUPPORTED_SYSTEM_BIN_DIRS, SpawnError, SpawnedChild, copilot_model_unavailable_diagnostic,
+    linux_bwrap_failed_write_diagnostic, macos_keychain_auth_diagnostic_with, orbit_tool_env_with,
     prepare_linux_sandbox_for_dispatch_with_probe, prepare_macos_codex_ca_environment_with,
     reject_unsatisfiable_managed_grants, resolve_provider_launcher_with,
     resolve_provider_launcher_with_extra_dirs, spawn_bare, spawn_macos_sandboxed_with,
@@ -415,6 +415,21 @@ fn keychain_auth_diagnostic_separates_a_real_expiry_from_a_sandbox_denial() {
         without_home.contains("HOME is unset"),
         "an unemitted keychain allow means re-authentication cannot help: {without_home}"
     );
+}
+
+#[test]
+fn copilot_unavailable_model_diagnostic_names_model_crew_and_config_key() {
+    let stderr = "Error: Model \"claude-sonnet-4.5\" from --model flag is not available.";
+
+    let diagnostic = copilot_model_unavailable_diagnostic("copilot", "qa", stderr)
+        .expect("Copilot unavailable-model stderr must be actionable");
+
+    assert!(diagnostic.contains("claude-sonnet-4.5"));
+    assert!(diagnostic.contains("crew `qa`"));
+    assert!(diagnostic.contains("`crews.qa.model`"));
+    assert!(diagnostic.contains("`/model`"));
+    assert!(copilot_model_unavailable_diagnostic("codex", "qa", stderr).is_none());
+    assert!(copilot_model_unavailable_diagnostic("copilot", "qa", "request timed out").is_none());
 }
 
 /// [ORB-10931] The third case: the operator's own `denyRead` outranks the

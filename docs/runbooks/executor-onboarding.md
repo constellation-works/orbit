@@ -106,6 +106,14 @@ On macOS, Orbit's `macos-sandbox-exec` profile denies `$HOME/Library/Keychains` 
 
 A failed keychain-backed step records Orbit's diagnosis — sandbox hid the item versus a real logout — on the run error and the task's `workflow_run_failed` note, not only `exited with code Some(1)`. Do not document a provider as file-backed on macOS from its state directory alone; inspect the CLI's credential store.
 
+### Copilot model pins
+
+Copilot's model catalog depends on the authenticated account and can change
+between CLI releases. Start `copilot` and enter `/model` to list the exact ids
+available to that account. Re-run this check after every Copilot CLI upgrade
+before retaining or changing a `crews.<name>.model` pin; a rejected pin fails
+closed rather than falling back to the CLI's ambient model choice.
+
 ## Add a deterministic local-shell executor
 
 Use a `local_shell` activity only for a bounded, reproducible command. Its `config` is the authority for `command`/`args` or for `shell`/`script`; rendered job input must never become child argv. The shared `local-shell` definition may supply a static command prefix, environment, and fallback timeout, but a shell action gets no agent prompt, model, tool allowlist, or workspace/registry identity variables.

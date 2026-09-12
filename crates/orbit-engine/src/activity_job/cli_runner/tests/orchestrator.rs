@@ -524,7 +524,7 @@ fn run_cli_backend_copilot_keychain_auth_failure_reaches_the_step_message() {
     let sink_for_writer: Arc<dyn AuditSink> = sink;
     let audit = Arc::new(V2AuditWriter::new(
         "job-copilot-keychain",
-        "copilot:claude-sonnet-4.5",
+        "copilot:claude-sonnet-5",
         sink_for_writer,
     ));
     let mut sandbox = sandbox_for_test();
@@ -587,6 +587,71 @@ fn run_cli_backend_copilot_keychain_auth_failure_reaches_the_step_message() {
         note.contains("macOS sandbox") && note.contains("copilot"),
         "workflow_run_failed must inline the diagnosis: {note}"
     );
+}
+
+#[test]
+fn run_cli_backend_copilot_unavailable_model_reaches_workflow_failure_note() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("copilot");
+    write_executable(
+        &script,
+        concat!(
+            "#!/bin/sh\ncat > /dev/null\n",
+            "printf '%s\\n' 'Error: Model \"retired-sonnet\" from --model flag is not available.' >&2\n",
+            "exit 1\n",
+        ),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-copilot-model",
+        "copilot:retired-sonnet",
+        sink_for_writer,
+    ));
+    let host = TestHost::with_command(script.display().to_string());
+    let mut spec = test_agent_loop_spec(Duration::from_secs(5));
+    spec.provider = orbit_types::workflow::activity_job::Provider::Copilot;
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "implement_one",
+        "jrun-copilot-model",
+        audit,
+        &serde_json::json!({"prompt": "say ok", "crew": "nightly"}),
+        None,
+    )
+    .expect("the invocation outcome should be classified");
+
+    assert!(!outcome.success);
+    let message = outcome
+        .message
+        .as_deref()
+        .expect("failed step carries a message");
+    for expected in ["retired-sonnet", "crew `nightly`", "`crews.nightly.model`"] {
+        assert!(
+            message.contains(expected),
+            "step message must contain {expected:?}: {message}"
+        );
+    }
+
+    let update = crate::context::blocked_workflow_failure_update(
+        "task_pr_pipeline",
+        "jrun-copilot-model",
+        Some("AGENT_INVOCATION_FAILED"),
+        Some(message),
+    );
+    let note = update
+        .status_note
+        .as_deref()
+        .expect("blocked update carries a note");
+    for expected in ["retired-sonnet", "crew `nightly`", "`crews.nightly.model`"] {
+        assert!(
+            note.contains(expected),
+            "workflow_run_failed note must contain {expected:?}: {note}"
+        );
+    }
 }
 
 #[test]

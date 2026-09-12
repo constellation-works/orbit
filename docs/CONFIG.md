@@ -326,7 +326,7 @@ than on configuration.
 
 ```toml
 [crews.copilot]
-model = "claude-sonnet-4.5"
+model = "claude-sonnet-5"
 provider = "copilot"
 ```
 
@@ -334,8 +334,10 @@ Copilot routes to several vendors' models (`claude-*`, `gpt-*`, `gemini-*`).
 **The provider identity stays `copilot` regardless.** A crew running
 `gpt-5.4` through Copilot is a `copilot` run, not a `codex` run: the execution
 lane, its authentication, its policy, and its sandbox grants are Copilot's.
-Run `copilot --model <id>` or the interactive `/model` command to see the ids
-your organization currently allows.
+Start `copilot` and enter `/model` to list the ids the authenticated account
+currently allows. Orbit's Sonnet default and Haiku system-crew pin were checked
+against Copilot CLI 1.0.84; repeat that account-visible catalog check whenever
+the Copilot CLI is upgraded, then update affected `crews.<name>.model` pins.
 
 ### Sandbox and permissions
 

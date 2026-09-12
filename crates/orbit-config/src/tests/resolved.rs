@@ -69,7 +69,7 @@ fn built_in_crews_use_standard_model_specific_names() {
         ("gemini", "gemini", "gemini-3.8-flash"),
         ("antigravity", "antigravity", "gemini-3.8-flash-high"),
         ("grok", "grok", "grok-4.6"),
-        ("copilot", "copilot", "claude-sonnet-4.5"),
+        ("copilot", "copilot", "claude-sonnet-5"),
         ("cursor", "cursor", "gpt-5"),
         ("pi", "pi", "sonnet"),
         ("opencode", "opencode", "anthropic/claude-sonnet-4-5"),
@@ -84,7 +84,7 @@ fn built_in_crews_use_standard_model_specific_names() {
     // The Copilot lane keeps its own identity: it is never aliased to the
     // vendor supplying its model, nor to GitHub. [ORB-10946]
     assert!(!crews.contains_key("github"));
-    assert!(!crews.contains_key("claude-sonnet-4.5"));
+    assert!(!crews.contains_key("claude-sonnet-5"));
     assert!(!crews.contains_key("anysphere"));
 
     let config = ResolvedConfig::built_in(PersistenceConfig::default_for_data_root(Path::new(
