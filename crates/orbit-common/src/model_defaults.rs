@@ -88,12 +88,12 @@ pub const GROK_DEFAULT_MODEL: &str = "grok-4.6";
 /// Copilot routes to several vendors' models; Orbit pins an explicit id rather
 /// than letting the CLI fall back to `COPILOT_MODEL` or its persisted `/model`
 /// choice, so a run's model comes from the resolved crew and not from ambient
-/// operator state. Both ids below are present in the model catalog shipped
-/// with Copilot CLI 1.0.80. The provider identity stays `copilot` regardless of
-/// which vendor supplies the model. [ORB-10946]
-pub const COPILOT_DEFAULT_MODEL: &str = "claude-sonnet-4.5";
+/// operator state. Both ids below were verified against the account-visible
+/// model catalog in Copilot CLI 1.0.84. The provider identity stays `copilot`
+/// regardless of which vendor supplies the model. [ORB-10946]
+pub const COPILOT_DEFAULT_MODEL: &str = "claude-sonnet-5";
 
-/// Cheap-tier Copilot model used for the bounded system crew.
+/// Cheap-tier Claude model used for the bounded Copilot system crew.
 pub const COPILOT_CREW_MODEL: &str = "claude-haiku-4.5";
 
 /// Default model for the Cursor execution lane.

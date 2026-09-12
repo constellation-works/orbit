@@ -402,7 +402,7 @@ model = "grok-4.6"
 <div class="ose-panel" id="ose-panel-copilot">
 <dl class="ose-facts">
 <dt>Binary on <code>PATH</code></dt><dd><code>copilot</code> (npm <code>@github/copilot</code>)</dd>
-<dt>Example model</dt><dd><code>claude-sonnet-4.5</code></dd>
+<dt>Example model</dt><dd><code>claude-sonnet-5</code></dd>
 <dt>Reasoning effort</dt><dd>Not supported.</dd>
 </dl>
 <div class="ose-snippet">
@@ -412,7 +412,7 @@ default_crew = "copilot"
 
 [crews.copilot]
 provider = "copilot"
-model = "claude-sonnet-4.5"
+model = "claude-sonnet-5"
 </code></pre>
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>

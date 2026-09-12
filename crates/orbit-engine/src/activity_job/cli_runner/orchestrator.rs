@@ -33,8 +33,9 @@ use super::envelope::{
 use super::inspection::SourceInspection;
 use super::spawn::{
     CODEX_CA_CERTIFICATE_ENV, PreparedSandbox, SSL_CERT_FILE_ENV,
-    linux_bwrap_failed_write_diagnostic, macos_keychain_auth_diagnostic, orbit_tool_env,
-    prepare_sandbox_for_dispatch, resolve_provider_launcher,
+    copilot_model_unavailable_diagnostic, linux_bwrap_failed_write_diagnostic,
+    macos_keychain_auth_diagnostic, orbit_tool_env, prepare_sandbox_for_dispatch,
+    resolve_provider_launcher,
 };
 use super::supervisor::{
     DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS, SpawnTraceContext, SpawnWithTimeoutRequest,
@@ -637,6 +638,28 @@ pub fn run_cli_backend(
         Some(
             sandbox_write_diagnostic
                 .clone()
+                // Copilot reports an unavailable explicit model only on
+                // stderr. Join it to the resolved crew before the generic
+                // exit-code path loses the configuration source.
+                .or_else(|| {
+                    input
+                        .get("crew")
+                        .and_then(Value::as_str)
+                        .and_then(|crew| {
+                            copilot_model_unavailable_diagnostic(
+                                &provider,
+                                crew,
+                                stderr_text.as_ref(),
+                            )
+                        })
+                        .map(|diagnostic| {
+                            format!(
+                                "{} {}",
+                                exit_message(),
+                                bounded_diagnostic(&diagnostic, &redaction)
+                            )
+                        })
+                })
                 // A Keychain-backed provider login reads as "expired" whether it
                 // really expired or the sandbox hid the credential. Orbit
                 // compiled the profile, so it is the layer that can say which
