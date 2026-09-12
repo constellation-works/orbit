@@ -11,7 +11,7 @@ tags: ["worktree-artifacts"]
 paths: ["crates/orbit-core/**", "crates/orbit-store/**", "crates/orbit-cli/**"]
 related_features: ["worktree-artifacts"]
 related_artifacts: ["ORB-00199", "ORB-00200", "ORB-00201"]
-last_validated: 2026-08-22
+last_validated: 2026-09-12
 ---
 
 # Worktree Artifacts - Vision

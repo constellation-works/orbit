@@ -5,7 +5,7 @@ tags: [operations, audit, observability, debugging]
 paths: ["crates/orbit-core/src/runtime/run_audit.rs", "crates/orbit-types/src/telemetry/audit_event.rs"]
 related_features: [auditability, activity-job]
 related_artifacts: [ORB-10014, ORB-10227, ORB-10228]
-last_validated: 2026-08-22
+last_validated: 2026-09-12
 ---
 
 # Inspect the Audit Trail
