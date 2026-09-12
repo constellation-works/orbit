@@ -4,6 +4,7 @@ mod format;
 mod job;
 mod ship;
 mod support;
+mod sweep;
 
 // Content moved from inline #[cfg(test)] mod tests in run/mod.rs per ORB-00221.
 

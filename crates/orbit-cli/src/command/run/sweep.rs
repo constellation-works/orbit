@@ -42,11 +42,11 @@ pub struct ShipSweepCommand {
     pub json: bool,
 }
 
-struct SweepReport {
+pub(crate) struct SweepReport {
     workspace_id: String,
     workspace_name: String,
     action: &'static str,
-    reason: Option<String>,
+    skip_reason: Option<String>,
     ready_backlog: usize,
     /// Resolved ship mode for this workspace (`pr` / `local`). Set for the
     /// dispatch paths (`would_dispatch` / `dispatched`) so the operator can
@@ -57,12 +57,12 @@ struct SweepReport {
 }
 
 impl SweepReport {
-    fn skipped(ws: &Workspace, reason: &str, ready_backlog: usize) -> Self {
+    pub(crate) fn skipped(ws: &Workspace, reason: &str, ready_backlog: usize) -> Self {
         Self {
             workspace_id: ws.id.clone(),
             workspace_name: ws.name.clone(),
             action: "skipped",
-            reason: Some(reason.to_string()),
+            skip_reason: Some(reason.to_string()),
             ready_backlog,
             mode: None,
             run_id: None,
@@ -70,12 +70,12 @@ impl SweepReport {
         }
     }
 
-    fn to_json(&self) -> Value {
+    pub(crate) fn to_json(&self) -> Value {
         json!({
             "workspace_id": self.workspace_id,
             "workspace_name": self.workspace_name,
             "action": self.action,
-            "reason": self.reason,
+            "skip_reason": self.skip_reason,
             "ready_backlog": self.ready_backlog,
             "mode": self.mode,
             "run_id": self.run_id,
@@ -83,7 +83,7 @@ impl SweepReport {
         })
     }
 
-    fn to_line(&self) -> String {
+    pub(crate) fn to_line(&self) -> String {
         let mut line = format!(
             "{}: {} (ready backlog: {})",
             self.workspace_name, self.action, self.ready_backlog
@@ -91,7 +91,7 @@ impl SweepReport {
         if let Some(mode) = self.mode {
             line.push_str(&format!(" [{mode}]"));
         }
-        if let Some(reason) = &self.reason {
+        if let Some(reason) = &self.skip_reason {
             line.push_str(&format!(" — {reason}"));
         }
         if let Some(run_id) = &self.run_id {
@@ -178,7 +178,7 @@ fn sweep_workspace(
             workspace_id: ws.id.clone(),
             workspace_name: ws.name.clone(),
             action: "error",
-            reason: Some(error.to_string()),
+            skip_reason: Some(error.to_string()),
             ready_backlog: 0,
             mode: None,
             run_id: None,
@@ -187,7 +187,7 @@ fn sweep_workspace(
     })
 }
 
-fn sweep_active_workspace(
+pub(crate) fn sweep_active_workspace(
     global_root: &Path,
     ws: &Workspace,
     checkout: &WorkspaceCheckout,
@@ -195,9 +195,6 @@ fn sweep_active_workspace(
     dry_run: bool,
 ) -> Result<SweepReport, OrbitError> {
     let runtime = RegisteredRuntimeFactory::open_registered_checkout(global_root, ws, checkout)?;
-    if !runtime.workflow_auto_ship() {
-        return Ok(SweepReport::skipped(ws, "auto_ship_disabled", 0));
-    }
 
     let tasks = runtime.list_tasks()?;
     let status_by_id = runtime.task_status_index()?;
@@ -209,6 +206,14 @@ fn sweep_active_workspace(
                 && task_dependencies_ready_with_index(task, &status_by_id, &reference_index)
         })
         .count();
+
+    if !runtime.workflow_auto_ship() {
+        return Ok(SweepReport::skipped(
+            ws,
+            "auto_ship_disabled",
+            ready_backlog,
+        ));
+    }
     if ready_backlog == 0 {
         return Ok(SweepReport::skipped(ws, "no_ready_backlog", 0));
     }
@@ -231,7 +236,7 @@ fn sweep_active_workspace(
             workspace_id: ws.id.clone(),
             workspace_name: ws.name.clone(),
             action: "would_dispatch",
-            reason: None,
+            skip_reason: None,
             ready_backlog,
             mode: Some(mode.as_input_value()),
             run_id: None,
@@ -268,7 +273,7 @@ fn sweep_active_workspace(
         workspace_id: ws.id.clone(),
         workspace_name: ws.name.clone(),
         action: "dispatched",
-        reason: None,
+        skip_reason: None,
         ready_backlog,
         mode: Some(mode.as_input_value()),
         run_id: Some(invoke.run_id),
