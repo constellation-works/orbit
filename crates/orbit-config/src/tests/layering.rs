@@ -1,12 +1,136 @@
 //! Global-over-workspace layering and source provenance.
 
 use std::collections::BTreeMap;
+use std::io::{self, Write};
+use std::sync::{Arc, Mutex};
 
 use tempfile::tempdir;
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::fmt::MakeWriter;
 
 use super::{roots, write_config};
 use crate::load_effective_config;
+use crate::resolved::RETIRED_ROUTINES_CONFIG_WARNING;
 use crate::{ConfigRoots, ConfigSnapshot, ConfigValueSourceKind, ResolvedConfig};
+
+#[derive(Clone)]
+struct CaptureMakeWriter(Arc<Mutex<Vec<u8>>>);
+
+struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+impl<'writer> MakeWriter<'writer> for CaptureMakeWriter {
+    type Writer = CaptureWriter;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        CaptureWriter(Arc::clone(&self.0))
+    }
+}
+
+impl Write for CaptureWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .expect("capture lock")
+            .extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn capture_warnings<T>(action: impl FnOnce() -> T) -> (T, Vec<serde_json::Value>) {
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(CaptureMakeWriter(Arc::clone(&buffer)))
+        .with_max_level(LevelFilter::WARN)
+        .with_target(false)
+        .without_time()
+        .finish();
+    let result = tracing::subscriber::with_default(subscriber, action);
+    let output = String::from_utf8(buffer.lock().expect("capture buffer lock").clone())
+        .expect("warning output is UTF-8");
+    let warnings = output
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("warning is JSON"))
+        .collect();
+    (result, warnings)
+}
+
+fn routines_warning_paths(warnings: &[serde_json::Value]) -> Vec<&str> {
+    warnings
+        .iter()
+        .filter_map(|warning| {
+            let fields = warning.get("fields")?;
+            if fields.get("RETIRED_ROUTINES_CONFIG_WARNING")?.as_str()?
+                != RETIRED_ROUTINES_CONFIG_WARNING
+            {
+                return None;
+            }
+            fields.get("config")?.as_str()
+        })
+        .collect()
+}
+
+#[test]
+fn global_only_retired_routines_warning_names_global_config() {
+    let global = tempdir().expect("global tempdir");
+    let workspace = tempdir().expect("workspace tempdir");
+    write_config(global.path(), "[routines]\nrole = \"source\"\n");
+    write_config(workspace.path(), "[scoring]\nenabled = false\n");
+
+    let (result, warnings) =
+        capture_warnings(|| ResolvedConfig::load(&roots(global.path(), workspace.path())));
+
+    result.expect("layered config loads");
+    let global_path = global.path().join("config.toml");
+    assert_eq!(
+        routines_warning_paths(&warnings),
+        vec![global_path.to_str().expect("UTF-8 path")]
+    );
+}
+
+#[test]
+fn workspace_only_retired_routines_warning_names_workspace_config() {
+    let global = tempdir().expect("global tempdir");
+    let workspace = tempdir().expect("workspace tempdir");
+    write_config(global.path(), "[scoring]\nenabled = false\n");
+    write_config(workspace.path(), "[routines]\nrole = \"source\"\n");
+
+    let (result, warnings) =
+        capture_warnings(|| ResolvedConfig::load(&roots(global.path(), workspace.path())));
+
+    result.expect("layered config loads");
+    let workspace_path = workspace.path().join("config.toml");
+    assert_eq!(
+        routines_warning_paths(&warnings),
+        vec![workspace_path.to_str().expect("UTF-8 path")]
+    );
+}
+
+#[test]
+fn retired_routines_warning_names_each_layer_that_requires_cleanup_once() {
+    let global = tempdir().expect("global tempdir");
+    let workspace = tempdir().expect("workspace tempdir");
+    write_config(global.path(), "[routines]\nrole = \"source\"\n");
+    write_config(workspace.path(), "[routines]\nrole = \"source\"\n");
+
+    let (result, warnings) =
+        capture_warnings(|| ResolvedConfig::load(&roots(global.path(), workspace.path())));
+
+    result.expect("layered config loads");
+    let global_path = global.path().join("config.toml");
+    let workspace_path = workspace.path().join("config.toml");
+    assert_eq!(
+        routines_warning_paths(&warnings),
+        vec![
+            global_path.to_str().expect("UTF-8 path"),
+            workspace_path.to_str().expect("UTF-8 path"),
+        ]
+    );
+}
 
 #[test]
 fn workspace_single_key_inherits_other_global_keys_then_built_in_defaults() {
