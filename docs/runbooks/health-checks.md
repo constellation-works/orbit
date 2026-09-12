@@ -100,9 +100,12 @@ individual flag; neither command upgrades the binary or pulls a remote repositor
 
 ### Reclaim orphaned task stores
 
-`orbit workspace teardown --confirm` deregisters the workspace and deletes both the checkout's
-`.orbit/` and the global task-store partition its task state is bound to, retiring that
-partition's rows in `~/.orbit/tasks/index.sqlite` in the same step.
+`orbit workspace teardown <workspace> --confirm` requires an explicit registered name,
+`ws_*` id, or absolute checkout path — it never infers the target from cwd. It prints the
+resolved catalog name and id, checkout root, and task-store partition path, then deregisters
+the workspace and deletes both the checkout's `.orbit/` and the global task-store partition
+its task state is bound to, retiring that partition's rows in `~/.orbit/tasks/index.sqlite`
+in the same step. The summary names the catalog workspace the deleted partition belonged to.
 
 A partition directory is named for a **task-store partition id**
 (`workspace_bindings.workspace_id` in `~/.orbit/tasks/index.sqlite`), minted as `<slug>-<hash>`
