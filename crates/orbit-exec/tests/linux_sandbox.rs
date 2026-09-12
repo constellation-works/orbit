@@ -113,7 +113,7 @@ fn kernel_descriptor_mount_never_writes_the_replacement_object() {
         false,
         vec![LinuxBwrapMountAuthority {
             destination: target.clone(),
-            source,
+            source: std::sync::Arc::new(source),
         }],
     )
     .expect("compile descriptor plan");

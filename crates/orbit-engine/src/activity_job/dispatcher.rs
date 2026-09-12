@@ -50,8 +50,8 @@ pub struct ResolvedShellExecutor {
 /// Open host object backing a Linux runtime convenience grant.
 ///
 /// The descriptor is acquired while the runtime path is validated and remains
-/// alive until Bubblewrap consumes the mount plan. The displayed path is only
-/// the namespace destination; it is never reopened as the mount source.
+/// alive until the sandboxed provider exits. The displayed path is only the
+/// namespace destination; it is never reopened as the mount source.
 #[derive(Clone, Debug)]
 pub struct LinuxRuntimeWriteAuthority {
     pub path: PathBuf,

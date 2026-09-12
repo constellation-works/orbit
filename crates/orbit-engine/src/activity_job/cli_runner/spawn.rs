@@ -2,12 +2,14 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_exec::{
-    BwrapProbeOutcome, LinuxBwrapMountAuthority, LinuxBwrapSpawnRequest, MacosLoginKeychainAccess,
-    MacosSandboxSpawnRequest, UnsatisfiedWriteGrant, compile_linux_bwrap_argv_with_authority,
-    compile_macos_sandbox_profile, linux_bwrap_write_grant_diagnostic, macos_login_keychain_access,
+    BwrapProbeOutcome, LinuxBwrapMountAuthority, LinuxBwrapPlan, LinuxBwrapSpawnRequest,
+    MacosLoginKeychainAccess, MacosSandboxSpawnRequest, UnsatisfiedWriteGrant,
+    compile_linux_bwrap_argv_with_authority, compile_macos_sandbox_profile,
+    linux_bwrap_write_grant_diagnostic, macos_login_keychain_access,
     prepare_linux_bwrap_write_grants, probe_bwrap, sandbox_exec_available,
     sandbox_exec_unavailable_message, spawn_under_linux_bwrap, spawn_under_macos_sandbox,
 };
@@ -447,6 +449,12 @@ pub(crate) struct SpawnedChild {
     /// Sandbox profile tempfile, if any. Held until the supervisor returns
     /// so the kernel can keep reading the SBPL profile while the child runs.
     pub(crate) _profile_temp: Option<NamedTempFile>,
+    /// Linux mount-source descriptors retained until the provider exits.
+    ///
+    /// Closing a duplicate SQLite database descriptor can release this
+    /// process's POSIX locks even while the host lease connection remains
+    /// open, so the complete plan shares the sandboxed child's lifetime.
+    pub(crate) _linux_mount_plan: Option<LinuxBwrapPlan>,
 }
 
 pub(crate) fn spawn_child_with_optional_sandbox(
@@ -503,25 +511,7 @@ fn spawn_linux_bwrap(
         }
         report_unsatisfied_grants(&prepared.unsatisfied);
     }
-    let authority = sandbox
-        .runtime_write_authority
-        .iter()
-        .map(|grant| {
-            grant
-                .handle
-                .try_clone()
-                .map(|source| LinuxBwrapMountAuthority {
-                    destination: grant.path.clone(),
-                    source,
-                })
-                .map_err(|error| {
-                    SpawnError::permanent(format!(
-                        "duplicate Linux runtime grant descriptor `{}`: {error}",
-                        grant.path.display()
-                    ))
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let authority = linux_bwrap_mount_authority(sandbox);
     let plan = compile_linux_bwrap_argv_with_authority(
         &sandbox.fs_profile,
         program,
@@ -545,7 +535,24 @@ fn spawn_linux_bwrap(
     Ok(SpawnedChild {
         child,
         _profile_temp: None,
+        _linux_mount_plan: Some(plan),
     })
+}
+
+/// Borrow the runtime owner's exact descriptors for the mount plan. `File`
+/// duplication is forbidden here because closing any duplicate for a SQLite
+/// database can release unrelated POSIX locks owned by this process.
+pub(crate) fn linux_bwrap_mount_authority(
+    sandbox: &ResolvedSandbox,
+) -> Vec<LinuxBwrapMountAuthority> {
+    sandbox
+        .runtime_write_authority
+        .iter()
+        .map(|grant| LinuxBwrapMountAuthority {
+            destination: grant.path.clone(),
+            source: Arc::clone(&grant.handle),
+        })
+        .collect()
 }
 
 /// Inside a managed worktree, preparation should have satisfied every grant.
@@ -804,6 +811,7 @@ pub(crate) fn spawn_bare(
     Ok(SpawnedChild {
         child,
         _profile_temp: None,
+        _linux_mount_plan: None,
     })
 }
 
@@ -892,6 +900,7 @@ pub(crate) fn spawn_macos_sandboxed_with(
     Ok(SpawnedChild {
         child,
         _profile_temp: Some(profile_temp),
+        _linux_mount_plan: None,
     })
 }
 

@@ -10,6 +10,13 @@ use std::time::Duration;
 
 use tempfile::tempdir;
 
+#[cfg(target_os = "linux")]
+use orbit_exec::{LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority};
+#[cfg(target_os = "linux")]
+use orbit_types::policy::ResolvedFsProfile;
+
+#[cfg(target_os = "linux")]
+use super::super::spawn::{SpawnedChild, spawn_bare};
 use super::super::supervisor::{SpawnTraceContext, SpawnWithTimeoutRequest, spawn_with_timeout};
 use super::test_support::{
     assert_event, capture_events, capture_events_live, capture_redacted_tracing_output, sh_args,
@@ -35,9 +42,81 @@ fn spawn_test_request<'a>(
         on_spawn: None,
         wait: None,
         live_readers: None,
+        spawned_child: None,
         #[cfg(unix)]
         cancel_pair: None,
     }
+}
+
+/// Execute the real supervisor with a descriptor-backed spawned-child guard.
+/// The plan must remain owned across its wait loop and be released only after
+/// supervision and process-tree cleanup return.
+#[cfg(target_os = "linux")]
+#[test]
+fn supervisor_retains_linux_mount_plan_through_wait_and_cleanup() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical root");
+    let target = root.join("orbit.db");
+    std::fs::write(&target, b"sqlite-object").expect("runtime object");
+    let authority = Arc::new(std::fs::File::open(&target).expect("authority"));
+    let authority_lifetime = Arc::downgrade(&authority);
+    let plan = compile_linux_bwrap_argv_with_authority(
+        &ResolvedFsProfile {
+            name: "test".to_string(),
+            read: vec!["/**".to_string()],
+            modify: vec![target.display().to_string()],
+        },
+        "/bin/true",
+        &[],
+        Some(&root),
+        false,
+        vec![LinuxBwrapMountAuthority {
+            destination: target,
+            source: authority,
+        }],
+    )
+    .expect("descriptor plan");
+    let SpawnedChild {
+        child,
+        _profile_temp,
+        _linux_mount_plan: _,
+    } = spawn_bare("/bin/sh", &sh_args("exit 0"), &[], Some(&root)).expect("spawn");
+    let spawned = SpawnedChild {
+        child,
+        _profile_temp,
+        _linux_mount_plan: Some(plan),
+    };
+    let wait = |child: &mut std::process::Child| {
+        assert!(
+            authority_lifetime.upgrade().is_some(),
+            "supervisor dropped the mount plan before waiting for the child"
+        );
+        child.try_wait()
+    };
+    let args = sh_args("exit 0");
+    let cwd_label = root.display().to_string();
+    let mut request = spawn_test_request(
+        "/bin/sh",
+        &args,
+        Some(&root),
+        Duration::from_secs(5),
+        SpawnTraceContext {
+            provider: "codex",
+            job_run_id: "jrun-descriptor-lifetime",
+            task_id: Some("descriptor-lifetime"),
+            cwd: Some(&cwd_label),
+        },
+    );
+    request.spawned_child = Some(spawned);
+    request.wait = Some(&wait);
+
+    let (_, _, exit_code, _, timed_out) = spawn_with_timeout(request).expect("supervision");
+    assert_eq!(exit_code, Some(0));
+    assert!(!timed_out);
+    assert!(
+        authority_lifetime.upgrade().is_none(),
+        "supervisor must release the mount plan after cleanup"
+    );
 }
 
 #[test]

@@ -463,6 +463,7 @@ pub fn run_cli_backend(
         on_spawn: Some(&on_spawn),
         wait: None,
         live_readers: None,
+        spawned_child: None,
         #[cfg(unix)]
         cancel_pair: None,
     });

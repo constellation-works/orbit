@@ -1,15 +1,22 @@
 #![allow(missing_docs)]
 
 use std::ffi::OsString;
+#[cfg(target_os = "linux")]
+use std::fs::File;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
 
 use orbit_exec::BwrapProbeOutcome;
+#[cfg(target_os = "linux")]
+use orbit_exec::{LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority, probe_bwrap};
 use orbit_types::workflow::ExecutorSandboxKind;
 use tempfile::tempdir;
 
 use super::super::super::dispatcher::ResolvedSandbox;
 use super::super::spawn::{
     SUPPORTED_SYSTEM_BIN_DIRS, SpawnError, SpawnedChild, copilot_model_unavailable_diagnostic,
-    linux_bwrap_failed_write_diagnostic, macos_keychain_auth_diagnostic_with, orbit_tool_env_with,
+    linux_bwrap_failed_write_diagnostic, linux_bwrap_mount_authority,
+    macos_keychain_auth_diagnostic_with, orbit_tool_env_with,
     prepare_linux_sandbox_for_dispatch_with_probe, prepare_macos_codex_ca_environment_with,
     reject_unsatisfiable_managed_grants, resolve_provider_launcher_with,
     resolve_provider_launcher_with_extra_dirs, spawn_bare, spawn_macos_sandboxed_with,
@@ -354,6 +361,7 @@ fn spawn_bare_runs_program_in_provided_cwd() {
     let SpawnedChild {
         child,
         _profile_temp,
+        _linux_mount_plan,
     } = spawn_bare("/bin/sh", &sh_args("pwd"), &[], Some(&cwd)).expect("spawn succeeds");
 
     let output = child.wait_with_output().expect("wait succeeds");
@@ -370,6 +378,7 @@ fn spawn_bare_does_not_inherit_ambient_sensitive_env() {
     let SpawnedChild {
         child,
         _profile_temp,
+        _linux_mount_plan,
     } = spawn_bare(
         "/bin/sh",
         &sh_args(
@@ -386,6 +395,154 @@ fn spawn_bare_does_not_inherit_ambient_sensitive_env() {
         String::from_utf8(output.stdout).expect("stdout utf8"),
         "unset"
     );
+}
+
+/// Regression for the engine ownership boundary behind the managed SQLite
+/// CannotOpen failure. The descriptor plan must remain alive after the child
+/// exits and until the supervisor drops the complete spawned-child guard.
+#[cfg(target_os = "linux")]
+#[test]
+fn spawned_child_guard_retains_linux_mount_descriptors() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical root");
+    let target = root.join("orbit.db");
+    std::fs::write(&target, b"sqlite-object").expect("runtime object");
+    let profile = orbit_types::policy::ResolvedFsProfile {
+        name: "test".to_string(),
+        read: vec!["/**".to_string()],
+        modify: vec![target.display().to_string()],
+    };
+    let source =
+        std::sync::Arc::new(File::open(root.join("orbit.db")).expect("descriptor authority"));
+    let authority_fd = source.as_raw_fd();
+    let plan = compile_linux_bwrap_argv_with_authority(
+        &profile,
+        "/bin/true",
+        &[],
+        Some(&root),
+        false,
+        vec![LinuxBwrapMountAuthority {
+            destination: target,
+            source,
+        }],
+    )
+    .expect("descriptor plan");
+    let source_fd = plan.mount_evidence()[0].source_fd;
+    assert_eq!(
+        source_fd, authority_fd,
+        "plan compilation must share the authority handle, not duplicate its raw descriptor"
+    );
+    let SpawnedChild {
+        child,
+        _profile_temp,
+        _linux_mount_plan: _,
+    } = spawn_bare("/bin/sh", &sh_args("exit 0"), &[], Some(&root)).expect("child");
+    let mut spawned = SpawnedChild {
+        child,
+        _profile_temp,
+        _linux_mount_plan: Some(plan),
+    };
+
+    assert!(unsafe { libc::fcntl(source_fd, libc::F_GETFD) } >= 0);
+    assert!(spawned.child.wait().expect("wait").success());
+    assert!(
+        unsafe { libc::fcntl(source_fd, libc::F_GETFD) } >= 0,
+        "mount descriptor must survive child exit until supervision completes"
+    );
+
+    drop(spawned);
+    assert_eq!(unsafe { libc::fcntl(source_fd, libc::F_GETFD) }, -1);
+}
+
+/// Negative control for the proven fault: translating host runtime authority
+/// into mount authority must share the same raw descriptor, never `dup` it.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_runtime_mount_authority_shares_host_descriptor() {
+    let temp = tempdir().expect("tempdir");
+    let target = temp.path().join("orbit.db");
+    std::fs::write(&target, b"sqlite-object").expect("runtime object");
+    let source = std::sync::Arc::new(File::open(&target).expect("descriptor authority"));
+    let source_fd = source.as_raw_fd();
+    let sandbox = ResolvedSandbox {
+        kind: ExecutorSandboxKind::LinuxBwrap,
+        fs_profile: orbit_types::policy::ResolvedFsProfile {
+            name: "test".to_string(),
+            read: vec!["/**".to_string()],
+            modify: vec![target.display().to_string()],
+        },
+        allow_fallback: false,
+        managed_worktree: false,
+        runtime_write_authority: vec![
+            super::super::super::dispatcher::LinuxRuntimeWriteAuthority {
+                path: target,
+                handle: source,
+                wal_file_set_lease: None,
+            },
+        ],
+    };
+
+    let authority = linux_bwrap_mount_authority(&sandbox);
+    assert_eq!(authority.len(), 1);
+    assert_eq!(authority[0].source.as_raw_fd(), source_fd);
+    assert_eq!(std::sync::Arc::strong_count(&authority[0].source), 2);
+}
+
+/// Real-kernel counterpart: when Bubblewrap is available, exercise the actual
+/// engine spawn path and require it to return ownership of the descriptor plan.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires a Linux host with working Bubblewrap user/mount namespaces"]
+fn linux_bwrap_spawn_returns_mount_descriptor_ownership() {
+    let probe = probe_bwrap();
+    assert!(
+        probe.available,
+        "live boundary unvalidated: {}",
+        probe.detail
+    );
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().expect("canonical root");
+    let target = root.join("orbit.db");
+    std::fs::write(&target, b"sqlite-object").expect("runtime object");
+    let sandbox = ResolvedSandbox {
+        kind: ExecutorSandboxKind::LinuxBwrap,
+        fs_profile: orbit_types::policy::ResolvedFsProfile {
+            name: "test".to_string(),
+            read: vec!["/**".to_string()],
+            modify: vec![target.display().to_string()],
+        },
+        allow_fallback: false,
+        managed_worktree: false,
+        runtime_write_authority: vec![
+            super::super::super::dispatcher::LinuxRuntimeWriteAuthority {
+                path: target.clone(),
+                handle: std::sync::Arc::new(File::open(&target).expect("descriptor authority")),
+                wal_file_set_lease: None,
+            },
+        ],
+    };
+    let mut spawned = super::super::spawn::spawn_child_with_optional_sandbox(
+        "/bin/sh",
+        &sh_args("exit 0"),
+        &[],
+        Some(&root),
+        Some(&sandbox),
+        "codex",
+    )
+    .expect("sandboxed spawn");
+
+    assert!(spawned._linux_mount_plan.is_some());
+    assert_eq!(
+        spawned
+            ._linux_mount_plan
+            .as_ref()
+            .expect("retained plan")
+            .mount_evidence()[0]
+            .source_fd,
+        sandbox.runtime_write_authority[0].handle.as_raw_fd(),
+        "engine spawn must not create a parent-side duplicate descriptor"
+    );
+    assert!(spawned.child.wait().expect("wait").success());
 }
 
 /// The failure an operator actually sees when a Keychain-backed login cannot be
@@ -1126,6 +1283,7 @@ fn spawn_macos_sandboxed_falls_back_to_bare_exec_when_allow_fallback_set() {
     // The fallback path returns a SpawnedChild with no profile tempfile
     // because the sandbox-exec wrapper was bypassed.
     assert!(spawned._profile_temp.is_none());
+    assert!(spawned._linux_mount_plan.is_none());
     let _ = spawned.child.wait();
 }
 
