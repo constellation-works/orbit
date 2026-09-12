@@ -103,8 +103,11 @@ A target that does not exist in this workspace and is not known to belong
 elsewhere is dangling: audit-visible, and it does not block completion. A
 target that exists only in another workspace on this host is **not**
 dangling — completing the task is rejected with `friction_not_local`. Resolve
-that friction from its owning workspace (`orbit.friction.resolve`, or a
-covering task there). Do not count a foreign `resolves` edge as coverage.
+that friction from its owning workspace — `orbit friction resolve <id>` is the
+operator CLI path; an agent instead runs `orbit tool run orbit.friction.update
+--input '{"id":"<id>","status":"resolved"}'`, which stamps the same resolution
+metadata — or land a covering task there. Do not count a foreign `resolves`
+edge as coverage.
 
 ## Reading the corpus
 

@@ -180,7 +180,7 @@ pub enum OrbitError {
     /// [ORB-11078]. Distinct from a dangling miss, which is audit-visible
     /// and does not block completion.
     #[error(
-        "resolves target '{}' is not in workspace '{}' (found in {}); auto-resolve is workspace-local — resolve it from its owning workspace with orbit.friction.resolve, or land a covering task there",
+        "resolves target '{}' is not in workspace '{}' (found in {}); auto-resolve is workspace-local — resolve it from its owning workspace with `orbit friction resolve <id>` (operator CLI) or `orbit tool run orbit.friction.update` with status resolved (agent path), or land a covering task there",
         .0.friction_id, .0.workspace_id, .0.found_in.join(", ")
     )]
     FrictionNotLocal(Box<FrictionNotLocal>),
