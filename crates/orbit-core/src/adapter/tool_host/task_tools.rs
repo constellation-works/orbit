@@ -35,6 +35,12 @@ pub(super) fn add(
     if !allows_missing_context(&input)? {
         runtime.ensure_context_selectors_exist(&raw_context_files)?;
     }
+    let raw_required_tools = optional_csv_or_string_list_alias(
+        &input,
+        &["required_tools", "requiredTools", "required-tool"],
+    )?
+    .unwrap_or_default();
+    let mut warnings = runtime.validate_required_tools(&raw_required_tools)?;
     let task = runtime.add_task_with_identity(
         TaskAddParams {
             parent_id: None,
@@ -52,11 +58,7 @@ pub(super) fn add(
             dependencies: Vec::new(),
             relations: parse_relations(&input)?.unwrap_or_default(),
             tags: optional_csv_or_string_list_alias(&input, &["tags", "tag"])?.unwrap_or_default(),
-            required_tools: optional_csv_or_string_list_alias(
-                &input,
-                &["required_tools", "requiredTools", "required-tool"],
-            )?
-            .unwrap_or_default(),
+            required_tools: raw_required_tools,
             plan: String::new(),
             comment: None,
             context_files: raw_context_files.clone(),
@@ -82,7 +84,10 @@ pub(super) fn add(
         model,
     )?;
     let mut response = serialize_task(runtime, &task)?;
-    let warnings = compute_task_add_warnings(&raw_context_files, task.task_type);
+    warnings.extend(compute_task_add_warnings(
+        &raw_context_files,
+        task.task_type,
+    ));
     if !warnings.is_empty()
         && let Some(obj) = response.as_object_mut()
     {

@@ -210,6 +210,7 @@ impl OrbitRuntime {
     /// An unknown name is an `InvalidInput` error naming the definition.
     pub fn auto_task_mint(&self, name: &str) -> Result<Task, OrbitError> {
         let definition = self.require_auto_task(name)?;
+        self.validate_required_tools(&definition.template.required_tools)?;
         mint_task(self, &definition)
     }
 
@@ -231,6 +232,7 @@ impl OrbitRuntime {
 
     fn validate_auto_task(&self, definition: &AutoTaskDefinition) -> Result<(), OrbitError> {
         definition.validate()?;
+        self.validate_required_tools(&definition.template.required_tools)?;
         // Load-time cron validation happens in the scheduler, but validating
         // here too means CRUD never persists a schedule the scheduler would
         // reject at fire time.

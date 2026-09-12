@@ -25,6 +25,49 @@ const TASK_PROVENANCE_TITLE_PREFIXES: &[(&str, &str)] = &[
 ];
 
 impl OrbitRuntime {
+    /// Validate task-scoped tool requirements against the current registry.
+    ///
+    /// A requirement is durable metadata, so a registered tool may be kept
+    /// even when it is currently disabled or not exposed on the agent surface.
+    /// Those states are warnings; an unknown name is rejected before the task
+    /// record can become impossible to admit.
+    pub fn validate_required_tools(
+        &self,
+        required_tools: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
+        let mut registered_names = self
+            .tool_registry()
+            .all_schemas()
+            .into_iter()
+            .map(|schema| schema.name)
+            .collect::<Vec<_>>();
+        registered_names.sort();
+
+        let mut warnings = Vec::new();
+        for name in normalize_required_tools(required_tools.to_vec()) {
+            if !self.tool_registry().has(&name) {
+                return Err(OrbitError::invalid_input_with_suggestions(
+                    format!("required_tools contains unregistered tool '{name}'"),
+                    registered_names,
+                ));
+            }
+
+            let registry_inactive = !self.tool_registry().is_active(&name);
+            let stored_disabled = self
+                .stores()
+                .tools()
+                .get_tool(&name)?
+                .is_some_and(|tool| !tool.enabled);
+            if registry_inactive || stored_disabled {
+                warnings.push(format!(
+                    "required_tools includes registered tool '{name}', which is currently disabled"
+                ));
+            }
+        }
+
+        Ok(warnings)
+    }
+
     pub fn add_task(&self, params: TaskAddParams) -> Result<Task, OrbitError> {
         self.add_task_with_identity(params, None, None)
     }
@@ -46,6 +89,8 @@ impl OrbitRuntime {
         action_key: Option<&str>,
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        self.validate_required_tools(&params.required_tools)?;
+
         // [ORB-00417] Redact secrets at the single task-creation choke point
         // (shared by the dashboard POST, CLI `task add`, and the MCP task tool)
         // so a pasted key never lands in the task registry or the audit trail.

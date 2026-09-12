@@ -81,6 +81,7 @@ pub struct TaskAddArgs {
 
 impl Execute for TaskAddArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        let required_tool_warnings = runtime.validate_required_tools(&self.required_tools)?;
         let (agent, model) = super::mutation_identity(self.model);
         if !self.allow_missing_context {
             runtime.ensure_context_selectors_exist(&self.context)?;
@@ -122,6 +123,15 @@ impl Execute for TaskAddArgs {
             model,
         )?;
 
-        Ok(Payload::detail(task_to_json_for_runtime(runtime, &task)?, task.id).into())
+        let mut document = task_to_json_for_runtime(runtime, &task)?;
+        if !required_tool_warnings.is_empty()
+            && let Some(object) = document.as_object_mut()
+        {
+            object.insert(
+                "warnings".to_string(),
+                serde_json::json!(required_tool_warnings),
+            );
+        }
+        Ok(Payload::detail(document, task.id).into())
     }
 }

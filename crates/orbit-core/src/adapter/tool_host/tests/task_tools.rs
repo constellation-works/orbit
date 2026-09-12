@@ -165,6 +165,70 @@ fn task_add_tool_creates_proposed_tasks_for_agents() {
     );
 }
 
+#[test]
+fn task_add_tool_rejects_unknown_required_tools_with_suggestions() {
+    let (_root, runtime, _repo_root) = test_runtime();
+
+    let error = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({
+                "title": "Reject unknown tool",
+                "description": "An invalid requirement must not be persisted.",
+                "complexity": "low",
+                "workspace": ".",
+                "required_tools": ["orbit.task.shwo"],
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect_err("unknown required tool must be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unregistered tool 'orbit.task.shwo'")
+    );
+    assert!(
+        error
+            .did_you_mean()
+            .is_some_and(|names| { names.iter().any(|name| name == "orbit.task.show") })
+    );
+    assert!(runtime.list_tasks().expect("list tasks").is_empty());
+}
+
+#[test]
+fn task_add_tool_accepts_disabled_required_tools_with_a_warning() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    runtime
+        .disable_tool("orbit.task.list")
+        .expect("disable tool");
+
+    let output = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({
+                "title": "Keep disabled tool requirement",
+                "description": "The requirement remains durable.",
+                "complexity": "low",
+                "workspace": ".",
+                "required_tools": ["orbit.task.list"],
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("disabled registered tool is accepted");
+
+    assert_eq!(output["required_tools"], json!(["orbit.task.list"]));
+    assert!(output["warnings"].as_array().is_some_and(|warnings| {
+        warnings.iter().any(|warning| {
+            warning.as_str().is_some_and(|message| {
+                message.contains("orbit.task.list") && message.contains("disabled")
+            })
+        })
+    }));
+}
+
 /// ORB-12208: `orbit.task.add` must validate `context_files` against the same
 /// root `add_task` stores them relative to (the repository root), not against
 /// a sub-directory path-form `workspace` selector. `orbit.task.update`

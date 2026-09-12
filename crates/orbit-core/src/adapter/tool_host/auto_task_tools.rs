@@ -5,7 +5,7 @@
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::crud::{AutoTaskAddParams, AutoTaskUpdateParams};
@@ -26,7 +26,14 @@ pub(super) fn add(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitEr
         template,
         dedupe,
     })?;
-    to_json(&definition)
+    let mut response = to_json(&definition)?;
+    let warnings = runtime.validate_required_tools(&definition.template.required_tools)?;
+    if !warnings.is_empty()
+        && let Some(object) = response.as_object_mut()
+    {
+        object.insert("warnings".to_string(), json!(warnings));
+    }
+    Ok(response)
 }
 
 pub(super) fn list(runtime: &OrbitRuntime, _input: Value) -> Result<Value, OrbitError> {
@@ -88,7 +95,14 @@ pub(super) fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
         template: parse_field(&input, "template", false)?,
     };
     let definition = runtime.auto_task_update(&name, params)?;
-    to_json(&definition)
+    let mut response = to_json(&definition)?;
+    let warnings = runtime.validate_required_tools(&definition.template.required_tools)?;
+    if !warnings.is_empty()
+        && let Some(object) = response.as_object_mut()
+    {
+        object.insert("warnings".to_string(), json!(warnings));
+    }
+    Ok(response)
 }
 
 pub(super) fn toggle(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {

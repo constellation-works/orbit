@@ -102,3 +102,84 @@ fn mint_requires_a_definition_name_and_names_an_unknown_one() {
     ));
     assert!(unknown.contains("nope"), "{unknown}");
 }
+
+#[test]
+fn auto_task_add_rejects_unknown_required_tools_with_suggestions() {
+    let (_temp, runtime, _repo) = test_runtime();
+
+    let error = run_tool_as_operator(
+        &runtime,
+        "orbit.auto_task.add",
+        json!({
+            "name": "invalid-tools",
+            "schedule": {"every_minutes": 60},
+            "template": {
+                "title": "Invalid requirement",
+                "required_tools": ["orbit.task.shwo"]
+            }
+        }),
+    )
+    .expect_err("unknown template tool must be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unregistered tool 'orbit.task.shwo'")
+    );
+    assert!(
+        error
+            .did_you_mean()
+            .is_some_and(|names| { names.iter().any(|name| name == "orbit.task.show") })
+    );
+}
+
+#[test]
+fn auto_task_update_rejects_unknown_required_tools_with_suggestions() {
+    let (_temp, runtime) = with_definition("update-tools");
+    let existing = runtime
+        .auto_task_show("update-tools")
+        .expect("show definition")
+        .expect("definition exists");
+    let mut template = serde_json::to_value(existing.template).expect("serialize template");
+    template["required_tools"] = json!(["orbit.task.shwo"]);
+
+    let error = run_tool_as_operator(
+        &runtime,
+        "orbit.auto_task.update",
+        json!({"name": "update-tools", "template": template}),
+    )
+    .expect_err("unknown template tool must be rejected on update");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unregistered tool 'orbit.task.shwo'")
+    );
+    assert!(
+        error
+            .did_you_mean()
+            .is_some_and(|names| { names.iter().any(|name| name == "orbit.task.show") })
+    );
+}
+
+#[test]
+fn auto_task_mint_rechecks_persisted_template_requirements() {
+    let (_temp, runtime, _repo) = test_runtime();
+    let path = runtime.paths().local_dir.join("auto_tasks/drift.yaml");
+    std::fs::create_dir_all(path.parent().expect("auto-task parent")).expect("create directory");
+    std::fs::write(
+        &path,
+        "schemaVersion: 1\nname: drift\nschedule:\n  every_minutes: 60\ntemplate:\n  title: Drift\n  required_tools:\n    - orbit.task.shwo\n",
+    )
+    .expect("write drift definition");
+
+    let error = run_tool_as_operator(&runtime, "orbit.auto_task.mint", json!({"name": "drift"}))
+        .expect_err("mint must revalidate template requirements");
+    assert!(
+        error
+            .to_string()
+            .contains("unregistered tool 'orbit.task.shwo'")
+    );
+    assert!(error.did_you_mean().is_some());
+    assert!(runtime.list_tasks().expect("list tasks").is_empty());
+}
