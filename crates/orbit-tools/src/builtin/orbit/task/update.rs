@@ -51,19 +51,19 @@ impl Tool for OrbitTaskUpdateTool {
             },
             ToolParam {
                 name: "plan".to_string(),
-                description: "Replacement task plan text (empty string clears)".to_string(),
+                description: "Replacement task plan text (empty string clears). May be supplied on the same write that transitions to in-progress when a plan is required.".to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },
             ToolParam {
                 name: "status".to_string(),
-                description: "New task status".to_string(),
+                description: "New task status. `backlog` on a proposed task is the approval transition and cannot be combined with field edits (only `note` and `comment`). `in-progress` from a pickup state is the start transition; `plan` and `crew` may be supplied on that write. Other status changes are ordinary governed updates and may include field edits.".to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },
             ToolParam {
                 name: "note".to_string(),
-                description: "Optional lifecycle note for an approval or start transition"
+                description: "Optional lifecycle note for the guarded approval (proposed → backlog) or start (pickup → in-progress) transition; rejected on any other update"
                     .to_string(),
                 param_type: "string".to_string(),
                 required: false,
@@ -174,7 +174,7 @@ impl Tool for OrbitTaskUpdateTool {
 
         ToolSchema {
             name: "orbit.task.update".to_string(),
-            description: "Update an Orbit task and return the fresh task JSON".to_string(),
+            description: "Update an Orbit task and return the fresh task JSON. Field edits may accompany a status change, except `status: backlog` on a proposed task (approval), which accepts only `note` and `comment`. Starting with `status: in-progress` may include `plan` and `crew` on the same write.".to_string(),
             parameters,
             builtin: true,
         }

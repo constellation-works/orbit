@@ -763,7 +763,7 @@
     "name": "orbit_task_show"
   },
   {
-    "description": "Update an Orbit task and return the fresh task JSON",
+    "description": "Update an Orbit task and return the fresh task JSON. Field edits may accompany a status change, except `status: backlog` on a proposed task (approval), which accepts only `note` and `comment`. Starting with `status: in-progress` may include `plan` and `crew` on the same write.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -860,7 +860,7 @@
           "type": "string"
         },
         "note": {
-          "description": "Optional lifecycle note for an approval or start transition",
+          "description": "Optional lifecycle note for the guarded approval (proposed → backlog) or start (pickup → in-progress) transition; rejected on any other update",
           "type": "string"
         },
         "orchestrator": {
@@ -868,7 +868,7 @@
           "type": "string"
         },
         "plan": {
-          "description": "Replacement task plan text (empty string clears)",
+          "description": "Replacement task plan text (empty string clears). May be supplied on the same write that transitions to in-progress when a plan is required.",
           "type": "string"
         },
         "planned_by": {
@@ -892,7 +892,7 @@
           "type": "string"
         },
         "status": {
-          "description": "New task status",
+          "description": "New task status. `backlog` on a proposed task is the approval transition and cannot be combined with field edits (only `note` and `comment`). `in-progress` from a pickup state is the start transition; `plan` and `crew` may be supplied on that write. Other status changes are ordinary governed updates and may include field edits.",
           "enum": [
             "proposed",
             "backlog",
