@@ -3665,11 +3665,10 @@ if (!disabled.disabled) throw new Error("controls must be disabled for an unauth
     );
 }
 
-/// ORB-11691: Jump to task ids must accept non-ORB prefixes, look up in the
-/// selected workspace, and probe concrete workspaces from the aggregate view,
-/// not the server default. The live failure was Diagnostics/Errors on ws_orbit with
-/// `window=24h&run_state=failed`: GET /api/tasks/ORB-11514 (no workspace) 404'd
-/// against polaris while the same id existed as blocked in ws_orbit.
+/// Task jumps must scope lookup and all resulting dashboard state to the task's
+/// workspace. Cross-workspace jumps refresh through the normal Tasks path;
+/// same-workspace jumps stay local, and superseded lookups cannot adopt or
+/// render their workspace after a newer lookup wins.
 #[test]
 fn dashboard_global_task_jump_scopes_to_selected_workspace_and_distinguishes_errors() {
     let app = include_str!("../../assets/dashboard/app.js");
@@ -3782,8 +3781,8 @@ globalThis.document = {
   },
   addEventListener: () => {},
 };
-const location = new URL("http://dashboard.test/?workspace=ws_orbit&window=24h&run_state=failed");
-location.hash = "#diagnostics/errors?window=24h";
+const location = new URL("http://dashboard.test/?workspace=ws_polaris&window=24h&run_state=failed");
+location.hash = "#tasks?status=in-progress%2Creview%2Cblocked%2Cproposed%2Cbacklog";
 const hashListeners = [];
 globalThis.window = {
   location,
@@ -3808,16 +3807,20 @@ Object.defineProperty(location, "hash", {
     for (const fn of hashListeners) fn();
   },
 });
-location._hash = "#diagnostics/errors?window=24h";
+location._hash = "#tasks?status=in-progress%2Creview%2Cblocked%2Cproposed%2Cbacklog";
 globalThis.history = { replaceState: (_, __, url) => { const next = new URL(String(url), location.href); location.search = next.search; location.pathname = next.pathname; } };
 Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
 globalThis.requestAnimationFrame = (fn) => fn();
 globalThis.setInterval = () => 0;
 globalThis.EventSource = class { constructor() {} close() {} };
 
-const existing = { id: "DANI-00012", title: "Enforce proc.spawn filesystem policy against indirect child access", status: "blocked", history: [], artifacts: [], comments: [] };
+const polarisTask = { id: "POLA-00001", title: "Polaris cached task", status: "blocked", history: [], artifacts: [], comments: [] };
+const existing = { id: "DANI-00012", title: "Orbit adopted task", status: "blocked", history: [], artifacts: [], comments: [] };
+const nebulaTask = { id: "NEBU-00002", title: "Nebula adopted task", status: "blocked", history: [], artifacts: [], comments: [] };
 let lookupMode = "existing";
 let delayed = null;
+let delayedOrbit = null;
+let delayedNebula = null;
 const requests = [];
 function json(payload, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => payload, text: async () => JSON.stringify(payload) };
@@ -3829,9 +3832,10 @@ globalThis.fetch = async (path) => {
     return json([
       { id: "ws_polaris", name: "polaris", status: "active", is_default: true },
       { id: "ws_orbit", name: "orbit", status: "active", is_default: false },
+      { id: "ws_nebula", name: "nebula", status: "active", is_default: false },
     ]);
   }
-  if (/^\/api\/tasks\/(?:ORB-|DANI-)/.test(url.pathname)) {
+  if (/^\/api\/tasks\/(?:ORB-|DANI-|POLA-|NEBU-)/.test(url.pathname)) {
     const id = decodeURIComponent(url.pathname.slice("/api/tasks/".length));
     const workspace = url.searchParams.get("workspace");
     if (lookupMode === "network" && id === "ORB-00001") throw new Error("offline");
@@ -3841,12 +3845,40 @@ globalThis.fetch = async (path) => {
       await new Promise((resolve) => { delayed = resolve; });
       return workspace === "ws_orbit" ? json(existing) : json({ error: `task not found: ${id}` }, 404);
     }
+    if (lookupMode === "rapid" && id === "DANI-00012" && workspace === "ws_orbit") {
+      await new Promise((resolve) => { delayedOrbit = resolve; });
+      return json(existing);
+    }
+    if (lookupMode === "rapid" && id === "NEBU-00002" && workspace === "ws_nebula") {
+      await new Promise((resolve) => { delayedNebula = resolve; });
+      return json(nebulaTask);
+    }
+    if (id === "POLA-00001" && workspace === "ws_polaris") return json(polarisTask);
     if (id === "DANI-00012" && workspace === "ws_orbit") return json(existing);
+    if (id === "NEBU-00002" && workspace === "ws_nebula") return json(nebulaTask);
     return json({ error: `task not found: ${id}` }, 404);
   }
   if (url.pathname === "/api/tasks" || url.pathname === "/api/tasks/all") {
-    return json({ items: [], total: 0, limit: 50, truncated: false });
+    const workspace = url.searchParams.get("workspace");
+    const item = workspace === "ws_polaris" ? polarisTask
+      : workspace === "ws_orbit" ? existing
+      : workspace === "ws_nebula" ? nebulaTask
+      : null;
+    return json({ items: item ? [item] : [], total: item ? 1 : 0, limit: 50, truncated: false });
   }
+  if (url.pathname === "/api/audit/summary") {
+    const workspace = url.searchParams.get("workspace");
+    const value = workspace === "ws_polaris" ? 101 : workspace === "ws_orbit" ? 202 : 303;
+    return json({ events: value, denials: 0, failed_runs: 1, active_long_runs: 0, sparkline: [] });
+  }
+  if (url.pathname === "/api/job-runs") {
+    const workspace = url.searchParams.get("workspace");
+    const runId = workspace === "ws_polaris" ? "jrun-polaris" : workspace === "ws_orbit" ? "jrun-orbit" : "jrun-nebula";
+    return json({ items: [{ run_id: runId, job_id: `${workspace}-job`, state: "failed", created_at: "2026-09-12T10:00:00Z" }], total: 1, limit: 25, truncated: false, state: "failed" });
+  }
+  if (url.pathname === "/api/crews") return json({ crews: [] });
+  if (url.pathname === "/api/tasks/locks") return json([]);
+  if (url.pathname === "/api/diagnostics/friction") return json([]);
   return json([]);
 };
 
@@ -3858,7 +3890,9 @@ await import("./app.js");
 await tick(); await tick(); await tick();
 
 const { getWorkspace, setWorkspace } = await import("./common.js");
-if (getWorkspace() !== "ws_orbit") throw new Error(`selected workspace should remain ws_orbit, got ${getWorkspace()}`);
+if (getWorkspace() !== "ws_polaris") throw new Error(`selected workspace should remain ws_polaris, got ${getWorkspace()}`);
+if (!get("tasks-body").textContent.includes("Polaris cached task")) throw new Error("initial ws_polaris task cache did not render");
+if (get("rail-count-audit").textContent !== "101") throw new Error(`initial rail count was not scoped to ws_polaris: ${get("rail-count-audit").textContent}`);
 
 const input = get("global-task-id");
 const err = get("global-task-id-error");
@@ -3869,18 +3903,67 @@ function jump(id) {
 }
 
 requests.length = 0;
-jump("dani-00012");
+jump("pola-00001");
 await tick(); await tick(); await tick(); await tick(); await tick();
-const taskGets = requests.filter((url) => url.startsWith("/api/tasks/DANI-00012"));
-if (!taskGets[0] || !taskGets[0].includes("workspace=ws_orbit")) {
+const taskGets = requests.filter((url) => url.startsWith("/api/tasks/POLA-00001"));
+if (!taskGets[0] || !taskGets[0].includes("workspace=ws_polaris")) {
   throw new Error(`existing-task jump must query the selected workspace first; got ${JSON.stringify(taskGets)}`);
+}
+if (requests.some((url) => !url.startsWith("/api/tasks/POLA-00001"))) {
+  throw new Error(`same-workspace jump must not refresh dashboard panels: ${JSON.stringify(requests)}`);
 }
 if (err.textContent.includes("not found")) throw new Error(`existing task reported missing: ${err.textContent}`);
 if (wrap.classList.contains("error")) throw new Error("successful jump must not leave the error state");
 if (input.value) throw new Error("successful jump should clear the input");
 if (!String(location.hash).includes("tasks")) throw new Error(`successful jump should open Tasks, hash=${location.hash}`);
-const opened = get("tasks-body").children.some((node) => String(node.textContent).includes("DANI-00012"));
+const opened = get("tasks-body").children.some((node) => String(node.textContent).includes("POLA-00001"));
 if (!opened) throw new Error("existing blocked task must render after jump");
+
+requests.length = 0;
+jump("DANI-00012");
+await tick(); await tick(); await tick(); await tick(); await tick();
+if (getWorkspace() !== "ws_orbit") throw new Error(`cross-workspace lookup should adopt ws_orbit, got ${getWorkspace()}`);
+const refreshed = requests.filter((url) => !url.startsWith("/api/tasks/DANI-00012"));
+if (!refreshed.some((url) => url.startsWith("/api/tasks?")) || !refreshed.some((url) => url.startsWith("/api/audit/summary?"))) {
+  throw new Error(`cross-workspace lookup did not use the normal Tasks refresh: ${JSON.stringify(requests)}`);
+}
+if (refreshed.some((url) => !url.includes("workspace=ws_orbit"))) {
+  throw new Error(`cross-workspace refresh leaked a non-orbit request: ${JSON.stringify(refreshed)}`);
+}
+if (!get("tasks-body").textContent.includes("Orbit adopted task") || get("tasks-body").textContent.includes("Polaris cached task")) {
+  throw new Error(`task rows were not replaced with ws_orbit state: ${get("tasks-body").textContent}`);
+}
+if (get("rail-count-audit").textContent !== "202") throw new Error(`rail count was not refreshed for ws_orbit: ${get("rail-count-audit").textContent}`);
+
+requests.length = 0;
+location.hash = "#diagnostics/runs?window=24h";
+await tick(); await tick(); await tick(); await tick(); await tick();
+const runRequests = requests.filter((url) => url.startsWith("/api/job-runs") || url.startsWith("/api/diagnostics/friction"));
+if (runRequests.length !== 2 || runRequests.some((url) => !url.includes("workspace=ws_orbit"))) {
+  throw new Error(`run refresh was not scoped to adopted ws_orbit: ${JSON.stringify(runRequests)}`);
+}
+if (!get("runs-body").textContent.includes("jrun-orbit") || get("runs-body").textContent.includes("jrun-polaris")) {
+  throw new Error(`run rows were not replaced with ws_orbit state: ${get("runs-body").textContent}`);
+}
+
+setWorkspace("ws_polaris");
+location.hash = "#tasks";
+await tick(); await tick(); await tick(); await tick(); await tick();
+lookupMode = "rapid";
+jump("DANI-00012");
+await tick(); await tick();
+jump("NEBU-00002");
+await tick(); await tick();
+if (typeof delayedNebula !== "function" || typeof delayedOrbit !== "function") throw new Error("rapid lookup responses were not both pending");
+delayedNebula();
+await tick(); await tick(); await tick(); await tick(); await tick();
+delayedOrbit();
+await tick(); await tick(); await tick(); await tick(); await tick();
+if (getWorkspace() !== "ws_nebula") throw new Error(`older lookup adopted ws_orbit after newer ws_nebula lookup: ${getWorkspace()}`);
+if (!get("tasks-body").textContent.includes("Nebula adopted task") || get("tasks-body").textContent.includes("Orbit adopted task")) {
+  throw new Error(`older lookup overwrote newer task state: ${get("tasks-body").textContent}`);
+}
+lookupMode = "existing";
 
 setWorkspace("");
 requests.length = 0;
