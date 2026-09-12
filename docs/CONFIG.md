@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-09-07
+last_validated: 2026-09-12
 ---
 
 # Orbit Configuration
@@ -292,14 +292,16 @@ Copilot resolves credentials in this documented order:
 1. `COPILOT_GITHUB_TOKEN`
 2. `GH_TOKEN`
 3. `GITHUB_TOKEN`
-4. Otherwise, the credentials stored by `copilot` itself via its `/login`
-   command, under `COPILOT_HOME` (default `$HOME/.copilot`).
+4. Otherwise the session stored by `copilot /login`. On macOS that session is
+   the login-keychain item `github-copilot-app`, not a file under
+   `COPILOT_HOME`. `COPILOT_HOME` (default `$HOME/.copilot`) still holds CLI
+   configuration, session history, `mcp-config.json`, and logs.
 
 **Orbit does not forward those token variables on the provider's behalf.**
 Agent subprocesses get an allowlist-composed environment, and credentials are
 admitted only when an operator names them, so an unrelated `GITHUB_TOKEN` left
-in the environment cannot be silently borrowed by a Copilot run. To use
-token-based authentication, add the variable explicitly:
+in the environment cannot be silently borrowed by a Copilot run. To skip the
+macOS keychain and use token-based authentication, add the variable explicitly:
 
 ```toml
 [execution.env]
@@ -307,8 +309,9 @@ pass = ["COPILOT_GITHUB_TOKEN"]
 ```
 
 Token *values* are never logged, recorded in audit argv, or included in error
-messages. The recommended setup is `copilot` `/login` once on the host, which
-needs no token in the environment at all.
+messages. The recommended setup on a Mac is `copilot` `/login` once on the
+host, which needs no token in the environment at all; Orbit's Copilot sandbox
+profile re-allows `$HOME/Library/Keychains` reads so that item is visible.
 
 `COPILOT_HOME` is forwarded to the provider subprocess and is also what the
 sandbox grants, so the directory the CLI writes to and the directory Orbit
@@ -349,8 +352,11 @@ package-extraction cache (`$XDG_CACHE_HOME/copilot`, default
 actually running** — other providers do not inherit them.
 
 Copilot is not granted read access to the GitHub CLI's credential store
-(`~/.config/gh`) or to the macOS login keychain; it authenticates from its own
-`COPILOT_HOME` or from an operator-passed token.
+(`~/.config/gh`). On macOS, the confined Copilot profile re-allows reads of
+`$HOME/Library/Keychains` so `/login` can see `github-copilot-app`;
+`/Library/Keychains` and `/System/Library/Keychains` stay denied, and an
+activity `denyRead` on the user keychain directory outranks the carve-out. To
+skip the keychain, pass `COPILOT_GITHUB_TOKEN` through `[execution.env].pass`.
 
 ### Prompt transport
 
@@ -389,10 +395,15 @@ never falls back to Codex or another model vendor.
 
 ### Authentication and credential handling
 
-Cursor supports two local CLI authentication paths:
+Cursor supports these local CLI authentication paths:
 
-1. Run `cursor-agent login` once and verify it with `cursor-agent status`. The
-   login state is stored under `$HOME/.cursor`.
+1. Run `cursor-agent login` once and verify it with `cursor-agent status`.
+   On macOS the default store is the login keychain (`cursor-access-token` /
+   `cursor-refresh-token`). `$HOME/.cursor/auth.json` is used only when
+   `AGENT_CLI_CREDENTIAL_STORE=file` was set **at login**; setting that
+   variable later does not migrate an existing keychain session. Orbit's
+   Cursor sandbox profile re-allows `$HOME/Library/Keychains` reads so the
+   default login is visible.
 2. Generate a Cursor user API key and explicitly pass `CURSOR_API_KEY` to the
    agent subprocess:
 
@@ -440,9 +451,10 @@ response envelope. A non-zero exit, malformed object, missing field, non-string
 result, or absent Orbit completion envelope fails closed.
 
 Only an active Cursor executor receives write access to `$HOME/.cursor` for
-login state, CLI settings, permissions, and sessions. Other providers do not
-inherit that write grant. The worktree and all other paths remain governed by
-the activity filesystem profile.
+CLI settings, permissions, and sessions. That directory is not the default
+macOS login store. Other providers do not inherit the write grant. The
+worktree and all other paths remain governed by the activity filesystem
+profile.
 
 ---
 

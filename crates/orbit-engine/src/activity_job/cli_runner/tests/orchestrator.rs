@@ -503,6 +503,92 @@ fn run_cli_backend_rejects_copilot_trailing_terminal_prose() {
     assert_eq!(outcome.output["completion_envelope_satisfied"], false);
 }
 
+/// A Copilot CLI that cannot see its login-keychain item exits 1 with
+/// "No authentication information found". The step message — which becomes
+/// `job_run_steps.error_message` and the task's `workflow_run_failed` note —
+/// must carry Orbit's diagnosis, not only the exit code. [ORB-12261]
+#[test]
+fn run_cli_backend_copilot_keychain_auth_failure_reaches_the_step_message() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("copilot");
+    write_executable(
+        &script,
+        concat!(
+            "#!/bin/sh\ncat > /dev/null\n",
+            "printf '%s\\n' 'Error: No authentication information found.' >&2\n",
+            "exit 1\n",
+        ),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-copilot-keychain",
+        "copilot:claude-sonnet-4.5",
+        sink_for_writer,
+    ));
+    let mut sandbox = sandbox_for_test();
+    // Linux CI has no sandbox-exec; the diagnostic is about the compiled
+    // profile, not about whether the wrapper actually applied.
+    sandbox.allow_fallback = true;
+    let host = TestHost {
+        command: script.display().to_string(),
+        executor_args: Vec::new(),
+        provider_config: HashMap::new(),
+        sandbox: Some(sandbox),
+        task_context: None,
+        workspace_root: None,
+        orbit_registry_root: None,
+        orbit_workspace_selector: None,
+    };
+    let mut spec = test_agent_loop_spec(Duration::from_secs(5));
+    spec.provider = orbit_types::workflow::activity_job::Provider::Copilot;
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "implement_one",
+        "jrun-copilot-keychain",
+        audit,
+        &serde_json::json!({"prompt": "say ok"}),
+        None,
+    )
+    .expect("the invocation outcome should be classified");
+
+    assert!(!outcome.success);
+    let message = outcome
+        .message
+        .as_deref()
+        .expect("failed step carries a message");
+    assert!(
+        message.contains("exited with code"),
+        "the exit code still belongs in the step message: {message}"
+    );
+    assert!(
+        message.contains("macOS sandbox") && message.contains("copilot"),
+        "the persisted step message must carry the keychain diagnosis, not only the exit code: {message}"
+    );
+
+    let update = crate::context::blocked_workflow_failure_update(
+        "task_pr_pipeline",
+        "jrun-copilot-keychain",
+        Some("AGENT_INVOCATION_FAILED"),
+        Some(message),
+    );
+    assert_eq!(
+        update.status_event.as_deref(),
+        Some(crate::context::WORKFLOW_RUN_FAILED_EVENT)
+    );
+    let note = update
+        .status_note
+        .as_deref()
+        .expect("blocked update carries a note");
+    assert!(
+        note.contains("macOS sandbox") && note.contains("copilot"),
+        "workflow_run_failed must inline the diagnosis: {note}"
+    );
+}
+
 #[test]
 fn run_cli_backend_projects_prose_prefixed_claude_envelope_result() {
     let temp = tempdir().expect("tempdir");

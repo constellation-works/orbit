@@ -792,11 +792,11 @@ fn compile_uses_the_copilot_home_override_for_the_active_executor() {
 }
 
 #[test]
-fn copilot_does_not_receive_the_macos_keychain_carve_out() {
-    // Copilot stores its credentials under COPILOT_HOME, not the login
-    // keychain, so it keeps the default credential deny. It also must not be
-    // handed the GitHub CLI's credential store: borrowing another tool's
-    // credentials is exactly what the auth contract forbids.
+fn copilot_reallows_the_user_keychain_but_not_github_cli_credentials() {
+    // Copilot's `/login` session lives in the macOS login keychain item
+    // `github-copilot-app`, so the confined Copilot profile re-allows that
+    // user directory. It must still not borrow the GitHub CLI's credential
+    // store: that is a different tool's secret. [ORB-12261]
     let resolved = profile("default", &["/Users/test/repo"], &["/Users/test/repo/src"]);
 
     let text = compile_with_env(
@@ -808,9 +808,16 @@ fn copilot_does_not_receive_the_macos_keychain_carve_out() {
         },
     );
 
-    assert!(!text.contains("(allow file-read* (subpath \"/Users/test/Library/Keychains\"))"));
-    assert!(text.contains("(deny file-read* (subpath \"/Users/test/Library/Keychains\"))"));
+    let deny = "(deny file-read* (subpath \"/Users/test/Library/Keychains\"))";
+    let allow = "(allow file-read* (subpath \"/Users/test/Library/Keychains\"))";
+    let deny_pos = text.find(deny).expect("default user keychain deny");
+    let allow_pos = text.find(allow).expect("copilot user keychain re-allow");
+    assert!(
+        deny_pos < allow_pos,
+        "re-allow must follow the default deny"
+    );
     assert!(text.contains("(deny file-read* (subpath \"/Users/test/.config/gh\"))"));
+    assert!(!text.contains("(allow file-read* (subpath \"/Users/test/.config/gh\"))"));
 }
 
 #[test]

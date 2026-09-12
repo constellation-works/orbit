@@ -457,7 +457,8 @@ fn keychain_auth_diagnostic_stays_silent_outside_its_exact_failure_shape() {
     let home = std::ffi::OsStr::new("/Users/test");
 
     // Providers that never read the keychain, unsandboxed runs, and unrelated
-    // failures must not collect a keychain explanation.
+    // failures must not collect a keychain explanation. A Copilot or Cursor
+    // failure also must not match Claude's wording, and vice versa.
     assert!(
         macos_keychain_auth_diagnostic_with("codex", Some(&sandbox), failure, Some(home)).is_none()
     );
@@ -480,6 +481,60 @@ fn keychain_auth_diagnostic_stays_silent_outside_its_exact_failure_shape() {
         )
         .is_none()
     );
+    assert!(
+        macos_keychain_auth_diagnostic_with("copilot", Some(&sandbox), failure, Some(home))
+            .is_none()
+    );
+    assert!(
+        macos_keychain_auth_diagnostic_with("cursor", Some(&sandbox), failure, Some(home))
+            .is_none()
+    );
+}
+
+/// Copilot and Cursor use different auth-failure wording from Claude. Each
+/// must still distinguish a reachable keychain (real logout) from an Orbit
+/// denyRead that hid the credential. [ORB-12261]
+#[test]
+fn keychain_auth_diagnostic_recognises_copilot_and_cursor_auth_failures() {
+    let home = std::ffi::OsStr::new("/Users/test");
+    let copilot_failure = "Error: No authentication information found.";
+    let cursor_quoted = "Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.";
+    let cursor_live = "Error: Authentication required. Please run agent login first, or set CURSOR_API_KEY environment variable.";
+
+    for (provider, failure) in [
+        ("copilot", copilot_failure),
+        ("cursor", cursor_quoted),
+        ("cursor", cursor_live),
+    ] {
+        let sandbox = sandbox_for_test();
+        let reachable =
+            macos_keychain_auth_diagnostic_with(provider, Some(&sandbox), failure, Some(home))
+                .unwrap_or_else(|| panic!("{provider} under sandbox-exec must be attributed"));
+        assert!(
+            reachable.contains("real login failure") && reachable.contains(provider),
+            "a reachable keychain means re-authentication is the fix: {reachable}"
+        );
+
+        let mut denied = sandbox_for_test();
+        denied.fs_profile.name = "hardened".to_string();
+        denied
+            .fs_profile
+            .read
+            .push("!/Users/test/Library/Keychains".to_string());
+        let diagnostic =
+            macos_keychain_auth_diagnostic_with(provider, Some(&denied), failure, Some(home))
+                .unwrap_or_else(|| panic!("{provider} activity deny must be attributed"));
+        assert!(
+            diagnostic.contains("!/Users/test/Library/Keychains")
+                && diagnostic.contains("hardened")
+                && diagnostic.contains("Re-authenticating will not help"),
+            "an Orbit-authored denial must name the rule, not send the operator to re-login: {diagnostic}"
+        );
+        assert!(
+            !diagnostic.contains("real login failure"),
+            "a denied keychain must never be reported as reachable: {diagnostic}"
+        );
+    }
 }
 
 #[test]

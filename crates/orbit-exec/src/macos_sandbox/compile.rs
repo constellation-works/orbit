@@ -181,9 +181,11 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
             ));
         }
     }
-    // Cursor's logged-in CLI state and permissions live in `$HOME/.cursor`.
-    // Grant the directory only to the active Cursor executor; API-key auth is
-    // an explicit environment opt-in and needs no additional path. [ORB-10945]
+    // Cursor's CLI configuration, permissions, and sessions live in
+    // `$HOME/.cursor`. On macOS the default login is the login keychain, not
+    // that directory; the write grant here is still required for the rest of
+    // the CLI state. API-key auth is an explicit environment opt-in and needs
+    // no additional path. [ORB-10945] [ORB-12261]
     if Provider::parse(provider).ok() == Some(Provider::Cursor)
         && let Some(state_dir) = super::provider_dirs::cursor_state_dir(home)
     {
@@ -265,18 +267,22 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
 /// Whether `provider`'s CLI reads its own credentials from the macOS login
 /// Keychain, and therefore cannot run under the default Keychain read deny.
 ///
-/// Only Claude Code does today: it keeps its OAuth session in the login
-/// keychain item `Claude Code-credentials` and leaves
-/// `~/.claude/.credentials.json` as an empty stub. Codex, Gemini, and Grok keep
-/// credentials in plain files under their own state directories, which are
-/// already granted, so they keep the deny. Names that do not resolve to a
-/// canonical [`Provider`] keep the deny too — the carve-out fails closed.
-/// [ORB-10929]
+/// Claude Code, Copilot CLI, and Cursor Agent CLI do: each keeps its login
+/// session in a login-keychain item (`Claude Code-credentials`,
+/// `github-copilot-app`, `cursor-access-token` / `cursor-refresh-token`) and
+/// does not persist a readable token under its state directory by default.
+/// Codex, Gemini, and Grok keep credentials in plain files under their own
+/// state directories, which are already granted, so they keep the deny. Names
+/// that do not resolve to a canonical [`Provider`] keep the deny too — the
+/// carve-out fails closed. [ORB-10929] [ORB-12261]
 ///
 /// Internal: callers outside this crate want [`macos_login_keychain_access`],
 /// which answers the question the compiled profile actually settles.
 fn provider_reads_macos_login_keychain(provider: &str) -> bool {
-    Provider::parse(provider).ok() == Some(Provider::Claude)
+    matches!(
+        Provider::parse(provider).ok(),
+        Some(Provider::Claude | Provider::Copilot | Provider::Cursor)
+    )
 }
 
 /// What the compiled profile decides about `provider` reading the *user* login
@@ -339,12 +345,13 @@ pub fn macos_login_keychain_access(
 /// Re-allow the confined provider's own credential store after
 /// [`emit_default_credential_read_denies`], so last-match-wins grants it.
 ///
-/// Without this, a sandboxed `claude` cannot see its Keychain item and reports
-/// `OAuth session expired and could not be refreshed` — an authentication
-/// failure no re-login can clear, because the credential is present and simply
-/// unreadable. The carve-out is deliberately narrow:
-/// - it applies to one provider, so a Codex or Grok agent still cannot read any
-///   keychain;
+/// Without this, a sandboxed Claude, Copilot, or Cursor CLI cannot see its
+/// Keychain item and reports a fake login failure (Claude: OAuth expiry;
+/// Copilot: no authentication information; Cursor: authentication required) —
+/// an authentication failure no re-login can clear, because the credential is
+/// present and simply unreadable. The carve-out is deliberately narrow:
+/// - it applies only to those providers, so a Codex or Grok agent still cannot
+///   read any keychain;
 /// - it covers only the *user* keychain directory; `/Library/Keychains` and
 ///   `/System/Library/Keychains` stay denied for every provider;
 /// - it grants reads only. Nothing here makes the login keychain writable, so a

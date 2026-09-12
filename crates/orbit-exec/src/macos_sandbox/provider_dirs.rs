@@ -128,10 +128,14 @@ pub(crate) fn copilot_cache_dir(
         .or_else(|| non_empty_env_path(home).map(|path| path.join(".cache").join("copilot")))
 }
 
-/// Cursor CLI stores login credentials, CLI configuration, permissions, and
-/// session state under `$HOME/.cursor`. The caller gates this directory on an
-/// active Cursor executor so other providers do not receive Cursor-specific
-/// write access. [ORB-10945]
+/// Cursor CLI stores configuration, permissions, and session state under
+/// `$HOME/.cursor`. On macOS the default logged-in credential lives in the
+/// login keychain (`cursor-access-token` / `cursor-refresh-token`); the file
+/// store at `$HOME/.cursor/auth.json` is used only when
+/// `AGENT_CLI_CREDENTIAL_STORE=file` was set at login time. `CURSOR_API_KEY`
+/// is the environment opt-in that skips both stores. The caller gates this
+/// directory on an active Cursor executor so other providers do not receive
+/// Cursor-specific write access. [ORB-10945] [ORB-12261]
 pub(crate) fn cursor_state_dir(home: Option<&OsStr>) -> Option<PathBuf> {
     non_empty_env_path(home).map(|path| path.join(".cursor"))
 }
