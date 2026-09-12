@@ -858,12 +858,14 @@ async fn list_reports_no_open_duplicate_when_only_instance_is_someday() {
     // Mint an instance and park it in Someday.
     let task = runtime.auto_task_mint("parked-chore").expect("mint");
     runtime
-        .update_task(
+        .update_task_with_identity(
             &task.id,
             TaskUpdateParams {
                 status: Some(TaskStatus::Someday),
                 ..Default::default()
             },
+            None,
+            None,
         )
         .expect("park task");
 
@@ -890,12 +892,14 @@ async fn list_reports_no_open_duplicate_when_only_instance_is_someday() {
 
     // Once an active instance exists, the same query marks open_duplicate as true.
     runtime
-        .update_task(
+        .update_task_with_identity(
             &task.id,
             TaskUpdateParams {
                 status: Some(TaskStatus::Backlog),
                 ..Default::default()
             },
+            None,
+            None,
         )
         .expect("activate task");
 

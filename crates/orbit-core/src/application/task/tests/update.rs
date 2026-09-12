@@ -1,4 +1,6 @@
-//! Explicit status classification through the owning `update_task` layer.
+//! Status classification and field edits through the owning `update_task`
+//! layer. The lifecycle table each attributed status change is checked
+//! against is covered in [`super::lifecycle`].
 
 use orbit_engine::TaskActivityUpdate;
 use orbit_types::task::{Task, TaskArtifact, TaskStatus};
@@ -32,51 +34,6 @@ fn update_status(
     )
 }
 
-const ALL_STATUSES: [TaskStatus; 9] = [
-    TaskStatus::Proposed,
-    TaskStatus::Backlog,
-    TaskStatus::InProgress,
-    TaskStatus::Review,
-    TaskStatus::Done,
-    TaskStatus::Blocked,
-    TaskStatus::Archived,
-    TaskStatus::Rejected,
-    TaskStatus::Someday,
-];
-
-#[test]
-fn explicit_update_allows_the_complete_status_transition_matrix() {
-    let (_root, runtime) = test_runtime();
-
-    for source in ALL_STATUSES {
-        for target in ALL_STATUSES {
-            let task = add_proposed_task(&runtime, &format!("Matrix {source} to {target}"));
-            update_status(&runtime, &task.id, source).expect("establish matrix source");
-            let history_before = runtime
-                .get_task_history(&task.id)
-                .expect("history before transition");
-
-            let updated = update_status(&runtime, &task.id, target)
-                .unwrap_or_else(|error| panic!("{source} -> {target} failed: {error}"));
-
-            assert_eq!(updated.id, task.id);
-            assert_eq!(updated.status, target);
-            let history_after = runtime
-                .get_task_history(&task.id)
-                .expect("history after transition");
-            if source == target {
-                assert_eq!(history_after, history_before, "{source} same-status edit");
-            } else {
-                let event = history_after.last().expect("status transition event");
-                assert_eq!(event.from_status, Some(source));
-                assert_eq!(event.to_status, Some(target));
-                assert!(!event.by.trim().is_empty());
-                assert!(event.at >= task.created_at);
-            }
-        }
-    }
-}
-
 #[test]
 fn update_status_covers_approve_transitions() {
     let (_root, runtime) = test_runtime();
@@ -90,10 +47,21 @@ fn update_status_covers_approve_transitions() {
     // review -> done (the former review approval).
     let done = drive_to_done(&runtime, &task.id);
     assert_eq!(done.status, TaskStatus::Done);
+    let approval = runtime
+        .get_task_history(&task.id)
+        .expect("task history")
+        .last()
+        .cloned()
+        .expect("completion event");
+    assert_eq!(approval.from_status, Some(TaskStatus::Review));
+    assert_eq!(approval.to_status, Some(TaskStatus::Done));
 }
 
+/// Reopening delivered work is a human override (`orbit task update --force`),
+/// not an ordinary edit — but when an operator takes it, the task's evidence
+/// must survive intact.
 #[test]
-fn reopening_done_preserves_identity_history_artifacts_and_execution_evidence() {
+fn forced_reopen_preserves_identity_history_artifacts_and_execution_evidence() {
     let (_root, runtime) = test_runtime();
     let task = add_proposed_task(&runtime, "Preserve reopen evidence");
     runtime
@@ -112,15 +80,17 @@ fn reopening_done_preserves_identity_history_artifacts_and_execution_evidence() 
         .expect("done artifacts");
 
     let reopened = runtime
-        .update_task(
+        .force_update_task_with_identity(
             &task.id,
             TaskUpdateParams {
                 status: Some(TaskStatus::Proposed),
                 title: Some("Reclassified without replacing evidence".to_string()),
                 ..Default::default()
             },
+            None,
+            None,
         )
-        .expect("reopen done task directly");
+        .expect("a human may reopen a done task");
 
     assert_eq!(reopened.id, done.id);
     assert_eq!(reopened.execution_summary, done.execution_summary);
@@ -144,10 +114,12 @@ fn reopening_done_preserves_identity_history_artifacts_and_execution_evidence() 
 fn manual_status_edits_do_not_require_execution_fields_or_fabricate_attribution() {
     let (_root, runtime) = test_runtime();
     let task = add_proposed_task(&runtime, "Classification is not execution");
+    update_status(&runtime, &task.id, TaskStatus::Backlog).expect("approve the proposal");
+    update_status(&runtime, &task.id, TaskStatus::InProgress).expect("pick the task up");
 
-    let in_progress = update_status(&runtime, &task.id, TaskStatus::InProgress)
-        .expect("manual in-progress status needs no plan");
-    assert!(in_progress.plan.is_empty());
+    // Only completion demands execution evidence: offering work for review is
+    // a classification, and classifying does not make this runtime the
+    // implementer.
     let review = update_status(&runtime, &task.id, TaskStatus::Review)
         .expect("manual review status needs no summary");
     assert!(review.execution_summary.is_empty());
@@ -164,7 +136,7 @@ fn invalid_accompanying_edit_does_not_partially_apply_status() {
             &task.id,
             TaskUpdateParams {
                 title: Some("   ".to_string()),
-                status: Some(TaskStatus::Done),
+                status: Some(TaskStatus::Backlog),
                 ..Default::default()
             },
         )

@@ -56,10 +56,10 @@ See [Delivery Workflows](../../getting-started/workflows/).
 | Command | Purpose |
 |---|---|
 | `orbit task add` | Create a task. `--title` and `--complexity` are required. |
-| `orbit task update <id>` | Update fields. `--approve` takes the next approval step (`proposed → backlog`, `review → done`). |
+| `orbit task update <id>` | Update fields. `--approve` takes the next approval step (`proposed → backlog`, `review → done`); `--status` follows the [lifecycle table](../../concepts/tasks/#transition-rules), and `--force` overrides it. |
 | `orbit task list` | List tasks. Status-neutral by default; filter with `--status`, `--tag`, `--path`, `--ready`, `--ref`. |
 | `orbit task show <id>` | Show one task, found by ID across registered workspaces. `--fields` projects specific fields. |
-| `orbit task archive <id>` | Archive a task. A bare `--status archived` update is refused. |
+| `orbit task archive <id>` | Archive a task from any status. Archived is terminal: restore with `task update <id> --status backlog --force`. |
 | `orbit task artifact` | Manage task artifact files. |
 | `orbit task lint` | Flag stale paths and vague acceptance criteria. |
 | `orbit task flow` | Filed-vs-closed rates over time — is the backlog draining? |

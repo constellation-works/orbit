@@ -13,12 +13,12 @@ use crate::OrbitRuntime;
 use super::helpers::{
     SYSTEM_ACTOR_LABEL, build_task_comments, effective_actor_label, implementation_label,
 };
+use super::lifecycle::{ensure_task_has_execution_plan, in_progress_transition_requires_plan};
 use super::params::TaskUpdateParams;
 
 #[cfg(test)]
 use std::sync::Mutex;
 
-const UNAUTHORED_TASK_PLAN_PLACEHOLDER: &str = "To be authored by executing agent at start time.";
 const RELATION_RESOLVES: &str = "resolves";
 /// [ORB-10470] Status event recorded when a resumed run restores its own
 /// lineage's coupling to a task (re-admission and/or batch re-claim).
@@ -828,18 +828,4 @@ fn ensure_task_delete_allowed(id: &str, status: TaskStatus, force: bool) -> Resu
     Err(OrbitError::InvalidInput(format!(
         "task '{id}' is in status '{status}'; use --force to delete tasks not in proposed or rejected status"
     )))
-}
-
-pub(crate) fn ensure_task_has_execution_plan(id: &str, plan: &str) -> Result<(), OrbitError> {
-    let normalized = plan.trim();
-    if normalized.is_empty() || normalized == UNAUTHORED_TASK_PLAN_PLACEHOLDER {
-        return Err(OrbitError::InvalidInput(format!(
-            "task '{id}' requires a non-empty execution plan before transitioning to in-progress"
-        )));
-    }
-    Ok(())
-}
-
-pub(crate) fn in_progress_transition_requires_plan(from_status: TaskStatus) -> bool {
-    !matches!(from_status, TaskStatus::Backlog | TaskStatus::InProgress)
 }

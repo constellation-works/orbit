@@ -2,6 +2,7 @@
 
 mod add;
 mod contention;
+mod lifecycle;
 mod params;
 mod paths;
 mod records;

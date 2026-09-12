@@ -308,6 +308,12 @@ pub(super) fn update(
                 .to_string(),
         ));
     }
+    if input.get("force").is_some() {
+        return Err(OrbitError::InvalidInput(
+            "orbit.task.update does not accept `force`; lifecycle transitions are enforced for agents, and the override is a human CLI action"
+                .to_string(),
+        ));
+    }
     let id = required_string(&input, &["id"], "id")?;
     let context_files = optional_csv_or_string_list_alias(&input, &["context_files", "context"])?;
     if !allows_missing_context(&input)?

@@ -77,9 +77,14 @@ impl TestWorkspace {
         val["id"].as_str().expect("task id").to_string()
     }
 
+    /// Park a fixture task in an arbitrary status. `--force` is the human
+    /// override for the lifecycle table (ORB-12245); listing behaviour, not
+    /// the route a task took to its status, is what these tests measure.
     fn update_status(&self, id: &str, status: &str) {
         self.run(
-            &["task", "update", id, "--status", status, "--json"],
+            &[
+                "task", "update", id, "--status", status, "--force", "--json",
+            ],
             "update task status",
         );
     }

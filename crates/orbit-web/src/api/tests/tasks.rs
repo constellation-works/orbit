@@ -1583,45 +1583,56 @@ async fn post_task(runtime: Arc<OrbitRuntime>, body: Value) -> Response {
         .expect("response")
 }
 
+/// [ORB-12245] The dashboard is an attributed operator surface, so its status
+/// edits obey the same lifecycle table as every other one: delivered work is
+/// not reopened from a PATCH, and completion still comes from `review`.
 #[tokio::test]
-async fn update_task_reopens_done_and_restores_archived_without_intermediate_statuses() {
+async fn update_task_refuses_to_fabricate_or_reopen_a_completion() {
     let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
-    let task = seed_backlog_task(&runtime, "Flexible API status");
+    let task = seed_backlog_task(&runtime, "Dashboard status governance");
 
-    let done = patch_task(runtime.clone(), &task.id, json!({ "status": "done" })).await;
-    assert_eq!(done.status(), StatusCode::OK);
-    assert_eq!(body_json(done).await["status"], json!("done"));
+    let skipped = patch_task(runtime.clone(), &task.id, json!({ "status": "done" })).await;
+    assert_eq!(skipped.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_json(skipped).await["error"]
+            .as_str()
+            .expect("error message")
+            .contains("'done' is reachable only from 'review'")
+    );
 
-    let archived = patch_task(
-        runtime.clone(),
-        &task.id,
-        json!({ "status": "archived", "title": "Archived through PATCH" }),
-    )
-    .await;
-    assert_eq!(archived.status(), StatusCode::OK);
-    let archived = body_json(archived).await;
-    assert_eq!(archived["status"], json!("archived"));
-    assert_eq!(archived["title"], json!("Archived through PATCH"));
+    for (status, body) in [
+        (
+            "in-progress",
+            json!({ "status": "in-progress", "plan": "1) do it" }),
+        ),
+        (
+            "review",
+            json!({ "status": "review", "execution_summary": "did it" }),
+        ),
+        ("done", json!({ "status": "done" })),
+    ] {
+        let response = patch_task(runtime.clone(), &task.id, body).await;
+        assert_eq!(response.status(), StatusCode::OK, "{status}");
+        assert_eq!(body_json(response).await["status"], json!(status));
+    }
 
-    let restored = patch_task(
-        runtime.clone(),
-        &task.id,
-        json!({ "status": "in-progress" }),
-    )
-    .await;
-    assert_eq!(restored.status(), StatusCode::OK);
-    assert_eq!(body_json(restored).await["status"], json!("in-progress"));
+    let reopened = patch_task(runtime.clone(), &task.id, json!({ "status": "backlog" })).await;
+    assert_eq!(reopened.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_json(reopened).await["error"]
+            .as_str()
+            .expect("error message")
+            .contains("regression_from")
+    );
 
     let fetched = body_json(request_shared(runtime, &format!("/tasks/{}", task.id)).await).await;
+    assert_eq!(fetched["status"], json!("done"));
     let history = fetched["history"].as_array().expect("history array");
     assert!(
         history
             .iter()
-            .any(|entry| { entry["from_status"] == "done" && entry["to_status"] == "archived" })
+            .any(|entry| { entry["from_status"] == "review" && entry["to_status"] == "done" })
     );
-    assert!(history.iter().any(|entry| {
-        entry["from_status"] == "archived" && entry["to_status"] == "in_progress"
-    }));
 }
 
 /// ORB-10648: `priority` is now a declared update field. It was undeclared

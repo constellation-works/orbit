@@ -87,6 +87,11 @@ pub struct TaskUpdateArgs {
     /// Note recorded on the approval's status history entry (with `--approve`)
     #[arg(long, requires = "approve")]
     pub note: Option<String>,
+    /// Apply `--status` even when the task lifecycle refuses the transition
+    /// (for example reopening a done task). Human-operator override: the
+    /// change is recorded in task history as `forced`.
+    #[arg(long, requires = "status")]
+    pub force: bool,
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
@@ -98,7 +103,8 @@ pub struct TaskUpdateArgs {
 /// same invocation, and `--status` would be a direct contradiction of the
 /// transition being requested. Rejecting the combination in the parser keeps
 /// approval one write with one history entry.
-const APPROVE_CONFLICTS: [&str; 19] = [
+const APPROVE_CONFLICTS: [&str; 20] = [
+    "force",
     "title",
     "description",
     "acceptance_criteria",
@@ -148,6 +154,7 @@ impl Execute for TaskUpdateArgs {
             model,
             approve,
             note,
+            force,
             json: _,
         } = self;
 
@@ -213,34 +220,34 @@ impl Execute for TaskUpdateArgs {
         }
         let (agent, model) = super::mutation_identity(model);
 
-        let task = runtime.update_task_with_identity(
-            &id,
-            TaskUpdateParams {
-                title,
-                description,
-                acceptance_criteria,
-                dependencies,
-                tags,
-                plan,
-                execution_summary,
-                comment,
-                status: status.map(Into::into),
-                task_type,
-                priority,
-                complexity,
-                planned_by,
-                implemented_by,
-                pr_status,
-                job_run_id,
-                crew,
-                orchestrator,
-                context_files,
-                upsert_artifacts,
-                ..Default::default()
-            },
-            agent,
-            model,
-        )?;
+        let params = TaskUpdateParams {
+            title,
+            description,
+            acceptance_criteria,
+            dependencies,
+            tags,
+            plan,
+            execution_summary,
+            comment,
+            status: status.map(Into::into),
+            task_type,
+            priority,
+            complexity,
+            planned_by,
+            implemented_by,
+            pr_status,
+            job_run_id,
+            crew,
+            orchestrator,
+            context_files,
+            upsert_artifacts,
+            ..Default::default()
+        };
+        let task = if force {
+            runtime.force_update_task_with_identity(&id, params, agent, model)?
+        } else {
+            runtime.update_task_with_identity(&id, params, agent, model)?
+        };
 
         Ok(Payload::detail(
             task_to_json_for_runtime(runtime, &task)?,

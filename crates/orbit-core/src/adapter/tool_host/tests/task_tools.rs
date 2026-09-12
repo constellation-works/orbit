@@ -456,6 +456,54 @@ fn friction_stats_does_not_write_state_scoreboard_file() {
     );
 }
 
+/// [ORB-12245] The agent-facing update surface is governed by the same
+/// lifecycle table the CLI and dashboard use, and it has no override: `force`
+/// is refused outright, so an agent cannot grant itself one.
+#[test]
+fn task_update_tool_enforces_the_lifecycle_and_refuses_force() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let task = create_task(
+        &runtime,
+        &repo_root,
+        "Fabricated completion",
+        "An agent must not mark unstarted work done.",
+        TaskStatus::Proposed,
+        &[],
+    );
+    let agent = Some("codex".to_string());
+    let model = Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string());
+
+    let message = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({ "id": task.id.clone(), "status": "done" }),
+        agent.clone(),
+        model.clone(),
+    ));
+    assert_eq!(
+        message,
+        format!(
+            "task '{}' cannot move from 'proposed' to 'done': 'done' is reachable only from 'review'",
+            task.id
+        )
+    );
+    assert_eq!(
+        runtime.get_task(&task.id).expect("reread task").status,
+        TaskStatus::Proposed
+    );
+
+    let message = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({ "id": task.id.clone(), "status": "done", "force": true }),
+        agent,
+        model,
+    ));
+    assert!(message.contains("does not accept `force`"), "{message}");
+    assert_eq!(
+        runtime.get_task(&task.id).expect("reread task").status,
+        TaskStatus::Proposed
+    );
+}
+
 #[test]
 fn task_delete_tool_rejects_unforced_protected_statuses() {
     let (_root, runtime, repo_root) = test_runtime();
