@@ -11,7 +11,7 @@ summary: Decision log for the auto-task primitive, including its move from a rou
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: []
+related_artifacts: [ORB-12233]
 ---
 
 # Auto-tasks — Decisions
@@ -99,7 +99,7 @@ All run budgets in Orbit config, auto-task definitions, job/activity assets, wor
 
 ## Auto-task definitions are evaluated by the host tick, not fired by a routine
 
-**Recorded:** 2026-09-12 · implementation task pending (backfill the id when allocated)
+**Recorded:** 2026-09-12 · [ORB-12233]
 **Code anchors:** `crates/orbit-core/src/application/auto_tasks/scheduler.rs::run_auto_task_scheduler_at`, `crates/orbit-core/src/application/routines/sweep.rs`
 
 ### Context
@@ -119,6 +119,7 @@ The scheduler pass was already a stateless, cursor-driven due evaluator — the 
 
 ## Task References
 
+- [ORB-12233] — moves auto-task evaluation into the host clock tick and retires the scheduler routine/job/activity.
 - [ORB-10149] — Shipped the auto-task primitive (record, scheduler, CRUD, assets).
 - [ORB-10148] — Added the QA definition and no-diff workflow exemption.
 - [ORB-10472] — Isolated auto-task definition refresh from the registered
