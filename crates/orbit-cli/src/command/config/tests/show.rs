@@ -1,6 +1,6 @@
 use std::fs;
 
-use orbit_config::{ConfigRoots, load_effective_config};
+use orbit_config::{ConfigRoots, admit_config_key, load_effective_config};
 
 use super::super::show::{effective_json, effective_text, scoped_json, scoped_text};
 use super::super::support::{ConfigScopeArg, open_store_for_scope};
@@ -185,4 +185,39 @@ fn config_show_marks_absent_workspace_layer_and_lists_every_settable_key() {
     assert_eq!(s_json["source"]["exists"], false);
     assert!(s_text.contains("(absent)"));
     assert!(s_text.contains("[unset]"));
+}
+
+#[test]
+fn every_effective_settings_key_is_readable_by_config_get() {
+    let (_root, runtime, global_root, workspace_root) = test_runtime();
+
+    let effective = load_effective_config(&ConfigRoots::new(&global_root, &workspace_root))
+        .expect("load effective layered config");
+    let json = effective_json(&runtime, effective.values());
+    let text = effective_text(&runtime, effective.values());
+
+    let settings = json["settings"].as_object().expect("settings object");
+    assert!(
+        !settings.is_empty(),
+        "expected at least one settings key to check"
+    );
+    for key in settings.keys() {
+        admit_config_key(key).unwrap_or_else(|err| {
+            panic!("settings key {key} must be readable by config get: {err}")
+        });
+    }
+
+    // `execution.env.inherit` is a derived invariant, not an admitted config
+    // key: it must not appear in `settings` (ORB-12339), and it must still
+    // surface as the top-level `execution_env_inherit` field and in the
+    // text `derived:` section, matching the scoped views.
+    assert!(
+        !settings.contains_key("execution.env.inherit"),
+        "settings must not list the non-admitted execution.env.inherit key: {settings:?}"
+    );
+    assert_eq!(json["execution_env_inherit"], false);
+    assert!(
+        text.contains("derived:") && text.contains("execution_env_inherit"),
+        "text output must surface execution_env_inherit under derived: {text}"
+    );
 }
