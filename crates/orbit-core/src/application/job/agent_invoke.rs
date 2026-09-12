@@ -29,8 +29,6 @@
 //! carries managed-run provenance, so it resolves as an *agent* at every
 //! capability chokepoint and cannot admit another invocation of its own.
 
-use std::path::{Path, PathBuf};
-
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::tool::ToolSessionContext;
@@ -144,7 +142,7 @@ impl OrbitRuntime {
         let authorizer = self.admit_agent_invoke(request.session_context)?;
 
         let prompt = require_non_empty(request.prompt, "prompt")?;
-        let cwd = self.resolve_invocation_cwd(request.cwd)?;
+        let cwd = self.resolve_workspace_cwd("cwd", request.cwd)?;
         let crew = self.canonical_crew_name(request.crew)?;
         let timeout_seconds = resolve_timeout(request.timeout_seconds)?;
         let requested_actor = request
@@ -209,47 +207,6 @@ impl OrbitRuntime {
             admission,
             timeout_seconds,
         })
-    }
-
-    /// Canonicalize and validate the explicit working directory.
-    ///
-    /// The directory must exist and lie inside the runtime's own checkout.
-    /// Containment is what keeps "the owning workspace authorized this" true:
-    /// a caller addressing workspace A must not be able to point an unsandboxed
-    /// subprocess at workspace B's checkout, or anywhere else on the host,
-    /// through the same admission.
-    fn resolve_invocation_cwd(&self, cwd: &str) -> Result<PathBuf, OrbitError> {
-        let requested = require_non_empty(cwd, "cwd")?;
-        let path = Path::new(requested);
-        if !path.is_absolute() {
-            return Err(OrbitError::InvalidInput(format!(
-                "`cwd` must be an absolute path; got '{requested}'"
-            )));
-        }
-        let canonical = path.canonicalize().map_err(|error| {
-            OrbitError::InvalidInput(format!("`cwd` '{requested}' is not readable: {error}"))
-        })?;
-        if !canonical.is_dir() {
-            return Err(OrbitError::InvalidInput(format!(
-                "`cwd` '{requested}' is not a directory"
-            )));
-        }
-        let workspace_root = self.paths().repo_root.canonicalize().map_err(|error| {
-            OrbitError::Execution(format!(
-                "canonicalize workspace root '{}': {error}",
-                self.paths().repo_root.display()
-            ))
-        })?;
-        if !canonical.starts_with(&workspace_root) {
-            return Err(OrbitError::InvalidInput(format!(
-                "`cwd` '{}' is outside this workspace checkout '{}'; an invocation is admitted \
-                 against the workspace that authorizes it, so run it from the owning workspace \
-                 instead",
-                canonical.display(),
-                workspace_root.display()
-            )));
-        }
-        Ok(canonical)
     }
 }
 

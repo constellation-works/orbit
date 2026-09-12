@@ -281,10 +281,8 @@ fn a_cwd_outside_the_workspace_checkout_is_refused() {
         .expect_err("an admission is scoped to the workspace that granted it");
     match error {
         OrbitError::InvalidInput(message) => {
-            assert!(
-                message.contains("outside this workspace checkout"),
-                "{message}"
-            )
+            assert!(message.contains("outside workspace"), "{message}");
+            assert!(message.contains("checkout"), "{message}");
         }
         other => panic!("expected invalid input, got {other:?}"),
     }

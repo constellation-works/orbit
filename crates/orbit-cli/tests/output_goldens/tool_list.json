@@ -164,7 +164,7 @@
         "required": true
       },
       {
-        "description": "Absolute working directory the agent starts in. Must exist and be inside this workspace's checkout; it is never inferred from the caller.",
+        "description": "Absolute working directory the agent starts in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller.",
         "name": "cwd",
         "param_type": "string",
         "required": true
@@ -235,7 +235,7 @@
         "required": true
       },
       {
-        "description": "Explicit working directory the command runs in.",
+        "description": "Absolute working directory the command runs in. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller.",
         "name": "working_directory",
         "param_type": "string",
         "required": true

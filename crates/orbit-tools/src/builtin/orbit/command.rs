@@ -8,7 +8,9 @@
 //! entry point, at the governed-operation chokepoint in
 //! `orbit_common::governance::authorization`) and the workspace claim (enforced in
 //! `OrbitRuntime::execute_remote_command`, the same chokepoint `orbit.workflow.ship`
-//! uses).
+//! uses). `working_directory` is confined by the same helper `orbit.agent.invoke`
+//! uses for `cwd`: it must be absolute and inside the selected workspace's
+//! checkout or a linked worktree under `.orbit/state/worktrees/`.
 //!
 //! The self-dispatch guard below mirrors `orbit.workflow.ship`/`run.resume`: a
 //! managed run's leaf agent must not reach a general command surface, which
@@ -36,7 +38,10 @@ impl Tool for OrbitCommandExecTool {
             },
             ToolParam {
                 name: "working_directory".to_string(),
-                description: "Explicit working directory the command runs in.".to_string(),
+                description: "Absolute working directory the command runs in. Must exist and \
+                     be inside this workspace's checkout or a linked worktree under \
+                     `.orbit/state/worktrees/`; it is never inferred from the caller."
+                    .to_string(),
                 param_type: "string".to_string(),
                 required: true,
             },

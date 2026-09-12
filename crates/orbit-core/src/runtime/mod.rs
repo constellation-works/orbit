@@ -17,6 +17,7 @@ mod authorization;
 pub mod builder;
 pub(crate) mod command_exec;
 mod coordination_audit;
+pub(crate) mod cwd;
 pub mod engine;
 pub mod event_bus;
 pub(crate) mod friction;
