@@ -10,6 +10,7 @@
 pub mod agent_detect;
 pub mod agent_prompt;
 mod command;
+mod prompt_stdin;
 mod seed;
 
 pub use command::InitCommand;

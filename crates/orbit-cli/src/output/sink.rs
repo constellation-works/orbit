@@ -230,6 +230,15 @@ impl OutputSink {
     }
 }
 
+/// Whether process stdin is a terminal.
+///
+/// Interactive prompts (`orbit init`) wait without a deadline when a human is
+/// at stdin, and apply a hang-breaker on a pipe or socket. This is independent
+/// of [`OutputSink::is_tty`], which describes stdout.
+pub fn stdin_is_terminal() -> bool {
+    std::io::stdin().is_terminal()
+}
+
 /// `COLUMNS` first, then what the terminal reported, then 0.
 ///
 /// A non-TTY sink is 0 regardless of either, so `COLUMNS=200 orbit … > file`
