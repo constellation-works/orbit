@@ -24,9 +24,12 @@ use orbit_mcp::{
 use orbit_types::tool::{McpToolDefinition, McpToolScope, ToolSessionContext};
 use serde_json::Value;
 
-/// The one tool whose target is a machine-global primary key, and therefore the
-/// one whose default binding follows the ID instead of the session [ORB-10797].
-const TASK_SHOW_TOOL: &str = "orbit.task.show";
+/// Tools whose target is a machine-global primary key, and therefore whose
+/// default binding follows that ID instead of the session [ORB-10797]
+/// [ORB-12254]. `orbit.task.artifact.get` reads a payload owned by a task, so
+/// it resolves the same way `orbit.task.show` does — its own schema advertises
+/// `workspace` as an optional filter, and behavior must agree.
+const ID_RESOLVED_WORKSPACE_TOOLS: &[&str] = &["orbit.task.show", "orbit.task.artifact.get"];
 
 /// Serve one stdio MCP session.
 ///
@@ -335,20 +338,20 @@ impl ServerMcpHost {
 
     /// Which registered workspace this call lands in.
     ///
-    /// `orbit.task.show` follows the globally unique task ID unless the call
-    /// itself passes `workspace` [ORB-10797] [ORB-10961]: the session's
-    /// announced workspace is ambient, like cwd, and is the right default for
-    /// authoring but the wrong one for addressing an ID. Linked-worktree
-    /// runtime identities are also ambient and must not become a filter. An
-    /// explicit per-call `workspace` stays a filter on every tool, so a task
-    /// owned elsewhere is not found there.
+    /// `orbit.task.show` and `orbit.task.artifact.get` follow the globally
+    /// unique task ID unless the call itself passes `workspace` [ORB-10797]
+    /// [ORB-10961] [ORB-12254]: the session's announced workspace is ambient,
+    /// like cwd, and is the right default for authoring but the wrong one for
+    /// addressing an ID. Linked-worktree runtime identities are also ambient
+    /// and must not become a filter. An explicit per-call `workspace` stays a
+    /// filter on every tool, so a task owned elsewhere is not found there.
     fn workspace_selection(
         &self,
         name: &str,
         input: &Value,
         context: &ToolSessionContext,
     ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
-        if name == TASK_SHOW_TOOL && call_workspace_selector(input).is_none() {
+        if ID_RESOLVED_WORKSPACE_TOOLS.contains(&name) && call_workspace_selector(input).is_none() {
             let task_id = required_string(input, &["id"], "id")?;
             return task_owner::resolve_task_owner(&self.global_root, &task_id);
         }

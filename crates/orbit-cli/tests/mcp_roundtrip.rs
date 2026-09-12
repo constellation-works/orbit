@@ -2188,6 +2188,118 @@ fn mcp_serve_lists_the_canonical_surface_outside_any_checkout() {
     assert_eq!(audited.3, audited.4);
 }
 
+/// [ORB-12254] `orbit.task.artifact.get` advertises `workspace` as an optional,
+/// fail-closed filter — identical wording to `orbit.task.show` — so it must
+/// resolve its owning task the same way: through the host task registry, not
+/// through a required session selector.
+#[test]
+fn task_artifact_get_resolves_globally_outside_any_checkout() {
+    let workspace = McpWorkspace::init();
+    let scratch = workspace.home.join("scratch");
+    std::fs::create_dir_all(&scratch).expect("create non-workspace launch dir");
+    let child = McpWorkspace::orbit_command(&scratch, &workspace.home)
+        .args(["mcp", "serve"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn checkout-independent MCP server");
+    let mut client = McpClient::new(child);
+    client.request(
+        "initialize",
+        json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "artifact-get-outside-checkout", "version": "0" }
+        }),
+    );
+    client.notify("notifications/initialized");
+
+    // An unknown id is reported as not found, following the id through the
+    // host task registry, exactly like `orbit_task_show` — never the
+    // session-selector refusal a `workspace`-required tool would give.
+    let missing = client.call_tool_err(
+        "orbit_task_artifact_get",
+        json!({ "id": "ORB-00001", "path": "qa/qa-note.md" }),
+    );
+    let message = missing["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("ORB-00001"),
+        "an unregistered id must be reported as not found: {missing}"
+    );
+    assert!(
+        !message.contains("requires an explicit workspace selector"),
+        "an id-resolved tool must not fall back to the session-selector gate: {missing}"
+    );
+}
+
+/// [ORB-12254] Regression guard for the class of bug this task fixed: a tool
+/// whose schema advertises `workspace` as resolved-globally-by-default text
+/// must actually resolve globally when a session carries no selector, and a
+/// tool that does not carry that wording must still fail closed. Walking the
+/// full canonical MCP surface keeps a future addition from drifting the same
+/// way `orbit.task.artifact.get` did.
+#[test]
+fn every_workspace_scoped_tool_behavior_matches_its_own_selector_wording() {
+    const ID_RESOLVED_SELECTOR_MARKER: &str = "resolved globally by default";
+
+    let workspace = McpWorkspace::init();
+    let scratch = workspace.home.join("scratch");
+    std::fs::create_dir_all(&scratch).expect("create non-workspace launch dir");
+    let child = McpWorkspace::orbit_command(&scratch, &workspace.home)
+        .args(["mcp", "serve"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn checkout-independent MCP server");
+    let mut client = McpClient::new(child);
+    client.request(
+        "initialize",
+        json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "selector-wording-audit", "version": "0" }
+        }),
+    );
+    client.notify("notifications/initialized");
+
+    let definitions = orbit_mcp::canonical_mcp_tool_definitions()
+        .expect("canonical MCP tool definitions must build");
+
+    // Global-scope tools never go through the session-selector gate at all;
+    // only `WorkspaceRequired` tools carry the id-resolution contract this
+    // test checks.
+    for definition in definitions
+        .iter()
+        .filter(|definition| definition.scope == orbit_types::tool::McpToolScope::WorkspaceRequired)
+    {
+        let name = definition.schema.name.as_str();
+        let advertises_global_id_resolution = definition
+            .schema
+            .parameters
+            .iter()
+            .find(|param| param.name == "workspace")
+            .is_some_and(|param| param.description.contains(ID_RESOLVED_SELECTOR_MARKER));
+
+        let advertised_name = orbit_types::tool::mcp_advertised_tool_name(name);
+        let result = client.call_tool(&advertised_name, json!({}));
+        let message = result
+            .get("structuredContent")
+            .and_then(|content| content.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let refused_for_missing_selector = result["isError"] == true
+            && message.contains("requires an explicit workspace selector");
+
+        assert_eq!(
+            refused_for_missing_selector, !advertises_global_id_resolution,
+            "{name}: schema advertises globally-resolved-by-default={advertises_global_id_resolution} \
+             but an unbound session's behavior disagrees (refused_for_missing_selector={refused_for_missing_selector}): {message}"
+        );
+    }
+}
+
 #[test]
 fn uninitialized_unbound_mcp_launch_gives_setup_guidance_without_operator_authority() {
     let registry_metadata = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../server.json");
