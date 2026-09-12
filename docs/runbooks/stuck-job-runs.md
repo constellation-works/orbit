@@ -5,7 +5,7 @@ tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-core/src/runtime/run_audit.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801]
-last_validated: 2026-08-22
+last_validated: 2026-09-12
 ---
 
 # Recover Stuck Job Runs
@@ -58,7 +58,8 @@ Agent: provider=codex pid=154953 step=agent_implement liveness=alive started_at=
 - `liveness=unknown` — the host cannot probe liveness. Never read this as dead.
 
 Liveness is probed when you ask, against the local process table, so it is only meaningful on
-the host that ran the child; a historical run inspected elsewhere reports `exited`. Use
+the host that ran the child; a historical run inspected elsewhere may report `exited` or
+`unknown` depending on what that host can observe. Use
 `orbit run show --json` for the full records (`pid`, `pid_start_time`, `step_id`, `finished`),
 or `orbit run events <run_id> --type cli.invocation.process` for the raw audit events.
 
@@ -89,13 +90,13 @@ or reboot without finalizing the run. A job that genuinely failed is `failed`;
 
 ## Understand orphan reconciliation
 
-Every run records its owner `pid` plus a pid-start-time token. Pipeline workers claim their
-queued run at startup, so `pending` runs carry an owner too [ORB-10070]. A reconcile pass
-probes liveness and finalizes conclusively orphaned runs to `interrupted`, releasing their
-task reservations:
+Newly submitted runs record their owner `pid` plus a pid-start-time token. Pipeline workers
+claim their queued run at startup, so `pending` runs may carry an owner too [ORB-10070]. A
+reconcile pass probes the owner and any recorded provider child, then finalizes conclusively
+orphaned runs to `interrupted`, releasing their task reservations:
 
-- `running` runs with a dead owner;
-- `pending` runs whose claimed worker died; and
+- `running` runs with a dead owner and no live or unverifiable provider child;
+- `pending` runs whose claimed worker died and have no live or unverifiable provider child; and
 - `pending` runs never claimed within a 30-minute grace window, such as queued children
   stranded when their parent run was interrupted by a reboot.
 
@@ -132,7 +133,7 @@ names each child it dispatched, to establish their lineage.
 After verifying that the owner is gone or that the run should no longer continue:
 
 ```sh
-orbit run cancel <run_id>
+orbit run cancel <run_id> --confirm
 ```
 
 This terminalizes the run on demand. Do not cancel solely because a legitimate step has
@@ -159,7 +160,7 @@ Three differences matter when triaging one:
   destination-resolved caller machine ID, invocation mode, and actual identity proof:
   strict grants are `key-bound`; explicitly cooperative same-OS-account SSH grants are
   `cooperative` and `self-asserted`.
-- **Cancel it the ordinary way.** `orbit run cancel <run_id>` signals the owner process
+- **Cancel it the ordinary way.** `orbit run cancel <run_id> --confirm` signals the owner process
   (TERM then KILL) and terminates the process tree, exactly as for any other run.
 - **It cannot be resumed.** `orbit job resume` and `submit_resume_run` refuse a run that
   carries an admission, because that admission covered one invocation and a resume would
