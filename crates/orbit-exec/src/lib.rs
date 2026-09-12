@@ -54,12 +54,12 @@ pub use linux_landlock::{
 };
 pub use linux_sandbox::{
     BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT,
-    LinuxBwrapMountAuthority, LinuxBwrapPlan, LinuxBwrapPostRunGuard, LinuxBwrapSpawnRequest,
-    PreparedWriteGrants, UnsatisfiedWriteGrant, WriteAnchorKind, WriteGrant, bwrap_path,
-    bwrap_program_for_audit, bwrap_unavailable_message, compile_linux_bwrap_argv,
-    compile_linux_bwrap_argv_with_authority, linux_bwrap_write_grant_diagnostic,
-    linux_bwrap_write_grants, prepare_linux_bwrap_write_grants, probe_bwrap,
-    spawn_under_linux_bwrap,
+    LinuxBwrapMountAuthority, LinuxBwrapMountEvidence, LinuxBwrapPlan, LinuxBwrapPostRunGuard,
+    LinuxBwrapSpawnRequest, PreparedWriteGrants, UnsatisfiedWriteGrant, WriteAnchorKind,
+    WriteGrant, bwrap_path, bwrap_program_for_audit, bwrap_unavailable_message,
+    compile_linux_bwrap_argv, compile_linux_bwrap_argv_with_authority,
+    linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
+    probe_bwrap, spawn_under_linux_bwrap,
 };
 pub use macos_sandbox::{
     MacosLoginKeychainAccess, MacosSandboxSpawnRequest, claude_state_dir_from_env,
