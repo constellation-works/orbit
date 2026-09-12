@@ -1,5 +1,5 @@
 use crate::task::{TaskPriority, TaskStatus, TaskType};
-use crate::workflow::{AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate};
+use crate::workflow::{AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 
 fn definition_with_interval(every_minutes: u64) -> AutoTaskDefinition {
     AutoTaskDefinition {
@@ -30,4 +30,19 @@ fn definition_with_interval(every_minutes: u64) -> AutoTaskDefinition {
 #[test]
 fn validation_rejects_out_of_range_interval() {
     assert!(definition_with_interval(u64::MAX).validate().is_err());
+}
+
+#[test]
+fn dedupe_policy_display_matches_its_serialized_wire_token() {
+    for (policy, token) in [
+        (DedupePolicy::SkipIfOpen, "skip_if_open"),
+        (DedupePolicy::Always, "always"),
+    ] {
+        assert_eq!(policy.to_string(), token);
+        assert_eq!(policy.as_str(), token);
+        assert_eq!(
+            serde_json::to_value(policy).expect("serialize dedupe policy"),
+            serde_json::Value::String(token.to_string())
+        );
+    }
 }

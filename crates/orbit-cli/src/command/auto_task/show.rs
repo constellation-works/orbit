@@ -72,7 +72,7 @@ impl Execute for AutoTaskShowArgs {
             "  schedule: {}",
             super::output::schedule_summary(&definition)
         );
-        let _ = writeln!(out, "  dedupe: {:?}", definition.dedupe);
+        let _ = writeln!(out, "  dedupe: {}", definition.dedupe);
         let _ = writeln!(out, "  template: {}", definition.template.title);
         if let Some(automation) = doc.get("automation") {
             let _ = writeln!(
