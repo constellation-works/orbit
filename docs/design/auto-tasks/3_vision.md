@@ -11,7 +11,7 @@ summary: Forward-looking directions for the auto-task primitive — cross-worksp
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-11315]
+related_artifacts: [ORB-10149, ORB-11315, ORB-12233]
 ---
 
 # Auto-tasks — Vision

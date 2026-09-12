@@ -11,7 +11,7 @@ summary: Target contract for the clock consolidation (one host tick for routines
 tags: [routines, scheduler]
 paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry, task-migration]
-related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-11315]
+related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-11315, ORB-12233]
 ---
 
 # Routines — Vision
@@ -24,7 +24,7 @@ task, implementation, and validation evidence, not by drifting in.
 
 ## 0. Graduating: clock consolidation
 
-Decided 2026-09-12, implementation task pending. The reasoning is in
+Decided 2026-09-12; implemented by [ORB-12233]. The reasoning is in
 [One host tick evaluates routines and auto-task definitions in-process](./4_decisions.md#one-host-tick-evaluates-routines-and-auto-task-definitions-in-process),
 [Definitions carry no host pin: every owner checkout is an independent schedule](./4_decisions.md#definitions-carry-no-host-pin-every-owner-checkout-is-an-independent-schedule),
 and [Registration is the automation opt-in; there is no routine-source role](./4_decisions.md#registration-is-the-automation-opt-in-there-is-no-routine-source-role).
@@ -219,8 +219,8 @@ External:
 
 ## Task References
 
-- Clock consolidation (§0) — implementation task pending; backfill the id here and on the
-  three 2026-09-12 entries in [4_decisions.md](./4_decisions.md) when allocated.
+- [ORB-12233] — implements the clock consolidation (§0): one host tick for routines and
+  auto-tasks, `orbit clock`, no host pins, no source role.
 - [ORB-11315] — proposes shared state-driven triggers and durable coverage semantics.
 
 - [ORB-10001] — authored this design-doc folder (proposal; no implementation).
