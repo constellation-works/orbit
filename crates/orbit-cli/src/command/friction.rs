@@ -11,7 +11,9 @@
 //! genuinely friction-specific: how to render a friction response as text.
 
 use clap::{ArgMatches, Args, Command, FromArgMatches, Subcommand};
-use orbit_common::governance::friction::{FRICTION_OPERATIONS, FrictionVerb, friction_operation};
+use orbit_common::governance::friction::{
+    FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FRICTION_OPERATIONS, FrictionVerb, friction_operation,
+};
 use orbit_common::governance::operation::CliRender;
 use orbit_core::OrbitRuntime;
 use serde_json::Value;
@@ -57,11 +59,23 @@ impl FromArgMatches for FrictionInvocation {
 
 impl Execute for FrictionCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let FrictionInvocation { spec, input, json } = self.command;
+        let FrictionInvocation {
+            spec,
+            mut input,
+            json,
+        } = self.command;
         // `--json` no longer picks a branch here: it resolves the sink's mode
         // in `main`, and the renderer projects whichever payload this builds.
         // The flag stays declared and accepted [ADR-0306].
         let _ = json;
+        if spec.verb == FrictionVerb::List
+            && let Some(object) = input.as_object_mut()
+        {
+            object.insert(
+                "response_mode".to_string(),
+                Value::String(FRICTION_LIST_RESPONSE_MODE_WITH_NOTES.to_string()),
+            );
+        }
         let value = runtime.run_tool(spec.tool_name, input)?;
         render(&value, spec.cli_render)
     }
@@ -112,11 +126,11 @@ fn records_table_payload(value: &Value) -> CommandOut {
         .map(|note| Block::text(format!("note: {note}")))
         .collect();
     blocks.push(Block::table(table));
-    Ok(Payload::blocks(value.clone(), blocks).into())
+    Ok(Payload::blocks(Value::Array(records), blocks).into())
 }
 
-/// Historical list JSON is a record array. An empty multi-word `--q` wraps as
-/// `{records, notes}` so the substring-needle diagnostic is visible.
+/// The tool's opt-in notes envelope is projected back to the historical record
+/// array for JSON output while retaining notes in the human rendering.
 fn split_list_payload(value: &Value) -> Option<(Vec<Value>, Vec<String>)> {
     match value {
         Value::Array(records) => Some((records.clone(), Vec::new())),

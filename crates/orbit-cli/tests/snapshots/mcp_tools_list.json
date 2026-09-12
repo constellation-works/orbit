@@ -205,7 +205,7 @@
     "name": "orbit_friction_add"
   },
   {
-    "description": "List friction records",
+    "description": "List friction records. Returns a JSON record array by default. Set `response_mode` to `with_notes` for a stable `{records, notes}` object.",
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
@@ -237,6 +237,10 @@
         },
         "q": {
           "description": "Optional case-insensitive query over id, model, tags, status, task, and body",
+          "type": "string"
+        },
+        "response_mode": {
+          "description": "Optional response shape: `with_notes` returns `{records, notes}`; omit for the legacy record array",
           "type": "string"
         },
         "status": {

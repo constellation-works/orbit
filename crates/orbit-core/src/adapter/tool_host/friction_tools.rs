@@ -11,7 +11,9 @@ use std::str::FromStr;
 
 use chrono::{DateTime, TimeZone, Utc};
 use orbit_common::OrbitError;
-use orbit_common::governance::friction::{FrictionVerb, effective_title, normalize_title};
+use orbit_common::governance::friction::{
+    FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb, effective_title, normalize_title,
+};
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_raw_string, optional_string, required_string,
 };
@@ -81,6 +83,16 @@ fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
 /// Translate the wire filter into the store filter, including the page, so
 /// SQLite decides which rows exist before any body is decoded.
 fn list_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, OrbitError> {
+    let response_mode = optional_string(&input, "response_mode")?;
+    let with_notes = match response_mode.as_deref() {
+        None => false,
+        Some(FRICTION_LIST_RESPONSE_MODE_WITH_NOTES) => true,
+        Some(value) => {
+            return Err(OrbitError::InvalidInput(format!(
+                "`response_mode` must be `{FRICTION_LIST_RESPONSE_MODE_WITH_NOTES}`, got '{value}'"
+            )));
+        }
+    };
     let month_bounds = optional_string(&input, "month")?
         .map(|raw| parse_month_bounds(&raw))
         .transpose()?;
@@ -110,21 +122,22 @@ fn list_in(store: &dyn FrictionStoreBackend, input: Value) -> Result<Value, Orbi
         .into_iter()
         .map(record_to_json)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(list_payload(records, filter.q.as_deref()))
+    Ok(list_payload(records, filter.q.as_deref(), with_notes))
 }
 
-/// Keep the historical JSON array when the page has hits or the needle is a
-/// single token. Wrap only the empty multi-word miss so a curator can see that
-/// the substring matcher — not an empty group — produced zero rows.
-fn list_payload(records: Vec<Value>, query: Option<&str>) -> Value {
-    if records.is_empty()
-        && let Some(query) = query
-        && let Some(note) = empty_whitespace_query_note(query)
-    {
-        return json!({
-            "records": [],
-            "notes": [note],
-        });
+/// Preserve the historical array unless the caller explicitly requests the
+/// stable notes envelope. The envelope shape does not depend on query results.
+fn list_payload(records: Vec<Value>, query: Option<&str>, with_notes: bool) -> Value {
+    if with_notes {
+        let notes = if records.is_empty() {
+            query
+                .and_then(empty_whitespace_query_note)
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        return json!({ "records": records, "notes": notes });
     }
     Value::Array(records)
 }
