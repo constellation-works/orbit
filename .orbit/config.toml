@@ -15,7 +15,7 @@ sandbox = "danger-full-access"
 auto_ship = true
 base_branch = "agent-main"
 default_crew = "luna"
-system_crew = "luna"
+system_crew = "sol"
 
 [crews.opus]
 backend = "cli"
@@ -73,4 +73,4 @@ roots = ["docs/"]
 
 [operation]
 review_crew = "opus"
-review_policy = "none"
+review_policy = "after-landing"
