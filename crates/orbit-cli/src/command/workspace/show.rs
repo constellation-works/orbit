@@ -93,7 +93,10 @@ pub(super) fn workspace_show_json(workspace: &Workspace, checkout: &WorkspaceChe
             "repo_root": checkout.repo_root.to_string_lossy(),
             "orbit_dir": checkout.orbit_dir.to_string_lossy(),
             "role": checkout.role.map(|role| role.to_string()),
-            "owner_machine_id": checkout.owner_machine_id,
+            "owner_machine_id": checkout
+                .owner_machine_id
+                .as_ref()
+                .or(workspace.owner_machine_id.as_ref()),
         },
     })
 }

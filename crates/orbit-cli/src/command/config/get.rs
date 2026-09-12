@@ -38,14 +38,29 @@ impl Execute for ConfigGetArgs {
         }
 
         let store = open_store_for_scope(runtime, self.scope)?;
-        let value = store.effective_value(&self.key)?;
+        admit_config_key(&self.key)?;
+        let file_exists = store.exists_on_disk();
+        let (value, exists) = if file_exists {
+            match store.explicit_value(&self.key)? {
+                Some(value) => (value, true),
+                None => (serde_json::Value::Null, false),
+            }
+        } else {
+            (serde_json::Value::Null, false)
+        };
+        let path = if file_exists {
+            serde_json::Value::String(store.path().to_string_lossy().into_owned())
+        } else {
+            serde_json::Value::Null
+        };
         let text = format_value_for_display(&value);
         Ok(Payload::detail(
             json!({
                 "key": self.key,
                 "scope": store.scope().label(),
-                "path": store.path().to_string_lossy(),
+                "path": path,
                 "value": value,
+                "exists": exists,
             }),
             text,
         )

@@ -645,3 +645,59 @@ fn open_for_workspace_set_fresh_starts_empty() {
         .expect("get default");
     assert_eq!(value, serde_json::json!("main"));
 }
+
+#[test]
+fn exists_on_disk_and_explicit_value_for_missing_and_present_keys() {
+    let dir = tempdir().expect("tempdir");
+    let missing_path = config_path(dir.path());
+    let store = ConfigStore::open(ConfigScope::Workspace, &missing_path).expect("open store");
+
+    assert!(!store.exists_on_disk());
+    assert!(!store.is_key_set("scoring.enabled"));
+    assert_eq!(
+        store
+            .explicit_value("scoring.enabled")
+            .expect("query unset"),
+        None
+    );
+
+    let present_dir = tempdir().expect("present tempdir");
+    let present_path = config_path(present_dir.path());
+    fs::write(
+        &present_path,
+        "[scoring]\nenabled = false\n\n[crews.sol]\nmodel = \"gpt-5.6-sol\"\n",
+    )
+    .expect("write config");
+
+    let present_store =
+        ConfigStore::open(ConfigScope::Workspace, &present_path).expect("open present store");
+    assert!(present_store.exists_on_disk());
+    assert!(present_store.is_key_set("scoring.enabled"));
+    assert_eq!(
+        present_store
+            .explicit_value("scoring.enabled")
+            .expect("query set"),
+        Some(serde_json::json!(false))
+    );
+    assert!(!present_store.is_key_set("workflow.base_branch"));
+    assert_eq!(
+        present_store
+            .explicit_value("workflow.base_branch")
+            .expect("query unset in file"),
+        None
+    );
+    assert!(present_store.is_key_set("crews.sol.model"));
+    assert_eq!(
+        present_store
+            .explicit_value("crews.sol.model")
+            .expect("query crew model"),
+        Some(serde_json::json!("gpt-5.6-sol"))
+    );
+    assert!(!present_store.is_key_set("crews.sol.effort"));
+    assert_eq!(
+        present_store
+            .explicit_value("crews.sol.effort")
+            .expect("query unset crew effort"),
+        None
+    );
+}
