@@ -598,8 +598,192 @@ function autoDrainReasons(payload) {
 
 function autoDrainCounts(payload) {
   const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
-  const eligible = tasks.filter((task) => task.eligible).length;
+  const eligible = tasks.filter((task) => task.eligible === true).length;
   return { eligible, waiting: tasks.length - eligible };
+}
+
+const AUTO_DRAIN_REASON_LABELS = {
+  ready: "Ready for admission",
+  ready_as_epic: "Ready as the next epic",
+  not_backlog: "Not in backlog",
+  unmet_dependency: "Waiting on a dependency",
+  task_pilot_preparation_required: "Task-pilot preparation required",
+  crew_not_allowed: "Crew excluded by this drain",
+  epic_managed: "Managed by an epic",
+  admissions_stopped: "Admissions stopped",
+  epic_run_active: "Another epic run is active",
+  queued_behind_epic: "Queued behind another epic",
+  context_lock_conflict: "Context is locked",
+  group_member_conflict: "A grouped task conflicts",
+  claimed_by_live_child: "Claimed by a live child run",
+  outside_grant_scope: "Outside the active grant scope",
+  grant_expired: "The active grant expired",
+  grant_stopped: "The active grant stopped admitting",
+  grant_revoked: "The active grant was revoked",
+  outside_candidate_pool: "Outside the examined candidate pool",
+  conflict_deferred: "Deferred behind a conflicting candidate",
+  capacity_saturated: "No admission capacity",
+};
+
+function autoDrainTaskLink(taskId, workspace) {
+  const link = el("a", { class: "auto-drain-reference mono", text: taskId, title: `Open task ${taskId}` });
+  link.href = `?workspace=${encodeURIComponent(workspace.id)}#tasks?status=all&q=${encodeURIComponent(taskId)}`;
+  return link;
+}
+
+function autoDrainRunLink(runId, workspace) {
+  const link = el("a", { class: "auto-drain-reference mono", text: runId, title: `Open run ${runId}` });
+  link.href = `?workspace=${encodeURIComponent(workspace.id)}#runs/${encodeURIComponent(runId)}`;
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    navigateToRun(runId, workspace.id);
+  });
+  return link;
+}
+
+function autoDrainEvidenceRow(label, values) {
+  return el("div", { class: "auto-drain-evidence-row" }, [
+    el("span", { class: "auto-drain-evidence-label", text: label }),
+    el("div", { class: "auto-drain-evidence-values" }, values),
+  ]);
+}
+
+function autoDrainTextValues(values) {
+  return values
+    .filter((value) => value != null && String(value).trim() !== "")
+    .map((value) => el("span", { class: "auto-drain-evidence-value mono", text: String(value) }));
+}
+
+function autoDrainMissingEvidence(task, reason, evidence) {
+  if (reason === "unmet_dependency" && evidence.dependencies === 0) {
+    return "Dependency details were not supplied.";
+  }
+  if (["context_lock_conflict", "group_member_conflict", "conflict_deferred"].includes(reason)
+    && evidence.conflicts === 0 && evidence.blockers === 0) {
+    return "Conflict details were not supplied.";
+  }
+  if (reason === "claimed_by_live_child" && evidence.claimingRuns === 0) {
+    return "Claiming run details were not supplied.";
+  }
+  if (reason === "capacity_saturated" && evidence.activeRuns === 0) {
+    return "Active run details were not supplied.";
+  }
+  if (reason === "crew_not_allowed" && task.crew == null && !Array.isArray(task.allowed_crews)) {
+    return "Crew restriction details were not supplied.";
+  }
+  if (["outside_grant_scope", "grant_expired", "grant_stopped", "grant_revoked"].includes(reason) && !task.grant_id) {
+    return "Grant details were not supplied.";
+  }
+  if (!AUTO_DRAIN_REASON_LABELS[reason] && evidence.rows === 0) {
+    return "No additional evidence was supplied for this server reason.";
+  }
+  return "";
+}
+
+function autoDrainTaskEvidence(task, workspace) {
+  const rows = [];
+  if (task.status && task.status !== "backlog") {
+    rows.push(autoDrainEvidenceRow("Task status", autoDrainTextValues([task.status])));
+  }
+  const dependencies = Array.isArray(task.dependencies) ? task.dependencies : [];
+  if (dependencies.length > 0) {
+    rows.push(autoDrainEvidenceRow("Dependencies", dependencies.map((dependency) => {
+      const taskId = typeof dependency === "string" ? dependency : dependency?.task_id;
+      const value = el("span", { class: "auto-drain-evidence-value" });
+      if (taskId) value.appendChild(autoDrainTaskLink(taskId, workspace));
+      else value.appendChild(el("span", { text: "Unknown dependency" }));
+      if (dependency?.status) value.appendChild(el("span", { text: ` · ${dependency.status}` }));
+      return value;
+    })));
+  }
+
+  const conflicts = Array.isArray(task.conflicts) ? task.conflicts : [];
+  if (conflicts.length > 0) {
+    rows.push(autoDrainEvidenceRow("Conflicts", conflicts.map((conflict) => {
+      const value = el("span", { class: "auto-drain-evidence-value" });
+      value.appendChild(el("span", { class: "mono", text: conflict?.requested_file || "File not supplied" }));
+      if (conflict?.locking_task_id) {
+        value.append(el("span", { text: " · held by " }), autoDrainTaskLink(conflict.locking_task_id, workspace));
+      }
+      return value;
+    })));
+  }
+
+  const blockingTaskIds = Array.isArray(task.blocking_task_ids) ? task.blocking_task_ids : [];
+  if (blockingTaskIds.length > 0) {
+    rows.push(autoDrainEvidenceRow("Blocking tasks", blockingTaskIds.map((taskId) => autoDrainTaskLink(taskId, workspace))));
+  }
+  const liveRunIds = Array.isArray(task.run_ids) ? task.run_ids : [];
+  if (liveRunIds.length > 0) {
+    rows.push(autoDrainEvidenceRow("Claiming runs", liveRunIds.map((runId) => autoDrainRunLink(runId, workspace))));
+  }
+  const activeRunIds = Array.isArray(task.active_run_ids) ? task.active_run_ids : [];
+  if (activeRunIds.length > 0) {
+    rows.push(autoDrainEvidenceRow("Active runs", activeRunIds.map((runId) => autoDrainRunLink(runId, workspace))));
+  }
+  if (task.crew != null || Array.isArray(task.allowed_crews)) {
+    const allowed = Array.isArray(task.allowed_crews) && task.allowed_crews.length > 0
+      ? task.allowed_crews.join(", ")
+      : "none supplied";
+    rows.push(autoDrainEvidenceRow("Crew", autoDrainTextValues([`${task.crew ?? "not supplied"} · allowed: ${allowed}`])));
+  }
+  if (task.grant_id) rows.push(autoDrainEvidenceRow("Grant", autoDrainTextValues([task.grant_id])));
+  if (task.epic_run_id) rows.push(autoDrainEvidenceRow("Active epic run", [autoDrainRunLink(task.epic_run_id, workspace)]));
+  if (task.next_epic_task_id) rows.push(autoDrainEvidenceRow("Next epic", [autoDrainTaskLink(task.next_epic_task_id, workspace)]));
+
+  const reason = typeof task.reason === "string" && task.reason.trim() ? task.reason : "unknown";
+  const evidenceMissing = autoDrainMissingEvidence(task, reason, {
+    dependencies: dependencies.length,
+    conflicts: conflicts.length,
+    blockers: blockingTaskIds.length,
+    claimingRuns: liveRunIds.length,
+    activeRuns: activeRunIds.length,
+    rows: rows.length,
+  });
+  if (evidenceMissing) rows.push(autoDrainEvidenceRow("Details", autoDrainTextValues([evidenceMissing])));
+
+  return rows;
+}
+
+function autoDrainReadinessList(payload, workspace) {
+  const tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+  const section = el("section", { class: "auto-drain-readiness" });
+  const heading = el("h3", { class: "auto-drain-readiness-title", text: "Task readiness" });
+  heading.id = "auto-drain-readiness-title";
+  section.setAttribute("aria-labelledby", heading.id);
+  section.appendChild(heading);
+  if (tasks.length === 0) {
+    section.appendChild(el("div", {
+      class: "empty-state auto-drain-empty",
+      text: "No readiness rows were returned in this bounded snapshot. This does not establish that the workspace has no backlog tasks.",
+    }));
+    return section;
+  }
+
+  const list = el("ul", { class: "auto-drain-task-list" });
+  for (const task of tasks) {
+    const taskId = typeof task.task_id === "string" && task.task_id.trim() ? task.task_id : "Task ID not supplied";
+    const reason = typeof task.reason === "string" && task.reason.trim() ? task.reason : "unknown";
+    const eligible = task.eligible === true;
+    const state = eligible ? "eligible" : "waiting";
+    const item = el("li", { class: `operation-card auto-drain-task ${state}` });
+    const identity = taskId === "Task ID not supplied"
+      ? el("strong", { class: "auto-drain-missing-id", text: taskId })
+      : autoDrainTaskLink(taskId, workspace);
+    item.appendChild(el("div", { class: "auto-drain-task-head" }, [
+      identity,
+      el("span", { class: `operation-state ${eligible ? "enabled" : "blocked"}`, text: state }),
+      el("span", {
+        class: "auto-drain-reason",
+        text: `${AUTO_DRAIN_REASON_LABELS[reason] || "Unknown readiness reason"} · ${reason}`,
+      }),
+    ]));
+    const evidence = autoDrainTaskEvidence(task, workspace);
+    if (evidence.length > 0) item.appendChild(el("div", { class: "auto-drain-evidence" }, evidence));
+    list.appendChild(item);
+  }
+  section.appendChild(list);
+  return section;
 }
 
 function autoDrainStartButton(payload) {
@@ -665,18 +849,36 @@ function renderAutoDrain(payload) {
   }
   const counts = autoDrainCounts(payload);
   const capacity = payload.capacity || {};
+  const occupancyPhases = Object.entries(capacity.occupancy?.phases || {})
+    .filter(([, count]) => Number(count) > 0)
+    .map(([phase, count]) => `${count} ${phase.replaceAll("_", "-")}`)
+    .join(", ");
+  const candidatePool = capacity.candidate_pool_size == null
+    ? "—"
+    : `${capacity.candidate_pool_size}${capacity.candidate_pool_truncated ? " · truncated" : ""}`;
   body.append(
     el("div", { class: "operation-grid" }, [
       field("Active leaf runs", `${capacity.active_leaf_runs ?? "—"} / ${capacity.max_active_leaf_runs ?? "—"}`),
       field("Free slots", capacity.free_slots),
       field("Eligible now", counts.eligible),
       field("Waiting", counts.waiting),
+      field("Candidate pool", candidatePool),
+      field("Occupied slot phases", occupancyPhases || "None supplied"),
     ]),
   );
   body.appendChild(el("p", {
     class: "operation-control-note",
-    text: "Proposed tasks are never drained automatically; promote a task to backlog first. This snapshot can change the instant after it is read.",
+    text: payload.snapshot?.limitations || "Snapshot only: eligibility can change immediately and does not guarantee a task will start.",
   }));
+  body.appendChild(el("p", {
+    class: "operation-control-note",
+    text: `The server returned a bounded snapshot of ${counts.eligible + counts.waiting} task${counts.eligible + counts.waiting === 1 ? "" : "s"}; these counts are not a workspace total.${capacity.candidate_pool_truncated ? " The candidate pool was truncated before all available slots could be filled." : ""}`,
+  }));
+  body.appendChild(el("p", {
+    class: "operation-control-note",
+    text: "Proposed tasks are never drained automatically; promote a task to backlog first.",
+  }));
+  body.appendChild(autoDrainReadinessList(payload, workspace));
 
   const durationSelect = el("select", { class: "operation-cadence", title: "Bounded drain window" });
   for (const value of AUTO_DRAIN_DURATIONS) {

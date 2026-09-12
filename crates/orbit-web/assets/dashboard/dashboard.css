@@ -4585,6 +4585,33 @@
       .operation-clock-summary { justify-content: flex-start; flex-wrap: wrap; margin-bottom: 14px; overflow-wrap: anywhere; }
       .operation-cadence { min-width: 0; max-width: 100%; }
       .operation-clock-actions { justify-content: flex-start; flex-wrap: wrap; margin-top: 14px; }
+      .auto-drain-readiness { min-width: 0; margin-top: 16px; }
+      .auto-drain-readiness-title {
+        margin: 0 0 8px; color: var(--fg); font: 12px var(--font-sans);
+        text-transform: uppercase; letter-spacing: .08em;
+      }
+      .auto-drain-task-list { min-width: 0; margin: 0; padding: 0; list-style: none; }
+      .auto-drain-task { min-width: 0; }
+      .auto-drain-task-head {
+        display: grid; grid-template-columns: minmax(120px, auto) auto minmax(0, 1fr);
+        align-items: center; gap: 8px 12px; min-width: 0;
+      }
+      .auto-drain-reference { color: var(--accent); overflow-wrap: anywhere; }
+      .auto-drain-reason { min-width: 0; color: var(--fg); font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere; }
+      .auto-drain-missing-id { color: var(--state-failed); font: 11px/1.4 var(--font-mono); overflow-wrap: anywhere; }
+      .auto-drain-evidence {
+        display: flex; flex-direction: column; gap: 5px; min-width: 0;
+        margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hair);
+      }
+      .auto-drain-evidence-row {
+        display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; min-width: 0;
+      }
+      .auto-drain-evidence-label {
+        color: var(--fg-dim); font: 9px/1.5 var(--font-sans); text-transform: uppercase; letter-spacing: .08em;
+      }
+      .auto-drain-evidence-values { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+      .auto-drain-evidence-value { min-width: 0; color: var(--fg-dim); font: 10px/1.5 var(--font-mono); overflow-wrap: anywhere; }
+      .auto-drain-empty { padding: 10px 0; }
 
       @media (max-width: 900px) {
         .operations-layout { grid-template-columns: 1fr; }
@@ -4595,6 +4622,8 @@
         .operation-row-head { grid-template-columns: minmax(0, 1fr); }
         .operation-card-actions { width: 100%; }
         .operation-mint-warning { overflow-wrap: anywhere; }
+        .auto-drain-task-head, .auto-drain-evidence-row { grid-template-columns: minmax(0, 1fr); }
+        .auto-drain-task-head .operation-state { justify-self: start; }
       }
       @media (max-width: 600px) {
         .operations-layout { display: block; padding: 8px; }
