@@ -1,12 +1,32 @@
+//! The worker side of a pipeline run, split by who owns which half.
+//!
+//! - `command` / `log` — how a worker process is launched and where its stdio
+//!   lands.
+//! - `supervisor` — the parent-side [`PipelineWorkerSupervisor`] that spawns a
+//!   worker, watches its startup, and settles a run whose worker died.
+//! - `record` — the store writes both sides share.
+//!
+//! What stays on [`OrbitRuntime`] here is the *child* process's own work:
+//! executing the run it was handed, plus thin delegations to the supervisor
+//! for callers that already hold a runtime.
+
+use std::sync::Arc;
+
 use super::*;
 use command::*;
 use log::*;
+use supervisor::PipelineWorkerSupervisor;
 
 use super::admission::pipeline_run_is_runnable;
 use super::wait::PIPELINE_WAIT_MIN_POLL_SECONDS;
 
 pub(super) mod command;
 pub(super) mod log;
+mod record;
+pub(super) mod supervisor;
+
+#[cfg(test)]
+mod tests;
 
 impl OrbitRuntime {
     pub fn execute_pipeline_run_worker(&self, run_id: &str) -> Result<(), OrbitError> {
@@ -254,48 +274,15 @@ impl OrbitRuntime {
         message: &str,
         state: JobRunState,
     ) -> Result<(), OrbitError> {
-        let current = self
-            .get_job_run_backend(&run.run_id)?
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run.run_id.clone()))?;
-        let already_has_error = current
-            .steps
-            .iter()
-            .any(|step| step.error_code.is_some() || step.error_message.is_some());
-        if already_has_error {
-            return Ok(());
-        }
-
-        let step_index = current
-            .steps
-            .iter()
-            .map(|step| step.step_index)
-            .max()
-            .map(|index| index.saturating_add(1) as usize)
-            .unwrap_or(0);
-        let duration_ms = Some(
-            finished_at
-                .signed_duration_since(started_at)
-                .num_milliseconds()
-                .max(0) as u64,
-        );
-        let params = JobRunStepParams {
-            step_index,
-            target_type: JobTargetType::Job,
-            target_id: run.job_id.clone(),
+        record::diagnostic_step(
+            self.stores().jobs(),
+            run,
             started_at,
             finished_at,
-            duration_ms,
-            exit_code: None,
-            agent_response_json: None,
+            error_code,
+            message,
             state,
-            error_code: error_code.map(str::to_string),
-            error_message: Some(message.to_string()),
-        };
-        let _ = self
-            .stores()
-            .jobs()
-            .complete_job_run_step(&run.run_id, &params)?;
-        Ok(())
+        )
     }
     /// [ORB-12038] Read a run's own `<run_id>.worker.log`, for a caller (`orbit
     /// run logs`) that found no audited CLI-invocation blobs to show. A run
@@ -325,165 +312,44 @@ impl OrbitRuntime {
         let content = read_pipeline_worker_log_tail(&mut file);
         Ok(Some(PipelineWorkerLogSnapshot { path, content }))
     }
+    /// Worker supervision for this runtime's workspace.
+    ///
+    /// Built per call: supervision is a short-lived unit of work, and a fresh
+    /// one always reflects the runtime's current handles.
+    fn pipeline_worker_supervisor(&self) -> PipelineWorkerSupervisor {
+        PipelineWorkerSupervisor::new(
+            Arc::clone(&self.stores().job_run),
+            Arc::clone(&self.stores().audit_event),
+            self.paths().clone(),
+            self.event_log.clone(),
+            WorkerCommandConfig::for_paths(self.paths()),
+            Arc::new(self.clone()),
+        )
+    }
     pub(super) fn spawn_pipeline_worker(
         &self,
         run_id: &str,
         actor: Option<&str>,
     ) -> Result<(), OrbitError> {
-        let mut command = self.pipeline_worker_command(run_id)?;
-        let worker_log =
-            configure_pipeline_worker_stdio(&mut command, &self.paths().logs_dir, run_id)?;
-        self.spawn_pipeline_worker_process(run_id, actor, command, worker_log)
-            .map(|_| ())
+        self.pipeline_worker_supervisor().spawn(run_id, actor)
     }
-    pub(crate) fn monitor_pipeline_worker_startup(
+    /// Spawn an already-built worker command. Production spawns go through
+    /// [`PipelineWorkerSupervisor::spawn`]; this is the runtime-shaped entry
+    /// point in-crate tests use to launch a worker fixture.
+    #[cfg(test)]
+    pub(crate) fn spawn_pipeline_worker_process(
         &self,
         run_id: &str,
-        mut child: Child,
-        workspace: &Path,
-        worker_log: &Path,
-        mut worker_log_reader: File,
         actor: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        let child_pid = child.id();
-        let mut claimed = false;
-        loop {
-            #[cfg(test)]
-            worker_observer_read_counter::record(self, run_id);
-            let run = self
-                .get_job_run_backend(run_id)?
-                .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
-            if run.pid == Some(child_pid) && !claimed {
-                let _ = self.record_pipeline_audit(
-                    "pipeline.worker.claimed",
-                    Some(run_id),
-                    actor,
-                    AuditEventStatus::Success,
-                    json!({
-                        "run_id": run_id,
-                        "worker_pid": child_pid,
-                        "owner_pid": child_pid,
-                        "workspace": workspace,
-                        "worker_log": worker_log,
-                        "state": run.state.to_string(),
-                    }),
-                    None,
-                );
-                claimed = true;
-            }
-
-            // A persisted owner or non-pending state settles the only startup
-            // question this observer owns. Waiting for the child avoids a
-            // full run/step SQLite read every 25ms throughout normal work.
-            let status = if run.pid.is_some() || run.state != JobRunState::Pending {
-                Some(child.wait().map_err(|error| {
-                    OrbitError::Execution(format!(
-                        "wait for pipeline worker process for run '{run_id}': {error}"
-                    ))
-                })?)
-            } else {
-                child.try_wait().map_err(|error| {
-                    OrbitError::Execution(format!(
-                        "observe pipeline worker process for run '{run_id}': {error}"
-                    ))
-                })?
-            };
-
-            if let Some(status) = status {
-                // The worker may have changed the run after the last startup
-                // observation. Exit handling must use fresh state so duplicate
-                // ownership, cancellation, and terminal outcomes stay
-                // authoritative.
-                #[cfg(test)]
-                worker_observer_read_counter::record(self, run_id);
-                let run = self.get_job_run_backend(run_id)?.ok_or_else(|| {
-                    OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string())
-                })?;
-                let output = read_pipeline_worker_log_tail(&mut worker_log_reader);
-                let output_detail = output
-                    .as_deref()
-                    .filter(|value| !value.is_empty())
-                    .map(|value| format!("; worker output:\n{value}"))
-                    .unwrap_or_default();
-                // [ORB-11116] A second worker can lose the atomic Start race
-                // and exit successfully while the incumbent's PID remains on
-                // the run. Only this observer's exact child PID establishes
-                // ownership; another non-null PID is a benign duplicate
-                // delivery, not evidence that this child abandoned the run.
-                if let Some(owner_pid) = run.pid.filter(|owner_pid| *owner_pid != child_pid) {
-                    tracing::info!(
-                        target: "orbit.core.job_run",
-                        run_id,
-                        worker_pid = child_pid,
-                        owner_pid,
-                        exit_status = %status,
-                        "duplicate pipeline worker exited without owning the persisted run",
-                    );
-                    let _ = self.record_pipeline_audit(
-                        "pipeline.worker.duplicate",
-                        Some(run_id),
-                        actor,
-                        AuditEventStatus::Success,
-                        json!({
-                            "run_id": run_id,
-                            "worker_pid": child_pid,
-                            "owner_pid": owner_pid,
-                            "workspace": workspace,
-                            "worker_log": worker_log,
-                            "state": run.state.to_string(),
-                            "exit_status": status.to_string(),
-                        }),
-                        None,
-                    );
-                    return Ok(());
-                }
-                #[cfg(unix)]
-                if let Some(signal) = status
-                    .signal()
-                    .filter(|signal| matches!(*signal, libc::SIGTERM | libc::SIGKILL))
-                    && self.record_pipeline_worker_cancellation_exit(
-                        &run,
-                        signal,
-                        &status.to_string(),
-                        actor,
-                    )?
-                {
-                    // The cancelling caller owns terminalization after it has
-                    // verified both the recorded leader and process group are
-                    // gone. Reaping the worker proves only the leader exited;
-                    // finalizing here could release reservations while a
-                    // run-owned child remains alive.
-                    return Ok(());
-                }
-                if run.state.is_terminal() {
-                    return Ok(());
-                }
-                let ownership = if run.pid == Some(child_pid) {
-                    "after claiming"
-                } else {
-                    "before claiming"
-                };
-                let message = format!(
-                    "pipeline worker for run '{run_id}' exited with status {status} {ownership} \
-                     the persisted run from registered workspace '{}'; worker log: \
-                     '{}'{output_detail}; verify workspace registration, worker root discovery, \
-                     and action availability",
-                    workspace.display(),
-                    worker_log.display(),
-                );
-                self.finalize_pipeline_worker_exit_failure(&run, &message, actor)?;
-                return Ok(());
-            }
-
-            thread::sleep(Duration::from_millis(25));
-        }
+        command: Command,
+        worker_log: PipelineWorkerLog,
+    ) -> Result<u32, OrbitError> {
+        self.pipeline_worker_supervisor()
+            .spawn_process(run_id, actor, command, worker_log)
     }
-    /// Record a TERM/KILL worker exit that belongs to an outstanding
-    /// cancellation request, without terminalizing the run. The signalling
-    /// caller performs the authoritative liveness verification and then
-    /// finalizes `cancelled`; this observer only preserves the completion
-    /// cause and suppresses the misleading generic worker-failure path.
-    #[cfg(unix)]
+    /// Runtime-shaped entry point for the cancellation-race test; the
+    /// observer itself records this through the supervisor.
+    #[cfg(all(test, unix))]
     pub(crate) fn record_pipeline_worker_cancellation_exit(
         &self,
         run: &JobRun,
@@ -491,89 +357,8 @@ impl OrbitRuntime {
         exit_status: &str,
         actor: Option<&str>,
     ) -> Result<bool, OrbitError> {
-        let Some(request_id) = self.active_job_run_cancellation_request(&run.run_id)? else {
-            return Ok(false);
-        };
-        self.record_pipeline_audit(
-            CANCELLATION_WORKER_EXIT_AUDIT,
-            Some(&run.run_id),
-            actor,
-            AuditEventStatus::Success,
-            json!({
-                "request_id": request_id,
-                "run_id": run.run_id,
-                "owner_pid": run.pid,
-                "signal": signal,
-                "signal_name": worker_cancellation_signal_name(signal),
-                "exit_status": exit_status,
-                "observed_at": Utc::now().to_rfc3339(),
-            }),
-            None,
-        )?;
-        Ok(true)
-    }
-    /// Terminalize a worker process that exited while it still owned a
-    /// non-terminal run. `try_wait` has already reaped the process when this is
-    /// called. Pending exits are interrupted startup; a worker that reached
-    /// running failed its claimed execution.
-    fn finalize_pipeline_worker_exit_failure(
-        &self,
-        run: &JobRun,
-        message: &str,
-        actor: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        let current = self
-            .get_job_run_backend(&run.run_id)?
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run.run_id.clone()))?;
-        let (state, started_at, audit_name) = match current.state {
-            JobRunState::Pending => (
-                JobRunState::Interrupted,
-                current.scheduled_at,
-                "pipeline.worker.startup",
-            ),
-            JobRunState::Running => (
-                JobRunState::Failed,
-                current.started_at.unwrap_or(current.scheduled_at),
-                "pipeline.worker.exit",
-            ),
-            _ => return Ok(()),
-        };
-        let finished_at = Utc::now();
-        self.record_pipeline_diagnostic_step(
-            &current,
-            started_at,
-            finished_at,
-            None,
-            message,
-            state,
-        )?;
-        let changed = self.finalize_job_run_with_reservation_cleanup(
-            &current.run_id,
-            state,
-            finished_at,
-            None,
-            TaskReservationReleaseReason::RunTerminal,
-        )?;
-        if changed {
-            self.record_event(OrbitEvent::JobRunCompleted {
-                job_id: current.job_id.clone(),
-                run_id: current.run_id.clone(),
-                state: state.to_string(),
-            })?;
-        }
-        let worker_log = pipeline_worker_log_path(&self.paths().logs_dir, &current.run_id)?;
-        self.record_pipeline_audit(
-            audit_name,
-            Some(&current.run_id),
-            actor,
-            AuditEventStatus::Failure,
-            json!({
-                "run_id": current.run_id,
-                "workspace": self.paths().repo_root,
-                "worker_log": worker_log,
-            }),
-            Some(message.to_string()),
-        )
+        self.pipeline_worker_supervisor()
+            .record_cancellation_exit(run, signal, exit_status, actor)
     }
     pub(super) fn finalize_pipeline_worker_startup_failure(
         &self,
@@ -581,50 +366,8 @@ impl OrbitRuntime {
         message: &str,
         actor: Option<&str>,
     ) -> Result<(), OrbitError> {
-        let current = self.show_job_run(&run.run_id)?;
-        if current.state != JobRunState::Pending || current.pid.is_some() {
-            return Ok(());
-        }
-
-        let finished_at = Utc::now();
-        // Persist the diagnostic step before terminalizing the run: an observer
-        // polling for a terminal state must never be able to see one without its
-        // startup diagnostic already durable.
-        self.record_pipeline_diagnostic_step(
-            run,
-            run.scheduled_at,
-            finished_at,
-            None,
-            message,
-            JobRunState::Interrupted,
-        )?;
-        let changed = self.finalize_job_run_with_reservation_cleanup(
-            &run.run_id,
-            JobRunState::Interrupted,
-            finished_at,
-            None,
-            TaskReservationReleaseReason::RunTerminal,
-        )?;
-        if changed {
-            self.record_event(OrbitEvent::JobRunCompleted {
-                job_id: run.job_id.clone(),
-                run_id: run.run_id.clone(),
-                state: JobRunState::Interrupted.to_string(),
-            })?;
-        }
-        let worker_log = pipeline_worker_log_path(&self.paths().logs_dir, &run.run_id)?;
-        self.record_pipeline_audit(
-            "pipeline.worker.startup",
-            Some(&run.run_id),
-            actor,
-            AuditEventStatus::Failure,
-            json!({
-                "run_id": run.run_id,
-                "workspace": self.paths().repo_root,
-                "worker_log": worker_log,
-            }),
-            Some(message.to_string()),
-        )
+        self.pipeline_worker_supervisor()
+            .finalize_startup_failure(run, message, actor)
     }
     pub(crate) fn record_pipeline_audit(
         &self,
@@ -635,56 +378,17 @@ impl OrbitRuntime {
         arguments: Value,
         error_message: Option<String>,
     ) -> Result<(), OrbitError> {
-        let arguments_json = serde_json::to_string(&arguments).map_err(|error| {
-            OrbitError::Store(format!("serialize pipeline audit args: {error}"))
-        })?;
-        let execution_id = audit_execution_id("exec");
-        self.record_audit_event(&AuditEventInsertParams {
-            execution_id,
-            command: "tool".to_string(),
-            subcommand: Some("run".to_string()),
-            tool_name: Some(tool_name.to_string()),
-            target_type: Some("job_run".to_string()),
-            target_id: target_id.map(ToOwned::to_owned),
-            role: "admin".to_string(),
-            status,
-            exit_code: if status == AuditEventStatus::Success {
-                0
-            } else {
-                1
+        record::pipeline_audit(
+            self.stores().audit_events(),
+            &self.paths().repo_root,
+            record::PipelineAuditRow {
+                tool_name,
+                target_id,
+                actor,
+                status,
+                arguments,
+                error_message,
             },
-            duration_ms: 0,
-            working_directory: self.paths().repo_root.display().to_string(),
-            arguments_json: Some(arguments_json),
-            stdout_truncated: None,
-            stderr_truncated: None,
-            error_message,
-            host: actor.map(ToOwned::to_owned),
-            pid: std::process::id(),
-            session_id: None,
-            workspace_id: None,
-            caller_machine_id: None,
-            caller_host_id: None,
-            process_machine_id: None,
-            process_host_id: None,
-            transport: None,
-            effective_capabilities: Default::default(),
-            origin_session_id: None,
-            mcp_call_id: None,
-            lease_id: None,
-            task_id: None,
-            job_run_id: target_id.map(ToOwned::to_owned),
-            activity_id: None,
-            step_index: None,
-        })
-    }
-}
-
-#[cfg(unix)]
-fn worker_cancellation_signal_name(signal: i32) -> &'static str {
-    match signal {
-        libc::SIGTERM => "SIGTERM",
-        libc::SIGKILL => "SIGKILL",
-        _ => "unknown",
+        )
     }
 }

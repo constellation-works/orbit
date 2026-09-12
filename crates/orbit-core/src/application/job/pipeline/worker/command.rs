@@ -191,81 +191,36 @@ pub(crate) mod worker_command_override {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod worker_observer_read_counter {
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-    use std::sync::{LazyLock, Mutex};
-
-    use crate::OrbitRuntime;
-
-    type StoreRun = (PathBuf, String);
-
-    static COUNTS: LazyLock<Mutex<HashMap<StoreRun, usize>>> =
-        LazyLock::new(|| Mutex::new(HashMap::new()));
-
-    pub(crate) struct Counter {
-        key: StoreRun,
-    }
-
-    fn key(runtime: &OrbitRuntime, run_id: &str) -> StoreRun {
-        // Run IDs are local to a database. Its resolved path remains stable
-        // across runtime clones while isolating independent temporary stores.
-        (
-            runtime.context.persistence().audit_db.clone(),
-            run_id.to_string(),
-        )
-    }
-
-    pub(crate) fn track(runtime: &OrbitRuntime, run_id: &str) -> Counter {
-        let key = key(runtime, run_id);
-        COUNTS
-            .lock()
-            .expect("test observer counters are not poisoned")
-            .insert(key.clone(), 0);
-        Counter { key }
-    }
-
-    pub(crate) fn record(runtime: &OrbitRuntime, run_id: &str) {
-        if let Some(count) = COUNTS
-            .lock()
-            .expect("test observer counters are not poisoned")
-            .get_mut(&key(runtime, run_id))
-        {
-            *count += 1;
-        }
-    }
-
-    impl Counter {
-        pub(crate) fn reads(&self) -> usize {
-            *COUNTS
-                .lock()
-                .expect("test observer counters are not poisoned")
-                .get(&self.key)
-                .expect("tracked observer counter exists")
-        }
-    }
-
-    impl Drop for Counter {
-        fn drop(&mut self) {
-            COUNTS
-                .lock()
-                .expect("test observer counters are not poisoned")
-                .remove(&self.key);
-        }
-    }
+/// How this workspace launches a detached worker process.
+///
+/// Production re-execs this same `orbit` binary at the hidden worker
+/// subcommand; workspace context comes from the child's cwd. The one piece of
+/// launch policy that cannot be derived at the call site is whether the parent
+/// runtime was pinned to a single root, so this carries it.
+#[derive(Clone, Debug)]
+pub(crate) struct WorkerCommandConfig {
+    /// `--root` to forward to the worker, so the child opens the same global
+    /// store the parent used to persist the run [ORB-10821]. `None` for the
+    /// default split-root layout; see [`pipeline_worker_root_override`].
+    root_override: Option<PathBuf>,
 }
 
-impl OrbitRuntime {
-    /// The program a detached worker runs: this same `orbit` binary, re-entered
-    /// at the hidden worker subcommand. Workspace context is discovered by cwd;
-    /// an explicit parent `--root` is forwarded so the child opens the same
-    /// global store the parent used to persist the run [ORB-10821].
-    pub(super) fn pipeline_worker_command(&self, run_id: &str) -> Result<Command, OrbitError> {
-        let paths = self.paths();
+impl WorkerCommandConfig {
+    pub(crate) fn for_paths(paths: &WorkspacePaths) -> Self {
+        Self {
+            root_override: pipeline_worker_root_override(paths).map(Path::to_path_buf),
+        }
+    }
+
+    /// The command that runs `run_id`'s worker from `workspace`.
+    pub(crate) fn build(&self, workspace: &Path, run_id: &str) -> Result<Command, OrbitError> {
         #[cfg(test)]
         {
-            worker_command_override::command(&paths.repo_root, run_id).ok_or_else(|| {
+            // A test binary must never re-exec itself, so an in-crate test
+            // substitutes its own program and there is no `orbit` invocation
+            // left to forward the pinned root to.
+            let _pinned_root = self.root_override.as_deref();
+            worker_command_override::command(workspace, run_id).ok_or_else(|| {
                 OrbitError::Execution(
                     "test pipeline worker requires an explicit worker command override".to_string(),
                 )
@@ -280,81 +235,11 @@ impl OrbitRuntime {
             let mut command = Command::new(resolve_pipeline_worker_executable(current_exe));
             configure_pipeline_worker_command(
                 &mut command,
-                &paths.repo_root,
+                workspace,
                 run_id,
-                pipeline_worker_root_override(paths),
+                self.root_override.as_deref(),
             );
             Ok(command)
         }
-    }
-    pub(crate) fn spawn_pipeline_worker_process(
-        &self,
-        run_id: &str,
-        actor: Option<&str>,
-        mut command: Command,
-        worker_log: PipelineWorkerLog,
-    ) -> Result<u32, OrbitError> {
-        let PipelineWorkerLog {
-            path: worker_log,
-            reader: worker_log_reader,
-        } = worker_log;
-
-        #[cfg(unix)]
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-
-        // Start the observer before the process so every successfully spawned
-        // worker has a parent-side path that can terminalize a pre-claim exit.
-        // Cwd still carries the registered workspace. `--root` is forwarded
-        // only when the parent itself was pinned (see
-        // `pipeline_worker_root_override`); passing the workspace `.orbit`
-        // path here used to pin both roots and disconnect the worker from
-        // `$HOME/.orbit/orbit.db`.
-        let (sender, receiver) = mpsc::sync_channel::<Child>(1);
-        let runtime = self.clone();
-        let run_id_for_observer = run_id.to_string();
-        let actor_for_observer = actor.map(ToOwned::to_owned);
-        let workspace_for_observer = self.paths().repo_root.clone();
-        let worker_log_for_observer = worker_log.clone();
-        thread::Builder::new()
-            .name(format!("pipeline-start-{run_id}"))
-            .spawn(move || {
-                let Ok(child) = receiver.recv() else {
-                    return;
-                };
-                if let Err(error) = runtime.monitor_pipeline_worker_startup(
-                    &run_id_for_observer,
-                    child,
-                    &workspace_for_observer,
-                    &worker_log_for_observer,
-                    worker_log_reader,
-                    actor_for_observer.as_deref(),
-                ) {
-                    tracing::error!(
-                        target: "orbit.core.job_run",
-                        run_id = run_id_for_observer,
-                        error = %error,
-                        "failed to observe pipeline worker startup",
-                    );
-                }
-            })
-            .map_err(|error| {
-                OrbitError::Execution(format!("spawn pipeline worker observer: {error}"))
-            })?;
-
-        let child = command
-            .spawn()
-            .map_err(|error| OrbitError::Execution(format!("spawn pipeline worker: {error}")))?;
-        let child_pid = child.id();
-        sender.send(child).map_err(|error| {
-            OrbitError::Execution(format!("hand pipeline worker to startup observer: {error}"))
-        })?;
-        Ok(child_pid)
     }
 }

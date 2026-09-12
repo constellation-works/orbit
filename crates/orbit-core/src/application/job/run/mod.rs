@@ -23,8 +23,12 @@ mod worker_limit;
 #[cfg(test)]
 mod tests;
 
+/// The request audit a supervisor test seeds before asserting the worker-exit
+/// record that answers it.
+#[cfg(all(test, unix))]
+pub(crate) use actions::CANCELLATION_REQUEST_AUDIT;
 #[cfg(unix)]
-pub(crate) use actions::CANCELLATION_WORKER_EXIT_AUDIT;
+pub(crate) use actions::{CANCELLATION_WORKER_EXIT_AUDIT, active_cancellation_request};
 pub use admissions_stop::{
     DrainAdmissionsStopChange, DrainAdmissionsStopRequest, DrainAdmissionsStopResult,
     RemainingDrainChild,

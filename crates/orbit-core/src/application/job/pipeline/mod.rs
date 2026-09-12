@@ -69,7 +69,7 @@ pub use wait::{PipelineWaitEntry, PipelineWaitResult, pipeline_wait_status_is_su
 #[cfg(test)]
 pub(crate) use worker::command::{
     configure_pipeline_worker_command, pipeline_worker_profile_file, pipeline_worker_root_override,
-    resolve_pipeline_worker_executable, worker_command_override, worker_observer_read_counter,
+    resolve_pipeline_worker_executable, worker_command_override,
 };
 pub(crate) use worker::command::{run_definition_snapshot_path, workspace_auto_run_input};
 #[cfg(test)]
@@ -77,6 +77,8 @@ pub(crate) use worker::log::configure_pipeline_worker_stdio;
 pub(crate) use worker::log::pipeline_worker_log_path;
 #[cfg(all(test, unix))]
 pub(crate) use worker::log::pipeline_worker_log_test_hook;
+#[cfg(test)]
+pub(crate) use worker::supervisor::worker_observer_read_counter;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PipelineInvokeResult {

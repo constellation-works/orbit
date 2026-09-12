@@ -7,9 +7,9 @@ use std::collections::HashSet;
 use chrono::Utc;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
-#[cfg(unix)]
-use orbit_store::contracts::AuditEventFilter;
 use orbit_store::contracts::TaskReservationReleaseReason;
+#[cfg(unix)]
+use orbit_store::contracts::{AuditEventFilter, AuditEventStoreBackend};
 use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
@@ -298,62 +298,15 @@ impl OrbitRuntime {
         )
     }
 
-    /// The newest cancellation request that has not conclusively failed or
-    /// observed a pre-existing terminal outcome. Worker observers use this to
-    /// avoid converting an expected TERM/KILL exit into a run failure before
-    /// the signalling caller verifies that every owned target stopped.
-    #[cfg(unix)]
+    /// The newest cancellation request still outstanding for `run_id`, read
+    /// through this runtime's audit store. Worker supervision answers the same
+    /// question through [`active_cancellation_request`] directly.
+    #[cfg(all(test, unix))]
     pub(crate) fn active_job_run_cancellation_request(
         &self,
         run_id: &str,
     ) -> Result<Option<String>, OrbitError> {
-        let audits = self.list_audit_events_filtered(&AuditEventFilter {
-            job_run_id: Some(run_id.to_string()),
-            limit: 200,
-            ..AuditEventFilter::default()
-        })?;
-        let mut completions = HashMap::<String, String>::new();
-        let mut requests = Vec::new();
-        for audit in audits {
-            let Some(tool) = audit.tool_name.as_deref() else {
-                continue;
-            };
-            if !matches!(
-                tool,
-                CANCELLATION_REQUEST_AUDIT | CANCELLATION_COMPLETION_AUDIT
-            ) {
-                continue;
-            }
-            let Some(arguments) = audit
-                .arguments_json
-                .as_deref()
-                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-            else {
-                continue;
-            };
-            let Some(request_id) = arguments.get("request_id").and_then(Value::as_str) else {
-                continue;
-            };
-            if tool == CANCELLATION_COMPLETION_AUDIT {
-                if let Some(outcome) = arguments.get("outcome").and_then(Value::as_str) {
-                    completions
-                        .entry(request_id.to_string())
-                        .or_insert_with(|| outcome.to_string());
-                }
-            } else {
-                requests.push(request_id.to_string());
-            }
-        }
-        let inactive: HashSet<&str> = completions
-            .iter()
-            .filter_map(|(request_id, outcome)| {
-                matches!(outcome.as_str(), "failed" | "already_terminal")
-                    .then_some(request_id.as_str())
-            })
-            .collect();
-        Ok(requests
-            .into_iter()
-            .find(|request_id| !inactive.contains(request_id.as_str())))
+        active_cancellation_request(self.stores().audit_events(), run_id)
     }
 
     pub fn archive_job_run(&self, run_id: &str) -> Result<(), OrbitError> {
@@ -592,4 +545,64 @@ fn cancellation_result(
         signal_attempted,
         signal_outcome,
     }
+}
+
+/// The newest cancellation request that has not conclusively failed or
+/// observed a pre-existing terminal outcome. Worker supervision uses this to
+/// avoid converting an expected TERM/KILL exit into a run failure before the
+/// signalling caller verifies that every owned target stopped.
+///
+/// A pure read of the run's own audit trail, so a supervisor can answer it
+/// from the audit store alone.
+#[cfg(unix)]
+pub(crate) fn active_cancellation_request(
+    audit_events: &dyn AuditEventStoreBackend,
+    run_id: &str,
+) -> Result<Option<String>, OrbitError> {
+    let audits = audit_events.list_audit_events(&AuditEventFilter {
+        job_run_id: Some(run_id.to_string()),
+        limit: 200,
+        ..AuditEventFilter::default()
+    })?;
+    let mut completions = HashMap::<String, String>::new();
+    let mut requests = Vec::new();
+    for audit in audits {
+        let Some(tool) = audit.tool_name.as_deref() else {
+            continue;
+        };
+        if !matches!(
+            tool,
+            CANCELLATION_REQUEST_AUDIT | CANCELLATION_COMPLETION_AUDIT
+        ) {
+            continue;
+        }
+        let Some(arguments) = audit
+            .arguments_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        else {
+            continue;
+        };
+        let Some(request_id) = arguments.get("request_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if tool == CANCELLATION_COMPLETION_AUDIT {
+            if let Some(outcome) = arguments.get("outcome").and_then(Value::as_str) {
+                completions
+                    .entry(request_id.to_string())
+                    .or_insert_with(|| outcome.to_string());
+            }
+        } else {
+            requests.push(request_id.to_string());
+        }
+    }
+    let inactive: HashSet<&str> = completions
+        .iter()
+        .filter_map(|(request_id, outcome)| {
+            matches!(outcome.as_str(), "failed" | "already_terminal").then_some(request_id.as_str())
+        })
+        .collect();
+    Ok(requests
+        .into_iter()
+        .find(|request_id| !inactive.contains(request_id.as_str())))
 }
