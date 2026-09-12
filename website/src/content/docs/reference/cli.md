@@ -13,7 +13,7 @@ This page is the map.
 | Option | Effect |
 |---|---|
 | `--root <ROOT>` | Override the Orbit root directory. Highest precedence. |
-| `--workspace <SELECTOR>` | Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`. |
+| `--workspace <SELECTOR>` | Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`. Only active workspaces may be bound. |
 | `--format <MODE>` | `auto` (default — table on a terminal, plain text when piped), `table`, `json`, or `ndjson`. |
 
 Global options go **before** the subcommand: `orbit --workspace ws_x task list`.

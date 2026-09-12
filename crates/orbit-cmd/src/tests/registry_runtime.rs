@@ -1167,3 +1167,218 @@ fn cwd_and_absolute_path_select_a_workspace_whose_id_collides_with_another_name(
         other => panic!("expected InvalidInput, got {other}"),
     }
 }
+
+#[test]
+fn deleted_checkout_workspace_selector_reports_inactive_status_and_recorded_path() {
+    let root = tempfile::tempdir().expect("root");
+    let global = root.path().join("global");
+    std::fs::create_dir_all(&global).expect("global");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_deleted_test\"\nhost_id = \"deleted-test\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("host identity");
+
+    let (ws_alpha, checkout_alpha) =
+        registered_workspace(root.path(), "ws_alpha", "alpha", "hm_deleted_test");
+    let (ws_beta, checkout_beta) =
+        registered_workspace(root.path(), "ws_beta", "beta", "hm_deleted_test");
+
+    save_registry_to(
+        &WorkspaceRegistry {
+            workspaces: vec![ws_alpha.clone(), ws_beta.clone()],
+            checkouts: vec![checkout_alpha.clone(), checkout_beta.clone()],
+            ..Default::default()
+        },
+        &registry_path_for(&global),
+    )
+    .expect("workspace registry");
+
+    let alpha_runtime =
+        RegisteredRuntimeFactory::open_registered_checkout(&global, &ws_alpha, &checkout_alpha)
+            .expect("alpha runtime");
+
+    // Delete beta checkout without teardown
+    std::fs::remove_dir_all(&checkout_beta.repo_root).expect("remove beta checkout");
+    let beta_repo_str = checkout_beta.repo_root.to_str().expect("utf8 beta path");
+
+    let selectors = [
+        ("registered name", "beta"),
+        ("logical id", "ws_beta"),
+        ("checkout path", beta_repo_str),
+    ];
+
+    for (label, selector) in selectors {
+        // Direct resolution via RegisteredRuntimeFactory
+        let direct_err = match RegisteredRuntimeFactory::initialize_with_overrides(
+            Some(&global),
+            Some(selector),
+        ) {
+            Ok(_) => panic!("deleted checkout workspace must not resolve ({label})"),
+            Err(e) => e,
+        };
+        let msg = match direct_err {
+            OrbitError::InvalidInput(msg) => msg,
+            other => panic!("expected InvalidInput for {label}, got {other}"),
+        };
+        assert!(
+            msg.contains("workspace 'beta' (ws_beta) is invalid on this machine"),
+            "error for {label} must report name, id, and invalid status: {msg}"
+        );
+        assert!(
+            msg.contains(beta_repo_str),
+            "error for {label} must report recorded checkout path: {msg}"
+        );
+        assert!(
+            !msg.contains("unknown workspace selector"),
+            "error for {label} must not report unknown workspace selector: {msg}"
+        );
+
+        // Rebinding via cli_tool on an active runtime
+        let tool_err = execute_cli_tool(
+            &alpha_runtime,
+            "orbit.task.list",
+            json!({ "workspace": selector, "limit": 10 }),
+        )
+        .expect_err("rebinding to deleted checkout workspace must fail");
+        let tool_msg = match tool_err {
+            OrbitError::InvalidInput(msg) => msg,
+            other => panic!("expected InvalidInput for {label}, got {other}"),
+        };
+        assert!(
+            tool_msg.contains("workspace 'beta' (ws_beta) is invalid on this machine"),
+            "tool error for {label} must report invalid status: {tool_msg}"
+        );
+        assert!(
+            tool_msg.contains(beta_repo_str),
+            "tool error for {label} must report recorded checkout path: {tool_msg}"
+        );
+    }
+
+    // Distinct message for unknown selector
+    let unknown_direct = match RegisteredRuntimeFactory::initialize_with_overrides(
+        Some(&global),
+        Some("unknown-workspace"),
+    ) {
+        Ok(_) => panic!("unknown selector must fail"),
+        Err(e) => e,
+    };
+    unsupported_workspace_message(unknown_direct, "unknown-workspace");
+
+    let unknown_tool = execute_cli_tool(
+        &alpha_runtime,
+        "orbit.task.list",
+        json!({ "workspace": "unknown-workspace", "limit": 10 }),
+    )
+    .expect_err("unknown selector tool call must fail");
+    unsupported_workspace_message(unknown_tool, "unknown-workspace");
+}
+
+#[test]
+fn non_active_workspace_with_readable_orbit_root_fails_to_bind_for_read_verbs() {
+    let root = tempfile::tempdir().expect("root");
+    let global = root.path().join("global");
+    std::fs::create_dir_all(&global).expect("global");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_readable_test\"\nhost_id = \"readable-test\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("host identity");
+
+    let (ws_alpha, checkout_alpha) =
+        registered_workspace(root.path(), "ws_alpha", "alpha", "hm_readable_test");
+
+    // Create gamma with split checkout: repo_root is deleted, but orbit_dir is readable
+    let gamma_repo = root.path().join("gamma_repo");
+    let gamma_orbit_dir = root.path().join("gamma_orbit");
+    std::fs::create_dir_all(&gamma_orbit_dir).expect("gamma orbit dir");
+    write_workspace_config(
+        &gamma_orbit_dir,
+        &WorkspaceConfig {
+            schema_version: 1,
+            workspace_id: "ws_gamma".to_string(),
+        },
+    )
+    .expect("gamma workspace config");
+
+    let ws_gamma = Workspace {
+        id: "ws_gamma".to_string(),
+        name: "gamma".to_string(),
+        owner_machine_id: Some("hm_readable_test".to_string()),
+        git_remote: None,
+        ship_mode: Some("local".to_string()),
+        base_branch: "agent-main".to_string(),
+        status: WorkspaceStatus::Invalid,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let checkout_gamma = WorkspaceCheckout::owner(
+        "ws_gamma".to_string(),
+        gamma_repo.clone(),
+        gamma_orbit_dir.clone(),
+    );
+
+    save_registry_to(
+        &WorkspaceRegistry {
+            workspaces: vec![ws_alpha.clone(), ws_gamma.clone()],
+            checkouts: vec![checkout_alpha.clone(), checkout_gamma.clone()],
+            ..Default::default()
+        },
+        &registry_path_for(&global),
+    )
+    .expect("workspace registry");
+
+    let alpha_runtime =
+        RegisteredRuntimeFactory::open_registered_checkout(&global, &ws_alpha, &checkout_alpha)
+            .expect("alpha runtime");
+
+    assert!(!gamma_repo.exists(), "gamma repo checkout must not exist");
+    assert!(
+        gamma_orbit_dir.exists(),
+        "gamma orbit root must still be readable"
+    );
+
+    let gamma_repo_str = gamma_repo.to_str().expect("utf8 gamma path");
+    let selectors = [
+        ("registered name", "gamma"),
+        ("logical id", "ws_gamma"),
+        ("checkout path", gamma_repo_str),
+    ];
+
+    for (label, selector) in selectors {
+        let err = match RegisteredRuntimeFactory::initialize_with_overrides(
+            Some(&global),
+            Some(selector),
+        ) {
+            Ok(_) => panic!("invalid workspace must not resolve ({label})"),
+            Err(e) => e,
+        };
+        let msg = match err {
+            OrbitError::InvalidInput(msg) => msg,
+            other => panic!("expected InvalidInput for {label}, got {other}"),
+        };
+        assert!(
+            msg.contains("workspace 'gamma' (ws_gamma) is invalid on this machine"),
+            "error for {label} must report invalid status: {msg}"
+        );
+        assert!(
+            msg.contains(gamma_repo_str),
+            "error for {label} must report recorded checkout path: {msg}"
+        );
+
+        let tool_err = execute_cli_tool(
+            &alpha_runtime,
+            "orbit.task.list",
+            json!({ "workspace": selector, "limit": 10 }),
+        )
+        .expect_err("rebinding to invalid workspace must fail");
+        let tool_msg = match tool_err {
+            OrbitError::InvalidInput(msg) => msg,
+            other => panic!("expected InvalidInput for {label}, got {other}"),
+        };
+        assert!(
+            tool_msg.contains("workspace 'gamma' (ws_gamma) is invalid on this machine"),
+            "tool error for {label} must report invalid status: {tool_msg}"
+        );
+    }
+}
