@@ -152,6 +152,12 @@ Missing objects, ambiguous content, unreachable covered/frozen boundaries,
 provider gaps, contract drift, or a changed head/generation fail closed. Never
 silently replace the baseline with current HEAD.
 
+An unresolved orphan with no delivery or provider association is itself unpaid
+debt. When the exact mapping proof uniquely identifies its canonical replacement,
+replay moves the same unresolved reason to that replacement without inventing a
+provider identity. This exception applies only to the mapped pre-existing debt;
+every inserted canonical commit still requires ordinary provider proof.
+
 Batch input contains batch/consumer/epoch IDs, ordered delivery IDs and evidence
 digests, exact `from_exclusive`/`through_inclusive` revisions and trees, full
 commit membership, required examination class, exclusion certificates, effective

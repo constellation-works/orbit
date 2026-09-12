@@ -130,18 +130,6 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
     let source = super::super::source::Source::new(&fixture_root);
     let old = source.revision(&orphan).unwrap();
     let covered = source.revision(&base).unwrap();
-    let old_delivery = Delivery {
-        key: "direct:sep-8-settings".into(),
-        repository: "constellation-works/orbit".into(),
-        branch: "agent-main".into(),
-        before: covered.clone(),
-        after: old.clone(),
-        commits: vec![orphan.clone()],
-        task_ids: vec![],
-        evidence_reference: "incident:sep-8-settings".into(),
-        evidence_digest: "persisted-proof".into(),
-        landed_at: Utc::now(),
-    };
     let state = AutomationState {
         members: None,
         consumer: "ws/qa".into(),
@@ -154,17 +142,19 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
         observed: old,
         covered: covered.clone(),
         pending_commits: vec![orphan.clone()],
-        pending: vec![old_delivery],
+        pending: vec![],
         waived: vec![],
         excluded: vec![],
-        unresolved: Default::default(),
+        unresolved: [(orphan.clone(), "evidence_pending".into())]
+            .into_iter()
+            .collect(),
         associations: Default::default(),
         active: None,
     };
     let provider_lookups = std::cell::RefCell::new(Vec::new());
     let provider = |_: &str, sha: &str| {
         provider_lookups.borrow_mut().push(sha.to_owned());
-        assert_eq!(sha, inserted, "mapped commit reuses persisted identity");
+        assert_eq!(sha, inserted, "the inserted commit needs provider proof");
         Ok(json!([{
             "number": 1586,
             "html_url": "https://github.com/constellation-works/orbit/pull/1586",
@@ -193,32 +183,30 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
         provider_lookups.borrow().as_slice(),
         [inserted.clone()].as_slice()
     );
-    assert_eq!(page.deliveries.len(), 2);
+    assert_eq!(page.deliveries.len(), 1);
     assert!(page.deliveries.iter().any(|delivery| {
         delivery.key == "pr:constellation-works/orbit:agent-main:1586"
             && delivery.commits == vec![inserted.clone()]
     }));
-    assert!(page.deliveries.iter().any(|delivery| {
-        delivery.key == "direct:sep-8-settings"
-            && delivery.commits == vec![canonical.clone()]
-            && delivery.task_ids.is_empty()
-            && delivery.evidence_reference == "incident:sep-8-settings"
-    }));
     assert_eq!(
-        page.unresolved,
-        [(inserted.clone(), "landing_span_pending".into())]
-            .into_iter()
-            .collect(),
-        "the provider-resolved inserted span retains its ordinary pending reason"
+        page.unresolved.get(&canonical).map(String::as_str),
+        Some("evidence_pending")
     );
+    assert!(!page.associations.contains_key(&canonical));
 
     git(&fixture_root, &["checkout", "--detach", &canonical]);
     git(&fixture_root, &["branch", "-f", "agent-main", &inserted]);
-    let (_, changed_head) = source.head("agent-main").unwrap();
-    assert_ne!(
-        changed_head, proof.captured_head,
-        "a moved configured head is detected by the replay apply fence"
-    );
+    let error = super::super::recovery::ensure_replay_head(
+        &super::super::source::Source::new(&fixture_root),
+        "agent-main",
+        &proof.captured_head,
+    )
+    .expect_err("a configured-head change must refuse apply");
+    assert!(matches!(
+        error,
+        orbit_common::OrbitError::InvalidInput(reason)
+            if reason == orbit_types::workflow::automation::recovery::refusal::HISTORY_HEAD_CHANGED
+    ));
     git(&fixture_root, &["branch", "-f", "agent-main", &canonical]);
 
     let mut missing = state.clone();
@@ -242,6 +230,26 @@ fn replay_proves_the_exact_sep_8_double_rebase_mapping() {
         error,
         orbit_automation::AutomationError::Refused(reason)
             if reason == orbit_types::workflow::automation::recovery::refusal::HISTORY_BOUNDARY_UNREACHABLE
+    ));
+}
+
+#[test]
+fn replay_refuses_ambiguous_mapping_and_bounded_traversal_exhaustion() {
+    use orbit_automation::AutomationError;
+    use orbit_types::workflow::automation::recovery::refusal;
+
+    let ambiguous = vec![(1, "canonical-a".into()), (2, "canonical-b".into())];
+    assert!(matches!(
+        super::super::source::unique_mapping_candidate(&ambiguous, None),
+        Err(AutomationError::Refused(reason)) if reason == refusal::HISTORY_MAPPING_AMBIGUOUS
+    ));
+    assert!(matches!(
+        super::super::source::validate_replay_range_lengths(1001, 1),
+        Err(AutomationError::Refused(reason)) if reason == refusal::HISTORY_TRAVERSAL_LIMIT
+    ));
+    assert!(matches!(
+        super::super::source::validate_replay_range_lengths(1, 1001),
+        Err(AutomationError::Refused(reason)) if reason == refusal::HISTORY_TRAVERSAL_LIMIT
     ));
 }
 

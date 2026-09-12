@@ -302,7 +302,9 @@ Replay never rewrites Git. It preserves the baseline, covered cursor, accepted
 receipts, waivers, exclusions, and the complete active batch/action/input digest.
 Pending deliveries, unresolved commits, and provider associations are replaced
 only through stable delivery keys and exact commit mapping; inserted commits use
-the normal provider association path. State and its immutable recovery record
+the normal provider association path. A mapped unresolved-only orphan keeps its
+exact reason on the canonical commit without acquiring a fabricated provider
+association. State and its immutable recovery record
 commit in one generation-fenced transaction. The command also compares the
 captured branch head immediately before that transaction and refuses a moved
 head. Restore unavailable objects or provider evidence and retry; do not reset
