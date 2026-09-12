@@ -2233,6 +2233,107 @@ fn task_artifact_get_resolves_globally_outside_any_checkout() {
     );
 }
 
+/// [ORB-12254] The payload read itself must follow the task ID: a session bound
+/// to one workspace reads an artifact owned by a task in another, and an
+/// explicit `workspace` stays a fail-closed filter — the same contract
+/// `orbit.task.show` holds for the artifact list.
+#[test]
+fn mcp_task_artifact_get_follows_the_global_id_and_explicit_workspace_stays_a_filter() {
+    let workspace = McpWorkspace::init();
+
+    let elsewhere = workspace.home.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("create the second checkout");
+    let output = Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&elsewhere)
+        .output()
+        .expect("initialize the second Git checkout");
+    assert!(output.status.success(), "git init failed: {output:?}");
+    let output = McpWorkspace::orbit_command(&elsewhere, &workspace.home)
+        .args(["workspace", "init", "--name", "mcp-elsewhere"])
+        .output()
+        .expect("register the second workspace");
+    assert!(
+        output.status.success(),
+        "second workspace init failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let elsewhere_selector = elsewhere.to_str().expect("utf8 checkout path");
+    let add_input = json!({
+        "title": "Owns an artifact read from elsewhere",
+        "description": "The artifact payload is addressed by task ID alone",
+        "workspace": elsewhere_selector,
+        "complexity": "low",
+        "model": "codex",
+    })
+    .to_string();
+    let output = McpWorkspace::orbit_command(&elsewhere, &workspace.home)
+        .args(["tool", "run", "orbit.task.add", "--input", &add_input])
+        .output()
+        .expect("author a task in the second workspace");
+    assert!(
+        output.status.success(),
+        "task add failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let created: Value = serde_json::from_slice(&output.stdout).expect("parse created task");
+    let task_id = created["id"].as_str().expect("task id").to_string();
+
+    std::fs::write(elsewhere.join("qa-note.md"), "globally addressable payload")
+        .expect("write the artifact source");
+    let put_input = json!({
+        "id": task_id,
+        "source_path": "qa-note.md",
+        "path": "qa/qa-note.md",
+        "workspace": elsewhere_selector,
+        "model": "codex",
+    })
+    .to_string();
+    let output = McpWorkspace::orbit_command(&elsewhere, &workspace.home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.artifact.put",
+            "--input",
+            &put_input,
+        ])
+        .output()
+        .expect("attach the artifact in the second workspace");
+    assert!(
+        output.status.success(),
+        "artifact put failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The session announces the *first* workspace at initialize.
+    let mut client = workspace.serve();
+
+    let read = client.call_tool_ok(
+        "orbit_task_artifact_get",
+        json!({ "id": task_id, "path": "qa/qa-note.md" }),
+    );
+    assert_eq!(
+        read["content"], "globally addressable payload",
+        "an id-only artifact read must return the payload owned elsewhere: {read}"
+    );
+
+    let session_workspace = workspace.work.to_str().expect("utf8 session workspace");
+    let missed = client.call_tool_err(
+        "orbit_task_artifact_get",
+        json!({ "id": task_id, "path": "qa/qa-note.md", "workspace": session_workspace }),
+    );
+    assert!(
+        missed["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&task_id)),
+        "an explicit workspace must filter rather than follow the id: {missed}"
+    );
+}
+
 /// [ORB-12254] Regression guard for the class of bug this task fixed: a tool
 /// whose schema advertises `workspace` as resolved-globally-by-default text
 /// must actually resolve globally when a session carries no selector, and a
