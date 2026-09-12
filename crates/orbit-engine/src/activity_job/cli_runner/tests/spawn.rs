@@ -657,10 +657,11 @@ fn spawn_io_error_classification_table() {
     let table = [
         (ErrorKind::NotFound, true),
         (ErrorKind::PermissionDenied, true),
-        (ErrorKind::WouldBlock, false),  // EAGAIN
-        (ErrorKind::OutOfMemory, false), // ENOMEM
-        (ErrorKind::Interrupted, false), // EINTR
-        (ErrorKind::Other, false),       // unknown → conservative: retryable
+        (ErrorKind::WouldBlock, false),         // EAGAIN
+        (ErrorKind::OutOfMemory, false),        // ENOMEM
+        (ErrorKind::Interrupted, false),        // EINTR
+        (ErrorKind::ExecutableFileBusy, false), // ETXTBSY: classified transient; spawn_bare does not retry
+        (ErrorKind::Other, false),              // unknown → conservative: retryable
     ];
     for (kind, expect_permanent) in table {
         let classified = SpawnError::from_spawn_io("prog", &Error::new(kind, "boom"));
@@ -847,18 +848,37 @@ fn homebrew_style_prefix(root: &std::path::Path) -> std::path::PathBuf {
     root.join("opt").join("homebrew").join("bin")
 }
 
+/// Launch a just-written resolver fixture.
+///
+/// A raw test-only `Command` keeps `io::ErrorKind` so Linux can reuse
+/// [`orbit_common::test_process::retry_executable_busy`] at this boundary.
+/// Other Unix targets still launch once. Fixture env matches `spawn_bare`:
+/// cleared environment plus the launchd-style `PATH`.
 fn launch_resolved_provider(program: &str) -> String {
-    let spawned = spawn_bare(
-        program,
-        &[],
-        &[("PATH".to_string(), MACOS_LAUNCHD_PATH.to_string())],
-        None,
-    )
-    .expect("spawn resolved provider launcher");
-    let output = spawned
-        .child
-        .wait_with_output()
-        .expect("wait for resolved provider");
+    let mut command = std::process::Command::new(program);
+    command
+        .env_clear()
+        .env("PATH", MACOS_LAUNCHD_PATH)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
+    let output = {
+        #[cfg(target_os = "linux")]
+        {
+            orbit_common::test_process::retry_executable_busy(|| command.output())
+                .expect("spawn resolved provider launcher")
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            command.output().expect("spawn resolved provider launcher")
+        }
+    };
     assert!(
         output.status.success(),
         "resolved launcher must exit 0: {}",
@@ -971,6 +991,80 @@ fn path_executable_wins_over_homebrew_style_fallback() {
 
     assert_eq!(resolved, path_launcher.to_string_lossy());
     assert_eq!(launch_resolved_provider(&resolved), "path\n");
+}
+
+/// The fixture launch helper must wait out a sibling writer the same way
+/// `a_fresh_test_launcher_waits_for_a_writer_to_close` does, without changing
+/// the resolver assertions above.
+#[cfg(target_os = "linux")]
+#[test]
+fn launch_resolved_provider_retries_executable_file_busy() {
+    let temp = tempdir().expect("tempdir");
+    let launcher = temp.path().join("codex");
+    write_executable(&launcher, "#!/bin/sh\nprintf 'path\\n'\n");
+    let writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&launcher)
+        .expect("hold launcher open for writing");
+    let error = std::process::Command::new(&launcher)
+        .spawn()
+        .expect_err("Linux must reject an executable that is open for writing");
+    assert_eq!(error.kind(), std::io::ErrorKind::ExecutableFileBusy);
+
+    let release_writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(75));
+        drop(writer);
+    });
+    let stdout = launch_resolved_provider(launcher.to_str().expect("utf-8 launcher path"));
+    release_writer.join().expect("release launcher writer");
+
+    assert_eq!(stdout, "path\n");
+}
+
+/// Only `ExecutableFileBusy` is in the retry window; other spawn errors must
+/// fail on the first attempt so the fixture does not mask a real resolver
+/// or permission problem.
+#[cfg(target_os = "linux")]
+#[test]
+fn retry_executable_busy_returns_non_busy_errors_immediately() {
+    use std::io::{Error, ErrorKind};
+    use std::time::Instant;
+
+    use orbit_common::test_process::retry_executable_busy;
+
+    for kind in [
+        ErrorKind::NotFound,
+        ErrorKind::PermissionDenied,
+        ErrorKind::Other,
+    ] {
+        let mut attempts = 0;
+        let started = Instant::now();
+        let error = retry_executable_busy(|| {
+            attempts += 1;
+            Err::<(), _>(Error::new(kind, "boom"))
+        })
+        .expect_err("non-busy errors must surface immediately");
+        assert_eq!(error.kind(), kind);
+        assert_eq!(attempts, 1, "{kind:?} must not be retried");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(200),
+            "{kind:?} must not wait for the executable-busy window"
+        );
+    }
+
+    let mut remaining_busy = 2;
+    let mut attempts = 0;
+    retry_executable_busy(|| {
+        attempts += 1;
+        if remaining_busy > 0 {
+            remaining_busy -= 1;
+            Err(Error::new(ErrorKind::ExecutableFileBusy, "busy"))
+        } else {
+            Ok(())
+        }
+    })
+    .expect("ExecutableFileBusy must retry until success");
+    assert_eq!(attempts, 3);
 }
 
 #[cfg(unix)]
