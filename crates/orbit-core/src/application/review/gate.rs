@@ -1,7 +1,7 @@
 //! The before-PR review gate: admit a fresh reviewer, then settle its
 //! report into an honest verdict and certificate [ORB-11333].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use chrono::Utc;
@@ -629,7 +629,7 @@ fn settle(
         })?
         .unwrap_or_default();
     judgement.check_task_meaning(context, &attempt, &admitted_selectors)?;
-    let repair = judgement.commit_repairs(context, &reviewer, &attempt)?;
+    let repair = judgement.commit_repairs(runtime, context, &reviewer, &attempt)?;
     judgement.reconcile_verdict(&ledger, repair.as_ref());
     let now = Utc::now();
     let elapsed_seconds = attempt.elapsed_at(now);
@@ -676,6 +676,7 @@ fn settle(
         consumed: ledger.consumed(),
         budget: ledger.budget,
         escalation: judgement.escalation.clone(),
+        selectors_widened: judgement.selectors_widened.clone(),
         issued_at: now,
     };
     store.review_certificate_record(&context.workspace_id, &certificate)?;
@@ -762,6 +763,7 @@ struct Judgement {
     escalation: Option<String>,
     summary: String,
     task_meaning_digest: String,
+    selectors_widened: Vec<String>,
 }
 
 impl Judgement {
@@ -781,6 +783,7 @@ impl Judgement {
             escalation: Some(reason.to_string()),
             summary: String::new(),
             task_meaning_digest: task_meaning_digest.clone(),
+            selectors_widened: Vec::new(),
         };
         let first_task = &context.task_ids[0];
         let Some(artifact) = runtime.get_task_artifact(first_task, REVIEW_REPORT_ARTIFACT)? else {
@@ -823,6 +826,7 @@ impl Judgement {
             escalation: report.escalation,
             summary: report.summary,
             task_meaning_digest,
+            selectors_widened: Vec::new(),
         })
     }
 
@@ -848,8 +852,15 @@ impl Judgement {
     }
 
     /// Commit whatever the reviewer changed as its own attributed work.
+    ///
+    /// An out-of-selector path listed on a repaired finding is a declared
+    /// coupled repair: the gate widens `context_files` the same way the
+    /// reviewer already may, and does not abandon the review. A changed
+    /// path named by no finding stays a silent drive-by and still
+    /// downgrades.
     fn commit_repairs(
         &mut self,
+        runtime: &OrbitRuntime,
         context: &GateContext,
         reviewer: &ReviewerIdentity,
         attempt: &ReviewAttempt,
@@ -858,11 +869,22 @@ impl Judgement {
         if changed.is_empty() {
             return Ok(None);
         }
-        let out_of_scope = changed
-            .iter()
-            .filter(|path| !path_in_scope(path, &context.tasks))
-            .cloned()
-            .collect::<Vec<_>>();
+        let declared = declared_repair_paths(&self.findings);
+        let mut declared_out_of_scope = Vec::new();
+        let mut undeclared = Vec::new();
+        for path in &changed {
+            if path_in_scope(path, &context.tasks) {
+                continue;
+            }
+            if declared.contains(&normalize_git_path(path)) {
+                declared_out_of_scope.push(path.clone());
+            } else {
+                undeclared.push(path.clone());
+            }
+        }
+        if !declared_out_of_scope.is_empty() {
+            self.widen_declared_selectors(runtime, context, &declared_out_of_scope)?;
+        }
         let finding_ids = self
             .findings
             .iter()
@@ -895,13 +917,62 @@ impl Judgement {
         // to; the model alone may carry no family hint.
         let reviewer_label = format!("{} / {}", reviewer.provider, reviewer.model);
         let commit = commit_reviewer_repairs(&context.workspace_path, &reviewer_label, &message)?;
-        if !out_of_scope.is_empty() {
-            self.downgrade(&format!(
-                "repair_out_of_scope: reviewer changed paths outside the task scope: {}",
-                out_of_scope.join(", ")
-            ));
+        if !undeclared.is_empty() {
+            self.downgrade(&undeclared_repair_reason(&undeclared));
         }
         Ok(commit)
+    }
+
+    /// Append `file:<path>` selectors for declared coupled repairs, then bind
+    /// the certificate to the post-widening task-meaning digest.
+    fn widen_declared_selectors(
+        &mut self,
+        runtime: &OrbitRuntime,
+        context: &GateContext,
+        paths: &[String],
+    ) -> Result<(), OrbitError> {
+        let mut widened = Vec::new();
+        for path in paths {
+            let selector = format!("file:{}", normalize_git_path(path));
+            for task_id in &context.task_ids {
+                let task = runtime.get_task(task_id)?;
+                if path_in_scope(path, std::slice::from_ref(&task))
+                    || task
+                        .context_files
+                        .iter()
+                        .any(|existing| existing == &selector)
+                {
+                    continue;
+                }
+                let mut selectors = task.context_files;
+                selectors.push(selector.clone());
+                runtime.update_task(
+                    task_id,
+                    TaskUpdateParams {
+                        context_files: Some(selectors),
+                        ..TaskUpdateParams::default()
+                    },
+                )?;
+                if !widened.contains(&selector) {
+                    widened.push(selector.clone());
+                }
+            }
+        }
+        if widened.is_empty() {
+            return Ok(());
+        }
+        let mut digests = Vec::with_capacity(context.task_ids.len());
+        for task_id in &context.task_ids {
+            let task = runtime.get_task(task_id)?;
+            digests.push((
+                task.id.to_string(),
+                task_meaning_digest(&task).map_err(automation_error)?,
+            ));
+        }
+        self.task_meaning_digest =
+            combined_task_meaning_digest(&digests).map_err(automation_error)?;
+        self.selectors_widened = widened;
+        Ok(())
     }
 
     /// Cross-check the claimed verdict against what actually happened.
@@ -1018,6 +1089,44 @@ fn path_in_scope(path: &str, tasks: &[Task]) -> bool {
     })
 }
 
+/// Git-relative paths listed on findings the reviewer marked repaired.
+fn declared_repair_paths(findings: &[orbit_types::workflow::ReviewFinding]) -> BTreeSet<String> {
+    findings
+        .iter()
+        .filter(|finding| finding.disposition == FindingDisposition::Repaired)
+        .flat_map(|finding| finding.paths.iter())
+        .map(|path| normalize_finding_path(path))
+        .filter(|path| !path.is_empty())
+        .collect()
+}
+
+fn normalize_git_path(path: &str) -> String {
+    path.trim().trim_start_matches("./").to_string()
+}
+
+fn normalize_finding_path(path: &str) -> String {
+    let trimmed = path.trim().trim_start_matches("./");
+    trimmed
+        .strip_prefix("file:")
+        .unwrap_or(trimmed)
+        .trim()
+        .trim_start_matches("./")
+        .to_string()
+}
+
+fn undeclared_repair_reason(paths: &[String]) -> String {
+    let listed = paths
+        .iter()
+        .map(|path| normalize_git_path(path))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if paths.len() == 1 {
+        format!("repair_out_of_scope: {listed} was changed but named by no finding")
+    } else {
+        format!("repair_out_of_scope: {listed} were changed but named by no finding")
+    }
+}
+
 fn verdict_comment(certificate: &ReviewCertificate, reviewed: &CandidateIdentity) -> String {
     let assurance = certificate
         .assurance
@@ -1039,6 +1148,7 @@ fn verdict_comment(certificate: &ReviewCertificate, reviewed: &CandidateIdentity
          - Reviewed candidate: `{}` on base `{}` ({} implementation commit(s))\n\
          - Final candidate: `{}`\n\
          - Reviewer repair commits: {}\n\
+         - Selectors widened from repaired findings: {}\n\
          - Findings: {} ({} open)\n\
          - Validation on final candidate: {} record(s) [{}], complete: {}\n\
          - Consumed: {} reviewer start(s), {} repair cycle(s), {}s of {} min\n\
@@ -1061,6 +1171,11 @@ fn verdict_comment(certificate: &ReviewCertificate, reviewed: &CandidateIdentity
         reviewed.commits.len(),
         certificate.final_candidate.commit,
         repairs,
+        if certificate.selectors_widened.is_empty() {
+            "none".to_string()
+        } else {
+            certificate.selectors_widened.join(", ")
+        },
         certificate.findings.len(),
         certificate
             .findings

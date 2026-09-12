@@ -63,8 +63,10 @@ spec:
       under your own reviewer identity after you return.
     - Do not change task status, acceptance criteria, plan, or description; do
       not approve, merge, dispatch, or invoke another agent. Adding a tightly
-      coupled `context_files` selector through `orbit.task.update` is the only
-      task edit allowed, and only when a repair needs it.
+      coupled `context_files` selector through `orbit.task.update` is still
+      allowed when a repair needs it. Listing every repaired path on a finding
+      with disposition `repaired` is sufficient for an out-of-selector coupled
+      repair; the gate widens `context_files` from that declaration.
     - Read broadly; write narrowly. Reading unrelated code does not authorize
       editing it.
     - Honor the remaining wall-time budget in the pinned manifest
@@ -90,9 +92,14 @@ spec:
        standards from the workspace AGENTS.md.
     3. Record each finding with a stable id, severity, summary, and paths. Repair
        directly only concrete correctness, test, or documentation defects that
-       stay inside the task's selectors and accepted intent. Requirement
-       changes, new dependency edges, substantial redesign, unrelated cleanup,
-       and anything you are unsure about stay open findings.
+       stay inside the accepted intent. A coupled repair of a derived artifact
+       (goldens, snapshots, lockfiles, generated mirrors) may land outside the
+       implementer's selectors: name every repaired path on the finding.
+       Listing those paths with disposition `repaired` is sufficient; the gate
+       widens `context_files` from that declaration, so you do not have to call
+       `orbit.task.update` first. Requirement changes, new dependency edges,
+       substantial redesign, unrelated cleanup, and anything you are unsure
+       about stay open findings.
     4. Run the repository's required validation on the final worktree state
        (for this repository at least `make ci-fast` and `make ci-lint`, plus the
        focused tests for the change). Record every command you ran or could not

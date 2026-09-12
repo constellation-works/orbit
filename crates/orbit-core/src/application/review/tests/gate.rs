@@ -278,6 +278,52 @@ fn reviewer_repairs_land_as_separate_attributed_commits_and_bind_the_final_tree(
 }
 
 #[test]
+fn a_declared_out_of_selector_repair_widens_context_files_and_passes() {
+    let gated = gated_fixture(GATED_CONFIG);
+    let admission = gated.admit().expect("admit");
+    let attempt_id = admission["attempt_id"].as_str().expect("attempt id");
+
+    fs::write(
+        gated.fixture.repo.join("README.md"),
+        "coupled repair of derived artifact\n",
+    )
+    .expect("repair");
+    let mut claim = report(attempt_id, ReviewVerdict::PassedWithRepairs, true);
+    claim.findings[0].paths = vec!["README.md".to_string()];
+    write_report(&gated.fixture.runtime, &gated.task_id, &claim);
+
+    let settled = gated.settle(&admission).expect("settle");
+    assert_eq!(settled["gate"], "passed");
+    assert_eq!(settled["verdict"], "passed_with_repairs");
+    assert!(
+        gated
+            .context_files()
+            .iter()
+            .any(|selector| selector == "file:README.md"),
+        "the gate widens the declared repair path: {:?}",
+        gated.context_files()
+    );
+
+    let certificate = gated.certificate();
+    assert_eq!(
+        certificate.selectors_widened,
+        vec!["file:README.md".to_string()]
+    );
+    let comments = gated
+        .fixture
+        .runtime
+        .get_task_comments(&gated.task_id)
+        .expect("comments");
+    assert!(
+        comments
+            .last()
+            .is_some_and(|comment| comment.message.contains("file:README.md")),
+        "the verdict comment mentions the widened selector: {:?}",
+        comments.last().map(|comment| &comment.message)
+    );
+}
+
+#[test]
 fn a_repair_in_a_canonical_symbol_selector_file_passes_without_a_redundant_file_selector() {
     let gated = gated_fixture(GATED_CONFIG);
     gated.rescope(&["symbol:src.txt#run:function"]);
@@ -342,8 +388,16 @@ fn qualified_rust_symbol_selectors_share_the_file_anchor_and_unrelated_paths_sti
     let error = unrelated.settle(&admission).expect_err("out of scope");
     let message = error.to_string();
     assert!(message.contains("repair_out_of_scope"), "{message}");
-    assert!(message.contains("README.md"), "{message}");
+    assert!(
+        message.contains("README.md was changed but named by no finding"),
+        "{message}"
+    );
     assert_eq!(unrelated.certificate().verdict, ReviewVerdict::Incomplete);
+    assert_eq!(
+        unrelated.context_files(),
+        vec!["symbol:src.txt#orbit_core::run:function".to_string()],
+        "an undeclared repair must not widen selectors"
+    );
 }
 
 #[test]

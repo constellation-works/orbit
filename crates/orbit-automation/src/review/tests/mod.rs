@@ -87,6 +87,7 @@ fn certificate(verdict: ReviewVerdict) -> ReviewCertificate {
         consumed: ReviewConsumption::default(),
         budget: ReviewBudget::default(),
         escalation: None,
+        selectors_widened: Vec::new(),
         issued_at: now(),
     }
 }
