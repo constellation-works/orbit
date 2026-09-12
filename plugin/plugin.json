@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "orbit",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "description": "Task and activity orchestration for AI coding agents. Adds Orbit's MCP tool surface and shared workflow skills to compatible clients.",
   "author": {
     "name": "constellation-works",

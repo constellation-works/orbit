@@ -1,10 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.22.0
+
+### Breaking Changes
+
+- **Task start and approve tools consolidated**: `orbit task start` CLI command and `orbit.task.start` / `orbit.task.approve` MCP tools are removed in favor of `orbit.task.update`. ([ORB-12268])
+- **Operation tools withdrawn from MCP**: all five `orbit.operation.*` tools are removed from the MCP surface; operations are managed via the Orbit CLI. ([ORB-12267])
+- **MCP task listing response shape updated**: `orbit.task.list` returns `{ tasks, total, truncated }` instead of `{ items }`; update MCP callers to consume the `tasks` array. ([ORB-12195])
+- **Routine hosts and source role configuration removed**: routine `hosts:` pins and `[routines] role = "source"` configuration schemas are removed in favor of host clock consolidation. ([ORB-12236])
 
 ### Highlights
 
 - **Dashboard inline task editors**: the expanded task detail edits complexity, description, tags, acceptance criteria, and context files in place, each saved as a single-field `PATCH /api/tasks/:id` with inline errors and an allow-missing-context escape. ([ORB-12235])
+- **Unified host clock consolidation**: `orbit clock tick` evaluates routines and auto-tasks in a single host loop, retiring separate auto-task schedulers and simplifying multi-host execution. ([ORB-12237])
+- **Owner-wins cross-host task sync**: cross-host synchronization safely imports foreign-prefix task bundles while preserving local task state and preventing overwrites. ([ORB-12126])
+- **Delivery auto-task reset and self-healing**: added `auto-task reset` and automated replay proof for diverged history recovery instead of silent per-tick deferrals. ([ORB-12346])
+- **Effective provider sandbox visibility**: `orbit.agent.invoke` surfaces the active execution sandbox and warns when running under full-access mode. ([ORB-12249])
 
 ## 0.21.0
 
