@@ -4,14 +4,18 @@
 use std::fs;
 use std::path::Path;
 
+use chrono::Utc;
+use orbit_registry::workspace_registry;
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, RegisterWorkspaceParams, TaskRegistryStore, task_registry_path,
     task_workspaces_dir,
 };
+use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceStatus};
 
 use crate::task_store::{
     bound_partition_id, inspect_task_store_partitions, partition_is_bound,
-    remove_checkout_task_stores, remove_unclaimed_task_stores, task_store_partition_path,
+    remove_checkout_task_stores, remove_unclaimed_task_stores, retain_task_store_on_catalog_remove,
+    task_store_partition_path,
 };
 
 fn bind(global_root: &Path, workspace_id: &str, slug: &str, repo_root: &Path) {
@@ -249,6 +253,150 @@ fn registered_checkoutless_workspace_claims_its_partition() {
         partition_is_bound(&global_root, "ws_mirror").expect("read bindings"),
         "the logical workspace registration must survive"
     );
+}
+
+fn write_catalog_workspace(global_root: &Path, workspace_id: &str, name: &str) {
+    let registry_path = workspace_registry::registry_path_for(global_root);
+    let mut registry =
+        workspace_registry::load_registry_from(&registry_path).expect("load catalog");
+    let now = Utc::now();
+    workspace_registry::register_workspace(
+        &mut registry,
+        Workspace {
+            id: workspace_id.to_string(),
+            name: name.to_string(),
+            owner_machine_id: None,
+            git_remote: None,
+            ship_mode: None,
+            base_branch: "main".to_string(),
+            status: WorkspaceStatus::Active,
+            created_at: now,
+            updated_at: now,
+        },
+    )
+    .expect("register catalog workspace");
+    workspace_registry::save_registry_to(&registry, &registry_path).expect("save catalog");
+}
+
+fn write_catalog_shared_root_checkout(global_root: &Path, workspace_id: &str, repo_root: &Path) {
+    let registry_path = workspace_registry::registry_path_for(global_root);
+    let mut registry =
+        workspace_registry::load_registry_from(&registry_path).expect("load catalog");
+    workspace_registry::register_checkout(
+        &mut registry,
+        WorkspaceCheckout::owner(
+            workspace_id.to_string(),
+            repo_root.to_path_buf(),
+            global_root.to_path_buf(),
+        ),
+    )
+    .expect("register shared-root catalog checkout");
+    workspace_registry::save_registry_to(&registry, &registry_path).expect("save catalog");
+}
+
+fn drop_catalog_workspace(global_root: &Path, workspace_id: &str) {
+    let registry_path = workspace_registry::registry_path_for(global_root);
+    let mut registry =
+        workspace_registry::load_registry_from(&registry_path).expect("load catalog");
+    workspace_registry::remove_workspace(&mut registry, workspace_id).expect("drop catalog");
+    workspace_registry::save_registry_to(&registry, &registry_path).expect("save catalog");
+}
+
+/// [ORB-12223] Dropping the catalog without copying checkout evidence lets a
+/// path-free task-registry binding re-claim the leftover. Retaining evidence
+/// first keeps it stale so the repair can reclaim it, even when a survivor
+/// already occupies the shared `orbit_dir`.
+#[test]
+fn retaining_checkout_evidence_keeps_a_shared_root_leftover_stale() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let survivor = temp.path().join("survivor");
+    let deleted = temp.path().join("deleted");
+    fs::create_dir_all(&global_root).expect("create global root");
+    fs::create_dir_all(&survivor).expect("create survivor checkout");
+    fs::create_dir_all(&deleted).expect("create deleted checkout");
+
+    bind_at(
+        &global_root,
+        "ws_survivor",
+        "survivor",
+        &survivor,
+        &global_root,
+    );
+    write_task_bundle(&global_root, "ws_survivor", "ORB-1");
+
+    register_logical_workspace(&global_root, "ws_deleted", "deleted");
+    write_catalog_workspace(&global_root, "ws_deleted", "deleted");
+    write_catalog_shared_root_checkout(&global_root, "ws_deleted", &deleted);
+    write_task_bundle(&global_root, "ws_deleted", "ORB-2");
+    fs::remove_dir_all(&deleted).expect("delete checkout");
+
+    let partitions = inspect_task_store_partitions(&global_root)
+        .expect("inspect before catalog drop")
+        .expect("partitions directory exists");
+    assert_eq!(
+        partitions
+            .stale
+            .iter()
+            .map(|partition| partition.path.clone())
+            .collect::<Vec<_>>(),
+        vec![task_store_partition_path(&global_root, "ws_deleted")]
+    );
+
+    let checkout = WorkspaceCheckout::owner(
+        "ws_deleted".to_string(),
+        deleted.clone(),
+        global_root.clone(),
+    );
+    let leftover =
+        retain_task_store_on_catalog_remove(&global_root, "ws_deleted", "deleted", Some(&checkout))
+            .expect("retain leftover");
+    assert_eq!(leftover.expect("leftover partition").task_bundles, 1);
+    drop_catalog_workspace(&global_root, "ws_deleted");
+
+    let partitions = inspect_task_store_partitions(&global_root)
+        .expect("inspect after catalog drop")
+        .expect("partitions directory exists");
+    assert_eq!(
+        partitions
+            .stale
+            .iter()
+            .map(|partition| partition.path.clone())
+            .collect::<Vec<_>>(),
+        vec![task_store_partition_path(&global_root, "ws_deleted")],
+        "catalog removal must not re-claim the leftover: {partitions:?}"
+    );
+    assert!(partitions.unowned.is_empty(), "{partitions:?}");
+
+    let removed = remove_unclaimed_task_stores(&global_root).expect("run the repair");
+    assert_eq!(removed.task_bundles_removed(), 1, "{removed:?}");
+    assert!(
+        !task_workspaces_dir(&global_root)
+            .join("ws_deleted")
+            .exists()
+    );
+    assert!(
+        task_workspaces_dir(&global_root)
+            .join("ws_survivor")
+            .join("ORB-1")
+            .is_dir()
+    );
+    assert!(partition_is_bound(&global_root, "ws_survivor").expect("read survivor binding"));
+}
+
+fn bind_at(global_root: &Path, workspace_id: &str, slug: &str, repo_root: &Path, orbit_dir: &Path) {
+    let tasks =
+        TaskRegistryStore::open(&task_registry_path(global_root)).expect("open task registry");
+    tasks
+        .bind_workspace(BindWorkspaceParams {
+            workspace_id: Some(workspace_id.to_string()),
+            slug: slug.to_string(),
+            repo_root: repo_root.to_path_buf(),
+            workspace_path: repo_root.to_path_buf(),
+            orbit_dir: orbit_dir.to_path_buf(),
+            repo_fingerprint: None,
+        })
+        .expect("bind task-registry workspace");
 }
 
 /// Residue with no task bundles carries nothing `orbit task reindex` could

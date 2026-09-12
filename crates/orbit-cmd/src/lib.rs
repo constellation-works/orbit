@@ -42,8 +42,9 @@ pub use doctor::{
 };
 pub use migrate::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
 pub use task_store::{
-    TaskStorePartitions, bound_partition_id, inspect_task_store_partitions,
-    remove_checkout_task_stores, remove_unclaimed_task_stores, task_store_partition_path,
+    TaskStorePartitions, UnclaimedPartition, bound_partition_id, inspect_task_store_partitions,
+    remove_checkout_task_stores, remove_unclaimed_task_stores, retain_task_store_on_catalog_remove,
+    task_store_partition_path,
 };
 
 /// One-stop import for every runtime extension trait this crate defines.
