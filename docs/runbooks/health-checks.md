@@ -4,7 +4,7 @@ summary: Check Orbit workspace, database, dashboard, log-sink, job-run, and rout
 tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-cmd/src/doctor.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
-related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12259]
+related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12244, ORB-12259]
 last_validated: 2026-09-12
 ---
 
@@ -31,6 +31,7 @@ Every check degrades to a row rather than aborting unless the store itself canno
 | `task-relations` | unresolved relation/dependency targets that would block a task-index rebuild |
 | `orphan-task-stores` | task-store partitions (`~/.orbit/tasks/workspaces/<ws_id>/`) that no workspace binding on this host claims |
 | `artifacts-*` | skills, jobs, activities, auto-tasks, and routines on disk: stale, deprecated, residual, catalog-invalid, or a previously reconciled shipped default that is missing |
+| `clock-unit` | the installed launchd/systemd sweep unit invokes this Orbit binary (path and `--version`); skipped when no unit is installed |
 
 Example:
 
@@ -244,7 +245,31 @@ state:
 orbit routine clock status
 orbit routine list
 orbit sweep --json
+orbit doctor
 ```
+
+`orbit routine clock status` prints the unit's program path and the version that program
+reports next to `platform:`. A version that does not match this binary is flagged on the
+same line as `mismatch: running <version> at <path>`. `orbit doctor`'s `clock-unit` row is
+the same comparison in check form:
+
+- **ok** — the unit invokes this binary (canonical path and version match)
+- **warning** — the unit's program path differs but `--version` matches (two installs; the
+  clock can drift), or the named program is missing/unrunnable
+- **ERROR** — the unit's program reports a different version than this binary. The row names
+  the unit file, both program paths, and both versions. Rewrite the unit with
+  `orbit routine init --install-clock`, or repoint the package-manager install the unit
+  names so it is this version
+- **skipped** — no launchd plist or systemd user service is installed
+
+`orbit update --check` reports the binary on `PATH` / the cargo install; it does not inspect
+what the clock unit invokes. After an upgrade, run `orbit doctor` or `orbit routine clock
+status` before assuming unattended sweeps are running the new binary.
+
+A sweep that discovers workspaces but fails to open every one of them exits non-zero and
+prints a single `sweep.no_workspace_loaded` row naming this binary's version and the first
+load error. Partial load errors still print one `load error […]` line per workspace and
+exit 0. An unconfigured host (no registered workspaces) remains a clean no-op.
 
 On Linux, a healthy enabled status includes an active timer, a finite next systemd trigger,
 and an effective cadence. `clock: unhealthy` with an inactive effective cadence means the

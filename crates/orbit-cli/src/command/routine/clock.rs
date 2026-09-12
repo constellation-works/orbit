@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use clap::{Args, Subcommand};
-use orbit_core::application::routines::{clock_status, set_clock_cadence, set_clock_enabled};
+use orbit_core::application::routines::{
+    clock_status, inspect_clock_unit, set_clock_cadence, set_clock_enabled,
+};
 
 use crate::command::{CommandOut, CommandOutput};
 
@@ -34,6 +36,9 @@ impl RoutineClockArgs {
         match self.command {
             RoutineClockSubcommand::Status => {
                 let status = clock_status(global_root)?;
+                let program = inspect_clock_unit()
+                    .map(|inspection| inspection.status_line_suffix())
+                    .unwrap_or_default();
                 let state = if !status.enabled {
                     "paused"
                 } else if status.schedulable {
@@ -42,14 +47,15 @@ impl RoutineClockArgs {
                     "unhealthy"
                 };
                 println!(
-                    "clock: {} | configured cadence: {}s | effective cadence: {} | platform: {}",
+                    "clock: {} | configured cadence: {}s | effective cadence: {} | platform: {}{}",
                     state,
                     status.configured_cadence_seconds,
                     status
                         .effective_cadence_seconds
                         .map(|value| format!("{value}s"))
                         .unwrap_or_else(|| "inactive".to_string()),
-                    status.platform
+                    status.platform,
+                    program
                 );
                 if let Some(issue) = status.health_issue {
                     println!("clock health: {issue}");

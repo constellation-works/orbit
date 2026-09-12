@@ -112,6 +112,10 @@ pub struct SweepOutcome {
     pub reports: Vec<RoutineSweepReport>,
     /// Fail-closed definition/load failures (those routines were absent).
     pub load_errors: Vec<RoutineLoadError>,
+    /// Set when every discovered workspace failed to open, so this pass
+    /// loaded nothing. The CLI prints this one row and exits non-zero.
+    /// Partial load errors leave this `None`.
+    pub no_workspace_loaded: Option<String>,
 }
 
 /// The dispatch-agnostic core of one sweep pass: outcome-sync

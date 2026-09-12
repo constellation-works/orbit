@@ -3,9 +3,10 @@
 //! Invoked every minute by the OS clock (launchd / systemd; see
 //! `orbit routine init --install-clock`). Like `orbit run ship-sweep`, it
 //! resolves everything from the global registry, never bootstraps a
-//! `.orbit/` in the caller's cwd, and exits non-zero only on infrastructure
-//! errors — an unconfigured host logs one line and exits 0, because the OS
-//! clock will invoke it forever.
+//! `.orbit/` in the caller's cwd, and exits non-zero on infrastructure
+//! errors or when every discovered workspace fails to load. An unconfigured
+//! host logs one line and exits 0, because the OS clock will invoke it
+//! forever. Partial workspace load errors stay on stderr and still exit 0.
 
 use std::path::Path;
 
@@ -90,21 +91,30 @@ impl SweepCommand {
         let doc = outcome_json(&outcome, self.dry_run);
 
         // Load errors are diagnostics, not records: they stay on stderr in
-        // every mode so a `--format json` consumer still sees them.
-        for error in &outcome.load_errors {
-            let path = error
-                .path
-                .as_ref()
-                .map(|path| format!(" ({})", path.display()))
-                .unwrap_or_default();
-            eprintln!(
-                "load error [{}]{}: {}",
-                error.source_workspace, path, error.message
-            );
+        // every mode so a `--format json` consumer still sees them. A pass
+        // that opened zero workspaces collapses those rows into one
+        // `sweep.no_workspace_loaded` line and exits non-zero [ORB-12244].
+        if let Some(row) = &outcome.no_workspace_loaded {
+            eprintln!("{row}");
+        } else {
+            for error in &outcome.load_errors {
+                let path = error
+                    .path
+                    .as_ref()
+                    .map(|path| format!(" ({})", path.display()))
+                    .unwrap_or_default();
+                eprintln!(
+                    "load error [{}]{}: {}",
+                    error.source_workspace, path, error.message
+                );
+            }
         }
 
         let lines = self.human_lines(&outcome);
-        Ok(Payload::blocks(doc, vec![Block::text(lines.join("\n"))]).into())
+        let exit_code = i32::from(outcome.no_workspace_loaded.is_some());
+        Ok(Payload::blocks(doc, vec![Block::text(lines.join("\n"))])
+            .with_exit_code(exit_code)
+            .into())
     }
 
     /// The `table`/plain lines for one pass.
@@ -181,5 +191,6 @@ pub(crate) fn outcome_json(outcome: &SweepOutcome, dry_run: bool) -> serde_json:
             "path": e.path.as_ref().map(|p| p.display().to_string()),
             "message": e.message,
         })).collect::<Vec<_>>(),
+        "no_workspace_loaded": outcome.no_workspace_loaded,
     })
 }
