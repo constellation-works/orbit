@@ -368,11 +368,13 @@ fn effective_values(
             source: source_for_key(key, global, workspace),
         })
         .collect::<Vec<_>>();
-    values.push(EffectiveConfigValue {
-        key: "execution.env.inherit".to_string(),
-        value: serde_json::json!(resolved.snapshot.execution_env_inherit),
-        source: built_in_source(),
-    });
+
+    // `execution.env.inherit` is a derived invariant, not an admitted config
+    // key (see `resolved::ExecutionEnvPolicy`), so it does not belong in the
+    // `settings`-shaped values here: `config get` rejects it via
+    // `admit_config_key`, and a settings-only listing must stay readable by
+    // `config get`/`config set`. `orbit config show`'s JSON/text rendering
+    // surfaces it separately as a derived field.
 
     for (name, crew) in &resolved.crews {
         let mut fields = vec![

@@ -139,6 +139,7 @@ pub(super) fn effective_text(runtime: &OrbitRuntime, values: &[EffectiveConfigVa
     let _ = writeln!(out);
 
     let _ = writeln!(out, "derived:");
+    let _ = writeln!(out, "  {:<36} false", "execution_env_inherit");
     let _ = writeln!(
         out,
         "  {:<36} {}",
