@@ -1,7 +1,9 @@
 use crate::contracts::AutomationStoreBackend;
 use crate::{Store, compose};
 use chrono::{TimeZone, Utc};
-use orbit_types::workflow::automation::recovery::{RecoveryRecord, ReissuedAction};
+use orbit_types::workflow::automation::recovery::{
+    HistoryMapping, HistoryReplayRecord, RecoveryRecord, ReissuedAction,
+};
 use orbit_types::workflow::automation::*;
 
 fn state() -> AutomationState {
@@ -274,6 +276,115 @@ fn adopted(previous: &AutomationState) -> AutomationState {
     next.epoch = "retuned".into();
     next.trigger = Some(retuned(previous));
     next
+}
+
+fn replay_fixture() -> (AutomationState, AutomationState, RecoveryRecord) {
+    let mut previous = state();
+    previous.generation = 1;
+    previous.observed = SourceRevision {
+        commit: "orphan".into(),
+        tree: "shared-tree".into(),
+    };
+    previous.pending_commits = vec!["orphan".into()];
+    previous
+        .unresolved
+        .insert("orphan".into(), "evidence_pending".into());
+
+    let canonical = SourceRevision {
+        commit: "canonical".into(),
+        tree: "shared-tree".into(),
+    };
+    let mut next = previous.clone();
+    next.generation = 2;
+    next.observed = canonical.clone();
+    next.pending_commits = vec![canonical.commit.clone()];
+    next.unresolved.clear();
+    next.unresolved
+        .insert(canonical.commit.clone(), "evidence_pending".into());
+
+    let replay = HistoryReplayRecord {
+        captured_generation: previous.generation,
+        captured_head: SourceRevision {
+            commit: "configured-head".into(),
+            tree: "head-tree".into(),
+        },
+        common_base: previous.covered.clone(),
+        old_observed: previous.observed.clone(),
+        new_observed: canonical.clone(),
+        mappings: vec![HistoryMapping {
+            orphan: previous.observed.clone(),
+            canonical,
+            proof_digest: "exact-proof".into(),
+        }],
+        added_obligations: vec![],
+        unchanged_baseline: previous.baseline.clone(),
+        unchanged_covered: previous.covered.clone(),
+        accepted_receipts: 0,
+    };
+    let record = RecoveryRecord {
+        consumer: previous.consumer.clone(),
+        previous_epoch: previous.epoch.clone(),
+        epoch: previous.epoch.clone(),
+        previous_trigger: previous.trigger.clone(),
+        trigger: previous.trigger.clone(),
+        adopted_settings: false,
+        reissued: None,
+        replayed_history: Some(replay),
+        reason: "reconcile proven history".into(),
+        by: "operator".into(),
+        at: at(),
+    };
+
+    (previous, next, record)
+}
+
+#[test]
+fn history_replay_migrates_the_exact_unresolved_reason_and_fences_generation() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let baseline = state();
+    let (previous, next, record) = replay_fixture();
+    assert!(store.automation_initialize(&baseline).unwrap());
+    assert!(store.automation_commit(&baseline, &previous, None).unwrap());
+
+    let mut changed_reason = next.clone();
+    changed_reason
+        .unresolved
+        .insert("canonical".into(), "different_reason".into());
+    assert!(
+        store
+            .automation_recover(&previous, &changed_reason, &record)
+            .is_err()
+    );
+    assert_eq!(
+        store.automation_state(&previous.consumer).unwrap(),
+        Some(previous.clone())
+    );
+
+    assert!(store.automation_recover(&previous, &next, &record).unwrap());
+    let audit = store.automation_recoveries(&previous.consumer, 10).unwrap();
+    let replay = audit[0].replayed_history.as_ref().unwrap();
+    assert_eq!(replay.old_observed, previous.observed);
+    assert_eq!(replay.new_observed, next.observed);
+    assert_eq!(replay.unchanged_covered, previous.covered);
+    assert_eq!(replay.mappings[0].proof_digest, "exact-proof");
+
+    let raced = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    assert!(raced.automation_initialize(&baseline).unwrap());
+    assert!(raced.automation_commit(&baseline, &previous, None).unwrap());
+    let mut concurrent = previous.clone();
+    concurrent.generation += 1;
+    assert!(
+        raced
+            .automation_commit(&previous, &concurrent, None)
+            .unwrap()
+    );
+    assert!(!raced.automation_recover(&previous, &next, &record).unwrap());
+    assert!(
+        raced
+            .automation_recoveries(&previous.consumer, 10)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

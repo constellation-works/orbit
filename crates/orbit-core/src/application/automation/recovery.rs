@@ -84,15 +84,23 @@ pub fn recover_auto_task(
     runtime.ensure_coordination_task_write_permitted()?;
 
     if let Some(replay) = &operation.replay {
-        let (_, current_head) = source
-            .head(&trigger.branch)
-            .map_err(automation_error_to_orbit)?;
-        if current_head != replay.record.captured_head {
-            return Err(OrbitError::InvalidInput(
-                orbit_types::workflow::automation::recovery::refusal::HISTORY_HEAD_CHANGED.into(),
-            ));
-        }
+        ensure_replay_head(&source, &trigger.branch, &replay.record.captured_head)?;
     }
 
     recovery::apply(store.as_ref(), &operation).map_err(automation_error_to_orbit)
+}
+
+pub(super) fn ensure_replay_head(
+    source: &Source<'_>,
+    branch: &str,
+    captured_head: &orbit_types::workflow::automation::SourceRevision,
+) -> Result<(), OrbitError> {
+    let (_, current_head) = source.head(branch).map_err(automation_error_to_orbit)?;
+    if &current_head != captured_head {
+        return Err(OrbitError::InvalidInput(
+            orbit_types::workflow::automation::recovery::refusal::HISTORY_HEAD_CHANGED.into(),
+        ));
+    }
+
+    Ok(())
 }

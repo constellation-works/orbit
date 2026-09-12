@@ -219,7 +219,34 @@ fn validate_history_replay(
         .iter()
         .map(String::as_str)
         .collect::<std::collections::BTreeSet<_>>();
+    let mut expected_unresolved = previous.unresolved.clone();
+    for mapping in &replay.mappings {
+        let Some(reason) = expected_unresolved.remove(&mapping.orphan.commit) else {
+            continue;
+        };
+        if expected_unresolved
+            .insert(mapping.canonical.commit.clone(), reason)
+            .is_some()
+        {
+            return Err(invalid());
+        }
+    }
+
+    let mapped_orphans = replay
+        .mappings
+        .iter()
+        .map(|mapping| mapping.orphan.commit.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let retained_commits = previous
+        .pending_commits
+        .iter()
+        .filter(|commit| !mapped_orphans.contains(commit.as_str()));
+
     if added != recorded
+        || next.unresolved != expected_unresolved
+        || !retained_commits
+            .into_iter()
+            .all(|commit| next.pending_commits.contains(commit))
         || next.pending_commits.len() > 5000
         || next.pending.len() > 1000
         || next
