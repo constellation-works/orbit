@@ -39,19 +39,13 @@ pub fn load_registry() -> Result<WorkspaceRegistry, OrbitError> {
 /// but a caller that loads, edits, and saves is not: two such callers (the
 /// scheduled sweep validating checkouts, `orbit workspace init` registering a
 /// new one) interleave, and the second save silently drops the first one's
-/// edit. Wrap the whole read-modify-write in this.
+/// edit. Wrap the whole read-modify-write in this. The owning runtime must
+/// initialize the selected global root before taking this lock; lock acquisition
+/// never creates a directory from its path argument.
 pub fn with_registry_lock<T>(
     path: &Path,
     op: impl FnOnce() -> Result<T, OrbitError>,
 ) -> Result<T, OrbitError> {
-    let parent = registry_parent(path)?;
-    std::fs::create_dir_all(parent).map_err(|error| {
-        OrbitError::Io(format!(
-            "create workspace registry directory {}: {error}",
-            parent.display()
-        ))
-    })?;
-
     let path = validated_registry_path(path)?;
     with_exclusive_file_lock(&path, "workspace registry", op)
 }

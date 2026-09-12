@@ -754,14 +754,15 @@ fn registry_io_rejects_a_symlinked_registry_file() {
 }
 
 #[test]
-fn registry_lock_creates_a_missing_parent_directory() {
+fn registry_lock_rejects_a_missing_parent_without_creating_it() {
     let root = tempdir().expect("tempdir");
     let registry_dir = root.path().join("custom-orbit");
     let path = registry_dir.join("workspaces.json");
 
-    with_registry_lock(&path, || Ok(())).expect("lock registry in a new root");
+    let error = with_registry_lock(&path, || Ok(())).expect_err("missing root must fail");
 
-    assert!(registry_dir.is_dir());
+    assert!(error.to_string().contains("canonicalize"), "{error}");
+    assert!(!registry_dir.exists());
 }
 
 #[test]
