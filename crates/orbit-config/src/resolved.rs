@@ -143,6 +143,25 @@ impl ResolvedConfig {
         config_path: &Path,
         persistence: PersistenceConfig,
     ) -> Result<Self, OrbitError> {
+        Self::from_raw_str_with_warnings(raw, config_path, persistence, true)
+    }
+
+    /// Parse a merged layered document while leaving compatibility warnings
+    /// to the loader, which still has each source document and its path.
+    pub(crate) fn from_layered_raw_str(
+        raw: &str,
+        config_path: &Path,
+        persistence: PersistenceConfig,
+    ) -> Result<Self, OrbitError> {
+        Self::from_raw_str_with_warnings(raw, config_path, persistence, false)
+    }
+
+    fn from_raw_str_with_warnings(
+        raw: &str,
+        config_path: &Path,
+        persistence: PersistenceConfig,
+        emit_compatibility_warnings: bool,
+    ) -> Result<Self, OrbitError> {
         let parsed = toml::from_str::<RawRuntimeConfig>(raw).map_err(|err| {
             OrbitError::InvalidInput(format!(
                 "invalid runtime config '{}': {err}",
@@ -183,19 +202,17 @@ impl ResolvedConfig {
             snapshot.workflow_default_crew.as_deref(),
         );
 
-        if parsed
-            .knowledge
-            .as_ref()
-            .and_then(|section| section.task_id_pattern.as_ref())
-            .is_some()
-        {
-            warn_deprecated_task_id_pattern(config_path);
-        }
-        if parsed.duel.is_some() {
-            warn_retired_duel_config(config_path);
-        }
-        if parsed.routines.is_some() {
-            warn_retired_routines_config(config_path);
+        let compatibility_keys = CompatibilityKeys {
+            deprecated_task_id_pattern: parsed
+                .knowledge
+                .as_ref()
+                .and_then(|section| section.task_id_pattern.as_ref())
+                .is_some(),
+            retired_duel: parsed.duel.is_some(),
+            retired_routines: parsed.routines.is_some(),
+        };
+        if emit_compatibility_warnings {
+            compatibility_keys.warn(config_path);
         }
 
         Ok(Self {
@@ -495,6 +512,35 @@ fn warn_deprecated_task_id_pattern(config_path: &Path) {
         config = %path,
         "knowledge.task_id_pattern is deprecated and ignored",
     );
+}
+
+struct CompatibilityKeys {
+    deprecated_task_id_pattern: bool,
+    retired_duel: bool,
+    retired_routines: bool,
+}
+
+impl CompatibilityKeys {
+    fn warn(&self, config_path: &Path) {
+        if self.deprecated_task_id_pattern {
+            warn_deprecated_task_id_pattern(config_path);
+        }
+        if self.retired_duel {
+            warn_retired_duel_config(config_path);
+        }
+        if self.retired_routines {
+            warn_retired_routines_config(config_path);
+        }
+    }
+}
+
+pub(crate) fn warn_compatibility_keys(document: &toml::Value, config_path: &Path) {
+    CompatibilityKeys {
+        deprecated_task_id_pattern: value_at_path(document, "knowledge.task_id_pattern").is_some(),
+        retired_duel: value_at_path(document, "duel").is_some(),
+        retired_routines: value_at_path(document, "routines").is_some(),
+    }
+    .warn(config_path);
 }
 
 pub(crate) const RETIRED_DUEL_CONFIG_WARNING: &str =

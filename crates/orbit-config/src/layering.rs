@@ -29,7 +29,7 @@ use crate::operation::{
 };
 use crate::persistence::PersistenceConfig;
 use crate::registry::CONFIG_KEY_REGISTRY;
-use crate::resolved::ResolvedConfig;
+use crate::resolved::{ResolvedConfig, warn_compatibility_keys};
 
 /// Security-sensitive settings that a workspace file must restate to keep.
 /// Inheriting a machine-global sandbox, approval, or environment allowlist
@@ -219,7 +219,10 @@ pub(crate) fn load_layered_resolved(
             redact_home_dir(&config_path.display().to_string())
         ))
     })?;
-    let mut resolved = ResolvedConfig::from_raw_str(&merged_raw, config_path, persistence)?;
+    let mut resolved = ResolvedConfig::from_layered_raw_str(&merged_raw, config_path, persistence)?;
+    for document in [global.as_ref(), workspace.as_ref()].into_iter().flatten() {
+        warn_compatibility_keys(&document.value, &document.path);
+    }
     resolved.operation = resolve_operation_layers(global.as_ref(), workspace.as_ref())?;
     Ok(LoadedResolvedConfig {
         resolved,
