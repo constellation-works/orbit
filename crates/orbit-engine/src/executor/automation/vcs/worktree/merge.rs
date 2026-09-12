@@ -8,8 +8,8 @@ use crate::executor::automation::input::{canonicalize_existing_dir, input_string
 
 use super::super::git::{
     BaseSyncMode, GitTimeoutBudget, GitTimeoutBudgetGuard, base_sync_mode_from_input,
-    git_command_success, git_failure_error, git_output, git_run, git_success, git_timeout_error,
-    resolve_worktree_start_point,
+    git_command_success, git_failure_error, git_output, git_output_raw, git_run, git_success,
+    git_timeout_error, resolve_worktree_start_point,
 };
 use super::super::handoff::rebase_in_progress;
 use super::resolve_shared_worktree_path;
@@ -261,8 +261,11 @@ fn parse_divergence_count(
     })
 }
 
+/// Uses [`git_output_raw`] rather than [`git_output`]: the latter trims the
+/// whole output, which would misalign the index/worktree columns of a
+/// single-line result by one byte (see `git_output`'s doc comment).
 pub(super) fn ensure_clean_checkout(path: &Path, label: &str) -> Result<(), OrbitError> {
-    let status = git_output(path, &["status", "--porcelain"])?;
+    let status = git_output_raw(path, &["status", "--porcelain"])?;
     if status.trim().is_empty() {
         return Ok(());
     }

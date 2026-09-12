@@ -279,6 +279,15 @@ pub(crate) fn git_output_paths(
         .collect())
 }
 
+/// Runs Git and trims the *entire* stdout string as one unit.
+///
+/// Safe for single-value output (`rev-parse`, `remote get-url`,
+/// `symbolic-ref`, and the like). Do not use this for `git status
+/// --porcelain` or any other fixed-width, column-oriented format: trimming
+/// the whole string eats the leading status column whenever the result is a
+/// single line (` M path` becomes `M path`), misaligning every column-offset
+/// read by one byte. Column-offset porcelain readers must use
+/// [`git_output_raw`] instead, which preserves each line's leading bytes.
 pub(crate) fn git_output(current_dir: &Path, args: &[&str]) -> Result<String, OrbitError> {
     Ok(git_output_raw(current_dir, args)?.trim().to_string())
 }

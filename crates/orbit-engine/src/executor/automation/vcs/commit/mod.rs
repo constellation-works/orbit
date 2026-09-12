@@ -16,7 +16,7 @@ use crate::context::RuntimeHost;
 
 use super::super::input::{canonicalize_existing_dir, input_string_field, required_job_run_id};
 use super::failure::commit_head_matches_failure_handoff;
-use super::git::{git_output, git_success};
+use super::git::{git_output, git_output_raw, git_success};
 use super::handoff::reject_failed_delivery;
 use author::{append_co_author_trailers, commit_author_for_tasks, reviewer_author};
 use git_ops::{
@@ -496,8 +496,12 @@ struct WorktreeStatusCounts {
     untracked: usize,
 }
 
+/// Uses [`git_output_raw`] rather than [`git_output`]: the latter trims the
+/// whole output, which would eat the leading status column of a single-line
+/// result (` M path` -> `M path`) and misalign the index/worktree columns by
+/// one byte (see `git_output`'s doc comment).
 fn worktree_status_counts(workspace_path: &Path) -> Result<WorktreeStatusCounts, OrbitError> {
-    let status = git_output(
+    let status = git_output_raw(
         workspace_path,
         &["status", "--porcelain=v1", "--untracked-files=all"],
     )?;
