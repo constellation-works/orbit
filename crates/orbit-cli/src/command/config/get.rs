@@ -11,8 +11,12 @@ use super::support::{ConfigScopeArg, open_store_for_scope, runtime_config_roots}
 pub struct ConfigGetArgs {
     /// Dotted config.toml key, e.g. workflow.base_branch
     pub key: String,
+    /// Select the layered effective config or resolve one file in isolation,
+    /// including built-in defaults for keys that file omits.
     #[arg(long, value_enum, default_value_t = ConfigScopeArg::Effective)]
     pub scope: ConfigScopeArg,
+    /// Emit JSON. For global/workspace scope, `exists` reports whether the key
+    /// is explicitly set, even when `value` contains its resolved default.
     #[arg(long)]
     pub json: bool,
 }
@@ -40,14 +44,8 @@ impl Execute for ConfigGetArgs {
         let store = open_store_for_scope(runtime, self.scope)?;
         admit_config_key(&self.key)?;
         let file_exists = store.exists_on_disk();
-        let (value, exists) = if file_exists {
-            match store.explicit_value(&self.key)? {
-                Some(value) => (value, true),
-                None => (serde_json::Value::Null, false),
-            }
-        } else {
-            (serde_json::Value::Null, false)
-        };
+        let value = store.effective_value(&self.key)?;
+        let exists = store.is_key_set(&self.key);
         let path = if file_exists {
             serde_json::Value::String(store.path().to_string_lossy().into_owned())
         } else {

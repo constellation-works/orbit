@@ -159,9 +159,9 @@ impl ConfigStore {
     }
 
     /// The fully resolved (defaulted) view of this document, as if it were
-    /// loaded as the effective `config.toml`. Used by both `orbit config
-    /// show` and `orbit config get` so they report identical values for the
-    /// same scope.
+    /// loaded as the effective `config.toml`. Scoped `orbit config show` uses
+    /// this to enumerate settings, and [`Self::validate`] uses it to verify an
+    /// edited document before saving.
     pub fn snapshot(&self) -> Result<ConfigSnapshot, OrbitError> {
         Ok(self.resolved()?.snapshot)
     }

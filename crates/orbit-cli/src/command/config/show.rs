@@ -12,8 +12,12 @@ use super::support::{
 
 #[derive(Args)]
 pub struct ConfigShowArgs {
+    /// Select the layered effective config or resolve one file in isolation,
+    /// including built-in defaults for keys that file omits.
     #[arg(long, value_enum, default_value_t = ConfigScopeArg::Effective)]
     pub scope: ConfigScopeArg,
+    /// Emit JSON. For global/workspace scope, `source.exists` reports whether
+    /// the selected config file exists, not whether individual keys are set.
     #[arg(long)]
     pub json: bool,
 }

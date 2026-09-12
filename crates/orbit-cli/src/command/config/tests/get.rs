@@ -4,6 +4,7 @@ use crate::command::{CommandOutput, Execute};
 
 use super::super::get::ConfigGetArgs;
 use super::super::set::ConfigSetArgs;
+use super::super::show::ConfigShowArgs;
 use super::super::support::ConfigScopeArg;
 use super::test_runtime;
 
@@ -23,6 +24,10 @@ fn set_args(key: &str, value: &str) -> ConfigSetArgs {
         seed_from_global: false,
         fresh: false,
     }
+}
+
+fn show_args(scope: ConfigScopeArg) -> ConfigShowArgs {
+    ConfigShowArgs { scope, json: true }
 }
 
 fn write_sol_crew(path: &std::path::Path) {
@@ -157,11 +162,11 @@ fn get_without_json_flag_still_returns_a_payload() {
 }
 
 #[test]
-fn get_scoped_workspace_without_config_file_returns_explicit_absent() {
+fn get_scoped_workspace_without_config_file_returns_default_and_explicit_absent() {
     let (_root, runtime, global_root, _workspace_root) = test_runtime();
     fs::write(
         global_root.join("config.toml"),
-        "[scoring]\nenabled = true\n\n[workflow]\nbase_branch = \"custom-global\"\n",
+        "[scoring]\nenabled = false\n\n[workflow]\nbase_branch = \"custom-global\"\n",
     )
     .expect("write global config");
 
@@ -169,10 +174,16 @@ fn get_scoped_workspace_without_config_file_returns_explicit_absent() {
     args.scope = ConfigScopeArg::Workspace;
     let output = args.execute(&runtime).expect("get workspace scoring");
     let document = json_value(output);
+    let shown = json_value(
+        show_args(ConfigScopeArg::Workspace)
+            .execute(&runtime)
+            .expect("show workspace config"),
+    );
 
     assert_eq!(document["key"], "scoring.enabled");
     assert_eq!(document["scope"], "workspace");
-    assert_eq!(document["value"], serde_json::Value::Null);
+    assert_eq!(document["value"], true);
+    assert_eq!(document["value"], shown["settings"]["scoring.enabled"]);
     assert_eq!(document["exists"], false);
     assert!(
         document["path"].is_null(),
@@ -192,7 +203,7 @@ fn get_scoped_workspace_without_config_file_returns_explicit_absent() {
     let crate::output::payload::Block::Text(text) = &blocks[0] else {
         panic!("expected text block");
     };
-    assert_eq!(text, "null");
+    assert_eq!(text, &document["value"].to_string());
 }
 
 #[test]
@@ -218,9 +229,18 @@ fn get_scoped_workspace_with_file_distinguishes_set_and_unset_keys() {
     let mut unset_args = get_args("workflow.base_branch", true);
     unset_args.scope = ConfigScopeArg::Workspace;
     let unset_doc = json_value(unset_args.execute(&runtime).expect("get unset key"));
+    let shown = json_value(
+        show_args(ConfigScopeArg::Workspace)
+            .execute(&runtime)
+            .expect("show workspace config"),
+    );
     assert_eq!(unset_doc["key"], "workflow.base_branch");
     assert_eq!(unset_doc["scope"], "workspace");
-    assert_eq!(unset_doc["value"], serde_json::Value::Null);
+    assert_eq!(unset_doc["value"], "main");
+    assert_eq!(
+        unset_doc["value"], shown["settings"]["workflow.base_branch"],
+        "scoped get and show must resolve an omitted key identically"
+    );
     assert_eq!(unset_doc["exists"], false);
     assert_eq!(unset_doc["path"], ws_config.to_string_lossy().as_ref());
 }
