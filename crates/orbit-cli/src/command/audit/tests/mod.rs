@@ -1,1 +1,2 @@
+mod stats;
 mod support;
