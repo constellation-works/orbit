@@ -2,9 +2,11 @@
 //! the same schema as workspace definitions and remain inert until explicitly
 //! enabled or manually minted.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
+use orbit_tools::ToolRegistry;
 use orbit_types::workflow::{AutoTaskSchedule, DedupePolicy};
 
 use crate::application::auto_tasks::DEFAULT_AUTO_TASK_FILES;
@@ -221,10 +223,18 @@ fn friction_curation_default_is_portable_and_inert() {
 
     assert!(body.contains("orbit tool run orbit.friction.list"));
     assert!(body.contains("orbit tool run orbit.friction.update"));
-    assert!(body.contains("orbit tool run orbit.friction.resolve"));
+    assert!(
+        body.contains(
+            r#"orbit tool run orbit.friction.update --input '{"id":"<id>","status":"resolved"}'"#
+        ),
+        "resolving a friction must go through the agent-reachable `update` tool, not the hidden `resolve` tool"
+    );
+    assert!(
+        !body.contains("orbit tool run orbit.friction.resolve"),
+        "orbit.friction.resolve is hidden from the agent tool surface and must not be instructed here"
+    );
     assert!(!body.contains("orbit friction list"));
     assert!(!body.contains("orbit friction update"));
-    assert!(!body.contains("orbit friction resolve"));
 }
 
 #[test]
@@ -627,4 +637,66 @@ fn security_review_default_is_portable_weekly_and_inert() {
                 && criterion.to_lowercase().contains("no-op")),
         "security-review acceptance criteria must treat a clean review as success"
     );
+}
+
+/// Every `orbit tool run <name>` mentioned in a shipped auto-task template
+/// must name a tool the default registry actually exposes to an agent
+/// caller. A template that instructs a hidden or retired tool sends an agent
+/// to a call it cannot make [ORB-12248].
+#[test]
+fn shipped_auto_task_tool_run_mentions_resolve_to_registered_tools() {
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let active: BTreeSet<String> = registry
+        .schemas()
+        .into_iter()
+        .map(|schema| schema.name)
+        .collect();
+
+    for (stem, yaml) in DEFAULT_AUTO_TASK_FILES {
+        for name in tool_run_mentions(yaml) {
+            assert!(
+                active.contains(&name),
+                "{stem} instructs `orbit tool run {name}`, which is not a registered default tool"
+            );
+        }
+    }
+}
+
+/// Every tool name immediately following an `orbit tool run ` mention in
+/// `text`, in order of appearance.
+fn tool_run_mentions(text: &str) -> Vec<String> {
+    const MARKER: &str = "orbit tool run ";
+    let mut names = Vec::new();
+    let mut rest = text;
+    while let Some(index) = rest.find(MARKER) {
+        let after = &rest[index + MARKER.len()..];
+        let end = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '_'))
+            .unwrap_or(after.len());
+        names.push(after[..end].to_string());
+        rest = &after[end..];
+    }
+    names
+}
+
+#[cfg(test)]
+mod tool_run_mentions_tests {
+    use super::tool_run_mentions;
+
+    #[test]
+    fn extracts_every_dotted_tool_name_in_order() {
+        let text = "run `orbit tool run orbit.friction.update --input '{}'` then \
+                     `orbit tool run orbit.task.show --input '{}'`.";
+
+        assert_eq!(
+            tool_run_mentions(text),
+            vec!["orbit.friction.update", "orbit.task.show"]
+        );
+    }
+
+    #[test]
+    fn finds_nothing_when_absent() {
+        assert!(tool_run_mentions("no tool invocations here").is_empty());
+    }
 }
