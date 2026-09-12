@@ -401,9 +401,18 @@ Cursor supports these local CLI authentication paths:
    On macOS the default store is the login keychain (`cursor-access-token` /
    `cursor-refresh-token`). `$HOME/.cursor/auth.json` is used only when
    `AGENT_CLI_CREDENTIAL_STORE=file` was set **at login**; setting that
-   variable later does not migrate an existing keychain session. Orbit's
-   Cursor sandbox profile re-allows `$HOME/Library/Keychains` reads so the
-   default login is visible.
+   variable later does not migrate an existing keychain session. The CLI picks
+   its store from that variable on every run, so a file-store login also has to
+   reach the agent subprocess — the child environment is cleared, and an
+   unlisted name is absent:
+
+   ```toml
+   [execution.env]
+   pass = ["AGENT_CLI_CREDENTIAL_STORE"]
+   ```
+
+   Orbit's Cursor sandbox profile re-allows `$HOME/Library/Keychains` reads, so
+   the default keychain login needs neither of those.
 2. Generate a Cursor user API key and explicitly pass `CURSOR_API_KEY` to the
    agent subprocess:
 

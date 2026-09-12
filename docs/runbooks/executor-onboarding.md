@@ -102,7 +102,7 @@ On macOS, Orbit's `macos-sandbox-exec` profile denies `$HOME/Library/Keychains` 
 | --- | --- | --- |
 | `claude` | login keychain item `Claude Code-credentials` | `ANTHROPIC_API_KEY` via `[execution.env].pass` |
 | `copilot` | login keychain item `github-copilot-app` | `COPILOT_GITHUB_TOKEN` via `[execution.env].pass` |
-| `cursor` | login keychain items `cursor-access-token` / `cursor-refresh-token` | `CURSOR_API_KEY` via `[execution.env].pass`, or log in with `AGENT_CLI_CREDENTIAL_STORE=file` (writes `$HOME/.cursor/auth.json`; setting the variable later does not migrate an existing keychain login) |
+| `cursor` | login keychain items `cursor-access-token` / `cursor-refresh-token` | `CURSOR_API_KEY` via `[execution.env].pass`, or log in with `AGENT_CLI_CREDENTIAL_STORE=file` and pass that variable too (it writes `$HOME/.cursor/auth.json`, the CLI re-reads the variable on every run, and setting it later does not migrate an existing keychain login) |
 
 A failed keychain-backed step records Orbit's diagnosis — sandbox hid the item versus a real logout — on the run error and the task's `workflow_run_failed` note, not only `exited with code Some(1)`. Do not document a provider as file-backed on macOS from its state directory alone; inspect the CLI's credential store.
 
