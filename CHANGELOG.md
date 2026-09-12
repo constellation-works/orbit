@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Highlights
+
+- **Task-pilot assessment precision**: task-pilot instructions define evidence gaps as rating-changing unknowns rather than unexecuted validation, and validate_recommendations allows assessed complexity with evidence gaps when confidence is low or medium. ([ORB-12232])
+
 ## 0.21.0
 
 ### Breaking Changes

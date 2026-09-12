@@ -236,19 +236,27 @@ spec:
        dependency bump with direct validation can be low; a caller migration
        is often medium; a trust-boundary or cross-subsystem redesign can be
        hard. These are policy examples, not proof of live-model classification
-       accuracy. If evidence cannot support a rating, return `unassessed`, name
-       concrete evidence gaps, and propose the smallest bounded investigation
-       through selectors and validation approach. Missing validation authority
-       belongs in `utility_warnings` as a readiness blocker. Complexity,
+       accuracy.
+       Whenever the pilot has produced selectors and a rationale, return an
+       assessed complexity (`low`, `medium`, or `hard`) with an appropriate
+       `confidence` level (`high`, `medium`, or `low`) expressing uncertainty.
+       Reserve `unassessed` strictly for tasks where the pilot cannot identify
+       the bounded repair at all, proposing the smallest bounded investigation
+       through selectors and validation approach.
+       Define `evidence_gaps` strictly as rating-changing unknowns only
+       (such as unknown fixture semantics, unresolved architecture choices, or
+       missing failure signatures that could change which complexity rating applies).
+       When `confidence` is `high`, `evidence_gaps` must be empty; when `confidence`
+       is `medium` or `low`, list those rating-changing unknowns in `evidence_gaps`.
+       Explicitly exclude 'validation not executed in this read-only assessment'
+       style entries: this lane is a read-only preflight and never builds, tests,
+       or runs validation commands (`proc.spawn` is CLI-only, so an MCP-transport
+       session does not advertise it at all). The structural absence of test
+       execution is never an evidence gap and must not be listed in `evidence_gaps`,
+       nor used to return `unassessed`. Name the checks that would establish the repair
+       in `validation_approach` / `reassessment_triggers`, and report missing validation
+       authority or readiness blockers in `utility_warnings`. Complexity,
        urgency, and readiness are separate decisions.
-       This lane is a read-only preflight and never builds, tests, or runs a
-       validation command; `proc.spawn` is CLI-only, so an MCP-transport
-       session does not advertise it at all. That absence of `proc.spawn` is
-       structural to the pilot lane and is not by itself an evidence gap: do
-       not return `unassessed` merely because you could not execute a build or
-       a test here. Name the check that would establish the repair in
-       `validation_approach` instead, and reserve `unassessed` for evidence
-       the pilot could have read at `source_revision` but did not find.
     7. Report recommendations only; do not apply them:
        `recommended_crew`, `recommended_complexity`, real `blocked_by` task IDs,
        `duplicate_of`, `already_landed`, `release_action_required`,
@@ -310,9 +318,13 @@ spec:
     },"error":null}
 
     Copy `partition_index` and `task_ids` exactly from the input and return one
-    task assessment per input ID. If evidence is insufficient to assign a
-    complexity, return the task as `unassessed` with actionable evidence gaps;
-    never omit it or invent certainty.
+    task assessment per input ID. Whenever you have produced selectors and a
+    rationale, return an assessed complexity (`low|medium|hard`) with an
+    appropriate `confidence` level (`high|medium|low`). Reserve `unassessed`
+    strictly for tasks where the bounded repair cannot be identified at all.
+    Define `evidence_gaps` as rating-changing unknowns only, leaving it empty
+    for `high` confidence, and never populate it with unexecuted validation
+    checks or read-only lane limitations.
   tools:
     - orbit.task.show
     - orbit.task.list
