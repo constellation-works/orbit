@@ -1217,7 +1217,7 @@ function buildActionsRow(task, detail, context) {
     });
     actions.appendChild(btn);
   }
-  if (statusTransition(task, "archived")) {
+  if (task.status !== "archived") {
     const btn = el("button", { class: "action archive", text: "archive" });
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
