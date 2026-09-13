@@ -83,7 +83,7 @@ Cloning gives you a framework to mold to your team's conventions; everything und
 >
 > 1. Ask me where to clone the Orbit repository (suggest `~/code/orbit`).
 > 2. Verify the Rust toolchain: Orbit's MSRV is `rust-version = "1.89"`. If cargo is missing or older, **stop and ask me before installing anything** (`rustup` modifies the shell profile).
-> 3. Clone `https://github.com/constellation-works/orbit` into that location and run `make install` (copies `orbit` to `$INSTALL_BIN_DIR`, default `~/.cargo/bin`). Confirm the install path with me first. Verify with `orbit --version`.
+> 3. Clone `https://github.com/constellation-works/orbit` into that location and run `make install` (copies `orbit` to `$INSTALL_BIN_DIR`, default `~/.orbit/bin`, the same location `./install.sh` uses). Confirm the install path with me first. Verify with `orbit --version`.
 > 4. Run `orbit init` for global state at `~/.orbit`. On Linux, follow `docs/runbooks/linux-sandbox.md` and require its probe to pass before dispatching agents.
 > 5. From *this* repository, run `orbit workspace init --mcp`. It creates `.orbit/` and registers an **operator-authorized** MCP server with installed agent CLIs. Tell me first if you'd rather it stay agent-only (`orbit mcp init`).
 > 6. Ask me whether to enable semantic search (optional): `orbit semantic install` downloads an embedder companion plus the default model under `~/.orbit/embed/` (macOS arm64 or Linux x86_64/aarch64 with glibc >= 2.38). If I accept and tasks already exist, run `orbit semantic index`.
@@ -91,7 +91,7 @@ Cloning gives you a framework to mold to your team's conventions; everything und
 > 8. Run `orbit task list` and `orbit semantic stats` and show me the output.
 > 9. Ask me what my first real task should be and create it with the `orbit` skill.
 >
-> Rules: never run destructive commands, install rustup, install outside `~/.cargo/bin`, or modify a shell profile without confirmation. If anything is unclear or fails, stop and ask. Do not simplify or hide Orbit's conventions; I am choosing this because I want the discipline.
+> Rules: never run destructive commands, install rustup, install outside `~/.orbit/bin`, or modify a shell profile without confirmation. If anything is unclear or fails, stop and ask. Do not simplify or hide Orbit's conventions; I am choosing this because I want the discipline.
 
 </details>
 

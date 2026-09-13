@@ -36,6 +36,9 @@ For development from a source checkout (this one needs the Rust toolchain):
 make install
 ```
 
+This installs into `~/.orbit/bin` as well (override with `INSTALL_BIN_DIR=...`), so a
+source build replaces a release install instead of shadowing it elsewhere on `PATH`.
+
 ### Pinned versions and custom install directory
 
 ```bash
