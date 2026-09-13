@@ -8,6 +8,7 @@
 //! operator action [ORB-11053].
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
@@ -115,52 +116,98 @@ impl CallersArgs {
 
 fn list(path: &Path) -> CommandOut {
     let file = orbit_mcp::load_callers(path)?;
-    println!("callers file: {}", path.display());
+    print!("{}", render_callers_list(path, &file));
+    Ok(CommandOutput::Silent)
+}
+
+/// Render the callers policy without copying identities or key material into
+/// stdout. CLI stdout/stderr is routinely captured by log collectors, so the
+/// loaded authorization rows must not be treated as safe merely because the
+/// command is intended for an operator. The booleans preserve the useful
+/// policy shape while keeping the values read from the callers file out of the
+/// logging sink.
+fn render_callers_list(path: &Path, file: &orbit_mcp::CallersFile) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "callers file: {}", path.display());
     if !path.exists() {
-        println!(
+        let _ = writeln!(
+            output,
             "  (absent — remote-originated sessions are served agent capabilities only; run \
              `orbit mcp callers init`)"
         );
     }
-    println!("default: {}", default_label(file.default));
+    let _ = writeln!(output, "default: {}", default_label(file.default));
     if file.callers.is_empty() {
-        println!("callers: none");
-        return Ok(CommandOutput::Silent);
+        let _ = writeln!(output, "callers: none");
+        return output;
     }
-    println!("callers:");
-    for row in &file.callers {
-        let label = row
-            .label
-            .as_deref()
-            .map(|label| format!(" ({label})"))
-            .unwrap_or_default();
-        println!(
-            "  {machine_id}{label}: [{capabilities}]",
-            machine_id = row.machine_id,
-            capabilities = row.capabilities.join(", "),
-        );
-        if let Some(workspaces) = &row.workspaces {
-            println!("    workspaces: {}", workspaces.join(", "));
-        }
-        if let Some(workspaces) = &row.agent_invoke_workspaces {
-            println!("    agent_invoke_workspaces: {}", workspaces.join(", "));
-        }
-        if let Some(fingerprint) = &row.ssh_key_fingerprint {
-            println!("    ssh_key_fingerprint: {fingerprint}");
-        }
-        println!(
-            "    agent_invoke: {}",
-            if row.agent_invoke {
-                match row.agent_invoke_mode.unwrap_or_default() {
-                    RemoteAgentInvokeMode::KeyBound => "enabled (key-bound)",
-                    RemoteAgentInvokeMode::Cooperative => "enabled (cooperative)",
-                }
+    let _ = writeln!(output, "callers (identities redacted):");
+    for (index, row) in file.callers.iter().enumerate() {
+        let has_agent = row
+            .capabilities
+            .iter()
+            .any(|capability| capability == "agent");
+        let has_operator = row
+            .capabilities
+            .iter()
+            .any(|capability| capability == "operator");
+        let is_denied = row.capabilities.is_empty()
+            || row
+                .capabilities
+                .iter()
+                .any(|capability| capability == "deny");
+        let _ = writeln!(output, "  caller #{}: [identity redacted]", index + 1);
+        let _ = writeln!(
+            output,
+            "    label: {}",
+            if row.label.is_some() {
+                "configured"
             } else {
-                "disabled"
+                "none"
             }
         );
+        let _ = writeln!(
+            output,
+            "    capabilities: agent={has_agent}, operator={has_operator}, denied={is_denied}"
+        );
+        let _ = writeln!(
+            output,
+            "    workspaces: {}",
+            if row.workspaces.is_some() {
+                "scoped (IDs redacted)"
+            } else {
+                "all"
+            }
+        );
+        let _ = writeln!(
+            output,
+            "    agent_invoke_workspaces: {}",
+            if row.agent_invoke_workspaces.is_some() {
+                "scoped (IDs redacted)"
+            } else {
+                "none"
+            }
+        );
+        let _ = writeln!(
+            output,
+            "    ssh_key_fingerprint: {}",
+            if row.ssh_key_fingerprint.is_some() {
+                "configured (redacted)"
+            } else {
+                "none"
+            }
+        );
+        let agent_invoke = if row.agent_invoke {
+            match row.agent_invoke_mode.unwrap_or_default() {
+                RemoteAgentInvokeMode::KeyBound => "enabled (key-bound)",
+                RemoteAgentInvokeMode::Cooperative => "enabled (cooperative)",
+            }
+        } else {
+            "disabled"
+        };
+        let _ = writeln!(output, "    agent_invoke: {agent_invoke}");
     }
-    Ok(CommandOutput::Silent)
+    output
 }
 
 fn check(path: &Path, machine_id: &str) -> CommandOut {
@@ -190,8 +237,8 @@ fn check(path: &Path, machine_id: &str) -> CommandOut {
         }
     );
     match &grant.pinned_fingerprint {
-        Some(fingerprint) => println!(
-            "identity pin: {fingerprint}, enforced where this machine can observe the \
+        Some(_) => println!(
+            "identity pin: configured (fingerprint redacted), enforced where this machine can observe the \
              authenticating key. The identity itself is key-bound only on the \
              destination-issued forced-command path; the ordinary SSH proxy remains \
              self-asserted."
@@ -203,26 +250,21 @@ fn check(path: &Path, machine_id: &str) -> CommandOut {
              line that binds it to a key."
         ),
     }
-    if let Some(workspaces) = &grant.workspaces {
-        println!(
-            "  on workspaces: {}",
-            workspaces.iter().cloned().collect::<Vec<_>>().join(", ")
-        );
+    if grant.workspaces.is_some() {
+        println!("  on workspaces: configured scope (workspace IDs redacted)");
         println!(
             "  elsewhere on this machine: [{}]",
             capability_list(&grant.elsewhere)
         );
     }
     match (&grant.agent_invoke_workspaces, grant.agent_invoke_mode) {
-        (Some(workspaces), Some(RemoteAgentInvokeMode::KeyBound)) => println!(
-            "agent_invoke: configured for {} in key-bound mode; admission requires a \
+        (Some(_), Some(RemoteAgentInvokeMode::KeyBound)) => println!(
+            "agent_invoke: configured for scoped workspace(s) in key-bound mode; admission requires a \
              destination-issued forced-command session",
-            workspaces.iter().cloned().collect::<Vec<_>>().join(", ")
         ),
-        (Some(workspaces), Some(RemoteAgentInvokeMode::Cooperative)) => println!(
-            "agent_invoke: configured for {} in cooperative mode; identity remains self-asserted \
+        (Some(_), Some(RemoteAgentInvokeMode::Cooperative)) => println!(
+            "agent_invoke: configured for scoped workspace(s) in cooperative mode; identity remains self-asserted \
              and the SSH OS-account/operator channel is the trust boundary",
-            workspaces.iter().cloned().collect::<Vec<_>>().join(", ")
         ),
         _ => println!("agent_invoke: not granted"),
     }
