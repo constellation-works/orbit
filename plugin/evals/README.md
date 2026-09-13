@@ -32,7 +32,7 @@ Cases:
 | --- | --- |
 | `file-task` | `orbit` skill fires; `workspace_list` → `search` → `task_add` ordering; `task_add` carries `complexity`, `model`, `workspace`, `acceptance_criteria`; reply reports the new ID and doesn't claim dispatch |
 | `task-status` | `task_show` by ID (no `task_list` scan); reply matches the record |
-| `mark-done` | exactly one `task_update` to `done` with `model` and a note |
+| `mark-done` | `in-progress → review → done` via at most two `task_update`s, each with `model` and a note; reply confirms done |
 | `orchestrate-backlog` | `orbit-orchestrate` skill fires; `task_list` scoped to the workspace; no `task_update`/`workflow_ship`; report finds the DANI-41/42 overlap and the DANI-45 dependency |
 | `off-topic-no-skill` | negative: no orbit skill, no orbit MCP call |
 
