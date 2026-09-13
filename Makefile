@@ -11,7 +11,9 @@ BIN_CRATE := orbit-cli
 BIN_CRATE_PATH := crates/$(BIN_CRATE)
 WORKSPACE := --workspace
 INSTALL_PROFILE ?= release
-INSTALL_BIN_DIR ?= $(HOME)/.cargo/bin
+# Same location as install.sh (ORBIT_INSTALL_DIR) so a source build and a
+# release install never shadow each other on PATH.
+INSTALL_BIN_DIR ?= $(HOME)/.orbit/bin
 
 # Detect profile
 PROFILE ?= debug

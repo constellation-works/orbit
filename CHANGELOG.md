@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- **`make install` targets `~/.orbit/bin`**: the source-checkout install now lands in the same directory as `install.sh` (override with `INSTALL_BIN_DIR`), so a stale `~/.cargo/bin/orbit` can no longer shadow the deployed binary on `PATH`.
+
 ## 0.22.0
 
 ### Breaking Changes
