@@ -82,10 +82,13 @@ resolved, otherwise the registered workspace containing the current
 directory, otherwise the first active entry.
 
 **All workspaces** is an explicit aggregate view. It lists tasks across the
-served registry, but mutations are disabled there — including Operations
-Enable/Disable, Mint now, clock changes, and auto-drain. Select one active
-workspace before changing anything. Inactive registry entries appear as
-`<name> (unavailable)` and cannot be selected.
+served registry, but it is not a write target. Operations Enable/Disable, Mint
+now, clock changes, auto-drain, and per-workspace panels are read-only there.
+Task-row and task-detail mutations are allowed only when a row carries its
+explicit owning workspace; aggregate task rows normally do, and writes are
+sent to that owner. If a row has no owner, its controls stay disabled. Select
+one active workspace before changing anything else. Inactive registry entries
+appear as `<name> (unavailable)` and cannot be selected.
 
 The selected workspace and time window live in the page URL, so a reload or
 copied link restores the same scope. **Diagnostics → Reliability** is
@@ -120,9 +123,9 @@ that apply to its current status:
 | **archive** | Any status except `archived`. |
 | **comment** | Always. |
 
-Status and crew dropdowns on the row are editable only with a concrete
-workspace selected. In **All workspaces** they stay visible but are
-read-only.
+Status and crew dropdowns on the row are editable with a concrete workspace
+selected, or for an aggregate row that includes its explicit owner. A row
+without that owner stays read-only in **All workspaces**.
 
 The status dropdown lists every lifecycle status, including for `done` and
 `archived` tasks. Targets the [lifecycle table](../../concepts/tasks/#transition-rules)
@@ -137,6 +140,35 @@ the MCP surface cannot force.
 The right dock has two modes that share the same column width: **Status**
 (files currently locked by tasks) and **Log** (a live `orbit.log` tail with
 all / err / deny / warn filters).
+
+#### Edit task metadata inline
+
+In **Tasks**, expand a row to open its detail. The five shipped inline editors
+are split across the two detail columns:
+
+| Field | Location and behavior |
+|---|---|
+| **description** | Left detail column, always shown for an editable task. Click **edit** to open the Markdown editor. |
+| **acceptance criteria** | Left detail column, in the collapsed-by-default **acceptance criteria** section. Click **edit**; enter one criterion per line. |
+| **complexity** | Right detail column, in the **properties** card. Choose **low**, **medium**, or **hard**; the change saves immediately. **unassessed** is displayed when already stored but is not an option. |
+| **tags** | Right detail column, in the **properties** card. Click the card-header **edit** button and enter comma- or newline-separated tags. |
+| **context files** | Right detail column, in the **context files** section. Click **edit**; enter one selector per line. The section header shows the current count. |
+
+The text editors use the current lowercase **save** and **cancel** buttons.
+**save** shows `saving…`, then returns to the read-only view with a field-saved
+notice. **cancel** discards the draft and makes no request. If a text-field
+save fails, the editor stays open with its text intact, the inline error is
+shown, and **save** / **cancel** are enabled again. Complexity has no
+save/cancel editor: changing its select saves immediately and reports
+`complexity saved` or an inline update error. These metadata edits update the
+task record; they do not dispatch work.
+
+For **context files**, use the displayed selector forms `file:…`, `dir:…`, or
+`symbol:…`. The server validates the selector kind, an existing filesystem
+anchor, and whether that anchor is a file or directory as requested. A
+`symbol:` name and kind are not looked up. If the task is deliberately about
+to create a target, check **allow missing context** before **save**; otherwise
+the rejected save leaves the draft in place so it can be corrected.
 
 ### Runs and errors
 
