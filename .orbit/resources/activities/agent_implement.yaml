@@ -80,7 +80,10 @@ spec:
        write nothing and fail with `worktree_mismatch`, naming requested and
        resolved roots.
        Read the workspace's AGENTS.md and relevant task-specific guidance.
-       Record the starting HEAD and git status; preserve pre-existing edits.
+       Record the starting HEAD and a full starting inventory
+       (`git status --short`) as the baseline that separates your own
+       output from pre-existing edits during the final reconciliation in
+       item 11; preserve pre-existing edits.
        Inspect the existing materials, their consumers, and relevant evidence before
        changing them.
 
@@ -92,6 +95,8 @@ spec:
        `orbit.task.update` only when needed to satisfy an acceptance criterion or
        keep directly affected materials and their consumers consistent. Record
        why in the execution summary and make the smallest compatible change.
+       Declaring a path never converts an accidental or unintended edit into
+       scoped work: revert that edit instead of widening the boundary.
        Stop after a task comment if the target implies out-of-scope behavior,
        broad restructuring, or remains ambiguous. Never delete unrelated
        materials as cleanup.
@@ -125,13 +130,31 @@ spec:
     10. Review the complete deliverable and diff before handoff for accuracy,
         clarity, consistency, unintended changes, and stale supporting material.
         Run the checks required by the task and workspace instructions.
-        Keep incidental caches and temporary artifacts out of the patch. For
-        Cargo outputs, use `cargo clean` or generate them outside the worktree;
-        never use raw `rm -f` or `rm -rf`. If cleanup is denied, do not retry:
-        record the bounded leftover. Independently run `git diff --check` and
-        `git status --short`, even after a cleanup denial; account for every
-        change. Preserve pre-existing contents and legitimate task outputs.
-    11. Workflow admission already set `in-progress`: do not redundantly set
+        Keep incidental caches and temporary artifacts out of the patch: write
+        scratch, logs, and review evidence outside the checkout, and attach any
+        evidence you must keep through the granted task tools before removing a
+        temporary copy. Before a successful exit, remove or revert the
+        run-owned output you verified is not part of the deliverable. For Cargo
+        outputs, use `cargo clean` or generate them outside the worktree; never
+        use raw `rm -f` or `rm -rf`, and never clean broadly to catch a
+        specific leftover. If a cleanup command is denied, do not retry it and
+        do not substitute a destructive one. Preserve pre-existing contents,
+        another actor's edits, and legitimate task outputs.
+    11. Reconcile every change before returning, separately from cleanup so a
+        denied cleanup cannot skip these reads. Take a final inventory with
+        `git status --short` and `git diff --check` — staged, unstaged, and
+        untracked, including modifications, deletions, and both sides of every
+        rename — and account for every entry against the item 3 baseline. Re-read
+        the durable `context_files` after any authorized update and confirm a
+        selector covers each intended delivery path; after creating an intended
+        new file, append its exact `file:` selector through `orbit.task.update`,
+        because a containing directory selector is not new-file intent. Tracked
+        modifications, deletions, and renames need no declaration beyond
+        existing task scope. Repeat the inventory after any cleanup from item
+        10. If run-owned non-deliverable output remains because cleanup was
+        denied or unsafe, name the exact leftover paths, record the blocker with
+        `orbit.task.update`, and do not hand off as success.
+    12. Workflow admission already set `in-progress`: do not redundantly set
         that status, and do not move the task to `review` (the pipeline owns
         that transition). Before returning, REQUIRED: persist a meaningful
         `execution_summary` with `orbit.task.update`; downstream delivery reads
@@ -162,16 +185,15 @@ spec:
         the declared scope requires reconciliation rather than this exemption.
 
         Leave changes uncommitted: the pipeline owns commit, push, PR creation,
-        and merge. After creating an intended new source file, append its exact
-        `file:` selector through `orbit.task.update`; a containing directory
-        selector is not new-file intent. Tracked modifications, deletions, and
-        renames need no declaration beyond existing task scope, and temporary
-        evidence or scratch files must remain outside the worktree. The
-        delivery boundary refuses every untracked path without exact durable
-        intent and never parses the execution summary as an oracle. Do not
+        and merge. Temporary evidence or scratch files must remain outside the
+        worktree. The delivery boundary refuses every untracked path without
+        exact durable intent; deterministic gates read durable artifacts and
+        task state, and never parse the execution summary as an oracle. Do not
         invoke another agent or dispatch additional work.
         In the execution summary, map criteria to results, list validation
-        commands as passed/failed/not run with reasons, and disclose remaining
+        commands as passed/failed/not run with reasons, record the item 11
+        reconciliation — intended delivery paths, selector coverage, cleanup
+        outcome, and any leftover path or blocker — and disclose remaining
         risks or deviations. Do not claim a skipped check passed or mark
         incomplete work successful. Keep the final answer concise and factual.
   tools:
