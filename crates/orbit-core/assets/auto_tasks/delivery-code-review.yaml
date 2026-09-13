@@ -16,6 +16,16 @@ template:
     Review the entire captured code range for correctness, concurrency, error handling and repository standards. Verify findings against the pinned source, search for duplicates and file confirmed findings with precise evidence.
     Use only the frozen automation input appended to this task. Examine every
     captured commit, including unattributed neighbors. Findings may remain open.
+    Attribute every finding to the task that introduced it: locate the commit
+    that made the code wrong, then read its task from the frozen input — each
+    `deliveries[]` entry lists its `commits` and the `task_ids` that landed them.
+    File each confirmed finding with `orbit.task.add` as a `bug` tagged
+    `delivery-code-review`, carrying `relations: [{"type": "regression_from",
+    "target": "<culprit task ID>"}]`. A defect in an unattributed neighbor
+    commit, or one that predates the batch and was merely exposed by it, is filed
+    without the relation and says so — never blame a bystander delivery. Name the
+    culprit task and commit in the finding's description and in the evidence
+    finding text.
     Complete the supplied evidence template, replace action_id with this task ID,
     and attach automation-coverage.json through orbit.task.artifact.put in this
     task's assigned executor run. Supply actual checks (subject, method,
@@ -24,6 +34,7 @@ template:
   acceptance_criteria:
   - Every captured obligation is examined at the exact supplied revisions.
   - Concrete checks and findings are attached as valid automation-coverage.json evidence.
+  - Every filed finding carries a `regression_from` relation targeting the delivery task whose commit introduced the defect, or states why no captured delivery can be held responsible.
   - Missing or skipped examination remains explicitly incomplete.
   task_type: chore
   tags:

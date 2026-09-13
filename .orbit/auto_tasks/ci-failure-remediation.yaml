@@ -67,6 +67,24 @@ template:
     or otherwise obtain green CI by hiding the failure. Informational checks
     remain informational, but they must execute successfully.
 
+    ## Attribute each regression to the task that introduced it
+
+    For every current repository-owned root cause, identify the task whose
+    landed change broke the check. Walk back from the tested checkout commit
+    to the newest commit at which the failing command still passed; the
+    commit that broke it is the culprit, and squash-merge subjects carry its
+    task ID as `[<task-id>]`. Confirm with `orbit tool run orbit.task.show
+    --input '{"id":"<task-id>"}'` that its change is the one at fault rather
+    than a later commit that merely touched the same file. Record the link on
+    this task with `orbit tool run orbit.task.update --input
+    '{"id":"<this task ID>","relations":[<existing relations from
+    orbit.task.show>,{"type":"regression_from","target":"<culprit task
+    ID>"}]}'` — one `regression_from` entry per culprit, and `relations`
+    replaces the whole list, so carry existing entries forward. When the
+    culprit commit carries no task ID, or the failure is transient
+    infrastructure, record that conclusion and its evidence in the execution
+    summary instead of blaming a bystander task.
+
     ## Validation and handoff
 
     For each fixed root cause, rerun the exact command that formerly failed.
@@ -80,7 +98,8 @@ template:
     Persist an `execution_summary` that maps every investigated run/job URL,
     reported head SHA, actual checkout commit, and current ref head to its
     root-cause cluster, disposition (fixed, stale, superseded, or transient),
-    change, local reproduction, exact formerly failing validation, pre-handoff
+    change, culprit task (the `regression_from` target, or why there is none),
+    local reproduction, exact formerly failing validation, pre-handoff
     result, and green GitHub rerun URL. Also map any matching PR-hook-created
     Orbit task. For a successful no-diff pass, list the queries, current heads,
     superseding successes or transient evidence, and why no repository-owned
@@ -110,6 +129,7 @@ template:
   - Every investigated run records its reported SHA, actual checkout commit, current ref head, failed job/step, exact log evidence, and stale or superseding evidence where applicable.
   - Repeated red runs are clustered by root cause, and every current repository-owned failure is reproduced and fixed without weakening or bypassing a check.
   - Transient-only classifications cite infrastructure evidence and a successful same-SHA retry; a single non-reproduction is not treated as sufficient evidence.
+  - Each fixed repository-owned cause is linked from this task by a `regression_from` relation targeting the task whose landed commit introduced it, or the execution_summary states why no task can be held responsible.
   - Each fixed cause passes the exact formerly failing validation and make ci-fast, and every affected required or informational GitHub Actions check executes successfully on the candidate commit.
   - The persisted execution_summary maps each run/job URL and SHA to its root cause, disposition, change, validations, green rerun, and any matching PR-hook task.
   - A no-current-failure or transient-only investigation is a successful no-diff outcome when its current-head queries and superseding or transient evidence are persisted.

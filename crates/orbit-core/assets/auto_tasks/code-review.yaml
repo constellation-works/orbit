@@ -29,7 +29,8 @@ template:
       and list open review work with
       `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked"],"tag":"code-review","model":"<agent-family>"}'`.
       File a finding with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"priority":"<low|medium|high|critical>","type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"regression_from","target":"<culprit task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Omit `relations` only when no task in the window can be held responsible.
       Do not use direct lifecycle CLI subcommands; they skip agent provenance.
     - Fail open. A window with no confirmed findings is a successful no-op. Do not
       invent work to justify the run.
@@ -51,13 +52,30 @@ template:
     guide, lint configuration). Review the window as a whole — interactions between
     separately merged changes are findings per-change review cannot see.
 
+    ## Attribute each finding to the task that introduced it
+
+    Every finding is a regression from a change that landed in the window, so
+    name the task that caused it. Find the commit that introduced the defect
+    (`git log -L` or `git blame` on the offending lines, restricted to the
+    reviewed range) and read the task ID from that commit: squash-merge subjects
+    carry it as `[<task-id>]`, and the delivery's pull request references it
+    otherwise. Confirm with `orbit.task.show` that the task exists and that its
+    change is the one at fault — blame the commit that introduced the defect, not
+    a later commit that merely touched the same file. When the defect spans
+    several tasks' changes, blame the one whose change made the code wrong.
+    When the culprit commit carries no task ID, or the defect predates the
+    window and was only exposed by it, say so in the finding and file it without
+    the relation rather than blaming a bystander.
+
     ## File confirmed findings
 
     Verify every finding against the live code before filing — a diff that looks
     wrong but is guarded elsewhere is not a finding. Search open Orbit tasks tagged
     `code-review` before filing; skip duplicates and nitpicks. File each confirmed
     finding as its own Orbit task with file:line evidence, a severity-appropriate
-    priority, and the `code-review` tag.
+    priority, the `code-review` tag, and a `regression_from` relation targeting
+    the task identified above. The finding's description names the culprit task
+    and the commit that introduced the defect.
 
     ## Record the cursor
 
@@ -66,6 +84,7 @@ template:
   acceptance_criteria:
   - The review window was derived from the previous sweep's recorded cursor, or the current HEAD was seeded as the baseline on the first run.
   - Every filed finding was verified against live code, is non-duplicate, and carries file:line evidence with a severity-appropriate priority and the `code-review` tag.
+  - Every filed finding carries a `regression_from` relation targeting the task whose landed commit introduced the defect, or its description states why no task in the window can be held responsible.
   - The reviewed range and the new last-reviewed commit are recorded in the persisted execution summary.
   - A window with no confirmed findings succeeds as a no-op.
   task_type: chore
