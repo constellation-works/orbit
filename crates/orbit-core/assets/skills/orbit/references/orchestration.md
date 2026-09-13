@@ -135,17 +135,18 @@ orbit run show <run_id>
 an empty list can be dispatched, but they cannot be kept off each other's files
 — so under high ship traffic, fill them first.
 
-Do **not** fill them inline. Use the task-pilot job: it audits tasks read-only in
-bounded partitions, and its apply step persists only selectors it validated.
+Do **not** fill them inline. Use `orbit run task-pilot`: it audits tasks
+read-only in bounded partitions, and its apply step persists only selectors it
+validated.
 
 ```bash
-orbit job show task_pilot_pipeline
-orbit run job task_pilot_pipeline                                  # zero-input discovery
-orbit run job task_pilot_pipeline --input 'task_ids=["<id>","<id>"]' # audit exactly these
-orbit run job task_pilot_pipeline --input crew=luna                # override the pilot's crew for this run
+orbit run task-pilot                            # zero-input discovery
+orbit run task-pilot <id> <id>                  # audit exactly these
+orbit run job task_pilot_pipeline --input crew=luna  # advanced: generic job form, override the pilot's crew for this run
 ```
 
-Crew selection here is `--input crew=<name>`, not a `--crew` flag — see
+`orbit run task-pilot` has no `--crew` flag; crew override is only available
+through the generic job form's `--input crew=<name>` — see
 [workflows.md](workflows.md#running-a-job) for the full contract and how it
 differs from an activity-level `system_crew` override.
 
