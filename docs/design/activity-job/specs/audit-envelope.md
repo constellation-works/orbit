@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: V2 Audit Envelope"
 tags: ["activity-job"]
-last_validated: 2026-08-29
+last_validated: 2026-09-13
 ---
 
 # Spec: V2 Audit Envelope
@@ -55,7 +55,7 @@ Loop-engine events use the same table with `source: loop_event`. Content-address
 .orbit/state/audit/blobs/<hh>/<hash>
 ```
 
-The v2 writer also keeps an in-memory snapshot for smoke assertions and CLI summaries. Its legacy `envelope_log_path()` hook returns `None` for the SQLite-backed production writer.
+Test builds expose an in-memory snapshot for smoke assertions; production CLI inspection reads the persisted SQLite audit rows and blob store. The writer's legacy `envelope_log_path()` hook returns `None` for the SQLite-backed production writer.
 
 ## CLI Inspection
 
