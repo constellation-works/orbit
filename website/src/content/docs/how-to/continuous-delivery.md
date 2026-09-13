@@ -15,7 +15,7 @@ Start with the zero-input pilot. It discovers only `proposed` and `backlog`
 tasks that have no `context_files`, then prepares bounded pilot groups.
 
 ```bash
-orbit run job task_pilot_pipeline --wait
+orbit run task-pilot --wait
 ```
 
 The pilot applies validated `context_files` selectors, but it does not approve
@@ -27,8 +27,14 @@ orbit run show "$PILOT_RUN_ID"
 orbit task show "$TASK_ID" --fields status,context_files
 ```
 
-Use an explicit task list only when you intend to inspect those exact tasks; the
-job input is a JSON array, not a space-separated list:
+Use an explicit task list only when you intend to inspect those exact tasks:
+
+```bash
+orbit run task-pilot "TASK-123" "TASK-456" --wait
+```
+
+The generic job form is equivalent, and its input is a JSON array rather than a
+space-separated list:
 
 ```bash
 orbit run job task_pilot_pipeline --input 'task_ids=["TASK-123","TASK-456"]' --wait

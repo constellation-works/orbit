@@ -14,6 +14,7 @@ so you do not have to remember job IDs.
 | [`orbit run auto`](#orbit-run-auto) | Drain the backlog for a time window, several tasks at a time. |
 | [`orbit run readiness`](#orbit-run-readiness) | Explain why backlog tasks can or cannot start. |
 | [`orbit run triage`](#orbit-run-triage) | Re-backlog tasks blocked by environmental run failures. |
+| [`orbit run task-pilot`](#orbit-run-task-pilot) | Preflight proposed/backlog tasks and persist validated selectors. |
 | [`orbit run ship-sweep`](#orbit-run-ship-sweep) | Dispatch ship runs across every opted-in workspace. |
 | [`orbit run job`](#direct-job-execution) | Run any job definition directly. |
 
@@ -92,6 +93,23 @@ orbit run triage "$TASK_ID"
 Tasks a human blocked by hand are never touched, and a non-environmental
 diagnosis stays blocked for an operator decision. An empty candidate set is a
 clean no-op.
+
+## `orbit run task-pilot`
+
+Preflight `proposed`/`backlog` tasks and persist validated `context_files`
+selectors, without promoting or dispatching anything:
+
+```bash
+orbit run task-pilot                        # zero-input discovery
+orbit run task-pilot "$TASK_ID" "$SECOND_TASK_ID" --wait
+```
+
+Omit task IDs for automatic discovery of tasks with empty `context_files` or
+unassessed complexity; pass explicit IDs to audit exactly those tasks. This is
+the named entrypoint for `task_pilot_pipeline` — see [Prepare proposed
+work](../../how-to/continuous-delivery/#1-prepare-proposed-work) for the full
+workflow, and [`orbit run job`](#direct-job-execution) for the equivalent
+generic form.
 
 ## `orbit run ship-sweep`
 
