@@ -120,42 +120,41 @@ spec:
     8. For a real blocker (missing dependency, contradictory requirements, or
        unresolvable conflict), use `orbit.task.update` to set `blocked` with a
        reason.
-    9. Run the friction checkpoint. File `orbit.friction.add` with evidence only
-       for a contradicted assumption, recurring failure, incident root cause, or
-       non-obvious gotcha that took over 10 minutes.
-    10. Review the complete deliverable and diff for accuracy, clarity,
-        consistency, unintended changes, and stale supporting material; run
-        required checks. Keep incidental caches out of the patch: write
-        scratch, logs, and review evidence outside the checkout, attach
-        evidence through the granted task tools before removing a temporary
+    9. File `orbit.friction.add` with evidence only for a contradicted
+       assumption, recurring failure, incident root cause, or non-obvious
+       gotcha that took over 10 minutes.
+    10. Review the deliverable and diff for accuracy, unintended changes, and
+        stale supporting material; run required checks. Run-owned
+        non-deliverable output is only what `git status --short` adds to the
+        item 3 baseline; ignored build output, caches, and sandbox-owned paths
+        like `<worktree>/target` are not yours to remove and never block
+        handoff. Write scratch, logs, and review evidence outside the checkout,
+        attach it through the granted task tools before removing a temporary
         copy, and before a successful exit, remove or revert the run-owned
-        output you verified is not part of the deliverable. For Cargo outputs,
-        use `cargo clean` or out-of-worktree generation; never use raw `rm -f`
+        output you verified is not part of the deliverable. Deleting is an
+        exception for a stray untracked path, not a step: never use raw `rm -f`
         or `rm -rf`, and never clean broadly to catch a specific leftover. If a
         cleanup command is denied, do not retry it; do not substitute a
-        destructive one. Preserve pre-existing contents, another actor's edits, and
-        legitimate task outputs.
+        destructive one. Preserve pre-existing contents, another actor's edits,
+        and legitimate task outputs.
     11. Reconcile every change before returning, separately from cleanup so a
-        denied cleanup cannot skip these reads. Take a final inventory with `git status --short`
-        and `git diff
-        --check`: staged, unstaged, and untracked, including modifications,
-        deletions, and both sides of every rename. Account for every entry
-        against the item 3 baseline. Re-read the durable `context_files` after
-        any authorized update and confirm a selector covers each intended
-        delivery path. After creating an intended new file, append its exact
-        `file:` selector through `orbit.task.update`; a containing directory
-        selector is not new-file intent. Tracked modifications, deletions, and
-        renames need no declaration beyond existing task scope. Repeat the
-        inventory after any cleanup. If run-owned non-deliverable output
-        remains because cleanup was denied or unsafe, name the exact leftover
-        paths, record the blocker with `orbit.task.update`, and do not hand off
-        as success.
+        denied cleanup cannot skip these reads. Take a final inventory with
+        `git status --short` and `git diff --check`: staged, unstaged, and
+        untracked, including deletions and both sides of every rename. Account
+        for every entry against the item 3 baseline. Re-read the durable
+        `context_files` after any authorized update and confirm a selector
+        covers each intended delivery path. After creating an intended new
+        file, append its exact `file:` selector through `orbit.task.update`; a
+        containing directory selector is not new-file intent. Tracked changes
+        need no declaration beyond existing task scope. Repeat the inventory
+        after any cleanup. If run-owned output remains because cleanup was
+        denied or unsafe, name the exact leftover paths, record the blocker
+        with `orbit.task.update` (`comment`), and do not hand off as success.
     12. Workflow admission already set `in-progress`: do not redundantly set
-        that status or move the task to `review` (the pipeline owns transition).
-        REQUIRED: persist a meaningful `execution_summary` with
-        `orbit.task.update`; delivery reads durable task state, not your
-        response. Return a short result summary and include `diff` only when
-        cheap and accurate.
+        that status or move the task to `review`; the pipeline owns that
+        transition. REQUIRED: persist a meaningful `execution_summary` with
+        `orbit.task.update`. Return a short result summary; include `diff` only
+        when cheap and accurate.
 
         If implementation already landed and the checkout is clean, do not
         manufacture a change. A same-task retry may attach
@@ -176,10 +175,9 @@ spec:
         parse the execution summary as an oracle. Do not invoke another agent
         or dispatch work. In the execution summary, map criteria to results,
         list validation commands as passed/failed/not run with reasons, record
-        the item 11 reconciliation (intended delivery paths, selector coverage,
-        cleanup outcome, leftovers/blockers), and disclose risks or deviations.
-        Do not claim skipped checks passed or incomplete work successful. Keep
-        the final answer concise and factual.
+        the item 11 reconciliation (delivery paths, selector coverage, cleanup
+        outcome, leftovers), and disclose risks or deviations.
+        Do not claim skipped checks passed or incomplete work successful.
   tools:
     - orbit.task.*
     - orbit.friction.*

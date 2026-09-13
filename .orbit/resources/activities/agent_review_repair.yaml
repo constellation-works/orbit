@@ -118,8 +118,8 @@ spec:
          corrected. Keep it and record the replacing required check after it.
          The replacement must name the same check: the same `command`, or the
          same non-empty `check` identity when the command or environment was
-         corrected. An unrelated later pass (for example `cargo fmt --check`
-         after a failed `cargo test`) does not replace it. A missing, empty,
+         corrected. An unrelated later pass (for example a formatting check
+         after a failed test run) does not replace it. A missing, empty,
          or one-sided `check` identity fails closed.
 
        At least one `required` record must pass, or the review establishes
