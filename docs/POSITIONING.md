@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit Positioning"
-last_validated: 2026-09-05
+last_validated: 2026-09-13
 ---
 
 # Orbit Positioning
@@ -12,15 +12,17 @@ This document names what Orbit is for, who it's for, and what it deliberately is
 
 **Applying engineering rigor to AI-assisted coding.**
 
-Coding agents are fast enough that the disciplines that keep code maintainable — planning before edits, decision records for load-bearing choices, audit trails, conflict-aware parallel execution — become tempting to skip. Orbit makes those disciplines cheap and enforces them by default: every change starts as a task, every load-bearing decision is written into the design docs for the feature it governs, every tool call lands in a structured audit log, and parallel runs are dispatched into worktrees with file-level locks.
+Coding agents are fast enough that the disciplines that keep code maintainable — planning before edits, decision records for load-bearing choices, audit trails, conflict-aware parallel execution — become tempting to skip. Orbit makes those disciplines cheap and enforces them by default: every change starts as a task, every load-bearing decision is captured in durable documentation, every tool call lands in a structured audit log, and parallel runs are dispatched into worktrees with file-level locks.
 
 The audience is the individual engineer driving multiple coding agents against real code and unwilling to trade engineering rigor for raw throughput. Agent vendors solve in-session execution; Orbit is the layer above that turns individual agent sessions into a coherent, traceable body of work.
 
 **Orbit is a free, self-hosted, permissively licensed OSS project. There is no paid tier, no hosted offering, no commercial roadmap. Whatever ships, ships in the OSS repo.**
 
+Orbit's own repository uses feature-scoped design docs for load-bearing decisions. That is an Orbit repository convention, not a consumer requirement: [Orbit Docs](design/orbit-docs/1_overview.md) indexes the human-authored Markdown corpus each workspace owns and does not impose a four-file or source-specific layout. Consumers can keep their own conventions for design notes, decision records, and runbooks; Orbit's concern is that important context remains durable and retrievable.
+
 ## Who Orbit is for
 
-The AI-native engineer running multiple coding agents (Claude Code, Codex CLI, Gemini CLI, plus any OpenAI-compatible or Ollama-served model) heavily, who has outgrown the in-session model and wants engineering discipline around their AI-assisted work — tasks, decision records, a searchable docs corpus, audit, sandboxing, parallel dispatch.
+The AI-native engineer running multiple provider CLIs — such as Claude Code, Codex, Antigravity, Grok, Copilot, Cursor, OpenCode, or Pi — heavily, who has outgrown the in-session model and wants engineering discipline around their AI-assisted work — tasks, decision records, a searchable docs corpus, audit, sandboxing, parallel dispatch. Gemini CLI remains available as a legacy executor. See the [current provider and executor list](../website/src/content/docs/concepts/agents.md).
 
 Staff and principal engineers, tech leads, and founding engineers fit the same profile. If they bring Orbit into their team's workflow, that's a natural extension — but the project is not positioned for team conversion. Orbit optimizes for the individual engineer who refuses to vibe-code their way through agent-driven development.
 
@@ -51,7 +53,7 @@ When auditability conflicts with performance, ergonomics, or feature surface, au
 
 - **Self-hostable under permissive license.** Single binary, no mandatory cloud dependency. MIT.
 - **Bring-your-own-credentials.** API keys belong to the operator; Orbit is pass-through.
-- **HTTP/SDK-first provider communication.** CLI shell-out is an escape hatch, not the backbone.
+- **Provider CLI execution.** Managed agent activities and agent job steps run through authenticated provider CLIs as supervised subprocesses; the CLI owns communication with the model. Orbit's direct HTTP/SDK transports — including Anthropic, Gemini HTTP, and OpenAI-compatible endpoints such as local Ollama-compatible servers — remain a standalone `orbit-agent` library surface for consumers and examples, not an alternate activity/job backend. See the [agent execution model](../website/src/content/docs/concepts/agents.md), [provider runtime code](../crates/orbit-agent/src/lib.rs), [provider SDK README](../crates/orbit-agent/README.md), and [retired backend specification](design/activity-job/specs/backend-resolution.md).
 - **Audit trail for everything that touches code.** See above.
 - **Intent attribution at the codebase level.** `task_id` in commit messages, queryable, durable across rewrites.
 - **Reproducibility where possible, recorded non-determinism where not.**
