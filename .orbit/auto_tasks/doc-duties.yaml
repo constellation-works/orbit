@@ -72,10 +72,13 @@ template:
 
     ## Scope
 
-    In scope: `docs/design/**` (excluding `docs/design/_archive/**`),
+    In scope: `docs/design/**` (excluding `docs/design/_archive/**`). Markdown
+    under `docs/design/_templates/` remains eligible for the rotation unless
+    the minted task explicitly excludes it.
     `docs/runbooks/**`, and the other prose under `docs/`.
 
-    Never modify: `.orbit/adrs/**`, `CHANGELOG.md`, and `docs/changelogs/**`
+    Never modify: `.orbit/adrs/**`, `CHANGELOG.md`, `docs/INDEX.md`, other
+    generated doc indexes, and `docs/changelogs/**`
     (historical records — a citation that was accurate when written is
     provenance, not staleness), `docs/design/_archive/**`, `.orbit/tasks/`,
     `.orbit/graph/`, and any other generated or stored state. Do not author
