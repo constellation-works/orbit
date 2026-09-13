@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use orbit_common::fs::io::{
-    atomic_write_bytes, atomic_write_text, sync_parent_dir, with_exclusive_file_lock,
+    atomic_write_bytes, atomic_write_text, create_private_dir, create_private_dir_all,
+    sync_parent_dir, with_exclusive_file_lock,
 };
 use orbit_common::migration::Plan;
 use orbit_common::{NotFoundKind, OrbitError};
@@ -204,12 +205,12 @@ fn create_staging_dir(bundle_dir: &Path) -> Result<PathBuf, OrbitError> {
             bundle_dir.display()
         ))
     })?;
-    fs::create_dir_all(parent).map_err(|error| OrbitError::from_write_io(parent, error))?;
+    create_private_dir_all(parent).map_err(|error| OrbitError::from_write_io(parent, error))?;
 
     for _ in 0..32 {
         let candidate = scratch_sibling_path(bundle_dir, "staging")
             .map_err(|error| OrbitError::from_write_io(bundle_dir, error))?;
-        match fs::create_dir(&candidate) {
+        match create_private_dir(&candidate) {
             Ok(()) => return Ok(candidate),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(OrbitError::from_write_io(&candidate, error)),
@@ -474,11 +475,11 @@ fn validate_bundle_consistency(bundle: &TaskBundleV2) -> Result<(), OrbitError> 
 }
 
 fn ensure_bundle_dirs(bundle_dir: &Path) -> Result<(), OrbitError> {
-    fs::create_dir_all(bundle_dir).map_err(|err| OrbitError::from_write_io(bundle_dir, err))?;
+    create_private_dir_all(bundle_dir).map_err(|err| OrbitError::from_write_io(bundle_dir, err))?;
     let artifact_files_dir = bundle_dir
         .join(TASK_ARTIFACTS_DIR_NAME)
         .join(TASK_ARTIFACT_FILES_DIR_NAME);
-    fs::create_dir_all(&artifact_files_dir)
+    create_private_dir_all(&artifact_files_dir)
         .map_err(|err| OrbitError::from_write_io(&artifact_files_dir, err))?;
     Ok(())
 }
@@ -733,7 +734,7 @@ pub(crate) fn copy_artifact_blobs(
     let source_artifact_dir = source_bundle_dir.join(TASK_ARTIFACTS_DIR_NAME);
     let dest_artifact_dir = dest_bundle_dir.join(TASK_ARTIFACTS_DIR_NAME);
     let dest_files_dir = dest_artifact_dir.join(TASK_ARTIFACT_FILES_DIR_NAME);
-    fs::create_dir_all(&dest_files_dir)
+    create_private_dir_all(&dest_files_dir)
         .map_err(|err| OrbitError::from_write_io(&dest_files_dir, err))?;
     for file in &manifest.files {
         let source = source_artifact_dir.join(&file.blob);

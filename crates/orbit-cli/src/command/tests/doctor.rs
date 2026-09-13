@@ -8,7 +8,7 @@ use orbit_core::application::routines::{ClockUnitInspection, ClockUnitVerdict};
 
 use super::super::doctor::{
     clock_unit_row_from_inspection, doctor_row_json, human_detail,
-    orphan_task_store_removal_message,
+    orphan_task_store_removal_message, state_directory_permissions_row,
 };
 use super::super::{Cli, CommandOutput, Execute};
 
@@ -138,6 +138,34 @@ fn healthy_doctor_row_has_null_remediation_and_no_action_line() {
 
     assert!(doctor_row_json(&row)["remediation"].is_null());
     assert_eq!(human_detail(&row), "none stale");
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_reports_group_writable_orbit_state_directories() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    let writable = runtime.paths().state_dir.join("operator-visible-fixture");
+    std::fs::create_dir(&writable).expect("create fixture directory");
+    std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o770))
+        .expect("make fixture group writable");
+
+    let row = state_directory_permissions_row(&runtime);
+
+    assert_eq!(row.check_name, "state-directory-permissions");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning);
+    assert!(
+        row.message.contains(&writable.display().to_string()),
+        "{}",
+        row.message
+    );
+    assert!(row.message.contains("0770"), "{}", row.message);
+    assert!(
+        row.remediation
+            .as_deref()
+            .is_some_and(|remediation| remediation.contains("chmod go-w"))
+    );
 }
 
 #[test]

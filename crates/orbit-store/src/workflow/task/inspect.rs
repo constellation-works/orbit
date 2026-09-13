@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::fs::io::create_private_dir_all;
 use orbit_types::identity::{validate_machine_id, validate_registry_identifier};
 use orbit_types::task::{TASK_ARTIFACT_FILES_DIR_NAME, TASK_ARTIFACTS_DIR_NAME, TaskEnvelopeV2};
 use orbit_types::workspace::{
@@ -223,7 +224,7 @@ fn fetch_publication(request: &ValidatedRequest) -> Result<FetchedSnapshot, Orbi
     let cache = request.cache_dir.join(&request.publication_id);
     let git_dir = cache.join("origin.git");
     let tree_dir = cache.join("tree");
-    fs::create_dir_all(&cache).map_err(|error| OrbitError::from_write_io(&cache, error))?;
+    create_private_dir_all(&cache).map_err(|error| OrbitError::from_write_io(&cache, error))?;
     let git_dir_s = path_str(&git_dir)?;
     let tree_dir_s = path_str(&tree_dir)?;
     if git_dir.join("HEAD").is_file() {
@@ -286,7 +287,8 @@ fn fetch_publication(request: &ValidatedRequest) -> Result<FetchedSnapshot, Orbi
         fs::remove_dir_all(&tree_dir)
             .map_err(|error| OrbitError::from_write_io(&tree_dir, error))?;
     }
-    fs::create_dir_all(&tree_dir).map_err(|error| OrbitError::from_write_io(&tree_dir, error))?;
+    create_private_dir_all(&tree_dir)
+        .map_err(|error| OrbitError::from_write_io(&tree_dir, error))?;
     git(&[
         "--git-dir",
         git_dir_s,
@@ -411,7 +413,7 @@ fn restore_empty_artifact_dir(bundle_dir: &Path) -> Result<(), OrbitError> {
     let artifacts = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME);
     if !artifacts.exists() {
         let files = artifacts.join(TASK_ARTIFACT_FILES_DIR_NAME);
-        fs::create_dir_all(&files).map_err(|error| OrbitError::from_write_io(&files, error))?;
+        create_private_dir_all(&files).map_err(|error| OrbitError::from_write_io(&files, error))?;
     }
     Ok(())
 }

@@ -116,6 +116,62 @@ fn tree_bytes(root: &Path) -> BTreeMap<String, Vec<u8>> {
     output
 }
 
+#[cfg(unix)]
+#[test]
+fn publication_snapshot_directories_are_private_under_permissive_umask() {
+    use std::os::unix::fs::PermissionsExt;
+
+    const CHILD_MARKER: &str = "ORBIT_TEST_PRIVATE_PUBLICATION_DIRECTORIES";
+    if std::env::var_os(CHILD_MARKER).is_none() {
+        let status = std::process::Command::new("sh")
+            .args(["-c", "umask 000; exec \"$@\"", "sh"])
+            .arg(std::env::current_exe().expect("current test executable"))
+            .arg("publication_snapshot_directories_are_private_under_permissive_umask")
+            .env(CHILD_MARKER, "1")
+            .status()
+            .expect("run test under permissive umask");
+        assert!(status.success(), "permissive-umask child failed");
+        return;
+    }
+
+    let root = TempDir::new().expect("tempdir");
+    let registry = open_registry(root.path());
+    let workspace_id = "ws_private_publication";
+    let binding = bind(&registry, root.path(), workspace_id);
+    let store = bundle_store(&registry, &binding);
+    seed(
+        &store,
+        &registry,
+        workspace_id,
+        &make_bundle("ORB-00001", "private publication", Vec::new()),
+    );
+    let snapshot = root.path().join("snapshot");
+    build_publication_snapshot(
+        &registry,
+        &snapshot,
+        metadata(workspace_id),
+        &policy(AttachmentPolicyKind::Fail),
+        None,
+    )
+    .expect("build publication snapshot");
+
+    let mut pending = vec![snapshot];
+    while let Some(directory) = pending.pop() {
+        let mode = fs::metadata(&directory)
+            .expect("publication directory metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "{} has mode {mode:04o}", directory.display());
+        for entry in fs::read_dir(&directory).expect("read publication directory") {
+            let entry = entry.expect("publication entry");
+            if entry.file_type().expect("publication entry type").is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+}
+
 #[test]
 fn publication_envelope_round_trips_all_identity_and_projection_fields() {
     let envelope = PublicationEnvelope {

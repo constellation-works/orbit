@@ -114,6 +114,39 @@ fn interrupted_layout_upgrade_leaves_stale_holder_metadata() {
     assert!(read_lock_holder(&lock_path).is_none());
 }
 
+#[cfg(unix)]
+#[test]
+fn layout_marker_parent_is_private_under_permissive_umask() {
+    use std::os::unix::fs::PermissionsExt;
+
+    const CHILD_MARKER: &str = "ORBIT_TEST_PRIVATE_LAYOUT_MARKER";
+    if std::env::var_os(CHILD_MARKER).is_none() {
+        let status = std::process::Command::new("sh")
+            .args(["-c", "umask 000; exec \"$@\"", "sh"])
+            .arg(std::env::current_exe().expect("current test executable"))
+            .arg("layout_marker_parent_is_private_under_permissive_umask")
+            .env(CHILD_MARKER, "1")
+            .status()
+            .expect("run test under permissive umask");
+        assert!(status.success(), "permissive-umask child failed");
+        return;
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let orbit_dir = temp.path().join("workspace/.orbit");
+    super::write_marker(&orbit_dir, 1).expect("write layout marker");
+
+    let state = orbit_dir.join("state");
+    for directory in [&orbit_dir, &state] {
+        let mode = fs::metadata(directory)
+            .expect("layout directory metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "{} has mode {mode:04o}", directory.display());
+    }
+}
+
 // ── shipping registry ──
 
 #[test]

@@ -48,7 +48,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::atomic_write_text;
+use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
 use orbit_types::task::is_valid_orb_task_id;
 
 use crate::contracts::{
@@ -712,7 +712,7 @@ fn write_marker(orbit_dir: &Path, version: u32) -> Result<(), OrbitError> {
         ))
     };
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| map_err("create directory for", e))?;
+        create_private_dir_all(parent).map_err(|e| map_err("create directory for", e))?;
     }
     let tmp = path.with_extension("version.tmp");
     std::fs::write(&tmp, format!("{version}\n")).map_err(|e| map_err("stage", e))?;

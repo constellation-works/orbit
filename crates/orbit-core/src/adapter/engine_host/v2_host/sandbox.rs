@@ -572,7 +572,7 @@ fn open_directory_at(parent: Option<&OwnedFd>, path: &Path) -> std::io::Result<O
 fn mkdir_at(parent: &OwnedFd, name: &std::ffi::OsStr, path: &Path) -> Result<(), DispatchError> {
     let name = CString::new(name.as_bytes())
         .map_err(|_| runtime_open_error(path, std::io::Error::from_raw_os_error(libc::EINVAL)))?;
-    let result = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o777) };
+    let result = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) };
     if result < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST) {
         return Err(runtime_open_error(path, std::io::Error::last_os_error()));
     }

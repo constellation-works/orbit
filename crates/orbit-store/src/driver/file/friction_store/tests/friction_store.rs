@@ -27,6 +27,40 @@ fn hub_migration_publishes_complete_tree_and_is_idempotent() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn hub_migration_preserves_private_file_modes_and_creates_private_directories() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let legacy = temp.path().join("legacy");
+    fs::create_dir_all(legacy.join("2026-07")).expect("legacy month");
+    let source = legacy.join("2026-07/F001.md");
+    fs::write(&source, "private record\n").expect("record");
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).expect("private source");
+
+    let canonical = prepare_hub_friction_root(temp.path(), "ws_test", Some(&legacy))
+        .expect("publish migration");
+    let copied = canonical.join("2026-07/F001.md");
+
+    assert_eq!(
+        fs::metadata(&copied)
+            .expect("copied metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    for directory in [&canonical, &canonical.join("2026-07")] {
+        let mode = fs::metadata(directory)
+            .expect("migration directory metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "{} has mode {mode:04o}", directory.display());
+    }
+}
+
 #[test]
 fn hub_migration_accepts_identical_interrupted_publish_and_commits_marker() {
     let temp = tempfile::tempdir().expect("tempdir");

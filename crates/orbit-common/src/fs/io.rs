@@ -42,7 +42,7 @@ const PRIVATE_DIR_MODE: u32 = 0o700;
 /// current user (`0o700`) instead of relying on the process umask. Existing
 /// directories are left unchanged so callers do not unexpectedly chmod a
 /// workspace root or home directory.
-pub(crate) fn create_private_dir_all(path: &Path) -> io::Result<()> {
+pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         create_private_dir_all_unix(path)
@@ -50,6 +50,26 @@ pub(crate) fn create_private_dir_all(path: &Path) -> io::Result<()> {
     #[cfg(not(unix))]
     {
         fs::create_dir_all(path)
+    }
+}
+
+/// Creates one secret-bearing Orbit state directory without relying on umask.
+///
+/// Unlike [`create_private_dir_all`], this preserves [`fs::create_dir`]'s
+/// exclusive-create behavior and returns `AlreadyExists` for an existing path.
+pub fn create_private_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(PRIVATE_DIR_MODE);
+        builder.create(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_DIR_MODE))
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(path)
     }
 }
 
@@ -758,8 +778,6 @@ fn set_private_file_permissions_for_open_file(file: &File) -> io::Result<()> {
 
 #[cfg(unix)]
 fn create_private_dir_all_unix(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-
     let mut current = PathBuf::new();
     for component in path.components() {
         current.push(component.as_os_str());
@@ -776,15 +794,8 @@ fn create_private_dir_all_unix(path: &Path) -> io::Result<()> {
                 ));
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let mut builder = fs::DirBuilder::new();
-                builder.mode(PRIVATE_DIR_MODE);
-                match builder.create(&current) {
-                    Ok(()) => {
-                        fs::set_permissions(
-                            &current,
-                            fs::Permissions::from_mode(PRIVATE_DIR_MODE),
-                        )?;
-                    }
+                match create_private_dir(&current) {
+                    Ok(()) => {}
                     Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                         if !current.is_dir() {
                             return Err(io::Error::new(

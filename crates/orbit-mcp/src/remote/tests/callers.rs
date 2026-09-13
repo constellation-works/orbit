@@ -967,5 +967,10 @@ fn the_seeder_writes_a_private_file_under_a_permissive_umask() {
         .permissions()
         .mode();
     assert_eq!(mode & 0o777, 0o600, "seeded mode {mode:o}");
+    let parent_mode = std::fs::metadata(path.parent().expect("callers parent"))
+        .expect("callers parent metadata")
+        .permissions()
+        .mode();
+    assert_eq!(parent_mode & 0o777, 0o700, "parent mode {parent_mode:o}");
     load_callers(&path).expect("the seeder's own output must satisfy the trust check");
 }

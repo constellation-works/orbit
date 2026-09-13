@@ -129,6 +129,7 @@ impl Execute for DoctorCommand {
             });
         }
         results.extend(runtime.doctor_workspace()?);
+        results.push(state_directory_permissions_row(runtime));
         // Machine-global rows, composed here rather than in `doctor_workspace`:
         // `orbit-cmd` does not know about MCP and must not learn, and this is
         // the one crate that already assembles both [ORB-11053].
@@ -179,6 +180,146 @@ impl Execute for DoctorCommand {
         Ok(Payload::blocks(Value::Array(values), blocks)
             .with_exit_code(exit_code)
             .into())
+    }
+}
+
+/// Report Orbit-owned state directories whose write bits let another local
+/// principal replace or unlink private files held beneath them.
+pub(crate) fn state_directory_permissions_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    #[cfg(unix)]
+    {
+        use std::collections::BTreeSet;
+        use std::os::unix::fs::PermissionsExt;
+
+        fn visit(
+            path: &std::path::Path,
+            descend: bool,
+            seen: &mut BTreeSet<std::path::PathBuf>,
+            writable: &mut Vec<(std::path::PathBuf, u32)>,
+        ) -> std::io::Result<()> {
+            if !seen.insert(path.to_path_buf()) {
+                return Ok(());
+            }
+            let metadata = std::fs::symlink_metadata(path)?;
+            if !metadata.is_dir() {
+                return Ok(());
+            }
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode & 0o022 != 0 {
+                writable.push((path.to_path_buf(), mode));
+            }
+            if !descend {
+                return Ok(());
+            }
+            for entry in std::fs::read_dir(path)? {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() {
+                    visit(&entry.path(), true, seen, writable)?;
+                }
+            }
+            Ok(())
+        }
+
+        let mut seen = BTreeSet::new();
+        let mut writable = Vec::new();
+        let global = runtime.global_root();
+        let workspace = runtime.paths().orbit_dir.clone();
+        let configured_roots = [
+            (global.clone(), false),
+            (global.join("state"), true),
+            (global.join("tasks"), true),
+            (global.join("cache"), true),
+            (global.join("frictions"), true),
+            (workspace.clone(), false),
+            (workspace.join("state"), true),
+            (workspace.join("tasks"), true),
+            (workspace.join("frictions"), true),
+            (workspace.join("knowledge"), true),
+        ];
+        for (configured_root, descend) in configured_roots {
+            let root = match configured_root.canonicalize() {
+                Ok(root) => root,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return WorkspaceDoctorResult {
+                        check_name: "state-directory-permissions".to_string(),
+                        status: WorkspaceDoctorStatus::Error,
+                        message: format!(
+                            "could not resolve Orbit state directory '{}': {error}",
+                            configured_root.display()
+                        ),
+                        remediation: Some(
+                            "Fix the directory access error named above, then rerun `orbit doctor`."
+                                .to_string(),
+                        ),
+                    };
+                }
+            };
+            if let Err(error) = visit(&root, descend, &mut seen, &mut writable) {
+                return WorkspaceDoctorResult {
+                    check_name: "state-directory-permissions".to_string(),
+                    status: WorkspaceDoctorStatus::Error,
+                    message: format!(
+                        "could not inspect Orbit state directory '{}': {error}",
+                        root.display()
+                    ),
+                    remediation: Some(
+                        "Fix the directory access error named above, then rerun `orbit doctor`."
+                            .to_string(),
+                    ),
+                };
+            }
+        }
+
+        if writable.is_empty() {
+            return WorkspaceDoctorResult {
+                check_name: "state-directory-permissions".to_string(),
+                status: WorkspaceDoctorStatus::Ok,
+                message: "all Orbit state directories deny group/world write access".to_string(),
+                remediation: None,
+            };
+        }
+
+        let sample = writable
+            .iter()
+            .take(5)
+            .map(|(path, mode)| format!("{} ({mode:04o})", path.display()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let remainder = writable.len().saturating_sub(5);
+        let suffix = if remainder == 0 {
+            String::new()
+        } else {
+            format!(", and {remainder} more")
+        };
+        WorkspaceDoctorResult {
+            check_name: "state-directory-permissions".to_string(),
+            status: WorkspaceDoctorStatus::Warning,
+            message: format!(
+                "{} Orbit state director{} group/world writable: {sample}{suffix}",
+                writable.len(),
+                if writable.len() == 1 {
+                    "y is"
+                } else {
+                    "ies are"
+                }
+            ),
+            remediation: Some(
+                "Remove group/world write permission from every named directory (for example, \
+                 `chmod go-w <directory>`), then rerun `orbit doctor`."
+                    .to_string(),
+            ),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = runtime;
+        WorkspaceDoctorResult {
+            check_name: "state-directory-permissions".to_string(),
+            status: WorkspaceDoctorStatus::Skipped,
+            message: "Unix directory mode checks are not available on this platform".to_string(),
+            remediation: None,
+        }
     }
 }
 
