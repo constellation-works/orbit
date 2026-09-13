@@ -76,9 +76,22 @@ impl FakeGh {
     /// `job_logs` maps a job id to what its log endpoint serves; a job absent
     /// from the map answers with a 404 the way `gh api` does.
     fn new(view: &Value, job_logs: &[(u64, &str)]) -> Self {
+        Self::with_run_log_failure(view, job_logs, None)
+    }
+
+    /// Script a non-zero run-scoped response. The message is stored in a
+    /// separate file so the shell fixture never interprets its contents.
+    fn with_run_log_failure(
+        view: &Value,
+        job_logs: &[(u64, &str)],
+        run_log_failure: Option<&str>,
+    ) -> Self {
         let dir = TempDir::new().expect("temp dir");
         let path = |name: &str| dir.path().join(name).display().to_string();
         fs::write(dir.path().join("run_view.json"), view.to_string()).expect("write run view");
+        if let Some(message) = run_log_failure {
+            fs::write(dir.path().join("run_log_error.txt"), message).expect("write run error");
+        }
 
         let mut cases = String::new();
         for (job_id, log) in job_logs {
@@ -90,12 +103,20 @@ impl FakeGh {
             ));
         }
 
+        let run_log_case = if run_log_failure.is_some() {
+            format!(
+                "  *\"--log-failed\"*|*\" --log\"*) cat {} >&2 ; exit 1 ;;\n",
+                path("run_log_error.txt")
+            )
+        } else {
+            "  *\"--log-failed\"*|*\" --log\"*) exit 0 ;;\n".to_string()
+        };
         let script = format!(
             "#!/usr/bin/env bash\n\
              case \"$*\" in --warmup) exit 0 ;; esac\n\
              printf '%s\\n' \"$*\" >> {calls}\n\
              case \"$*\" in\n\
-             {cases}  *\"--log-failed\"*|*\" --log\"*) exit 0 ;;\n  \
+             {cases}{run_log_case}  \
              *\"--json\"*) cat {view} ; exit 0 ;;\n  \
              *\"actions/jobs/\"*) printf 'gh: Not Found (HTTP 404) token=ghp_{token}\\n' >&2 ; exit 1 ;;\n\
              esac\n\
@@ -207,6 +228,7 @@ fn an_empty_failed_step_read_recovers_the_failed_jobs_own_log() {
         vec![json!({
             "job_id": FAILED_JOB_ID,
             "name": "docs",
+            "status": "completed",
             "conclusion": "failure",
             "url": format!("{}/job/{FAILED_JOB_ID}", run_url(RUN_ID)),
         })]
@@ -224,6 +246,64 @@ fn an_empty_failed_step_read_recovers_the_failed_jobs_own_log() {
     assert_eq!(read.log.checkout_evidence.commits, vec![CHECKOUT_SHA]);
     assert!(read.log.checkout_evidence.complete);
     assert_read_the_failed_job(&gh.calls());
+}
+
+#[test]
+fn an_in_progress_parent_readiness_error_recovers_a_completed_failed_job() {
+    let mut view = run_view(&run_url(RUN_ID));
+    view["status"] = json!("in_progress");
+    view["conclusion"] = Value::Null;
+    let log = job_log();
+    let gh = FakeGh::with_run_log_failure(
+        &view,
+        &[(FAILED_JOB_ID, log.as_str())],
+        Some(&format!(
+            "failed to get run log: run {RUN_ID} is still in progress; logs will be available when it is complete"
+        )),
+    );
+
+    let read = gh.read(
+        json!({"run": RUN_ID, "job": FAILED_JOB_ID, "scope": "failed"}),
+        512,
+    );
+
+    assert_eq!(read.source, "job_api_log");
+    assert_eq!(read.fallback_error, None);
+    assert!(read.log.source_complete);
+    assert!(read.log.returned_bytes <= 512 + 128);
+    assert!(read.log.text.contains("reject_root_override"));
+    assert_eq!(read.log.checkout_evidence.commits, vec![CHECKOUT_SHA]);
+    assert!(read.log.checkout_evidence.complete);
+    assert_eq!(read.source_jobs[0]["job_id"], json!(FAILED_JOB_ID));
+    assert_eq!(read.source_jobs[0]["status"], json!("completed"));
+    assert_eq!(gh.calls().len(), 3);
+}
+
+#[test]
+fn readiness_does_not_read_a_running_failed_job() {
+    let mut view = run_view(&run_url(RUN_ID));
+    view["status"] = json!("in_progress");
+    view["conclusion"] = Value::Null;
+    view["jobs"][1]["status"] = json!("in_progress");
+    let gh = FakeGh::with_run_log_failure(
+        &view,
+        &[(FAILED_JOB_ID, job_log().as_str())],
+        Some(&format!(
+            "failed to get run log: run {RUN_ID} is still in progress; logs will be available when it is complete"
+        )),
+    );
+
+    let read = gh.read(json!({"run": RUN_ID, "job": FAILED_JOB_ID}), 16_384);
+
+    assert_eq!(read.source, "run_log");
+    assert!(read.log.text.is_empty());
+    assert!(
+        read.fallback_error
+            .as_deref()
+            .is_some_and(|reason| reason.contains("job log recovery failed")
+                && reason.contains("not a job of run"))
+    );
+    assert_read_no_job_log(&gh.calls());
 }
 
 #[test]
@@ -405,6 +485,28 @@ fn a_narrowed_job_must_belong_to_the_run() {
 }
 
 #[test]
+fn a_job_from_a_previous_rerun_attempt_is_refused() {
+    let mut view = run_view(&run_url(RUN_ID));
+    view["jobs"][1]["databaseId"] = json!(FAILED_JOB_ID + 1);
+    let gh = FakeGh::with_run_log_failure(
+        &view,
+        &[(FAILED_JOB_ID, job_log().as_str())],
+        Some(&format!(
+            "failed to get run log: run {RUN_ID} is still in progress; logs will be available when it is complete"
+        )),
+    );
+
+    let read = gh.read(json!({"run": RUN_ID, "job": FAILED_JOB_ID}), 16_384);
+
+    assert!(
+        read.fallback_error
+            .as_deref()
+            .is_some_and(|reason| reason.contains("not a job of run"))
+    );
+    assert_read_no_job_log(&gh.calls());
+}
+
+#[test]
 fn a_failing_run_scoped_read_stays_an_error_instead_of_falling_back() {
     // Nothing in the script answers a bare `run view … --log-failed` for this
     // run id, so `gh` exits non-zero — a retryable transport failure, not the
@@ -426,6 +528,29 @@ fn a_failing_run_scoped_read_stays_an_error_instead_of_falling_back() {
         "unexpected error: {error}"
     );
     assert_read_no_job_log(&gh.calls());
+}
+
+#[test]
+fn auth_and_network_failures_do_not_trigger_job_log_recovery() {
+    for message in [
+        "HTTP 401: Bad credentials",
+        "error connecting to api.github.com: network is unreachable",
+        "HTTP 401 while run 34060485218 is still in progress; logs will be available when it is complete",
+    ] {
+        let gh = FakeGh::with_run_log_failure(
+            &run_view(&run_url(RUN_ID)),
+            &[(FAILED_JOB_ID, job_log().as_str())],
+            Some(message),
+        );
+        let requests = gh.requests(failed_scope(RUN_ID));
+
+        let error = read_run_log(&requests, LogReadBounds::new(16_384))
+            .err()
+            .expect("transport failure stays an error");
+
+        assert!(error.to_string().contains(message));
+        assert_read_no_job_log(&gh.calls());
+    }
 }
 
 #[test]
@@ -466,7 +591,13 @@ fn set_executable(_path: &Path) {}
 #[test]
 fn source_read_limit_defers_without_retrying_or_returning_a_partial_unit() {
     let log = "bounded line\n".repeat(700_000);
-    let gh = FakeGh::new(&run_view(&run_url(RUN_ID)), &[(FAILED_JOB_ID, &log)]);
+    let gh = FakeGh::with_run_log_failure(
+        &run_view(&run_url(RUN_ID)),
+        &[(FAILED_JOB_ID, &log)],
+        Some(&format!(
+            "failed to get run log: run {RUN_ID} is still in progress; logs will be available when it is complete"
+        )),
+    );
     let read = gh.read(json!({"run": RUN_ID, "job": FAILED_JOB_ID}), 16_384);
     assert!(read.log.diagnostic.is_none());
     assert!(read.log.text.is_empty());

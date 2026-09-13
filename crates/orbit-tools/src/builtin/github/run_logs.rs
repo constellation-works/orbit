@@ -18,7 +18,7 @@ impl crate::Tool for GithubRunLogsTool {
     fn schema(&self) -> orbit_types::tool::ToolSchema {
         super::gh_schema(
             "github.run.logs",
-            "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is read incrementally with an 8 MiB stdout limit and process timeout. A separate diagnostic_unit retains a unique complete failing runner command up to 256 KiB; display truncation does not imply missing command evidence. Source-limit exhaustion is retryable. When the run-scoped read succeeds with no output at all, the excerpt is recovered from the log API of a job the run itself reported failed, and `source` says so.",
+            "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. The source stream is read incrementally with an 8 MiB stdout limit and process timeout. A separate diagnostic_unit retains a unique complete failing runner command up to 256 KiB; display truncation does not imply missing command evidence. Source-limit exhaustion is retryable. When the run-scoped read succeeds with no output, or GitHub says the parent run is still in progress, the excerpt can be recovered from the log API of a verified completed job belonging to that run; failed scope is restricted to unsuccessful jobs. `source` and `source_jobs` identify the recovery. Other errors remain errors.",
             vec![
                 super::tool_param("run", "Numeric workflow-run ID", "string", true),
                 super::tool_param(
@@ -69,9 +69,9 @@ impl crate::Tool for GithubRunLogsTool {
             "returned_bytes": log.returned_bytes,
             "total_bytes": log.total_bytes,
             // Which query the excerpt above came from, and — when the
-            // run-scoped read returned nothing — the job whose own log stood
-            // in for it, so a reader is never left guessing what these bytes
-            // describe.
+            // run-scoped read hit its empty/readiness blind spot — the job
+            // whose own log stood in for it, so a reader is never left
+            // guessing what these bytes describe.
             "source": read.source,
             "source_jobs": read.source_jobs,
             "fallback_error": read.fallback_error,
