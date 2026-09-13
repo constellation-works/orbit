@@ -2659,7 +2659,7 @@ fn failed_auto_task_refresh_preserves_primary_and_audits_definition_and_run() {
 }
 
 #[test]
-fn unchanged_pre_dirty_path_is_excluded_from_escape_diagnostic() {
+fn stationary_primary_delta_is_observed_without_attributing_a_writer() {
     let fixture = linked_worktree_fixture();
     fs::write(
         fixture.primary.join("README.md"),
@@ -2678,7 +2678,7 @@ fn unchanged_pre_dirty_path_is_excluded_from_escape_diagnostic() {
     let mut host = TestHost::with_command(script.display().to_string());
     host.workspace_root = Some(fixture.primary.clone());
 
-    let error = run_cli_backend(
+    let outcome = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
         "test_activity",
@@ -2687,29 +2687,23 @@ fn unchanged_pre_dirty_path_is_excluded_from_escape_diagnostic() {
         &worktree_input(&fixture, "ORB-PREDIRTY-ATTRIBUTION"),
         None,
     )
-    .expect_err("new primary delta must fail closed");
+    .expect("stationary primary dirt has no reliable writer attribution");
 
-    let diagnostic = worktree_integrity_diagnostic(&error);
+    assert!(outcome.success);
     assert_eq!(
-        diagnostic["changed_paths"],
-        serde_json::json!(["escaped-after-capture.txt"]),
-        "unchanged pre-existing dirtiness must not be attributed to this invocation"
+        fs::read_to_string(&escaped).expect("read observed primary dirt"),
+        "escaped\n",
+        "observation must not discard the concurrent primary content"
     );
     assert_eq!(
-        diagnostic["primary_before"]["path_states"]["README.md"],
-        diagnostic["primary_after"]["path_states"]["README.md"],
-        "the diagnostic must retain identical before/after identity for the pre-dirty path"
-    );
-    assert!(
-        diagnostic["primary_after"]["path_states"]["escaped-after-capture.txt"]
-            ["untracked_content_sha256"]
-            .is_string(),
-        "the new untracked path needs its own content identity"
+        fs::read_to_string(fixture.primary.join("README.md")).expect("read pre-dirty path"),
+        "pre-existing primary dirtiness\n",
+        "observation must not rewrite pre-existing primary dirt"
     );
 }
 
 #[test]
-fn staged_only_primary_delta_reports_its_path_and_index_identity() {
+fn staged_only_primary_delta_is_preserved_without_blocking_the_candidate() {
     let fixture = linked_worktree_fixture();
     let script = fixture.root().join("codex");
     write_executable(
@@ -2723,7 +2717,7 @@ fn staged_only_primary_delta_reports_its_path_and_index_identity() {
     let mut host = TestHost::with_command(script.display().to_string());
     host.workspace_root = Some(fixture.primary.clone());
 
-    let error = run_cli_backend(
+    let outcome = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
         "test_activity",
@@ -2732,26 +2726,18 @@ fn staged_only_primary_delta_reports_its_path_and_index_identity() {
         &worktree_input(&fixture, "ORB-STAGED-ONLY"),
         None,
     )
-    .expect_err("staged primary delta must fail closed");
+    .expect("staged primary dirt is external to the assigned candidate");
 
-    let diagnostic = worktree_integrity_diagnostic(&error);
+    assert!(outcome.success);
     assert_eq!(
-        diagnostic["changed_paths"],
-        serde_json::json!(["README.md"])
+        git_bytes(&fixture.primary, &["show", ":README.md"]),
+        b"staged-only\n",
+        "the external staged change must remain staged verbatim"
     );
-    let after = &diagnostic["primary_after"]["path_states"]["README.md"];
-    assert!(after["index_entry_sha256"].is_string());
-    assert!(after["staged_patch_sha256"].is_string());
-    assert!(
-        after["worktree_patch_sha256"].is_null(),
-        "a fully staged edit has no index-to-worktree patch"
-    );
-    assert_eq!(after["worktree_present"], true);
-    assert!(after["untracked_content_sha256"].is_null());
 }
 
 #[test]
-fn primary_escape_is_typed_non_retryable_and_preserves_both_checkouts() {
+fn primary_index_delta_is_never_moved_into_the_assigned_candidate() {
     let fixture = linked_worktree_fixture();
     let escaped = fixture.primary.join("escaped.txt");
     let script = fixture.root().join("claude");
@@ -2767,7 +2753,7 @@ fn primary_escape_is_typed_non_retryable_and_preserves_both_checkouts() {
     host.workspace_root = Some(fixture.primary.clone());
     let audit = test_audit("run-deliberate-escape", "claude");
 
-    let error = run_cli_backend(
+    let outcome = run_cli_backend(
         &host,
         &test_agent_loop_spec_for("claude", Duration::from_secs(5)),
         "test_activity",
@@ -2776,16 +2762,9 @@ fn primary_escape_is_typed_non_retryable_and_preserves_both_checkouts() {
         &worktree_input(&fixture, "ORB-ESCAPE"),
         None,
     )
-    .expect_err("primary write must fail closed");
+    .expect("primary snapshots alone do not identify the writer");
 
-    assert_worktree_integrity_error(
-        &error,
-        "primary_checkout_drift",
-        ("ORB-ESCAPE", "run-deliberate-escape", "claude"),
-        &fixture,
-        "escaped.txt",
-    );
-    assert!(error.is_non_retryable());
+    assert!(outcome.success);
     assert!(
         escaped.exists(),
         "diagnosis must not clean the primary delta"
@@ -2810,12 +2789,12 @@ fn primary_escape_is_typed_non_retryable_and_preserves_both_checkouts() {
             .expect("audit events")
             .iter()
             .any(|event| matches!(event.kind, V2AuditEventKind::CliInvocationFinished { .. })),
-        "terminal provider audit must precede the integrity failure"
+        "terminal provider audit must precede boundary acceptance"
     );
 }
 
 #[test]
-fn primary_content_mutation_is_typed_even_when_assigned_content_also_changes() {
+fn primary_content_delta_does_not_replace_assigned_content() {
     let fixture = linked_worktree_fixture();
     let escaped = fixture.primary.join("ambiguous-primary.txt");
     let script = fixture.root().join("codex");
@@ -2829,7 +2808,7 @@ fn primary_content_mutation_is_typed_even_when_assigned_content_also_changes() {
     let mut host = TestHost::with_command(script.display().to_string());
     host.workspace_root = Some(fixture.primary.clone());
 
-    let error = run_cli_backend(
+    let outcome = run_cli_backend(
         &host,
         &test_agent_loop_spec(Duration::from_secs(5)),
         "test_activity",
@@ -2838,15 +2817,9 @@ fn primary_content_mutation_is_typed_even_when_assigned_content_also_changes() {
         &worktree_input(&fixture, "ORB-AMBIGUOUS"),
         None,
     )
-    .expect_err("dual-checkout mutation must fail closed");
+    .expect("primary dirt is external to the assigned candidate");
 
-    assert_worktree_integrity_error(
-        &error,
-        "primary_checkout_drift",
-        ("ORB-AMBIGUOUS", "run-ambiguous-integrity", "codex"),
-        &fixture,
-        "ambiguous-primary.txt",
-    );
+    assert!(outcome.success);
     assert!(fixture.assigned.join("ambiguous-assigned.txt").exists());
     assert!(escaped.exists());
 }
@@ -2871,10 +2844,14 @@ fn dirty_integrity_failure_persists_and_restores_tracked_and_untracked_content()
         "src/escaped.rs",
         "fn escaped_primary_write() {}\n",
     );
+    git_ok(
+        &fixture.primary,
+        &["checkout", "-b", "primary-recovery-drift"],
+    );
 
     let error = guard
         .verify()
-        .expect_err("primary escape must fail after preserving assigned dirt");
+        .expect_err("a primary branch switch must fail after preserving assigned dirt");
     let diagnostic = worktree_integrity_diagnostic(&error);
     let recovery = &diagnostic["recovery"];
     let tracked_patch = PathBuf::from(
@@ -3131,7 +3108,7 @@ fn dirty_to_clean_primary_fast_forward_is_accepted() {
 }
 
 #[test]
-fn primary_dirt_intersecting_the_run_defeats_a_fast_forward() {
+fn primary_dirt_intersecting_the_run_does_not_defeat_a_fast_forward() {
     for (kind, shared) in [("untracked", "shared-new.txt"), ("tracked", "README.md")] {
         let fixture = linked_worktree_fixture();
         let run_id = format!("run-{kind}-interference");
@@ -3142,21 +3119,14 @@ fn primary_dirt_intersecting_the_run_defeats_a_fast_forward() {
         advance_primary(&fixture, "merged-pr.txt");
         fs::write(fixture.primary.join(shared), "primary escape\n").expect("write primary escape");
 
-        let error = guard
-            .verify()
-            .expect_err("primary dirt on a path the run touched must fail closed");
-
-        assert_worktree_integrity_error(
-            &error,
-            "primary_checkout_drift",
-            (&task_id, &run_id, "codex"),
-            &fixture,
-            shared,
-        );
+        let primary_before = git_bytes(&fixture.primary, &["status", "--porcelain=v2", "-z"]);
+        guard.verify().unwrap_or_else(|error| {
+            panic!("{kind} primary dirt cannot stand in for a remote merge conflict: {error}")
+        });
         assert_eq!(
-            worktree_integrity_diagnostic(&error)["conflicting_paths"],
-            serde_json::json!([shared]),
-            "{kind} interference must be named as a conflicting path"
+            git_bytes(&fixture.primary, &["status", "--porcelain=v2", "-z"]),
+            primary_before,
+            "boundary acceptance must preserve {kind} primary dirt"
         );
     }
 }
@@ -3205,7 +3175,7 @@ fn stationary_primary_record_store_dirt_disjoint_from_the_run_is_accepted() {
 }
 
 #[test]
-fn stationary_primary_source_edit_stays_fail_closed_even_when_disjoint() {
+fn stationary_primary_source_edit_is_external_to_the_candidate() {
     let fixture = linked_worktree_fixture();
     let guard = boundary_guard(&fixture, "ORB-STATIONARY-SOURCE", "run-stationary-source");
 
@@ -3215,28 +3185,20 @@ fn stationary_primary_source_edit_stays_fail_closed_even_when_disjoint() {
     write_primary_file(&fixture, ".orbit/routines/nightly.yaml", "name: nightly\n");
     write_primary_file(&fixture, "src/escaped.rs", "fn escaped() {}\n");
 
-    let error = guard
+    let primary_before = git_bytes(&fixture.primary, &["status", "--porcelain=v2", "-z"]);
+    guard
         .verify()
-        .expect_err("a primary source edit must remain fail closed");
-
-    assert_worktree_integrity_error(
-        &error,
-        "primary_checkout_drift",
-        ("ORB-STATIONARY-SOURCE", "run-stationary-source", "codex"),
-        &fixture,
-        "src/escaped.rs",
-    );
+        .expect("source path class does not identify who changed the primary");
     assert_eq!(
-        worktree_integrity_diagnostic(&error)["conflicting_paths"],
-        serde_json::json!([]),
-        "the source edit is fatal on its path class, not on run interference"
+        git_bytes(&fixture.primary, &["status", "--porcelain=v2", "-z"]),
+        primary_before,
+        "the guard must preserve all primary source dirt"
     );
+    assert!(!fixture.assigned.join("src/escaped.rs").exists());
 }
 
 #[test]
-fn stationary_primary_dirt_intersecting_the_run_remains_a_typed_drift_failure() {
-    // Both paths are inside the record store, so only the intersection with
-    // `run_changed_paths` can be what keeps them fail-closed.
+fn stationary_primary_dirt_intersecting_the_run_is_not_a_remote_conflict() {
     for (kind, shared) in [
         ("untracked", ".orbit/frictions/F-0009/friction.yaml"),
         ("tracked", ".orbit/routines/worktree_gc.yaml"),
@@ -3254,23 +3216,141 @@ fn stationary_primary_dirt_intersecting_the_run_remains_a_typed_drift_failure() 
         write_worktree_file(&fixture.assigned, shared, "run candidate\n");
         write_primary_file(&fixture, shared, "primary escape\n");
 
-        let error = guard
-            .verify()
-            .expect_err("primary dirt on a path the run touched must fail closed");
-
-        assert_worktree_integrity_error(
-            &error,
-            "primary_checkout_drift",
-            (&task_id, &run_id, "codex"),
-            &fixture,
-            shared,
-        );
+        let primary_before = git_bytes(&fixture.primary, &["status", "--porcelain=v2", "-z"]);
+        guard.verify().unwrap_or_else(|error| {
+            panic!("stationary {kind} pathname overlap is not remote integration: {error}")
+        });
         assert_eq!(
-            worktree_integrity_diagnostic(&error)["conflicting_paths"],
-            serde_json::json!([shared]),
-            "stationary {kind} interference must be named as a conflicting path"
+            git_bytes(&fixture.primary, &["status", "--porcelain=v2", "-z"]),
+            primary_before,
+            "the guard must preserve stationary {kind} primary dirt"
         );
     }
+}
+
+#[test]
+fn stationary_primary_source_dirt_survives_clean_fetched_target_integration() {
+    let fixture = linked_worktree_fixture();
+    write_primary_file(&fixture, "src/deleted.rs", "pub fn retained() {}\n");
+    git_ok(&fixture.primary, &["add", "--", "src/deleted.rs"]);
+    git_ok(&fixture.primary, &["commit", "-m", "seed tracked source"]);
+    let seeded_head = git_head_text(&fixture.primary);
+    git_ok(&fixture.assigned, &["merge", "--ff-only", &seeded_head]);
+    let (remote, target_branch) = initialize_remote(&fixture);
+    let guard = boundary_guard(&fixture, "ORB-CLEAN-INTEGRATION", "run-clean-integration");
+
+    // Candidate and remote both edit README.md, but at distinct locations.
+    // The primary simultaneously accumulates overlapping staged dirt, an
+    // unstaged deletion, and an untracked source file while HEAD stays put.
+    write_worktree_file(&fixture.assigned, "README.md", "base\ncandidate\n");
+    write_primary_file(&fixture, "README.md", "primary-local\nbase\n");
+    git_ok(&fixture.primary, &["add", "--", "README.md"]);
+    fs::remove_file(fixture.primary.join("src/deleted.rs")).expect("delete tracked primary source");
+    write_primary_file(&fixture, "src/untracked.rs", "pub fn external() {}\n");
+    advance_remote_file(
+        &fixture,
+        &remote,
+        &target_branch,
+        "README.md",
+        "remote\nbase\n",
+    );
+
+    let primary_status = git_bytes(&fixture.primary, &["status", "--porcelain=v2", "-z"]);
+    let primary_index = git_bytes(&fixture.primary, &["ls-files", "--stage", "-z", "--"]);
+    let primary_patch = git_bytes(&fixture.primary, &["diff", "--binary", "HEAD", "--"]);
+    guard
+        .verify()
+        .expect("local primary dirt must defer to fetched-target integration");
+
+    git_ok(&fixture.assigned, &["add", "--", "README.md"]);
+    git_ok(&fixture.assigned, &["commit", "-m", "candidate change"]);
+    git_ok(&fixture.assigned, &["fetch", "origin", &target_branch]);
+    let remote_ref = format!("origin/{target_branch}");
+    git_ok(&fixture.assigned, &["rebase", &remote_ref]);
+
+    assert_eq!(
+        git_bytes(&fixture.primary, &["status", "--porcelain=v2", "-z"]),
+        primary_status,
+        "fetch and candidate integration must preserve primary working contents"
+    );
+    assert_eq!(
+        git_bytes(&fixture.primary, &["ls-files", "--stage", "-z", "--"]),
+        primary_index,
+        "fetch and candidate integration must preserve the primary index"
+    );
+    assert_eq!(
+        git_bytes(&fixture.primary, &["diff", "--binary", "HEAD", "--"]),
+        primary_patch,
+        "tracked primary modifications and deletion must remain byte-identical"
+    );
+    assert_eq!(
+        git_bytes(&fixture.assigned, &["show", "HEAD:README.md"]),
+        b"remote\nbase\ncandidate\n",
+        "same-path nonconflicting candidate and remote edits must integrate"
+    );
+    assert_eq!(
+        git_bytes(&fixture.assigned, &["show", "HEAD:src/deleted.rs"]),
+        b"pub fn retained() {}\n",
+        "the primary deletion must not enter the candidate"
+    );
+    assert!(
+        !fixture.assigned.join("src/untracked.rs").exists(),
+        "untracked primary source must not enter the candidate"
+    );
+}
+
+#[test]
+fn true_candidate_remote_conflict_still_stops_fetched_target_integration() {
+    let fixture = linked_worktree_fixture();
+    let (remote, target_branch) = initialize_remote(&fixture);
+    let guard = boundary_guard(
+        &fixture,
+        "ORB-CONFLICT-INTEGRATION",
+        "run-conflict-integration",
+    );
+
+    write_worktree_file(&fixture.assigned, "README.md", "candidate\n");
+    write_primary_file(&fixture, "README.md", "primary-local\n");
+    git_ok(&fixture.primary, &["add", "--", "README.md"]);
+    advance_remote_file(&fixture, &remote, &target_branch, "README.md", "remote\n");
+    let primary_status = git_bytes(&fixture.primary, &["status", "--porcelain=v2", "-z"]);
+    let primary_index = git_bytes(&fixture.primary, &["ls-files", "--stage", "-z", "--"]);
+
+    guard
+        .verify()
+        .expect("local pathname overlap must not be mislabeled as a remote conflict");
+    git_ok(&fixture.assigned, &["add", "--", "README.md"]);
+    git_ok(
+        &fixture.assigned,
+        &["commit", "-m", "conflicting candidate"],
+    );
+    git_ok(&fixture.assigned, &["fetch", "origin", &target_branch]);
+    let remote_ref = format!("origin/{target_branch}");
+    let rebase = Command::new("git")
+        .arg("-C")
+        .arg(&fixture.assigned)
+        .args(["rebase", &remote_ref])
+        .output()
+        .expect("run conflicting fetched-target rebase");
+
+    assert!(
+        !rebase.status.success(),
+        "a true candidate-versus-remote content conflict cannot falsely succeed"
+    );
+    assert!(
+        !git_bytes(&fixture.assigned, &["ls-files", "-u"]).is_empty(),
+        "the unmerged index entries are the existing conflict-recovery trigger"
+    );
+    assert_eq!(
+        git_bytes(&fixture.primary, &["status", "--porcelain=v2", "-z"]),
+        primary_status,
+        "failed candidate integration must preserve primary contents"
+    );
+    assert_eq!(
+        git_bytes(&fixture.primary, &["ls-files", "--stage", "-z", "--"]),
+        primary_index,
+        "failed candidate integration must preserve the primary index"
+    );
 }
 
 #[test]
@@ -3298,7 +3378,7 @@ fn primary_branch_switch_remains_a_typed_drift_failure() {
 }
 
 #[test]
-fn primary_escape_is_checked_after_nonzero_exit_and_timeout() {
+fn primary_dirt_does_not_override_nonzero_exit_or_timeout() {
     for (terminal, trailer, timeout) in [
         ("nonzero", "exit 23", Duration::from_secs(5)),
         // The timeout arm's budget has to cover a fork/exec plus one write on a
@@ -3329,7 +3409,7 @@ fn primary_escape_is_checked_after_nonzero_exit_and_timeout() {
         let run_id = format!("run-{terminal}-escape");
         let task_id = format!("ORB-{}", terminal.to_ascii_uppercase());
 
-        let error = run_cli_backend(
+        let outcome = run_cli_backend(
             &host,
             &test_agent_loop_spec(timeout),
             "test_activity",
@@ -3338,16 +3418,16 @@ fn primary_escape_is_checked_after_nonzero_exit_and_timeout() {
             &worktree_input(&fixture, &task_id),
             None,
         )
-        .unwrap_err();
+        .expect("primary dirt must not replace the provider's own terminal outcome");
 
-        assert_worktree_integrity_error(
-            &error,
-            "primary_checkout_drift",
-            (&task_id, &run_id, "codex"),
-            &fixture,
-            &escaped_name,
+        assert!(
+            !outcome.success,
+            "{terminal} remains the invocation outcome"
         );
-        assert!(escaped.exists(), "{terminal} delta must remain for rescue");
+        assert!(
+            escaped.exists(),
+            "{terminal} primary dirt must remain untouched"
+        );
     }
 }
 
@@ -3424,6 +3504,61 @@ fn advance_primary(fixture: &LinkedWorktreeFixture, path: &str) {
     fs::write(fixture.primary.join(path), "merged\n").expect("write merged PR file");
     git_ok(&fixture.primary, &["add", "--", path]);
     git_ok(&fixture.primary, &["commit", "-m", "merge sibling PR"]);
+}
+
+fn initialize_remote(fixture: &LinkedWorktreeFixture) -> (PathBuf, String) {
+    let remote = fixture.root().join("remote.git");
+    let remote_arg = remote.to_str().expect("utf8 remote path");
+    git_ok(fixture.root(), &["init", "--bare", remote_arg]);
+    git_ok(&fixture.primary, &["remote", "add", "origin", remote_arg]);
+    let target_branch =
+        String::from_utf8(git_bytes(&fixture.primary, &["branch", "--show-current"]))
+            .expect("utf8 target branch")
+            .trim()
+            .to_string();
+    let refspec = format!("HEAD:refs/heads/{target_branch}");
+    git_ok(&fixture.primary, &["push", "origin", &refspec]);
+    (remote, target_branch)
+}
+
+fn advance_remote_file(
+    fixture: &LinkedWorktreeFixture,
+    remote: &Path,
+    target_branch: &str,
+    path: &str,
+    contents: &str,
+) {
+    let publisher = fixture.root().join("publisher");
+    fs::create_dir(&publisher).expect("create publisher checkout");
+    git_ok(&publisher, &["init"]);
+    git_ok(&publisher, &["config", "user.name", "Orbit Publisher"]);
+    git_ok(
+        &publisher,
+        &["config", "user.email", "publisher@example.invalid"],
+    );
+    git_ok(
+        &publisher,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote.to_str().expect("utf8 remote path"),
+        ],
+    );
+    git_ok(&publisher, &["fetch", "origin", target_branch]);
+    git_ok(&publisher, &["checkout", "-b", "publisher", "FETCH_HEAD"]);
+    write_worktree_file(&publisher, path, contents);
+    git_ok(&publisher, &["add", "--", path]);
+    git_ok(&publisher, &["commit", "-m", "advance remote target"]);
+    let refspec = format!("HEAD:refs/heads/{target_branch}");
+    git_ok(&publisher, &["push", "origin", &refspec]);
+}
+
+fn git_head_text(repo: &Path) -> String {
+    String::from_utf8(git_bytes(repo, &["rev-parse", "HEAD"]))
+        .expect("utf8 HEAD")
+        .trim()
+        .to_string()
 }
 
 /// Write a (possibly nested) path inside the registered primary checkout.

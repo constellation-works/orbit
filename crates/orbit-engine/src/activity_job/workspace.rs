@@ -569,13 +569,13 @@ impl WorktreeBoundaryGuard {
     }
 
     /// Compare both monitored checkouts after the provider reaches any
-    /// terminal outcome. A primary delta is benign in exactly two shapes: a
-    /// proven same-branch fast-forward, or a stationary HEAD whose only
-    /// movement is Orbit record-store dirt. Both require that the delta left
-    /// every path this run touched alone: linked worktrees keep their own
-    /// HEAD, and the shipment rebase checkpoint owns reconciliation with a new
-    /// base. Primary rewrites, primary branch switches, primary source edits,
-    /// primary dirt overlapping the run, and unapproved history changes in the
+    /// terminal outcome. Primary working-copy and index movement is observed
+    /// but never attributed to the provider from before/after snapshots alone.
+    /// A stationary primary HEAD is therefore benign regardless of path class
+    /// or overlap with the candidate. A proven same-branch fast-forward is also
+    /// benign: linked worktrees retain their own HEAD, and the later fetched-base
+    /// rebase is the authority for candidate-versus-target integration. Primary
+    /// rewrites, primary branch switches, and unapproved history changes in the
     /// assigned worktree remain typed, fail-closed violations. Only completion
     /// of an explicitly admitted stopped rebase permits assigned history changes.
     pub(crate) fn verify_after_provider(
@@ -645,11 +645,10 @@ impl WorktreeBoundaryGuard {
             return Ok(());
         }
 
-        if primary_dirt_only_delta_is_benign(
+        if primary_stationary_dirt_delta_is_benign(
             &self.primary_before,
             &primary_after,
             &primary_dirt_paths,
-            &conflicting_paths,
         ) {
             tracing::info!(
                 target: "orbit.engine.cli_runner",
@@ -657,17 +656,13 @@ impl WorktreeBoundaryGuard {
                 run_id = %self.run_id,
                 primary_head = %primary_after.head,
                 ignored_primary_paths = ?primary_dirt_paths,
-                "accepted concurrent primary record-store dirt disjoint from the run; primary HEAD and branch never moved"
+                "accepted concurrent primary working-state movement; primary HEAD and branch never moved, and fetched-target integration remains authoritative"
             );
             return Ok(());
         }
 
-        if primary_fast_forward_is_benign(
-            &self.primary_root,
-            &self.primary_before,
-            &primary_after,
-            &conflicting_paths,
-        )? {
+        if primary_fast_forward_is_benign(&self.primary_root, &self.primary_before, &primary_after)?
+        {
             tracing::info!(
                 target: "orbit.engine.cli_runner",
                 task_id = %self.task_id,
@@ -849,58 +844,38 @@ impl WorktreeBoundaryGuard {
     }
 }
 
-/// Orbit's own record store inside a checkout. Tasks, frictions, auto-tasks,
-/// and routines under this prefix are rewritten continuously by the
-/// engine that drives the pipeline and by out-of-run curation passes; they are
-/// never part of a run's code candidate, so the primary's copy moving under a
-/// stationary HEAD carries no data-loss signal.
-const ORBIT_RECORD_STORE_PREFIX: &str = ".orbit/";
-
-/// Accept a primary checkout that never moved but merely gained or lost record
-/// store dirt away from the run.
+/// Accept a primary checkout whose HEAD and branch stayed stationary while its
+/// working copy or index changed.
 ///
 /// `primary_fast_forward_is_benign` covers the case where the primary branch
 /// advanced; it rejects `before.head == after.head` on its first clause, which
-/// left a stationary primary with *any* unrelated dirt delta reported as
-/// `primary_checkout_drift` (F2026-07-166: an out-of-run curation pass
-/// rewriting tracked Orbit records killed a complete, validated implementation).
+/// previously left source dirt reported as `primary_checkout_drift` after a
+/// complete implementation.
 ///
-/// Unlike a fast-forward, a stationary HEAD offers no positive proof that Git
-/// itself produced the delta, so acceptance is deliberately narrower than
-/// "disjoint from the run" alone (ADR-0293): every mutated path must live in
-/// the record store. A provider that escapes its worktree to edit source in
-/// the primary — the ORB-10134 data-loss hazard — keeps failing closed even
-/// when the file it touched is one this run never looked at. The delta must
-/// also be fully explained by dirt-path movement; an otherwise unattributable
-/// fingerprint change is not something this branch understands.
-fn primary_dirt_only_delta_is_benign(
+/// The snapshots prove only that primary state moved during the invocation;
+/// they cannot identify the writer. The primary is outside the candidate and
+/// is never staged, committed, reset, or cleaned here. Candidate integration
+/// is decided later in the assigned worktree against the fetched remote target,
+/// where Git can distinguish a clean merge from a real conflict. The nonempty
+/// dirt-path condition keeps unexplained fingerprint changes fail closed.
+fn primary_stationary_dirt_delta_is_benign(
     before: &GitWorktreeFingerprint,
     after: &GitWorktreeFingerprint,
     primary_dirt_paths: &[String],
-    conflicting_paths: &[String],
 ) -> bool {
-    before.head == after.head
-        && before.branch == after.branch
-        && !primary_dirt_paths.is_empty()
-        && conflicting_paths.is_empty()
-        && primary_dirt_paths
-            .iter()
-            .all(|path| path.starts_with(ORBIT_RECORD_STORE_PREFIX))
+    before.head == after.head && before.branch == after.branch && !primary_dirt_paths.is_empty()
 }
 
 fn primary_fast_forward_is_benign(
     root: &Path,
     before: &GitWorktreeFingerprint,
     after: &GitWorktreeFingerprint,
-    conflicting_paths: &[String],
 ) -> Result<bool, DispatchError> {
     // Linked-worktree shipment owns clean base fast-forwards; the provider
-    // boundary still rejects primary rewrites and any primary dirt that lands
-    // on a path this run touched. Primary dirt disjoint from the run — a
-    // concurrent Orbit process dropping an unrelated file, for instance — is
-    // not interference and must not convert a benign base advance into
-    // primary_checkout_drift (F2026-07-139).
-    if before.head == after.head || before.branch != after.branch || !conflicting_paths.is_empty() {
+    // boundary still rejects primary rewrites. Primary dirt and pathname
+    // overlap do not establish candidate-versus-target interference; the later
+    // fetched-base rebase owns that decision.
+    if before.head == after.head || before.branch != after.branch {
         return Ok(false);
     }
     Ok(git_output_raw(
