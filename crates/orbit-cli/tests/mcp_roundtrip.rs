@@ -1993,10 +1993,23 @@ fn last_authorization_arguments(workspace: &McpWorkspace) -> String {
         .expect("the grant is recorded beside the effective set")
 }
 
+/// Install a callers file the destination will trust.
+///
+/// The mode is part of the fixture: a ceiling any other principal could write
+/// is refused at load [ORB-12450], and `std::fs::write` alone lands at the
+/// runner's ambient umask.
 fn write_callers(workspace: &McpWorkspace, contents: &str) {
     let orbit_home = workspace.home.join(".orbit");
     std::fs::create_dir_all(&orbit_home).expect("global orbit root");
-    std::fs::write(orbit_home.join("mcp-callers.toml"), contents).expect("write callers file");
+    let path = orbit_home.join("mcp-callers.toml");
+    std::fs::write(&path, contents).expect("write callers file");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("private callers file");
+    }
 }
 
 /// ORB-10960: `orbit workspace init --mcp` is the operator-facing bootstrap

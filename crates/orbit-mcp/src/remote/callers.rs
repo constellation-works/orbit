@@ -33,9 +33,35 @@
 //! remote case. [`RemoteCallerIdentity`] carries which of the two applies all
 //! the way into the audit row, so the difference is recorded rather than
 //! assumed. See [`super::ssh_auth`].
+//!
+//! # Why the file's own permissions are part of the ceiling
+//!
+//! The file is only a ceiling if the principals it caps cannot write it
+//! [ORB-12450]. Anyone who can append a `[[callers]]` row can grant themselves
+//! `operator` and `agent_invoke`, which is exactly the caller-authored grant
+//! this module exists to replace. So [`load_callers`] refuses a file that is
+//! group- or world-writable or not owned by the account serving the session,
+//! and [`write_callers_seed`] creates it `0600` rather than at the ambient
+//! umask. A refusal is total — no session is served from an untrusted ceiling —
+//! because a partially trusted authorization file has no meaning.
+//!
+//! Group *read* is deliberately **not** required, and not refused either. The
+//! Tier 2 launcher is setgid only to cross Linux's protected-exec boundary: it
+//! runs under the destination account's own uid (`getuid() == geteuid()` is
+//! checked before the bearer is read) and permanently drops the launch group
+//! with `setresgid` before Orbit opens any state, so the process that reads
+//! this file is the owner and needs no group bit. Group and world *read* are
+//! therefore unnecessary, but they only disclose the trusted machine IDs,
+//! labels, and pinned fingerprints rather than letting anyone raise the
+//! ceiling; refusing them would take a destination's remote sessions down for
+//! a disclosure, so `orbit doctor` reports them instead.
+//!
+//! The mode of the containing `~/.orbit` directory is a separate exposure with
+//! the same shape — a group-writable parent lets a peer replace the file
+//! wholesale — and is tracked on its own; this check does not stand in for it.
 
 use std::collections::{BTreeSet, HashSet};
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -135,12 +161,41 @@ pub fn callers_path(global_orbit_root: &Path) -> PathBuf {
 ///
 /// A missing file is valid and means `default = "agent"` with no rows. A
 /// malformed one is never served as if absent: it fails the whole file closed
-/// here, at load, before any session is served.
+/// here, at load, before any session is served. So does one whose ownership or
+/// mode means a principal other than the destination account could have
+/// written the ceiling — see the module docs.
 pub fn load_callers(path: &Path) -> Result<CallersFile, OrbitError> {
-    let contents = match std::fs::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(CallersFile::default());
+    let Some(contents) = read_trusted_callers(path)? else {
+        return Ok(CallersFile::default());
+    };
+    let file: CallersFile = toml::from_str(&contents).map_err(|error| {
+        OrbitError::InvalidInput(format!("invalid MCP callers '{}': {error}", path.display()))
+    })?;
+    validate_callers(&file, path)?;
+    Ok(file)
+}
+
+/// Read the callers file, or `None` when this destination has none.
+///
+/// Ownership and mode are checked against the *opened descriptor*, so the file
+/// that was trusted is the file that is read: a replacement swapped in after a
+/// pathname check cannot be the one that answers. The open does not follow the
+/// final component, because a symlink's own mode says nothing about the file it
+/// points at.
+fn read_trusted_callers(path: &Path) -> Result<Option<String>, OrbitError> {
+    let mut file = match orbit_common::fs::open_read_only_no_follow(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_)
+            if std::fs::symlink_metadata(path)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink()) =>
+        {
+            return Err(untrusted(
+                path,
+                "is a symlink, whose own permissions do not describe the file it points at; \
+                 replace it with the regular file itself"
+                    .to_string(),
+            ));
         }
         Err(error) => {
             return Err(OrbitError::Io(format!(
@@ -149,11 +204,104 @@ pub fn load_callers(path: &Path) -> Result<CallersFile, OrbitError> {
             )));
         }
     };
-    let file: CallersFile = toml::from_str(&contents).map_err(|error| {
-        OrbitError::InvalidInput(format!("invalid MCP callers '{}': {error}", path.display()))
+    let metadata = file.metadata().map_err(|error| {
+        OrbitError::Io(format!(
+            "failed to inspect MCP callers '{}': {error}",
+            path.display()
+        ))
     })?;
-    validate_callers(&file, path)?;
-    Ok(file)
+    if !metadata.is_file() {
+        return Err(untrusted(
+            path,
+            "is not a regular file, so nothing about it is an operator's statement".to_string(),
+        ));
+    }
+    validate_callers_file_trust(path, &metadata)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).map_err(|error| {
+        OrbitError::Io(format!(
+            "failed to read MCP callers '{}': {error}",
+            path.display()
+        ))
+    })?;
+    Ok(Some(contents))
+}
+
+/// Refuse a ceiling that a principal other than this account could have
+/// written [ORB-12450].
+///
+/// Writability is the whole question: a row is a grant, so write access to the
+/// file is `operator` on this machine for anyone who wants it. Group and world
+/// read are left to [`inspect_caller_authorization`] to report — see the module
+/// docs for why they are neither required nor refused.
+#[cfg(unix)]
+fn validate_callers_file_trust(
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> Result<(), OrbitError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    // SAFETY: geteuid has no preconditions and only reads the process effective uid.
+    let effective_uid = unsafe { libc::geteuid() };
+    if metadata.uid() != effective_uid {
+        return Err(untrusted(
+            path,
+            format!(
+                "is owned by uid {owner}, but this destination serves sessions as uid \
+                 {effective_uid}; a ceiling this account does not own is not its statement. Run \
+                 `chown {effective_uid} {CALLERS_FILE_DISPLAY}`",
+                owner = metadata.uid(),
+            ),
+        ));
+    }
+    let mode = metadata.permissions().mode();
+    if mode & 0o022 != 0 {
+        return Err(untrusted(
+            path,
+            format!(
+                "is {scope}-writable (mode {mode:04o}), so a principal with no capability of its \
+                 own could append a row granting itself `operator` and `agent_invoke`. Run \
+                 `chmod 600 {CALLERS_FILE_DISPLAY}`",
+                scope = if mode & 0o002 != 0 { "world" } else { "group" },
+                mode = mode & 0o7777,
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_callers_file_trust(
+    _path: &Path,
+    _metadata: &std::fs::Metadata,
+) -> Result<(), OrbitError> {
+    Ok(())
+}
+
+/// Whether anyone other than the owner can read the ceiling.
+///
+/// Not a refusal: it discloses which machines this destination trusts and the
+/// keys they are pinned to, without letting a reader raise the ceiling.
+#[cfg(unix)]
+fn readable_beyond_owner(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::symlink_metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o044 != 0)
+}
+
+#[cfg(not(unix))]
+fn readable_beyond_owner(_path: &Path) -> bool {
+    false
+}
+
+/// A refusal about the file itself rather than its contents.
+fn untrusted(path: &Path, detail: String) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "MCP callers '{}' {detail}; no remote-originated MCP session is served while the caller \
+         ceiling is not this account's own private file",
+        path.display()
+    ))
 }
 
 fn validate_callers(file: &CallersFile, path: &Path) -> Result<(), OrbitError> {
@@ -739,6 +887,12 @@ pub struct CallerAuthorizationHealth {
     pub unpinned_operator_callers: Vec<String>,
     /// Rows in the file, for a summary line.
     pub row_count: usize,
+    /// Whether the file is group- or world-readable [ORB-12450]. A writable
+    /// one is already a `defect`, because it does not load; this is the weaker
+    /// disclosure half — the trusted machine IDs, labels, and pinned key
+    /// fingerprints are readable by other local accounts. Always false off
+    /// Unix.
+    pub readable_beyond_owner: bool,
 }
 
 /// Inspect this machine's caller authorization without serving a session.
@@ -753,6 +907,7 @@ pub fn inspect_caller_authorization(
 ) -> CallerAuthorizationHealth {
     let path = callers_path(global_root);
     let present = path.exists();
+    let readable_beyond_owner = readable_beyond_owner(&path);
     let serves_ssh = std::fs::read_to_string(authorized_keys).is_ok_and(|contents| {
         contents
             .lines()
@@ -774,6 +929,7 @@ pub fn inspect_caller_authorization(
                 .map(|row| row.machine_id.clone())
                 .collect(),
             row_count: file.callers.len(),
+            readable_beyond_owner,
         },
         Err(error) => CallerAuthorizationHealth {
             path,
@@ -782,6 +938,7 @@ pub fn inspect_caller_authorization(
             serves_ssh,
             unpinned_operator_callers: Vec::new(),
             row_count: 0,
+            readable_beyond_owner,
         },
     }
 }
@@ -830,20 +987,18 @@ pub fn render_callers_seed(callers: &[SeedCaller]) -> String {
 ///
 /// An existing file is an operator's statement about who may do what here;
 /// re-running the seeder must never silently revoke an `operator` grant it is
-/// forbidden to write back.
+/// forbidden to write back. The refusal comes from the kernel's exclusive
+/// create rather than a prior `exists()` check, and the file is created `0600`
+/// whatever the ambient umask is — a seed that landed group-writable would be
+/// refused by [`load_callers`] on the next session [ORB-12450].
 pub fn write_callers_seed(path: &Path, contents: &str) -> Result<(), OrbitError> {
-    if path.exists() {
-        return Err(OrbitError::InvalidInput(format!(
-            "MCP callers file '{}' already exists; edit it directly rather than re-seeding",
-            path.display()
-        )));
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            OrbitError::Io(format!("failed to create '{}': {error}", parent.display()))
-        })?;
-    }
-    std::fs::write(path, contents).map_err(|error| {
+    orbit_common::fs::io::write_new_private_text(path, contents).map_err(|error| {
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            return OrbitError::InvalidInput(format!(
+                "MCP callers file '{}' already exists; edit it directly rather than re-seeding",
+                path.display()
+            ));
+        }
         OrbitError::Io(format!(
             "failed to write MCP callers '{}': {error}",
             path.display()

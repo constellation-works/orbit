@@ -92,6 +92,23 @@ pub(crate) fn atomic_write_private_bytes(path: &Path, content: &[u8]) -> io::Res
     staged.commit()
 }
 
+/// Create `path` with private permissions and write `content` to it, failing
+/// with [`io::ErrorKind::AlreadyExists`] when it is already there.
+///
+/// The exclusive create is the point: a caller that must not overwrite an
+/// existing file gets that guarantee from the kernel rather than from a
+/// `path.exists()` check something can win a race against. On Unix the file is
+/// `0o600` whatever the ambient umask is, and parent directories this call
+/// creates are `0o700`.
+pub fn write_new_private_text(path: &Path, content: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        create_private_dir_all(parent)?;
+    }
+    let mut file = create_new_private_file(path)?;
+    file.write_all(content.as_bytes())?;
+    file.sync_all()
+}
+
 /// Atomically write `content` to `path` without fsyncing the parent.
 /// Cheaper than [`atomic_write_text`] but post-crash the rename may be lost.
 pub fn atomic_write_text_volatile(path: &Path, content: &str) -> io::Result<()> {

@@ -14,6 +14,8 @@ workspace = true
 [dependencies]
 base64.workspace = true
 getrandom.workspace = true
+# The callers-file trust check compares the file owner to the effective uid.
+libc.workspace = true
 orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }
 orbit-registry = { path = "../orbit-registry" }

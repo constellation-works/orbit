@@ -193,7 +193,12 @@ impl Execute for DoctorCommand {
 /// Both are warnings, never errors. Tier 2 is opt-in, and a destination that
 /// deliberately runs Tier 1 alone is a documented configuration with a weaker
 /// guarantee, not a broken one. A file that does not *load* is different: it
-/// refuses every remote session, so it fails.
+/// refuses every remote session, so it fails — and a group- or world-*writable*
+/// ceiling is one of those, because a file anyone can add a row to is not a
+/// ceiling. A file that is readable but not writable beyond its owner is a
+/// third condition on the same row, and a warning: it discloses the machines
+/// this destination trusts without letting a reader raise the grant
+/// [ORB-12450].
 fn caller_authorization_rows() -> Vec<WorkspaceDoctorResult> {
     let Ok(home) = orbit_common::fs::path::home_dir() else {
         return Vec::new();
@@ -210,10 +215,26 @@ fn caller_authorization_rows() -> Vec<WorkspaceDoctorResult> {
             // The defect already names the file, so the row does not repeat it.
             message: format!("the MCP callers file does not load: {defect}"),
             remediation: Some(
-                "Every remote-originated MCP session is refused until this file parses. Fix the \
-                 defect named above, then rerun `orbit mcp callers list`."
+                "Every remote-originated MCP session is refused until this file loads. Fix the \
+                 defect named above — a malformed row, or permissions that let another principal \
+                 write the ceiling — then rerun `orbit mcp callers list`."
                     .to_string(),
             ),
+        }
+    } else if health.present && health.readable_beyond_owner {
+        WorkspaceDoctorResult {
+            check_name: "mcp-callers".to_string(),
+            status: WorkspaceDoctorStatus::Warning,
+            message: format!(
+                "{file} declares {} caller(s) but is readable beyond its owner, disclosing the \
+                 machine IDs, labels, and pinned keys this machine trusts",
+                health.row_count
+            ),
+            remediation: Some(format!(
+                "Run `chmod 600 {file}`. Nothing on this machine needs group or world read: the \
+                 destination account owns the file and reads it as itself, even under the setgid \
+                 Tier 2 launcher, which drops its launch group before Orbit opens any state."
+            )),
         }
     } else if health.present {
         WorkspaceDoctorResult {
