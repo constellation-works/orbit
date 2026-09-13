@@ -19,6 +19,18 @@ spec:
       - error_message
       - attempt
       - max_attempts
+      - workspace_path
+      - repo_root
+      - run_id
+      - failed_step_input
+      - crew
+      - crew_config_key
+      - system_crew
+    anyOf:
+      - required:
+          - task_id
+      - required:
+          - task_ids
     properties:
       failed_step_id:
         type: string
@@ -32,10 +44,37 @@ spec:
       max_attempts:
         type: integer
         minimum: 1
+      task_id:
+        type: string
+        minLength: 1
+      task_ids:
+        type: array
+        minItems: 1
+        items:
+          type: string
+          minLength: 1
+      workspace_path:
+        type: string
+        minLength: 1
+      repo_root:
+        type: string
+        minLength: 1
+      run_id:
+        type: string
+        minLength: 1
+      # The rendered input of the failed target. It retains delivery-tail
+      # checkpoints without promoting those fields into recovery authority.
+      failed_step_input:
+        type: object
+      crew:
+        type: string
+        minLength: 1
+      crew_config_key:
+        const: workflow.system_crew
       # Injected by the recovery dispatcher only. It records that this system
       # activity must resolve workflow.system_crew into its crew input.
       system_crew:
-        type: boolean
+        const: true
   # Advisory reporting surface only — never a contract anything depends on.
   #
   # Nothing consumes these fields. A step's `recovery_activity` has no step id,
@@ -121,6 +160,12 @@ spec:
     - error_message: the original retry-exhausted error text
     - attempt: the attempt number that failed
     - max_attempts: the normal retry budget for the failed step
+    - task_id or task_ids: task identity projected from the failed target or run
+    - workspace_path and repo_root: the same assigned managed worktree, projected
+      from the failed target; recovery refuses to dispatch without this pair
+    - run_id: the current run's authoritative identity, never a rendered stale value
+    - failed_step_input: the complete rendered failed-target input for inspecting
+      delivery checkpoints; it is evidence, not independent execution authority
 
     Use this decision procedure:
 

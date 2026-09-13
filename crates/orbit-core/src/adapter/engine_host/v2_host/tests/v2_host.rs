@@ -424,6 +424,7 @@ model = "gpt-5.6-luna"
         runtime: &runtime,
         assigned: &assigned,
         task_id: &task.id,
+        failure: RecoveryPreparationFailure::Conflict,
     };
     let error = execute_job_with_resume(&job, input, run_id, audit.clone(), &host, Some(&resume))
         .unwrap_err();
@@ -474,11 +475,240 @@ model = "gpt-5.6-luna"
     );
 }
 
+/// Exercise the two failure positions that motivated ORB-12442 through the
+/// real runtime policy resolver. The host stops immediately after sandbox
+/// compilation, so the regression is deterministic and needs neither a real
+/// provider nor an available user namespace.
+#[cfg(target_os = "linux")]
+#[test]
+fn step_failure_recovery_keeps_managed_context_for_implement_and_commit() {
+    use super::super::test_support::{runtime_with_workspace_config, seed_executor};
+    use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
+    use orbit_engine::{DispatchError, V2AuditWriter, execute_job_with_resume};
+    use orbit_types::workflow::PipelineState;
+    use orbit_types::workflow::activity_job::{ActivityV2Spec, DeterministicSpec, JobV2StepBody};
+
+    for (failed_step_id, resume_implement) in [("implement_one", false), ("commit", true)] {
+        let (_root, runtime, primary) = runtime_with_workspace_config(Some(
+            r#"
+[workflow]
+default_crew = "repair"
+system_crew = "repair"
+[crews.repair]
+provider = "codex"
+model = "gpt-5.6-luna"
+"#,
+        ));
+        seed_executor(
+            &runtime,
+            "codex",
+            Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
+        );
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&primary)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init"]);
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "base",
+        ]);
+        let base_sha = {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&primary)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        let assigned = runtime
+            .paths()
+            .orbit_dir
+            .join(format!("state/worktrees/orbit-{failed_step_id}-fixture"));
+        git(&[
+            "worktree",
+            "add",
+            "-b",
+            &format!("candidate-{failed_step_id}"),
+            assigned.to_str().unwrap(),
+        ]);
+        let task = runtime
+            .add_task(crate::application::task::TaskAddParams {
+                title: format!("{failed_step_id} recovery boundary"),
+                description: "Retain the managed assignment.".to_string(),
+                plan: "Exercise recovery preparation.".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut job = load_job_asset(include_str!(
+            "../../../../../assets/jobs/task_pr_pipeline.yaml"
+        ))
+        .unwrap()
+        .spec;
+        let mut catalog = V2ActivityCatalog::new();
+        catalog
+            .load_dir(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/activities"))
+            .unwrap();
+        orbit_engine::resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+
+        let failed_step = if failed_step_id == "implement_one" {
+            let implement_bundle = job
+                .steps
+                .iter_mut()
+                .find(|step| step.id == "implement_bundle")
+                .unwrap();
+            let JobV2StepBody::Loop { loop_ } = &mut implement_bundle.body else {
+                panic!("resolved implementation loop")
+            };
+            loop_
+                .steps
+                .iter_mut()
+                .find(|step| step.id == failed_step_id)
+                .unwrap()
+        } else {
+            job.steps
+                .iter_mut()
+                .find(|step| step.id == failed_step_id)
+                .unwrap()
+        };
+        let JobV2StepBody::Target(target) = &mut failed_step.body else {
+            panic!("resolved failed target")
+        };
+        target.spec = ActivityV2Spec::Deterministic(DeterministicSpec {
+            action: format!("{failed_step_id}_fixture"),
+            config: Value::Null,
+        });
+        job.failure_activity = None;
+        job.resolved_failure_activity = None;
+
+        let run_id = format!("run-{failed_step_id}-boundary");
+        let input = serde_json::json!({
+            "task_ids": [task.id],
+            "allowed_crews": ["repair"],
+        });
+        let mut resume = PipelineState::new(
+            run_id.clone(),
+            "task_pr_pipeline".to_string(),
+            input.clone(),
+        );
+        resume.step_states.insert(0, JobRunState::Success);
+        resume.step_outputs.insert(
+            0,
+            serde_json::json!({
+                "job_run_id": run_id,
+                "workspace_path": assigned,
+                "base_ref": "refs/heads/agent-main",
+                "base_sha": base_sha,
+            }),
+        );
+        if resume_implement {
+            resume.step_states.insert(1, JobRunState::Success);
+            resume.step_outputs.insert(1, serde_json::json!({}));
+        }
+        let audit = V2AuditWriter::with_disk_sinks(
+            &runtime.paths().orbit_dir.join("state/audit"),
+            runtime.v2_audit_store().unwrap(),
+            "fixture",
+            &run_id,
+            "test",
+            Some(&primary),
+        )
+        .unwrap();
+        let host = RecoveryPreparationHost {
+            runtime: &runtime,
+            assigned: &assigned,
+            task_id: &task.id,
+            failure: RecoveryPreparationFailure::StepFailure {
+                step_id: failed_step_id,
+            },
+        };
+        let primary_status_before = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&primary)
+            .args(["status", "--porcelain"])
+            .output()
+            .unwrap();
+        assert!(primary_status_before.status.success());
+
+        let error =
+            execute_job_with_resume(&job, input, &run_id, audit.clone(), &host, Some(&resume))
+                .unwrap_err();
+        assert!(
+            matches!(
+                error,
+                DispatchError::DeterministicActionFailed { ref message, .. }
+                    if message == &format!("original {failed_step_id} failure")
+            ),
+            "the original failure must remain authoritative: {error:?}"
+        );
+        let events = audit.events_snapshot().unwrap();
+        let recovery = events
+            .iter()
+            .find(|event| event.envelope.event_type == "step.recovery_attempted")
+            .map(|event| serde_json::to_value(event).unwrap())
+            .expect("durable recovery outcome");
+        assert_eq!(recovery["step_id"], failed_step_id);
+        assert_eq!(recovery["failure_phase"], "dispatch");
+        assert!(
+            recovery["error_message"]
+                .as_str()
+                .unwrap()
+                .contains("fixture launcher refused after managed sandbox compilation")
+        );
+        assert!(
+            !recovery
+                .to_string()
+                .contains("sk-proj-abcdefghijklmnopqrstuvwxyz0123456789")
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event.envelope.event_type == "cli.invocation.started")
+        );
+        let primary_status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&primary)
+            .args(["status", "--porcelain"])
+            .output()
+            .unwrap();
+        assert!(primary_status.status.success());
+        assert_eq!(
+            primary_status.stdout, primary_status_before.stdout,
+            "recovery preparation must leave the primary checkout unchanged"
+        );
+    }
+}
+
 #[cfg(target_os = "linux")]
 struct RecoveryPreparationHost<'a> {
     runtime: &'a OrbitRuntime,
     assigned: &'a std::path::Path,
     task_id: &'a str,
+    failure: RecoveryPreparationFailure,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum RecoveryPreparationFailure {
+    Conflict,
+    StepFailure { step_id: &'static str },
 }
 
 #[cfg(target_os = "linux")]
@@ -490,13 +720,23 @@ impl RuntimeHost for RecoveryPreparationHost<'_> {
         _: &Value,
         _: orbit_tools::ToolContext,
     ) -> Result<Value, orbit_engine::DispatchError> {
-        Err(orbit_engine::DispatchError::RecoverableVcsConflict {
-            operation: "git_rebase".to_string(),
-            original_base_sha: "original".to_string(),
-            target_base_sha: "target".to_string(),
-            conflicting_paths: vec!["src/lib.rs".to_string()],
-            diagnostic: "original conflict".to_string(),
-        })
+        match self.failure {
+            RecoveryPreparationFailure::Conflict => {
+                Err(orbit_engine::DispatchError::RecoverableVcsConflict {
+                    operation: "git_rebase".to_string(),
+                    original_base_sha: "original".to_string(),
+                    target_base_sha: "target".to_string(),
+                    conflicting_paths: vec!["src/lib.rs".to_string()],
+                    diagnostic: "original conflict".to_string(),
+                })
+            }
+            RecoveryPreparationFailure::StepFailure { step_id } => {
+                Err(orbit_engine::DispatchError::DeterministicActionFailed {
+                    action: format!("{step_id}_fixture"),
+                    message: format!("original {step_id} failure"),
+                })
+            }
+        }
     }
 
     fn system_crew_for_dispatch(&self) -> Option<String> {
@@ -533,12 +773,30 @@ impl RuntimeHost for RecoveryPreparationHost<'_> {
         &self,
         input: &Value,
     ) -> Result<Option<Value>, orbit_engine::DispatchError> {
-        assert_eq!(input["failed_step_input"]["head"], "candidate");
-        assert_eq!(input["failed_step_input"]["head_sha"], "candidate-sha");
-        assert_eq!(
-            input["failed_step_input"]["job_run_id"],
-            "run-conflict-boundary"
-        );
+        assert_eq!(input["workspace_path"], self.assigned.display().to_string());
+        assert_eq!(input["repo_root"], input["workspace_path"]);
+        match self.failure {
+            RecoveryPreparationFailure::Conflict => {
+                assert_eq!(input["failed_step_input"]["head"], "candidate");
+                assert_eq!(input["failed_step_input"]["head_sha"], "candidate-sha");
+                assert_eq!(
+                    input["failed_step_input"]["job_run_id"],
+                    "run-conflict-boundary"
+                );
+            }
+            RecoveryPreparationFailure::StepFailure { step_id } => {
+                assert_eq!(input["failed_step_id"], step_id);
+                assert_eq!(input["run_id"], format!("run-{step_id}-boundary"));
+                assert!(
+                    input.get("task_id").is_some() || input.get("task_ids").is_some(),
+                    "recovery input must preserve task identity: {input}"
+                );
+                assert_eq!(
+                    input["failed_step_input"]["workspace_path"],
+                    input["workspace_path"]
+                );
+            }
+        }
         let context = self.runtime.task_context_for_agent_input(input)?;
         assert_eq!(context.as_ref().unwrap()["id"], self.task_id);
         assert_eq!(
@@ -571,6 +829,14 @@ impl RuntimeHost for RecoveryPreparationHost<'_> {
             .resolve_executor_sandbox(provider, profile, cwd)?
             .unwrap();
         assert!(sandbox.managed_worktree);
+        assert!(
+            sandbox
+                .fs_profile
+                .modify
+                .iter()
+                .any(|rule| rule.starts_with('!') && rule.contains("/**/.env")),
+            "managed recovery must retain the default dotenv denyModify rules"
+        );
         let grants =
             orbit_exec::prepare_linux_bwrap_write_grants(&sandbox.fs_profile, self.assigned)
                 .unwrap();

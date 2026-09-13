@@ -193,8 +193,10 @@ fn dispatch_recovery(
         recovery.name.as_str(),
         "step_failure_recovery" | PR_CONFLICT_RECOVERY_ACTIVITY
     ) {
-        if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY {
-            bind_recovery_context(step, ctx, &mut input)
+        bind_recovery_context(step, ctx, &mut input)
+            .map_err(|error| ("input", error.to_string()))?;
+        if recovery.name == "step_failure_recovery" {
+            validate_bound_recovery_context(&input)
                 .map_err(|error| ("input", error.to_string()))?;
         }
         input["system_crew"] = Value::Bool(true);
@@ -271,6 +273,39 @@ fn bind_recovery_context(
     input["run_id"] = Value::String(ctx.run_id.clone());
     input["failed_step_input"] = failed_input;
     Ok(())
+}
+
+fn validate_bound_recovery_context(input: &Value) -> Result<(), DispatchError> {
+    let has_task_identity = input
+        .get("task_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.trim().is_empty())
+        || input
+            .get("task_ids")
+            .and_then(Value::as_array)
+            .is_some_and(|ids| {
+                !ids.is_empty()
+                    && ids
+                        .iter()
+                        .all(|id| id.as_str().is_some_and(|id| !id.trim().is_empty()))
+            });
+    let valid_checkout_field = |field: &str| {
+        input
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|path| !path.trim().is_empty())
+    };
+    if has_task_identity
+        && valid_checkout_field("workspace_path")
+        && valid_checkout_field("repo_root")
+    {
+        return Ok(());
+    }
+
+    Err(DispatchError::JobExecution(
+        "managed step recovery requires a task ID and non-empty workspace_path/repo_root from the failed step; the assigned worktree may not have been created or its context did not render, so recovery refuses primary-checkout or unrestricted execution"
+            .to_string(),
+    ))
 }
 
 fn redacted_recovery_diagnostic(message: &str) -> String {
