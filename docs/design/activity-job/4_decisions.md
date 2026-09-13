@@ -1263,6 +1263,26 @@ No separate narrative body survives; the title, date, and [ORB-10471] task refer
 
 ---
 
+## Primary dirt is isolated from candidate integration
+
+**Recorded:** 2026-09-13 · [ORB-12443]
+**Supersedes in part:** [Primary fast-forward acceptance is decided by interference with the run, not primary dirty-state byte-identity](#primary-fast-forward-acceptance-is-decided-by-interference-with-the-run-not-primary-dirty-state-byte-identity)
+**Paths:** `crates/orbit-engine/src/activity_job/workspace.rs`, `crates/orbit-engine/src/activity_job/cli_runner/tests/orchestrator.rs`, `docs/design/activity-job/*`
+
+**Context.** Managed implementations repeatedly completed successfully in their assigned worktrees and then failed `primary_checkout_drift` because unrelated processes changed tracked, deleted, or untracked source paths in the primary checkout while its HEAD remained stationary. The guard's before/after fingerprints established that primary state changed during the invocation, but did not establish who changed it. Restricting acceptance to `.orbit/` paths or to dirt disjoint from the candidate treated pathname class and overlap as writer attribution. It also confused local primary state with the fetched remote target that delivery actually integrates.
+
+**Decision.** A stationary primary HEAD and branch may gain, lose, stage, or modify dirt on any path without failing the provider boundary. A proven same-branch primary fast-forward remains admissible even when its working dirt overlaps candidate paths. Orbit records the observed paths but neither stages, commits, resets, cleans, copies, nor otherwise reconciles primary contents or index state. Assigned-worktree HEAD and branch identity checks remain fail closed, as do primary branch switches, resets, and non-fast-forward moves.
+
+Candidate integration stays isolated in the assigned worktree. The ordinary delivery sequence commits only that candidate, fetches and pins the current remote target during preparation, and rebases against the pinned target. A clean rebase may continue through the existing validation, review, freshness, lease, and authorization gates. A real content conflict produces unmerged index entries and follows the existing conflict-recovery and failure-handoff paths. Local primary pathname overlap alone cannot create or suppress that result.
+
+**Consequences.**
+- Concurrent primary source work no longer destroys a completed candidate or blocks an otherwise clean delivery.
+- Primary tracked modifications, deletions, untracked files, and staged index entries remain byte-for-byte owned by their external writer and cannot enter the task candidate through this boundary.
+- Snapshot comparison remains useful for diagnosing primary movement, but no longer claims provider authorship. Managed sandbox and assigned-root enforcement continue to prevent unauthorized writes directly.
+- Merge authority is unchanged: `completion: done`, normal validation and review, fresh delivery evidence, push leases, and verified remote merge state remain required.
+
+---
+
 ## Re-dispatched implement attempts self-cancel on a write-gated task
 
 **Decision summary · 2026-07 · [ORB-10499]**
@@ -1609,6 +1629,7 @@ Retrying setup while the stale leftover remains keeps refusing. Recovery is oper
 - **[ORB-10499]** — Confirm the duplicate implement invocation as the executor's bounded post-recovery attempt, and let the re-dispatched attempt exit on a write-gated task (resolving [F2026-07-174]).
 - **[ORB-10468]** — Introduce run-keyed dirty integrity recovery plus the now-superseded provider-commit admission policy ([Preserve failed worktree state before cleanup and admit only proven task commits](#preserve-failed-worktree-state-before-cleanup-and-admit-only-proven-task-commits), superseded by [Workflow alone creates shipment commits while dirty failures remain recoverable](#workflow-alone-creates-shipment-commits-while-dirty-failures-remain-recoverable)).
 - **[ORB-10471]** — Scope the worktree boundary guard's primary dirt check to paths the run touched, so unrelated primary dirt no longer defeats a benign fast-forward ([Primary fast-forward acceptance is decided by interference with the run, not primary dirty-state byte-identity](#primary-fast-forward-acceptance-is-decided-by-interference-with-the-run-not-primary-dirty-state-byte-identity)).
+- **[ORB-12443]** — Keep local primary dirt outside candidate integration and defer conflict authority to the fetched remote target ([Primary dirt is isolated from candidate integration](#primary-dirt-is-isolated-from-candidate-integration)).
 - **[ORB-10470]** — Make resume submit a detached run that starts at the failed checkpoint, and reconcile blocked/re-stamped tasks against the run's retry lineage ([Resume is a durable submission scoped by explicit retry lineage](#resume-is-a-durable-submission-scoped-by-explicit-retry-lineage)).
 - **[ORB-10456]** — Resolve provider launchers at the shared CLI spawn boundary and add provider-aware missing-launcher diagnostics ([Provider launchers resolve at the shared CLI spawn boundary](#provider-launchers-resolve-at-the-shared-cli-spawn-boundary)).
 - **[ORB-11808]** — Search `/opt/homebrew/bin` and `/usr/local/bin` after `PATH` and `$HOME` bins so launchd-minimal Mac drains resolve Homebrew provider CLIs at the same seam.
