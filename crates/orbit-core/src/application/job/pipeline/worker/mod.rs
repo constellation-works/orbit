@@ -162,10 +162,12 @@ impl OrbitRuntime {
     }
     /// Reopen the shared SQLite store before the worker claims a run.
     ///
-    /// ADR-0287: another Orbit process may advance the host-global database
-    /// while this runtime remains alive. Reopening here applies migrations
-    /// supported by this binary or trips the downgrade guard before any agent
-    /// work. Invocation persistence still reopens independently, but it can no
+    /// Another Orbit process may advance the host-global database while this
+    /// runtime remains alive. Reopening here applies migrations supported by
+    /// this binary, and fails before any agent work when the database is
+    /// newer than this binary — whether it refuses outright or would only
+    /// open read-only, which a run that must write cannot use (ORB-12434).
+    /// Invocation persistence still reopens independently, but it can no
     /// longer be the first compatibility check after useful work completes.
     pub(crate) fn preflight_pipeline_worker_store(&self) -> Result<(), OrbitError> {
         self.ensure_persistence_ready()?;

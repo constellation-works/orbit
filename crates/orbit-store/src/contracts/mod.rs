@@ -1,4 +1,5 @@
 mod audit;
+mod compat;
 mod friction;
 pub(crate) mod incident;
 mod invocation;
@@ -12,6 +13,7 @@ mod traits;
 mod v2_audit;
 
 pub use audit::*;
+pub use compat::*;
 pub use friction::*;
 pub use incident::*;
 pub use invocation::*;
@@ -29,3 +31,6 @@ mod operation;
 pub use operation::*;
 mod review;
 pub use review::*;
+
+#[cfg(test)]
+mod tests;

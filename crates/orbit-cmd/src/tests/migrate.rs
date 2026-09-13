@@ -4,6 +4,9 @@
 use std::fs;
 use std::path::PathBuf;
 
+use orbit_store::contracts::{
+    BreakingMigration, COMPATIBILITY_RECORD_FORMAT, CompatibilityRecord, StateComponent,
+};
 use orbit_store::maintenance::migration::SUPPORTED_SCHEMA_VERSION;
 use orbit_store::workflow::layout::SUPPORTED_LAYOUT_VERSION;
 
@@ -122,4 +125,109 @@ fn workspace_layout_newer_than_binary_refuses_to_open() {
     assert_eq!(status.layout_version, 99);
     assert!(status.newer_than_binary());
     assert!(status.pending_layout.is_empty());
+}
+
+#[test]
+fn workspace_layout_newer_by_additive_migrations_opens_read_only() {
+    let roots = temp_roots();
+    let state_dir = roots.workspace_root.join("state");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    let newer = SUPPORTED_LAYOUT_VERSION + 1;
+    fs::write(state_dir.join("layout.version"), format!("{newer}\n")).expect("write marker");
+    // What a newer binary records: its extra migration is additive, and the
+    // newest breaking migration is one this binary already has.
+    let record = CompatibilityRecord {
+        format: COMPATIBILITY_RECORD_FORMAT,
+        version: newer,
+        breaking: vec![BreakingMigration {
+            version: SUPPORTED_LAYOUT_VERSION,
+            name: "remove-task-checkout-projections".to_string(),
+        }],
+    };
+    fs::write(
+        state_dir.join("layout.compat"),
+        format!("{}\n", record.encode().expect("encode record")),
+    )
+    .expect("write compatibility record");
+    let marker_before = fs::read(state_dir.join("layout.version")).expect("read marker");
+
+    let runtime = OrbitRuntime::from_roots(&roots.global_root, &roots.workspace_root)
+        .expect("a newer-but-additive workspace must open");
+
+    let report = runtime.layout_upgrade_report();
+    assert!(report.applied.is_empty(), "an older binary applies nothing");
+    let forward = report
+        .forward_compatible
+        .as_ref()
+        .expect("the open must be recorded as forward-compatible");
+    assert_eq!(forward.component, StateComponent::WorkspaceLayout);
+    assert_eq!(forward.state_version, newer);
+
+    // Read-only work is served rather than refused at open.
+    runtime.list_tasks().expect("task listing must still work");
+    assert_eq!(
+        fs::read(state_dir.join("layout.version")).expect("read marker"),
+        marker_before,
+        "an older binary must not restamp a newer workspace"
+    );
+
+    // Both status surfaces report the read-only compatibility instead of
+    // failing: the apply path over the open runtime...
+    let status = runtime.migrate_status().expect("migrate status");
+    assert_eq!(status.layout_version, newer);
+    assert!(status.newer_than_binary());
+    assert!(status.forward_compatible_only());
+    assert_eq!(status.pending_total(), 0);
+
+    // ...and the dry-run inspection that never opens a runtime.
+    let status =
+        migrate_dry_run_at(&roots.global_root, &roots.workspace_root).expect("dry run status");
+    assert_eq!(status.layout_version, newer);
+    assert!(status.forward_compatible_only());
+    assert_eq!(
+        status
+            .layout_forward_compatible
+            .expect("dry run reports the layout compatibility")
+            .supported_version,
+        SUPPORTED_LAYOUT_VERSION
+    );
+    assert!(status.schema_forward_compatible.is_none());
+}
+
+#[test]
+fn workspace_layout_newer_by_a_breaking_migration_still_refuses() {
+    let roots = temp_roots();
+    let state_dir = roots.workspace_root.join("state");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    let newer = SUPPORTED_LAYOUT_VERSION + 1;
+    fs::write(state_dir.join("layout.version"), format!("{newer}\n")).expect("write marker");
+    let record = CompatibilityRecord {
+        format: COMPATIBILITY_RECORD_FORMAT,
+        version: newer,
+        breaking: vec![BreakingMigration {
+            version: newer,
+            name: "relocate-run-state".to_string(),
+        }],
+    };
+    fs::write(
+        state_dir.join("layout.compat"),
+        format!("{}\n", record.encode().expect("encode record")),
+    )
+    .expect("write compatibility record");
+
+    let Err(error) = OrbitRuntime::from_roots(&roots.global_root, &roots.workspace_root) else {
+        panic!("a breaking-newer layout must refuse to open");
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!("v{newer} (relocate-run-state)")),
+        "{message}"
+    );
+    assert!(message.contains("upgrade orbit"), "{message}");
+
+    let status =
+        migrate_dry_run_at(&roots.global_root, &roots.workspace_root).expect("dry run status");
+    assert!(status.newer_than_binary());
+    assert!(!status.forward_compatible_only());
+    assert!(status.layout_forward_compatible.is_none());
 }

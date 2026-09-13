@@ -37,10 +37,12 @@ When in doubt, ask the human during the breaking-change confirmation step (see b
 
 Since ORB-10012, on-disk `.orbit/` state is versioned end to end and a breaking layout change **requires shipping the migration with it** — an undocumented break is no longer an option:
 
-- **SQLite store schema** changes go through the versioned ledger in `crates/orbit-store/src/sqlite/migration/ledger.rs` (`MIGRATIONS` + `SUPPORTED_SCHEMA_VERSION`, ORB-10003).
-- **Everything else about the `.orbit/` layout** — directory structure, non-SQLite state files, log/index locations, persisted file formats — goes through the workspace-layout registry in `crates/orbit-store/src/layout/mod.rs`: append a `LAYOUT_MIGRATIONS` entry (version, name, description, apply fn over the workspace `.orbit` dir) and bump `SUPPORTED_LAYOUT_VERSION`, in the same PR as the layout change.
+- **SQLite store schema** changes go through the versioned ledger in `crates/orbit-store/src/driver/sqlite/migration/ledger.rs` (`MIGRATIONS` + `SUPPORTED_SCHEMA_VERSION`, ORB-10003).
+- **Everything else about the `.orbit/` layout** — directory structure, non-SQLite state files, log/index locations, persisted file formats — goes through the workspace-layout registry in `crates/orbit-store/src/workflow/layout/mod.rs`: append a `LAYOUT_MIGRATIONS` entry (version, name, description, compatibility, apply fn over the workspace `.orbit` dir) and bump `SUPPORTED_LAYOUT_VERSION`, in the same PR as the layout change.
 
-Layout migrations must be **idempotent or staged (write-new-then-swap)**: they auto-apply during the workspace-open pre-flight and re-run after a crash (the `state/layout.version` marker only advances after an entry's apply succeeds). A workspace written by a newer orbit refuses to open under an older binary (downgrade guard), and `orbit migrate --dry-run` lists pending migrations — with a backup hint — before an upgrade applies them.
+Every entry in either registry declares `MigrationCompatibility::Additive` or `::Breaking` (ORB-12434) — whether a binary *without* that migration can still read (and, for the layout, safely write) the state it produces. The declaration decides what older binaries on the host do with the upgraded workspace: additive-only means they open it read-only, breaking means they refuse and name your migration. Declare `Breaking` when in doubt, and see [docs/design/state-compatibility](docs/design/state-compatibility/2_design.md) for the contract.
+
+Layout migrations must be **idempotent or staged (write-new-then-swap)**: they auto-apply during the workspace-open pre-flight and re-run after a crash (the `state/layout.version` marker only advances after an entry's apply succeeds). `orbit migrate --dry-run` lists pending migrations — with a backup hint — before an upgrade applies them.
 
 Such a change is still **breaking** for versioning purposes (bump minor) and must be listed under Breaking Changes; the registry entry is what makes it *survivable*, not what makes it non-breaking.
 

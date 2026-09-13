@@ -1,11 +1,11 @@
 ---
 type: runbook
-summary: Install a new Orbit release with `orbit update`, then review, apply, and verify workspace-layout and store-schema migrations safely.
+summary: Install a new Orbit release with `orbit update`, then review, apply, and verify workspace-layout and store-schema migrations safely, including what an older binary may still do with a newer workspace.
 tags: [operations, upgrades, migrations, recovery]
-paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**"]
+paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013]
-last_validated: 2026-09-10
+related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434]
+last_validated: 2026-09-13
 ---
 
 # Upgrade Orbit Safely
@@ -71,9 +71,10 @@ reading its diagnostics. When `--root` or `ORBIT_ROOT` selected the workspace, r
 includes that root explicitly, so retrying from a different checkout does not silently switch the
 workspace being repaired.
 
-The outgoing executable stays at `<orbit>.previous`. Restore it only if `.orbit/` state was not
-migrated to a format it cannot read: an older binary refuses unsupported compatibility
-versions. Additive storage can remain compatible, as described below. See [Respect the downgrade guard](#respect-the-downgrade-guard).
+The outgoing executable stays at `<orbit>.previous`. Restoring it is safe when the state it
+must open is newer only by additive migrations — it then serves reads and refuses writes —
+and refused when a breaking migration separates the two. See
+[Run an older binary against a newer workspace](#run-an-older-binary-against-a-newer-workspace).
 
 Without a root override, `orbit update` converges **the workspace you run it from**. `ORBIT_ROOT`
 selects an environment-only override, while an explicit `--root` takes precedence over it. Run
@@ -107,6 +108,13 @@ Two ledgers guard `.orbit/` state and auto-apply on workspace open:
 - **Store schema:** the `schema_meta` ledger table inside `orbit.db`, backed by
   `crates/orbit-store/src/driver/sqlite/migration/`. Each migration and its ledger row commit in one
   transaction.
+
+Each ledger also carries a compatibility record written by whichever binary applied the
+last migration — `.orbit/state/layout.compat` and the `migration.compat` row in
+`schema_meta`. That record is what lets a binary older than the workspace decide whether
+it may still read it; see
+[Run an older binary against a newer workspace](#run-an-older-binary-against-a-newer-workspace).
+Both files are Orbit-owned state: read them for diagnosis, never edit them.
 
 The host task registry has a separate reader-compatibility marker:
 `PRAGMA user_version` in `~/.orbit/tasks/index.sqlite` (or the configured global
@@ -218,18 +226,73 @@ that can write tasks. Install the new binary, apply or trigger the workspace
 upgrade, and only then restart workers. Older binaries still contain the
 retired projection writer and can recreate links while they remain running.
 
-## Respect the downgrade guard
+## Run an older binary against a newer workspace
 
-A workspace or DB written by a newer Orbit refuses to open rather than corrupting state:
+A binary older than the workspace no longer fails every command on the version number
+alone. Each migration declares itself **additive** (an older binary reads the result
+correctly) or **breaking** (it removes, renames, or reinterprets state older binaries
+use), and the binary that applies a migration records that classification beside the
+version it stamps — `state/layout.compat` for the layout, the `migration.compat` row in
+`schema_meta` for the database. An older binary reads the record and takes one of two
+paths. The contract is described in
+[docs/design/state-compatibility](../design/state-compatibility/2_design.md).
+
+### Additive-newer: read-only, not refused
+
+When nothing breaking sits above the binary's supported version, the workspace opens
+**read-only**. `orbit task list`, `orbit task show`, `orbit run history`, and
+`orbit search` work; every write is refused with its own diagnostic, and the older
+binary never migrates, restamps, or otherwise rewrites the newer state:
+
+```text
+error: schema migration failed: cannot open a write transaction: this orbit binary
+supports store schema version 20 and the store records version 21, so it was opened
+read-only; reads are served normally — upgrade orbit to write to this store
+```
+
+`orbit migrate` (and `--dry-run`) report this as a successful inspection and name it:
+
+```text
+read-only: store schema version 21 is newer than this binary's supported version 20,
+but only by additive migrations; opened read-only
+
+This workspace is newer than this binary, by additive migrations only: read-only
+commands work and writes are refused. Upgrade orbit to write to it.
+```
+
+Two limits are worth knowing before relying on this. Audit events are writes, so a
+read-only command records no audit row and prints a `failed to write audit event`
+warning. And an additive-newer *layout* (as opposed to store schema) is not
+write-gated: additive is a declaration that older binaries stay safe, which is why
+anything an older writer could damage — layout v3's task projections, for instance — is
+declared breaking instead.
+
+### Breaking-newer, or unclassified: still refused
+
+A breaking migration the binary lacks refuses the open, now naming that migration:
+
+```text
+error: schema migration failed: workspace '….orbit' has .orbit layout version 4, newer
+than the newest version this orbit binary supports (3); migration v4 (relocate-run-state)
+is a breaking change this binary does not have; upgrade orbit to open this workspace
+```
+
+State written **before** this contract shipped carries no compatibility record, and so
+does state whose record is stale (a crash between stamping the version and writing the
+record) or unreadable. All three refuse with the reason named, exactly as every newer
+version did previously:
 
 ```text
 error: schema migration failed: workspace '….orbit' has .orbit layout version 99, newer
-than the newest version this orbit binary supports (1); upgrade orbit to open this workspace
+than the newest version this orbit binary supports (3); it records no forward-compatibility
+metadata, so this binary cannot tell whether the newer migrations are additive; upgrade
+orbit to open this workspace
 ```
 
-The schema ledger has the same guard:
-`store database schema version N is newer than the newest version this orbit binary supports`.
-Upgrade the binary. Never hand-edit `layout.version` to force the workspace open.
+In every refusing case the remedy is the same as before: upgrade the binary that is
+reporting it — through its own install channel — and re-run. Never hand-edit
+`layout.version` or `layout.compat`, and never delete the record to force an open: that
+converts a refusal into a binary operating on state it cannot interpret.
 
 ## Mixed binaries and the workspace semantic index
 

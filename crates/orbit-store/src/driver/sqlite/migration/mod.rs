@@ -4,6 +4,8 @@ use orbit_common::OrbitError;
 use orbit_types::telemetry::{ACTOR_ALIAS_MAP_VERSION, canonical_actor_for_role_label};
 use rusqlite::Connection;
 
+use crate::contracts::{ForwardCompatibleOpen, StateComponent, evaluate_newer_state};
+
 mod feature;
 mod ledger;
 
@@ -15,13 +17,20 @@ pub(crate) use ledger::{applied_migrations, current_schema_version};
 
 /// Bring the store database up to the newest supported schema version,
 /// applying any pending versioned migrations (each transactional and
-/// recorded in the `schema_meta` ledger). Refuses to open a database whose
-/// recorded schema version is newer than this binary supports.
-pub(crate) fn apply_schema(conn: &Connection) -> Result<(), OrbitError> {
+/// recorded in the `schema_meta` ledger).
+///
+/// A database whose recorded schema version is newer than this binary
+/// supports is decided by its forward-compatibility record (ORB-12434):
+/// `Ok(Some(..))` means the caller must hold the connection read-only, and
+/// an error means the database must not be opened at all.
+pub(crate) fn apply_schema(conn: &Connection) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
     ledger::run_migrations(conn, ledger::MIGRATIONS)
 }
 
-pub(crate) fn apply_schema_at_path(conn: &Connection, path: &Path) -> Result<(), OrbitError> {
+pub(crate) fn apply_schema_at_path(
+    conn: &Connection,
+    path: &Path,
+) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
     ledger::run_migrations_at_path(conn, ledger::MIGRATIONS, path)
 }
 
@@ -44,6 +53,11 @@ pub struct SchemaLedgerStatus {
     /// Empty when the database is current or newer than this binary
     /// (compare against [`SUPPORTED_SCHEMA_VERSION`] to distinguish).
     pub pending: Vec<PendingSchemaMigration>,
+    /// Set when the database is newer than this binary supports but only by
+    /// additive migrations, so it can still be opened read-only (ORB-12434).
+    /// `None` also covers a newer database this binary must refuse — the
+    /// open path carries that refusal and its reason.
+    pub forward_compatible: Option<ForwardCompatibleOpen>,
 }
 
 /// Inspect the migration ledger of the store database at `db_path` without
@@ -52,7 +66,7 @@ pub struct SchemaLedgerStatus {
 /// as version 0 with every registry migration pending (opening it would
 /// create and migrate it). Powers `orbit migrate --dry-run`.
 pub fn read_schema_ledger_status(db_path: &Path) -> Result<SchemaLedgerStatus, OrbitError> {
-    let current_version = if db_path.exists() {
+    let (current_version, forward_compatible) = if db_path.exists() {
         let conn = Connection::open_with_flags(
             db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -63,14 +77,30 @@ pub fn read_schema_ledger_status(db_path: &Path) -> Result<SchemaLedgerStatus, O
                 db_path.display()
             ))
         })?;
-        current_schema_version(&conn)?
+        let current_version = current_schema_version(&conn)?;
+        let forward_compatible = if current_version > SUPPORTED_SCHEMA_VERSION {
+            ledger::read_compat_record(&conn)
+                .and_then(|record| {
+                    evaluate_newer_state(
+                        StateComponent::StoreSchema,
+                        current_version,
+                        SUPPORTED_SCHEMA_VERSION,
+                        record,
+                    )
+                })
+                .ok()
+        } else {
+            None
+        };
+        (current_version, forward_compatible)
     } else {
-        0
+        (0, None)
     };
 
     Ok(SchemaLedgerStatus {
         current_version,
         pending: pending_schema_migrations_after(current_version),
+        forward_compatible,
     })
 }
 

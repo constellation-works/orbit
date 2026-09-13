@@ -9,10 +9,15 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::create_dir_symlink;
 use orbit_types::task::TaskStatus;
 
+use crate::contracts::{
+    BreakingMigration, COMPATIBILITY_RECORD_FORMAT, CompatibilityRecord, MigrationCompatibility,
+    StateComponent,
+};
+
 use super::{
     LAYOUT_MIGRATIONS, LayoutMigration, SUPPORTED_LAYOUT_VERSION, current_layout_version,
-    pending_layout_migrations, pending_with, upgrade_lock_path, upgrade_with,
-    upgrade_workspace_layout,
+    layout_forward_compatible_open, pending_layout_migrations, pending_with, upgrade_lock_path,
+    upgrade_with, upgrade_workspace_layout,
 };
 use crate::driver::file::task_bundle::read_bundle_at;
 use crate::fs::lock::read_lock_holder;
@@ -45,6 +50,7 @@ fn blocking_apply(_orbit_dir: &Path) -> Result<(), OrbitError> {
 const INTERRUPTED_REGISTRY: &[LayoutMigration] = &[LayoutMigration {
     version: 1,
     name: "blocking migration",
+    compat: MigrationCompatibility::Additive,
     description: "wait for the test process to be interrupted",
     apply: blocking_apply,
 }];
@@ -189,6 +195,182 @@ fn newer_marker_refuses_with_downgrade_guard() {
             .expect("pending")
             .is_empty()
     );
+}
+
+// ── forward compatibility (ORB-12434) ──
+
+/// State a workspace as a newer binary would have left it: marker plus the
+/// companion compatibility record naming the registry's breaking migrations.
+fn stamp_newer_workspace(orbit_dir: &Path, version: u32, breaking: &[(u32, &str)]) {
+    fs::create_dir_all(orbit_dir.join("state")).expect("mkdir state");
+    fs::write(
+        orbit_dir.join("state").join("layout.version"),
+        format!("{version}\n"),
+    )
+    .expect("write marker");
+    let record = CompatibilityRecord {
+        format: COMPATIBILITY_RECORD_FORMAT,
+        version,
+        breaking: breaking
+            .iter()
+            .map(|(version, name)| BreakingMigration {
+                version: *version,
+                name: (*name).to_string(),
+            })
+            .collect(),
+    };
+    fs::write(
+        orbit_dir.join("state").join("layout.compat"),
+        format!("{}\n", record.encode().expect("encode record")),
+    )
+    .expect("write compatibility record");
+}
+
+fn state_bytes(orbit_dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    for entry in fs::read_dir(orbit_dir.join("state")).expect("read state dir") {
+        let entry = entry.expect("state dir entry");
+        if entry.path().is_file() {
+            files.insert(
+                entry.file_name().to_string_lossy().to_string(),
+                fs::read(entry.path()).expect("read state file"),
+            );
+        }
+    }
+    files
+}
+
+#[test]
+fn applying_a_migration_records_the_compatibility_contract() {
+    let temp = temp_orbit_dir();
+    upgrade_workspace_layout(temp.path()).expect("upgrade");
+
+    let raw = fs::read_to_string(temp.path().join("state").join("layout.compat"))
+        .expect("read compatibility record");
+    let record = CompatibilityRecord::decode(raw.trim()).expect("decode compatibility record");
+    assert_eq!(record.format, COMPATIBILITY_RECORD_FORMAT);
+    assert_eq!(record.version, SUPPORTED_LAYOUT_VERSION);
+    let expected: Vec<BreakingMigration> = LAYOUT_MIGRATIONS
+        .iter()
+        .filter(|migration| migration.compat.is_breaking())
+        .map(|migration| BreakingMigration {
+            version: migration.version,
+            name: migration.name.to_string(),
+        })
+        .collect();
+    assert_eq!(record.breaking, expected);
+}
+
+#[test]
+fn layout_newer_by_additive_migrations_opens_read_only_without_rewriting_state() {
+    let temp = temp_orbit_dir();
+    let newer = SUPPORTED_LAYOUT_VERSION + 2;
+    // Every breaking migration in the newer registry is one this binary
+    // already has, so only additive work separates the two.
+    stamp_newer_workspace(
+        temp.path(),
+        newer,
+        &[(SUPPORTED_LAYOUT_VERSION, "remove-task-checkout-projections")],
+    );
+    let before = state_bytes(temp.path());
+
+    let report = upgrade_workspace_layout(temp.path()).expect("newer-but-additive layout opens");
+    assert_eq!(report.from_version, newer);
+    assert_eq!(report.to_version, newer);
+    assert!(report.applied.is_empty(), "an older binary applies nothing");
+    let forward = report
+        .forward_compatible
+        .expect("the report must record the read-only open");
+    assert_eq!(forward.component, StateComponent::WorkspaceLayout);
+    assert_eq!(forward.state_version, newer);
+    assert_eq!(forward.supported_version, SUPPORTED_LAYOUT_VERSION);
+    assert_eq!(forward.min_reader_version, SUPPORTED_LAYOUT_VERSION);
+
+    assert_eq!(
+        state_bytes(temp.path()),
+        before,
+        "a read-only open must not rewrite any layout state"
+    );
+    assert_eq!(
+        layout_forward_compatible_open(temp.path()).expect("inspection"),
+        Some(forward)
+    );
+}
+
+#[test]
+fn layout_newer_by_a_breaking_migration_refuses_and_names_it() {
+    let temp = temp_orbit_dir();
+    let newer = SUPPORTED_LAYOUT_VERSION + 2;
+    stamp_newer_workspace(
+        temp.path(),
+        newer,
+        &[
+            (SUPPORTED_LAYOUT_VERSION + 1, "relocate-run-state"),
+            (newer, "drop-legacy-events"),
+        ],
+    );
+    let before = state_bytes(temp.path());
+
+    let error = upgrade_workspace_layout(temp.path()).expect_err("breaking-newer must refuse");
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!("layout version {newer}")),
+        "{message}"
+    );
+    // The first breaking migration this binary lacks, not the newest.
+    assert!(
+        message.contains(&format!(
+            "v{} (relocate-run-state)",
+            SUPPORTED_LAYOUT_VERSION + 1
+        )),
+        "{message}"
+    );
+    assert!(!message.contains("drop-legacy-events"), "{message}");
+    assert!(message.contains("upgrade orbit"), "{message}");
+
+    assert_eq!(state_bytes(temp.path()), before);
+    assert_eq!(
+        layout_forward_compatible_open(temp.path()).expect("inspection"),
+        None
+    );
+}
+
+#[test]
+fn newer_layout_with_a_stale_or_unreadable_record_still_refuses() {
+    let temp = temp_orbit_dir();
+    let newer = SUPPORTED_LAYOUT_VERSION + 1;
+
+    // Stale: the record describes an older version, leaving the migrations
+    // in between unclassified.
+    stamp_newer_workspace(temp.path(), newer, &[]);
+    fs::write(
+        temp.path().join("state").join("layout.compat"),
+        format!(
+            "{}\n",
+            CompatibilityRecord {
+                format: COMPATIBILITY_RECORD_FORMAT,
+                version: SUPPORTED_LAYOUT_VERSION,
+                breaking: Vec::new(),
+            }
+            .encode()
+            .expect("encode")
+        ),
+    )
+    .expect("write stale record");
+    let error = upgrade_workspace_layout(temp.path()).expect_err("stale record must refuse");
+    assert!(
+        error.to_string().contains("only describes version"),
+        "{error}"
+    );
+
+    // Unreadable: present but not a record this binary can evaluate.
+    fs::write(
+        temp.path().join("state").join("layout.compat"),
+        "not-a-record\n",
+    )
+    .expect("write corrupt record");
+    let error = upgrade_workspace_layout(temp.path()).expect_err("corrupt record must refuse");
+    assert!(error.to_string().contains("unreadable"), "{error}");
 }
 
 #[test]
@@ -457,12 +639,14 @@ const TOY_V2_REGISTRY: &[LayoutMigration] = &[
     LayoutMigration {
         version: 1,
         name: "baseline",
+        compat: MigrationCompatibility::Additive,
         description: "adopt the versioned layout",
         apply: |_| Ok(()),
     },
     LayoutMigration {
         version: 2,
         name: "notes-into-subdir",
+        compat: MigrationCompatibility::Additive,
         description: "move notes.txt under notes/",
         apply: toy_v2_apply,
     },
@@ -525,12 +709,14 @@ fn failed_migration_keeps_the_marker_at_the_last_applied_version() {
         LayoutMigration {
             version: 1,
             name: "baseline",
+            compat: MigrationCompatibility::Additive,
             description: "adopt",
             apply: |_| Ok(()),
         },
         LayoutMigration {
             version: 2,
             name: "explodes",
+            compat: MigrationCompatibility::Additive,
             description: "always fails",
             apply: failing_apply,
         },
@@ -557,12 +743,14 @@ fn non_increasing_registry_is_rejected() {
         LayoutMigration {
             version: 2,
             name: "two",
+            compat: MigrationCompatibility::Additive,
             description: "",
             apply: |_| Ok(()),
         },
         LayoutMigration {
             version: 2,
             name: "two-again",
+            compat: MigrationCompatibility::Additive,
             description: "",
             apply: |_| Ok(()),
         },

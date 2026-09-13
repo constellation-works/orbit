@@ -24,9 +24,15 @@
 //!   pre-flight when a workspace opens (matching how the SQLite ledger
 //!   auto-applies inside `Store::open`); `orbit migrate` is the explicit
 //!   inspection/apply surface.
-//! - **Downgrade guard.** A marker newer than
-//!   [`SUPPORTED_LAYOUT_VERSION`] refuses to open with
-//!   [`OrbitError::Migration`], mirroring the schema ledger's guard.
+//! - **Forward-compatible open.** A marker newer than
+//!   [`SUPPORTED_LAYOUT_VERSION`] is decided from the companion
+//!   `state/layout.compat` record a newer binary leaves behind
+//!   ([`crate::contracts::CompatibilityRecord`], ORB-12434): newer by
+//!   additive migrations only opens read-only (nothing is applied and the
+//!   marker is never rewritten); anything breaking — or a missing, stale, or
+//!   unreadable record — still refuses with [`OrbitError::Migration`],
+//!   naming the first breaking migration this binary lacks. The SQLite
+//!   ledger guards its database the same way.
 //! - **Crash tolerance.** Every migration MUST be idempotent (or stage via
 //!   write-new-then-swap): the marker is advanced (atomic temp-file +
 //!   rename) only *after* a migration's `apply` returns, so a crash in
@@ -45,6 +51,11 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_types::task::is_valid_orb_task_id;
 
+use crate::contracts::{
+    CompatibilityRecord, CompatibilityRefusal, ForwardCompatibleOpen, MigrationCompatibility,
+    StateComponent, evaluate_newer_state,
+};
+
 /// Highest workspace-layout version this binary knows how to produce.
 /// Bump together with a new [`LAYOUT_MIGRATIONS`] entry — never without one.
 pub const SUPPORTED_LAYOUT_VERSION: u32 = 3;
@@ -55,6 +66,14 @@ pub const SUPPORTED_LAYOUT_VERSION: u32 = 3;
 /// commit parts of `.orbit/`.
 const MARKER_FILE: &str = "layout.version";
 
+/// Companion forward-compatibility record, relative to `state/`. Written
+/// beside the marker whenever a migration advances it, so a binary that is
+/// older than the workspace can tell an additive layout bump from a breaking
+/// one (ORB-12434). A separate file, not extra fields in the marker: shipped
+/// binaries parse the whole marker as one integer, and a marker they cannot
+/// parse would be a worse failure than the one this contract replaces.
+const COMPAT_FILE: &str = "layout.compat";
+
 /// Advisory lock serializing concurrent upgraders, relative to `state/`.
 const UPGRADE_LOCK_FILE: &str = "layout.lock";
 
@@ -64,6 +83,9 @@ pub(crate) struct LayoutMigration {
     pub(crate) name: &'static str,
     /// One-line human description surfaced by `orbit migrate --dry-run`.
     pub(crate) description: &'static str,
+    /// What this migration means for a binary that does not have it. See
+    /// [`MigrationCompatibility`]; declare `Breaking` when in doubt.
+    pub(crate) compat: MigrationCompatibility,
     /// Applies the migration to the workspace `.orbit` directory. MUST be
     /// idempotent or staged (write-new-then-swap): a crash between `apply`
     /// and the marker write re-runs it on the next open. Directories the
@@ -80,18 +102,27 @@ pub(crate) const LAYOUT_MIGRATIONS: &[LayoutMigration] = &[
         version: 1,
         name: "baseline",
         description: "adopt the versioned .orbit/ layout (records the current shape; changes nothing)",
+        // Records the shape older binaries already produce.
+        compat: MigrationCompatibility::Additive,
         apply: apply_baseline_layout,
     },
     LayoutMigration {
         version: 2,
         name: "archive-friction-tasks",
         description: "rewrite affected task records from status 'friction' to 'archived', preserving the task and its event history",
+        // Rewrites a removed status into one every binary understands; a
+        // binary without this migration reads the result correctly.
+        compat: MigrationCompatibility::Additive,
         apply: apply_archive_friction_tasks,
     },
     LayoutMigration {
         version: 3,
         name: "remove-task-checkout-projections",
         description: "remove verified legacy .orbit/tasks symlinks without following them or touching canonical task bundles",
+        // ORB-11994/12078: binaries without this migration still read tasks
+        // through the removed projections — and recreate them when they
+        // write.
+        compat: MigrationCompatibility::Breaking,
         apply: remove_legacy_task_projections,
     },
 ];
@@ -404,6 +435,10 @@ pub struct LayoutUpgradeReport {
     /// Migrations applied by this call, in order. Empty when the workspace
     /// was already current.
     pub applied: Vec<LayoutMigrationInfo>,
+    /// Set when the workspace layout is newer than this binary supports but
+    /// only by additive migrations (ORB-12434). The workspace is usable
+    /// read-only: nothing was applied and the marker was not rewritten.
+    pub forward_compatible: Option<ForwardCompatibleOpen>,
 }
 
 /// Current layout version recorded in the workspace marker; 0 when no marker
@@ -427,6 +462,23 @@ pub fn upgrade_workspace_layout(orbit_dir: &Path) -> Result<LayoutUpgradeReport,
     upgrade_with(orbit_dir, LAYOUT_MIGRATIONS)
 }
 
+/// Whether a workspace whose layout is *newer* than this binary supports may
+/// still be opened read-only (ORB-12434).
+///
+/// `Ok(None)` covers both "not newer" and "newer in a way this binary must
+/// refuse" — read-only inspection surfaces such as `orbit migrate --dry-run`
+/// compare versions themselves and only need to know whether the newer
+/// workspace is usable. [`upgrade_workspace_layout`] carries the refusal.
+pub fn layout_forward_compatible_open(
+    orbit_dir: &Path,
+) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
+    let current = read_marker(orbit_dir)?;
+    if current <= SUPPORTED_LAYOUT_VERSION {
+        return Ok(None);
+    }
+    Ok(evaluate_marker(orbit_dir, current, SUPPORTED_LAYOUT_VERSION)?.ok())
+}
+
 pub(crate) fn pending_with(
     orbit_dir: &Path,
     migrations: &[LayoutMigration],
@@ -448,12 +500,15 @@ pub(crate) fn upgrade_with(
     let supported = migrations.last().map(|m| m.version).unwrap_or(0);
 
     let current = read_marker(orbit_dir)?;
-    refuse_newer(orbit_dir, current, supported)?;
+    if let Some(report) = forward_compatible_report(orbit_dir, current, supported)? {
+        return Ok(report);
+    }
     if current == supported {
         return Ok(LayoutUpgradeReport {
             from_version: current,
             to_version: current,
             applied: Vec::new(),
+            forward_compatible: None,
         });
     }
 
@@ -462,7 +517,9 @@ pub(crate) fn upgrade_with(
     let _guard =
         crate::fs::lock::acquire_exclusive(&upgrade_lock_path(orbit_dir), "layout upgrade")?;
     let from_version = read_marker(orbit_dir)?;
-    refuse_newer(orbit_dir, from_version, supported)?;
+    if let Some(report) = forward_compatible_report(orbit_dir, from_version, supported)? {
+        return Ok(report);
+    }
 
     let mut applied = Vec::new();
     let mut version = from_version;
@@ -476,6 +533,7 @@ pub(crate) fn upgrade_with(
             ))
         })?;
         write_marker(orbit_dir, migration.version)?;
+        write_compat_record(orbit_dir, migrations, migration.version)?;
         version = migration.version;
         applied.push(LayoutMigrationInfo::from_entry(migration));
         orbit_common::tracing::info!(
@@ -491,18 +549,65 @@ pub(crate) fn upgrade_with(
         from_version,
         to_version: version,
         applied,
+        forward_compatible: None,
     })
 }
 
-fn refuse_newer(orbit_dir: &Path, current: u32, supported: u32) -> Result<(), OrbitError> {
-    if current > supported {
-        return Err(OrbitError::Migration(format!(
-            "workspace '{}' has .orbit layout version {current}, newer than the newest version \
-             this orbit binary supports ({supported}); upgrade orbit to open this workspace",
-            orbit_dir.display()
-        )));
+/// Decide a marker newer than `supported`: `Ok(None)` when it is not newer,
+/// `Ok(Some(report))` when it is newer only by additive migrations (nothing
+/// applied, marker untouched), and an error naming the first breaking
+/// migration this binary lacks otherwise.
+fn forward_compatible_report(
+    orbit_dir: &Path,
+    current: u32,
+    supported: u32,
+) -> Result<Option<LayoutUpgradeReport>, OrbitError> {
+    if current <= supported {
+        return Ok(None);
     }
-    Ok(())
+    match evaluate_marker(orbit_dir, current, supported)? {
+        Ok(forward) => {
+            orbit_common::tracing::warn!(
+                target: "orbit.store.layout",
+                orbit_dir = %orbit_dir.display(),
+                layout_version = current,
+                supported_version = supported,
+                "opening a newer workspace layout read-only; this binary applies no layout migration to it",
+            );
+            Ok(Some(LayoutUpgradeReport {
+                from_version: current,
+                to_version: current,
+                applied: Vec::new(),
+                forward_compatible: Some(forward),
+            }))
+        }
+        Err(refusal) => Err(OrbitError::Migration(format!(
+            "workspace '{}' has .orbit layout version {current}, newer than the newest version \
+             this orbit binary supports ({supported}); {refusal}; upgrade orbit to open this \
+             workspace",
+            orbit_dir.display()
+        ))),
+    }
+}
+
+/// Read the companion compatibility record and decide whether this binary
+/// may open the newer workspace read-only. The outer error covers only I/O
+/// on the record itself; an unusable record is an inner [`CompatibilityRefusal`].
+fn evaluate_marker(
+    orbit_dir: &Path,
+    current: u32,
+    supported: u32,
+) -> Result<Result<ForwardCompatibleOpen, CompatibilityRefusal>, OrbitError> {
+    let record = match read_compat_record(orbit_dir)? {
+        Ok(record) => record,
+        Err(refusal) => return Ok(Err(refusal)),
+    };
+    Ok(evaluate_newer_state(
+        StateComponent::WorkspaceLayout,
+        current,
+        supported,
+        record,
+    ))
 }
 
 fn validate_registry(migrations: &[LayoutMigration]) -> Result<(), OrbitError> {
@@ -525,6 +630,53 @@ fn marker_path(orbit_dir: &Path) -> PathBuf {
 
 fn upgrade_lock_path(orbit_dir: &Path) -> PathBuf {
     orbit_dir.join("state").join(UPGRADE_LOCK_FILE)
+}
+
+fn compat_path(orbit_dir: &Path) -> PathBuf {
+    orbit_dir.join("state").join(COMPAT_FILE)
+}
+
+/// Read the companion compatibility record. A missing file is the
+/// pre-ORB-12434 case, not an error.
+fn read_compat_record(
+    orbit_dir: &Path,
+) -> Result<Result<Option<CompatibilityRecord>, CompatibilityRefusal>, OrbitError> {
+    let path = compat_path(orbit_dir);
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Ok(None)),
+        Err(error) => {
+            return Err(OrbitError::Migration(format!(
+                "cannot read layout compatibility record '{}': {error}",
+                path.display()
+            )));
+        }
+    };
+    Ok(CompatibilityRecord::decode(raw.trim()).map(Some))
+}
+
+/// Record what this binary knows about layout compatibility, so a binary
+/// that is older than `version` can tell whether it may still read the
+/// workspace. Written after the marker: a crash in between leaves a stale
+/// record, which readers refuse rather than misinterpret.
+fn write_compat_record(
+    orbit_dir: &Path,
+    migrations: &[LayoutMigration],
+    version: u32,
+) -> Result<(), OrbitError> {
+    let record = CompatibilityRecord::for_registry(
+        version,
+        migrations
+            .iter()
+            .map(|migration| (migration.version, migration.name, migration.compat)),
+    );
+    let path = compat_path(orbit_dir);
+    atomic_write_text(&path, &format!("{}\n", record.encode()?)).map_err(|error| {
+        OrbitError::Migration(format!(
+            "cannot write layout compatibility record '{}': {error}",
+            path.display()
+        ))
+    })
 }
 
 fn read_marker(orbit_dir: &Path) -> Result<u32, OrbitError> {

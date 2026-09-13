@@ -37,7 +37,7 @@ CLI behavior, state layout, or recovery semantics change.
 | [Inventory and Protect Orbit State](./runbooks/state-and-backup.md) | Locate Orbit state and perform WAL-safe backups, explicit task publication, restores, and task migrations. |
 | [Recover Stuck Job Runs](./runbooks/stuck-job-runs.md) | Diagnose, cancel, resume, or replay pending and running Orbit job runs. |
 | [Publish Orbit Tasks to a Dedicated Repository](./runbooks/task-publication.md) | Bind, authenticate, publish, verify, inspect, and recover an Orbit task-publication repository. |
-| [Upgrade Orbit Safely](./runbooks/upgrades.md) | Install a new Orbit release with `orbit update`, then review, apply, and verify workspace-layout and store-schema migrations safely. |
+| [Upgrade Orbit Safely](./runbooks/upgrades.md) | Install a new Orbit release with `orbit update`, then review, apply, and verify workspace-layout and store-schema migrations safely, including what an older binary may still do with a newer workspace. |
 | [Validate Website Changes in a Job-Run Sandbox](./runbooks/website-validation.md) | Build, preview, and validate Orbit website changes with Playwright inside a job-run sandbox. |
 
 Authoring rules live in [runbook conventions](./runbooks/CONVENTIONS.md).
@@ -85,6 +85,7 @@ a conservative title/status fallback.
 | [Remote Access](./design/remote-access/1_overview.md) | Multi-workspace Orbit Web serving and loopback-safe remote access over an SSH local forward. | Accepted | codex |
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | An epic owns one worktree and one branch; its children land into that branch sequentially and the epic agent finishes the work inside it. workspace_auto_pipeline drains the workspace for a caller-supplied window instead of taking one action per tick. The fire clock lives outside Orbit. | Draft | codex, grok, claude |
 | [Routines](./design/routines/1_overview.md) | Durable, git-versioned scheduler primitive that fires catalog jobs/activities on cron triggers, per host, with local state. | Accepted | claude |
+| [State Compatibility](./design/state-compatibility/1_overview.md) | How an Orbit binary decides whether it may open workspace state written by a newer Orbit, instead of refusing every command on a version number. | Draft | claude |
 | [Task Artifacts](./design/task-artifacts/1_overview.md) | Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. | Draft | codex |
 | [Task Migration](./design/task-migration/1_overview.md) | Move orbit tasks between hosts with export/import (tar.zst); hosts stay disjoint by task_prefix, and the minting host owns each task. | Draft | claude |
 | [Task Publication](./design/task-publication/1_overview.md) | Explicitly publish authority-owned task snapshots to a dedicated Git repository for labelled inspection and deliberate recovery. | Accepted | codex |
