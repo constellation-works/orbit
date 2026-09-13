@@ -97,10 +97,12 @@ any open status → blocked | archived
    before the task enters `in-progress`.
 
 A refused transition is an `invalid_input` error naming the from/to pair and
-the missing precondition. A human on the bare CLI can override the table with
-`orbit task update <id> --status <status> --force`, which records the change in
-the task's history as a `forced` event; the tool and MCP surfaces refuse a
-`force` argument outright.
+the missing precondition. A human can override the table from either human
+surface — `orbit task update <id> --status <status> --force` on the bare CLI, or
+the dashboard's status dropdown, whose off-table targets sit under a **force**
+group and ask for one confirmation before they are sent. Both record the change
+in the task's history as a `forced` event. The `orbit.task.update` tool and the
+MCP surface refuse a `force` argument outright, so an agent stays on the table.
 
 Friction reports use their own `orbit friction` surface and are not task
 statuses.

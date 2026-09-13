@@ -19,8 +19,9 @@ use super::params::TaskUpdateParams;
 
 const UNAUTHORED_TASK_PLAN_PLACEHOLDER: &str = "To be authored by executing agent at start time.";
 
-/// Status event recorded when a human overrides the lifecycle table on the
-/// bare CLI, so an audit can tell a governed transition from an override.
+/// Status event recorded when a human overrides the lifecycle table from the
+/// bare CLI or the dashboard, so an audit can tell a governed transition from
+/// an override.
 pub(crate) const FORCED_STATUS_EVENT: &str = "forced";
 
 /// Whether `from -> to` is a legal lifecycle edge.

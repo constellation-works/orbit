@@ -1205,6 +1205,9 @@ const REJECT_STATUSES = new Set(["proposed", "review", "backlog"]);
 // Ship dispatches a task through the pipeline, which admits it out of backlog —
 // so backlog is the only status where the control means anything.
 const SHIP_STATUSES = new Set(["backlog"]);
+// Group heading for the status targets the lifecycle table refuses. Choosing one
+// is the operator override recorded in task history as `forced`.
+const FORCED_STATUS_GROUP_LABEL = "force (off-table)";
 
 function buildActionsRow(task, detail, context) {
   const actions = el("div", { class: "actions" });
@@ -1264,6 +1267,14 @@ function buildActionsRow(task, detail, context) {
 function buildStatusUpdateControl(task, context) {
   const cell = el("span", { class: "status-cell" });
   const targets = statusTransitions(task).map((transition) => transition.status);
+  // ORB-12445: an operator may move a task to any status from any status, the
+  // same override the bare CLI spells `--force`. The governed targets keep the
+  // plain list; everything else the lifecycle table refuses is offered under a
+  // marked group so the two are never confused, and a terminal task is no
+  // longer a dead control.
+  const forcedTargets = statusOrder(context).filter(
+    (status) => status && status !== task.status && !targets.includes(status),
+  );
   const color = `var(--status-${task.status}, var(--fg))`;
   const mutable = canMutateTask(task);
   const feedback = statusFeedback.get(task.id);
@@ -1290,7 +1301,24 @@ function buildStatusUpdateControl(task, context) {
     select.appendChild(option);
   }
 
-  if (targets.length === 0 || !mutable || (feedback && feedback.kind === "pending")) {
+  if (forcedTargets.length > 0) {
+    const group = el("optgroup", {
+      title: `Off-table targets — forcing one overrides the lifecycle table for ${task.id}`,
+    });
+    group.setAttribute("label", FORCED_STATUS_GROUP_LABEL);
+    for (const status of forcedTargets) {
+      const option = el("option", { text: `${status} ⚠` });
+      option.value = status;
+      group.appendChild(option);
+    }
+    select.appendChild(group);
+  }
+
+  if (
+    targets.length + forcedTargets.length === 0 ||
+    !mutable ||
+    (feedback && feedback.kind === "pending")
+  ) {
     select.disabled = true;
   }
 
@@ -1377,7 +1405,12 @@ function buildCrewUpdateControl(task, context) {
 async function applyTaskStatusChange(task, nextStatus, context) {
   if (!nextStatus || nextStatus === task.status || !canMutateTask(task)) return;
   const transition = statusTransition(task, nextStatus);
-  if (!transition) {
+  // A target the projection did not offer is an override, not a mistake: the
+  // operator gets one confirm naming the move, and the PATCH carries `force`
+  // so the server applies it and records the `forced` history event. A target
+  // that is not a lifecycle status at all stays a refusal.
+  const forced = !transition;
+  if (forced && !statusOrder(context).includes(nextStatus)) {
     statusFeedback.set(task.id, {
       kind: "error",
       text: `status update unavailable: ${task.status} cannot move to ${nextStatus}`,
@@ -1385,9 +1418,19 @@ async function applyTaskStatusChange(task, nextStatus, context) {
     renderTasks(taskList(context), context);
     return;
   }
+  if (forced && !confirmForcedStatusChange(task, nextStatus)) {
+    if (typeof window.confirm !== "function") {
+      statusFeedback.set(task.id, {
+        kind: "error",
+        text: `status update unavailable: forcing ${task.status} → ${nextStatus} needs a confirmation`,
+      });
+    }
+    renderTasks(taskList(context), context);
+    return;
+  }
 
-  const payload = { status: nextStatus };
-  if (transition.required_field) {
+  const payload = forced ? { status: nextStatus, force: true } : { status: nextStatus };
+  if (!forced && transition.required_field) {
     const evidence = collectStatusTransitionEvidence(task, nextStatus, transition.required_field);
     if (!evidence) {
       statusFeedback.set(task.id, {
@@ -1408,7 +1451,7 @@ async function applyTaskStatusChange(task, nextStatus, context) {
     applyUpdatedTask(updatedTask, context);
     const feedback = {
       kind: "success",
-      text: "status saved",
+      text: forced ? "status forced" : "status saved",
     };
     const reverse = statusTransition(updatedTask, previousValue);
     if (reverse && !reverse.required_field) {
@@ -1424,6 +1467,17 @@ async function applyTaskStatusChange(task, nextStatus, context) {
   }
   renderTasks(taskList(context), context);
   scheduleFeedbackExpiry(statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+}
+
+// One confirm, naming the exact move, before the override leaves the browser.
+// A host without `confirm` cannot obtain it, so the forced write is refused
+// rather than sent unconfirmed.
+function confirmForcedStatusChange(task, nextStatus) {
+  if (typeof window.confirm !== "function") return false;
+  return window.confirm(
+    `Force ${task.id} from ${task.status} to ${nextStatus}? This overrides the lifecycle ` +
+      `table and is recorded in task history as a forced change.`,
+  );
 }
 
 function collectStatusTransitionEvidence(task, nextStatus, requiredField) {

@@ -1339,8 +1339,12 @@ fn dashboard_task_filter_hash_round_trips_default_all_someday_and_none() {
     );
 }
 
+/// ORB-12445: the select offers every lifecycle status for every task. The
+/// projected transitions are the governed list; everything else the table
+/// refuses is offered under the marked `force` group, so a terminal task is
+/// still operable by a human.
 #[test]
-fn dashboard_renders_only_projected_lifecycle_transitions() {
+fn dashboard_renders_governed_transitions_and_marks_forced_targets() {
     let app = include_str!("../../assets/dashboard/app.js");
     for status in [
         "in-progress",
@@ -1415,12 +1419,38 @@ for (const [status, targets] of fixtures) {
   });
   const select = find(get("tasks-body"), (node) => node.className === "task-status-select mono");
   if (!select) throw new Error(`status select did not render for ${status}`);
-  const values = select.children.map((option) => option.value).filter(Boolean);
-  if (JSON.stringify(values) !== JSON.stringify(targets)) {
-    throw new Error(`${status} options ${JSON.stringify(values)} != ${JSON.stringify(targets)}`);
+  const governed = select.children.filter((node) => node.value).map((option) => option.value);
+  if (JSON.stringify(governed) !== JSON.stringify(targets)) {
+    throw new Error(`${status} governed options ${JSON.stringify(governed)} != ${JSON.stringify(targets)}`);
   }
-  if ((status === "done" || status === "archived") && !select.disabled) {
-    throw new Error(`${status} status select must be disabled`);
+
+  const group = select.children.find((node) => node.label);
+  const expectedForced = statuses.filter((candidate) => candidate !== status && !targets.includes(candidate));
+  if (expectedForced.length === 0) {
+    if (group) throw new Error(`${status} must not render an empty force group`);
+  } else {
+    if (!group) throw new Error(`${status} did not render the force group`);
+    if (group.label !== "force (off-table)") {
+      throw new Error(`${status} force group label was ${group.label}`);
+    }
+    const forced = group.children.map((option) => option.value);
+    if (JSON.stringify(forced) !== JSON.stringify(expectedForced)) {
+      throw new Error(`${status} forced options ${JSON.stringify(forced)} != ${JSON.stringify(expectedForced)}`);
+    }
+    for (const option of group.children) {
+      if (!option.textContent.includes("⚠")) {
+        throw new Error(`${status} forced option ${option.value} is not marked`);
+      }
+    }
+  }
+
+  const offered = governed.concat(expectedForced).sort();
+  const everyOther = statuses.filter((candidate) => candidate !== status).sort();
+  if (JSON.stringify(offered) !== JSON.stringify(everyOther)) {
+    throw new Error(`${status} did not offer every other lifecycle status: ${JSON.stringify(offered)}`);
+  }
+  if (select.disabled) {
+    throw new Error(`${status} status select must stay operable for a human override`);
   }
 }
 "#,
@@ -1539,6 +1569,115 @@ if (requests.length !== 3 || requests[2].status !== "blocked") {
 }
 if (!find(get("tasks-body"), (node) => node.className === "mutation-undo")) {
   throw new Error("undo was not offered for a valid blocked to backlog reverse transition");
+}
+if (requests.some((request) => "force" in request)) {
+  throw new Error("a governed transition must not request a force override");
+}
+"#,
+    );
+}
+
+/// ORB-12445: an off-table target is the human override. It costs one confirm
+/// naming the move, and only then does the PATCH carry `force: true` — the same
+/// escape hatch as `orbit task update --force`, which the server records as a
+/// `forced` history event.
+#[test]
+fn dashboard_forces_off_table_status_only_after_one_confirmation() {
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor() { this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { const old = child.parentNode; if (old) old.children = old.children.filter((candidate) => candidate !== child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get lastElementChild() { return this.children[this.children.length - 1]; }
+  get classList() { return { add: (...names) => { this.className = `${this.className} ${names.join(" ")}`.trim(); } }; }
+}
+const nodes = new Map();
+const get = (id) => nodes.get(id) || (nodes.set(id, new Node()), nodes.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: () => new Node(),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+  createDocumentFragment: () => new Node(),
+};
+const location = new URL("http://dashboard.test/#tasks");
+const confirmations = [];
+let confirmed = false;
+globalThis.window = {
+  location,
+  addEventListener: () => {},
+  confirm: (message) => { confirmations.push(message); return confirmed; },
+  prompt: () => { throw new Error("a forced transition must not prompt for evidence"); },
+};
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: () => Promise.resolve() } }, configurable: true });
+globalThis.setTimeout = () => 0;
+
+// A delivered task: the lifecycle table offers it nothing.
+let task = {
+  id: "ORB-1", title: "Delivered task", status: "done", plan: "1) do it",
+  execution_summary: "did it", history: [], artifacts: [], status_transitions: [],
+};
+const requests = [];
+globalThis.fetch = async (_path, options) => {
+  const request = JSON.parse(options.body);
+  requests.push(request);
+  task = { ...task, status: request.status, status_transitions: [] };
+  return { ok: true, text: async () => JSON.stringify(task) };
+};
+const statuses = ["in-progress", "review", "blocked", "proposed", "backlog", "someday", "done", "rejected", "archived"];
+const context = {
+  getTasks: () => [task], getTasksMeta: () => null, getSearchQuery: () => "",
+  getActiveStatuses: () => new Set(statuses), statusOrder: statuses,
+  replaceTask: (updated) => { task = updated; }, fmtAbsTime: (value) => value,
+  refreshDashboard: () => Promise.resolve(),
+};
+const { renderTasks } = await import("./tasks.js");
+
+function find(node, predicate) {
+  if (predicate(node)) return node;
+  for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
+  return null;
+}
+function selectStatus(target) {
+  const select = find(get("tasks-body"), (node) => node.className === "task-status-select mono");
+  select.value = target;
+  select.listeners.change({ stopPropagation: () => {} });
+}
+
+renderTasks([task], context);
+selectStatus("backlog");
+await new Promise(setImmediate);
+if (confirmations.length !== 1) {
+  throw new Error(`a forced transition needs exactly one confirm: ${JSON.stringify(confirmations)}`);
+}
+if (!confirmations[0].includes("done") || !confirmations[0].includes("backlog")) {
+  throw new Error(`the confirm must name the move: ${confirmations[0]}`);
+}
+if (requests.length !== 0) throw new Error("a declined confirm must not send the override");
+if (task.status !== "done") throw new Error("a declined confirm must leave the status alone");
+
+confirmed = true;
+renderTasks([task], context);
+selectStatus("backlog");
+await new Promise(setImmediate);
+if (confirmations.length !== 2) {
+  throw new Error(`the accepted override needs its own confirm: ${JSON.stringify(confirmations)}`);
+}
+if (requests.length !== 1 || requests[0].status !== "backlog" || requests[0].force !== true) {
+  throw new Error(`the forced status change was not submitted: ${JSON.stringify(requests)}`);
+}
+if ("plan" in requests[0] || "execution_summary" in requests[0]) {
+  throw new Error("a forced transition must not fabricate lifecycle evidence");
+}
+if (task.status !== "backlog") throw new Error("the forced status was not applied");
+const feedback = find(get("tasks-body"), (node) => node.className.includes("mutation-feedback"));
+if (!feedback || !feedback.textContent.includes("forced")) {
+  throw new Error(`the forced write was not reported as forced: ${feedback && feedback.textContent}`);
 }
 "#,
     );

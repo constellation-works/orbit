@@ -257,6 +257,14 @@ pub(super) struct UpdateTaskBody {
     comment: Option<String>,
     #[serde(default)]
     status: Option<TaskStatus>,
+    /// Human override of the lifecycle table for this write's `status`, the
+    /// dashboard's equivalent of `orbit task update --force` (ORB-12445). Only
+    /// meaningful with `status`; alone it is a 400, matching the CLI flag's
+    /// `requires = "status"`. The registered `orbit.task.update` tool and the
+    /// MCP surface still have no such field, so no agent can grant itself the
+    /// override.
+    #[serde(default)]
+    force: bool,
     /// Replacement dispatch priority (ORB-10648). Previously undeclared here
     /// even though the record layer could persist it, so an operator's
     /// re-prioritization was dropped while the response reported success.
@@ -587,6 +595,12 @@ pub(super) async fn create_task_action(
 /// into [`TaskUpdateParams`], `model` becomes the write's provenance, and any
 /// other key is a 400 from [`reject_unsupported_task_body_fields`]. A caller
 /// therefore never receives a `200` for a field this endpoint discarded.
+///
+/// `force` (ORB-12445) makes this the dashboard's counterpart to `orbit task
+/// update --force`: the status change is applied under `StatusAuthority::Forced`
+/// and recorded in task history as `forced`. The dashboard is an operator
+/// surface, so it carries the same human override the bare CLI does; the agent
+/// tool and MCP surfaces still do not declare the field.
 pub(super) async fn update_task_action(
     Ws(runtime): Ws,
     Path(id): Path<String>,
@@ -611,8 +625,16 @@ pub(super) async fn update_task_action(
         Ok(complexity) => complexity,
         Err(message) => return bad_request(message),
     };
+    if body.force && body.status.is_none() {
+        return bad_request(
+            "`force` overrides the lifecycle table for a status change, so it requires \
+             `status`; send the target status or drop `force`"
+                .to_string(),
+        );
+    }
     let model = body.model.as_deref().and_then(non_empty_string);
     let allow_missing_context = body.allow_missing_context;
+    let force = body.force;
     let params = TaskUpdateParams {
         title: body.title,
         description: body.description,
@@ -642,7 +664,11 @@ pub(super) async fn update_task_action(
         if !allow_missing_context && let Some(candidates) = params.context_files.as_deref() {
             runtime.ensure_context_selectors_exist(candidates)?;
         }
-        runtime.update_task_with_identity(&id, params, None, model)
+        if force {
+            runtime.force_update_task_with_identity(&id, params, None, model)
+        } else {
+            runtime.update_task_with_identity(&id, params, None, model)
+        }
     })
     .await
 }

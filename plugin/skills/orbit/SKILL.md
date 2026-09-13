@@ -69,9 +69,12 @@ is a *new* task with a `regression_from` relation — not a reopened one.
 Creating a task does not authorize dispatch or completion. Follow the user's
 approval and repository delivery policy. Use `blocked` when execution cannot
 safely continue. Provenance follows the surface: `orbit tool run ...` is
-agent-driven, bare `orbit task ...` is human-driven — and only a human on the
-bare CLI can override the table, with `orbit task update <id> --status <status>
---force`, which records the override in task history.
+agent-driven, bare `orbit task ...` is human-driven — and only a human can
+override the table, from the bare CLI with `orbit task update <id> --status
+<status> --force` or from the dashboard's status dropdown (off-table targets
+sit under a `force` group and take one confirmation). Either way the override
+is recorded in task history as a `forced` event. `orbit.task.update` and the
+MCP surface have no `force`.
 
 ## Common Mistakes — DO NOT
 

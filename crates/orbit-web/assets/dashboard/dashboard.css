@@ -892,6 +892,11 @@
         color: var(--fg);
         background: var(--bg);
       }
+      .task-status-select optgroup {
+        color: var(--fg-dim);
+        background: var(--bg);
+        font-style: italic;
+      }
       .task-crew-select,
       .task-complexity-select {
         width: 100%;
