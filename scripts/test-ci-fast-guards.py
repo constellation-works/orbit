@@ -191,6 +191,107 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertIn("usage: check-goldens.sh [--update]", result.stderr)
 
 
+class WorkflowActionPinGuardrailTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.scripts = self.root / "scripts"
+        self.scripts.mkdir()
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.log = self.root / "curl_calls.log"
+        self.status_map = self.root / "curl_status_map.json"
+        self.status_map.write_text("{}")
+        self.env = dict(
+            os.environ,
+            PATH=f"{self.bin}:{os.environ['PATH']}",
+            FAKE_CURL_LOG=str(self.log),
+            FAKE_CURL_STATUS_MAP_FILE=str(self.status_map),
+        )
+        self.write_executable(self.bin / "curl", '''#!/usr/bin/env python3
+import json, os, sys
+url = sys.argv[-1]
+log = os.environ.get("FAKE_CURL_LOG")
+if log:
+    with open(log, "a") as f:
+        f.write(url + "\\n")
+mapping = json.loads(open(os.environ["FAKE_CURL_STATUS_MAP_FILE"]).read())
+status = mapping.get(url)
+if status is None or status == "000":
+    sys.exit(1)
+sys.stdout.write(status)
+''')
+
+    def write_executable(self, path, content):
+        path.write_text(content)
+        path.chmod(0o755)
+
+    def set_statuses(self, mapping):
+        self.status_map.write_text(json.dumps(mapping))
+
+    def write_workflow(self, name, uses_lines):
+        workflows = self.root / ".github/workflows"
+        workflows.mkdir(parents=True, exist_ok=True)
+        body = "jobs:\n  job:\n    steps:\n" + "".join(
+            f"      - uses: {line}\n" for line in uses_lines
+        )
+        (workflows / name).write_text(body)
+
+    def run_guard(self, *arguments):
+        shutil.copy2(SCRIPTS / "check-workflow-action-pins.sh", self.scripts / "check-workflow-action-pins.sh")
+        return subprocess.run(
+            ["/bin/bash", str(self.scripts / "check-workflow-action-pins.sh"), *arguments],
+            env=self.env, text=True, capture_output=True,
+        )
+
+    def test_passes_when_all_pins_resolve(self):
+        good_sha = "a" * 40
+        self.write_workflow("check.yml", [f"actions/checkout@{good_sha} # v1"])
+        self.set_statuses({
+            "https://api.github.com": "200",
+            f"https://api.github.com/repos/actions/checkout/commits/{good_sha}": "200",
+        })
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fails_when_a_pin_does_not_resolve(self):
+        bad_sha = "b" * 40
+        self.write_workflow("check.yml", [f"actions/setup-node@{bad_sha} # v7.0.0"])
+        self.set_statuses({
+            "https://api.github.com": "200",
+            f"https://api.github.com/repos/actions/setup-node/commits/{bad_sha}": "422",
+        })
+        result = self.run_guard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"actions/setup-node@{bad_sha} does not resolve", result.stderr)
+        self.assertIn(".github/workflows/check.yml:", result.stderr)
+
+    def test_skips_without_network_access(self):
+        bad_sha = "c" * 40
+        self.write_workflow("check.yml", [f"actions/setup-node@{bad_sha} # v7.0.0"])
+        self.set_statuses({})
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("skipping pin resolution", result.stderr)
+
+    def test_dedupes_repeated_pins(self):
+        sha = "d" * 40
+        self.write_workflow(
+            "a.yml",
+            [f"actions/checkout@{sha} # v1", f"actions/checkout@{sha} # v1"],
+        )
+        self.set_statuses({
+            "https://api.github.com": "200",
+            f"https://api.github.com/repos/actions/checkout/commits/{sha}": "200",
+        })
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.log.read_text().splitlines()
+        commit_calls = [c for c in calls if c.endswith(f"/commits/{sha}")]
+        self.assertEqual(len(commit_calls), 1)
+
+
 class CargoDenyGuardrailTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

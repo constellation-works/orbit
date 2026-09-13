@@ -50,6 +50,7 @@ fi
 "$repo_root/scripts/test-installer-security.sh"
 "$repo_root/scripts/test-mcp-registry-publish-workflow.sh"
 "$repo_root/scripts/check-dependency-direction.sh"
+"$repo_root/scripts/check-workflow-action-pins.sh"
 "$repo_root/scripts/test-ci-fast-guards.py"
 "$repo_root/scripts/test-codeql-extension-schema.py"
 "$repo_root/scripts/check-codeql-extension-schema.py"

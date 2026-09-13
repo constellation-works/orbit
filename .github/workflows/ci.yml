@@ -284,6 +284,8 @@ jobs:
           rg --version | head -1
 
       - name: Run CI guardrails
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./scripts/ci-guardrails.sh
 
       # [ORB-10126] Confirm disk headroom survived the workspace build/test.
