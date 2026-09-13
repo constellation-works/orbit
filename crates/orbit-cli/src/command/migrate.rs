@@ -75,7 +75,10 @@ impl MigrateCommand {
         // failing command has no payload — stdout carries records only
         // (spec §5). The readout is the diagnostic that explains the exit
         // code, so on the failing paths it goes to stderr alongside it.
-        if status.newer_than_binary() {
+        // A workspace newer than this binary is not necessarily unusable:
+        // when every extra migration is additive it opens read-only
+        // (ORB-12434), and reporting that is a successful inspection.
+        if status.newer_than_binary() && !status.forward_compatible_only() {
             eprintln!("{}", status_trailer(&status));
             return Err(OrbitError::Migration(format!(
                 "workspace '{}' was written by a newer orbit than this binary supports; \
@@ -130,6 +133,19 @@ fn status_payload(status: &MigrateStatus, dry_run: bool) -> CommandOut {
             "name": m.name,
         })).collect::<Vec<_>>(),
         "up_to_date": status.pending_total() == 0 && !status.newer_than_binary(),
+        "forward_compatible": {
+            "read_only": status.forward_compatible_only(),
+            "layout": status.layout_forward_compatible.as_ref().map(|open| json!({
+                "state_version": open.state_version,
+                "supported_version": open.supported_version,
+                "min_reader_version": open.min_reader_version,
+            })),
+            "schema": status.schema_forward_compatible.as_ref().map(|open| json!({
+                "state_version": open.state_version,
+                "supported_version": open.supported_version,
+                "min_reader_version": open.min_reader_version,
+            })),
+        },
     });
 
     // A fixed-shape status readout, not a result set: every component is named
@@ -167,6 +183,22 @@ fn status_trailer(status: &MigrateStatus) -> String {
             "\napplied on open: layout v{} ({})",
             applied.version, applied.name
         ));
+    }
+
+    for forward in [
+        status.layout_forward_compatible.as_ref(),
+        status.schema_forward_compatible.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        trailer.push_str(&format!("\nread-only: {forward}"));
+    }
+    if status.forward_compatible_only() {
+        trailer.push_str(
+            "\n\nThis workspace is newer than this binary, by additive migrations only: \
+             read-only commands work and writes are refused. Upgrade orbit to write to it.",
+        );
     }
 
     // The caller emits the refusal error for a workspace newer than the binary,

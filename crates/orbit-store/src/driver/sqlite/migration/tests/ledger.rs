@@ -5,6 +5,11 @@ use std::thread;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
+
+use crate::contracts::{
+    BreakingMigration, COMPATIBILITY_RECORD_FORMAT, CompatibilityRecord, MigrationCompatibility,
+    StateComponent,
+};
 use rusqlite::{Connection, Error as SqliteError, ffi};
 
 use super::super::ledger::{self, Migration};
@@ -293,6 +298,156 @@ fn refuses_db_from_a_newer_binary() {
     );
 }
 
+/// Stamp a database as a newer binary would have left it: an extra ledger
+/// row plus the forward-compatibility record describing that version.
+fn stamp_newer_database(conn: &Connection, version: u32, breaking: &[(u32, &str)]) {
+    conn.execute(
+        "INSERT INTO schema_meta(key, value, updated_at) VALUES (?1, 'from-the-future', ?2)",
+        rusqlite::params![format!("migration.v{version:04}"), "2099-01-01T00:00:00Z"],
+    )
+    .expect("record future migration");
+    let record = CompatibilityRecord {
+        format: COMPATIBILITY_RECORD_FORMAT,
+        version,
+        breaking: breaking
+            .iter()
+            .map(|(version, name)| BreakingMigration {
+                version: *version,
+                name: (*name).to_string(),
+            })
+            .collect(),
+    };
+    conn.execute(
+        "INSERT INTO schema_meta(key, value, updated_at) VALUES ('migration.compat', ?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        rusqlite::params![
+            record.encode().expect("encode record"),
+            "2099-01-01T00:00:00Z"
+        ],
+    )
+    .expect("record compatibility metadata");
+}
+
+#[test]
+fn applying_migrations_records_the_compatibility_contract() {
+    let conn = Connection::open_in_memory().expect("open in-memory connection");
+    apply_schema(&conn).expect("apply schema");
+
+    let raw: String = conn
+        .query_row(
+            "SELECT value FROM schema_meta WHERE key = 'migration.compat'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read compatibility record");
+    let record = CompatibilityRecord::decode(&raw).expect("decode compatibility record");
+    assert_eq!(record.format, COMPATIBILITY_RECORD_FORMAT);
+    assert_eq!(record.version, SUPPORTED_SCHEMA_VERSION);
+    let expected: Vec<BreakingMigration> = ledger::MIGRATIONS
+        .iter()
+        .filter(|migration| migration.compat.is_breaking())
+        .map(|migration| BreakingMigration {
+            version: migration.version,
+            name: migration.name.to_string(),
+        })
+        .collect();
+    assert_eq!(record.breaking, expected);
+    // The record never lands in the version ledger itself.
+    assert!(
+        !ledger_rows(&conn)
+            .iter()
+            .any(|(key, _)| key == "migration.compat")
+    );
+}
+
+#[test]
+fn additive_newer_database_opens_read_only_and_leaves_its_bytes_untouched() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("orbit.db");
+    {
+        let store = crate::Store::open(&path).expect("create store");
+        assert!(store.forward_compatible_open().is_none());
+        let conn = Connection::open(&path).expect("open raw connection");
+        // A newer binary applied one additive migration on top; every
+        // breaking migration it lists is one this binary already has.
+        stamp_newer_database(
+            &conn,
+            SUPPORTED_SCHEMA_VERSION + 1,
+            &[(14, "remove_native_learning_subsystem")],
+        );
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .expect("checkpoint wal");
+    }
+    let before = std::fs::read(&path).expect("read database bytes");
+
+    let store = crate::Store::open(&path).expect("newer-but-additive database opens");
+    let forward = store
+        .forward_compatible_open()
+        .expect("the handle must record the read-only open");
+    assert_eq!(forward.component, StateComponent::StoreSchema);
+    assert_eq!(forward.state_version, SUPPORTED_SCHEMA_VERSION + 1);
+    assert_eq!(forward.supported_version, SUPPORTED_SCHEMA_VERSION);
+
+    // Reads are served normally.
+    assert_eq!(
+        store.schema_version().expect("schema version"),
+        SUPPORTED_SCHEMA_VERSION + 1
+    );
+
+    // Writes are refused by a scoped, actionable error — not by failing the
+    // open — and never reach the file.
+    let error = store
+        .with_transaction(|_| Ok(()))
+        .expect_err("a write transaction must be refused");
+    let message = error.to_string();
+    assert!(message.contains("opened read-only"), "{message}");
+    assert!(message.contains("upgrade orbit"), "{message}");
+    let denied = store
+        .conn
+        .lock()
+        .expect("writer lock")
+        .execute("INSERT INTO schema_meta VALUES ('x','y','z')", [])
+        .expect_err("query_only must reject a direct write");
+    assert!(denied.to_string().contains("readonly"), "{denied}");
+
+    drop(store);
+    assert_eq!(
+        std::fs::read(&path).expect("read database bytes"),
+        before,
+        "an older binary must not rewrite a newer store"
+    );
+}
+
+#[test]
+fn breaking_newer_database_refuses_and_names_the_first_missing_migration() {
+    let conn = Connection::open_in_memory().expect("open in-memory connection");
+    apply_schema(&conn).expect("apply schema");
+    stamp_newer_database(
+        &conn,
+        SUPPORTED_SCHEMA_VERSION + 2,
+        &[
+            (SUPPORTED_SCHEMA_VERSION + 1, "split_job_runs"),
+            (SUPPORTED_SCHEMA_VERSION + 2, "drop_audit_events"),
+        ],
+    );
+
+    let err = apply_schema(&conn).expect_err("must refuse a breaking newer schema");
+    let message = err.to_string();
+    assert!(
+        message.contains(&format!("schema version {}", SUPPORTED_SCHEMA_VERSION + 2)),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "v{} (split_job_runs)",
+            SUPPORTED_SCHEMA_VERSION + 1
+        )),
+        "{message}"
+    );
+    assert!(!message.contains("drop_audit_events"), "{message}");
+    assert!(message.contains("upgrade orbit"), "{message}");
+}
+
 #[test]
 fn store_reopens_database_at_shipped_schema_v4_and_applies_through_latest() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -507,11 +662,13 @@ fn failed_migration_rolls_back_schema_and_ledger() {
         Migration {
             version: 1,
             name: "marker",
+            compat: MigrationCompatibility::Additive,
             apply: migration_v1_marker,
         },
         Migration {
             version: 2,
             name: "fails-midway",
+            compat: MigrationCompatibility::Additive,
             apply: migration_v2_fails_midway,
         },
     ];
@@ -533,11 +690,13 @@ fn failed_migration_rolls_back_schema_and_ledger() {
         Migration {
             version: 1,
             name: "marker",
+            compat: MigrationCompatibility::Additive,
             apply: migration_v1_marker,
         },
         Migration {
             version: 2,
             name: "fixed",
+            compat: MigrationCompatibility::Additive,
             apply: migration_v1_marker_v2,
         },
     ];
@@ -672,11 +831,13 @@ fn waiter_applies_after_holder_panics_and_rolls_back() {
     let panic_registry = [Migration {
         version: 1,
         name: "holds-then-panics",
+        compat: MigrationCompatibility::Additive,
         apply: migration_holds_lock_then_panics,
     }];
     let success_registry = [Migration {
         version: 1,
         name: "applies-after-rollback",
+        compat: MigrationCompatibility::Additive,
         apply: migration_creates_panic_table,
     }];
 
@@ -736,6 +897,7 @@ fn sqlite_full_commit_error_is_a_store_resource_error() {
     let migration = Migration {
         version: 42,
         name: "disk-full-test",
+        compat: MigrationCompatibility::Additive,
         apply: migration_v1_marker,
     };
     let error = SqliteError::SqliteFailure(ffi::Error::new(ffi::SQLITE_FULL), None);
@@ -769,11 +931,13 @@ fn rejects_non_increasing_registry() {
         Migration {
             version: 2,
             name: "second",
+            compat: MigrationCompatibility::Additive,
             apply: migration_v1_marker,
         },
         Migration {
             version: 1,
             name: "first",
+            compat: MigrationCompatibility::Additive,
             apply: migration_v1_marker,
         },
     ];

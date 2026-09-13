@@ -16,8 +16,11 @@
 //!   `SQLITE_BUSY_SNAPSHOT` nor re-applies a version another process
 //!   just committed.
 //! - A database whose recorded version is newer than
-//!   [`SUPPORTED_SCHEMA_VERSION`] is refused with
-//!   [`OrbitError::Migration`] (downgrade guard).
+//!   [`SUPPORTED_SCHEMA_VERSION`] is decided from the
+//!   `schema_meta` forward-compatibility record a newer binary leaves
+//!   behind (ORB-12434): newer by additive migrations only opens
+//!   read-only, anything else is refused with [`OrbitError::Migration`]
+//!   naming the first breaking migration this binary lacks.
 //! - Legacy databases created by the pre-ledger idempotent migrations
 //!   adopt the ledger transparently: the v1 baseline is the same
 //!   idempotent schema code, so running it on an existing database is a
@@ -28,10 +31,18 @@ use std::path::Path;
 use orbit_common::{OrbitError, SqliteContention};
 use rusqlite::{Connection, ErrorCode, Transaction, TransactionBehavior, params};
 
+use crate::contracts::{
+    CompatibilityRecord, CompatibilityRefusal, ForwardCompatibleOpen, MigrationCompatibility,
+    StateComponent, evaluate_newer_state,
+};
+
 /// One entry in the migration registry.
 pub(crate) struct Migration {
     pub(crate) version: u32,
     pub(crate) name: &'static str,
+    /// What this migration means for a binary that does not have it. See
+    /// [`MigrationCompatibility`]; declare `Breaking` when in doubt.
+    pub(crate) compat: MigrationCompatibility,
     pub(crate) apply: fn(&Connection) -> Result<(), OrbitError>,
 }
 
@@ -42,46 +53,56 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
         name: "baseline",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_baseline_schema,
     },
     Migration {
         version: 2,
         name: "learnings_index_workspace_scope",
+        // Drops and reshapes `learnings_index`, which binaries without it query.
+        compat: MigrationCompatibility::Breaking,
         apply: super::apply_learning_index_workspace_scope,
     },
     Migration {
         version: 3,
         name: "flat_crew_model",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_flat_crew_model,
     },
     Migration {
         version: 4,
         name: "job_run_archive_stage",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_job_run_archive_stage,
     },
     Migration {
         version: 5,
         name: "host_registry_core",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_host_registry_core,
     },
     Migration {
         version: 6,
         name: "workspace_coordination_projections",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_workspace_coordination_projections,
     },
     Migration {
         version: 7,
         name: "trusted_mcp_audit_provenance",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_trusted_mcp_audit_provenance,
     },
     Migration {
         version: 8,
         name: "hub_registry_metadata",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_hub_registry_metadata,
     },
     Migration {
         version: 9,
         name: "feature_schema_ledger",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_feature_schema_ledger,
     },
     // ORB-10367: carries the invocation telemetry columns
@@ -90,6 +111,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 10,
         name: "invocation_telemetry_columns",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_invocation_telemetry_columns,
     },
     // ADR-0287: baseline v1 is frozen; schema added later always advances
@@ -97,6 +119,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 11,
         name: "routine_scheduler_schema",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_routine_scheduler_schema,
     },
     // ORB-10680: hub friction records leave the Markdown tree for the
@@ -104,6 +127,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 12,
         name: "friction_records_sqlite",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_friction_records_schema,
     },
     // ORB-10709 / ADR-0352: `task_reservations` gains the coordination
@@ -112,6 +136,9 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 13,
         name: "workspace_claim_scope",
+        // Adds the coordination dimension to `task_reservations`: a binary
+        // without it reads an exclusive workspace claim as a file reservation.
+        compat: MigrationCompatibility::Breaking,
         apply: super::apply_workspace_claim_scope,
     },
     // ORB-10736: keep the shipped learning migrations above intact, then
@@ -119,11 +146,14 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 14,
         name: "remove_native_learning_subsystem",
+        // Drops the learning tables older binaries still query.
+        compat: MigrationCompatibility::Breaking,
         apply: super::apply_remove_native_learning_subsystem,
     },
     Migration {
         version: 15,
         name: "invocation_audit_context",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_invocation_audit_context,
     },
     // ORB-10888: `role` alone conflates agent families, model strings, system
@@ -132,6 +162,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 16,
         name: "audit_actor_identity",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_audit_actor_identity,
     },
     // ORB-10890: the untrusted half of attribution. An MCP client started from
@@ -140,6 +171,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 17,
         name: "audit_self_reported_actor",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_audit_self_reported_actor,
     },
     // Alias map v2: `fable` became a family rule so versioned Fable labels
@@ -147,6 +179,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 18,
         name: "audit_actor_alias_v2",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_audit_actor_alias_v2,
     },
     // The run listing orders by `created_at DESC, run_id` per workspace; the
@@ -156,6 +189,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 19,
         name: "job_runs_created_index",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_job_runs_created_index,
     },
     // Every window filter (`ts >= ? AND ts < ?`) and the newest-first
@@ -165,6 +199,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 20,
         name: "invocations_ts_index",
+        compat: MigrationCompatibility::Additive,
         apply: super::apply_invocations_ts_index,
     },
 ];
@@ -176,6 +211,10 @@ pub const SUPPORTED_SCHEMA_VERSION: u32 = 20;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 
+/// `schema_meta` key carrying the forward-compatibility record (ORB-12434).
+/// Deliberately outside the `migration.v<NNNN>` namespace the ledger scans.
+pub(crate) const COMPAT_KEY: &str = "migration.compat";
+
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppliedMigration {
@@ -185,12 +224,16 @@ pub struct AppliedMigration {
 }
 
 /// Bring `conn` up to the newest version in `migrations`, recording each
-/// applied migration in the ledger. Refuses databases newer than the
-/// registry supports.
+/// applied migration in the ledger.
+///
+/// A database newer than the registry supports is decided by its
+/// forward-compatibility record: `Ok(Some(..))` means the caller must keep
+/// the connection read-only (ORB-12434); an error means this binary must not
+/// touch the database at all.
 pub(crate) fn run_migrations(
     conn: &Connection,
     migrations: &[Migration],
-) -> Result<(), OrbitError> {
+) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
     run_migrations_inner(conn, migrations, None)
 }
 
@@ -198,7 +241,7 @@ pub(crate) fn run_migrations_at_path(
     conn: &Connection,
     migrations: &[Migration],
     path: &Path,
-) -> Result<(), OrbitError> {
+) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
     run_migrations_inner(conn, migrations, Some(path))
 }
 
@@ -206,26 +249,99 @@ fn run_migrations_inner(
     conn: &Connection,
     migrations: &[Migration],
     path: Option<&Path>,
-) -> Result<(), OrbitError> {
+) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
     validate_registry(migrations)?;
     let current = current_schema_version(conn)?;
     let supported = migrations.last().map(|m| m.version).unwrap_or(0);
     if current > supported {
-        return Err(newer_than_supported(current, supported));
+        return evaluate_newer_database(conn, current, supported).map(Some);
     }
     // A current store needs no write transaction. Return before the
     // idempotent CREATE TABLE so read-only mounts remain genuinely readable.
     if current == supported {
-        return Ok(());
+        return Ok(None);
     }
 
     // `current` is only a hint for which versions to attempt. `apply_one`
     // re-reads the ledger under BEGIN IMMEDIATE and skips anything another
     // opener already committed while this connection waited.
     for migration in migrations.iter().filter(|m| m.version > current) {
-        apply_one(conn, migration, supported, path)?;
+        if let Some(forward) = apply_one(conn, migrations, migration, supported, path)? {
+            // Another opener advanced the database past this binary while we
+            // were applying; the rest of the registry is moot and the caller
+            // must hold the connection read-only.
+            return Ok(Some(forward));
+        }
     }
 
+    Ok(None)
+}
+
+/// Decide a database recorded newer than this binary supports. Reads only
+/// the compatibility record a newer binary left behind; never writes.
+fn evaluate_newer_database(
+    conn: &Connection,
+    current: u32,
+    supported: u32,
+) -> Result<ForwardCompatibleOpen, OrbitError> {
+    let record = match read_compat_record(conn) {
+        Ok(record) => evaluate_newer_state(StateComponent::StoreSchema, current, supported, record),
+        Err(refusal) => Err(refusal),
+    };
+    match record {
+        Ok(forward) => {
+            orbit_common::tracing::warn!(
+                target: "orbit.store.sqlite",
+                schema_version = current,
+                supported_version = supported,
+                "opening a newer store database read-only; this binary applies no schema migration to it",
+            );
+            Ok(forward)
+        }
+        Err(refusal) => Err(newer_than_supported(current, supported, &refusal)),
+    }
+}
+
+/// Read the forward-compatibility record from `schema_meta`. A missing row
+/// is the pre-ORB-12434 case, not an error.
+pub(crate) fn read_compat_record(
+    conn: &Connection,
+) -> Result<Option<CompatibilityRecord>, CompatibilityRefusal> {
+    let raw = match conn.query_row(
+        "SELECT value FROM schema_meta WHERE key = ?1",
+        [COMPAT_KEY],
+        |row| row.get::<_, String>(0),
+    ) {
+        Ok(raw) => raw,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+        Err(error) => return Err(CompatibilityRefusal::CorruptRecord(error.to_string())),
+    };
+    CompatibilityRecord::decode(raw.trim()).map(Some)
+}
+
+/// Record what this binary knows about schema compatibility, inside the same
+/// transaction that commits the migration it describes.
+fn write_compat_record(
+    conn: &Connection,
+    migrations: &[Migration],
+    version: u32,
+) -> Result<(), OrbitError> {
+    let record = CompatibilityRecord::for_registry(
+        version,
+        migrations
+            .iter()
+            .map(|migration| (migration.version, migration.name, migration.compat)),
+    );
+    conn.execute(
+        "INSERT INTO schema_meta(key, value, updated_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        params![COMPAT_KEY, record.encode()?, crate::now_string()],
+    )
+    .map_err(|error| {
+        OrbitError::Migration(format!(
+            "failed to record schema compatibility metadata at v{version}: {error}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -274,12 +390,16 @@ pub(crate) fn applied_migrations(conn: &Connection) -> Result<Vec<AppliedMigrati
     Ok(applied)
 }
 
+/// Apply one migration, unless the database has meanwhile moved past this
+/// binary — in which case the forward-compatibility decision is returned
+/// instead (or raised as a refusal).
 fn apply_one(
     conn: &Connection,
+    migrations: &[Migration],
     migration: &Migration,
     supported: u32,
     path: Option<&Path>,
-) -> Result<(), OrbitError> {
+) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
     // BEGIN IMMEDIATE takes the reserved lock before any read so a WAL
     // snapshot cannot be pinned under DEFERRED while another opener
     // commits. `new_unchecked` is the `&Connection` form of
@@ -291,10 +411,13 @@ fn apply_one(
 
     let current = current_schema_version(&tx)?;
     if current > supported {
-        return Err(newer_than_supported(current, supported));
+        // Another opener advanced the database past this binary while we
+        // waited for the write lock. Re-decide from its record rather than
+        // continuing to apply migrations to a newer database.
+        return evaluate_newer_database(&tx, current, supported).map(Some);
     }
     if current >= migration.version {
-        return Ok(());
+        return Ok(None);
     }
 
     ensure_schema_meta_table(&tx)?;
@@ -321,6 +444,7 @@ fn apply_one(
             migration.version, migration.name
         ))
     })?;
+    write_compat_record(&tx, migrations, migration.version)?;
 
     tx.commit()
         .map_err(|error| commit_migration_error(migration, error))?;
@@ -331,7 +455,7 @@ fn apply_one(
         name = migration.name,
         "applied store schema migration",
     );
-    Ok(())
+    Ok(None)
 }
 
 fn migration_begin_error(
@@ -360,10 +484,14 @@ fn migration_begin_error(
     ))
 }
 
-fn newer_than_supported(current: u32, supported: u32) -> OrbitError {
+fn newer_than_supported(
+    current: u32,
+    supported: u32,
+    refusal: &CompatibilityRefusal,
+) -> OrbitError {
     OrbitError::Migration(format!(
         "store database schema version {current} is newer than the newest version this \
-        orbit binary supports ({supported}); upgrade orbit to open this database"
+        orbit binary supports ({supported}); {refusal}; upgrade orbit to open this database"
     ))
 }
 

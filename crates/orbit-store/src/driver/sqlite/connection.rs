@@ -6,6 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::{apply_default_pragmas, open_private};
 use rusqlite::{Connection, OpenFlags, Transaction, TransactionBehavior};
 
+use crate::contracts::ForwardCompatibleOpen;
 use crate::driver::sqlite::migration;
 use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
 
@@ -30,6 +31,12 @@ pub struct Store {
     /// reads fall back to the writer connection (a second connection would
     /// see a different empty database).
     readers: Option<Arc<ReadPool>>,
+    /// Set when this handle opened a database written by a newer orbit whose
+    /// extra migrations are all additive (ORB-12434). The connection is
+    /// pinned with `PRAGMA query_only=ON` and every write surface refuses
+    /// before it reaches SQLite, so an older binary reads a newer store but
+    /// never rewrites it.
+    forward_compatible: Option<Arc<ForwardCompatibleOpen>>,
 }
 
 pub struct StoreTx<'a> {
@@ -64,6 +71,9 @@ impl Store {
     }
 
     pub(crate) fn set_schema_meta_value(&self, key: &str, value: &str) -> Result<(), OrbitError> {
+        if let Some(refusal) = self.refuse_forward_compatible_write("write store metadata") {
+            return Err(refusal);
+        }
         let conn = self
             .conn
             .lock()
@@ -99,23 +109,58 @@ impl Store {
         let conn = opened.connection;
         let read_only = opened.read_only;
 
-        if let Err(error) = migration::apply_schema_at_path(&conn, path) {
-            if read_only && error.is_readonly_or_access_failure() {
-                orbit_common::tracing::warn!(
-                    target: "orbit.store.sqlite",
-                    path = %path.display(),
-                    currency = ?opened.currency,
-                    error = %error,
-                    "skipped schema migration while opening a store for observational reads"
-                );
-            } else {
-                return Err(error);
+        let mut forward_compatible = None;
+        match migration::apply_schema_at_path(&conn, path) {
+            Ok(compatibility) => forward_compatible = compatibility,
+            Err(error) => {
+                if read_only && error.is_readonly_or_access_failure() {
+                    orbit_common::tracing::warn!(
+                        target: "orbit.store.sqlite",
+                        path = %path.display(),
+                        currency = ?opened.currency,
+                        error = %error,
+                        "skipped schema migration while opening a store for observational reads"
+                    );
+                } else {
+                    return Err(error);
+                }
             }
+        }
+        // A newer-but-additive database is readable, never writable by this
+        // binary. Pin the writer connection read-only in SQLite itself so a
+        // write cannot reach the file through any path that holds it.
+        if forward_compatible.is_some() {
+            conn.pragma_update(None, "query_only", "ON")
+                .map_err(|error| {
+                    OrbitError::Store(format!(
+                        "cannot pin '{}' read-only for a forward-compatible open: {error}",
+                        path.display()
+                    ))
+                })?;
         }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             readers: (!read_only).then(|| Arc::new(ReadPool::new(path.to_path_buf()))),
+            forward_compatible: forward_compatible.map(Arc::new),
         })
+    }
+
+    /// Set when this handle opened a database newer than the binary
+    /// supports, in additive-only read-only mode (ORB-12434).
+    pub fn forward_compatible_open(&self) -> Option<&ForwardCompatibleOpen> {
+        self.forward_compatible.as_deref()
+    }
+
+    /// The scoped refusal for a write attempted against a forward-compatible
+    /// read-only handle: name the operation, not the whole workspace.
+    fn refuse_forward_compatible_write(&self, operation: &str) -> Option<OrbitError> {
+        let forward = self.forward_compatible.as_ref()?;
+        Some(OrbitError::Migration(format!(
+            "cannot {operation}: this orbit binary supports {} version {} and the store records \
+             version {}, so it was opened read-only; reads are served normally — upgrade orbit to \
+             write to this store",
+            forward.component, forward.supported_version, forward.state_version
+        )))
     }
 
     /// Rebind this handle and all of its writer clones to the current files at
@@ -162,6 +207,7 @@ impl Store {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             readers: None,
+            forward_compatible: None,
         })
     }
 
@@ -172,6 +218,7 @@ impl Store {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             readers: None,
+            forward_compatible: None,
         })
     }
 
@@ -190,6 +237,9 @@ impl Store {
     where
         F: FnOnce(&mut StoreTx<'_>) -> Result<T, OrbitError>,
     {
+        if let Some(refusal) = self.refuse_forward_compatible_write("open a write transaction") {
+            return Err(refusal);
+        }
         let mut conn = self
             .conn
             .lock()

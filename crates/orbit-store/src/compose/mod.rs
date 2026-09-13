@@ -101,10 +101,26 @@ pub fn workspace_friction_store_from_path(
     workspace_friction_store(Store::open(database)?, workspace_id, files_root)
 }
 
+/// Prove the store database is open-able *and writable by this binary*.
+///
+/// Callers use this before work that must write (the pipeline worker's
+/// pre-claim pre-flight). A database newer than this binary opens read-only
+/// under the forward-compatibility contract (ORB-12434), which is not
+/// readiness for those callers — fail here rather than mid-run.
 pub fn ensure_sqlite_store_ready(
     database: &std::path::Path,
 ) -> Result<(), orbit_common::OrbitError> {
-    drop(Store::open(database)?);
+    let store = Store::open(database)?;
+    if let Some(forward) = store.forward_compatible_open() {
+        return Err(orbit_common::OrbitError::Migration(format!(
+            "store database '{}' records {} version {} and this orbit binary supports {}, \
+             so it opened read-only; work that writes needs a newer orbit",
+            database.display(),
+            forward.component,
+            forward.state_version,
+            forward.supported_version
+        )));
+    }
     Ok(())
 }
 

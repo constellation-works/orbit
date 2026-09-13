@@ -14,10 +14,16 @@
 //!   are listed instead of silently applied — the only way to see "pending"
 //!   given auto-migration on open. Environment and workspace-catalog
 //!   resolution belongs to the calling application.
+//!
+//! Both paths also report forward compatibility (ORB-12434): a workspace
+//! newer than this binary is not automatically unusable, and
+//! [`MigrateStatus::forward_compatible_only`] distinguishes "newer, opens
+//! read-only" from "newer, refuses".
 
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_store::contracts::ForwardCompatibleOpen;
 use orbit_store::maintenance::migration::{
     PendingSchemaMigration, SUPPORTED_SCHEMA_VERSION, pending_schema_migrations_after,
     read_schema_ledger_status,
@@ -51,6 +57,12 @@ pub struct MigrateStatus {
     /// Layout migrations the current runtime open auto-applied (apply path
     /// only; always empty for a dry-run, which never applies).
     pub applied_layout: Vec<LayoutMigrationInfo>,
+    /// Set when the workspace layout is newer than this binary supports but
+    /// readable read-only (ORB-12434).
+    pub layout_forward_compatible: Option<ForwardCompatibleOpen>,
+    /// Set when the store database is newer than this binary supports but
+    /// readable read-only (ORB-12434).
+    pub schema_forward_compatible: Option<ForwardCompatibleOpen>,
 }
 
 impl MigrateStatus {
@@ -63,6 +75,20 @@ impl MigrateStatus {
     /// (the workspace was written by a newer orbit).
     pub fn newer_than_binary(&self) -> bool {
         self.layout_version > self.layout_supported || self.schema_version > self.schema_supported
+    }
+
+    /// True when everything newer than this binary is newer only by additive
+    /// migrations, so the workspace still serves read-only commands
+    /// (ORB-12434). False when nothing is newer.
+    pub fn forward_compatible_only(&self) -> bool {
+        if !self.newer_than_binary() {
+            return false;
+        }
+        let layout_ok = self.layout_version <= self.layout_supported
+            || self.layout_forward_compatible.is_some();
+        let schema_ok = self.schema_version <= self.schema_supported
+            || self.schema_forward_compatible.is_some();
+        layout_ok && schema_ok
     }
 }
 
@@ -88,6 +114,8 @@ pub fn migrate_dry_run_at(
         pending_layout: layout::pending_layout_migrations(orbit_dir)?,
         pending_schema: ledger.pending,
         applied_layout: Vec::new(),
+        layout_forward_compatible: layout::layout_forward_compatible_open(orbit_dir)?,
+        schema_forward_compatible: ledger.forward_compatible,
     })
 }
 
@@ -116,6 +144,8 @@ impl MigrateCommands for OrbitRuntime {
             pending_layout: layout::pending_layout_migrations(&orbit_dir)?,
             pending_schema: pending_schema_migrations_after(schema_version),
             applied_layout: self.layout_upgrade_report().applied.clone(),
+            layout_forward_compatible: self.layout_upgrade_report().forward_compatible.clone(),
+            schema_forward_compatible: self.sqlite_store()?.forward_compatible_open().cloned(),
             orbit_dir,
         })
     }
