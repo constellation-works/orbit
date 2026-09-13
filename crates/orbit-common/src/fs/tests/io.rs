@@ -104,6 +104,37 @@ fn exclusive_lock_open_on_readonly_dir_names_path_and_hints_sandbox() {
     }
 }
 
+#[test]
+fn write_new_private_text_creates_once_and_refuses_a_second_write() {
+    let root = tempfile::tempdir().expect("root tempdir");
+    let path = root.path().join("nested/secret.toml");
+
+    crate::fs::io::write_new_private_text(&path, "first = true\n").expect("first write");
+    let error = crate::fs::io::write_new_private_text(&path, "second = true\n")
+        .expect_err("an existing file must not be overwritten");
+
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists, "{error}");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("contents"),
+        "first = true\n"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+        let parent = std::fs::metadata(path.parent().expect("parent"))
+            .expect("parent metadata")
+            .permissions()
+            .mode();
+        assert_eq!(parent & 0o777, 0o700, "{parent:o}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn private_append_rejects_a_final_symlink() {

@@ -38,11 +38,29 @@ fn observed(fingerprint: &str) -> Option<ObservedKeys> {
     })
 }
 
+/// Write a callers file the way an operator must hold it: private to the
+/// account that serves sessions from it. `std::fs::write` alone would land at
+/// the ambient umask, which `load_callers` refuses [ORB-12450] — the same
+/// refusal the permission cases below assert.
 fn write(contents: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().expect("temp dir");
     let path = dir.path().join("mcp-callers.toml");
     std::fs::write(&path, contents).expect("write callers");
+    chmod(&path, 0o600);
     (dir, path)
+}
+
+fn chmod(path: &std::path::Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode);
+    }
 }
 
 #[test]
@@ -804,4 +822,150 @@ fn seed_escapes_labels_that_would_break_the_toml_literal() {
         parsed["callers"][0]["label"].as_str(),
         Some("laptop\" # not a comment")
     );
+}
+
+/// [ORB-12450] A ceiling anyone else can write is not a ceiling: a principal
+/// with no capability of its own would append a row granting itself `operator`
+/// and `agent_invoke`. The refusal is total — the session is not served from
+/// the file at a lowered grant, because a lowered grant would look exactly
+/// like a legitimately small one.
+///
+/// The owner half of the same check (`uid != geteuid`) cannot be exercised
+/// here: creating a file owned by another account needs privileges a unit test
+/// must not have.
+#[cfg(unix)]
+#[test]
+fn a_writable_ceiling_is_refused_and_serves_no_session() {
+    for (mode, scope) in [(0o664, "group"), (0o666, "world"), (0o622, "world")] {
+        let (dir, path) = write(
+            r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent", "operator"]
+"#,
+        );
+        chmod(&path, mode);
+
+        let error = load_callers(&path).expect_err("a writable ceiling must fail closed");
+        let message = error.to_string();
+        assert!(message.contains(scope), "{mode:o}: {message}");
+        assert!(
+            message.contains("chmod 600 ~/.orbit/mcp-callers.toml"),
+            "the denial must name the fix: {message}"
+        );
+        assert!(matches!(error, OrbitError::InvalidInput(_)), "{error:?}");
+
+        let refused = SessionCapabilityPolicy::resolve(
+            dir.path(),
+            McpSessionAuthority::Operator,
+            &caller("hm_alpha"),
+        )
+        .expect_err("no session may be established from an untrusted ceiling");
+        assert!(
+            refused.to_string().contains("mcp-callers.toml"),
+            "{refused}"
+        );
+    }
+}
+
+/// [ORB-12450] Read access is a disclosure, not an escalation, so it is
+/// reported rather than refused: taking every remote session down over the
+/// mode the conventional `umask 022` produces would trade an outage for a
+/// leak. Nothing on the destination needs the group bit — the account owns the
+/// file and reads it as itself even under the setgid Tier 2 launcher, which
+/// drops its launch group before Orbit opens any state.
+#[cfg(unix)]
+#[test]
+fn a_readable_ceiling_still_loads_and_is_reported_instead() {
+    let (dir, path) = write(
+        r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent"]
+"#,
+    );
+    let authorized_keys = dir.path().join("authorized_keys");
+    std::fs::write(&authorized_keys, "ssh-ed25519 AAAA nobody@nowhere\n").expect("write");
+
+    for mode in [0o644, 0o640] {
+        chmod(&path, mode);
+        let file = load_callers(&path).expect("a readable ceiling is not a refusal");
+        assert_eq!(file.resolve(&caller("hm_alpha")).granted, agent());
+
+        let health = inspect_caller_authorization(dir.path(), &authorized_keys);
+        assert!(health.defect.is_none(), "{health:?}");
+        assert!(
+            health.readable_beyond_owner,
+            "the doctor must see mode {mode:o}"
+        );
+    }
+
+    chmod(&path, 0o600);
+    let health = inspect_caller_authorization(dir.path(), &authorized_keys);
+    assert!(
+        !health.readable_beyond_owner,
+        "a private ceiling has nothing to report: {health:?}"
+    );
+}
+
+/// [ORB-12450] A symlink's own mode says nothing about the file it points at,
+/// so the target cannot be trusted by checking the link. Refusing names the
+/// reason instead of reporting a bare `ELOOP` from the no-follow open.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_ceiling_is_refused_rather_than_followed() {
+    let (dir, path) = write(
+        r#"
+[[callers]]
+machine_id = "hm_alpha"
+capabilities = ["agent"]
+"#,
+    );
+    let link = dir.path().join("linked-callers.toml");
+    std::os::unix::fs::symlink(&path, &link).expect("symlink");
+
+    let error = load_callers(&link).expect_err("a symlinked ceiling must fail closed");
+
+    assert!(error.to_string().contains("symlink"), "{error}");
+}
+
+/// [ORB-12450] The seeder used to write at the ambient umask, so on a host
+/// with the conventional `umask 002` `orbit mcp callers init` produced a
+/// group-writable authorization file — which `load_callers` now refuses,
+/// making the seeder's own output unusable if it were still umask-dependent.
+/// The child process proves the mode is the kernel-set one, not an artifact of
+/// whatever umask the test runner happens to have.
+#[cfg(unix)]
+#[test]
+fn the_seeder_writes_a_private_file_under_a_permissive_umask() {
+    use std::os::unix::fs::PermissionsExt;
+
+    const CHILD_MARKER: &str = "ORBIT_TEST_CALLERS_SEED_UMASK";
+    if std::env::var_os(CHILD_MARKER).is_none() {
+        let status = std::process::Command::new("sh")
+            .args(["-c", "umask 000; exec \"$@\"", "sh"])
+            .arg(std::env::current_exe().expect("current test executable"))
+            .arg("the_seeder_writes_a_private_file_under_a_permissive_umask")
+            .env(CHILD_MARKER, "1")
+            .status()
+            .expect("run test under permissive umask");
+        assert!(status.success(), "permissive-umask child failed");
+        return;
+    }
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let path = root.path().join("nested/mcp-callers.toml");
+    let seeded = render_callers_seed(&[SeedCaller {
+        machine_id: "hm_alpha".to_string(),
+        label: None,
+    }]);
+
+    write_callers_seed(&path, &seeded).expect("seed writes");
+
+    let mode = std::fs::metadata(&path)
+        .expect("seed metadata")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600, "seeded mode {mode:o}");
+    load_callers(&path).expect("the seeder's own output must satisfy the trust check");
 }

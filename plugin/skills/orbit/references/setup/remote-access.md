@@ -56,6 +56,16 @@ orbit mcp callers check <caller-machine-id>
 orbit mcp callers init
 ```
 
+The file must be the destination account's own private file: Orbit refuses to
+serve any remote session from a callers file that is group- or world-writable
+or owned by another account, because a row is a grant and write access to the
+file is operator capability for whoever has it. `init` creates it `0600`; an
+older file seeded under the ambient umask needs `chmod 600
+~/.orbit/mcp-callers.toml` once. Group and world *read* are not required by
+anything — including the setgid Tier 2 launcher, which reads the file as the
+account that owns it — and `orbit doctor` reports them, since they disclose
+which machines this destination trusts.
+
 `init` seeds known callers with agent grants only. Operator grants are deliberate
 operator edits on the destination. For example:
 

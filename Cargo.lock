@@ -2306,6 +2306,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "getrandom 0.3.4",
+ "libc",
  "orbit-common",
  "orbit-registry",
  "orbit-tools",
