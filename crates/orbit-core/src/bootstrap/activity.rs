@@ -270,6 +270,134 @@ backend = "cli"
         assert!(!instruction.contains("is a directory"));
     }
 
+    /// The effective implementation instruction — the packaged asset and the
+    /// versioned workspace override a run actually loads — must carry the
+    /// final scope-reconciliation and cleanup contract, not the older
+    /// permissive "record the bounded leftover" handoff.
+    #[test]
+    fn agent_implement_requires_final_scope_reconciliation_before_handoff() {
+        let (_, shipped) = DEFAULT_ACTIVITY_FILES
+            .iter()
+            .find(|(name, _)| *name == "agent_implement")
+            .expect("agent implement activity is seeded");
+        let workspace_override =
+            include_str!("../../../../.orbit/resources/activities/agent_implement.yaml");
+
+        for (source, yaml) in [("packaged", *shipped), ("workspace", workspace_override)] {
+            let instruction = agent_implement_instruction(yaml);
+
+            for clause in [
+                // Final inventory across every change class.
+                "take a final inventory with `git status --short` and `git diff --check`",
+                "staged, unstaged, and untracked",
+                "both sides of every rename",
+                "account for every entry against the item 3 baseline",
+                // Selector coverage, refreshed after authorized updates.
+                "re-read the durable `context_files` after any authorized update",
+                "confirm a selector covers each intended delivery path",
+                "append its exact `file:` selector",
+                "a containing directory selector is not new-file intent",
+                // Cleanup before a successful exit, and what stays untouched.
+                "before a successful exit, remove or revert the run-owned output",
+                "write scratch, logs, and review evidence outside the checkout",
+                "preserve pre-existing contents, another actor's edits, and legitimate task outputs",
+                // Denied cleanup is a blocker, not a successful handoff.
+                "if a cleanup command is denied, do not retry it",
+                "name the exact leftover paths",
+                "do not hand off as success",
+                // Durable state stays the authority for delivery.
+                "record the item 11 reconciliation",
+                "never parse the execution summary as an oracle",
+            ] {
+                assert!(
+                    instruction.contains(clause),
+                    "{source} agent_implement lost the reconciliation clause: {clause}"
+                );
+            }
+
+            assert!(
+                !instruction.contains("record the bounded leftover"),
+                "{source} agent_implement still permits a bounded leftover at successful handoff"
+            );
+        }
+    }
+
+    /// Focused handoff scenarios the reconciliation contract has to answer.
+    /// Each one names the clause an implementer needs to decide correctly.
+    #[test]
+    fn agent_implement_reconciliation_answers_each_handoff_scenario() {
+        let (_, yaml) = DEFAULT_ACTIVITY_FILES
+            .iter()
+            .find(|(name, _)| *name == "agent_implement")
+            .expect("agent implement activity is seeded");
+        let instruction = agent_implement_instruction(yaml);
+
+        for (scenario, clauses) in [
+            (
+                "intended new file needs its own exact selector",
+                vec![
+                    "append its exact `file:` selector",
+                    "a containing directory selector is not new-file intent",
+                ],
+            ),
+            (
+                "an accidental edit is reverted, never declared into scope",
+                vec![
+                    "declaring a path never converts an accidental or unintended edit into scoped work",
+                    "revert that edit instead of widening the boundary",
+                ],
+            ),
+            (
+                "review evidence and scratch live outside the checkout",
+                vec![
+                    "write scratch, logs, and review evidence outside the checkout",
+                    "before removing a temporary copy",
+                    "temporary evidence or scratch files must remain outside the worktree",
+                ],
+            ),
+            (
+                "pre-existing dirt is separated from run-owned output",
+                vec![
+                    "record the starting head and a full starting inventory",
+                    "preserve pre-existing edits",
+                    "run-owned output you verified is not part of the deliverable",
+                ],
+            ),
+            (
+                "denied cleanup blocks instead of retrying or over-deleting",
+                vec![
+                    "never use raw `rm -f` or `rm -rf`",
+                    "never clean broadly to catch a specific leftover",
+                    "do not substitute a destructive one",
+                    "record the blocker with `orbit.task.update`",
+                    "separately from cleanup so a denied cleanup cannot skip these reads",
+                    "repeat the inventory after any cleanup",
+                ],
+            ),
+        ] {
+            for clause in clauses {
+                assert!(
+                    instruction.contains(clause),
+                    "agent_implement cannot answer `{scenario}`: missing {clause}"
+                );
+            }
+        }
+    }
+
+    /// Whitespace-normalized, lowercased instruction text of an `agent_loop`
+    /// activity asset, so clause assertions ignore YAML line wrapping.
+    fn agent_implement_instruction(yaml: &str) -> String {
+        let asset = load_activity_asset(yaml).expect("parse agent implement activity");
+        let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
+            panic!("expected agent_loop activity");
+        };
+        spec.instruction
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    }
+
     #[test]
     fn agent_response_contract_matches_durable_handoff_shape() {
         for (name, required) in [("agent_implement", false), ("triage_failed_runs", true)] {
