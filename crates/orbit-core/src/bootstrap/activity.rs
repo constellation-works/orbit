@@ -743,7 +743,21 @@ backend = "cli"
                 "activity_name",
                 "error_message",
                 "attempt",
-                "max_attempts"
+                "max_attempts",
+                "workspace_path",
+                "repo_root",
+                "run_id",
+                "failed_step_input",
+                "crew",
+                "crew_config_key",
+                "system_crew"
+            ])
+        );
+        assert_eq!(
+            asset.spec.input_schema_json["anyOf"],
+            serde_json::json!([
+                { "required": ["task_id"] },
+                { "required": ["task_ids"] }
             ])
         );
         assert_eq!(

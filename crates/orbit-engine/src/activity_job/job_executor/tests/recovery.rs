@@ -342,6 +342,145 @@ fn pr_recovery_projects_rendered_candidate_context_without_overriding_run_author
 }
 
 #[test]
+fn step_failure_recovery_projects_managed_context_for_implement_and_commit_failures() {
+    let asset = load_activity_asset(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../orbit-core/assets/activities/step_failure_recovery.yaml"
+    )))
+    .unwrap();
+    let schema = jsonschema::JSONSchema::compile(&asset.spec.input_schema_json).unwrap();
+    for (failed_step_id, failed_input, job_input, expected_task_field) in [
+        (
+            "implement_one",
+            json!({
+                "task_id": "ORB-IMPLEMENT",
+                "workspace_path": "{{ input.assigned }}",
+                "repo_root": "{{ input.assigned }}",
+            }),
+            json!({
+                "task_id": "ORB-IMPLEMENT",
+                "assigned": "/assigned/implement-worktree",
+            }),
+            ("task_id", json!("ORB-IMPLEMENT")),
+        ),
+        (
+            "commit",
+            json!({
+                "job_run_id": "{{ input.run_id }}",
+                "workspace_path": "{{ input.assigned }}",
+            }),
+            json!({
+                "task_ids": ["ORB-COMMIT"],
+                "assigned": "/assigned/commit-worktree",
+                "run_id": "stale-step-run",
+            }),
+            ("task_ids", json!(["ORB-COMMIT"])),
+        ),
+    ] {
+        let original = retryable_error("flaky", &format!("{failed_step_id} failed"));
+        let host = RecoveryHost::new([
+            (
+                "flaky",
+                vec![Err(original.clone()), Ok(json!({"recovered": true}))],
+            ),
+            ("step_failure_recovery", vec![Ok(json!({}))]),
+        ]);
+        let mut job = recovery_job(Some("step_failure_recovery"), None, "flaky", None, 1);
+        job.steps[0].id = failed_step_id.to_string();
+        let JobV2StepBody::Target(target) = &mut job.steps[0].body else {
+            panic!("resolved failed target")
+        };
+        target.default_input = Some(failed_input);
+        let run_id = format!("run-{failed_step_id}-recovery");
+        let writer = Arc::new(test_writer(&run_id));
+
+        let outcome = execute_job(&job, job_input, &run_id, writer.clone(), &host)
+            .expect("managed recovery context should reach dispatch");
+        assert!(outcome.success);
+
+        let input = host
+            .input_for_action("step_failure_recovery")
+            .expect("recovery dispatch input");
+        assert_eq!(input["failed_step_id"], failed_step_id);
+        assert_eq!(input["run_id"], run_id);
+        assert_eq!(input[expected_task_field.0], expected_task_field.1);
+        assert_eq!(input["repo_root"], input["workspace_path"]);
+        assert_eq!(
+            input["failed_step_input"]["workspace_path"],
+            input["workspace_path"]
+        );
+        assert_eq!(input["system_crew"], true);
+        let mut agent_input = input.clone();
+        agent_input.as_object_mut().unwrap().remove("step_id");
+        assert!(
+            schema.is_valid(&agent_input),
+            "recovery input must satisfy the shipped strict schema: {agent_input}"
+        );
+
+        let events = writer.events_snapshot().expect("audit snapshot");
+        assert!(matches!(
+            recovery_events(&events)[0].kind,
+            V2AuditEventKind::StepRecoveryAttempted {
+                recovery_succeeded: true,
+                failure_phase: None,
+                error_message: None,
+                ..
+            }
+        ));
+    }
+}
+
+#[test]
+fn step_failure_recovery_without_managed_context_fails_closed_with_audit_diagnostic() {
+    for invalid_input in [
+        json!({"task_id": "ORB-NO-WORKTREE"}),
+        json!({
+            "task_id": "ORB-INVALID-WORKTREE",
+            "workspace_path": null,
+            "repo_root": "/primary/checkout",
+        }),
+    ] {
+        let original = retryable_error("flaky", "failure before managed context existed");
+        let host = RecoveryHost::new([
+            ("flaky", vec![Err(original.clone())]),
+            ("step_failure_recovery", vec![Ok(json!({}))]),
+        ]);
+        let mut job = recovery_job(Some("step_failure_recovery"), None, "flaky", None, 1);
+        let JobV2StepBody::Target(target) = &mut job.steps[0].body else {
+            panic!("resolved failed target")
+        };
+        target.default_input = Some(invalid_input);
+        let writer = Arc::new(test_writer("run-missing-recovery-context"));
+
+        let error = execute_job(
+            &job,
+            Value::Null,
+            "run-missing-recovery-context",
+            writer.clone(),
+            &host,
+        )
+        .expect_err("recovery must not fall back to direct primary execution");
+
+        assert_eq!(error.to_string(), original.to_string());
+        assert_eq!(host.action_count("step_failure_recovery"), 0);
+        let events = writer.events_snapshot().expect("audit snapshot");
+        assert!(matches!(
+            recovery_events(&events)[0].kind,
+            V2AuditEventKind::StepRecoveryAttempted {
+                recovery_succeeded: false,
+                ref failure_phase,
+                ref error_message,
+                ..
+            } if failure_phase.as_deref() == Some("input")
+                && error_message.as_deref().is_some_and(|message| {
+                    message.contains("managed step recovery requires a task ID")
+                        && message.contains("refuses primary-checkout or unrestricted execution")
+                })
+        ));
+    }
+}
+
+#[test]
 fn step_level_recovery_activity_runs_without_job_level_recovery() {
     let original_error = retryable_error("flaky", "dirty checkout");
     let host = RecoveryHost::new([
