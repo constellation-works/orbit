@@ -386,6 +386,12 @@ impl Commands {
                         Some("triage"),
                         RuntimeNeed::Required,
                     ),
+                    RunSubcommand::TaskPilot(_) => (
+                        "task-pilot",
+                        Some("workflow"),
+                        Some("task-pilot"),
+                        RuntimeNeed::Required,
+                    ),
                     RunSubcommand::Readiness(_) => (
                         "readiness",
                         Some("workspace"),

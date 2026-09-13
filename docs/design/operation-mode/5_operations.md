@@ -1,8 +1,8 @@
 ---
 title: Operation Mode — Operations
 owner: claude
-last_updated: 2026-09-07
-last_validated: 2026-09-07
+last_updated: 2026-09-13
+last_validated: 2026-09-13
 status: Accepted
 feature: operation-mode
 doc_role: operations
@@ -187,11 +187,13 @@ a preference has no owner to act through.
 
 ## 8. Surfaces and observability
 
-- CLI: `orbit operation explain|enable|list|show|stop|revoke`, `orbit run auto --grant`, and
+- CLI: `orbit operation explain|enable|list|show|stop|revoke`, `orbit run auto --grant`,
   `orbit run readiness`, whose `capacity.operation` block and per-task
-  reasons (`outside_grant_scope`, `grant_*`) reflect a live grant-bound drain.
-  Operation mode is an operator control on the CLI and dashboard; agents read
-  grant state from readiness rather than MCP tools.
+  reasons (`outside_grant_scope`, `grant_*`) reflect a live grant-bound drain,
+  and `orbit run task-pilot` / `orbit run triage` for on-demand preparation and
+  failed-run triage (neither promotes or dispatches). Operation mode is an
+  operator control on the CLI and dashboard; agents read grant state from
+  readiness rather than MCP tools.
 - Dashboard: the Operations → Auto-drain view has an **Operation Mode** panel
   showing every field with its source, the grant, caps, limiting reasons,
   and governed Stop/Revoke controls with compare-and-set. When a grant is

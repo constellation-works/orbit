@@ -22,6 +22,10 @@ pub const WORKFLOWS: &[Workflow] = &[
         alias: "triage",
         job_id: "task_triage_pipeline",
     },
+    Workflow {
+        alias: "task-pilot",
+        job_id: "task_pilot_pipeline",
+    },
 ];
 
 pub fn find_workflow(name: &str) -> Option<&'static Workflow> {
@@ -133,6 +137,13 @@ mod tests {
         let workflow = find_workflow("triage").expect("triage workflow");
 
         assert_eq!(workflow.job_id, "task_triage_pipeline");
+    }
+
+    #[test]
+    fn task_pilot_workflow_routes_to_task_pilot_pipeline() {
+        let workflow = find_workflow("task-pilot").expect("task-pilot workflow");
+
+        assert_eq!(workflow.job_id, "task_pilot_pipeline");
     }
 }
 

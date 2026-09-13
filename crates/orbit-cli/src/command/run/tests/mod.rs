@@ -5,6 +5,7 @@ mod job;
 mod ship;
 mod support;
 mod sweep;
+mod task_pilot;
 
 // Content moved from inline #[cfg(test)] mod tests in run/mod.rs per ORB-00221.
 

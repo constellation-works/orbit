@@ -15,6 +15,7 @@ mod show;
 mod steps;
 pub(crate) mod support;
 pub mod sweep;
+pub mod task_pilot;
 mod trace;
 pub mod triage;
 

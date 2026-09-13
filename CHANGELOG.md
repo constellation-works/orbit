@@ -4,6 +4,7 @@
 
 ### Changes
 
+- **`orbit run task-pilot`**: named entrypoint for `task_pilot_pipeline`, matching `orbit run triage` for on-demand discovery or explicit task IDs. ([ORB-12437])
 - **`make install` targets `~/.orbit/bin`**: the source-checkout install now lands in the same directory as `install.sh` (override with `INSTALL_BIN_DIR`), so a stale `~/.cargo/bin/orbit` can no longer shadow the deployed binary on `PATH`.
 
 ## 0.22.0
