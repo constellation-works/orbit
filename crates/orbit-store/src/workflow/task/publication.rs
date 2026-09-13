@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::fs::io::{create_private_dir, create_private_dir_all};
 use orbit_types::identity::{validate_machine_id, validate_registry_identifier};
 use orbit_types::policy::{compile_glob_regex, match_glob};
 use orbit_types::task::{
@@ -321,7 +322,7 @@ pub(crate) fn build_publication_snapshot_from_task_workspace(
             destination.display()
         ))
     })?;
-    fs::create_dir_all(parent).map_err(|error| OrbitError::from_write_io(parent, error))?;
+    create_private_dir_all(parent).map_err(|error| OrbitError::from_write_io(parent, error))?;
 
     let binding = registry
         .find_workspace_binding(task_workspace_id)?
@@ -346,12 +347,19 @@ pub(crate) fn build_publication_snapshot_from_task_workspace(
     task_ids.dedup();
     validate_sorted_unique_task_ids(&task_ids)?;
 
-    let staging = tempfile::Builder::new()
-        .prefix(".orbit-task-publication-")
+    let mut staging_builder = tempfile::Builder::new();
+    staging_builder.prefix(".orbit-task-publication-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        staging_builder.permissions(fs::Permissions::from_mode(0o700));
+    }
+    let staging = staging_builder
         .tempdir_in(parent)
         .map_err(|error| OrbitError::from_write_io(parent, error))?;
     let tasks_root = staging.path().join(PUBLICATION_TASKS_DIR_NAME);
-    fs::create_dir(&tasks_root).map_err(|error| OrbitError::from_write_io(&tasks_root, error))?;
+    create_private_dir(&tasks_root)
+        .map_err(|error| OrbitError::from_write_io(&tasks_root, error))?;
 
     let mut omitted_attachments = Vec::new();
     let mut included_attachment_bytes = 0u64;

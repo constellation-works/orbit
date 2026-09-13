@@ -21,6 +21,7 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
+use orbit_common::fs::io::create_private_dir_all;
 use orbit_types::identity::{validate_machine_id, validate_registry_identifier};
 use orbit_types::workspace::{
     canonicalize_publication_branch, redact_git_remote, validate_git_commit_id,
@@ -311,7 +312,7 @@ impl PublicationCache {
             .cache_dir
             .join(&request.publication_id)
             .join("publish");
-        fs::create_dir_all(&root).map_err(|error| OrbitError::from_write_io(&root, error))?;
+        create_private_dir_all(&root).map_err(|error| OrbitError::from_write_io(&root, error))?;
         let cache = Self {
             git_dir: root.join("origin.git"),
             pending_path: root.join(PENDING_FILE_NAME),
@@ -452,8 +453,14 @@ impl PublicationCache {
         policy: &AttachmentPolicy,
         scanner: Option<&dyn AttachmentSensitivityScanner>,
     ) -> Result<StagedSnapshot, OrbitError> {
-        let temp = tempfile::Builder::new()
-            .prefix(".orbit-publish-")
+        let mut temp_builder = tempfile::Builder::new();
+        temp_builder.prefix(".orbit-publish-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            temp_builder.permissions(fs::Permissions::from_mode(0o700));
+        }
+        let temp = temp_builder
             .tempdir_in(&self.root)
             .map_err(|error| OrbitError::from_write_io(&self.root, error))?;
         let tree = temp.path().join("tree");

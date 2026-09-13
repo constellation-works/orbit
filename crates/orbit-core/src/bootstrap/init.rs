@@ -23,7 +23,7 @@ use crate::bootstrap::global_defaults::{
     global_defaults_are_current, record_global_defaults_reconciled,
 };
 use crate::bootstrap::policy::seed_default_policies;
-use orbit_common::fs::io::{create_dir_symlink, remove_path_if_exists};
+use orbit_common::fs::io::{create_dir_symlink, create_private_dir_all, remove_path_if_exists};
 
 use crate::runtime::{is_global_orbit_root, resolve_global_root};
 use orbit_config::{ConfigRoots, ConfigSeed, ResolvedConfig, seed_default_config};
@@ -412,7 +412,7 @@ fn find_git_repo_root(start: &Path) -> Option<PathBuf> {
 
 fn seed_scoreboard_templates(orbit_root: &Path) -> Result<(), OrbitError> {
     let scoreboard_dir = orbit_layout_paths(orbit_root).scoreboard_dir;
-    fs::create_dir_all(&scoreboard_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+    create_private_dir_all(&scoreboard_dir).map_err(|e| OrbitError::Io(e.to_string()))?;
 
     let pr_path = scoreboard_dir.join("pr.json");
     if !pr_path.exists() {
@@ -431,7 +431,7 @@ fn prepare_workspace_root_layout(
     orbit_root: &Path,
     global_root: &Path,
 ) -> Result<WorkspacePaths, OrbitError> {
-    fs::create_dir_all(orbit_root).map_err(|e| OrbitError::Io(e.to_string()))?;
+    create_private_dir_all(orbit_root).map_err(|e| OrbitError::Io(e.to_string()))?;
     let layout = orbit_layout_paths(orbit_root);
     ensure_workspace_dirs(&layout)?;
     remove_workspace_seeded_default_skills(orbit_root, &layout, global_root)?;
@@ -448,7 +448,7 @@ fn orbit_layout_paths(orbit_root: &Path) -> WorkspacePaths {
 }
 
 fn prepare_global_root_layout(orbit_root: &Path) -> Result<WorkspacePaths, OrbitError> {
-    fs::create_dir_all(orbit_root).map_err(|e| OrbitError::Io(e.to_string()))?;
+    create_private_dir_all(orbit_root).map_err(|e| OrbitError::Io(e.to_string()))?;
     let layout = orbit_layout_paths(orbit_root);
     ensure_global_dirs(&layout)?;
     Ok(layout)
@@ -466,7 +466,7 @@ fn ensure_workspace_dirs(paths: &WorkspacePaths) -> Result<(), OrbitError> {
         &paths.worktrees_dir,
         &paths.knowledge_dir,
     ] {
-        fs::create_dir_all(dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+        create_private_dir_all(dir).map_err(|e| OrbitError::Io(e.to_string()))?;
     }
     Ok(())
 }
@@ -560,7 +560,7 @@ fn ensure_global_dirs(paths: &WorkspacePaths) -> Result<(), OrbitError> {
         &paths.policies_dir,
         &global_skills_dir(&paths.orbit_dir),
     ] {
-        fs::create_dir_all(dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+        create_private_dir_all(dir).map_err(|e| OrbitError::Io(e.to_string()))?;
     }
     Ok(())
 }
@@ -841,6 +841,98 @@ mod tests {
                 .map(|name| (name, None))
                 .chain(std::iter::once(("HOME", home.to_str()))),
         )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn global_and_workspace_init_create_private_directory_trees_under_permissive_umask() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const CHILD_MARKER: &str = "ORBIT_TEST_PRIVATE_INIT_DIRECTORIES";
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let status = std::process::Command::new("sh")
+                .args(["-c", "umask 000; exec \"$@\"", "sh"])
+                .arg(std::env::current_exe().expect("current test executable"))
+                .arg(
+                    "global_and_workspace_init_create_private_directory_trees_under_permissive_umask",
+                )
+                .env(CHILD_MARKER, "1")
+                .status()
+                .expect("run test under permissive umask");
+            assert!(status.success(), "permissive-umask child failed");
+            return;
+        }
+
+        fn assert_private_directories<'a>(directories: impl IntoIterator<Item = &'a Path>) {
+            for directory in directories {
+                let mode = fs::metadata(directory)
+                    .expect("directory metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                assert_eq!(
+                    mode,
+                    0o700,
+                    "Orbit-owned directory {} has mode {mode:04o}",
+                    directory.display()
+                );
+            }
+        }
+
+        let temp = tempdir().expect("tempdir");
+        let global_root = temp.path().join("global/.orbit");
+        init_workspace_at_root(
+            &global_root,
+            InitOptions {
+                global_only: true,
+                refresh_defaults: true,
+                config_seed: Some(ConfigSeed::default()),
+                ..Default::default()
+            },
+        )
+        .expect("initialize global root");
+
+        let workspace_root = temp.path().join("workspace/.orbit");
+        init_workspace_at_root(
+            &workspace_root,
+            InitOptions {
+                global_root_override: Some(global_root.clone()),
+                ..Default::default()
+            },
+        )
+        .expect("initialize workspace root");
+
+        let global = orbit_layout_paths(&global_root);
+        assert_private_directories(
+            [
+                &global_root,
+                &global.resources_dir,
+                &global.activities_dir,
+                &global.jobs_dir,
+                &global.executors_dir,
+                &global.policies_dir,
+                &global_skills_dir(&global_root),
+            ]
+            .into_iter()
+            .map(PathBuf::as_path),
+        );
+        let workspace = orbit_layout_paths(&workspace_root);
+        assert_private_directories(
+            [
+                &workspace_root,
+                &workspace.resources_dir,
+                &workspace.state_dir,
+                &workspace.audit_dir,
+                &workspace.job_runs_dir,
+                &workspace.logs_dir,
+                &workspace.diagnostics_dir,
+                &workspace.scoreboard_dir,
+                &workspace.worktrees_dir,
+                &workspace.knowledge_dir,
+            ]
+            .into_iter()
+            .map(PathBuf::as_path),
+        );
     }
 
     #[test]

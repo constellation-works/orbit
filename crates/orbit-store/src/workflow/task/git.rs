@@ -13,6 +13,7 @@ use std::path::Path;
 use std::process::Command;
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::create_private_dir_all;
 use orbit_types::workspace::git_remotes_equivalent;
 
 /// Highest-precedence attributes for an Orbit-owned cache. Unsets every
@@ -165,7 +166,7 @@ fn isolate_git_dir(git_dir: &Path) -> Result<(), OrbitError> {
         return Ok(());
     }
     let info = git_dir.join("info");
-    fs::create_dir_all(&info).map_err(|error| OrbitError::from_write_io(&info, error))?;
+    create_private_dir_all(&info).map_err(|error| OrbitError::from_write_io(&info, error))?;
     let path = info.join("attributes");
     fs::write(&path, LITERAL_ATTRIBUTES)
         .map_err(|error| OrbitError::from_write_io(&path, error))?;

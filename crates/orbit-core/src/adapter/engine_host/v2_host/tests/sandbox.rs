@@ -1480,6 +1480,8 @@ mod runtime_store_grants {
 
     #[test]
     fn directory_grant_creates_and_grants_a_store_inside_the_root() {
+        use std::os::unix::fs::PermissionsExt;
+
         let root = tempfile::tempdir().expect("runtime root");
         let root = canonical_root(root.path());
         let mut profile = empty_profile();
@@ -1497,6 +1499,14 @@ mod runtime_store_grants {
             vec![root.join("state/logs").display().to_string()]
         );
         assert_eq!(authority[0].path, root.join("state/logs"));
+        for directory in [root.join("state"), root.join("state/logs")] {
+            let mode = std::fs::metadata(&directory)
+                .expect("runtime store metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700, "{} has mode {mode:04o}", directory.display());
+        }
     }
 
     /// A store whose parent is redirected out of the runtime root must not be

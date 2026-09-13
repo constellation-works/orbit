@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
+use orbit_common::fs::io::{atomic_write_text, create_private_dir_all, with_exclusive_file_lock};
 use orbit_common::governance::friction::DEFAULT_FRICTION_TAGS;
 use orbit_types::record::{FrictionFrontmatter, FrictionRecord};
 
@@ -69,7 +69,7 @@ pub fn prepare_hub_friction_root(
         .join(HUB_FRICTION_MIGRATION_MARKERS)
         .join(format!("{workspace_id}.migration"));
     with_exclusive_file_lock(&lock, "hub friction migration", || {
-        fs::create_dir_all(parent).map_err(|error| OrbitError::Io(error.to_string()))?;
+        create_private_dir_all(parent).map_err(|error| OrbitError::Io(error.to_string()))?;
         if marker.exists() {
             if !canonical.is_dir() {
                 return Err(OrbitError::Store(format!(
@@ -85,7 +85,8 @@ pub fn prepare_hub_friction_root(
         // decision that would prevent a later caller with the legacy root
         // from copying or conflict-checking that state.
         if legacy_root.is_none() {
-            fs::create_dir_all(&canonical).map_err(|error| OrbitError::Io(error.to_string()))?;
+            create_private_dir_all(&canonical)
+                .map_err(|error| OrbitError::Io(error.to_string()))?;
             return Ok(canonical.clone());
         }
 
@@ -128,7 +129,8 @@ pub fn prepare_hub_friction_root(
                 ))
             })?;
         } else if !canonical.exists() {
-            fs::create_dir_all(&canonical).map_err(|error| OrbitError::Io(error.to_string()))?;
+            create_private_dir_all(&canonical)
+                .map_err(|error| OrbitError::Io(error.to_string()))?;
         }
 
         atomic_write_text(&marker, "schema_version: 1\nstate: complete\n")?;
@@ -171,7 +173,7 @@ pub fn readable_hub_friction_root(
 }
 
 fn copy_directory_tree(source: &Path, destination: &Path) -> Result<(), OrbitError> {
-    fs::create_dir_all(destination).map_err(|error| OrbitError::Io(error.to_string()))?;
+    create_private_dir_all(destination).map_err(|error| OrbitError::Io(error.to_string()))?;
     for entry in fs::read_dir(source).map_err(|error| OrbitError::Io(error.to_string()))? {
         let entry = entry.map_err(|error| OrbitError::Io(error.to_string()))?;
         let file_type = entry
@@ -181,7 +183,13 @@ fn copy_directory_tree(source: &Path, destination: &Path) -> Result<(), OrbitErr
         if file_type.is_dir() {
             copy_directory_tree(&entry.path(), &target)?;
         } else if file_type.is_file() {
-            fs::copy(entry.path(), target).map_err(|error| OrbitError::Io(error.to_string()))?;
+            let source = entry.path();
+            let permissions = fs::metadata(&source)
+                .map_err(|error| OrbitError::Io(error.to_string()))?
+                .permissions();
+            fs::copy(&source, &target).map_err(|error| OrbitError::Io(error.to_string()))?;
+            fs::set_permissions(&target, permissions)
+                .map_err(|error| OrbitError::Io(error.to_string()))?;
         } else {
             return Err(OrbitError::Store(format!(
                 "hub friction migration refuses non-file entry '{}'",

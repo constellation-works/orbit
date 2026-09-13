@@ -4,6 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::create_private_dir_all;
 
 use crate::driver::file::task_bundle::{
     read_bundle_at, write_bundle_at, write_bundle_with_artifacts_at,
@@ -143,10 +144,16 @@ fn restore_publication_inner(
     }
 
     let workspace_root = registry.workspaces_dir().join(&task_workspace_id);
-    fs::create_dir_all(&workspace_root)
+    create_private_dir_all(&workspace_root)
         .map_err(|error| OrbitError::from_write_io(&workspace_root, error))?;
-    let staging = tempfile::Builder::new()
-        .prefix(".orbit-publication-restore-")
+    let mut staging_builder = tempfile::Builder::new();
+    staging_builder.prefix(".orbit-publication-restore-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        staging_builder.permissions(fs::Permissions::from_mode(0o700));
+    }
+    let staging = staging_builder
         .tempdir_in(&workspace_root)
         .map_err(|error| OrbitError::from_write_io(&workspace_root, error))?;
     for published in &missing {
