@@ -4,7 +4,7 @@ type: design
 title: "Activity / Job — Overview"
 owner: codex
 last_updated: 2026-07-20
-last_validated: 2026-08-23
+last_validated: 2026-09-13
 status: Draft
 feature: activity-job
 doc_role: overview
@@ -67,7 +67,7 @@ Name resolution arrived in [T20260418-2019]; `run-v2` entrypoints in [T20260418-
 
 ### 2.4 Provider is the only agent runtime choice
 
-For `agent_loop`, the asset declares a **provider** — `claude`, `codex`, `gemini`, `grok`, `copilot`, `ollama`, `openai_compat`, or `cursor`. Orbit's CLI entry point executes the canonical four (`claude`, `codex`, `gemini`, and `grok`); other provider identities fail structurally instead of falling back.
+For `agent_loop`, the asset declares a **provider** — `claude`, `codex`, `gemini`, `grok`, `copilot`, `ollama`, `openai_compat`, `cursor`, `pi`, `antigravity`, or `opencode`. Orbit's CLI entry point uses the registered direct-agent executors for the supported provider lanes; `openai_compat` and providers without a supported executor fail structurally instead of falling back.
 
 ### 2.5 Audit, policy, and seeded assets make the runtime inspectable
 
