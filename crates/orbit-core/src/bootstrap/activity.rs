@@ -301,9 +301,15 @@ backend = "cli"
                 "before a successful exit, remove or revert the run-owned output",
                 "write scratch, logs, and review evidence outside the checkout",
                 "preserve pre-existing contents, another actor's edits, and legitimate task outputs",
+                // Cleanup is scoped to what git reports, never to ignored
+                // build output the sandbox owns.
+                "run-owned non-deliverable output is only what `git status --short` adds to the item 3 baseline",
+                "ignored build output, caches, and sandbox-owned paths like `<worktree>/target` are not yours to remove and never block handoff",
+                "deleting is an exception for a stray untracked path, not a step",
                 // Denied cleanup is a blocker, not a successful handoff.
                 "if a cleanup command is denied, do not retry it",
                 "name the exact leftover paths",
+                "record the blocker with `orbit.task.update` (`comment`)",
                 "do not hand off as success",
                 // Durable state stays the authority for delivery.
                 "record the item 11 reconciliation",
@@ -319,6 +325,23 @@ backend = "cli"
                 !instruction.contains("record the bounded leftover"),
                 "{source} agent_implement still permits a bounded leftover at successful handoff"
             );
+
+            // The contract is global: every workspace loads it, whatever the
+            // language. No cleanup mechanism may name one toolchain.
+            for language_specific in [
+                "cargo",
+                "rustfmt",
+                "node_modules",
+                "npm run",
+                "__pycache__",
+                ".venv",
+                "gradle",
+            ] {
+                assert!(
+                    !instruction.contains(language_specific),
+                    "{source} agent_implement names a language-specific cleanup mechanism: {language_specific}"
+                );
+            }
         }
     }
 
@@ -364,12 +387,19 @@ backend = "cli"
                 ],
             ),
             (
+                "an empty ignored sandbox build mount is not a leftover",
+                vec![
+                    "run-owned non-deliverable output is only what `git status --short` adds to the item 3 baseline",
+                    "sandbox-owned paths like `<worktree>/target` are not yours to remove and never block handoff",
+                ],
+            ),
+            (
                 "denied cleanup blocks instead of retrying or over-deleting",
                 vec![
                     "never use raw `rm -f` or `rm -rf`",
                     "never clean broadly to catch a specific leftover",
                     "do not substitute a destructive one",
-                    "record the blocker with `orbit.task.update`",
+                    "record the blocker with `orbit.task.update` (`comment`)",
                     "separately from cleanup so a denied cleanup cannot skip these reads",
                     "repeat the inventory after any cleanup",
                 ],
