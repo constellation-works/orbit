@@ -97,6 +97,10 @@ pub fn project_run_view(run: &Value) -> Value {
             json!({
                 "job_id": job["job_id"],
                 "name": job["name"],
+                // Fallback log reads require this independently of the
+                // conclusion: an unsuccessful but still-running job can only
+                // provide a partial log stream.
+                "status": job["status"],
                 "conclusion": job["conclusion"],
                 "url": job["url"],
                 "failed_steps": failed_steps,

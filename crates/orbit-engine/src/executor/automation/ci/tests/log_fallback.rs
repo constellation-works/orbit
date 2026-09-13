@@ -34,6 +34,7 @@ fn source_job() -> Value {
     json!({
         "job_id": 101560010340_u64,
         "name": "docs",
+        "status": "completed",
         "conclusion": "failure",
         "url": "https://github.com/acme/orbit/actions/runs/10/job/101560010340",
     })
@@ -213,6 +214,88 @@ fn one_runs_failed_fallback_does_not_withhold_anothers_complete_finding() {
         "run 11's evidence is complete, so it owns no error: {}",
         evidence["retryable_errors"]
     );
+}
+
+#[test]
+fn three_running_parents_recover_independently_and_deferred_evidence_retries_later() {
+    let running =
+        |run_id, workflow, created_at| run(run_id, workflow, HEAD, "in_progress", None, created_at);
+    let runs = vec![
+        running(10, "ci", "2026-09-06T21:15:00Z"),
+        running(11, "docs", "2026-09-06T21:16:00Z"),
+        running(12, "lint", "2026-09-06T21:17:00Z"),
+    ];
+    let source = |run_id, job_id, name| {
+        json!({
+            "job_id": job_id,
+            "name": name,
+            "status": "completed",
+            "conclusion": "failure",
+            "url": format!("https://github.com/acme/orbit/actions/runs/{run_id}/job/{job_id}"),
+        })
+    };
+    let mut queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_runs(vec![runs.clone(), runs])
+        .with_run_view("10", json!({"failed_jobs": [failed_job(201, "ci")]}))
+        .with_run_view("11", json!({"failed_jobs": [failed_job(202, "docs")]}))
+        .with_run_view("12", json!({"failed_jobs": [failed_job(203, "lint")]}))
+        .with_job_log_fallback("10", false, &job_log(), vec![source(10, 201, "ci")])
+        .with_job_log_fallback("11", false, &job_log(), vec![source(11, 202, "docs")])
+        .with_log_fallback_error(
+            "12",
+            false,
+            "parent run is still in progress; completed job log is temporarily unavailable",
+        );
+
+    let first = collect(&queries, &input()).expect("first sweep");
+
+    assert_eq!(first["outcome_hint"], json!("retryable_error"));
+    assert_eq!(
+        first["summary"]["investigated_failure_run_ids"],
+        json!([11, 10])
+    );
+    assert_eq!(first["truncation"]["job_log_reads"], json!(3));
+    assert_eq!(first["truncation"]["checkout_log_reads"], json!(0));
+    assert_eq!(
+        failure_by_id(&first, 10).expect("run 10")["evidence_state"],
+        "complete"
+    );
+    assert_eq!(
+        failure_by_id(&first, 11).expect("run 11")["evidence_state"],
+        "complete"
+    );
+    let deferred = failure_by_id(&first, 12).expect("run 12");
+    assert_eq!(deferred["evidence_state"], "deferred");
+    assert_eq!(deferred["investigated"], false);
+    assert!(
+        first["retryable_errors"]
+            .as_array()
+            .expect("retryable errors")
+            .iter()
+            .all(|error| error["run_id"] == 12 && error["job_id"] == 203)
+    );
+
+    // The next sweep sees the same current parent and job identities. Once
+    // the job endpoint becomes available, the formerly deferred finding is
+    // eligible to progress without any persisted suppression state.
+    queries
+        .log_fallback_errors
+        .remove(&("12".to_string(), false));
+    queries.job_log_fallbacks.insert(
+        ("12".to_string(), false),
+        (job_log(), vec![source(12, 203, "lint")]),
+    );
+    let second = collect(&queries, &input()).expect("later sweep");
+
+    assert_eq!(second["outcome_hint"], json!("current_failures"));
+    assert_eq!(
+        second["summary"]["investigated_failure_run_ids"],
+        json!([12, 11, 10])
+    );
+    assert_eq!(second["retryable_errors"], json!([]));
+    assert_eq!(second["truncation"]["checkout_log_reads"], json!(0));
 }
 
 fn two_job_queries(reverse: bool) -> FakeQueries {

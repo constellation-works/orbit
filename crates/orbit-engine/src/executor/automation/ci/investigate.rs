@@ -163,6 +163,7 @@ fn investigate_job<Q: CiQueries + ?Sized>(
     retryable_errors: &mut Vec<Value>,
 ) {
     let run_id = failure["run_id"].to_string();
+    let mut job_api_recovery_attempted = false;
     match queries.run_logs(&run_id, job_id, LogScope::Failed, bounds.log_max_bytes) {
         Ok(log) => {
             if !log_belongs_to_job(&log, job_id) {
@@ -175,6 +176,8 @@ fn investigate_job<Q: CiQueries + ?Sized>(
                 );
                 return;
             }
+            job_api_recovery_attempted = log.source == orbit_tools::github_cli::SOURCE_JOB_API_LOG
+                || log.fallback_error.is_some();
             failure["log_job_id"] = json!(job_id);
             let diagnostic = bound_diagnostic(&log, failure, job_id);
             if !log.source_complete || (log.truncated && diagnostic.is_none()) {
@@ -237,6 +240,23 @@ fn investigate_job<Q: CiQueries + ?Sized>(
             .and_then(Value::as_bool)
             != Some(true);
     if !needs_checkout {
+        return;
+    }
+    // A fallback job endpoint always serves the whole job log, regardless of
+    // whether the rejected parent query asked for failed or all scope. A
+    // second all-scope call would repeat the same readiness query and job API
+    // read without adding evidence. Preserve the gap for a later sweep.
+    if job_api_recovery_attempted {
+        failure["checkout_evidence_scope"] = json!("job_api_log");
+        if retryable_errors.is_empty() {
+            push_retryable_error(
+                retryable_errors,
+                "registration",
+                "checkout_evidence",
+                failure.get("run_id"),
+                "the complete recovered job log contained no actual checkout SHA; the same job remains eligible for a later sweep",
+            );
+        }
         return;
     }
     if *checkout_log_reads >= bounds.max_checkout_log_reads {
