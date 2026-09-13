@@ -34,8 +34,8 @@ enum StatusAuthority {
     /// dashboard, and the registered `orbit.task.update` tool. The lifecycle
     /// table decides.
     Lifecycle,
-    /// A human overriding the table on the bare CLI, recorded in task history
-    /// as [`FORCED_STATUS_EVENT`].
+    /// A human overriding the table from the bare CLI or the dashboard,
+    /// recorded in task history as [`FORCED_STATUS_EVENT`].
     Forced,
 }
 
@@ -109,9 +109,10 @@ impl OrbitRuntime {
     /// update even when the lifecycle table refuses the status change, and
     /// record the override in task history.
     ///
-    /// Only the bare CLI reaches this. The registered `orbit.task.update` tool
-    /// refuses a `force` argument outright, so no agent can grant itself the
-    /// override.
+    /// Only the two human surfaces reach this — the bare CLI and the
+    /// dashboard's `PATCH /api/tasks/:id` with `force: true` (ORB-12445). The
+    /// registered `orbit.task.update` tool refuses a `force` argument outright,
+    /// so no agent can grant itself the override.
     pub fn force_update_task_with_identity(
         &self,
         id: &str,

@@ -1671,6 +1671,74 @@ async fn update_task_refuses_to_fabricate_or_reopen_a_completion() {
     );
 }
 
+/// [ORB-12445] The dashboard carries the same human override as the bare CLI's
+/// `orbit task update --force`: with `force: true` a status change skips the
+/// lifecycle table and its evidence gates, and lands in history as `forced`.
+/// Without the flag the table still governs, and `force` alone is a 400.
+#[tokio::test]
+async fn update_task_forces_an_off_table_status_and_records_it_as_forced() {
+    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+
+    let proposed = seed_task_with_status(&runtime, "Forced completion", TaskStatus::Proposed);
+    let refused = patch_task(runtime.clone(), &proposed.id, json!({ "status": "done" })).await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+
+    let forced = patch_task(
+        runtime.clone(),
+        &proposed.id,
+        json!({ "status": "done", "force": true }),
+    )
+    .await;
+    assert_eq!(forced.status(), StatusCode::OK);
+    assert_eq!(body_json(forced).await["status"], json!("done"));
+
+    // `done` is terminal: reopening it is refused, and forced right back open.
+    let reopened = patch_task(
+        runtime.clone(),
+        &proposed.id,
+        json!({ "status": "backlog" }),
+    )
+    .await;
+    assert_eq!(reopened.status(), StatusCode::BAD_REQUEST);
+
+    let forced_reopen = patch_task(
+        runtime.clone(),
+        &proposed.id,
+        json!({ "status": "backlog", "force": true }),
+    )
+    .await;
+    assert_eq!(forced_reopen.status(), StatusCode::OK);
+    assert_eq!(body_json(forced_reopen).await["status"], json!("backlog"));
+
+    let missing_status = patch_task(runtime.clone(), &proposed.id, json!({ "force": true })).await;
+    assert_eq!(missing_status.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_json(missing_status).await["error"]
+            .as_str()
+            .expect("error message")
+            .contains("requires `status`")
+    );
+
+    let fetched =
+        body_json(request_shared(runtime, &format!("/tasks/{}", proposed.id)).await).await;
+    assert_eq!(fetched["status"], json!("backlog"));
+    let forced_events = fetched["history"]
+        .as_array()
+        .expect("history array")
+        .iter()
+        .filter(|entry| entry["event"] == "forced")
+        .map(|entry| (entry["from_status"].clone(), entry["to_status"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        forced_events,
+        vec![
+            (json!("proposed"), json!("done")),
+            (json!("done"), json!("backlog")),
+        ],
+        "each forced dashboard transition must appear once as the `forced` event"
+    );
+}
+
 #[tokio::test]
 async fn task_projection_exposes_only_canonical_status_transitions_and_missing_evidence() {
     let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));

@@ -124,6 +124,16 @@ Status and crew dropdowns on the row are editable only with a concrete
 workspace selected. In **All workspaces** they stay visible but are
 read-only.
 
+The status dropdown lists every lifecycle status, including for `done` and
+`archived` tasks. Targets the [lifecycle table](../../concepts/tasks/#transition-rules)
+allows are the ordinary path and still prompt for the evidence they require (a
+plan, a completion summary). Every other target sits under a **force
+(off-table)** group marked with ⚠: picking one asks for a single confirmation
+naming the move, then applies it as the operator override — the same escape
+hatch as `orbit task update <id> --status <status> --force`, recorded in task
+history as a `forced` event. Agents have no equivalent: `orbit.task.update` and
+the MCP surface cannot force.
+
 The right dock has two modes that share the same column width: **Status**
 (files currently locked by tasks) and **Log** (a live `orbit.log` tail with
 all / err / deny / warn filters).
