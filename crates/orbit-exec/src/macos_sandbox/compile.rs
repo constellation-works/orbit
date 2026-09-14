@@ -26,9 +26,9 @@ use orbit_types::workflow::Provider;
 ///   ipc, sysctl, iokit) and unrestricted network — agents call out to
 ///   provider APIs;
 /// - allows pseudo-tty allocation (`(allow pseudo-tty)`), needed by
-///   `openpty`/`posix_openpt` alongside the `/dev/ptmx` and `/dev/ttys*`
-///   file access already covered by the broad read allow and the `/dev`
-///   write grant below;
+///   `openpty`/`posix_openpt`, with the narrowly scoped `/dev/ptmx` and
+///   `/dev/ttys*` read/write/ioctl rules Seatbelt requires for the allocated
+///   devices;
 /// - allows writes inside the resolved `modify` scope plus a small set of
 ///   well-known scratch areas (`/tmp`, `/private/tmp`,
 ///   `/private/var/folders`, `~/Library/Caches`, and the HOME-derived Orbit
@@ -142,14 +142,18 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
     out.push_str("(allow network*)\n");
     out.push_str("(allow sysctl*)\n");
     out.push_str("(allow iokit*)\n");
-    // `openpty`/`posix_openpt` need the `pseudo-tty` operation in addition to
-    // `/dev/ptmx` and `/dev/ttys*` file access; without it allocation fails
-    // with EPERM even though the broad `file-read*` allow and the `/dev`
-    // `file-write*` subpath below already cover those device files. A PTY is
-    // a local IPC primitive scoped to the calling process's own descriptors —
-    // granting the operation adds no filesystem or network reach beyond what
-    // this profile already grants. [ORB-12470]
+    // `openpty`/`posix_openpt` need the `pseudo-tty` operation plus explicit
+    // device-node ioctl permissions. The slave read/write rule checks the
+    // Seatbelt PTY extension, but the broad file-read* and /dev file-write*
+    // grants also allow access without that extension. It is not an ownership
+    // boundary. The separate ioctl rule also covers slave ttys that existed
+    // before sandbox entry, subject to normal OS access checks.
     out.push_str("(allow pseudo-tty)\n");
+    out.push_str("(allow file-read* file-write* file-ioctl (literal \"/dev/ptmx\"))\n");
+    out.push_str(
+        "(allow file-read* file-write* (require-all (regex #\"^/dev/ttys[0-9]+\") (extension \"com.apple.sandbox.pty\")))\n",
+    );
+    out.push_str("(allow file-ioctl (regex #\"^/dev/ttys[0-9]+\"))\n");
 
     out.push_str("(allow file-write* (subpath \"/tmp\"))\n");
     out.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
