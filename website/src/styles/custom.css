@@ -238,12 +238,51 @@ html:not([data-has-sidebar]) header.header {
   text-decoration: none;
 }
 
+/* Starlight applies `margin-top: var(--sl-content-gap-y)` to any element
+   preceded by a sibling inside `.sl-markdown-content`. Inside a flex or grid
+   container that pushes every item except the first down inside its cell.
+   Zero it for every landing container that lays its children out itself. */
+.orbit-hero > *,
+.orbit-hero-copy > *,
+.orbit-hero-actions > *,
+.orbit-hero-providers > *,
+.orbit-hero-providers-list > *,
+.orbit-session > *,
+.orbit-session-frame > *,
+.orbit-session-bar > *,
+.orbit-session-body > *,
+.orbit-session-step > *,
+.orbit-session-cmd > *,
+.orbit-session-out > *,
+.orbit-section > *,
+.orbit-section-head > *,
+.orbit-section-intro > *,
+.orbit-rail > *,
+.orbit-rail li > *,
+.orbit-card-grid > *,
+.orbit-card-row > *,
+.orbit-card-body > *,
+.orbit-modes > *,
+.orbit-docs-panel > *,
+.orbit-docs-index > *,
+.orbit-docs-group > * {
+  margin-top: 0;
+}
+
+/* ------------------------------------------------------------------------
+   Hero
+   ------------------------------------------------------------------------ */
 .orbit-hero {
-  align-items: center;
+  align-items: start;
   display: grid;
-  gap: 3.5rem;
-  grid-template-columns: minmax(0, 32.25rem) minmax(0, 1fr);
-  margin: 1.5rem 0 4.75rem;
+  gap: 4.5rem;
+  grid-template-columns: minmax(0, 37.5rem) minmax(0, 1fr);
+  padding: 4rem 0 4rem;
+}
+
+.orbit-hero-copy {
+  display: flex;
+  flex-direction: column;
 }
 
 .orbit-hero-eyebrow {
@@ -252,25 +291,29 @@ html:not([data-has-sidebar]) header.header {
   font-size: 0.78rem;
   font-weight: 500;
   letter-spacing: 0.08em;
-  margin-bottom: 1rem;
+  margin-bottom: 1.375rem;
   text-transform: uppercase;
 }
 
+/* The only heading on the site above the docs type scale: the page's one
+   claim, sized to land before the reader scrolls. */
 .orbit-hero-headline {
   color: var(--sl-color-white);
-  font-size: 2.75rem;
+  font-size: 3.6rem;
   font-weight: 650;
-  letter-spacing: -0.005em;
-  line-height: 1.05;
-  margin: 0 0 1rem;
+  letter-spacing: -0.022em;
+  line-height: 1.02;
+  margin: 0 0 1.375rem;
+  text-wrap: balance;
 }
 
 .orbit-hero-lede {
   color: var(--sl-color-gray-2);
-  font-size: 1.1rem;
-  line-height: 1.6;
-  margin: 0 0 1.5rem;
-  max-width: 32rem;
+  font-size: 1.125rem;
+  line-height: 1.55;
+  margin: 0 0 1.875rem;
+  max-width: 32.5rem;
+  text-wrap: pretty;
 }
 
 .orbit-hero-install {
@@ -303,9 +346,9 @@ html:not([data-has-sidebar]) header.header {
   white-space: nowrap;
 }
 
-/* Copy-to-clipboard control, shared by the hero install bar and the delivery
-   mode commands. It is delivered `hidden` and unhidden by the inline script,
-   so a page without JavaScript shows the command text and no dead button. */
+/* Copy-to-clipboard control for the hero install bar. It is delivered
+   `hidden` and unhidden by the inline script, so a page without JavaScript
+   shows the command text and no dead button. */
 .orbit-copy {
   background: transparent;
   border: 1px solid transparent;
@@ -362,20 +405,19 @@ html:not([data-has-sidebar]) header.header {
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
-  margin-top: 1rem;
 }
 
 .orbit-button {
   align-items: center;
-  border: 1px solid var(--sl-color-hairline-light);
+  border: 1px solid var(--sl-color-gray-5);
   border-radius: 8px;
   color: var(--sl-color-text);
   display: inline-flex;
-  font-size: 0.92rem;
+  font-size: 0.95rem;
   font-weight: 600;
   gap: 0.45rem;
-  min-height: 2.35rem;
-  padding: 0.45rem 0.8rem;
+  min-height: 2.625rem;
+  padding: 0.45rem 1rem;
   text-decoration: none;
 }
 
@@ -395,35 +437,53 @@ html:not([data-has-sidebar]) header.header {
   color: #0a0a0a;
 }
 
-/* The mono strip under the hero CTAs naming the provider CLIs Orbit drives. */
+:root[data-theme='light'] .orbit-button.primary {
+  color: #ffffff;
+}
+
+:root[data-theme='light'] .orbit-button.primary:hover {
+  background: var(--sl-color-accent-high);
+  color: #ffffff;
+}
+
+/* The provider strip under the hero CTAs, naming the CLIs Orbit drives. Set
+   apart by a hairline rather than typeset as a mono strip, so it reads as a
+   fact about the product and not as a second headline. */
 .orbit-hero-providers {
-  align-items: center;
-  color: var(--sl-color-gray-3);
+  border-top: 1px solid var(--sl-color-hairline);
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 0.625rem;
+  margin-top: 2.75rem;
+  padding-top: 1.5rem;
+}
+
+.orbit-hero-providers-label {
+  color: var(--sl-color-gray-4);
   font-family: var(--sl-font-mono);
   font-size: 0.72rem;
-  gap: 0.625rem;
-  letter-spacing: 0.04em;
-  margin-top: 1.75rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.orbit-hero-providers-rule {
-  background: var(--sl-color-hairline-light);
-  flex: 0 0 auto;
-  height: 0.7rem;
-  width: 1px;
+.orbit-hero-providers-list {
+  color: var(--sl-color-gray-2);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.875rem;
+  font-weight: 500;
+  gap: 0.5rem 1.375rem;
 }
 
 /* Gemini is still shipped but is no longer the current Google terminal agent,
-   so it is named apart from the strip rather than dropped or implied current. */
+   so it is named apart from the list rather than dropped or implied current. */
 .orbit-landing .orbit-hero-providers-note {
-  color: var(--sl-color-gray-3);
-  font-size: 0.8rem;
-  line-height: 1.55;
-  margin: 0.6rem 0 0;
-  max-width: 32rem;
+  color: var(--sl-color-gray-4);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  margin: 0.25rem 0 0;
+  max-width: 30rem;
 }
 
 .orbit-hero-providers-note a {
@@ -435,290 +495,283 @@ html:not([data-has-sidebar]) header.header {
   text-decoration: underline;
 }
 
-/* Hero dashboard: an illustration of the operator Tasks view after the
-   default ship in the walkthrough. Not a screenshot and not live data. */
-.orbit-dash {
-  --orbit-dash-review: #d946ef;
-  background: var(--sl-color-bg-inline-code);
-  border: 1px solid var(--sl-color-hairline-light);
-  border-radius: 8px;
-  margin: 0;
+/* Hero session: the four-command walkthrough as one terminal session. The
+   product surface is the CLI, so the CLI is the hero visual. `role="img"` on
+   the frame and a figcaption mark it as illustrative, not captured output. */
+.orbit-session {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 0.375rem 0 0;
   min-width: 0;
-  overflow: hidden;
 }
 
-.orbit-dash-frame {
-  display: grid;
-  grid-template-columns: 7.25rem minmax(0, 1fr);
-  min-height: 22.5rem;
-}
-
-.orbit-dash-rail {
+.orbit-session-frame {
   background: color-mix(in srgb, var(--sl-color-bg) 70%, var(--sl-color-bg-inline-code));
-  border-right: 1px solid var(--sl-color-hairline-light);
-  color: var(--sl-color-gray-3);
-  display: flex;
-  flex-direction: column;
-  font-size: 0.72rem;
-  min-width: 0;
-  padding: 0.75rem 0.55rem 0.65rem;
-}
-
-.orbit-dash-brand {
-  align-items: center;
-  color: var(--sl-color-text);
-  display: flex;
-  font-size: 0.78rem;
-  font-weight: 650;
-  gap: 0.4rem;
-  letter-spacing: 0.02em;
-  margin-bottom: 0.85rem;
-  padding: 0 0.3rem;
-}
-
-.orbit-dash-brand svg {
-  flex: 0 0 auto;
-}
-
-.orbit-dash-mark {
-  fill: var(--sl-color-accent);
-}
-
-.orbit-dash-rail-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  margin-bottom: 0.7rem;
-}
-
-.orbit-dash-rail-label {
-  color: var(--sl-color-gray-3);
-  font-family: var(--sl-font-mono);
-  font-size: 0.58rem;
-  letter-spacing: 0.1em;
-  padding: 0.15rem 0.35rem 0.25rem;
-  text-transform: uppercase;
-}
-
-.orbit-dash-rail-item {
-  border-radius: 4px;
-  padding: 0.28rem 0.4rem;
-}
-
-.orbit-dash-rail-item.is-active {
-  background: color-mix(in srgb, var(--sl-color-accent) 14%, transparent);
-  color: var(--sl-color-text);
-  font-weight: 600;
-}
-
-.orbit-dash-rail-foot {
-  color: var(--sl-color-gray-3);
-  font-family: var(--sl-font-mono);
-  font-size: 0.62rem;
-  margin-top: auto;
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 10px;
+  box-shadow: 0 30px 80px rgb(0 0 0 / 0.5);
   overflow: hidden;
-  padding: 0.45rem 0.35rem 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.orbit-dash-main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
+:root[data-theme='light'] .orbit-session-frame {
+  box-shadow: 0 20px 60px rgb(15 16 20 / 0.12);
 }
 
-.orbit-dash-topbar {
+.orbit-session-bar {
   align-items: center;
   border-bottom: 1px solid var(--sl-color-hairline-light);
-  color: var(--sl-color-gray-3);
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  min-height: 2.5rem;
+  padding: 0 1rem;
+}
+
+.orbit-session-dots {
   display: flex;
-  font-size: 0.72rem;
   gap: 0.5rem;
-  min-height: 2.125rem;
-  padding: 0 0.75rem;
 }
 
-.orbit-dash-crumb {
-  color: var(--sl-color-text);
-  font-weight: 600;
+.orbit-session-dots span {
+  background: var(--sl-color-gray-5);
+  border-radius: 999px;
+  display: block;
+  height: 10px;
+  width: 10px;
 }
 
-.orbit-dash-jump {
-  background: var(--sl-color-bg);
-  border: 1px solid var(--sl-color-hairline-light);
-  border-radius: 4px;
-  color: var(--sl-color-gray-3);
-  flex: 1 1 auto;
+.orbit-session-name {
+  color: var(--sl-color-gray-4);
   font-family: var(--sl-font-mono);
-  font-size: 0.62rem;
-  margin-left: auto;
-  max-width: 11rem;
-  min-width: 0;
+  font-size: 0.75rem;
   overflow: hidden;
-  padding: 0.2rem 0.45rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.orbit-dash-refresh {
-  border: 1px solid var(--sl-color-hairline-light);
-  border-radius: 4px;
-  flex: 0 0 auto;
-  font-size: 0.62rem;
-  padding: 0.2rem 0.4rem;
-}
-
-.orbit-dash-body {
-  display: grid;
-  flex: 1 1 auto;
-  grid-template-columns: minmax(0, 1fr) 7.5rem;
-  min-height: 0;
-}
-
-.orbit-dash-panel,
-.orbit-dash-dock {
-  min-width: 0;
-}
-
-.orbit-dash-dock {
-  border-left: 1px solid var(--sl-color-hairline-light);
-  color: var(--sl-color-gray-3);
+.orbit-session-body {
   display: flex;
   flex-direction: column;
-  font-size: 0.68rem;
-  line-height: 1.45;
-  padding: 0.7rem 0.65rem;
+  font-family: var(--sl-font-mono);
+  font-size: 0.8125rem;
+  gap: 1.125rem;
+  line-height: 1.7;
+  padding: 1.25rem 1.375rem 1.375rem;
 }
 
-.orbit-dash-dock p {
-  margin: 0.55rem 0 0;
-}
-
-.orbit-dash-panel-head,
-.orbit-dash-dock-head {
-  align-items: center;
-  color: var(--sl-color-gray-3);
+.orbit-session-step {
   display: flex;
-  font-size: 0.72rem;
-  font-weight: 600;
-  gap: 0.45rem;
+  flex-direction: column;
+}
+
+.orbit-session-cmd {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.orbit-session-cmd code {
+  background: transparent;
+  border: 0;
+  color: var(--sl-color-text);
+  font-family: var(--sl-font-mono);
+  font-size: inherit;
+  padding: 0;
+}
+
+.orbit-session-prompt {
+  color: var(--sl-color-gray-3);
+  flex: 0 0 auto;
+}
+
+.orbit-session-out {
+  align-items: baseline;
+  color: var(--sl-color-gray-3);
+  display: grid;
+  gap: 0 0.875rem;
+  grid-template-columns: auto 4.25rem auto minmax(0, 1fr);
+}
+
+.orbit-session-mark {
+  align-self: center;
+  background: var(--sl-color-accent);
+  border-radius: 999px;
+  display: block;
+  height: 7px;
+  width: 7px;
+}
+
+.orbit-session-id {
+  color: var(--sl-color-gray-2);
+  white-space: nowrap;
+}
+
+.orbit-session-note em {
+  color: var(--sl-color-text-accent);
+  font-style: normal;
+}
+
+.orbit-landing .orbit-session-caption {
+  color: var(--sl-color-gray-4);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  margin: 0;
+  padding: 0 0.25rem;
+}
+
+/* ------------------------------------------------------------------------
+   Sections below the hero
+   ------------------------------------------------------------------------
+   Each opens on a two-column head: eyebrow and heading on the left, a short
+   lede on the right. The heading carries the section's one sentence; the
+   eyebrow is the label the reader scans for. */
+.orbit-section {
+  border-top: 1px solid var(--sl-color-hairline);
+  padding: 4rem 0;
+}
+
+.orbit-section:last-of-type {
+  padding-bottom: 0;
+}
+
+.orbit-section-head {
+  align-items: end;
+  display: grid;
+  gap: 4.5rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  margin-bottom: 3rem;
+}
+
+.orbit-section-head-single {
+  grid-template-columns: minmax(0, 40rem);
+}
+
+.orbit-section-head-link {
+  align-items: end;
+  display: flex;
   justify-content: space-between;
 }
 
-.orbit-dash-panel-head {
-  padding: 0.7rem 0.75rem 0.35rem;
-}
-
-.orbit-dash-count {
-  color: var(--sl-color-gray-3);
-  font-family: var(--sl-font-mono);
-  font-size: 0.62rem;
-  font-weight: 500;
-}
-
-.orbit-dash-filters {
+.orbit-section-intro {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-  padding: 0.2rem 0.75rem 0.55rem;
+  flex-direction: column;
+  gap: 0.875rem;
 }
 
-.orbit-dash-filters span,
-.orbit-dash-dock-head span,
-.orbit-dash-actions span {
-  border: 1px solid var(--sl-color-hairline-light);
-  border-radius: 4px;
-  color: var(--sl-color-gray-3);
+.orbit-landing .orbit-section-eyebrow {
+  color: var(--sl-color-text-accent);
   font-family: var(--sl-font-mono);
-  font-size: 0.58rem;
-  letter-spacing: 0.04em;
-  padding: 0.12rem 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  margin: 0;
   text-transform: uppercase;
 }
 
-.orbit-dash-filters .is-on,
-.orbit-dash-dock-head .is-on {
-  background: color-mix(in srgb, var(--orbit-dash-review) 16%, transparent);
-  border-color: color-mix(in srgb, var(--orbit-dash-review) 45%, var(--sl-color-hairline-light));
-  color: var(--orbit-dash-review);
+.orbit-landing .orbit-section-heading {
+  color: var(--sl-color-white);
+  font-size: 2.25rem;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+  line-height: 1.12;
+  margin: 0;
+  text-wrap: balance;
 }
 
-.orbit-dash-row {
-  align-items: center;
-  border-top: 1px solid var(--sl-color-hairline-light);
-  display: grid;
-  gap: 0.5rem;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  padding: 0.55rem 0.75rem;
-}
-
-.orbit-dash-row.is-open {
-  background: color-mix(in srgb, var(--sl-color-accent) 8%, transparent);
-}
-
-.orbit-dash-id {
+.orbit-landing .orbit-section-lede {
   color: var(--sl-color-gray-3);
-  font-family: var(--sl-font-mono);
-  font-size: 0.62rem;
+  font-size: 1rem;
+  line-height: 1.6;
+  margin: 0 0 0.25rem;
+  text-wrap: pretty;
 }
 
-.orbit-dash-title {
-  color: var(--sl-color-text);
-  font-size: 0.78rem;
-  font-weight: 600;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.orbit-section-link {
+  color: var(--sl-color-text-accent);
+  font-size: 0.875rem;
+  font-weight: 500;
   white-space: nowrap;
 }
 
-.orbit-dash-status {
-  border-left: 2px solid var(--orbit-dash-review);
-  color: var(--orbit-dash-review);
-  font-family: var(--sl-font-mono);
-  font-size: 0.62rem;
-  padding-left: 0.35rem;
+.orbit-section-link:hover,
+.orbit-section-link:focus-visible {
+  text-decoration: underline;
 }
 
-.orbit-dash-detail {
-  border-top: 1px solid var(--sl-color-hairline-light);
-  padding: 0.65rem 0.75rem 0.8rem;
-}
-
-.orbit-dash-detail p {
-  color: var(--sl-color-gray-3);
-  font-size: 0.75rem;
-  line-height: 1.45;
-  margin: 0 0 0.55rem;
-}
-
-.orbit-dash-actions {
+/* The task lifecycle as a rail: every state the walkthrough passes through,
+   with the default ship's stop marked. `done` is dashed because the default
+   path leaves it to a separate, explicit approval. */
+.orbit-rail {
+  align-items: flex-start;
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
+  list-style: none;
+  margin: 0 0 3.25rem;
+  padding: 0;
 }
 
-.orbit-dash-actions .is-primary {
-  background: color-mix(in srgb, var(--sl-color-accent) 16%, transparent);
-  border-color: var(--sl-color-accent);
-  color: var(--sl-color-text-accent);
+.orbit-rail li {
+  align-items: center;
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  position: relative;
 }
 
-.orbit-dash-caption {
-  border-top: 1px solid var(--sl-color-hairline-light);
+.orbit-rail li:last-child {
+  flex: 0 0 auto;
+}
+
+/* The connector between states, drawn in the rail so it never crosses text. */
+.orbit-rail li:not(:last-child)::after {
+  background: var(--sl-color-hairline-light);
+  content: "";
+  flex: 1 1 0;
+  height: 1px;
+}
+
+.orbit-rail li.is-stop::after {
+  background: repeating-linear-gradient(90deg, var(--sl-color-gray-5) 0 6px, transparent 6px 12px);
+}
+
+.orbit-rail-state {
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 999px;
   color: var(--sl-color-gray-3);
+  flex: 0 0 auto;
+  font-family: var(--sl-font-mono);
   font-size: 0.75rem;
-  line-height: 1.5;
-  margin: 0;
-  padding: 0.75rem 1.25rem;
+  padding: 0.3rem 0.75rem;
+  white-space: nowrap;
+}
+
+.orbit-rail li.is-stop .orbit-rail-state {
+  background: var(--sl-color-accent-low);
+  border-color: var(--sl-color-accent);
+  color: var(--sl-color-accent-high);
+}
+
+.orbit-rail li.is-later .orbit-rail-state {
+  border-style: dashed;
+  border-color: var(--sl-color-gray-5);
+  color: var(--sl-color-gray-4);
+}
+
+.orbit-rail-note {
+  color: var(--sl-color-text-accent);
+  font-family: var(--sl-font-mono);
+  font-size: 0.69rem;
+  letter-spacing: 0.04em;
+  left: 0;
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  white-space: nowrap;
 }
 
 .orbit-landing .orbit-walk-next {
   color: var(--sl-color-gray-3);
   font-size: 0.95rem;
   line-height: 1.6;
-  margin: -0.5rem 0 0;
+  margin: 1.5rem 0 0;
 }
 
 .orbit-walk-next a {
@@ -731,290 +784,157 @@ html:not([data-has-sidebar]) header.header {
   text-decoration: underline;
 }
 
-.orbit-section-title {
-  align-items: center;
-  color: var(--sl-color-gray-3);
-  display: flex;
-  font-size: 0.78rem;
-  font-weight: 600;
-  gap: 0.75rem;
-  letter-spacing: 0.1em;
-  margin: 3rem 0 1.25rem;
+/* ------------------------------------------------------------------------
+   Delivery modes
+   ------------------------------------------------------------------------
+   One table, four rows: the reader comparing modes sees them side by side
+   instead of clicking through a tab per mode. Row headers carry the guide
+   link for that mode. */
+.orbit-modes {
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 10px;
+  overflow-x: auto;
+}
+
+.orbit-landing .orbit-modes table {
+  background: color-mix(in srgb, var(--sl-color-bg) 70%, var(--sl-color-bg-inline-code));
+  border: 0;
+  border-collapse: collapse;
+  border-radius: 0;
+  font-size: 0.875rem;
+  margin: 0;
+  min-width: 70rem;
+  width: 100%;
+}
+
+.orbit-landing .orbit-modes th,
+.orbit-landing .orbit-modes td {
+  border: 0;
+  border-bottom: 1px solid var(--sl-color-hairline-light);
+  padding: 1.125rem 1.25rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.orbit-landing .orbit-modes thead th {
+  background: transparent;
+  color: var(--sl-color-gray-4);
+  font-family: var(--sl-font-mono);
+  font-size: 0.69rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  padding: 0.75rem 1.25rem;
   text-transform: uppercase;
 }
 
-.orbit-section-title::after {
-  background: var(--sl-color-hairline-light);
-  content: "";
-  flex: 1;
-  height: 1px;
+.orbit-landing .orbit-modes tbody tr:last-child th,
+.orbit-landing .orbit-modes tbody tr:last-child td {
+  border-bottom: 0;
 }
 
-.orbit-landing .orbit-section-lede {
-  color: var(--sl-color-gray-3);
-  font-size: 0.95rem;
-  line-height: 1.6;
-  margin: 0 0 1.5rem;
-  max-width: 46rem;
+.orbit-landing .orbit-modes tbody th {
+  color: var(--sl-color-text);
+  font-weight: 600;
+  width: 11rem;
+}
+
+.orbit-landing .orbit-modes tbody th a {
+  color: var(--sl-color-text);
+}
+
+.orbit-landing .orbit-modes tbody th a:hover,
+.orbit-landing .orbit-modes tbody th a:focus-visible {
+  color: var(--sl-color-text-accent);
+}
+
+.orbit-modes-sub {
+  color: var(--sl-color-gray-4);
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 400;
+  margin-top: 0.25rem;
+}
+
+.orbit-landing .orbit-modes td {
+  color: var(--sl-color-gray-2);
+  line-height: 1.5;
+}
+
+.orbit-landing .orbit-modes td:nth-child(2) {
+  white-space: nowrap;
+  width: 20rem;
+}
+
+.orbit-landing .orbit-modes td:last-child {
+  width: 20rem;
+}
+
+.orbit-landing .orbit-modes td em {
+  color: var(--sl-color-text-accent);
+  font-family: var(--sl-font-mono);
+  font-size: 0.8125rem;
+  font-style: normal;
 }
 
 /* ------------------------------------------------------------------------
-   Delivery mode explorer
-   ------------------------------------------------------------------------
-   A radio group over four panels, switched entirely in CSS. Native radios do
-   the work: pointer users click the label, keyboard users arrow through the
-   group, and assistive technology reads the checked state without a script.
-   Nothing here depends on JavaScript, so the panel for the checked mode is
-   readable on a static page.
+   Cards
    ------------------------------------------------------------------------ */
-.orbit-flow {
-  border: 1px solid var(--sl-color-hairline-light);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-/* Same reason as `.orbit-card-grid > *`: Starlight's adjacent-sibling margin
-   would otherwise open gaps between grid and flex children. */
-.orbit-flow-tabs > *,
-.orbit-flow-panels > *,
-.orbit-flow-panel > *,
-.orbit-flow-facts > *,
-.orbit-dash-frame > *,
-.orbit-dash-rail > *,
-.orbit-dash-main > *,
-.orbit-dash-body > *,
-.orbit-dash-panel > *,
-.orbit-dash-dock > *,
-.orbit-dash-row > *,
-.orbit-dash-detail > *,
-.orbit-dash-filters > *,
-.orbit-dash-actions > * {
-  margin-top: 0;
-}
-
-.orbit-flow-tabs {
+.orbit-card-grid {
   display: grid;
+  gap: 1.25rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
+.orbit-card-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.orbit-card-grid-4 {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.orbit-flow-tab {
-  border-bottom: 1px solid var(--sl-color-hairline-light);
-  border-right: 1px solid var(--sl-color-hairline-light);
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  padding: 0.9rem 1rem;
-  position: relative;
-  transition: background-color 150ms ease;
-}
-
-.orbit-flow-tab:last-child {
-  border-right: 0;
-}
-
-/* Visually hidden, but still focusable and still the accessible control:
-   removing it from the layout would take the keyboard and the screen reader
-   with it. */
-.orbit-flow-tab input {
-  clip-path: inset(50%);
-  height: 1px;
-  margin: 0;
-  position: absolute;
-  width: 1px;
-}
-
-.orbit-flow-tab-name {
-  color: var(--sl-color-gray-3);
-  font-size: 0.92rem;
-  font-weight: 600;
-  transition: color 120ms ease;
-}
-
-.orbit-flow-tab-cmd {
-  color: var(--sl-color-gray-3);
-  font-family: var(--sl-font-mono);
-  font-size: 0.72rem;
-}
-
-.orbit-flow-tab:hover {
-  background: var(--sl-color-hairline-shade);
-}
-
-.orbit-flow-tab:hover .orbit-flow-tab-name {
-  color: var(--sl-color-text-accent);
-}
-
-.orbit-flow-tab:has(input:checked) {
-  background: var(--sl-color-accent-low);
-}
-
-.orbit-flow-tab:has(input:checked) .orbit-flow-tab-name {
-  color: var(--sl-color-accent-high);
-}
-
-/* The selected-state marker is a 2px rule, not colour alone, so the choice
-   survives a monochrome or high-contrast rendering. */
-.orbit-flow-tab:has(input:checked)::after {
-  background: var(--sl-color-accent);
-  bottom: -1px;
-  content: "";
-  height: 2px;
-  left: 0;
-  position: absolute;
-  right: 0;
-}
-
-.orbit-flow-tab:has(input:focus-visible) {
-  outline: 2px solid var(--sl-color-accent);
-  outline-offset: -3px;
-}
-
-.orbit-flow-panel {
-  display: none;
-  gap: 2rem 3rem;
-  padding: 1.5rem;
-}
-
-/* Only the checked mode's panel is laid out. `display: none` also takes the
-   other three out of the accessibility tree, so the group reads as one
-   answer rather than four. */
-.orbit-flow:has(#orbit-flow-pr:checked) .orbit-flow-panel[data-flow='pr'],
-.orbit-flow:has(#orbit-flow-local:checked) .orbit-flow-panel[data-flow='local'],
-.orbit-flow:has(#orbit-flow-auto:checked) .orbit-flow-panel[data-flow='auto'],
-.orbit-flow:has(#orbit-flow-sweep:checked) .orbit-flow-panel[data-flow='sweep'] {
-  display: grid;
-  grid-template-areas:
-    "main facts"
-    "link facts";
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-rows: 1fr auto;
-}
-
-.orbit-flow-main {
-  grid-area: main;
-}
-
-.orbit-flow-main p {
-  color: var(--sl-color-gray-3);
-  font-size: 0.95rem;
-  line-height: 1.6;
-  margin: 0;
-}
-
-.orbit-flow-cmd {
-  align-items: center;
-  background: var(--sl-color-bg-inline-code);
-  border: 1px solid var(--sl-color-hairline-light);
-  border-radius: 6px;
-  display: flex;
-  font-family: var(--sl-font-mono);
-  font-size: 0.82rem;
-  gap: 0.6rem;
-  margin-bottom: 1rem;
-  padding: 0.6rem 0.75rem;
-}
-
-.orbit-flow-cmd-prompt {
-  color: var(--sl-color-gray-3);
-  flex: 0 0 auto;
-}
-
-.orbit-flow-cmd code {
-  background: transparent;
-  border: 0;
-  color: var(--sl-color-text);
-  flex: 1 1 auto;
-  font-family: var(--sl-font-mono);
-  min-width: 0;
-  overflow-x: auto;
-  padding: 0;
-  white-space: nowrap;
-}
-
-.orbit-flow-facts {
-  display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
-  grid-area: facts;
-  margin: 0;
-}
-
-.orbit-flow-facts dt {
-  color: var(--sl-color-gray-3);
-  font-family: var(--sl-font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.08em;
-  margin-bottom: 0.25rem;
-  text-transform: uppercase;
-}
-
-.orbit-flow-facts dd {
-  color: var(--sl-color-gray-2);
-  font-size: 0.9rem;
-  line-height: 1.55;
-  margin: 0;
-}
-
-.orbit-flow-link {
-  align-self: end;
-  color: var(--sl-color-text-accent);
-  font-size: 0.9rem;
-  font-weight: 600;
-  grid-area: link;
-  justify-self: start;
-  margin-top: 1.5rem;
-}
-
-.orbit-flow-link:hover,
-.orbit-flow-link:focus-visible {
-  text-decoration: underline;
-}
-
-.orbit-card-grid {
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin: 1.5rem 0 2rem;
-}
-
 .orbit-card {
-  background: var(--sl-color-bg-inline-code);
+  background: color-mix(in srgb, var(--sl-color-bg) 70%, var(--sl-color-bg-inline-code));
   border: 1px solid var(--sl-color-hairline-light);
-  border-radius: 6px;
+  border-radius: 10px;
   color: var(--sl-color-text);
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
   min-width: 0;
-  padding: 1.25rem;
+  padding: 1.375rem;
   position: relative;
   text-decoration: none;
   transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
 }
 
+.orbit-card > * {
+  margin-top: 0;
+}
+
+/* The walkthrough's step number, set above the title in the card's own
+   flow so it never collides with a long heading. */
 .orbit-card[data-tag]::before {
-  color: var(--sl-color-text-accent);
+  color: var(--sl-color-gray-4);
   content: attr(data-tag);
   font-family: var(--sl-font-mono);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 500;
   letter-spacing: 0.08em;
-  position: absolute;
-  right: 1.25rem;
-  top: 1.25rem;
 }
 
-.orbit-card-icon {
-  align-items: center;
+/* Where the default ship stops: the one card the reader has to notice. */
+.orbit-card.is-stop {
+  border-color: var(--sl-color-accent);
+}
+
+.orbit-card.is-stop::before {
   color: var(--sl-color-text-accent);
-  display: flex;
-  height: 36px;
-  justify-content: flex-start;
-  margin-bottom: 0.75rem;
-  width: 36px;
 }
 
-.orbit-card:hover,
-.orbit-card:focus-visible {
+a.orbit-card:hover,
+a.orbit-card:focus-visible {
   background: var(--sl-color-accent-low);
   border-color: var(--sl-color-accent);
   transform: translateY(-1px);
@@ -1022,56 +942,82 @@ html:not([data-has-sidebar]) header.header {
 
 /* The hover treatment alone is not a focus indicator — keyboard users get a
    real ring on top of it. */
-.orbit-card:focus-visible {
+a.orbit-card:focus-visible {
   outline: 2px solid var(--sl-color-accent);
   outline-offset: 2px;
 }
 
-.orbit-card:hover h3,
-.orbit-card:focus-visible h3 {
+a.orbit-card:hover h3,
+a.orbit-card:focus-visible h3 {
   color: var(--sl-color-text-accent);
 }
 
 .orbit-card h3 {
   font-family: var(--sl-font);
-  font-size: 1rem;
-  font-weight: 650;
-  margin: 0 0 0.35rem;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  margin: 0;
   transition: color 120ms ease;
 }
 
 .orbit-card p {
   color: var(--sl-color-gray-3);
-  font-size: 0.92rem;
-  line-height: 1.5;
+  flex: 1 1 auto;
+  font-size: 0.875rem;
+  line-height: 1.55;
   margin: 0;
 }
 
-/* Starlight applies `margin-top: var(--sl-content-gap-y)` to any
-   element preceded by a sibling inside `.sl-markdown-content`. In a
-   grid, that pushes every item except the first one down inside its
-   cell, breaking row alignment. Zero it out for our grid children. */
-.orbit-card-grid > * {
-  margin-top: 0;
-}
-
-.orbit-card-grid-4 {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-/* The command a "Start here" step actually runs, pinned under its copy. */
+/* The command a card actually runs, pinned under its copy. */
 .orbit-card-cmd {
-  background: var(--sl-color-bg);
+  align-self: flex-start;
+  background: var(--sl-color-bg-inline-code);
   border: 1px solid var(--sl-color-hairline-light);
   border-radius: 6px;
-  color: var(--sl-color-gray-2);
+  color: var(--sl-color-text);
   font-family: var(--sl-font-mono);
   font-size: 0.75rem;
-  margin-top: 0.875rem;
+  margin-top: 0.25rem;
+  max-width: 100%;
   overflow: hidden;
-  padding: 0.5rem 0.625rem;
+  padding: 0.5rem 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Why Orbit: icon beside the copy rather than above it, so four cards read
+   as two rows of argument instead of a strip of tiles. */
+.orbit-card-row {
+  display: grid;
+  gap: 1.125rem;
+  grid-template-columns: 2.75rem minmax(0, 1fr);
+  padding: 1.625rem;
+}
+
+.orbit-card-icon {
+  align-items: center;
+  background: var(--sl-color-bg-inline-code);
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 8px;
+  color: var(--sl-color-text-accent);
+  display: flex;
+  height: 2.75rem;
+  justify-content: center;
+  width: 2.75rem;
+}
+
+.orbit-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.orbit-card-body p {
+  font-size: 0.9375rem;
+}
+
+.orbit-card-body .orbit-card-cmd {
+  margin-top: 0.375rem;
 }
 
 .orbit-landing code {
@@ -1080,46 +1026,57 @@ html:not([data-has-sidebar]) header.header {
   font-size: 0.85em;
 }
 
-.orbit-landing .orbit-section-title {
-  margin: 4.75rem 0 1.25rem;
-  padding-top: 0;
+/* ------------------------------------------------------------------------
+   Docs index
+   ------------------------------------------------------------------------
+   A flat index of the sidebar, so the landing page is a way into the corpus
+   and not just a hero. Groups mirror astro.config.mjs. */
+.orbit-docs-panel {
+  background: color-mix(in srgb, var(--sl-color-bg) 85%, var(--sl-color-bg-inline-code));
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 12px;
+  margin-top: 4rem;
+  padding: 2.25rem 2.5rem 2.5rem;
 }
 
-/* A flat index of the sidebar, so the landing page is a way into the corpus
-   and not just a hero. Groups mirror astro.config.mjs. */
+.orbit-landing .orbit-docs-panel-title {
+  color: var(--sl-color-gray-4);
+  margin-bottom: 1.75rem;
+}
+
 .orbit-docs-index {
   display: grid;
-  gap: 1.25rem 3rem;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: 1.5rem 0 0;
+  gap: 1.5rem 2rem;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .orbit-docs-group {
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
+  gap: 0.625rem;
 }
 
 .orbit-docs-group-title {
   border-bottom: 1px solid var(--sl-color-hairline-light);
-  color: var(--sl-color-gray-3);
-  font-family: var(--sl-font-mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
-  margin: 0;
-  padding-bottom: 0.375rem;
-  text-transform: uppercase;
+  color: var(--sl-color-text);
+  font-family: var(--sl-font);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem;
+  padding-bottom: 0.625rem;
 }
 
 .orbit-docs-group a {
   color: var(--sl-color-gray-2);
-  font-size: 0.92rem;
+  font-size: 0.875rem;
+  line-height: 1.4;
 }
 
 .orbit-docs-group a:hover,
 .orbit-docs-group a:focus-visible {
   color: var(--sl-color-text-accent);
 }
+
 .orbit-footer {
   border-top: 1px solid var(--sl-color-hairline-light);
   color: var(--sl-color-gray-3);
@@ -1160,32 +1117,21 @@ html:not([data-has-sidebar]) header.header {
 }
 
 @media (max-width: 72rem) {
+  .orbit-hero {
+    gap: 3rem;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .orbit-hero-headline {
+    font-size: 2.75rem;
+  }
+
   .orbit-card-grid-4 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .orbit-dash-body {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .orbit-dash-dock {
-    border-left: 0;
-    border-top: 1px solid var(--sl-color-hairline-light);
-  }
-
   .orbit-docs-index {
-    gap: 1.25rem 2rem;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .orbit-flow-tabs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  /* With two per row, the right-hand border of every second tab is the
-     container edge. */
-  .orbit-flow-tab:nth-child(2n) {
-    border-right: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -1355,25 +1301,100 @@ html:not([data-has-sidebar]) header.header {
   }
 
   .orbit-hero {
-    gap: 2.25rem;
+    gap: 2.5rem;
     grid-template-columns: minmax(0, 1fr);
-    margin-bottom: 3.25rem;
+    padding: 2rem 0 3rem;
   }
 
   .orbit-hero-headline {
     font-size: 2.2rem;
   }
 
-  .orbit-landing .orbit-section-title {
-    margin-top: 3.25rem;
+  .orbit-session-frame {
+    box-shadow: none;
+  }
+
+  .orbit-session-body {
+    font-size: 0.75rem;
+    padding: 1rem 1rem 1.125rem;
+  }
+
+  /* The output rows lose their fixed key column; the note wraps under the
+     identifier instead of running off the frame. */
+  .orbit-session-out {
+    grid-template-columns: auto auto minmax(0, 1fr);
+  }
+
+  .orbit-session-note {
+    grid-column: 2 / -1;
+  }
+
+  /* The generic docs rule above turns tables into scrolling blocks; the
+     modes table already scrolls inside its own wrapper, so keep its columns. */
+  .orbit-landing .orbit-modes table {
+    display: table;
+  }
+
+  .orbit-section {
+    padding: 3rem 0;
+  }
+
+  .orbit-section-head,
+  .orbit-section-head-link {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+
+  .orbit-section-head-link {
+    align-items: flex-start;
+  }
+
+  .orbit-landing .orbit-section-heading {
+    font-size: 1.75rem;
+  }
+
+  /* Five states in a row is unreadable this narrow; stack them and let the
+     connector run down the left edge. */
+  .orbit-rail {
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 2.25rem;
+  }
+
+  .orbit-rail li,
+  .orbit-rail li:last-child {
+    flex: 0 0 auto;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+  }
+
+  .orbit-rail li:not(:last-child)::after {
+    flex: 0 0 auto;
+    height: 0.75rem;
+    margin-left: 1rem;
+    width: 1px;
+  }
+
+  .orbit-rail-note {
+    position: static;
+    white-space: normal;
   }
 
   /* The hero has already stacked by here, but a tablet still has room for two
      cards per row; one column this early wastes half the viewport. */
   .orbit-card-grid,
+  .orbit-card-grid-3,
   .orbit-card-grid-4,
   .orbit-docs-index {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .orbit-docs-panel {
+    margin-top: 3rem;
+    padding: 1.5rem 1.5rem 1.75rem;
   }
 
   /* Five steps in a row is unreadable this narrow; stack them and turn the
@@ -1389,69 +1410,15 @@ html:not([data-has-sidebar]) header.header {
     top: auto;
     transform: rotate(135deg);
   }
-
-  .orbit-dash-frame {
-    grid-template-columns: minmax(0, 1fr);
-    min-height: 0;
-  }
-
-  .orbit-dash-rail {
-    align-items: center;
-    border-right: 0;
-    border-bottom: 1px solid var(--sl-color-hairline-light);
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 0.35rem 0.7rem;
-    padding: 0.55rem 0.75rem;
-  }
-
-  .orbit-dash-brand {
-    margin: 0 0.5rem 0 0;
-  }
-
-  .orbit-dash-rail-group {
-    flex-direction: row;
-    gap: 0.35rem;
-    margin: 0;
-  }
-
-  .orbit-dash-rail-label,
-  .orbit-dash-rail-foot {
-    display: none;
-  }
-
-  .orbit-flow-panel,
-  .orbit-flow:has(input:checked) .orbit-flow-panel {
-    padding: 1.25rem;
-  }
-
-  /* One column: the facts follow the command they qualify instead of sitting
-     beside it, and the guide link stays last. */
-  .orbit-flow:has(#orbit-flow-pr:checked) .orbit-flow-panel[data-flow='pr'],
-  .orbit-flow:has(#orbit-flow-local:checked) .orbit-flow-panel[data-flow='local'],
-  .orbit-flow:has(#orbit-flow-auto:checked) .orbit-flow-panel[data-flow='auto'],
-  .orbit-flow:has(#orbit-flow-sweep:checked) .orbit-flow-panel[data-flow='sweep'] {
-    gap: 1.5rem;
-    grid-template-areas:
-      "main"
-      "facts"
-      "link";
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto;
-  }
-
-  .orbit-flow-link {
-    margin-top: 0;
-  }
 }
 
 /* Phone widths: everything becomes one column, including the pairs the tablet
    step above kept side by side. */
 @media (max-width: 34rem) {
   .orbit-card-grid,
+  .orbit-card-grid-3,
   .orbit-card-grid-4,
-  .orbit-docs-index,
-  .orbit-flow-tabs {
+  .orbit-docs-index {
     grid-template-columns: 1fr;
   }
 
@@ -1464,20 +1431,12 @@ html:not([data-has-sidebar]) header.header {
     grid-column: 2;
   }
 
-  .orbit-flow-tab {
-    border-right: 0;
-  }
-
-  .orbit-dash-jump {
+  .orbit-session-name {
     display: none;
   }
 
-  .orbit-dash-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .orbit-dash-id {
-    display: none;
+  .orbit-card-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -1487,15 +1446,13 @@ html:not([data-has-sidebar]) header.header {
   .orbit-card,
   .orbit-card h3,
   .orbit-copy,
-  .orbit-flow-tab,
-  .orbit-flow-tab-name,
   .orbit-stack-layer,
   .orbit-stack-name {
     transition: none;
   }
 
-  .orbit-card:hover,
-  .orbit-card:focus-visible {
+  a.orbit-card:hover,
+  a.orbit-card:focus-visible {
     transform: none;
   }
 }
