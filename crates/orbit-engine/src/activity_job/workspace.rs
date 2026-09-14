@@ -1,12 +1,14 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
+use super::audit_writer::V2AuditWriter;
 use super::dispatcher::DispatchError;
 
 pub(crate) mod fingerprint;
@@ -370,6 +372,9 @@ pub(crate) struct WorktreeBoundaryGuard {
     assigned_before: GitWorktreeFingerprint,
     primary_before: GitWorktreeFingerprint,
     rebase_recovery: Option<RebaseRecoveryCheckpoint>,
+    /// Sink for the full fingerprint evidence a violation would otherwise have
+    /// to inline into its error string. Absent only where no run audit exists.
+    audit: Option<Arc<V2AuditWriter>>,
 }
 
 impl WorktreeBoundaryGuard {
@@ -565,7 +570,16 @@ impl WorktreeBoundaryGuard {
             assigned_root,
             primary_root,
             rebase_recovery: None,
+            audit: None,
         }))
+    }
+
+    /// Bind the run's audit trail so an integrity violation can persist its
+    /// full fingerprint evidence as a blob instead of inlining it into the
+    /// error string every consumer then copies [ORB-12467].
+    pub(crate) fn with_audit(mut self, audit: Arc<V2AuditWriter>) -> Self {
+        self.audit = Some(audit);
+        self
     }
 
     /// Compare both monitored checkouts after the provider reaches any
@@ -814,6 +828,20 @@ impl WorktreeBoundaryGuard {
                 "preservation_error": error.to_string(),
             }),
         };
+        // The four fingerprints are the bulk of this evidence and none of its
+        // readability: every dirty path contributes up to four sha256 digests,
+        // and an untracked tree contributes one more each. They go to the run's
+        // audit blob store; the diagnostic keeps a summary and the blob's name.
+        let fingerprints = json!({
+            "assigned_before": self.assigned_before,
+            "assigned_after": assigned_after,
+            "primary_before": self.primary_before,
+            "primary_after": primary_after,
+        });
+        let fingerprints_blob_ref = self
+            .audit
+            .as_ref()
+            .map(|audit| audit.write_blob(fingerprints.to_string().as_bytes()));
         let diagnostic = json!({
             "code": code,
             "reason": reason,
@@ -830,10 +858,11 @@ impl WorktreeBoundaryGuard {
             "primary_dirt_paths": primary_dirt_paths,
             "conflicting_paths": conflicting_paths,
             "assigned_changed": assigned_after != &self.assigned_before,
-            "assigned_before": self.assigned_before,
-            "assigned_after": assigned_after,
-            "primary_before": self.primary_before,
-            "primary_after": primary_after,
+            "assigned_before": fingerprint_summary(&self.assigned_before),
+            "assigned_after": fingerprint_summary(assigned_after),
+            "primary_before": fingerprint_summary(&self.primary_before),
+            "primary_after": fingerprint_summary(primary_after),
+            "fingerprints_blob_ref": fingerprints_blob_ref,
             "recovery": recovery,
             "automatic_reconciliation": false,
         });
@@ -842,6 +871,25 @@ impl WorktreeBoundaryGuard {
             diagnostic: diagnostic.to_string(),
         }
     }
+}
+
+/// The parts of a checkout fingerprint that identify it without enumerating it.
+///
+/// A full [`GitWorktreeFingerprint`] carries a `path_states` entry — up to four
+/// sha256 digests — for every dirty path, plus an `untracked_content` digest per
+/// untracked file. Four of those serialised into one error string reached 2.5 MB
+/// on a 50-path `primary_checkout_drift`, and every consumer of that string
+/// (`run.finished.error_message`, the worker log, the recovery agent's prompt)
+/// then carried the copy. The digests stay retrievable from the audit blob named
+/// by the diagnostic's `fingerprints_blob_ref` [ORB-12467].
+fn fingerprint_summary(fingerprint: &GitWorktreeFingerprint) -> Value {
+    json!({
+        "head": fingerprint.head,
+        "branch": fingerprint.branch,
+        "index_sha256": fingerprint.index_sha256,
+        "tracked_patch_sha256": fingerprint.tracked_patch_sha256,
+        "dirty_paths": fingerprint.dirty_paths,
+    })
 }
 
 /// Accept a primary checkout whose HEAD and branch stayed stationary while its

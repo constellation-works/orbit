@@ -3,10 +3,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use orbit_agent::loop_engine::audit::{AuditSink, LoopAuditEvent};
 use tempfile::{TempDir, tempdir};
 
+use super::super::audit_writer::V2AuditWriter;
 use super::super::dispatcher::DispatchError;
 use super::super::workspace::fingerprint::{git_fingerprint, untracked_file_identity};
 use super::super::workspace::*;
@@ -338,6 +341,134 @@ fn capture_of_thousands_of_untracked_files_uses_a_constant_git_budget() {
         elapsed < Duration::from_secs(1),
         "2,000 untracked files must fingerprint well under a second, took {elapsed:?}"
     );
+}
+
+/// [ORB-12467] The four fingerprints, not the path lists, were what made a
+/// `primary_checkout_drift` diagnostic reach megabytes: every dirty path
+/// contributes up to four sha256 digests to `path_states` and one more to
+/// `untracked_content`. They now go to the run's audit blob store, and the
+/// error string every consumer copies keeps only the identity summary.
+#[test]
+fn primary_drift_diagnostic_is_bounded_and_keeps_full_fingerprints_in_the_run_audit() {
+    let fixture = linked_worktree_fixture();
+    let run_id = "run-drift-diagnostic-size";
+    let pair = declared_pair(&fixture, "ORB-12467", run_id);
+    let input = worktree_input(&fixture, "ORB-12467");
+    let sink = Arc::new(BlobRecordingSink::default());
+    let audit = Arc::new(V2AuditWriter::new(
+        run_id,
+        "codex",
+        Arc::clone(&sink) as Arc<dyn AuditSink>,
+    ));
+    let guard = WorktreeBoundaryGuard::capture(
+        &input,
+        None,
+        run_id,
+        "codex",
+        Some(&fixture.assigned),
+        Some(&fixture.primary),
+        Some(&pair),
+    )
+    .expect("capture drift guard")
+    .expect("drift guard enabled")
+    .with_audit(Arc::clone(&audit));
+
+    // 50 dirty paths on each side of the boundary — the shape of the reported
+    // failure, where the agent had edited a wide change set.
+    write_untracked_tree(&fixture.assigned, 50);
+    write_untracked_tree(&fixture.primary, 50);
+    // A primary branch switch with a stationary HEAD is neither a benign
+    // stationary dirt delta nor a provable fast-forward, so it drifts.
+    git_ok(&fixture.primary, &["switch", "-c", "drifted"]);
+
+    let error = guard.verify().expect_err("primary drift must fail closed");
+    let DispatchError::WorktreeIntegrity { code, diagnostic } = &error else {
+        panic!("expected WorktreeIntegrity, got {error:?}");
+    };
+    assert_eq!(*code, "primary_checkout_drift");
+    assert!(
+        diagnostic.len() < 32 * 1024,
+        "drift diagnostic is {} B",
+        diagnostic.len()
+    );
+    assert!(
+        !diagnostic.contains("path_states") && !diagnostic.contains("untracked_content"),
+        "per-path digests must not reach the error string"
+    );
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(diagnostic).expect("diagnostic is still JSON");
+    assert_eq!(
+        parsed["assigned_after"]["dirty_paths"]
+            .as_array()
+            .unwrap()
+            .len(),
+        50
+    );
+    assert!(parsed["assigned_after"]["head"].is_string());
+    assert!(parsed["assigned_after"]["index_sha256"].is_string());
+    assert_eq!(parsed["primary_after"]["branch"], "drifted");
+    assert_ne!(
+        parsed["primary_before"]["branch"],
+        parsed["primary_after"]["branch"]
+    );
+
+    let blob_ref = parsed["fingerprints_blob_ref"]
+        .as_str()
+        .expect("diagnostic names the persisted fingerprints");
+    let blob = sink
+        .blob(blob_ref)
+        .expect("fingerprints persisted to the run");
+    let fingerprints: serde_json::Value =
+        serde_json::from_slice(&blob).expect("persisted fingerprints are JSON");
+    for side in [
+        "assigned_before",
+        "assigned_after",
+        "primary_before",
+        "primary_after",
+    ] {
+        assert!(
+            fingerprints[side]["path_states"].is_object(),
+            "{side} must retain its full per-path state"
+        );
+    }
+    assert_eq!(
+        fingerprints["assigned_after"]["path_states"]
+            .as_object()
+            .unwrap()
+            .len(),
+        50
+    );
+    assert!(
+        blob.len() > diagnostic.len(),
+        "the bulk of the evidence must have moved out of the error string"
+    );
+}
+
+#[derive(Default)]
+struct BlobRecordingSink {
+    blobs: Mutex<Vec<(String, Vec<u8>)>>,
+}
+
+impl BlobRecordingSink {
+    fn blob(&self, reference: &str) -> Option<Vec<u8>> {
+        self.blobs
+            .lock()
+            .expect("blobs lock")
+            .iter()
+            .find_map(|(id, bytes)| (id == reference).then(|| bytes.clone()))
+    }
+}
+
+impl AuditSink for BlobRecordingSink {
+    fn emit(&self, _event: &LoopAuditEvent) {}
+
+    fn write_blob(&self, content: &[u8]) -> String {
+        let mut blobs = self.blobs.lock().expect("blobs lock");
+        let reference = format!("blob-{}", blobs.len() + 1);
+        blobs.push((reference.clone(), content.to_vec()));
+        reference
+    }
 }
 
 struct LinkedWorktreeFixture {

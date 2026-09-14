@@ -287,7 +287,10 @@ pub fn run_cli_backend(
         source_cwd.as_deref(),
         tool_ctx.workspace_root.as_deref(),
         declared_worktree_pair.as_ref(),
-    )?;
+    )?
+    // A violation's full fingerprints belong in the run's blob store, not in
+    // the error string every downstream reader copies [ORB-12467].
+    .map(|boundary| boundary.with_audit(Arc::clone(&audit)));
 
     if activity_name == "pr_conflict_recovery" {
         let boundary = worktree_boundary.as_mut().ok_or_else(|| {
