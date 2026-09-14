@@ -163,7 +163,7 @@ fn investigate_job<Q: CiQueries + ?Sized>(
     retryable_errors: &mut Vec<Value>,
 ) {
     let run_id = failure["run_id"].to_string();
-    let mut job_api_recovery_attempted = false;
+    let mut job_api_log_recovered = false;
     match queries.run_logs(&run_id, job_id, LogScope::Failed, bounds.log_max_bytes) {
         Ok(log) => {
             if !log_belongs_to_job(&log, job_id) {
@@ -176,8 +176,7 @@ fn investigate_job<Q: CiQueries + ?Sized>(
                 );
                 return;
             }
-            job_api_recovery_attempted = log.source == orbit_tools::github_cli::SOURCE_JOB_API_LOG
-                || log.fallback_error.is_some();
+            job_api_log_recovered = log.source == orbit_tools::github_cli::SOURCE_JOB_API_LOG;
             failure["log_job_id"] = json!(job_id);
             let diagnostic = bound_diagnostic(&log, failure, job_id);
             if !log.source_complete || (log.truncated && diagnostic.is_none()) {
@@ -246,7 +245,7 @@ fn investigate_job<Q: CiQueries + ?Sized>(
     // whether the rejected parent query asked for failed or all scope. A
     // second all-scope call would repeat the same readiness query and job API
     // read without adding evidence. Preserve the gap for a later sweep.
-    if job_api_recovery_attempted {
+    if job_api_log_recovered {
         failure["checkout_evidence_scope"] = json!("job_api_log");
         if retryable_errors.is_empty() {
             push_retryable_error(

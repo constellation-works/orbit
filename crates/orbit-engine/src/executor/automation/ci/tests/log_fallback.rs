@@ -257,7 +257,7 @@ fn three_running_parents_recover_independently_and_deferred_evidence_retries_lat
         json!([11, 10])
     );
     assert_eq!(first["truncation"]["job_log_reads"], json!(3));
-    assert_eq!(first["truncation"]["checkout_log_reads"], json!(0));
+    assert_eq!(first["truncation"]["checkout_log_reads"], json!(1));
     assert_eq!(
         failure_by_id(&first, 10).expect("run 10")["evidence_state"],
         "complete"
@@ -296,6 +296,92 @@ fn three_running_parents_recover_independently_and_deferred_evidence_retries_lat
     );
     assert_eq!(second["retryable_errors"], json!([]));
     assert_eq!(second["truncation"]["checkout_log_reads"], json!(0));
+}
+
+#[test]
+fn failed_fallback_performs_all_scope_checkout_read_and_records_sha() {
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_runs(vec![vec![failing_run(10)]])
+        .with_run_view(
+            "10",
+            json!({"failed_jobs": [failed_job(101560010340, "docs")]}),
+        )
+        .with_log_fallback_error(
+            "10",
+            false,
+            "job 101560010340 (`docs`): Not Found (HTTP 404)",
+        )
+        .with_log("10", true, &format!("HEAD is now at {CHECKOUT}\n"));
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    let failure = failure_by_id(&evidence, 10).expect("run 10 is visible");
+    // Fallback failed, but the budgeted whole-run checkout-evidence read was
+    // performed and recorded the checkout SHA from that read.
+    assert_eq!(failure["actual_checkout_shas"], json!([CHECKOUT]));
+    assert_eq!(failure["checkout_evidence_scope"], json!("all"));
+    assert_ne!(failure["checkout_evidence_scope"], json!("job_api_log"));
+    assert_eq!(failure["checkout_identity"]["state"], json!("observed"));
+    assert_eq!(
+        failure["checkout_identity"]["provenance"]["source"],
+        json!("runner_log")
+    );
+    assert_eq!(
+        failure["checkout_identity"]["provenance"]["read_via"],
+        json!("run_log")
+    );
+    assert_ne!(
+        failure["checkout_identity"]["provenance"]["read_via"],
+        json!("job_api_log")
+    );
+    assert_eq!(
+        failure["checkout_identity"]["provenance"]["scope"],
+        json!("all")
+    );
+    assert_eq!(evidence["truncation"]["checkout_log_reads"], json!(1));
+}
+
+#[test]
+fn recovered_job_api_log_without_checkout_skips_second_read_and_records_job_api_log_scope() {
+    let log_without_checkout = "2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n\
+         2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n\
+         2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n";
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_runs(vec![vec![failing_run(10)]])
+        .with_run_view(
+            "10",
+            json!({"failed_jobs": [failed_job(101560010340, "docs")]}),
+        )
+        .with_job_log_fallback("10", false, log_without_checkout, vec![source_job()])
+        .with_log("10", true, &format!("HEAD is now at {CHECKOUT}\n"));
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    let failure = failure_by_id(&evidence, 10).expect("run 10 is visible");
+    // Since the excerpt was recovered from the job log API, it skips the second
+    // whole-run read, leaving checkout_log_reads at 0 and actual_checkout_shas empty.
+    assert_eq!(evidence["truncation"]["checkout_log_reads"], json!(0));
+    assert_eq!(failure["checkout_evidence_scope"], json!("job_api_log"));
+    assert_eq!(failure["actual_checkout_shas"], json!([]));
+    assert!(
+        evidence["retryable_errors"]
+            .as_array()
+            .expect("retryable errors")
+            .iter()
+            .any(|error| {
+                error["operation"] == json!("checkout_evidence")
+                    && error["message"].as_str().is_some_and(|msg| {
+                        msg.contains(
+                            "the complete recovered job log contained no actual checkout SHA",
+                        )
+                    })
+            }),
+        "expected retryable error for missing checkout in complete job API log"
+    );
 }
 
 fn two_job_queries(reverse: bool) -> FakeQueries {
