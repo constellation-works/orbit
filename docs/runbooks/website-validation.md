@@ -233,7 +233,7 @@ mechanism to the site.
 
 After Daniel's manual publication, verify the public result independently:
 
-1. Open `https://orbit-cli.com/`, the delivery-mode explorer, and
+1. Open `https://orbit-cli.com/`, the delivery-mode table, and
    `https://orbit-cli.com/getting-started/install/`; confirm each returns a
    successful response and the expected rendered content.
 2. Fetch `https://orbit-cli.com/deployment.json` only when Daniel's deployment

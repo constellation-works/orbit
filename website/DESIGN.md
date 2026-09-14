@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Owner:** Orbit contributors
-**Last updated:** 2026-09-07
+**Last updated:** 2026-09-13
 
 ---
 
@@ -96,37 +96,46 @@ Three-column, fixed:
 The homepage uses an in-content hero in place of Starlight's auto-rendered title (which is hidden via a scoped CSS rule on the homepage only):
 
 - **Eyebrow** — mono uppercase tag (`early access`).
-- **Headline** — 2.75rem display heading. The only heading on the site that exceeds the body type scale.
+- **Headline** — 3.6rem display heading (2.75rem on narrower desktops, 2.2rem
+  on phones). The only heading on the site that exceeds the body type scale.
 - **Lede + install bar + primary/secondary CTAs.** Install bar carries a `$` prompt and a Copy action.
-- **Provider strip** — mono uppercase list of the shipped CLI executors, with the
-  legacy Gemini executor named in a footnote rather than implied current.
-- **Dashboard preview** — a `figure` of the operator Tasks view after that
-  default ship: the walkthrough task in `review`, pull request open and
-  unmerged, `approve` available, `ship` absent. `role="img"` plus a
-  `figcaption` mark it as an illustration of current chrome, not a screenshot
-  or a live host. Identifiers are placeholders; no measured counts or
-  durations.
+- **Provider strip** — the shipped CLI executors as a plain list under a
+  hairline, with the legacy Gemini executor named in a footnote rather than
+  implied current.
+- **Session preview** — a `figure` of the four-command walkthrough as one
+  terminal session: `task add` (task in `proposed`), `run ship` (run ID,
+  file scope reserved, worktree isolated), `run show` (steps settled, pull
+  request opened, task in `review`), `task update --approve` (task in
+  `done`). The product surface is the CLI, so the CLI is the hero visual.
+  `role="img"` plus a `figcaption` mark it as illustrative, not captured
+  output. Identifiers are placeholders; no measured counts or durations.
 
-Below the hero, in order:
+Below the hero, each section opens on a two-column head — mono eyebrow and a
+one-sentence heading on the left, a short lede on the right — and in order:
 
-1. **One task, one pull request** — a 4-card grid for create → ship → inspect
-   → review. Each card carries a mono numbered tag `01`–`04` and the command
-   it runs. New tasks start in `proposed` until approved into the backlog.
-   The default path stops in `review` with the PR unmerged; approving the
-   task does not merge the pull request. A sentence under the grid points at
-   Install and First Task.
-2. **Other delivery modes** — a four-mode explorer over `orbit run ship`,
-   `--mode local`, `orbit run auto` and `orbit run ship-sweep`. Each panel
-   states the command, where the run stops, and that `--complete` is a separate
-   explicit authorization. Built as a native radio group switched by CSS
-   `:has()`, so pointer, keyboard and screen-reader support are the platform's
-   and the selected panel still renders without JavaScript. This section stays
-   after the walkthrough so the default path is read first.
-3. **Why Orbit** — a 4-card value-prop strip. Each card carries a thin SVG glyph;
-   these and the walkthrough tags are the only glyphs in content.
-4. **Go further** — a 4-card grid routing to continuous delivery, recurring work,
-   publication and recovery, and the CLI reference.
-5. **Explore the docs** — a flat index of the sidebar groups.
+1. **One task, one pull request** — the task lifecycle as a rail
+   (`proposed → backlog → in-progress → review → done`, with the default
+   ship's stop at `review` marked and `done` dashed), then a 4-card grid for
+   create → ship → inspect → review. Each card carries a mono numbered tag
+   `01`–`04` and the command it runs; the review card is outlined in the
+   accent because that is where the default path stops. New tasks start in
+   `proposed` until approved into the backlog; approving the task does not
+   merge the pull request. A sentence under the grid points at Install and
+   First Task.
+2. **Other delivery modes** — one table over `orbit run ship`, `--mode local`,
+   `orbit run auto` and `orbit run ship-sweep`: the command, where the run
+   stops, and that `--complete` is a separate explicit authorization, side by
+   side so modes compare without clicking. Row headers link to each mode's
+   guide. This section stays after the walkthrough so the default path is
+   read first.
+3. **Why Orbit** — a 2×2 value-prop grid. Each card carries a thin SVG glyph
+   beside its copy and the command that shows the property; these and the
+   walkthrough tags are the only glyphs in content.
+4. **Go further** — a 3-card grid routing to continuous delivery, recurring
+   work, and publication and recovery, with the CLI reference linked from the
+   section head.
+5. **Explore the docs** — a flat five-column index of the sidebar groups,
+   closing the page in one bordered panel.
 
 Commands shown on this page must match current CLI behaviour, and illustrative
 output must say that it is illustrative. The page advertises no unlanded feature
