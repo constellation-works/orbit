@@ -143,11 +143,11 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
     out.push_str("(allow sysctl*)\n");
     out.push_str("(allow iokit*)\n");
     // `openpty`/`posix_openpt` need the `pseudo-tty` operation plus explicit
-    // device-node ioctl permissions. The extension check is required for
-    // newly-created slave ttys; the separate ioctl rule covers ttys that
-    // existed before the process entered the sandbox. Keep these rules
-    // narrow: a PTY is a local IPC primitive scoped to the caller's own
-    // descriptors and does not grant unrelated filesystem or network access.
+    // device-node ioctl permissions. The slave read/write rule checks the
+    // Seatbelt PTY extension, but the broad file-read* and /dev file-write*
+    // grants also allow access without that extension. It is not an ownership
+    // boundary. The separate ioctl rule also covers slave ttys that existed
+    // before sandbox entry, subject to normal OS access checks.
     out.push_str("(allow pseudo-tty)\n");
     out.push_str("(allow file-read* file-write* file-ioctl (literal \"/dev/ptmx\"))\n");
     out.push_str(

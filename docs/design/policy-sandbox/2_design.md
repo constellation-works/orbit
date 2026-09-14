@@ -225,13 +225,13 @@ The child Orbit runtime roots are deliberately narrower than the workspace `.orb
 
 macOS PTY allocation is a separate operation grant, not a consequence of the
 broad `/dev` file rules. The compiled profile emits `(allow pseudo-tty)`,
-explicit read/write/ioctl access to `/dev/ptmx`, extension-gated read/write
-access to newly-created `/dev/ttys[0-9]+` slave devices, and ioctl access to
-`/dev/ttys[0-9]+` for PTYs that predate sandbox entry. The extension gate keeps
-the device grant tied to Seatbelt-created PTYs; the ioctl rule is needed for
-interactive behavior on pre-existing slave devices. This is local descriptor
-management, not a filesystem or network expansion, and Linux Bubblewrap has no
-equivalent SBPL operation gate.
+explicit read/write/ioctl access to `/dev/ptmx`, a slave-device read/write rule
+that checks the `com.apple.sandbox.pty` extension, and ioctl access to
+`/dev/ttys[0-9]+` for PTYs that predate sandbox entry. The profile's broad
+`file-read*` and `/dev` write grants also allow slave-device access without the
+extension, so this check does not enforce PTY ownership or isolation. Normal
+OS access checks still apply. The added allocation and ioctl permissions
+target PTY devices; Linux Bubblewrap has no equivalent SBPL operation gate.
 
 `agent_implement` also exposes `orbit.adr.add` and `orbit.adr.update` ([ORB-10596]). On Linux, only the active managed worktree's `.orbit/adrs/proposed` and `.orbit/adrs/.locks` directories are bind-mounted writable after the enclosing worktree `.orbit/**` read-only mount; Accepted/Superseded ADRs and learning, task, state, and unknown local stores remain read-only. Allocation still uses the workspace-shared semantic database and `.id_alloc.lock`, so simultaneous worktrees serialize ID selection while each Proposed body lands under `<job-worktree>/.orbit/adrs/proposed/<id>/`. The allocator records that worktree-relative body path, allowing an orchestrator runtime to resolve and search it as a federated artifact while the worktree is live. macOS already re-allows the active job worktree as a whole after the policy deny, so this change adds no macOS SBPL allowance and changes no policy YAML.
 
