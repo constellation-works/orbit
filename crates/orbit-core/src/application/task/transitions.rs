@@ -4,8 +4,7 @@ use orbit_store::contracts::FrictionStoreBackend;
 use orbit_types::identity::is_valid_friction_id;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    Task, TaskHistoryEntry, TaskRelationType, TaskStatus, normalize_task_tags,
-    unmet_task_dependencies,
+    Task, TaskHistoryEntry, TaskRelationType, TaskStatus, unmet_task_dependencies,
 };
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
@@ -16,6 +15,7 @@ use super::helpers::{
 };
 use super::lifecycle::{ensure_task_has_execution_plan, in_progress_transition_requires_plan};
 use super::params::TaskUpdateParams;
+use super::paths::context_files_pruned_history_entry;
 
 #[cfg(test)]
 use std::sync::Mutex;
@@ -49,6 +49,7 @@ struct StartTaskOptions {
     crew_override: Option<String>,
     plan: Option<String>,
     field_edits: TaskUpdateParams,
+    artifact_owner: Option<String>,
 }
 
 fn start_body_field_edits(
@@ -60,9 +61,6 @@ fn start_body_field_edits(
         field_edits.plan = plan;
     }
     field_edits.comment = None;
-    if let Some(tags) = field_edits.tags.take() {
-        field_edits.tags = Some(normalize_task_tags(tags));
-    }
     field_edits
 }
 
@@ -320,6 +318,7 @@ impl OrbitRuntime {
         crew_override: Option<String>,
         plan: Option<String>,
         field_edits: TaskUpdateParams,
+        artifact_owner: Option<String>,
     ) -> Result<Task, OrbitError> {
         self.start_task_with_actor_label_override(
             id,
@@ -331,6 +330,7 @@ impl OrbitRuntime {
                 crew_override,
                 plan,
                 field_edits,
+                artifact_owner,
                 ..Default::default()
             },
         )
@@ -368,6 +368,7 @@ impl OrbitRuntime {
             crew_override,
             plan,
             field_edits,
+            artifact_owner,
         } = options;
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
@@ -405,14 +406,31 @@ impl OrbitRuntime {
                     )));
                 }
             }
+            let validated = self.validate_and_normalize_task_field_edits(
+                id,
+                &task,
+                start_body_field_edits(field_edits.clone(), plan.clone()),
+            )?;
+            let start_edits = validated.params;
+            let context_history = (!validated.dropped_context_files.is_empty()).then(|| {
+                context_files_pruned_history_entry(
+                    effective_label.as_str(),
+                    &validated.dropped_context_files,
+                )
+            });
+            let resolved_crew_override = if field_edits.crew.is_some() {
+                start_edits.crew.clone().flatten()
+            } else {
+                self.canonical_crew_name(crew_override.as_deref())?
+            };
             self.resolve_and_log_crew_for_task_start(
                 id,
-                crew_override.as_deref(),
+                resolved_crew_override.as_deref(),
                 task.crew.as_deref(),
             )?;
             let dependency_status_index = self.task_status_index()?;
             let unmet_dependencies = unmet_task_dependencies(&task, &dependency_status_index);
-            let effective_plan = plan.as_deref().unwrap_or(task.plan.as_str());
+            let effective_plan = start_edits.plan.as_deref().unwrap_or(task.plan.as_str());
             if in_progress_transition_requires_plan(task.status) {
                 ensure_task_has_execution_plan(id, effective_plan)?;
             }
@@ -430,8 +448,6 @@ impl OrbitRuntime {
                     );
                 }
             };
-            let start_edits = start_body_field_edits(field_edits.clone(), plan.clone());
-
             started = Some(match task.status {
                 TaskStatus::Proposed => {
                 warn_unmet_dependencies();
@@ -442,15 +458,18 @@ impl OrbitRuntime {
                         StoreTaskUpdateParams {
                             actor: effective_label.clone(),
                             status_event: Some("started".to_string()),
-                            append_history: vec![TaskHistoryEntry {
+                            append_history: std::iter::once(TaskHistoryEntry {
                                 at,
                                 by: effective_label.clone(),
                                 event: "proposal_approved".to_string(),
                                 note: note.clone(),
                                 from_status: Some(task.status),
                                 to_status: Some(TaskStatus::Backlog),
-                            }],
+                            })
+                            .chain(context_history.clone())
+                            .collect(),
                             append_comments: append_comments.clone(),
+                            artifact_owner_run_id: artifact_owner.clone(),
                             expected_status: Some(vec![task.status]),
                             ..StoreTaskUpdateParams::from(start_edits.clone())
                         },
@@ -476,6 +495,8 @@ impl OrbitRuntime {
                             status_event: Some("started".to_string()),
                             status_note: note.clone(),
                             append_comments: append_comments.clone(),
+                            append_history: context_history.clone().into_iter().collect(),
+                            artifact_owner_run_id: artifact_owner.clone(),
                             expected_status: Some(vec![task.status]),
                             ..StoreTaskUpdateParams::from(start_edits.clone())
                         },

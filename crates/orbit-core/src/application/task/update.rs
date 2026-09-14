@@ -50,6 +50,11 @@ struct TaskUpdateContext {
     status_authority: StatusAuthority,
 }
 
+pub(super) struct ValidatedTaskFieldEdits {
+    pub(super) params: TaskUpdateParams,
+    pub(super) dropped_context_files: Vec<String>,
+}
+
 impl OrbitRuntime {
     /// The in-crate task setter. Status changes are *not* checked against the
     /// lifecycle table here: callers are Core's own use cases, which either
@@ -262,52 +267,9 @@ impl OrbitRuntime {
         {
             ensure_status_change_allowed(self, &task, &params, target)?;
         }
-        let prune_root = context_workspace_root(&self.paths().repo_root, None);
-
-        let dropped_context_files: Vec<String> = if let Some(candidates) =
-            params.context_files.take()
-        {
-            let normalized = normalize_context_files_for_write(candidates, &prune_root)?;
-            // An explicit replacement preserves draft/future selectors; pruning stays read-time.
-            params.context_files = Some(normalized);
-            Vec::new()
-        } else {
-            let normalized = canonicalize_context_files_for_read(&task.context_files, &prune_root);
-            if normalized != task.context_files {
-                let (kept, dropped) = prune_missing_context_files(&prune_root, normalized);
-                params.context_files = Some(kept);
-                dropped
-            } else {
-                Vec::new()
-            }
-        };
-        if let Some(dependencies) = params.dependencies.take() {
-            let normalized_dependencies = normalize_task_dependencies(dependencies)?;
-            validate_task_dependencies(&self.list_tasks()?, Some(id), &normalized_dependencies)?;
-            params.dependencies = Some(normalized_dependencies);
-        }
-        if let Some(tags) = params.tags.take() {
-            params.tags = Some(normalize_task_tags(tags));
-        }
-        if let Some(crew) = &params.crew {
-            self.validate_crew_name(crew.as_deref())?;
-        }
-        if let Some(orchestrator) = &mut params.orchestrator {
-            *orchestrator = self.canonical_crew_name(orchestrator.as_deref())?;
-            if !matches!(task.status, TaskStatus::Proposed | TaskStatus::Backlog) {
-                return Err(OrbitError::InvalidInput(format!(
-                    "task {id} is {}; orchestrator can only be changed while proposed or backlog",
-                    task.status
-                )));
-            }
-        }
-        if params.status == Some(TaskStatus::Done) && task.status != TaskStatus::Done {
-            let mut preview = task.clone();
-            if let Some(relations) = &params.relations {
-                preview.relations = relations.clone();
-            }
-            self.ensure_resolves_are_workspace_local(&preview)?;
-        }
+        let validated = self.validate_and_normalize_task_field_edits(id, &task, params)?;
+        params = validated.params;
+        let dropped_context_files = validated.dropped_context_files;
 
         let actor = self.actor().clone();
         let attribution = assemble_task_attribution(
@@ -410,5 +372,63 @@ impl OrbitRuntime {
         })?;
 
         Ok(updated)
+    }
+
+    /// Apply the validation and canonicalization shared by ordinary updates
+    /// and the guarded start body before either path reaches the record layer.
+    pub(super) fn validate_and_normalize_task_field_edits(
+        &self,
+        id: &str,
+        task: &Task,
+        mut params: TaskUpdateParams,
+    ) -> Result<ValidatedTaskFieldEdits, OrbitError> {
+        let prune_root = context_workspace_root(&self.paths().repo_root, None);
+        let dropped_context_files = if let Some(candidates) = params.context_files.take() {
+            let normalized = normalize_context_files_for_write(candidates, &prune_root)?;
+            // An explicit replacement preserves draft/future selectors; pruning stays read-time.
+            params.context_files = Some(normalized);
+            Vec::new()
+        } else {
+            let normalized = canonicalize_context_files_for_read(&task.context_files, &prune_root);
+            if normalized != task.context_files {
+                let (kept, dropped) = prune_missing_context_files(&prune_root, normalized);
+                params.context_files = Some(kept);
+                dropped
+            } else {
+                Vec::new()
+            }
+        };
+        if let Some(dependencies) = params.dependencies.take() {
+            let normalized_dependencies = normalize_task_dependencies(dependencies)?;
+            validate_task_dependencies(&self.list_tasks()?, Some(id), &normalized_dependencies)?;
+            params.dependencies = Some(normalized_dependencies);
+        }
+        if let Some(tags) = params.tags.take() {
+            params.tags = Some(normalize_task_tags(tags));
+        }
+        if let Some(crew) = &mut params.crew {
+            *crew = self.canonical_crew_name(crew.as_deref())?;
+        }
+        if let Some(orchestrator) = &mut params.orchestrator {
+            *orchestrator = self.canonical_crew_name(orchestrator.as_deref())?;
+            if !matches!(task.status, TaskStatus::Proposed | TaskStatus::Backlog) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "task {id} is {}; orchestrator can only be changed while proposed or backlog",
+                    task.status
+                )));
+            }
+        }
+        if params.status == Some(TaskStatus::Done) && task.status != TaskStatus::Done {
+            let mut preview = task.clone();
+            if let Some(relations) = &params.relations {
+                preview.relations = relations.clone();
+            }
+            self.ensure_resolves_are_workspace_local(&preview)?;
+        }
+
+        Ok(ValidatedTaskFieldEdits {
+            params,
+            dropped_context_files,
+        })
     }
 }
