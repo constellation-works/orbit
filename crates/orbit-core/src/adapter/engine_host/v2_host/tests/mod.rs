@@ -12,6 +12,8 @@ mod leaf_occupancy;
 mod pipeline_actions;
 #[cfg(target_os = "linux")]
 mod recovery_authority_sandbox;
+#[cfg(target_os = "linux")]
+mod recovery_execution_sandbox;
 mod required_tools;
 mod sandbox;
 mod sandbox_nested;

@@ -2,10 +2,12 @@
 type: runbook
 summary: Install and verify the Bubblewrap host prerequisite that Orbit's Linux sandbox fails closed without.
 tags: [operations, sandbox, linux, bubblewrap, apparmor]
-paths: ["crates/orbit-exec/src/**"]
+paths:
+  - "crates/orbit-exec/src/**"
+  - "crates/orbit-core/src/adapter/engine_host/v2_host/tests/**"
 related_features: [policy-sandbox, executors]
 related_artifacts: []
-last_validated: 2026-09-03
+last_validated: 2026-09-14
 ---
 
 # Prepare a Linux Host for Sandboxed Dispatch
@@ -53,6 +55,33 @@ grep -Fq 'bwrap-userns-restrict' /sys/kernel/security/apparmor/profiles
 ```
 
 The final command must exit successfully.
+
+## Verify step-failure recovery through Bubblewrap
+
+After changing recovery dispatch, managed-worktree policy, or the Linux spawn
+path, run the focused native regression from the candidate checkout:
+
+```sh
+cargo test -p orbit-core --lib \
+  adapter::engine_host::v2_host::tests::recovery_execution_sandbox::step_failure_recovery_runs_a_real_linux_sandboxed_subprocess \
+  -- --ignored --exact --nocapture
+```
+
+The test starts an isolated child after removing inherited Orbit run and
+registry authority. The child creates disposable global, repository, task, and
+managed-worktree state, then exercises both `implement_one` and `commit`
+failure shapes with a local fake provider. No provider account, network access,
+or production task is used. Each provider process must run through the trusted
+Bubblewrap path and leave durable invocation-start, process, exit,
+recovery-attempt, and single post-recovery-attempt evidence. The fixture also
+checks the assigned task/run/worktree identity, default dotenv write denial,
+Git metadata denial, and an unchanged primary checkout.
+
+This is a native-host check. If `/usr/bin/bwrap` cannot create the required
+namespace, the test fails with `native Linux recovery check NOT RUN` and prints
+the exact test binary plus the command above. Record that outcome as **not run**
+and have an operator rerun the printed command on the owning Linux host after
+fixing the namespace prerequisite. A capability denial is never a passing skip.
 
 ## If the probe still fails
 
