@@ -1149,6 +1149,7 @@ fn task_update_in_progress_outcome_does_not_depend_on_extra_fields() {
                 "status": "in-progress",
                 "priority": "high",
                 "tags": ["x"],
+                "crew": " sol ",
             }),
             agent.clone(),
             model.clone(),
@@ -1157,6 +1158,7 @@ fn task_update_in_progress_outcome_does_not_depend_on_extra_fields() {
     assert_eq!(started["status"], "in-progress");
     assert_eq!(started["priority"], "high");
     assert_eq!(started["tags"], json!(["x"]));
+    assert_eq!(started["crew"], "sol");
     assert!(
         runtime
             .list_session_events(20)
@@ -1210,6 +1212,381 @@ fn task_update_in_progress_outcome_does_not_depend_on_extra_fields() {
             }),
         "proposed start with extra fields must still emit TaskStarted: {picked_up}"
     );
+}
+
+/// ORB-12474: the guarded start body must pass field edits through the same
+/// dependency validator as an ordinary update before either reaches storage.
+#[test]
+fn task_update_start_rejects_self_dependency_like_an_ordinary_update() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let task = create_task(
+        &runtime,
+        &repo_root,
+        "Self dependency",
+        "A start cannot create its own readiness cycle.",
+        TaskStatus::Backlog,
+        &[],
+    );
+    runtime
+        .update_task(
+            &task.id,
+            crate::application::task::TaskUpdateParams {
+                plan: Some("1. refuse the invalid dependency.".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed plan");
+    let agent = Some("codex".to_string());
+    let model = Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string());
+
+    let ordinary = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({ "id": task.id, "dependencies": [task.id] }),
+        agent.clone(),
+        model.clone(),
+    ));
+    let start = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({
+            "id": task.id,
+            "status": "in-progress",
+            "dependencies": [task.id],
+        }),
+        agent,
+        model,
+    ));
+
+    assert_eq!(start, ordinary);
+    assert!(
+        start.contains("cannot declare a self-dependency"),
+        "self-dependency refusal should explain the cycle: {start}"
+    );
+    assert_eq!(
+        runtime.get_task(&task.id).expect("task remains").status,
+        TaskStatus::Backlog
+    );
+}
+
+/// ORB-12474: opting into missing context skips only the existence check. It
+/// does not skip canonicalization or workspace containment on a start write.
+#[test]
+fn task_update_start_normalizes_and_contains_context_like_an_ordinary_update() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let ordinary_task = create_task(
+        &runtime,
+        &repo_root,
+        "Ordinary context update",
+        "Control arm for selector normalization.",
+        TaskStatus::Backlog,
+        &[],
+    );
+    let start_task = create_task(
+        &runtime,
+        &repo_root,
+        "Start context update",
+        "Start arm for selector normalization.",
+        TaskStatus::Backlog,
+        &[],
+    );
+    runtime
+        .update_task(
+            &start_task.id,
+            crate::application::task::TaskUpdateParams {
+                plan: Some("1. normalize the selector.".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed plan");
+    let agent = Some("codex".to_string());
+    let model = Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string());
+    let selector = "future/../future/new.rs";
+
+    let ordinary = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": ordinary_task.id,
+                "context_files": [selector],
+                "allow_missing_context": true,
+            }),
+            agent.clone(),
+            model.clone(),
+        )
+        .expect("ordinary update normalizes missing selector");
+    let started = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": start_task.id,
+                "status": "in-progress",
+                "context_files": [selector],
+                "allow_missing_context": true,
+            }),
+            agent.clone(),
+            model.clone(),
+        )
+        .expect("start update normalizes missing selector");
+    assert_eq!(started["context_files"], ordinary["context_files"]);
+    assert_eq!(started["context_files"], json!(["file:future/new.rs"]));
+
+    let outside = create_task(
+        &runtime,
+        &repo_root,
+        "Outside context",
+        "Containment applies even when existence does not.",
+        TaskStatus::Backlog,
+        &[],
+    );
+    runtime
+        .update_task(
+            &outside.id,
+            crate::application::task::TaskUpdateParams {
+                plan: Some("1. refuse the escaping selector.".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed plan");
+    let ordinary_error = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({
+            "id": outside.id,
+            "context_files": ["../outside.rs"],
+            "allow_missing_context": true,
+        }),
+        agent.clone(),
+        model.clone(),
+    ));
+    let start_error = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({
+            "id": outside.id,
+            "status": "in-progress",
+            "context_files": ["../outside.rs"],
+            "allow_missing_context": true,
+        }),
+        agent,
+        model,
+    ));
+    assert_eq!(start_error, ordinary_error);
+    assert!(
+        start_error.contains("must remain inside workspace"),
+        "{start_error}"
+    );
+}
+
+/// ORB-12474: orchestrator edits retain their ordinary update rules when the
+/// same write also starts the task.
+#[test]
+fn task_update_start_validates_canonicalizes_and_gates_orchestrator() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let ordinary_task = create_task(
+        &runtime,
+        &repo_root,
+        "Ordinary orchestrator update",
+        "Control arm for canonicalization.",
+        TaskStatus::Backlog,
+        &[],
+    );
+    let start_task = create_task(
+        &runtime,
+        &repo_root,
+        "Start orchestrator update",
+        "Start arm for canonicalization.",
+        TaskStatus::Backlog,
+        &[],
+    );
+    runtime
+        .update_task(
+            &start_task.id,
+            crate::application::task::TaskUpdateParams {
+                plan: Some("1. start with canonical attribution.".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed plan");
+    let agent = Some("codex".to_string());
+    let model = Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string());
+    let crew_error_message = |result: Result<Value, orbit_common::OrbitError>| match result {
+        Err(orbit_common::OrbitError::InvalidInput(message))
+        | Err(orbit_common::OrbitError::InvalidInputDiagnostic { message, .. }) => message,
+        Err(error) => panic!("expected invalid crew input, got {error:?}"),
+        Ok(value) => panic!("expected invalid crew input, got {value}"),
+    };
+
+    let ordinary = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({ "id": ordinary_task.id, "orchestrator": " sol " }),
+            agent.clone(),
+            model.clone(),
+        )
+        .expect("ordinary update canonicalizes orchestrator");
+    let started = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": start_task.id,
+                "status": "in-progress",
+                "orchestrator": " sol ",
+            }),
+            agent.clone(),
+            model.clone(),
+        )
+        .expect("start update canonicalizes orchestrator");
+    assert_eq!(ordinary["orchestrator"], "sol");
+    assert_eq!(started["orchestrator"], ordinary["orchestrator"]);
+
+    let unknown = create_task(
+        &runtime,
+        &repo_root,
+        "Unknown orchestrator",
+        "Both paths reject an unknown crew.",
+        TaskStatus::Backlog,
+        &[],
+    );
+    runtime
+        .update_task(
+            &unknown.id,
+            crate::application::task::TaskUpdateParams {
+                plan: Some("1. refuse an unknown crew.".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed plan");
+    let ordinary_unknown = crew_error_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({ "id": unknown.id, "orchestrator": "does-not-exist" }),
+        agent.clone(),
+        model.clone(),
+    ));
+    let start_unknown = crew_error_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({
+            "id": unknown.id,
+            "status": "in-progress",
+            "orchestrator": "does-not-exist",
+        }),
+        agent.clone(),
+        model.clone(),
+    ));
+    assert_eq!(start_unknown, ordinary_unknown);
+
+    let someday = create_task(
+        &runtime,
+        &repo_root,
+        "Someday orchestrator",
+        "Orchestrator is immutable in someday.",
+        TaskStatus::Someday,
+        &[],
+    );
+    runtime
+        .update_task(
+            &someday.id,
+            crate::application::task::TaskUpdateParams {
+                plan: Some("1. enforce the attribution gate.".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed plan");
+    let ordinary_gate = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({ "id": someday.id, "orchestrator": "sol" }),
+        agent.clone(),
+        model.clone(),
+    ));
+    let start_gate = invalid_input_message(runtime.execute_tool_command(
+        "orbit.task.update",
+        json!({
+            "id": someday.id,
+            "status": "in-progress",
+            "orchestrator": "sol",
+        }),
+        agent,
+        model,
+    ));
+    assert_eq!(start_gate, ordinary_gate);
+    assert!(
+        start_gate.contains("orchestrator can only be changed while proposed or backlog"),
+        "{start_gate}"
+    );
+}
+
+/// ORB-12474: the task update handler must forward the authenticated caller's
+/// run id to artifact storage on both ordinary and start writes.
+#[test]
+fn task_update_start_preserves_artifact_owner_run_id() {
+    use orbit_tools::ReservationOwnerContext;
+    use orbit_types::workflow::automation::{EVIDENCE_AUTHORITY_ARTIFACT, EvidenceSubmission};
+
+    let (_root, runtime, repo_root) = test_runtime();
+    let ordinary_task = create_task(
+        &runtime,
+        &repo_root,
+        "Ordinary artifact update",
+        "Control arm for owner attribution.",
+        TaskStatus::Backlog,
+        &[],
+    );
+    let start_task = create_task(
+        &runtime,
+        &repo_root,
+        "Start artifact update",
+        "Start arm for owner attribution.",
+        TaskStatus::Backlog,
+        &[],
+    );
+    runtime
+        .update_task(
+            &start_task.id,
+            crate::application::task::TaskUpdateParams {
+                plan: Some("1. attach owned evidence while starting.".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("seed plan");
+    let run_id = "jrun-owned-artifact";
+    let owner = || ReservationOwnerContext {
+        owner_run_id: run_id.to_string(),
+        owner_metadata_json: Some(r#"{"source":"test"}"#.to_string()),
+    };
+    let input = |id: &str, start: bool| {
+        let mut value = json!({
+            "id": id,
+            "artifacts": {"automation-coverage.json": "coverage"},
+        });
+        if start {
+            value["status"] = json!("in-progress");
+        }
+        value
+    };
+
+    super::super::task_tools::update(
+        &runtime,
+        input(&ordinary_task.id, false),
+        Some("codex".to_string()),
+        Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        Some(owner()),
+    )
+    .expect("ordinary update stores owned artifact");
+    super::super::task_tools::update(
+        &runtime,
+        input(&start_task.id, true),
+        Some("codex".to_string()),
+        Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        Some(owner()),
+    )
+    .expect("start update stores owned artifact");
+
+    for task_id in [&ordinary_task.id, &start_task.id] {
+        let witness = runtime
+            .get_task_artifact(task_id, EVIDENCE_AUTHORITY_ARTIFACT)
+            .expect("read authority witness")
+            .expect("owner run creates authority witness");
+        let submission: EvidenceSubmission =
+            serde_json::from_slice(&witness.content).expect("parse authority witness");
+        assert_eq!(submission.run_id, run_id);
+        assert_eq!(submission.action_id, *task_id);
+    }
 }
 
 /// ORB-10648: `priority` is an advertised and applied update field. The record

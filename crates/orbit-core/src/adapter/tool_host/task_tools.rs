@@ -309,6 +309,7 @@ pub(super) fn update(
                         params.crew.clone().flatten(),
                         params.plan.clone(),
                         params,
+                        owner.map(|owner| owner.owner_run_id),
                     )?
                 }
             };
