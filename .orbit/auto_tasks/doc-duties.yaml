@@ -21,10 +21,23 @@ template:
     1. List every in-scope doc together with its `last_validated` value. A
        document with no frontmatter block has no `last_validated` value and is
        treated as never validated.
-    2. Order them: docs with **no** `last_validated` key first (never validated),
-       then oldest date first. Break ties by path so the order is stable.
-    3. Take the **6 oldest**. That is this run's batch. Do not take more — a
-       bounded batch that is done properly beats a broad pass that is not.
+    2. Classify the inventory before ordering it. A Markdown file under
+       `docs/design/_templates/` whose frontmatter still contains the literal
+       `last_validated: YYYY-MM-DD` placeholder is a template skeleton, not a
+       concrete doc: exclude it from the candidate set and report it as an
+       excluded skeleton. It must not displace a concrete doc. A template with
+       a real date remains eligible unless the minted task explicitly excludes
+       templates.
+    3. Order concrete docs with a total, stable order: missing
+       `last_validated` keys first; then present values that are not an exact,
+       valid `YYYY-MM-DD` calendar date (treat these real docs as never
+       validated, after the missing-key group); then valid dates oldest first.
+       Within each group, break ties by relative path. In the dated group,
+       equal dates also tie by relative path. Do not interpret a placeholder,
+       empty value, `TBD`, or an impossible date as a concrete date.
+    4. Take the **6 oldest** concrete candidates in that order. That is this
+       run's batch. Do not take more — a bounded batch that is done properly
+       beats a broad pass that is not.
 
     Documents with no frontmatter block are eligible for the rotation. When
     one is selected, determine whether Orbit Docs' existing tolerant inference
@@ -97,9 +110,18 @@ template:
     and why, and for each selected frontmatter-less doc whether frontmatter was
     migrated, the derived `type` and `summary`, and the verification evidence.
     Report selected docs left unchanged because their classification or claims
-    could not be verified confidently.
+    could not be verified confidently. Persist the selection evidence in the
+    task's durable `execution_summary`, not only in shell output: include
+    `batch_size: 6`, the selected relative paths in order, and each selected
+    doc's exact ordering value (`missing`, `invalid:<raw value>`, or its valid
+    `YYYY-MM-DD` date). Also list excluded template skeleton paths and their
+    placeholder values. Record the focused selection-contract check and its
+    result, including the missing/invalid/date buckets, path tie-break, and
+    six-item limit.
   acceptance_criteria:
   - Exactly the batch of least-recently-validated in-scope docs was worked, selected by missing-then-oldest `last_validated`.
+  - Template skeletons with literal placeholder dates are excluded from concrete-doc candidates, while real docs with missing, invalid, and valid dates have the deterministic ordering and path tie-break defined above.
+  - The durable execution summary records the six selected paths in order, each selected path's missing/invalid/date ordering value, excluded skeletons, and focused selection-contract evidence.
   - Every doc stamped with today's `last_validated` was actually verified against the code, with the verification named in the execution summary.
   - Docs or individual claims that could not be verified were left unstamped and unmodified, and are listed in the execution summary.
   - No file under .orbit/adrs/, CHANGELOG.md, docs/changelogs/, docs/design/_archive/, or generated state was modified.
