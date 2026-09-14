@@ -101,6 +101,12 @@ pub struct OrbitRuntime {
     /// automation write merges or refuses.
     #[cfg(test)]
     after_locked_state_read: Arc<Mutex<Option<AfterLockedStateReadHook>>>,
+    /// Test-only seam for approve/start/reject: after the locked `get_task`,
+    /// mutate the named task so compare-and-set can observe a lost race.
+    /// Instance-scoped so concurrent `cargo test` threads cannot collide on
+    /// the deterministic first task ID.
+    #[cfg(test)]
+    transition_read_hook: Arc<Mutex<Option<(String, orbit_types::task::TaskStatus)>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +201,8 @@ impl OrbitRuntime {
             _temp_dir: None,
             #[cfg(test)]
             after_locked_state_read: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            transition_read_hook: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -234,6 +242,8 @@ impl OrbitRuntime {
             _temp_dir: Some(Arc::new(temp_dir)),
             #[cfg(test)]
             after_locked_state_read: Arc::new(Mutex::new(None)),
+            #[cfg(test)]
+            transition_read_hook: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -266,6 +276,29 @@ impl OrbitRuntime {
         if let Some(hook) = hook {
             hook(task);
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_transition_read_hook_status(
+        &self,
+        id: Option<&str>,
+        status: Option<orbit_types::task::TaskStatus>,
+    ) {
+        *self
+            .transition_read_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            id.zip(status).map(|(id, status)| (id.to_string(), status));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn transition_read_hook_status(
+        &self,
+    ) -> Option<(String, orbit_types::task::TaskStatus)> {
+        self.transition_read_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Registry-owning composition supplies stable machine identity; Core never discovers it.
