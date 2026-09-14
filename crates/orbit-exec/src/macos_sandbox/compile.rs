@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_types::policy::ResolvedFsProfile;
@@ -28,6 +29,11 @@ use orbit_types::workflow::Provider;
 ///   well-known scratch areas (`/tmp`, `/private/tmp`,
 ///   `/private/var/folders`, `~/Library/Caches`, and the HOME-derived Orbit
 ///   JSONL log directory) that tools and the filesystem layer expect to write to;
+/// - allows writes inside Cargo's shared download caches
+///   (`$CARGO_HOME/registry`, `$CARGO_HOME/git`, and the two
+///   `.package-cache*` locks) so a build can populate the host registry, for a
+///   profile that already grants some write — see
+///   [`emit_cargo_download_cache_write_allows`];
 /// - emits resolved `read` / `modify` rules in order, including explicit
 ///   `(deny ...)` clauses for negated entries and narrow host-policy or
 ///   runtime re-allows after their enclosing deny, preserving SBPL's
@@ -51,6 +57,7 @@ pub fn compile_macos_sandbox_profile(
     let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
     let xdg_state_home = std::env::var_os("XDG_STATE_HOME");
     let opencode_config_dir = std::env::var_os("OPENCODE_CONFIG_DIR");
+    let cargo_home = std::env::var_os("CARGO_HOME");
     compile_macos_sandbox_profile_with_env(
         rules,
         provider,
@@ -66,6 +73,7 @@ pub fn compile_macos_sandbox_profile(
             xdg_config_home: xdg_config_home.as_deref(),
             xdg_state_home: xdg_state_home.as_deref(),
             opencode_config_dir: opencode_config_dir.as_deref(),
+            cargo_home: cargo_home.as_deref(),
         },
     )
 }
@@ -86,6 +94,7 @@ pub(super) struct SandboxCompileEnv<'a> {
     pub(super) xdg_config_home: Option<&'a OsStr>,
     pub(super) xdg_state_home: Option<&'a OsStr>,
     pub(super) opencode_config_dir: Option<&'a OsStr>,
+    pub(super) cargo_home: Option<&'a OsStr>,
 }
 
 pub(super) fn compile_macos_sandbox_profile_with_env(
@@ -105,6 +114,7 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
         xdg_config_home,
         xdg_state_home,
         opencode_config_dir,
+        cargo_home,
     } = env;
     let mut out = String::new();
     out.push_str("(version 1)\n");
@@ -149,6 +159,11 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
             "(allow file-write* (subpath \"{}/.orbit/state/logs\"))\n",
             super::sbpl_filter::sbpl_escape(&home)
         ));
+    }
+    if profile_grants_write(rules)
+        && let Some(cargo_home) = cargo_home_dir(home, cargo_home)
+    {
+        emit_cargo_download_cache_write_allows(&cargo_home, &mut out);
     }
     // Per-provider state directories. Each `backend: cli` agent CLI writes
     // setup state (sessions, settings, history, etc.) before it reads
@@ -250,7 +265,7 @@ pub(super) fn compile_macos_sandbox_profile_with_env(
     // and the activity's negated `read` rules come last — an operator who
     // writes `denyRead` for a credential path gets that denial even when the
     // provider would otherwise be granted it. [ORB-10931]
-    emit_default_credential_read_denies(home, &mut out);
+    emit_default_credential_read_denies(home, cargo_home, &mut out);
     emit_provider_credential_read_reallow(provider, home, &mut out);
     for rule in &rules.read {
         if let Some(deny_path) = rule.strip_prefix('!') {
@@ -387,7 +402,11 @@ fn emit_provider_credential_read_reallow(provider: &str, home: Option<&OsStr>, o
 /// deny and the provider re-allow so the two clauses cannot drift.
 const USER_KEYCHAINS_SUBPATH: &str = "Library/Keychains";
 
-fn emit_default_credential_read_denies(home: Option<&OsStr>, out: &mut String) {
+fn emit_default_credential_read_denies(
+    home: Option<&OsStr>,
+    cargo_home: Option<&OsStr>,
+    out: &mut String,
+) {
     if let Some(home) = super::provider_dirs::non_empty_env_path(home) {
         let home = home.display().to_string();
         for suffix in [
@@ -404,14 +423,103 @@ fn emit_default_credential_read_denies(home: Option<&OsStr>, out: &mut String) {
         }
     }
 
+    // Cargo's crates.io publish token. It is a file at the `$CARGO_HOME` root
+    // rather than inside a granted subdirectory, so it needs its own clause:
+    // `registry`/`git` are writable (see
+    // [`emit_cargo_download_cache_write_allows`]) while the token beside them
+    // is unreadable. Both spellings are denied — cargo reads the legacy
+    // extensionless `credentials` as well as `credentials.toml`. [ORB-12469]
+    if let Some(cargo_home) = cargo_home_dir(home, cargo_home) {
+        for name in CARGO_CREDENTIAL_FILE_NAMES {
+            emit_read_deny_literal(&format!("{}/{name}", cargo_home.display()), out);
+        }
+    }
+
     for path in ["/Library/Keychains", "/System/Library/Keychains"] {
         emit_read_deny_subpath(path, out);
+    }
+}
+
+/// Whether the resolved profile grants any write at all. A profile whose
+/// `modify` rules are all negated confines the CLI to a read-only filesystem,
+/// and no convenience grant may quietly turn it into a writer.
+fn profile_grants_write(rules: &ResolvedFsProfile) -> bool {
+    rules.modify.iter().any(|rule| !rule.starts_with('!'))
+}
+
+/// Resolve Cargo's home directory the way cargo itself does: `$CARGO_HOME`
+/// when the operator admitted it into the child environment, otherwise the
+/// documented `$HOME/.cargo` default. `None` when neither resolves, in which
+/// case no cargo clause is emitted at all.
+fn cargo_home_dir(home: Option<&OsStr>, cargo_home: Option<&OsStr>) -> Option<PathBuf> {
+    super::provider_dirs::non_empty_env_path(cargo_home)
+        .or_else(|| super::provider_dirs::non_empty_env_path(home).map(|path| path.join(".cargo")))
+}
+
+/// Subdirectories of `$CARGO_HOME` a sandboxed build must be able to write.
+const CARGO_WRITABLE_CACHE_SUBDIRS: &[&str] = &["registry", "git"];
+
+/// `$CARGO_HOME` lock files a sandboxed build must be able to create and take.
+const CARGO_PACKAGE_CACHE_LOCK_FILES: &[&str] = &[".package-cache", ".package-cache-mutate"];
+
+/// Cargo credential file names, both spellings, denied for read.
+const CARGO_CREDENTIAL_FILE_NAMES: &[&str] = &["credentials", "credentials.toml"];
+
+/// Allow writes inside Cargo's shared download caches.
+///
+/// This is the one host-owned tree a sandboxed build must *write* outside its
+/// own worktree. `cargo fetch` stores the downloaded `.crate` under
+/// `$CARGO_HOME/registry/cache`, unpacks it under `registry/src`, refreshes the
+/// index sidecar under `registry/index/<registry>/.cache`, and clones a git
+/// dependency under `$CARGO_HOME/git`. With those denied, a worker whose
+/// lockfile names a single crate the host has not cached yet dies with
+/// `failed to open .../registry/cache/<crate>.crate: Operation not permitted`
+/// — and stays silent until then, because a fully warm cache needs no write at
+/// all. [ORB-12469]
+///
+/// The two `.package-cache*` locks are granted as `literal` clauses: they are
+/// files at the `$CARGO_HOME` root, and cargo treats a lock it cannot open as
+/// a read-only registry and proceeds *unlocked*, so withholding them while the
+/// registry is writable would let concurrent workers mutate one shared
+/// registry with no serialization.
+///
+/// Deliberately not granted: `$CARGO_HOME` itself, `$CARGO_HOME/bin` (the
+/// host's installed binaries, which stay readable and executable but not
+/// replaceable), and the credential files, which
+/// [`emit_default_credential_read_denies`] additionally makes unreadable. The
+/// caller emits these clauses only for a profile that already grants some
+/// write, so a reviewer or other read-only profile keeps an immutable host —
+/// the same rule Linux Bubblewrap follows for the identical paths.
+/// `$CARGO_HOME/.global-cache` — cargo's cache-GC bookkeeping database — also
+/// stays read-only; cargo skips that bookkeeping rather than failing the build.
+fn emit_cargo_download_cache_write_allows(cargo_home: &Path, out: &mut String) {
+    let cargo_home = cargo_home.display().to_string();
+    for subdir in CARGO_WRITABLE_CACHE_SUBDIRS {
+        out.push_str(&format!(
+            "(allow file-write* (subpath \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&format!("{cargo_home}/{subdir}"))
+        ));
+    }
+    for lock in CARGO_PACKAGE_CACHE_LOCK_FILES {
+        out.push_str(&format!(
+            "(allow file-write* (literal \"{}\"))\n",
+            super::sbpl_filter::sbpl_escape(&format!("{cargo_home}/{lock}"))
+        ));
     }
 }
 
 fn emit_read_deny_subpath(path: &str, out: &mut String) {
     out.push_str(&format!(
         "(deny file-read* (subpath \"{}\"))\n",
+        super::sbpl_filter::sbpl_escape(path)
+    ));
+}
+
+/// Deny reads of exactly one path. Used for a credential *file* that sits
+/// beside granted siblings, where `subpath` would be the wrong shape.
+fn emit_read_deny_literal(path: &str, out: &mut String) {
+    out.push_str(&format!(
+        "(deny file-read* (literal \"{}\"))\n",
         super::sbpl_filter::sbpl_escape(path)
     ));
 }

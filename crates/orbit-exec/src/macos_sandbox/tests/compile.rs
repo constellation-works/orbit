@@ -314,6 +314,161 @@ fn compile_grants_write_access_to_global_orbit_log_dir() {
     );
 }
 
+/// [ORB-12469] Cargo's shared download caches are the one host-owned tree a
+/// sandboxed build must write. Pin the exact grant shape: the two cache
+/// subtrees and the package-cache locks are writable, `$CARGO_HOME` itself and
+/// its `bin` directory are not, and the publish token beside them is
+/// unreadable.
+#[test]
+fn compile_grants_write_access_to_cargo_download_caches_only() {
+    let resolved = profile("default", &["/Users/test/repo"], &["/Users/test/repo/src"]);
+    let text = compile_with_env(
+        &resolved,
+        NEUTRAL_PROVIDER,
+        EnvOverrides {
+            home: Some("/Users/test"),
+            ..Default::default()
+        },
+    );
+
+    for writable in ["/Users/test/.cargo/registry", "/Users/test/.cargo/git"] {
+        assert!(
+            text.contains(&format!("(allow file-write* (subpath \"{writable}\"))")),
+            "missing cargo cache write allow for {writable}: {text}"
+        );
+    }
+    for lock in [
+        "/Users/test/.cargo/.package-cache",
+        "/Users/test/.cargo/.package-cache-mutate",
+    ] {
+        assert!(
+            text.contains(&format!("(allow file-write* (literal \"{lock}\"))")),
+            "missing package-cache lock write allow for {lock}: {text}"
+        );
+    }
+
+    // The grant is the two caches and the locks, never the tree that holds
+    // them or the host's installed binaries.
+    for denied in [
+        "/Users/test/.cargo",
+        "/Users/test/.cargo/bin",
+        "/Users/test/.cargo/credentials.toml",
+        "/Users/test/.cargo/credentials",
+    ] {
+        assert!(
+            !text.contains(&format!("(allow file-write* (subpath \"{denied}\"))")),
+            "{denied} must not be writable: {text}"
+        );
+        assert!(
+            !text.contains(&format!("(allow file-write* (literal \"{denied}\"))")),
+            "{denied} must not be writable: {text}"
+        );
+    }
+
+    // `bin` keeps the broad read allow — the profile withholds replacement,
+    // not execution of the toolchain the build runs.
+    assert!(
+        !text.contains("(deny file-read* (subpath \"/Users/test/.cargo/bin\"))"),
+        "cargo bin must stay readable and executable: {text}"
+    );
+
+    // The publish token sits beside the granted caches, so it needs its own
+    // read deny after the broad read allow.
+    let allow_pos = text.find("(allow file-read*)").expect("broad read allow");
+    for name in ["credentials", "credentials.toml"] {
+        let deny = format!("(deny file-read* (literal \"/Users/test/.cargo/{name}\"))");
+        let deny_pos = text
+            .find(&deny)
+            .unwrap_or_else(|| panic!("missing cargo credential read deny for {name}: {text}"));
+        assert!(
+            allow_pos < deny_pos,
+            "cargo credential deny must follow the broad read allow for last-match-wins: {text}"
+        );
+    }
+}
+
+/// The grant follows `$CARGO_HOME` when the operator admitted it, and the
+/// HOME-derived default is then not granted at all.
+#[test]
+fn compile_follows_the_cargo_home_override_for_cache_grants() {
+    let resolved = profile("default", &["/Users/test/repo"], &["/Users/test/repo/src"]);
+    let text = compile_with_env(
+        &resolved,
+        NEUTRAL_PROVIDER,
+        EnvOverrides {
+            home: Some("/Users/test"),
+            cargo_home: Some("/Volumes/build/cargo"),
+            ..Default::default()
+        },
+    );
+
+    for writable in ["/Volumes/build/cargo/registry", "/Volumes/build/cargo/git"] {
+        assert!(
+            text.contains(&format!("(allow file-write* (subpath \"{writable}\"))")),
+            "missing overridden cargo cache write allow for {writable}: {text}"
+        );
+    }
+    assert!(
+        text.contains("(deny file-read* (literal \"/Volumes/build/cargo/credentials.toml\"))"),
+        "credential deny must follow the override: {text}"
+    );
+    assert!(
+        !text.contains("(allow file-write* (subpath \"/Users/test/.cargo/registry\"))"),
+        "the HOME default must not be granted when CARGO_HOME is set: {text}"
+    );
+    assert!(
+        !text.contains("(allow file-write* (subpath \"/Volumes/build/cargo/bin\"))"),
+        "an overridden cargo bin must stay read-only: {text}"
+    );
+}
+
+/// A read-only profile stays read-only. The cargo caches are a build
+/// convenience, so they never turn a profile whose `modify` rules are all
+/// negated into a writer — the same rule the Linux backend applies.
+#[test]
+fn compile_withholds_cargo_cache_writes_from_a_read_only_profile() {
+    let resolved = profile(
+        "reviewer",
+        &["/Users/test/repo"],
+        &["!/Users/test/repo/.orbit/**"],
+    );
+    let text = compile_with_env(
+        &resolved,
+        NEUTRAL_PROVIDER,
+        EnvOverrides {
+            home: Some("/Users/test"),
+            ..Default::default()
+        },
+    );
+
+    assert!(
+        !text.contains("(allow file-write* (subpath \"/Users/test/.cargo/registry\"))"),
+        "a read-only profile must not gain a cargo cache write: {text}"
+    );
+    assert!(
+        !text.contains("(allow file-write* (literal \"/Users/test/.cargo/.package-cache\"))"),
+        "a read-only profile must not gain a cargo lock write: {text}"
+    );
+    // The publish-token deny is not a convenience and does not depend on the
+    // profile's write surface.
+    assert!(
+        text.contains("(deny file-read* (literal \"/Users/test/.cargo/credentials.toml\"))"),
+        "the cargo credential deny is unconditional: {text}"
+    );
+}
+
+/// With neither variable resolved there is no path to grant, so the profile
+/// carries no cargo clause rather than guessing one.
+#[test]
+fn compile_without_home_or_cargo_home_emits_no_cargo_cache_clause() {
+    let resolved = profile("default", &["/Users/test/repo"], &["/Users/test/repo/src"]);
+    let text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
+    assert!(
+        !text.contains(".cargo"),
+        "unresolved cargo home must emit no clause: {text}"
+    );
+}
+
 #[test]
 fn compile_with_env_does_not_mutate_process_home() {
     let home_before = std::env::var_os("HOME");
@@ -1058,5 +1213,122 @@ fn compiled_profile_with_mid_path_glob_rule_is_accepted_by_sandbox_exec() {
         output.status.code(),
         Some(65),
         "sandbox-exec failed to compile the mid-path-glob profile (exit 65); stderr: {stderr}"
+    );
+}
+
+/// [ORB-12469] Kernel-level complement to the profile-text assertions: prove
+/// the compiled clauses actually resolve into a writable download cache, an
+/// unwritable `bin`, and an unreadable publish token. A synthetic
+/// `$CARGO_HOME` stands in for the operator's real one, so nothing here
+/// touches the host registry.
+#[cfg(target_os = "macos")]
+#[test]
+fn compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_token() {
+    use std::process::Command;
+
+    if !sandbox_exec_can_apply() {
+        return;
+    }
+
+    // The broad `/tmp` and `~/Library/Caches` write allows would mask the
+    // grant under test, so the synthetic cargo home has to live outside them.
+    let parent = sandbox_test_parent("cargo-cache");
+    let _cleanup = ScopeGuard(parent.clone());
+    let dir = tempfile::Builder::new()
+        .prefix("compile-cargo-")
+        .tempdir_in(&parent)
+        .expect("tempdir in parent");
+    let cargo_home = dir.path().join("cargo");
+    let workspace = dir.path().join("workspace");
+    // The layout any host that has fetched once already has.
+    for subdir in ["registry", "git", "bin"] {
+        std::fs::create_dir_all(cargo_home.join(subdir)).expect("cargo home subdir");
+    }
+    std::fs::create_dir_all(&workspace).expect("workspace dir");
+    std::fs::write(cargo_home.join(".package-cache"), b"").expect("write package cache lock");
+    let token = cargo_home.join("credentials.toml");
+    std::fs::write(&token, b"token = \"synthetic\"\n").expect("write token");
+
+    let read_root = dir.path().display().to_string();
+    let modify_root = workspace.display().to_string();
+    let resolved = profile("implementer", &[&read_root], &[&modify_root]);
+    let cargo_home_text = cargo_home.display().to_string();
+    let profile_text = compile_with_env(
+        &resolved,
+        NEUTRAL_PROVIDER,
+        EnvOverrides {
+            cargo_home: Some(&cargo_home_text),
+            ..Default::default()
+        },
+    );
+    let mut profile_file = tempfile::Builder::new()
+        .prefix("orbit-sandbox-cargo-")
+        .suffix(".sb")
+        .tempfile()
+        .expect("tempfile");
+    use std::io::Write;
+    profile_file
+        .write_all(profile_text.as_bytes())
+        .expect("write profile");
+    profile_file.flush().expect("flush");
+
+    let run = |script: String| {
+        Command::new(sandbox_exec_path_for_test())
+            .arg("-f")
+            .arg(profile_file.path())
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("run sandbox-exec")
+            .success()
+    };
+
+    // What `cargo fetch` does: land the `.crate`, unpack it, clone a git
+    // dependency, and take the package-cache lock.
+    for writable in [
+        cargo_home.join("registry/cache/index.example/lebe-0.5.3.crate"),
+        cargo_home.join("registry/src/index.example/lebe-0.5.3/lib.rs"),
+        cargo_home.join("git/db/marker"),
+    ] {
+        let created = run(format!(
+            "mkdir -p {} && echo ok > {}",
+            shell_escape(writable.parent().expect("cache parent")),
+            shell_escape(&writable)
+        ));
+        assert!(
+            created && writable.exists(),
+            "a sandboxed build must be able to write {}",
+            writable.display()
+        );
+    }
+    assert!(
+        run(format!(
+            "echo lock > {}",
+            shell_escape(&cargo_home.join(".package-cache"))
+        )),
+        "cargo's package-cache lock must be takeable"
+    );
+
+    // What the grant must not reach: the installed toolchain, the cargo home
+    // itself, and the publish token beside the caches.
+    for blocked in [cargo_home.join("bin/cargo"), cargo_home.join("config.toml")] {
+        assert!(
+            !run(format!("echo bad > {}", shell_escape(&blocked))),
+            "{} must stay read-only",
+            blocked.display()
+        );
+        assert!(
+            !blocked.exists(),
+            "{} must not have been created",
+            blocked.display()
+        );
+    }
+    assert!(
+        !run(format!("cat {}", shell_escape(&token))),
+        "the crates.io publish token must stay unreadable"
     );
 }
