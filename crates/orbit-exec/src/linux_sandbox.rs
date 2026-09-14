@@ -600,6 +600,10 @@ pub fn probe_bwrap() -> BwrapProbeOutcome {
 /// on [`LinuxBwrapPlan::dropped_grants`] rather than dropped, so the caller can
 /// attribute the resulting denial to a path and a rule instead of leaving the
 /// sandboxed process to interpret an EROFS.
+///
+/// A write-capable profile also binds Cargo's shared download caches writable
+/// before any policy mount — see [`append_cargo_download_cache_mounts`] for why
+/// the read-only bind of `/` cannot stand for them.
 pub fn compile_linux_bwrap_argv(
     profile: &ResolvedFsProfile,
     program: &str,
@@ -620,6 +624,12 @@ pub fn compile_linux_bwrap_argv(
         "--tmpfs".to_string(),
         "/tmp".to_string(),
     ]);
+    // Before any policy mount, so a policy deny that covers one of these paths
+    // is still emitted afterwards and still wins. A profile with no positive
+    // modify rule gains no writable bind at all, cargo caches included.
+    if profile_grants_write(profile) {
+        append_cargo_download_cache_mounts(&mut out, cargo_home_dir().as_deref());
+    }
     let writable_roots = positive_mount_roots(profile)?;
 
     for (index, rule) in profile.modify.iter().enumerate() {
@@ -943,6 +953,74 @@ fn append_stable_toolchain_mounts(out: &mut Vec<String>, cwd: &Path) -> Result<(
         }
     }
     Ok(())
+}
+
+/// Subdirectories of `$CARGO_HOME` a sandboxed build must be able to write.
+const CARGO_WRITABLE_CACHE_SUBDIRS: &[&str] = &["registry", "git"];
+
+/// `$CARGO_HOME` lock files that serialize concurrent writers of those caches.
+const CARGO_PACKAGE_CACHE_LOCK_FILES: &[&str] = &[".package-cache", ".package-cache-mutate"];
+
+/// Whether the effective profile grants any write at all. A profile whose
+/// `modify` rules are all negated confines the child to a read-only host, and
+/// no convenience grant may quietly turn it into a writer.
+fn profile_grants_write(profile: &ResolvedFsProfile) -> bool {
+    profile.modify.iter().any(|rule| !rule.starts_with('!'))
+}
+
+/// Resolve Cargo's home directory the way cargo itself does: `$CARGO_HOME`
+/// when set, otherwise the documented `$HOME/.cargo` default.
+fn cargo_home_dir() -> Option<PathBuf> {
+    fn non_empty(name: &str) -> Option<PathBuf> {
+        std::env::var_os(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    }
+    non_empty("CARGO_HOME").or_else(|| non_empty("HOME").map(|home| home.join(".cargo")))
+}
+
+/// Bind Cargo's shared download caches writable inside the namespace.
+///
+/// The backend's read-only bind of `/` makes every host path immutable, which
+/// is right for the host but wrong for the one tree a build legitimately
+/// populates: `cargo fetch` writes the downloaded `.crate` under
+/// `$CARGO_HOME/registry/cache`, unpacks it under `registry/src`, refreshes the
+/// index sidecar under `registry/index/<registry>/.cache`, and clones a git
+/// dependency under `$CARGO_HOME/git`. Without these mounts a worker whose
+/// lockfile names a single crate the host has not cached yet fails its build
+/// with `failed to open .../registry/cache/<crate>.crate: Read-only file
+/// system`, and stays silent until then, because a fully warm cache needs no
+/// write at all. The macOS profile grants the same paths, so the two backends
+/// answer the question the same way. [ORB-12469]
+///
+/// The two `.package-cache*` locks are bound for the same reason macOS grants
+/// them: cargo treats a lock it cannot open as a read-only registry and
+/// proceeds *unlocked*, so leaving them read-only while the registry is
+/// writable would let concurrent workers mutate one shared registry with no
+/// serialization.
+///
+/// Deliberately not bound: `$CARGO_HOME` itself, `$CARGO_HOME/bin`, and the
+/// credential files beside them, all of which stay under the read-only bind.
+/// The caller emits these mounts only for a profile that already grants some
+/// write, so a reviewer or other read-only profile keeps a fully immutable
+/// host — the same rule the global host cache root follows. [ORB-11259]
+/// Bubblewrap cannot bind a source that does not exist, so an absent path is
+/// skipped rather than created on the host; cargo then sees the same read-only
+/// cache it saw before, which is the pre-existing behavior and not a new
+/// failure mode.
+fn append_cargo_download_cache_mounts(out: &mut Vec<String>, cargo_home: Option<&Path>) {
+    let Some(cargo_home) = cargo_home else {
+        return;
+    };
+    for relative in CARGO_WRITABLE_CACHE_SUBDIRS
+        .iter()
+        .chain(CARGO_PACKAGE_CACHE_LOCK_FILES)
+    {
+        let path = cargo_home.join(relative);
+        if path.exists() {
+            push_mount(out, "--bind", &path);
+        }
+    }
 }
 
 fn push_mount(args: &mut Vec<String>, option: &str, path: &Path) {

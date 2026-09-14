@@ -27,6 +27,7 @@ pub(super) struct EnvOverrides<'a> {
     pub(super) xdg_config_home: Option<&'a str>,
     pub(super) xdg_state_home: Option<&'a str>,
     pub(super) opencode_config_dir: Option<&'a str>,
+    pub(super) cargo_home: Option<&'a str>,
 }
 
 /// Provider used by profile tests that are not about the per-provider
@@ -54,6 +55,7 @@ pub(super) fn compile_with_env(
             xdg_config_home: env.xdg_config_home.map(OsStr::new),
             xdg_state_home: env.xdg_state_home.map(OsStr::new),
             opencode_config_dir: env.opencode_config_dir.map(OsStr::new),
+            cargo_home: env.cargo_home.map(OsStr::new),
         },
     )
     .expect("compile")

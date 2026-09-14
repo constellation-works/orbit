@@ -965,6 +965,69 @@ The dropdown label `default: codex` in the dashboard means *the task has no `cre
 
 ---
 
+## Sandbox write grants for the shared Cargo caches
+
+Both OS sandboxes — the macOS `sandbox-exec` profile and the Linux Bubblewrap
+namespace — confine an agent subprocess to its own worktree plus a named set of
+host paths. Cargo's download caches are on that set, so workers share one
+registry instead of re-downloading a dependency graph per run:
+
+| Path | Inside a worker |
+|---|---|
+| `$CARGO_HOME/registry` | read-write |
+| `$CARGO_HOME/git` | read-write |
+| `$CARGO_HOME/.package-cache`, `$CARGO_HOME/.package-cache-mutate` | read-write — cargo's own download locks |
+| `$CARGO_HOME/bin` | readable and executable, never writable |
+| `$CARGO_HOME/credentials.toml`, `$CARGO_HOME/credentials` | read-denied |
+| `$CARGO_HOME` itself, `$CARGO_HOME/.global-cache` | read-only |
+
+`$CARGO_HOME` resolves the way cargo resolves it: the variable when the child
+environment carries it (add it to `[execution.env].pass` to relocate the cache
+for workers), otherwise cargo's documented `$HOME/.cargo`.
+
+The grant reaches a worker whose `fsProfile` already grants some write
+(`implementer`, `unrestricted`, `docs_writer`, …). A profile whose `modify`
+rules are all negated — `reviewer`, `pure_compute` — keeps a fully immutable
+host and gets no cache grant, the same rule the global `~/.orbit/cache` root
+follows.
+
+**Why the caches are writable.** `cargo fetch` stores a downloaded `.crate`
+under `registry/cache`, unpacks it under `registry/src`, refreshes the index
+sidecar under `registry/index/<registry>/.cache`, and clones a git dependency
+under `git/`. With those paths read-only, a worker whose lockfile names a single
+crate the host has not cached yet fails its build with `failed to open
+.../registry/cache/<crate>.crate: Operation not permitted` (macOS) or
+`Read-only file system` (Linux) and exits 101. Nothing warns first: a fully warm
+cache needs no write at all, so the identical run succeeds on a host that
+happens to hold the crate, and fails the moment a lockfile moves. [ORB-12469]
+
+**Linux Landlock is a read boundary, not a write one.** The activity-scoped
+`proc.spawn` confinement handles `EXECUTE | READ_FILE | READ_DIR | REFER` and no
+write access right, so a scoped spawn could always populate the registry; what
+Landlock contributes is the *read* grant for `$CARGO_HOME` with the publish
+token carved back out. Write confinement on Linux is the Bubblewrap namespace,
+which binds the four cache paths above writable over its read-only bind of `/`.
+Both platforms therefore grant the same paths, for the same reason. On Linux a
+cache path that does not exist on the host is skipped rather than created —
+Bubblewrap cannot bind a missing source — which leaves cargo with the read-only
+cache it had before rather than a failed spawn.
+
+**What the grant is not.** `$CARGO_HOME/bin` stays read-only, so a worker cannot
+replace `cargo`, `rustc`, or any installed binary for the next run. The
+crates.io publish token is read-denied under both spellings; on macOS the deny
+is emitted after the profile's broad read allow, so it wins under SBPL's
+last-match-wins evaluation. `$CARGO_HOME/.global-cache`, cargo's cache-GC
+bookkeeping database, stays read-only; cargo skips that bookkeeping rather than
+failing the build.
+
+**Why the locks are granted.** Cargo treats a package-cache lock it cannot open
+as a read-only registry and continues *unlocked*. With the registry writable and
+the lock denied, concurrent workers would mutate one registry with no
+serialization; granting the two lock files keeps cargo's own single-writer
+protocol intact.
+
+---
+
 ## `[execution.env]` — the agent subprocess environment
 
 Every agent subprocess — bare execution, the Linux Bubblewrap sandbox, and the
