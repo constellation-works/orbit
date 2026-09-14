@@ -1030,20 +1030,25 @@ protocol intact.
 
 ## Sandbox pseudo-tty allocation (macOS)
 
-The compiled macOS `sandbox-exec` profile includes `(allow pseudo-tty)`.
-Without it, `openpty`/`posix_openpt` fail with `EPERM` inside a worker even
-though `/dev/ptmx` and `/dev/ttys*` are otherwise reachable — pseudo-tty
-allocation is gated by its own SBPL operation, separate from the file
-permissions on those device nodes. A repository whose test suite opens a PTY
-(for example, a CLI smoke test that drives the binary through a real
-terminal) needs this grant to pass its full validation inside a worker.
-[ORB-12470]
+The compiled macOS `sandbox-exec` profile includes `(allow pseudo-tty)` plus
+the device operations that Darwin requires to create and use a PTY:
+
+- `/dev/ptmx` is allowed for `file-read*`, `file-write*`, and `file-ioctl`.
+- Newly-created `/dev/ttys[0-9]+` slave devices are allowed for read/write
+  only when they carry Seatbelt's `com.apple.sandbox.pty` extension.
+- `file-ioctl` is allowed on `/dev/ttys[0-9]+` so PTYs that existed before the
+  process entered the sandbox remain usable.
+
+Without these clauses, `openpty`/`posix_openpt` can fail with `EPERM` inside a
+worker even though the broad profile rules reach the device paths. A repository
+whose test suite opens a PTY (for example, a CLI smoke test that drives the
+binary through a real terminal) needs this complete grant to pass its full
+validation inside a worker.
 
 **Why this is safe.** A PTY is a local IPC primitive: allocating one hands
-the calling process a pair of file descriptors it already has permission to
-open (`/dev/ptmx` read/write, covered by the broad `file-read*` allow and the
-`/dev` `file-write*` subpath grant) and does not reach the filesystem or
-network beyond what the profile already grants. The Linux Bubblewrap sandbox
+the calling process a pair of file descriptors for the PTY devices, and the
+slave-device rule is limited to kernel-created PTY nodes. The grant does not
+reach unrelated filesystem or network operations. The Linux Bubblewrap sandbox
 needs no equivalent clause — its namespace does not gate `/dev/pts` behind a
 syscall-level policy the way SBPL does.
 
