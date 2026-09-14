@@ -4,6 +4,7 @@
 use std::fs;
 
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
+use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{AutoTaskSchedule, DedupePolicy};
 use tempfile::tempdir;
 
@@ -82,6 +83,7 @@ fn update_patches_present_fields() {
         .expect("add");
 
     let mut replacement = template("Renamed chore");
+    replacement.complexity = Some(TaskComplexity::Low);
     replacement.required_tools = vec![
         "github.run.list".to_string(),
         "github.auth.status".to_string(),
@@ -104,6 +106,7 @@ fn update_patches_present_fields() {
     assert_eq!(updated.description, "new body");
     assert_eq!(updated.dedupe, DedupePolicy::Always);
     assert_eq!(updated.template.title, "Renamed chore");
+    assert_eq!(updated.template.complexity, Some(TaskComplexity::Low));
     assert_eq!(
         updated.template.required_tools,
         vec!["github.auth.status", "github.run.list"]

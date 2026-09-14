@@ -4,7 +4,7 @@
 //! scheduler fire.
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use orbit_types::workflow::{DedupePolicy, auto_task_tag};
 use serde_json::Value;
 
@@ -57,6 +57,7 @@ fn content(task: &Task) -> Value {
 fn mint_matches_a_scheduler_fire_field_for_field() {
     let runtime = runtime();
     let mut params = interval_params("chore", 60);
+    params.template.complexity = Some(TaskComplexity::Hard);
     params.template.required_tools = vec![
         "github.run.list".to_string(),
         "github.auth.status".to_string(),
@@ -97,13 +98,26 @@ fn mint_matches_a_scheduler_fire_field_for_field() {
     );
     assert_eq!(
         minted.complexity,
-        Some(orbit_types::task::TaskComplexity::Unassessed),
-        "automated mint writes the explicit non-answer, never a fabricated assessment"
+        Some(TaskComplexity::Hard),
+        "automated mint inherits the template's explicit assessment"
     );
     assert_eq!(
         minted.required_tools,
         vec!["github.auth.status", "github.run.list"]
     );
+}
+
+#[test]
+fn mint_preserves_legacy_missing_complexity_as_unassessed() {
+    let runtime = runtime();
+    let params = interval_params("legacy-chore", 60);
+    assert_eq!(params.template.complexity, None);
+    runtime
+        .auto_task_add(params)
+        .expect("add legacy definition");
+
+    let minted = runtime.auto_task_mint("legacy-chore").expect("mint");
+    assert_eq!(minted.complexity, Some(TaskComplexity::Unassessed));
 }
 
 #[test]

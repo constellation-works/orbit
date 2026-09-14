@@ -64,6 +64,77 @@ fn auto_task_update_accepts_required_tools() {
 }
 
 #[test]
+fn auto_task_add_and_update_accept_assessed_complexity() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let add = Cli::try_parse_from([
+        "orbit",
+        "auto-task",
+        "add",
+        "--name",
+        "complex-chore",
+        "--every-minutes",
+        "5",
+        "--title",
+        "Complex chore",
+        "--complexity",
+        "hard",
+    ])
+    .expect("parse auto-task add complexity");
+    let Commands::AutoTask(auto_task) = add.command else {
+        panic!("expected auto-task command");
+    };
+    let AutoTaskSubcommand::Add(args) = auto_task.command else {
+        panic!("expected auto-task add command");
+    };
+    assert_eq!(
+        args.complexity,
+        Some(orbit_types::task::TaskComplexity::Hard)
+    );
+    let CommandOutput::Payload(payload) = args.execute(&runtime).expect("add definition") else {
+        panic!("auto-task add should return a payload");
+    };
+    let (document, _) = payload.into_view();
+    assert_eq!(document["template"]["complexity"], "hard");
+    assert_eq!(
+        runtime
+            .auto_task_mint("complex-chore")
+            .expect("mint hard task")
+            .complexity,
+        Some(orbit_types::task::TaskComplexity::Hard)
+    );
+
+    let update = Cli::try_parse_from([
+        "orbit",
+        "auto-task",
+        "update",
+        "complex-chore",
+        "--complexity",
+        "low",
+    ])
+    .expect("parse auto-task update complexity");
+    let Commands::AutoTask(auto_task) = update.command else {
+        panic!("expected auto-task command");
+    };
+    let AutoTaskSubcommand::Update(args) = auto_task.command else {
+        panic!("expected auto-task update command");
+    };
+    assert_eq!(
+        args.complexity,
+        Some(orbit_types::task::TaskComplexity::Low)
+    );
+    args.execute(&runtime).expect("update definition");
+    assert_eq!(
+        runtime
+            .auto_task_show("complex-chore")
+            .expect("show definition")
+            .expect("definition exists")
+            .template
+            .complexity,
+        Some(orbit_types::task::TaskComplexity::Low)
+    );
+}
+
+#[test]
 fn auto_task_add_execution_rejects_unknown_required_tools() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let cli = Cli::try_parse_from([
@@ -257,6 +328,7 @@ fn delivery_schedule_summary_uses_coverage_wire_names() {
                     tags: vec![],
                     required_tools: vec![],
                     priority: TaskPriority::Medium,
+                    complexity: None,
                     crew: None,
                     status: TaskStatus::Backlog,
                 },
@@ -351,6 +423,7 @@ fn auto_task_recover_defaults_to_a_preview_and_needs_a_delivery_definition() {
                 tags: vec![],
                 required_tools: vec![],
                 priority: TaskPriority::Medium,
+                complexity: None,
                 crew: None,
                 status: TaskStatus::Backlog,
             },
@@ -450,6 +523,7 @@ fn auto_task_reset_needs_a_delivery_definition_that_exists() {
                 tags: vec![],
                 required_tools: vec![],
                 priority: TaskPriority::Medium,
+                complexity: None,
                 crew: None,
                 status: TaskStatus::Backlog,
             },

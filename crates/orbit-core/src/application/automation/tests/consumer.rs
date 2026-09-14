@@ -282,6 +282,7 @@ pub(super) fn definition(
                 tags: vec![],
                 required_tools: vec![],
                 priority: TaskPriority::Medium,
+                complexity: None,
                 crew: None,
                 status: TaskStatus::Backlog,
             },

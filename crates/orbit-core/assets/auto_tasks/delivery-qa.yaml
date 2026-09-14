@@ -30,6 +30,7 @@ template:
   - delivery-qa
   - no-diff-expected
   priority: medium
+  complexity: hard
   crew: system
   status: backlog
 dedupe: skip_if_open

@@ -1,4 +1,4 @@
-use crate::task::{TaskPriority, TaskStatus, TaskType};
+use crate::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use crate::workflow::{AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 
 fn definition_with_interval(every_minutes: u64) -> AutoTaskDefinition {
@@ -16,6 +16,7 @@ fn definition_with_interval(every_minutes: u64) -> AutoTaskDefinition {
             tags: Vec::new(),
             required_tools: Vec::new(),
             priority: TaskPriority::Medium,
+            complexity: None,
             crew: None,
             status: TaskStatus::Backlog,
         },
@@ -25,6 +26,41 @@ fn definition_with_interval(every_minutes: u64) -> AutoTaskDefinition {
         updated_by: None,
         updated_at: String::new(),
     }
+}
+
+#[test]
+fn template_complexity_roundtrips_explicit_values_and_preserves_legacy_omission() {
+    let mut definition = definition_with_interval(60);
+    definition.template.complexity = Some(TaskComplexity::Hard);
+
+    let yaml = serde_yaml::to_string(&definition).expect("serialize definition");
+    assert!(yaml.contains("  complexity: hard\n"), "{yaml}");
+    let explicit: AutoTaskDefinition = serde_yaml::from_str(&yaml).expect("load explicit value");
+    assert_eq!(explicit.template.complexity, Some(TaskComplexity::Hard));
+
+    let legacy = yaml.replace("  complexity: hard\n", "");
+    let omitted: AutoTaskDefinition = serde_yaml::from_str(&legacy).expect("load legacy omission");
+    assert_eq!(omitted.template.complexity, None);
+    assert!(
+        !serde_yaml::to_string(&omitted)
+            .expect("serialize legacy definition")
+            .contains("complexity:"),
+        "legacy omission must remain distinguishable from an explicit assessment"
+    );
+}
+
+#[test]
+fn definition_validation_rejects_explicit_unassessed_complexity() {
+    let mut definition = definition_with_interval(60);
+    definition.template.complexity = Some(TaskComplexity::Unassessed);
+
+    let error = definition
+        .validate()
+        .expect_err("template complexity must be assessed");
+    assert!(
+        error.to_string().contains("low, medium, or hard"),
+        "{error}"
+    );
 }
 
 #[test]

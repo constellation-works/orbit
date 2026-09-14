@@ -1018,9 +1018,16 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let global_root = temp.path().join("global");
         let orbit_root = temp.path().join("repo/.orbit");
+        init_workspace_at_root(
+            &global_root,
+            InitOptions {
+                global_only: true,
+                ..Default::default()
+            },
+        )
+        .expect("initialize scratch global root");
         let options = InitOptions {
-            global_root_override: Some(global_root),
-            config_seed: Some(ConfigSeed::default()),
+            global_root_override: Some(global_root.clone()),
             ..Default::default()
         };
 
@@ -1128,6 +1135,26 @@ mod tests {
                 .iter()
                 .any(|loaded| loaded.definition.name == "code-review")
         );
+
+        let runtime = OrbitRuntime::from_roots(&global_root, &orbit_root)
+            .expect("open freshly initialized workspace");
+        for loaded in &loaded.definitions {
+            let expected = loaded
+                .definition
+                .template
+                .complexity
+                .expect("shipped definition carries assessed complexity");
+            assert!(expected.is_assessed(), "{}", loaded.definition.name);
+            let minted = runtime
+                .auto_task_mint(&loaded.definition.name)
+                .unwrap_or_else(|error| panic!("mint {}: {error}", loaded.definition.name));
+            assert_eq!(
+                minted.complexity,
+                Some(expected),
+                "scratch-workspace mint must inherit {} complexity",
+                loaded.definition.name
+            );
+        }
 
         let authored_friction = "operator-authored friction definition\n";
         let authored_qa = "operator-authored QA definition\n";

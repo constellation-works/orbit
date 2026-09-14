@@ -1,7 +1,7 @@
 use clap::{ArgAction, Args};
 use orbit_core::{
-    AutoTaskTemplate, AutoTaskUpdateParams, DedupePolicy, OrbitError, OrbitRuntime, TaskPriority,
-    TaskStatus, TaskType,
+    AutoTaskTemplate, AutoTaskUpdateParams, DedupePolicy, OrbitError, OrbitRuntime, TaskComplexity,
+    TaskPriority, TaskStatus, TaskType,
 };
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -52,6 +52,9 @@ pub struct AutoTaskUpdateArgs {
     /// New priority
     #[arg(long, value_enum)]
     pub priority: Option<TaskPriority>,
+    /// New assessed complexity for minted tasks
+    #[arg(long, value_enum)]
+    pub complexity: Option<TaskComplexity>,
     /// New crew override
     #[arg(long)]
     pub crew: Option<String>,
@@ -78,6 +81,7 @@ impl AutoTaskUpdateArgs {
             || !self.tags.is_empty()
             || self.required_tools.is_some()
             || self.priority.is_some()
+            || self.complexity.is_some()
             || self.crew.is_some()
             || self.status.is_some()
     }
@@ -120,6 +124,7 @@ impl Execute for AutoTaskUpdateArgs {
                     .map(crate::parse::csv_to_vec)
                     .unwrap_or(current.required_tools),
                 priority: self.priority.unwrap_or(current.priority),
+                complexity: self.complexity.or(current.complexity),
                 crew: self.crew.clone().or(current.crew),
                 status: self.status.unwrap_or(current.status),
             })

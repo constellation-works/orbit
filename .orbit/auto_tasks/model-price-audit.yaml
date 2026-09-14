@@ -91,6 +91,7 @@ template:
   - pricing
   - no-diff-expected
   priority: medium
+  complexity: medium
   crew: terra
   status: backlog
 dedupe: skip_if_open

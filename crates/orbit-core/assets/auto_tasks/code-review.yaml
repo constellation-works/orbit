@@ -92,6 +92,7 @@ template:
   - code-review
   - no-diff-expected
   priority: medium
+  complexity: medium
   # The portable system lane is seeded per machine and compatibility-aliased
   # for configs written before that crew existed.
   crew: system

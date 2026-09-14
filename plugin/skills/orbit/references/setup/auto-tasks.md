@@ -28,7 +28,8 @@ orbit auto-task add \
   --type chore \
   --tag dependency-audit \
   --required-tool github.run.list \
-  --priority medium
+  --priority medium \
+  --complexity medium
 ```
 
 Definitions land in `.orbit/auto_tasks/<name>.yaml` — a versioned file, so
@@ -43,29 +44,27 @@ review it in a PR like any other definition.
 | `--type` | `feature`, `bug`, `refactor`, `chore`. Defaults to `chore`. |
 | `--tag` | Repeatable, and worth setting: it is how the minted tasks are found later. A provenance tag is added automatically. |
 | `--required-tool` | Repeatable exact canonical tool name. Scheduled fires and manual `mint` copy the normalized list onto each task. |
+| `--complexity` | Optional assessed complexity: `low`, `medium`, or `hard`. It is copied to every minted task. |
 | `--status` | Status the minted task enters. Defaults to `backlog`; use `proposed` when a human should approve each instance before it becomes shippable work. |
 | `--crew` | Crew override for minted tasks. |
 | `--dedupe` | `skip-if-open` (default) or `always`. `skip_if_open` is also accepted. The definition file, the JSON document, and `show` all print the canonical `skip_if_open` / `always` token. |
 
-## Minted tasks carry `complexity: "unassessed"`
+## Minted tasks inherit template complexity
 
-A definition's template does not carry `complexity` — minting is the one create
-path allowed to leave the assessment unset, and it always does, storing the
-explicit non-answer `unassessed` rather than defaulting to `medium` or leaving
-the field blank. `unassessed` is a full `TaskComplexity` value: it round-trips
-through `task.show`, `task.list`, and every persisted store, and it is exactly
-the value `task.add`/`task.update` reject on the `complexity` field — those two
-surfaces only accept `low`/`medium`/`hard`, so a human or agent can assess a
-minted task but can never re-clear that assessment. This does not block
-ordinary updates: `complexity` is patched only when a `task.update` call
-supplies it, so filing a comment, changing status, or any other no-op on
-`complexity` succeeds on a minted task exactly as it would on any other.
+Set `template.complexity` (or `--complexity`) to `low`, `medium`, or `hard` to
+give every minted task an explicit assessment. The value round-trips through
+the definition YAML, list/show surfaces, and both scheduled and manual minting.
+It also allows automatic crew selection to use the matching
+`workflow.*_complexity_crews` pool when no template crew overrides it.
 
-Auto crew-pool selection (`workflow.*_complexity_crews`) has no pool for
-`unassessed`: the configured pools only cover `low` / `medium` / `hard`, so a
-minted task always falls through to the default crew, never a complexity-keyed
-pool. Assess the task through `task.update --complexity` first if it should
-draw from a pool.
+Legacy and custom definitions may omit `complexity`. They remain valid and mint
+the explicit non-answer `unassessed`, preserving the historical behavior rather
+than silently treating omission as `medium`. `unassessed` round-trips through
+task persistence, but human and agent `task.add`/`task.update` surfaces still
+accept only `low`/`medium`/`hard`; they can assess such a minted task but cannot
+re-clear the assessment. Ordinary updates that omit complexity continue to
+succeed. An omitted template falls through to the default crew because there is
+no `unassessed` complexity pool.
 
 ## Dedupe is the important field
 
@@ -104,11 +103,11 @@ structured `github.auth.status` answer may still report `available: false` or
 `authenticated: false` when the lane has no GitHub CLI or no credentials.
 That is unavailable evidence, not a clean CI result.
 
-## The four seeded definitions
+## The six seeded definitions
 
-`orbit workspace init` seeds all four, disabled:
+`orbit workspace init` seeds all six, disabled:
 
-- **`qa-sweep`** — hourly. Identifies recent changes, exercises them hands-on
+- **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
   through their real user-facing paths rather than just re-running the test
   suite, and files a task for each non-duplicate issue found. In agent-executor
   sandboxes and linked job-run worktrees, the managed `.git` mount is read-only
@@ -116,18 +115,22 @@ That is unavailable evidence, not a clean CI result.
   Use `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base` to build a
   baseline revision without writing `.git`, and `git show HEAD:<path> > <path>`
   to revert a tracked file when `git checkout --` cannot take `index.lock`.
-- **`friction-curation`** — daily. Deduplicates the open friction corpus against
+- **`friction-curation`** (`medium`) — daily. Deduplicates the open friction corpus against
   task history, verifies each survivor still reproduces, resolves the ones that
   don't, and files fix tasks for the ones that do. → [friction.md](../friction.md)
-- **`security-review`** — weekly. Reviews applicable application code,
+- **`security-review`** (`hard`) — weekly. Reviews applicable application code,
   dependencies, secret handling, and configuration with evidence; files a
   durable Orbit task for each non-duplicate finding with severity and impact; a
   clean review is a successful no-op.
-- **`code-review`** — every six hours. Reviews the commits merged into the
+- **`code-review`** (`medium`) — every six hours. Reviews the commits merged into the
   integration branch since the previous sweep's recorded cursor, verifies each
   candidate finding against the live code, files the non-duplicate ones as tasks
   tagged `code-review`, and records the new last-reviewed commit in its execution
   summary — that cursor is the next sweep's window start.
+- **`delivery-qa`** (`hard`) — exercises each frozen delivery batch and records
+  typed coverage evidence.
+- **`delivery-code-review`** (`hard`) — reviews each frozen delivery batch and
+  records typed coverage evidence.
 
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.

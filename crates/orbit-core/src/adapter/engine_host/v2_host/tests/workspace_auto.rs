@@ -70,6 +70,7 @@ fn minted_no_diff_auto_task_is_admitted_unassessed_and_still_assessable() {
                 tags: vec!["no-diff-expected".to_string()],
                 required_tools: vec![],
                 priority: TaskPriority::Medium,
+                complexity: None,
                 crew: Some("opus".to_string()),
                 status: TaskStatus::Backlog,
             },

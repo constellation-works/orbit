@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_updated: 2026-09-14
+last_validated: 2026-09-14
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -32,11 +32,13 @@ and unimplemented; existing scheduling and action semantics remain current.
 `schedule`, `template`, `dedupe`, and provenance (`created_by/at`,
 `updated_by/at`). `schedule` is an untagged enum — `{ cron: "…" }` or
 `{ every_minutes: N }`. `template` carries `title`, `description`,
-`acceptance_criteria`, `task_type`, `tags`, `priority`, `crew`, and `status`
-(default `backlog`). Minted tasks always receive
-`complexity: unassessed` — an explicit non-answer, not a fabricated
-`low`/`medium`/`hard` assessment. Definitions do not carry complexity;
-the shared template-to-task mapping stamps the value. Per [Run budgets are provider-neutral: wall-clock timeouts, never turn caps](./4_decisions.md#run-budgets-are-provider-neutral-wall-clock-timeouts-never-turn-caps) there are **no turn-based knobs**; `deny_unknown_fields`
+`acceptance_criteria`, `task_type`, `tags`, `priority`, optional `complexity`,
+`crew`, and `status` (default `backlog`). An explicit complexity must be an
+assessed `low`, `medium`, or `hard` value and is copied to every minted task.
+The bundled defaults all carry reviewed explicit assessments. Legacy and custom
+definitions that omit `complexity` remain valid and mint
+`complexity: unassessed`, preserving the historical automated-creation behavior
+without pretending it is an assessment. Per [Run budgets are provider-neutral: wall-clock timeouts, never turn caps](./4_decisions.md#run-budgets-are-provider-neutral-wall-clock-timeouts-never-turn-caps) there are **no turn-based knobs**; `deny_unknown_fields`
 makes a stray `max_turns`/`turns` a hard parse error.
 
 Definitions live as `.orbit/auto_tasks/<name>.yaml` in the active checkout.
@@ -112,7 +114,8 @@ records a baseline and fires nothing; otherwise it evaluates due-math. On
 still open, it skips **without claiming or advancing the cursor** — so the
 pending occurrence fires (once, collapsed) the moment the queue drains.
 Otherwise it claims the slot, mints a `system_created` task from the template
-(tagged for provenance, complexity `unassessed`), and checkpoints
+(tagged for provenance and carrying its assessed complexity, or `unassessed`
+for a legacy omission), and checkpoints
 `last_slot` / `last_task_id`. Every minted title is `[auto-task] ` followed
 by the template title; the prefix is applied at the shared template-to-task
 mapping, so definition YAML titles stay clean and an already-prefixed
@@ -157,6 +160,13 @@ that silently stopped firing is discoverable as a `faulty` row on the
 `orbit doctor` artifacts surface rather than only via the one command that
 happens to touch it.
 
+The CLI's `auto-task add` and `auto-task update` accept `--complexity
+<low|medium|hard>`. Registry-tool callers supply the same optional field inside
+the template object. Add, update, YAML persistence, list/show, and mint all use
+the shared typed template, so an explicit value round-trips without a separate
+projection or default. Omitting the field remains supported for compatible
+custom and legacy definitions.
+
 ### 5a. Managed seeding
 
 Default definitions are seeded manifest-aware after [ORB-10800] / [All five definition-artifact kinds carry managed provenance, and doctor reports it](../activity-job/4_decisions.md#all-five-definition-artifact-kinds-carry-managed-provenance-and-doctor-reports-it):
@@ -177,6 +187,8 @@ exactly one template→task mapping and a manually minted task is field-for-fiel
 identical to a fired one: same field mapping, same `[auto-task] ` title
 convention, same `auto-task:<name>` tag, same `system_created` marker, same
 template-supplied status.
+It also carries the template's explicit complexity; a template that omits the
+field receives the compatibility fallback `unassessed` at this one mapping.
 
 Title provenance is enforced by `OrbitRuntime::add_task_with_identity`, the
 shared creation boundary used by CLI, MCP, dashboard, scheduler, and internal
@@ -225,9 +237,9 @@ cursor-neutral on every surface.
 
 The dashboard Operations tab exposes the same CRUD/mint runtime rather than a
 second scheduler. `#operations/auto-tasks` lists the selected workspace's
-definitions (name, enabled, schedule, template summary, dedupe, last
-scheduler evaluation, last minted task id, and a structured next-evaluation
-state). Next evaluation is the schedule's next occurrence (§2b) computed by
+definitions (name, enabled, schedule, template summary including complexity,
+dedupe, last scheduler evaluation, last minted task id, and a structured
+next-evaluation state). Next evaluation is the schedule's next occurrence (§2b) computed by
 the scheduler's own arithmetic, never catch-up eligibility: a definition owed
 a make-up fire still shows the upcoming slot, not the owed one. It is also
 never an unqualified future timestamp: disabled rows show `Disabled` (a
