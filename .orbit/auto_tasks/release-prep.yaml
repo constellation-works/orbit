@@ -102,6 +102,7 @@ template:
   - release-prep
   - no-diff-expected
   priority: high
+  complexity: low
   crew: luna
   status: backlog
 dedupe: skip_if_open

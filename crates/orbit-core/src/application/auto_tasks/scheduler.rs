@@ -113,9 +113,12 @@ pub(crate) fn template_params(definition: &AutoTaskDefinition) -> TaskAddParams 
         tags,
         required_tools: template.required_tools.clone(),
         priority: template.priority,
-        // Automated mint has no operator to assess; persist the explicit
-        // non-answer so aggregates can separate it from low/medium/hard.
-        complexity: orbit_types::task::TaskComplexity::Unassessed,
+        // Legacy/custom definitions may omit an assessment. Preserve their
+        // historical automated-creation behavior while allowing assessed
+        // templates to route directly through complexity-aware workflows.
+        complexity: template
+            .complexity
+            .unwrap_or(orbit_types::task::TaskComplexity::Unassessed),
         task_type: Some(template.task_type),
         status: Some(template.status),
         crew: template.crew.clone(),

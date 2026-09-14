@@ -8,7 +8,7 @@ use orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV;
 use orbit_core::application::auto_tasks::cursor_state_path;
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::{AutoTaskAddParams, OrbitRuntime};
-use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::automation::{CoverageClass, DeliveryTrigger};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use tower::ServiceExt;
@@ -34,6 +34,7 @@ fn chore_params(name: &str) -> AutoTaskAddParams {
             tags: vec![],
             required_tools: Vec::new(),
             priority: TaskPriority::Medium,
+            complexity: Some(TaskComplexity::Medium),
             crew: None,
             status: TaskStatus::Backlog,
         },
@@ -64,6 +65,7 @@ fn delivery_params(name: &str, coverage: CoverageClass) -> AutoTaskAddParams {
             tags: vec![],
             required_tools: Vec::new(),
             priority: TaskPriority::Medium,
+            complexity: Some(TaskComplexity::Hard),
             crew: None,
             status: TaskStatus::Backlog,
         },
@@ -208,6 +210,7 @@ async fn list_reports_enabled_and_disabled_definitions() {
     assert_eq!(nightly["enabled"], false);
     assert_eq!(hourly["enabled"], true);
     assert_eq!(hourly["dedupe"], "skip_if_open");
+    assert_eq!(hourly["template"]["complexity"], "medium");
     assert_eq!(
         hourly["template"]["required_tools"],
         serde_json::json!(["github.auth.status", "github.run.list"])
@@ -217,6 +220,13 @@ async fn list_reports_enabled_and_disabled_definitions() {
             .as_str()
             .expect("summary")
             .contains("[auto-task] Chore hourly"),
+        "{hourly}"
+    );
+    assert!(
+        hourly["template_summary"]
+            .as_str()
+            .expect("summary")
+            .contains("complexity medium"),
         "{hourly}"
     );
     assert_eq!(hourly["last_evaluation"]["kind"], "fired");
@@ -762,6 +772,7 @@ async fn mint_returns_the_created_task_id() {
         .expect("list");
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].id.to_string(), task_id);
+    assert_eq!(tasks[0].complexity, Some(TaskComplexity::Medium));
 }
 
 #[tokio::test]

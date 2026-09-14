@@ -18,6 +18,7 @@ pub(super) fn template(title: &str) -> AutoTaskTemplate {
         tags: vec![],
         required_tools: Vec::new(),
         priority: TaskPriority::Medium,
+        complexity: None,
         crew: None,
         status: orbit_types::task::TaskStatus::Backlog,
     }

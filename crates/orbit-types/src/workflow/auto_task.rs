@@ -9,13 +9,13 @@
 //!
 //! Parsing is fail-closed (like [`super::routine`]): an invalid file is an
 //! error, never a definition that fires with defaults. Per ADR-0217 the schema
-//! is provider-neutral: the template carries crew / priority / type only —
-//! there are no turn-based budget knobs anywhere in the definition.
+//! is provider-neutral: the template carries task routing and assessment
+//! fields, but no turn-based budget knobs.
 
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::error::WorkflowError;
-use crate::task::{TaskPriority, TaskStatus, TaskType};
+use crate::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 
 /// Auto-task YAML schema version this binary reads and writes.
 pub const AUTO_TASK_SCHEMA_VERSION: u32 = 1;
@@ -131,8 +131,9 @@ impl<'de> Deserialize<'de> for AutoTaskSchedule {
     }
 }
 
-/// The task template instantiated on each fire. Provider-neutral (ADR-0217):
-/// crew / priority / type only — no turn-based knobs.
+/// The task template instantiated on each fire. Provider-neutral: task fields
+/// such as crew, priority, type, and complexity are supported; turn-based
+/// knobs are not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AutoTaskTemplate {
@@ -160,6 +161,11 @@ pub struct AutoTaskTemplate {
     /// Priority (defaults to `medium`).
     #[serde(default = "default_priority")]
     pub priority: TaskPriority,
+    /// Assessed complexity copied onto each minted task. Older and custom
+    /// definitions may omit this field; minting preserves their historical
+    /// behavior by treating omission as `unassessed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complexity: Option<TaskComplexity>,
     /// Crew override, when the chore should route to a specific crew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
@@ -258,6 +264,11 @@ impl AutoTaskDefinition {
                 "auto-task '{}' template.title must not be empty",
                 self.name
             )));
+        }
+        if let Some(complexity) = self.template.complexity {
+            complexity.require_assessed().map_err(|error| {
+                WorkflowError::Invalid(format!("auto-task '{}' template.{error}", self.name))
+            })?;
         }
         Ok(())
     }

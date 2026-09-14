@@ -41,6 +41,7 @@ template:
   - delivery-code-review
   - no-diff-expected
   priority: medium
+  complexity: hard
   crew: system
   status: backlog
 dedupe: skip_if_open

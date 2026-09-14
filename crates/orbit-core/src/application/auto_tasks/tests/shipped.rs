@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use orbit_tools::ToolRegistry;
+use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{AutoTaskSchedule, DedupePolicy};
 
 use crate::application::auto_tasks::DEFAULT_AUTO_TASK_FILES;
@@ -46,6 +47,12 @@ fn shipped_defaults_all_parse_and_are_disabled() {
             !definition.enabled,
             "default auto-task {stem} must ship disabled"
         );
+        let expected = match *stem {
+            "code-review" | "friction-curation" | "qa-sweep" => TaskComplexity::Medium,
+            "delivery-code-review" | "delivery-qa" | "security-review" => TaskComplexity::Hard,
+            other => panic!("unreviewed shipped auto-task complexity for {other}"),
+        };
+        assert_eq!(definition.template.complexity, Some(expected), "{stem}");
     }
 }
 
@@ -77,6 +84,18 @@ fn repository_definitions_all_parse() {
             definition.name, stem,
             "name must match file stem for {stem}"
         );
+        let expected = match stem {
+            "release-prep" => TaskComplexity::Low,
+            "code-review" | "doc-duties" | "friction-curation" | "model-price-audit"
+            | "qa-sweep" => TaskComplexity::Medium,
+            "ci-failure-remediation"
+            | "delivery-code-review"
+            | "delivery-qa"
+            | "qa-full-sweep"
+            | "security-review" => TaskComplexity::Hard,
+            other => panic!("unreviewed repository auto-task complexity for {other}"),
+        };
+        assert_eq!(definition.template.complexity, Some(expected), "{stem}");
         count += 1;
     }
     assert!(

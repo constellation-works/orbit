@@ -50,6 +50,7 @@ template:
   - release
   - no-diff-expected
   priority: high
+  complexity: hard
   crew: opus
   status: backlog
 dedupe: skip_if_open

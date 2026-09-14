@@ -207,6 +207,7 @@ fn an_applied_assessment_is_durable_and_only_a_later_audited_pass_changes_it() {
                 tags: vec!["code-review".to_string(), "no-diff-expected".to_string()],
                 required_tools: vec![],
                 priority: TaskPriority::Medium,
+                complexity: None,
                 crew: Some("opus".to_string()),
                 status: TaskStatus::Backlog,
             },

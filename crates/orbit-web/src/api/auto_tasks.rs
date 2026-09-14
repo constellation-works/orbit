@@ -418,6 +418,7 @@ fn definition_json(
             "crew": definition.template.crew,
             "status": definition.template.status,
             "priority": definition.template.priority,
+            "complexity": definition.template.complexity,
             "required_tools": definition.template.required_tools,
         },
         "dedupe": match definition.dedupe {
@@ -488,6 +489,12 @@ fn template_summary(template: &AutoTaskTemplate) -> String {
     }
     parts.push(format!("status {}", template.status));
     parts.push(format!("priority {}", template.priority));
+    parts.push(format!(
+        "complexity {}",
+        template
+            .complexity
+            .map_or("unassessed", |value| value.as_str())
+    ));
     parts.join(" · ")
 }
 

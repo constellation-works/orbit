@@ -31,7 +31,7 @@ impl Tool for OrbitAutoTaskUpdateTool {
             },
             ToolParam {
                 name: "template".to_string(),
-                description: "Replacement task template object, including optional exact canonical `required_tools` copied to minted tasks.".to_string(),
+                description: "Replacement task template object, including optional assessed `complexity` (low/medium/hard) and exact canonical `required_tools` copied to minted tasks.".to_string(),
                 param_type: "object".to_string(),
                 required: false,
             },

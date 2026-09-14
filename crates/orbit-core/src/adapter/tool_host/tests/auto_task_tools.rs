@@ -30,6 +30,7 @@ fn params(name: &str) -> AutoTaskAddParams {
             tags: vec![],
             required_tools: Vec::new(),
             priority: orbit_types::task::TaskPriority::Medium,
+            complexity: None,
             crew: None,
             status: orbit_types::task::TaskStatus::Backlog,
         },
@@ -82,6 +83,38 @@ fn mint_returns_the_minted_task_with_its_provenance_tag() {
         !cursor_state_path(&runtime.paths().state_dir).exists(),
         "a manual mint must not write the scheduler cursor"
     );
+}
+
+#[test]
+fn explicit_template_complexity_roundtrips_through_tools_and_minting() {
+    let (_temp, runtime, _repo) = test_runtime();
+    let created = run_tool_as_operator(
+        &runtime,
+        "orbit.auto_task.add",
+        json!({
+            "name": "assessed-chore",
+            "schedule": {"every_minutes": 60},
+            "template": {"title": "Assessed chore", "complexity": "hard"}
+        }),
+    )
+    .expect("add assessed definition");
+    assert_eq!(created["template"]["complexity"], json!("hard"));
+
+    let shown = run_tool_as_operator(
+        &runtime,
+        "orbit.auto_task.show",
+        json!({"name": "assessed-chore"}),
+    )
+    .expect("show assessed definition");
+    assert_eq!(shown["template"]["complexity"], json!("hard"));
+
+    let minted = run_tool_as_operator(
+        &runtime,
+        "orbit.auto_task.mint",
+        json!({"name": "assessed-chore"}),
+    )
+    .expect("mint assessed definition");
+    assert_eq!(minted["complexity"], json!("hard"));
 }
 
 /// ORB-12253: a minted task's `complexity: "unassessed"` must never block a

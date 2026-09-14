@@ -1,7 +1,7 @@
 use clap::{ArgAction, Args};
 use orbit_core::{
-    AutoTaskAddParams, AutoTaskTemplate, DedupePolicy, OrbitRuntime, TaskPriority, TaskStatus,
-    TaskType,
+    AutoTaskAddParams, AutoTaskTemplate, DedupePolicy, OrbitRuntime, TaskComplexity, TaskPriority,
+    TaskStatus, TaskType,
 };
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -52,6 +52,9 @@ pub struct AutoTaskAddArgs {
     /// Priority (defaults to medium)
     #[arg(long, value_enum, default_value_t = TaskPriority::Medium)]
     pub priority: TaskPriority,
+    /// Assessed complexity copied to every minted task
+    #[arg(long, value_enum)]
+    pub complexity: Option<TaskComplexity>,
     /// Crew override for minted tasks
     #[arg(long)]
     pub crew: Option<String>,
@@ -70,9 +73,6 @@ impl Execute for AutoTaskAddArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let schedule = require_schedule(self.cron, self.every_minutes, self.deliveries_landed)?;
         let required_tool_warnings = runtime.validate_required_tools(&self.required_tools)?;
-        // Minted tasks receive TaskComplexity::Unassessed (not a real
-        // assessment). Definitions do not carry complexity; the mint path
-        // stamps the explicit non-answer so create never produces a gap.
         let template = AutoTaskTemplate {
             title: self.title,
             description: self.body,
@@ -81,6 +81,7 @@ impl Execute for AutoTaskAddArgs {
             tags: self.tags,
             required_tools: self.required_tools,
             priority: self.priority,
+            complexity: self.complexity,
             crew: self.crew,
             status: self.status,
         };

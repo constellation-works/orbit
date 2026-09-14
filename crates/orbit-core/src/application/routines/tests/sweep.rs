@@ -171,6 +171,7 @@ fn auto_task(name: &str) -> AutoTaskAddParams {
             tags: Vec::new(),
             required_tools: Vec::new(),
             priority: TaskPriority::Medium,
+            complexity: None,
             crew: None,
             status: TaskStatus::Backlog,
         },

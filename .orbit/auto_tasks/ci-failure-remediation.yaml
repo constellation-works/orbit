@@ -139,6 +139,7 @@ template:
   - github-actions
   - no-diff-expected
   priority: high
+  complexity: hard
   crew: luna
   status: backlog
 dedupe: skip_if_open
