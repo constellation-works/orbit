@@ -63,7 +63,7 @@ next: false
         </div>
         <div class="orbit-session-step">
           <div class="orbit-session-cmd"><span class="orbit-session-prompt">$</span><code>orbit task update "&lt;task-id&gt;" --approve</code></div>
-          <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">task</span><span class="orbit-session-id">&lt;task-id&gt;</span><span class="orbit-session-note"><em>done</em> — the PR merges on your terms, not Orbit's</span></div>
+          <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">task</span><span class="orbit-session-id">&lt;task-id&gt;</span><span class="orbit-session-note"><em>done</em> — approved in Orbit; merging the PR is still your call</span></div>
         </div>
       </div>
     </div>
@@ -77,7 +77,7 @@ next: false
       <p class="orbit-section-eyebrow">One task, one pull request</p>
       <h2 class="orbit-section-heading">Four commands from intent to a pull request you review.</h2>
     </div>
-    <p class="orbit-section-lede">Create the work, run an agent, inspect the result, then review the pull request. The task stops in <code>review</code> with the PR unmerged. Approving the task does not merge the pull request.</p>
+    <p class="orbit-section-lede">Create the work, run an agent, inspect the result, then review the pull request. The task stops in <code>review</code> with the PR unmerged. Approving the task does not merge the pull request, and approving or merging the pull request does not complete the task.</p>
   </div>
 
   <ol class="orbit-rail" aria-label="Task lifecycle">
@@ -106,7 +106,7 @@ next: false
     </a>
     <a class="orbit-card is-stop" data-tag="04" href="/how-to/task-lifecycle/">
       <h3>Review the pull request</h3>
-      <p>Look at the diff, CI, and execution summary. Approving moves the task from <code>review</code> to <code>done</code> — it does not merge the PR by itself.</p>
+      <p>Look at the diff, CI, and execution summary, then merge on your terms. Approving or merging the PR on GitHub does not touch the task; <code>orbit task update --approve</code> is what moves it from <code>review</code> to <code>done</code>.</p>
       <div class="orbit-card-cmd">orbit task update "$TASK_ID" --approve</div>
     </a>
   </div>
