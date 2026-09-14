@@ -341,6 +341,153 @@ fn pr_recovery_projects_rendered_candidate_context_without_overriding_run_author
     );
 }
 
+/// [ORB-12467] A 2.5 MB `primary_checkout_drift` diagnostic reached the
+/// recovery input verbatim and was then copied into the envelope's `prompt`,
+/// so `codex exec` rejected the 5.1 MB turn with `input_too_large` and the
+/// recovery agent never started. The bound keeps both ends of the diagnostic
+/// and leaves the envelope an order of magnitude below the 1 MiB ceiling.
+#[test]
+fn oversized_error_message_is_bounded_so_the_provider_envelope_stays_under_one_mib() {
+    let head = "PRIMARY_CHECKOUT_DRIFT_HEAD";
+    let tail = "PRIMARY_CHECKOUT_DRIFT_TAIL";
+    let huge = format!(
+        "{head}{}{tail}",
+        "path_states-sha256-noise ".repeat(120_000)
+    );
+    assert!(huge.len() > 3_000_000, "fixture must exceed 3 MB");
+    let original = retryable_error("flaky", &huge);
+    let host = RecoveryHost::new([
+        (
+            "flaky",
+            vec![Err(original.clone()), Ok(json!({"recovered": true}))],
+        ),
+        ("step_failure_recovery", vec![Ok(json!({}))]),
+    ]);
+    let mut job = recovery_job(Some("step_failure_recovery"), None, "flaky", None, 1);
+    job.steps[0].id = "implement_one".to_string();
+    let JobV2StepBody::Target(target) = &mut job.steps[0].body else {
+        panic!("resolved failed target")
+    };
+    target.default_input = Some(json!({
+        "task_id": "ORB-12467",
+        "workspace_path": "/assigned/worktree",
+        "repo_root": "/assigned/worktree",
+    }));
+    let run_id = "run-oversized-error-message";
+    let writer = Arc::new(test_writer(run_id));
+
+    execute_job(&job, json!({"task_id": "ORB-12467"}), run_id, writer, &host)
+        .expect("bounded recovery input must reach dispatch");
+
+    let input = host
+        .input_for_action("step_failure_recovery")
+        .expect("recovery dispatched");
+    let error_message = input["error_message"].as_str().expect("string message");
+    assert!(
+        error_message.len() <= 64 * 1024,
+        "error_message is {} B",
+        error_message.len()
+    );
+    assert!(error_message.contains(head), "head must survive");
+    assert!(error_message.contains(tail), "tail must survive");
+    assert!(
+        error_message.contains("[truncated: error_message is")
+            && error_message.contains(&format!("orbit run show {run_id} --json")),
+        "marker must name the original size and where the full text is: {}",
+        &error_message[..error_message.len().min(400)]
+    );
+
+    // The shipped strict schema still accepts the bounded input.
+    let asset = load_activity_asset(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../orbit-core/assets/activities/step_failure_recovery.yaml"
+    )))
+    .expect("shipped recovery activity");
+    let schema =
+        jsonschema::JSONSchema::compile(&asset.spec.input_schema_json).expect("compile schema");
+    let mut agent_input = input.clone();
+    agent_input
+        .as_object_mut()
+        .expect("object input")
+        .remove("step_id");
+    assert!(
+        schema.is_valid(&agent_input),
+        "bounded recovery input must satisfy the shipped schema"
+    );
+
+    let ActivityV2Spec::AgentLoop(spec) = &asset.spec.spec else {
+        panic!("step failure recovery must remain an agent leaf")
+    };
+    let envelope = crate::activity_job::cli_runner::cli_agent_envelope_json(
+        spec,
+        run_id,
+        &agent_input,
+        None,
+        &[],
+        &[],
+    )
+    .expect("serialize provider envelope");
+    assert!(
+        envelope.len() < 1_048_576,
+        "provider envelope is {} B; codex exec refuses above 1,048,576",
+        envelope.len()
+    );
+}
+
+/// [ORB-12467] `failed_step_input` carries the whole rendered target input, so
+/// a single oversized leaf can blow the same ceiling. It is bounded in place:
+/// the value stays the object both recovery schemas declare.
+#[test]
+fn oversized_failed_step_input_is_bounded_without_losing_its_object_shape() {
+    let original = retryable_error("flaky", "implement_one failed");
+    let host = RecoveryHost::new([
+        (
+            "flaky",
+            vec![Err(original.clone()), Ok(json!({"recovered": true}))],
+        ),
+        ("step_failure_recovery", vec![Ok(json!({}))]),
+    ]);
+    let mut job = recovery_job(Some("step_failure_recovery"), None, "flaky", None, 1);
+    job.steps[0].id = "implement_one".to_string();
+    let JobV2StepBody::Target(target) = &mut job.steps[0].body else {
+        panic!("resolved failed target")
+    };
+    target.default_input = Some(json!({
+        "task_id": "ORB-12467",
+        "workspace_path": "/assigned/worktree",
+        "repo_root": "/assigned/worktree",
+        "rendered_prompt": format!("PROMPT_HEAD{}PROMPT_TAIL", "x".repeat(3_000_000)),
+    }));
+    let run_id = "run-oversized-failed-step-input";
+    let writer = Arc::new(test_writer(run_id));
+
+    execute_job(&job, json!({"task_id": "ORB-12467"}), run_id, writer, &host)
+        .expect("bounded recovery input must reach dispatch");
+
+    let input = host
+        .input_for_action("step_failure_recovery")
+        .expect("recovery dispatched");
+    let failed_step_input = &input["failed_step_input"];
+    assert!(
+        failed_step_input.is_object(),
+        "failed_step_input must stay an object"
+    );
+    assert_eq!(failed_step_input["task_id"], "ORB-12467");
+    assert_eq!(failed_step_input["workspace_path"], "/assigned/worktree");
+    let serialized = serde_json::to_string(failed_step_input).expect("serialize bounded input");
+    assert!(
+        serialized.len() <= 64 * 1024,
+        "failed_step_input is {} B",
+        serialized.len()
+    );
+    let prompt = failed_step_input["rendered_prompt"]
+        .as_str()
+        .expect("oversized leaf stays a string");
+    assert!(prompt.starts_with("PROMPT_HEAD"));
+    assert!(prompt.ends_with("PROMPT_TAIL"));
+    assert!(prompt.contains("[truncated: failed_step_input field is"));
+}
+
 #[test]
 fn step_failure_recovery_projects_managed_context_for_implement_and_commit_failures() {
     let asset = load_activity_asset(include_str!(concat!(

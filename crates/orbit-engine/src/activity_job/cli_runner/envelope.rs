@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::super::dispatcher::DispatchError;
 
-pub(super) fn cli_agent_envelope_json(
+pub(in crate::activity_job) fn cli_agent_envelope_json(
     spec: &AgentLoopSpec,
     run_id: &str,
     input: &Value,
