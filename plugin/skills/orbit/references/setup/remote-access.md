@@ -56,6 +56,13 @@ orbit mcp callers check <caller-machine-id>
 orbit mcp callers init
 ```
 
+`callers list` reports the default and a redacted summary of each configured
+row. It retains policy shape, scope presence, and key-binding state for
+diagnosis, but omits machine IDs, labels, workspace IDs, and key fingerprints
+because CLI output may be captured by log collectors. `callers check` likewise
+redacts identity and workspace values while showing the resolved capabilities
+and trust mode.
+
 The file must be the destination account's own private file: Orbit refuses to
 serve any remote session from a callers file that is group- or world-writable
 or owned by another account, because a row is a grant and write access to the

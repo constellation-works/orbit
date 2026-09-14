@@ -61,6 +61,35 @@ fn a_workspace_root_override_is_refused() {
 }
 
 #[test]
+fn callers_list_redacts_identity_and_key_material_but_keeps_policy_shape() {
+    let file = orbit_mcp::CallersFile {
+        default: DefaultGrant::Deny,
+        callers: vec![orbit_mcp::CallerRow {
+            machine_id: "hm_sensitive_machine".to_string(),
+            capabilities: vec!["agent".to_string(), "operator".to_string()],
+            label: Some("sensitive host label".to_string()),
+            workspaces: Some(vec!["ws_sensitive".to_string()]),
+            ssh_key_fingerprint: Some("SHA256:sensitive-fingerprint".to_string()),
+            agent_invoke: true,
+            agent_invoke_workspaces: Some(vec!["ws_sensitive".to_string()]),
+            agent_invoke_mode: Some(RemoteAgentInvokeMode::KeyBound),
+        }],
+    };
+
+    let rendered = render_callers_list(Path::new("/tmp/mcp-callers.toml"), &file);
+
+    assert!(rendered.contains("caller #1: [identity redacted]"));
+    assert!(rendered.contains("capabilities: agent=true, operator=true, denied=false"));
+    assert!(rendered.contains("workspaces: scoped (IDs redacted)"));
+    assert!(rendered.contains("ssh_key_fingerprint: configured (redacted)"));
+    assert!(rendered.contains("agent_invoke: enabled (key-bound)"));
+    assert!(!rendered.contains("hm_sensitive_machine"));
+    assert!(!rendered.contains("sensitive host label"));
+    assert!(!rendered.contains("ws_sensitive"));
+    assert!(!rendered.contains("SHA256:sensitive-fingerprint"));
+}
+
+#[test]
 fn seeding_reads_registry_owners_and_configured_destinations() {
     let root = tempfile::tempdir().expect("global root");
     orbit_registry::ensure_host_identity(root.path(), || {
