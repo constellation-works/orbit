@@ -124,6 +124,7 @@ pub fn resolve_task_owner(
     Ok(ResolvedWorkspaceSelection {
         workspace: workspace.clone(),
         checkout: checkout.clone(),
+        local_root: checkout.orbit_dir.clone(),
     })
 }
 

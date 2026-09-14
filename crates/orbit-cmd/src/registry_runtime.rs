@@ -38,6 +38,13 @@ pub struct ResolvedWorkspaceBinding {
 pub struct ResolvedWorkspaceSelection {
     pub workspace: Workspace,
     pub checkout: WorkspaceCheckout,
+    /// Definition/artifact root for the specifically selected checkout.
+    ///
+    /// A logical name or ID selects the registered primary checkout. An
+    /// explicit linked-worktree path keeps shared stores on that registered
+    /// checkout while using the linked checkout's `.orbit` for Git-versioned
+    /// local definitions.
+    pub local_root: PathBuf,
 }
 
 /// Build Core's authoritative runtime binding for a registered checkout.
@@ -198,6 +205,7 @@ impl RegisteredRuntimeFactory {
                 &global_root,
                 &selected.workspace,
                 &selected.checkout,
+                &selected.local_root,
             )
         } else {
             Self::open_registered_checkout(&global_root, &selected.workspace, &selected.checkout)
@@ -221,13 +229,14 @@ impl RegisteredRuntimeFactory {
     ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
         let registry_path = workspace_registry::registry_path_for(global_root);
         let registry = load_registry_for_selector_resolution(&registry_path)?;
-        let (workspace, checkout) = resolve_cli_workspace_binding(&registry, selector)?;
+        let (workspace, checkout, local_root) = resolve_cli_workspace_binding(&registry, selector)?;
         if workspace.status != WorkspaceStatus::Active {
             return Err(inactive_cli_workspace(workspace, checkout));
         }
         Ok(ResolvedWorkspaceSelection {
             workspace: workspace.clone(),
             checkout: checkout.clone(),
+            local_root,
         })
     }
 
@@ -293,13 +302,14 @@ impl RegisteredRuntimeFactory {
         global_root: &Path,
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
+        local_root: &Path,
     ) -> Result<OrbitRuntime, OrbitError> {
         sync_task_prefix(global_root)?;
         let binding = workspace_runtime_binding(workspace, checkout)?;
         OrbitRuntime::from_resolved_roots_read_only_with_binding(
             global_root,
             &checkout.orbit_dir,
-            &checkout.orbit_dir,
+            local_root,
             binding,
         )
         .map(|runtime| {
@@ -365,6 +375,7 @@ impl RegisteredRuntimeFactory {
                 workspace,
                 checkout,
                 rewrite_to_repo_root,
+                ..
             } => {
                 if workspace.status != WorkspaceStatus::Active {
                     return Err(inactive_cli_workspace(workspace, checkout));
@@ -448,6 +459,7 @@ enum CliWorkspaceTarget<'a> {
         workspace: &'a Workspace,
         checkout: &'a WorkspaceCheckout,
         rewrite_to_repo_root: bool,
+        local_root: PathBuf,
     },
 }
 
@@ -481,13 +493,14 @@ fn resolve_cli_workspace_target<'a>(
         workspace,
         checkout,
         rewrite_to_repo_root: true,
+        local_root: checkout.orbit_dir.clone(),
     })
 }
 
 fn resolve_cli_workspace_binding<'a>(
     registry: &'a WorkspaceRegistry,
     selector: &str,
-) -> Result<(&'a Workspace, &'a WorkspaceCheckout), OrbitError> {
+) -> Result<(&'a Workspace, &'a WorkspaceCheckout, PathBuf), OrbitError> {
     match if selector_looks_like_path(selector) {
         resolve_cli_workspace_path(registry, None, selector)?
     } else {
@@ -495,14 +508,16 @@ fn resolve_cli_workspace_binding<'a>(
         CliWorkspaceTarget::Checkout {
             workspace,
             checkout,
+            local_root: checkout.orbit_dir.clone(),
             rewrite_to_repo_root: true,
         }
     } {
         CliWorkspaceTarget::Checkout {
             workspace,
             checkout,
+            local_root,
             ..
-        } => Ok((workspace, checkout)),
+        } => Ok((workspace, checkout, local_root)),
         CliWorkspaceTarget::CurrentRuntime => Err(unsupported_cli_workspace(selector)),
     }
 }
@@ -546,6 +561,7 @@ fn resolve_cli_workspace_path<'a>(
                 workspace,
                 checkout,
                 rewrite_to_repo_root: false,
+                local_root: local_root_for_selected_path(checkout, &canonical),
             });
         }
         if let Some(runtime) = runtime
@@ -561,6 +577,7 @@ fn resolve_cli_workspace_path<'a>(
             workspace,
             checkout,
             rewrite_to_repo_root: false,
+            local_root: checkout.orbit_dir.clone(),
         });
     }
     Err(unsupported_cli_workspace(selector))
@@ -606,6 +623,35 @@ fn git_common_dir(path: &Path) -> Option<PathBuf> {
         .arg("-C")
         .arg(path)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8(output.stdout).ok()?;
+    let trimmed = raw.lines().next()?.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(canonical_path(Path::new(trimmed)))
+}
+
+/// Keep registered/shared state on the catalog checkout while choosing the
+/// Git-versioned local root of an explicitly selected linked checkout.
+fn local_root_for_selected_path(checkout: &WorkspaceCheckout, selected: &Path) -> PathBuf {
+    if canonical_path(&checkout.orbit_dir) == selected {
+        return checkout.orbit_dir.clone();
+    }
+    git_checkout_root(selected)
+        .map(|root| root.join(".orbit"))
+        .unwrap_or_else(|| checkout.orbit_dir.clone())
+}
+
+fn git_checkout_root(path: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--path-format=absolute", "--show-toplevel"])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -795,6 +841,7 @@ pub(crate) fn select_workspace_for_cwd_and_roots(
         return Ok(Some(ResolvedWorkspaceSelection {
             workspace: workspace.clone(),
             checkout: checkout.clone(),
+            local_root: roots.local_root.clone(),
         }));
     }
 
@@ -810,6 +857,7 @@ pub(crate) fn select_workspace_for_cwd_and_roots(
             return Ok(Some(ResolvedWorkspaceSelection {
                 workspace: workspace.clone(),
                 checkout: checkout.clone(),
+                local_root: roots.local_root.clone(),
             }));
         }
     }

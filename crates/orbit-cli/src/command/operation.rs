@@ -729,6 +729,11 @@ impl Commands {
             ),
             Commands::AutoTask(command) => {
                 use super::auto_task::AutoTaskSubcommand;
+                let runtime_need = if matches!(&command.command, AutoTaskSubcommand::Show(_)) {
+                    RuntimeNeed::ReadOnly
+                } else {
+                    RuntimeNeed::Required
+                };
                 let (subcommand, target_id) = match &command.command {
                     AutoTaskSubcommand::Add(args) => ("add", Some(args.name.as_str())),
                     AutoTaskSubcommand::List(_) => ("list", None),
@@ -740,7 +745,7 @@ impl Commands {
                     AutoTaskSubcommand::Reset(args) => ("reset", Some(args.name.as_str())),
                 };
                 CommandOperation::new(
-                    RuntimeNeed::Required,
+                    runtime_need,
                     Some(admin_meta(
                         "auto-task",
                         Some(subcommand),

@@ -50,6 +50,26 @@ host-local cursor state continues to use the shared root. This split makes
 definition edits ordinary branch content instead of transient tracked dirt in
 the registered primary checkout ([Route tracked auto-task definitions through the active worktree](./4_decisions.md#route-tracked-auto-task-definitions-through-the-active-worktree)).
 
+`auto-task show` reports `definition_source.root` and
+`definition_source.path` in JSON, plus the same root and path in plain text, so
+the inspected YAML is never implicit. A logical `--workspace` name or `ws_*`
+ID selects the registered primary checkout even when the command is launched
+from a linked worktree. To validate a candidate definition in isolation, pass
+that linked checkout's absolute path instead:
+
+```bash
+orbit --workspace /absolute/path/to/linked-worktree auto-task show <name> --json
+```
+
+The path must resolve to the registered checkout or a Git-linked worktree for
+it; unrelated and invalid selectors fail closed. Only the read-only `show`
+operation opens that path as a candidate local definition root. Writable
+auto-task operations retain the registered primary checkout as their local
+root even when given a linked path, and shared task/runtime state always
+remains there. Candidate inspection therefore neither redirects a mutation,
+creates a worktree-local shadow store, nor uses `--root` as a candidate-source
+override.
+
 ## 2. Due computation and catch-up collapse
 
 `schedule::decide_due(schedule, baseline, last_slot, now)` returns `NotDue` or

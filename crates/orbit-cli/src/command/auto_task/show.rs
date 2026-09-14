@@ -1,5 +1,7 @@
 use clap::Args;
+use orbit_core::application::auto_tasks::definition_path;
 use orbit_core::{OrbitError, OrbitRuntime};
+use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload};
 
@@ -24,6 +26,12 @@ impl Execute for AutoTaskShowArgs {
         })?;
 
         let mut doc = definition_to_json(&definition);
+        let definition_root = runtime.local_root();
+        let source_path = definition_path(&definition_root, &self.name);
+        doc["definition_source"] = json!({
+            "root": definition_root,
+            "path": source_path,
+        });
         if matches!(
             definition.schedule,
             orbit_core::AutoTaskSchedule::Deliveries { .. }
@@ -67,6 +75,8 @@ impl Execute for AutoTaskShowArgs {
         if !definition.description.is_empty() {
             let _ = writeln!(out, "  {}", definition.description);
         }
+        let _ = writeln!(out, "  definition root: {}", definition_root.display());
+        let _ = writeln!(out, "  definition source: {}", source_path.display());
         let _ = writeln!(
             out,
             "  schedule: {}",
