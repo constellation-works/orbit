@@ -90,6 +90,49 @@ fn callers_list_redacts_identity_and_key_material_but_keeps_policy_shape() {
 }
 
 #[test]
+fn callers_check_redacts_identity_and_key_material_but_keeps_policy_shape() {
+    let file = orbit_mcp::CallersFile {
+        default: DefaultGrant::Deny,
+        callers: vec![orbit_mcp::CallerRow {
+            machine_id: "hm_sensitive_machine".to_string(),
+            capabilities: vec!["agent".to_string(), "operator".to_string()],
+            label: Some("sensitive host label".to_string()),
+            workspaces: Some(vec![
+                "ws_sensitive_alpha".to_string(),
+                "ws_sensitive_beta".to_string(),
+            ]),
+            ssh_key_fingerprint: Some("SHA256:sensitive-fingerprint".to_string()),
+            agent_invoke: true,
+            agent_invoke_workspaces: Some(vec!["ws_sensitive_alpha".to_string()]),
+            agent_invoke_mode: Some(RemoteAgentInvokeMode::KeyBound),
+        }],
+    };
+
+    let rendered = render_callers_check(
+        Path::new("/tmp/mcp-callers.toml"),
+        "hm_sensitive_machine",
+        &file,
+    );
+
+    assert!(rendered.contains("granted: [agent, operator]"));
+    assert!(rendered.contains("decision: granted"));
+    assert!(rendered.contains("identity pin: configured (fingerprint redacted)"));
+    assert!(rendered.contains("on workspaces: configured scope (workspace IDs redacted)"));
+    assert!(
+        rendered.contains("agent_invoke: configured for scoped workspace(s) in key-bound mode")
+    );
+    assert!(rendered.contains("on workspace #1: "));
+    assert!(rendered.contains("on workspace #2: "));
+    // The machine ID is echoed back because it is the operator's own CLI
+    // argument, not material read from the callers file.
+    assert!(rendered.contains("caller: hm_sensitive_machine"));
+    assert!(!rendered.contains("sensitive host label"));
+    assert!(!rendered.contains("ws_sensitive_alpha"));
+    assert!(!rendered.contains("ws_sensitive_beta"));
+    assert!(!rendered.contains("SHA256:sensitive-fingerprint"));
+}
+
+#[test]
 fn seeding_reads_registry_owners_and_configured_destinations() {
     let root = tempfile::tempdir().expect("global root");
     orbit_registry::ensure_host_identity(root.path(), || {

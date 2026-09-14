@@ -212,14 +212,30 @@ fn render_callers_list(path: &Path, file: &orbit_mcp::CallersFile) -> String {
 
 fn check(path: &Path, machine_id: &str) -> CommandOut {
     let file = orbit_mcp::load_callers(path)?;
+    print!("{}", render_callers_check(path, machine_id, &file));
+    Ok(CommandOutput::Silent)
+}
+
+/// Render what a session from `machine_id` would resolve to, without copying
+/// identity or key material into stdout.
+///
+/// Mirrors [`render_callers_list`]'s redaction contract for the same reason:
+/// CLI stdout/stderr is routinely captured by log collectors, so the loaded
+/// authorization row must not be treated as safe merely because the command
+/// is intended for an operator. Workspace IDs are redacted to a stable
+/// per-call index rather than their raw value, the same way `list` redacts
+/// caller identities to `caller #1`.
+fn render_callers_check(path: &Path, machine_id: &str, file: &orbit_mcp::CallersFile) -> String {
+    let mut output = String::new();
     // A check answers what the *grant* would be, and the grant is the same
     // under either tier — what the tier changes is whether the caller could
     // have selected this row at all, which is reported separately below.
     let identity = RemoteCallerIdentity::self_asserted(machine_id);
     let grant = file.resolve(&identity);
-    println!("callers file: {}", path.display());
-    println!("caller: {machine_id}");
-    println!(
+    let _ = writeln!(output, "callers file: {}", path.display());
+    let _ = writeln!(output, "caller: {machine_id}");
+    let _ = writeln!(
+        output,
         "matched: {}",
         if grant.matched {
             "a row"
@@ -227,8 +243,9 @@ fn check(path: &Path, machine_id: &str) -> CommandOut {
             "no row — the file default applies"
         }
     );
-    println!("granted: [{}]", capability_list(&grant.granted));
-    println!(
+    let _ = writeln!(output, "granted: [{}]", capability_list(&grant.granted));
+    let _ = writeln!(
+        output,
         "decision: {}",
         if grant.granted.is_empty() {
             "denied"
@@ -237,68 +254,98 @@ fn check(path: &Path, machine_id: &str) -> CommandOut {
         }
     );
     match &grant.pinned_fingerprint {
-        Some(_) => println!(
-            "identity pin: configured (fingerprint redacted), enforced where this machine can observe the \
-             authenticating key. The identity itself is key-bound only on the \
-             destination-issued forced-command path; the ordinary SSH proxy remains \
-             self-asserted."
-        ),
-        None => println!(
-            "identity: self-asserted — this row is selected by a name, so any caller that \
-             reaches this machine can select it. `orbit mcp callers authorize --machine-id \
-             {machine_id} --key <key>.pub --launcher <protected-orbit>` prints the authorized_keys \
-             line that binds it to a key."
-        ),
+        Some(_) => {
+            let _ = writeln!(
+                output,
+                "identity pin: configured (fingerprint redacted), enforced where this machine can observe the \
+                 authenticating key. The identity itself is key-bound only on the \
+                 destination-issued forced-command path; the ordinary SSH proxy remains \
+                 self-asserted."
+            );
+        }
+        None => {
+            let _ = writeln!(
+                output,
+                "identity: self-asserted — this row is selected by a name, so any caller that \
+                 reaches this machine can select it. `orbit mcp callers authorize --machine-id \
+                 {machine_id} --key <key>.pub --launcher <protected-orbit>` prints the authorized_keys \
+                 line that binds it to a key."
+            );
+        }
     }
     if grant.workspaces.is_some() {
-        println!("  on workspaces: configured scope (workspace IDs redacted)");
-        println!(
+        let _ = writeln!(
+            output,
+            "  on workspaces: configured scope (workspace IDs redacted)"
+        );
+        let _ = writeln!(
+            output,
             "  elsewhere on this machine: [{}]",
             capability_list(&grant.elsewhere)
         );
     }
     match (&grant.agent_invoke_workspaces, grant.agent_invoke_mode) {
-        (Some(_), Some(RemoteAgentInvokeMode::KeyBound)) => println!(
-            "agent_invoke: configured for scoped workspace(s) in key-bound mode; admission requires a \
-             destination-issued forced-command session",
-        ),
-        (Some(_), Some(RemoteAgentInvokeMode::Cooperative)) => println!(
-            "agent_invoke: configured for scoped workspace(s) in cooperative mode; identity remains self-asserted \
-             and the SSH OS-account/operator channel is the trust boundary",
-        ),
-        _ => println!("agent_invoke: not granted"),
+        (Some(_), Some(RemoteAgentInvokeMode::KeyBound)) => {
+            let _ = writeln!(
+                output,
+                "agent_invoke: configured for scoped workspace(s) in key-bound mode; admission requires a \
+                 destination-issued forced-command session",
+            );
+        }
+        (Some(_), Some(RemoteAgentInvokeMode::Cooperative)) => {
+            let _ = writeln!(
+                output,
+                "agent_invoke: configured for scoped workspace(s) in cooperative mode; identity remains self-asserted \
+                 and the SSH OS-account/operator channel is the trust boundary",
+            );
+        }
+        _ => {
+            let _ = writeln!(output, "agent_invoke: not granted");
+        }
     }
     // Both requests, because the grant is a ceiling and the caller's argv is
     // the other half of the intersection: printing only one would read as the
     // answer to a question the caller did not ask.
-    println!("a remote-originated session from this caller would hold:");
+    let _ = writeln!(
+        output,
+        "a remote-originated session from this caller would hold:"
+    );
     for (label, authority) in [
         ("orbit mcp serve", McpSessionAuthority::Agent),
         ("orbit mcp serve --operator", McpSessionAuthority::Operator),
     ] {
         let policy = SessionCapabilityPolicy::from_grant(authority, file.resolve(&identity));
         // A narrowing makes "what would this session hold" a per-workspace
-        // question, so answering it with one set would be a half-truth.
+        // question, so answering it with one set would be a half-truth. The
+        // workspace ID itself is redacted to a stable index: it is
+        // identity-adjacent material read from the callers file, the same as
+        // the IDs redacted above in "on workspaces".
         match &grant.workspaces {
-            None => println!(
-                "  {label}: [{}]",
-                capability_list(&policy.effective_for(None))
-            ),
+            None => {
+                let _ = writeln!(
+                    output,
+                    "  {label}: [{}]",
+                    capability_list(&policy.effective_for(None))
+                );
+            }
             Some(workspaces) => {
-                for workspace in workspaces {
-                    println!(
-                        "  {label} on {workspace}: [{}]",
+                for (index, workspace) in workspaces.iter().enumerate() {
+                    let _ = writeln!(
+                        output,
+                        "  {label} on workspace #{}: [{}]",
+                        index + 1,
                         capability_list(&policy.effective_for(Some(workspace)))
                     );
                 }
-                println!(
+                let _ = writeln!(
+                    output,
                     "  {label} elsewhere: [{}]",
                     capability_list(&policy.effective_for(Some("")))
                 );
             }
         }
     }
-    Ok(CommandOutput::Silent)
+    output
 }
 
 fn init(global_root: &Path, path: &Path) -> CommandOut {
