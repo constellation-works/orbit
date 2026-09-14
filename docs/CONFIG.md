@@ -1028,6 +1028,27 @@ protocol intact.
 
 ---
 
+## Sandbox pseudo-tty allocation (macOS)
+
+The compiled macOS `sandbox-exec` profile includes `(allow pseudo-tty)`.
+Without it, `openpty`/`posix_openpt` fail with `EPERM` inside a worker even
+though `/dev/ptmx` and `/dev/ttys*` are otherwise reachable — pseudo-tty
+allocation is gated by its own SBPL operation, separate from the file
+permissions on those device nodes. A repository whose test suite opens a PTY
+(for example, a CLI smoke test that drives the binary through a real
+terminal) needs this grant to pass its full validation inside a worker.
+[ORB-12470]
+
+**Why this is safe.** A PTY is a local IPC primitive: allocating one hands
+the calling process a pair of file descriptors it already has permission to
+open (`/dev/ptmx` read/write, covered by the broad `file-read*` allow and the
+`/dev` `file-write*` subpath grant) and does not reach the filesystem or
+network beyond what the profile already grants. The Linux Bubblewrap sandbox
+needs no equivalent clause — its namespace does not gate `/dev/pts` behind a
+syscall-level policy the way SBPL does.
+
+---
+
 ## `[execution.env]` — the agent subprocess environment
 
 Every agent subprocess — bare execution, the Linux Bubblewrap sandbox, and the

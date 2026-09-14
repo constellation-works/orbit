@@ -3,7 +3,8 @@ use super::super::spawn::sandbox_exec_path_from;
 use super::super::spawn::{MacosSandboxSpawnRequest, spawn_under_macos_sandbox};
 #[cfg(target_os = "macos")]
 use super::super::test_support::{
-    ScopeGuard, sandbox_exec_can_apply, sandbox_test_parent, shell_escape,
+    EnvOverrides, NEUTRAL_PROVIDER, ScopeGuard, compile_with_env, profile, sandbox_exec_can_apply,
+    sandbox_test_parent, shell_escape,
 };
 use std::path::Path;
 #[cfg(target_os = "macos")]
@@ -172,5 +173,75 @@ fn spawn_under_macos_sandbox_runs_program_in_provided_cwd() {
     assert_eq!(
         String::from_utf8(output.stdout).expect("stdout utf8"),
         format!("{}\n", cwd.display())
+    );
+}
+
+/// [ORB-12470] Regression probe for the missing `(allow pseudo-tty)` clause.
+/// Runs under the real compiled profile (not a permissive `(allow default)`
+/// test profile) so the assertion exercises exactly what a worker's own PTY
+/// smoke test would hit. Never run directly by `cargo test`; spawned by
+/// [`pty_allocation_is_allowed_under_compiled_profile`] as a sandboxed child
+/// via its `--exact` module path, so renaming this test without updating that
+/// caller silently breaks the probe.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "spawned under sandbox-exec by pty_allocation_is_allowed_under_compiled_profile"]
+fn pty_probe_process() {
+    let mut controller: libc::c_int = -1;
+    let mut follower: libc::c_int = -1;
+    let rc = unsafe {
+        libc::openpty(
+            &mut controller,
+            &mut follower,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(
+        rc,
+        0,
+        "openpty failed under the compiled sandbox profile: {}",
+        std::io::Error::last_os_error()
+    );
+    unsafe {
+        libc::close(controller);
+        libc::close(follower);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn pty_allocation_is_allowed_under_compiled_profile() {
+    if !sandbox_exec_can_apply() {
+        return;
+    }
+
+    let resolved = profile("pty-probe", &[], &[]);
+    let profile_text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
+    let current_exe = std::env::current_exe().expect("current test binary path");
+    let args = [
+        "--exact".to_string(),
+        "macos_sandbox::tests::spawn::pty_probe_process".to_string(),
+        "--ignored".to_string(),
+    ];
+    let env = [("PATH".to_string(), "/usr/bin:/bin".to_string())];
+    let (child, _profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+        profile_text: &profile_text,
+        program: current_exe.to_str().expect("utf8 test binary path"),
+        args: &args,
+        env: &env,
+        cwd: None,
+        stdin: Stdio::null(),
+        stdout: Stdio::piped(),
+        stderr: Stdio::piped(),
+    })
+    .expect("spawn sandboxed pty probe");
+    let output = child.wait_with_output().expect("wait for pty probe");
+
+    assert!(
+        output.status.success(),
+        "openpty probe failed under the compiled sandbox profile; stderr={}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

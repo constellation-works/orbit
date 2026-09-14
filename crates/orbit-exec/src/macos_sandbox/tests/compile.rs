@@ -13,6 +13,21 @@ fn compile_emits_deny_default_and_broad_read_with_modify_subpath() {
     );
 }
 
+/// [ORB-12470] `openpty`/`posix_openpt` need the `pseudo-tty` SBPL operation
+/// in addition to `/dev/ptmx` and `/dev/ttys*` file access; without this
+/// clause a sandboxed CLI test suite that opens a PTY (e.g. for a terminal
+/// smoke test) fails allocation with EPERM even though the device files
+/// themselves are reachable.
+#[test]
+fn compile_allows_pseudo_tty_allocation() {
+    let resolved = profile("default", &["/Users/test/repo"], &["/Users/test/repo/src"]);
+    let text = compile_with_env(&resolved, NEUTRAL_PROVIDER, EnvOverrides::default());
+    assert!(
+        text.contains("(allow pseudo-tty)"),
+        "missing pseudo-tty allocation allow: {text}"
+    );
+}
+
 #[test]
 fn compile_default_profile_denies_well_known_credential_reads() {
     let resolved = profile("default", &["/Users/test/repo"], &["/Users/test/repo/src"]);
