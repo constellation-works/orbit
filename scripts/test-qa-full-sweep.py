@@ -481,7 +481,9 @@ spec:
 
     def completed_fixture_run(evidence):
         body = parse_json(evidence, "fixture job run")
-        if body.get("state") != "succeeded" or not body.get("run_id"):
+        # Canonical vocabulary is JobRunState::Success.to_string() == "success"
+        # (crates/orbit-types/src/workflow/job.rs), not the legacy "succeeded" literal.
+        if body.get("state") != "success" or not body.get("run_id"):
             raise ValueError("deterministic fixture job did not succeed")
 
     fixture_run = checked("legacy-logs-compatibility",
@@ -492,7 +494,14 @@ spec:
 
     def legacy_logs_output(evidence):
         body = parse_json(evidence, "legacy logs")
-        if body != []:
+        # The fixture's single deterministic step is recorded on the run, so the
+        # legacy view renders exactly one legacy_step_to_json entry for it; only
+        # the timing fields are left unchecked.
+        expected = {"step_index": 0, "target_id": "exact_step", "target_type": "activity",
+                    "state": "success", "exit_code": None, "error_code": None,
+                    "error_message": None}
+        observed = {key: body[0].get(key) for key in expected} if isinstance(body, list) and len(body) == 1 else None
+        if observed != expected:
             raise ValueError(f"legacy logs changed its exact detached-run compatibility output: {body!r}")
         if "[deprecated]" not in evidence.get("stderr", ""):
             raise ValueError("legacy logs omitted its compatibility deprecation notice")
