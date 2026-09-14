@@ -1268,6 +1268,11 @@ fn managed_registry_locator_routes_linked_worktree_to_authoritative_store() {
     let explicitly_selected =
         RegisteredRuntimeFactory::initialize_with_overrides(None, Some("managed"))
             .expect("managed registry locator must serve explicit workspace selectors");
+    assert_eq!(
+        explicitly_selected.local_root(),
+        fixture.repo_root.join(".orbit"),
+        "logical selectors inspect the registered primary checkout"
+    );
     let selected_task = run_tool(
         &explicitly_selected,
         "orbit.task.show",

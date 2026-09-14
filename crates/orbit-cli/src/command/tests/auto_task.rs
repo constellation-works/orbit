@@ -273,7 +273,20 @@ fn dedupe_accepts_both_spellings_and_agrees_across_file_json_and_show() {
         else {
             panic!("auto-task show should return a payload");
         };
-        let (_, view) = show_payload.into_view();
+        let (document, view) = show_payload.into_view();
+        let definition_root = runtime.local_root();
+        assert_eq!(
+            document["definition_source"]["root"],
+            definition_root.to_string_lossy().as_ref()
+        );
+        assert_eq!(
+            document["definition_source"]["path"],
+            definition_root
+                .join("auto_tasks")
+                .join(format!("{name}.yaml"))
+                .to_string_lossy()
+                .as_ref()
+        );
         let View::Blocks(blocks) = view else {
             panic!("expected block view");
         };
@@ -285,6 +298,20 @@ fn dedupe_accepts_both_spellings_and_agrees_across_file_json_and_show() {
             })
             .expect("text block");
         assert!(text.contains("dedupe: skip_if_open"), "{text}");
+        assert!(
+            text.contains(&format!("definition root: {}", definition_root.display())),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "definition source: {}",
+                definition_root
+                    .join("auto_tasks")
+                    .join(format!("{name}.yaml"))
+                    .display()
+            )),
+            "{text}"
+        );
         assert!(!text.contains("SkipIfOpen"), "{text}");
     }
 }

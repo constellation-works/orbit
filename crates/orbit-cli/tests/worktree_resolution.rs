@@ -84,6 +84,186 @@ fn config_show_reports_shared_and_local_roots_for_git_worktrees_and_overrides() 
     );
 }
 
+#[test]
+fn auto_task_show_reports_and_honors_the_selected_definition_source() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let main_repo = temp.path().join("repo");
+    let linked_worktree = temp.path().join("repo-candidate");
+    fs::create_dir_all(&home).expect("create home");
+    fs::create_dir_all(&main_repo).expect("create main repo");
+    init_git_repo(&main_repo);
+    run_git(
+        &main_repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "orbit-auto-task-candidate",
+            linked_worktree.to_str().expect("utf8 worktree path"),
+        ],
+    );
+    run_orbit_success(&main_repo, &home, &["workspace", "init"], None);
+
+    let main_repo = fs::canonicalize(&main_repo).expect("canonicalize main repo");
+    let linked_worktree = fs::canonicalize(&linked_worktree).expect("canonicalize worktree");
+    let main_orbit = main_repo.join(".orbit");
+    let linked_orbit = linked_worktree.join(".orbit");
+    write_auto_task_fixture(&main_orbit, "Primary checkout definition");
+    write_auto_task_fixture(&linked_orbit, "Linked candidate definition");
+
+    let workspaces = run_orbit_json(
+        &main_repo,
+        &home,
+        &["workspace", "list", "--format", "json"],
+        None,
+    );
+    let workspace_id = workspaces
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["id"].as_str())
+        .unwrap_or_else(|| panic!("expected registered workspace in {workspaces}"));
+
+    let primary = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &[
+            "--workspace",
+            workspace_id,
+            "auto-task",
+            "show",
+            "candidate-probe",
+            "--json",
+        ],
+        None,
+    );
+    assert_eq!(primary["description"], "Primary checkout definition");
+    assert_eq!(
+        primary["definition_source"]["root"],
+        main_orbit.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        primary["definition_source"]["path"],
+        main_orbit
+            .join("auto_tasks/candidate-probe.yaml")
+            .to_string_lossy()
+            .as_ref()
+    );
+
+    let linked_selector = linked_worktree.to_string_lossy();
+    let candidate = run_orbit_json(
+        &main_repo,
+        &home,
+        &[
+            "--workspace",
+            &linked_selector,
+            "auto-task",
+            "show",
+            "candidate-probe",
+            "--json",
+        ],
+        None,
+    );
+    assert_eq!(candidate["description"], "Linked candidate definition");
+    assert_eq!(
+        candidate["definition_source"]["root"],
+        linked_orbit.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        candidate["definition_source"]["path"],
+        linked_orbit
+            .join("auto_tasks/candidate-probe.yaml")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert!(
+        !linked_orbit.join("tasks").exists(),
+        "candidate inspection must not create a worktree-local shadow store"
+    );
+
+    run_orbit_success(
+        &main_repo,
+        &home,
+        &[
+            "--workspace",
+            &linked_selector,
+            "auto-task",
+            "update",
+            "candidate-probe",
+            "--description",
+            "Primary definition updated through authoritative routing",
+        ],
+        None,
+    );
+    let primary_after_update = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &[
+            "--workspace",
+            workspace_id,
+            "auto-task",
+            "show",
+            "candidate-probe",
+            "--json",
+        ],
+        None,
+    );
+    assert_eq!(
+        primary_after_update["description"],
+        "Primary definition updated through authoritative routing"
+    );
+    let candidate_after_update = run_orbit_json(
+        &main_repo,
+        &home,
+        &[
+            "--workspace",
+            &linked_selector,
+            "auto-task",
+            "show",
+            "candidate-probe",
+            "--json",
+        ],
+        None,
+    );
+    assert_eq!(
+        candidate_after_update["description"], "Linked candidate definition",
+        "writable explicit-linked-selector commands must not retarget definition mutations"
+    );
+    assert!(
+        !linked_orbit.join("tasks").exists(),
+        "writable routing must not create a worktree-local shadow store"
+    );
+
+    let outside_checkout = temp.path().to_string_lossy().into_owned();
+    for rejected in ["no-such-workspace", outside_checkout.as_str()] {
+        let mut command = cargo_bin_cmd!("orbit");
+        command
+            .current_dir(&main_repo)
+            .env(
+                "PATH",
+                stub_first_path(&plant_agent_cli_stub(&home, "codex")),
+            )
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .args([
+                "--workspace",
+                rejected,
+                "auto-task",
+                "show",
+                "candidate-probe",
+                "--json",
+            ]);
+        clear_inherited_authority_env(&mut command);
+        set_orbit_root_env(&mut command, None);
+        let assert = command.assert().failure();
+        let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+        assert!(
+            stderr.contains("unknown workspace selector"),
+            "rejected selector {rejected} reported: {stderr}"
+        );
+    }
+}
+
 /// The real detached worker must bootstrap, claim, and finish its run while an
 /// unrelated WAL writer holds the already-current task registry. The parent
 /// keeps supervising the child; no fixture claims the run on its behalf.
@@ -469,6 +649,41 @@ fn init_git_repo(main_repo: &Path) {
     fs::write(main_repo.join("README.md"), "# orbit\n").expect("write readme");
     run_git(main_repo, &["add", "README.md"]);
     run_git(main_repo, &["commit", "-m", "initial"]);
+}
+
+fn write_auto_task_fixture(orbit_dir: &Path, description: &str) {
+    let directory = orbit_dir.join("auto_tasks");
+    fs::create_dir_all(&directory).expect("create auto-task fixture directory");
+    fs::write(
+        directory.join("candidate-probe.yaml"),
+        format!(
+            r#"schemaVersion: 1
+name: candidate-probe
+description: {description}
+enabled: false
+schedule:
+  cron: 0 * * * *
+template:
+  title: Inspect candidate definition
+  description: Exercise definition-source selection.
+  acceptance_criteria:
+  - The selected definition is reported.
+  task_type: chore
+  tags:
+  - candidate-probe
+  priority: low
+  complexity: low
+  crew: system
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-09-14T00:00:00Z
+updated_by: system
+updated_at: 2026-09-14T00:00:00Z
+"#
+        ),
+    )
+    .expect("write auto-task fixture");
 }
 
 /// [ORB-10981] `orbit --root <data-dir> executor list` from a cwd that is not
