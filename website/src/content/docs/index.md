@@ -138,7 +138,7 @@ next: false
           <th scope="row"><a href="/how-to/task-lifecycle/">One task, one PR</a><span class="orbit-modes-sub">the default</span></th>
           <td><code>orbit run ship "$TASK_ID"</code></td>
           <td><em>review</em>, with the pull request open and unmerged. Base branch from <code>[workflow] base_branch</code> in <code>config.toml</code>, or <code>main</code> when unset. Override with <code>--base</code>.</td>
-          <td>Separate and explicit. <code>--complete</code> lets that one run move the task to <em>done</em> once the PR is verified merged and branch protections and required checks are respected.</td>
+          <td>Separate and explicit. <code>--complete</code> merges the PR as soon as GitHub allows it and moves the task to <em>done</em> once the merge is verified. Only branch protection can hold it back: with no required checks it does not wait for CI.</td>
         </tr>
         <tr>
           <th scope="row"><a href="/getting-started/workflows/">One task, merged locally</a></th>
