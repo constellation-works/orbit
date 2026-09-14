@@ -17,27 +17,10 @@ use super::lifecycle::{ensure_task_has_execution_plan, in_progress_transition_re
 use super::params::TaskUpdateParams;
 use super::paths::context_files_pruned_history_entry;
 
-#[cfg(test)]
-use std::sync::Mutex;
-
 const RELATION_RESOLVES: &str = "resolves";
 /// [ORB-10470] Status event recorded when a resumed run restores its own
 /// lineage's coupling to a task (re-admission and/or batch re-claim).
 const RESUME_READMITTED_EVENT: &str = "resume_readmitted";
-
-#[cfg(test)]
-static TRANSITION_READ_HOOK_STATUS: Mutex<Option<(String, TaskStatus)>> = Mutex::new(None);
-
-#[cfg(test)]
-pub(super) static TRANSITION_READ_HOOK_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-#[cfg(test)]
-pub(super) fn set_transition_read_hook_status(id: Option<&str>, status: Option<TaskStatus>) {
-    *TRANSITION_READ_HOOK_STATUS
-        .lock()
-        .expect("transition read hook mutex") =
-        id.zip(status).map(|(id, status)| (id.to_string(), status));
-}
 
 #[derive(Default)]
 struct StartTaskOptions {
@@ -856,10 +839,7 @@ impl OrbitRuntime {
 
     #[cfg(test)]
     fn apply_transition_read_hook(&self, id: &str) -> Result<(), OrbitError> {
-        if let Some((hook_id, status)) = TRANSITION_READ_HOOK_STATUS
-            .lock()
-            .expect("transition read hook mutex")
-            .clone()
+        if let Some((hook_id, status)) = self.transition_read_hook_status()
             && hook_id == id
         {
             self.update_task(
