@@ -1,5 +1,6 @@
 // Content moved from tests.rs per ORB-00231
 
+mod read_pool;
 mod schema;
 
 use std::fs;
