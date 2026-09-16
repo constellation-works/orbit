@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use orbit_types::tool::{ToolSchema, mcp_advertised_tool_name};
+#[cfg(test)]
 use rmcp::ErrorData as McpError;
+#[cfg(test)]
 use serde_json::json;
 
 /// Sanitize an Orbit tool name into the character set MCP clients accept.
@@ -21,6 +23,7 @@ pub(super) struct ToolNameCollision {
 }
 
 impl ToolNameCollision {
+    #[cfg(test)]
     pub(super) fn into_mcp_error(self) -> McpError {
         let message = self.to_string();
         McpError::internal_error(

@@ -17,7 +17,7 @@ use rmcp::service::{RequestContext, RoleServer};
 use serde_json::{Map, Value};
 
 use super::OrbitToolServer;
-use super::name_map::{ToolNameCollision, build_name_map};
+use super::name_map::build_name_map;
 use super::schema::{
     SelectorAdvertisement, WorkspaceBinding, ensure_workspace_selector, schema_to_tool,
 };
@@ -27,20 +27,64 @@ use crate::error::tool_error_result;
 impl OrbitToolServer {
     /// Return the host's complete exposed surface after validating only the
     /// canonical and advertised names the MCP kernel itself owns.
+    #[cfg(test)]
     pub(super) fn tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        let definitions = self.load_tool_definitions()?;
+        self.name_map()
+            .map_err(|error| OrbitError::InvalidInput(error.message.into_owned()))?;
+        Ok(definitions)
+    }
+
+    fn load_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        if let Some(definitions) = self.definitions.get() {
+            return Ok(definitions.as_ref().clone());
+        }
+
         let definitions = self.host.list_mcp_tool_definitions()?;
-        let schemas = definitions
+        if let Some(schema) = definitions
             .iter()
-            .map(|definition| definition.schema.clone())
-            .collect::<Vec<_>>();
-        if let Some(schema) = schemas.iter().find(|schema| schema.name.trim().is_empty()) {
+            .map(|definition| &definition.schema)
+            .find(|schema| schema.name.trim().is_empty())
+        {
             return Err(OrbitError::InvalidInput(format!(
                 "canonical MCP tool name must not be empty: {:?}",
                 schema.name
             )));
         }
-        build_name_map(&schemas).map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-        Ok(definitions)
+        let definitions = Arc::new(definitions);
+        let _ = self.definitions.set(Arc::clone(&definitions));
+        Ok(self
+            .definitions
+            .get()
+            .cloned()
+            .unwrap_or(definitions)
+            .as_ref()
+            .clone())
+    }
+
+    fn name_map(&self) -> Result<Arc<std::collections::HashMap<String, String>>, McpError> {
+        self.name_map
+            .get_or_init(|| {
+                let result = self
+                    .load_tool_definitions()
+                    .map(|definitions| {
+                        definitions
+                            .into_iter()
+                            .map(|definition| definition.schema)
+                            .collect::<Vec<_>>()
+                    })
+                    .map_err(invalid_definitions_mcp_error)
+                    .and_then(|schemas| {
+                        build_name_map(&schemas).map(Arc::new).map_err(|error| {
+                            invalid_definitions_mcp_error(OrbitError::InvalidInput(
+                                error.to_string(),
+                            ))
+                        })
+                    });
+                Arc::new(result)
+            })
+            .as_ref()
+            .clone()
     }
 
     #[cfg(test)]
@@ -137,16 +181,7 @@ impl OrbitToolServer {
     }
 
     pub(super) fn canonical_name(&self, advertised: &str) -> Result<String, McpError> {
-        let schemas = self
-            .tool_definitions()
-            .map(|definitions| {
-                definitions
-                    .into_iter()
-                    .map(|definition| definition.schema)
-                    .collect::<Vec<_>>()
-            })
-            .map_err(invalid_definitions_mcp_error)?;
-        let map = build_name_map(&schemas).map_err(ToolNameCollision::into_mcp_error)?;
+        let map = self.name_map()?;
         Ok(map
             .get(advertised)
             .cloned()
@@ -221,8 +256,19 @@ impl ServerHandler for OrbitToolServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
+        let advertisement = self.selector_advertisement();
+        if let Ok(cache) = self.list_tools_cache.lock()
+            && let Some(cached) = cache.get(&advertisement)
+        {
+            return Ok((**cached).clone());
+        }
+
+        // Build and validate the map on the same first pass as the list. This
+        // keeps malformed advertised names from being hidden by the response
+        // cache while avoiding a rebuild on later calls.
+        self.name_map()?;
         let mut definitions = self
-            .tool_definitions()
+            .load_tool_definitions()
             .map_err(invalid_definitions_mcp_error)?;
         definitions.sort_by(|left, right| left.schema.name.cmp(&right.schema.name));
         let tools = definitions
@@ -234,7 +280,11 @@ impl ServerHandler for OrbitToolServer {
                 Ok(schema_to_tool(definition.schema, input_schema))
             })
             .collect::<Result<Vec<_>, McpError>>()?;
-        Ok(ListToolsResult::with_all_items(tools))
+        let result = ListToolsResult::with_all_items(tools);
+        if let Ok(mut cache) = self.list_tools_cache.lock() {
+            cache.insert(advertisement, Arc::new(result.clone()));
+        }
+        Ok(result)
     }
 
     async fn call_tool(
