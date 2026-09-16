@@ -30,10 +30,14 @@ routine definition. Its durable configuration is `~/.orbit/clock.toml`, defaults
 60-second cadence, and accepts only whole-minute values from 60 through 3600 seconds.
 
 `orbit clock status` reports configured cadence, native-manager enabled state,
-and whether an enabled Linux timer is active with a finite next trigger. An enabled timer
-without that scheduling state is `unhealthy`, has no effective cadence, and reports
-`orbit clock enable`, which rewrites a stale installed systemd timer if needed,
-restarts the timer, and verifies the resulting deadline.
+and whether an enabled unit can actually still sweep. An enabled unit without that
+scheduling state is `unhealthy`, has no effective cadence, and reports
+`orbit clock enable`, which rewrites a stale installed unit if needed,
+re-arms it, and verifies the result. On Linux the evidence is a timer that is active with
+a finite next trigger. On macOS, where launchd reports an agent as loaded whether or not
+its program still works, the evidence is the unit's own program (through the inspection
+behind `orbit doctor`'s `clock-unit` row) plus `launchctl print`: a non-zero `last exit
+code` for the most recent run, or a `penalty box` property, means no sweep is firing.
 An installed unit that still invokes `orbit sweep` is stale; `orbit clock enable` rewrites
 it to invoke `orbit clock tick` through the same compare-and-rewrite path.
 `orbit clock pause` disables only launchd/systemd
