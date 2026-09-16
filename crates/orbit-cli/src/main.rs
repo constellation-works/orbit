@@ -248,6 +248,7 @@ fn main() {
     let actor = ActorIdentity::from_env();
     let CommandOperation {
         runtime_need,
+        task_owner_id,
         audit_meta,
         json_error_preference,
         suppress_errors,
@@ -284,10 +285,17 @@ fn main() {
                 workspace_selector.as_deref(),
             )
         }
-        RuntimeNeed::ReadOnly => RegisteredRuntimeFactory::initialize_read_only_with_overrides(
-            root_override.as_deref(),
-            workspace_selector.as_deref(),
-        ),
+        RuntimeNeed::ReadOnly => match task_owner_id.as_deref() {
+            Some(task_id) => orbit_cmd::task_owner::initialize_for_task_show(
+                root_override.as_deref(),
+                workspace_selector.as_deref(),
+                task_id,
+            ),
+            None => RegisteredRuntimeFactory::initialize_read_only_with_overrides(
+                root_override.as_deref(),
+                workspace_selector.as_deref(),
+            ),
+        },
         RuntimeNeed::TaskOwner { task_id } => orbit_cmd::task_owner::initialize_for_task_show(
             root_override.as_deref(),
             workspace_selector.as_deref(),

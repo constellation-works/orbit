@@ -39,11 +39,10 @@ pub enum RuntimeNeed {
     /// Bind the workspace that owns this task ID rather than the one the cwd
     /// or `--workspace` walk would pick [ORB-10797] [ORB-10961].
     ///
-    /// Task IDs are a machine-global primary key, so `task show` — including
-    /// `orbit tool run orbit.task.show` — is the one verb whose target is
-    /// addressable without knowing its workspace. A `--workspace` selector
-    /// still wins and still filters: the bootstrap binds that workspace, and a
-    /// task owned elsewhere is simply not found.
+    /// Task IDs are a machine-global primary key, so ID-addressed task reads
+    /// can resolve their owner without knowing the workspace. A `--workspace`
+    /// selector still wins and still filters: the bootstrap binds that
+    /// workspace, and a task owned elsewhere is simply not found.
     TaskOwner {
         task_id: String,
     },
@@ -94,6 +93,10 @@ pub type CommandDispatch = for<'a> fn(Commands, DispatchContext<'a>) -> CommandO
 
 pub struct CommandOperation {
     pub runtime_need: RuntimeNeed,
+    /// Optional owner lookup for read-only human `task show`. This keeps the
+    /// command on the read-only bootstrap while preserving its ID-global
+    /// workspace routing.
+    pub task_owner_id: Option<String>,
     pub audit_meta: Option<CommandMeta>,
     pub json_error_preference: Option<bool>,
     pub suppress_errors: bool,
@@ -128,12 +131,18 @@ impl CommandOperation {
     ) -> Self {
         Self {
             runtime_need,
+            task_owner_id: None,
             audit_meta,
             json_error_preference,
             suppress_errors,
             dispatch,
             governed: None,
         }
+    }
+
+    fn with_task_owner_id(mut self, task_id: Option<String>) -> Self {
+        self.task_owner_id = task_id;
+        self
     }
 
     /// Mark this invocation as performing a governed operation.
@@ -229,8 +238,8 @@ impl Commands {
                 let (subcommand, runtime_need, governed) = match &command.command {
                     WorkspaceSubcommand::Init(_) => ("init", RuntimeNeed::Forbidden, false),
                     WorkspaceSubcommand::Sync(_) => ("sync", RuntimeNeed::Forbidden, false),
-                    WorkspaceSubcommand::List(_) => ("list", RuntimeNeed::Required, false),
-                    WorkspaceSubcommand::Show(_) => ("show", RuntimeNeed::Required, false),
+                    WorkspaceSubcommand::List(_) => ("list", RuntimeNeed::ReadOnly, false),
+                    WorkspaceSubcommand::Show(_) => ("show", RuntimeNeed::ReadOnly, false),
                     WorkspaceSubcommand::SourceRemote(command) => match &command.command {
                         WorkspaceSourceRemoteSubcommand::Show(_) => {
                             ("source-remote-show", RuntimeNeed::Required, false)
@@ -588,10 +597,12 @@ impl Commands {
                     },
                     TaskSubcommand::Reindex(_) => ("reindex", None, None),
                 };
+                let task_owner_id = match &command.command {
+                    TaskSubcommand::Show(args) => Some(args.id.clone()),
+                    _ => None,
+                };
                 let runtime_need = match &command.command {
-                    TaskSubcommand::Show(args) => RuntimeNeed::TaskOwner {
-                        task_id: args.id.clone(),
-                    },
+                    TaskSubcommand::Show(_) => RuntimeNeed::ReadOnly,
                     // `orbit.task.artifact.get` shares `orbit.task.show`'s
                     // resolved-globally-by-default schema wording, so `orbit
                     // task artifact get` must resolve the same way rather than
@@ -603,6 +614,8 @@ impl Commands {
                         },
                         TaskArtifactSubcommand::Put(_) => RuntimeNeed::Required,
                     },
+                    TaskSubcommand::List(_) | TaskSubcommand::Flow(_) => RuntimeNeed::ReadOnly,
+                    TaskSubcommand::Lint(args) if !args.fix => RuntimeNeed::ReadOnly,
                     // Every other task verb keeps cwd (or `--workspace`) as its
                     // binding: only a read addressed by a globally unique ID can
                     // be routed from the ID alone.
@@ -615,6 +628,7 @@ impl Commands {
                     false,
                     boxed_runtime_dispatch!(Task),
                 )
+                .with_task_owner_id(task_owner_id)
                 .governed_when(
                     matches!(
                         &command.command,
@@ -730,7 +744,10 @@ impl Commands {
             ),
             Commands::AutoTask(command) => {
                 use super::auto_task::AutoTaskSubcommand;
-                let runtime_need = if matches!(&command.command, AutoTaskSubcommand::Show(_)) {
+                let runtime_need = if matches!(
+                    &command.command,
+                    AutoTaskSubcommand::List(_) | AutoTaskSubcommand::Show(_)
+                ) {
                     RuntimeNeed::ReadOnly
                 } else {
                     RuntimeNeed::Required
@@ -892,6 +909,7 @@ impl Commands {
                         Some(task_id) => RuntimeNeed::TaskOwner { task_id },
                         None => RuntimeNeed::Required,
                     },
+                    ToolSubcommand::List(_) => RuntimeNeed::ReadOnly,
                     _ => RuntimeNeed::Required,
                 };
                 CommandOperation::new(
