@@ -129,11 +129,33 @@ pub fn semantic_search(
     search::run(vector_store, params)
 }
 
+/// [`semantic_search`] against an embedder the caller already built.
+///
+/// A fan-out over several workspaces resolves the query-side model and spawns
+/// the companion once, then hands the same embedder to every index it reads
+/// [DANI-10365].
+pub fn semantic_search_with(
+    vector_store: &VectorStore,
+    embedder: &dyn crate::Embedder,
+    params: SemanticSearchParams,
+) -> Result<SemanticSearchResult, OrbitError> {
+    search::run_with_embedder(vector_store, embedder, params)
+}
+
 pub fn doc_semantic_search(
     vector_store: &VectorStore,
     params: DocSemanticSearchParams,
 ) -> Result<DocSemanticSearchResult, OrbitError> {
     doc_search::run(vector_store, params)
+}
+
+/// [`doc_semantic_search`] against an embedder the caller already built.
+pub fn doc_semantic_search_with(
+    vector_store: &VectorStore,
+    embedder: &dyn crate::Embedder,
+    params: DocSemanticSearchParams,
+) -> Result<DocSemanticSearchResult, OrbitError> {
+    doc_search::run_with_embedder(vector_store, embedder, params)
 }
 
 pub fn semantic_related(
