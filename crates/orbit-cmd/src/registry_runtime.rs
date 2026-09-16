@@ -273,7 +273,7 @@ impl RegisteredRuntimeFactory {
         )?;
         let selected = Self::resolve_selector_in(&registry, &selector)?;
         if read_only {
-            Self::open_registered_checkout_read_only(
+            Self::open_registered_checkout_read_only_with_identity(
                 &global_root,
                 &selected.workspace,
                 &selected.checkout,
@@ -428,7 +428,24 @@ impl RegisteredRuntimeFactory {
         })
     }
 
-    fn open_registered_checkout_read_only(
+    /// Open a registered checkout for an observation command without stale-run
+    /// reconciliation or other normal runtime-open writes.
+    pub fn open_registered_checkout_read_only(
+        global_root: &Path,
+        workspace: &Workspace,
+        checkout: &WorkspaceCheckout,
+    ) -> Result<OrbitRuntime, OrbitError> {
+        let identity = inspect_host_identity(global_root)?;
+        Self::open_registered_checkout_read_only_with_identity(
+            global_root,
+            workspace,
+            checkout,
+            &checkout.orbit_dir,
+            &identity,
+        )
+    }
+
+    fn open_registered_checkout_read_only_with_identity(
         global_root: &Path,
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
