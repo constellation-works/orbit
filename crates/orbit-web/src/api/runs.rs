@@ -474,6 +474,7 @@ pub(super) async fn list_run_events(
 
     let run_id = run_id.to_string();
     match blocking("run events", move || {
+        runtime.show_job_run(&run_id)?;
         let rows = runtime.list_v2_audit_events(V2AuditEventFilter {
             workspace_id: String::new(),
             run_id: Some(run_id),

@@ -263,6 +263,30 @@ async fn list_run_logs_returns_not_found_for_unknown_run_and_empty_for_existing_
 }
 
 #[tokio::test]
+async fn list_run_events_returns_not_found_for_unknown_run_and_empty_for_existing_run_without_events()
+ {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let missing_run_id = "jrun-events-missing";
+
+    let response = request_dashboard_run_events(runtime.clone(), missing_run_id).await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let payload = body_json(response).await;
+    assert_eq!(payload["error"], "run not found: jrun-events-missing");
+
+    let seeded_run = seed_run(
+        &runtime,
+        "jrun-events-empty",
+        "web_events_empty",
+        JobRunState::Success,
+    );
+    let response = request_dashboard_run_events(runtime, &seeded_run.run_id).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await, json!([]));
+}
+
+#[tokio::test]
 async fn list_run_logs_stops_after_requested_limit() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run_id = "jrun-log-limit";
@@ -350,6 +374,12 @@ async fn list_run_events_streams_small_page_from_oversized_fixture() {
     // every event first.
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run_id = "jrun-events-oversize";
+    seed_run(
+        &runtime,
+        run_id,
+        "web_events_oversize",
+        JobRunState::Success,
+    );
     seed_v2_audit_events(
         &runtime,
         run_id,
@@ -383,6 +413,7 @@ async fn list_run_events_returns_payload_too_large_when_scan_budget_exceeded() {
     // without ever filling the page.
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run_id = "jrun-events-budget";
+    seed_run(&runtime, run_id, "web_events_budget", JobRunState::Success);
     seed_v2_audit_events(
         &runtime,
         run_id,
@@ -414,6 +445,7 @@ async fn list_run_events_kind_filter_still_works_with_streaming() {
     // Confirms AC3: streaming preserves kind filtering correctness.
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run_id = "jrun-events-kind";
+    seed_run(&runtime, run_id, "web_events_kind", JobRunState::Success);
     seed_v2_audit_events(
         &runtime,
         run_id,
@@ -456,6 +488,7 @@ async fn list_run_events_kind_filter_still_works_with_streaming() {
 async fn list_run_events_accepts_valid_run_id() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run_id = "jrun-1";
+    seed_run(&runtime, run_id, "web_events_valid", JobRunState::Success);
     seed_v2_audit_events(
         &runtime,
         run_id,
