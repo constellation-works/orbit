@@ -9,6 +9,8 @@ use super::super::test_support::{
 use std::path::Path;
 #[cfg(target_os = "macos")]
 use std::process::Stdio;
+#[cfg(target_os = "macos")]
+use std::sync::Arc;
 
 #[test]
 fn sandbox_exec_path_from_uses_trusted_absolute_candidate() {
@@ -244,4 +246,52 @@ fn pty_allocation_is_allowed_under_compiled_profile() {
         "openpty probe failed under the compiled sandbox profile; stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// [DANI-10409] Identical compiled profile text must reuse one process-wide
+/// tempfile across spawns (constant `(fs_profile, provider, env)` retried
+/// within a run), instead of creating, writing, and unlinking a fresh one
+/// every time.
+#[cfg(target_os = "macos")]
+#[test]
+fn spawn_under_macos_sandbox_reuses_tempfile_for_identical_profile_text() {
+    if !sandbox_exec_can_apply() {
+        return;
+    }
+
+    // Unique clause so this profile text never collides with another test's
+    // literal `(allow default)` profile in the shared process-wide cache.
+    let profile_text =
+        "(version 1)\n(allow default)\n(allow file-read* (literal \"/dani-10409-cache-marker\"))\n";
+    let args = ["-c".to_string(), "exit 0".to_string()];
+
+    let spawn_once = || {
+        let (child, profile_file) = spawn_under_macos_sandbox(MacosSandboxSpawnRequest {
+            profile_text,
+            program: "/bin/sh",
+            args: &args,
+            env: &[],
+            cwd: None,
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+        })
+        .expect("spawn sandboxed child");
+        let output = child.wait_with_output().expect("wait for child");
+        assert!(
+            output.status.success(),
+            "sandboxed child should succeed; stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        profile_file
+    };
+
+    let first = spawn_once();
+    let second = spawn_once();
+
+    assert!(
+        Arc::ptr_eq(&first, &second),
+        "identical profile text should reuse the same process-wide tempfile"
+    );
+    assert_eq!(first.path(), second.path());
 }

@@ -448,7 +448,10 @@ pub(crate) struct SpawnedChild {
     pub(crate) child: Child,
     /// Sandbox profile tempfile, if any. Held until the supervisor returns
     /// so the kernel can keep reading the SBPL profile while the child runs.
-    pub(crate) _profile_temp: Option<NamedTempFile>,
+    /// Shared: identical compiled profiles reuse one process-wide tempfile
+    /// (see `orbit_exec::spawn_under_macos_sandbox`), so this may outlive
+    /// this particular spawn.
+    pub(crate) _profile_temp: Option<Arc<NamedTempFile>>,
     /// Linux mount-source descriptors retained until the provider exits.
     ///
     /// Closing a duplicate SQLite database descriptor can release this
