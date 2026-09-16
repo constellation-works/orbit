@@ -192,6 +192,9 @@ fn validated_diagnostics_file_path(
     month_dir: &Path,
     path: PathBuf,
 ) -> Result<PathBuf, OrbitError> {
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| OrbitError::Io(format!("resolve diagnostics root: {error}")))?;
     let canonical_month_dir = month_dir
         .canonicalize()
         .map_err(|error| OrbitError::Io(format!("resolve diagnostics month: {error}")))?;
@@ -199,7 +202,9 @@ fn validated_diagnostics_file_path(
         .canonicalize()
         .map_err(|error| OrbitError::Io(format!("resolve diagnostics file: {error}")))?;
 
-    if canonical_file.starts_with(root) && canonical_file.starts_with(&canonical_month_dir) {
+    if canonical_file.starts_with(&canonical_root)
+        && canonical_file.starts_with(&canonical_month_dir)
+    {
         Ok(canonical_file)
     } else {
         Err(OrbitError::InvalidInput(
