@@ -28,12 +28,19 @@ use crate::state::DashboardState;
 /// frontend can render the selected workspace's location directly, without
 /// needing to know the server's home directory (ORB-00037).
 pub(super) async fn list_workspaces(State(state): State<DashboardState>) -> Response {
+    match blocking("list workspaces", move || Ok(list_workspaces_json(&state))).await {
+        Ok(values) => Json(Value::Array(values)).into_response(),
+        Err(response) => *response,
+    }
+}
+
+fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
     // Refresh and pin one snapshot so the listing and its `is_default` flags all
     // reflect the same generation (add/remove/rebind observed atomically).
     let pinned = state.pin();
     let default = pinned.default_workspace();
     let home = home_dir();
-    let values: Vec<Value> = pinned
+    pinned
         .entries()
         .iter()
         .map(|entry| {
@@ -46,8 +53,7 @@ pub(super) async fn list_workspaces(State(state): State<DashboardState>) -> Resp
                 "is_default": default == Some(entry.id.as_str()),
             })
         })
-        .collect();
-    Json(Value::Array(values)).into_response()
+        .collect()
 }
 
 /// `GET /api/tasks/all` — dashboard tasks aggregated across active workspaces.
@@ -64,15 +70,16 @@ pub(super) async fn list_all_tasks(
     State(state): State<DashboardState>,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
-    let mut query = match TaskPageQuery::parse(raw_query.as_deref()) {
+    let query = match TaskPageQuery::parse(raw_query.as_deref()) {
         Ok(query) => query,
         Err(message) => return bad_request(message),
     };
-    let scope = aggregate_task_scope(&state);
-    if let Err(message) = query.bind_cursor(&scope) {
-        return bad_request(message);
-    }
     match blocking("aggregate task list", move || {
+        let scope = aggregate_task_scope(&state);
+        let mut query = query;
+        query
+            .bind_cursor(&scope)
+            .map_err(orbit_core::OrbitError::InvalidInput)?;
         Ok(all_tasks_json(&state, &query, &scope))
     })
     .await

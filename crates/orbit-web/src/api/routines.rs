@@ -22,7 +22,7 @@ use orbit_types::tool::ToolSessionContext;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::map_runtime_error;
+use super::{blocking, map_runtime_error};
 use crate::state::{DashboardState, Ws};
 
 #[derive(Debug, Deserialize, Default)]
@@ -62,15 +62,16 @@ pub(super) struct ClockControlRequest {
 /// `GET /api/routines` — routine definition state and the independent host clock.
 pub(super) async fn list_routine_health(State(state): State<DashboardState>) -> Response {
     let generated_at = Utc::now();
-    let report = match routine_statuses(state.global_root()) {
-        Ok(report) => report,
-        Err(error) => return map_runtime_error(error),
-    };
-    let clock = match state.clock_status() {
-        Ok(clock) => clock,
-        Err(error) => return map_runtime_error(error),
-    };
-    Json(report_json(&report, &clock, generated_at)).into_response()
+    match blocking("routine health", move || {
+        let report = routine_statuses(state.global_root())?;
+        let clock = state.clock_status()?;
+        Ok((report, clock))
+    })
+    .await
+    {
+        Ok((report, clock)) => Json(report_json(&report, &clock, generated_at)).into_response(),
+        Err(response) => *response,
+    }
 }
 
 /// `POST /api/routines/toggle` — atomically change one selected workspace's
@@ -104,9 +105,10 @@ pub(super) async fn toggle_routine(
         }
     };
     let started = Instant::now();
-    let report = match routine_statuses(state.global_root()) {
+    let global_root = state.global_root().to_path_buf();
+    let report = match blocking("routine statuses", move || routine_statuses(&global_root)).await {
         Ok(report) => report,
-        Err(error) => return map_runtime_error(error),
+        Err(response) => return *response,
     };
     let Some(status) = report
         .statuses
@@ -137,9 +139,16 @@ pub(super) async fn toggle_routine(
         );
     }
 
-    let outcome = match set_routine_enabled(&status.routine, body.expected_enabled, body.enabled) {
-        Ok(outcome) => outcome,
-        Err(error) => {
+    let outcome = match blocking("routine toggle", {
+        let routine = status.routine.clone();
+        let expected_enabled = body.expected_enabled;
+        let enabled = body.enabled;
+        move || Ok(set_routine_enabled(&routine, expected_enabled, enabled))
+    })
+    .await
+    {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(error)) => {
             let error_message = error.to_string();
             record_operation_audit(
                 &runtime,
@@ -155,6 +164,7 @@ pub(super) async fn toggle_routine(
             );
             return map_runtime_error(error);
         }
+        Err(response) => return *response,
     };
     if let RoutineToggleOutcome::Conflict { actual_enabled } = outcome {
         return (
@@ -226,13 +236,18 @@ pub(super) async fn control_clock(
         }
     };
     let started = Instant::now();
-    let before = match state.clock_status() {
-        Ok(status) => status,
-        Err(error) => return map_runtime_error(error),
-    };
-    let report = match routine_statuses(state.global_root()) {
-        Ok(report) => report,
-        Err(error) => return map_runtime_error(error),
+    let (before, report) = match blocking("clock status", {
+        let state = state.clone();
+        move || {
+            let before = state.clock_status()?;
+            let report = routine_statuses(state.global_root())?;
+            Ok((before, report))
+        }
+    })
+    .await
+    {
+        Ok(pair) => pair,
+        Err(response) => return *response,
     };
     if body.host_id != report.host_id {
         return selection_conflict(
@@ -255,17 +270,30 @@ pub(super) async fn control_clock(
             .into_response();
     }
 
-    let mutation = match body.action {
-        ClockAction::Enable => set_clock_enabled(state.global_root(), true).map(|_| ()),
-        ClockAction::Disable => set_clock_enabled(state.global_root(), false).map(|_| ()),
-        ClockAction::SetCadence => body
-            .cadence_seconds
-            .ok_or_else(|| {
-                orbit_core::OrbitError::InvalidInput(
-                    "cadence_seconds is required for set_cadence".to_string(),
-                )
+    let mutation = match blocking("clock control", {
+        let state = state.clone();
+        let action = body.action;
+        let cadence_seconds = body.cadence_seconds;
+        move || {
+            Ok(match action {
+                ClockAction::Enable => set_clock_enabled(state.global_root(), true).map(|_| ()),
+                ClockAction::Disable => set_clock_enabled(state.global_root(), false).map(|_| ()),
+                ClockAction::SetCadence => cadence_seconds
+                    .ok_or_else(|| {
+                        orbit_core::OrbitError::InvalidInput(
+                            "cadence_seconds is required for set_cadence".to_string(),
+                        )
+                    })
+                    .and_then(|cadence| {
+                        set_clock_cadence(state.global_root(), cadence).map(|_| ())
+                    }),
             })
-            .and_then(|cadence| set_clock_cadence(state.global_root(), cadence).map(|_| ())),
+        }
+    })
+    .await
+    {
+        Ok(inner) => inner,
+        Err(response) => return *response,
     };
     if let Err(error) = mutation {
         let error_message = error.to_string();
@@ -283,9 +311,14 @@ pub(super) async fn control_clock(
         );
         return map_runtime_error(error);
     }
-    let after = match state.clock_status() {
+    let after = match blocking("clock status after", {
+        let state = state.clone();
+        move || state.clock_status()
+    })
+    .await
+    {
         Ok(status) => status,
-        Err(error) => return map_runtime_error(error),
+        Err(response) => return *response,
     };
     record_operation_audit(
         &runtime,

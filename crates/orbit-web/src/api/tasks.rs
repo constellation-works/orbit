@@ -353,18 +353,16 @@ where
 /// the boundary; clients that need a new live snapshot restart without a cursor.
 /// The cross-workspace `/api/tasks/all` aggregate uses the same contract.
 pub(super) async fn list_tasks(Ws(runtime): Ws, RawQuery(query): RawQuery) -> Response {
-    let mut query = match TaskPageQuery::parse(query.as_deref()) {
+    let query = match TaskPageQuery::parse(query.as_deref()) {
         Ok(query) => query,
         Err(message) => return bad_request(message),
     };
-    let scope = match runtime.workspace_id() {
-        Ok(workspace_id) => format!("workspace:{workspace_id}"),
-        Err(error) => return server_error(error),
-    };
-    if let Err(message) = query.bind_cursor(&scope) {
-        return bad_request(message);
-    }
     match blocking("task list", move || {
+        let scope = format!("workspace:{}", runtime.workspace_id()?);
+        let mut query = query;
+        query
+            .bind_cursor(&scope)
+            .map_err(orbit_core::OrbitError::InvalidInput)?;
         Ok(task_list_page_json(&runtime, &query, &scope))
     })
     .await
