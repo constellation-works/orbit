@@ -8,6 +8,7 @@ pub use orbit_search::{
 };
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskListFilter;
 
 impl OrbitRuntime {
     pub fn semantic_install(
@@ -67,9 +68,8 @@ impl OrbitRuntime {
 
     pub fn semantic_stats(&self) -> Result<SemanticStatsResult, OrbitError> {
         let task_ids: Vec<String> = self
-            .stores()
-            .tasks()
-            .list_tasks()?
+            .task_candidates(&TaskListFilter::default(), usize::MAX)?
+            .items
             .into_iter()
             .map(|task| task.id)
             .collect();
