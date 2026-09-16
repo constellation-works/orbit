@@ -602,7 +602,7 @@ fn append_output_chunk(
 }
 
 fn flush_line_buf(context: &OutputReaderContext, line_buf: &[u8]) {
-    if line_buf.is_empty() {
+    if line_buf.is_empty() || !tracing::enabled!(tracing::Level::INFO) {
         return;
     }
     emit_output_line(
@@ -769,6 +769,10 @@ fn emit_output_chunk(
     raw: &[u8],
     line_buf: &mut Vec<u8>,
 ) {
+    if !tracing::enabled!(tracing::Level::INFO) {
+        return;
+    }
+
     for segment in raw.split_inclusive(|byte| *byte == b'\n') {
         line_buf.extend_from_slice(segment);
         if segment.ends_with(b"\n") || line_buf.len() >= OUTPUT_LINE_EVENT_LIMIT_BYTES {
