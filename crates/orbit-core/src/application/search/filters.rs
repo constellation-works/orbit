@@ -14,15 +14,12 @@ pub(super) fn task_has_all_tags(task: &orbit_types::task::Task, tag_filter: &[St
     })
 }
 
-pub(super) fn doc_has_all_tags(
-    record: &crate::application::docs::DocRecord,
-    tag_filter: &[String],
-) -> bool {
+/// Whether a doc's tags satisfy every requested tag, case-insensitively.
+/// Takes the tags alone because a hybrid candidate's tags may come from the
+/// index rather than a walked record [DANI-10369].
+pub(super) fn doc_has_all_tags(tags: &[String], tag_filter: &[String]) -> bool {
     tag_filter.iter().all(|needle| {
-        record
-            .frontmatter
-            .tags
-            .iter()
+        tags.iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(needle))
     })
 }

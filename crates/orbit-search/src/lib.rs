@@ -45,14 +45,14 @@ mod vector;
 mod tests;
 
 pub use commands::{
-    CompanionStatus, DocIndexParams, DocIndexResult, DocSemanticHit, DocSemanticSearchParams,
-    DocSemanticSearchResult, IndexKind, ScoreBreakdown, SemanticHit, SemanticIndexParams,
-    SemanticIndexResult, SemanticInstallParams, SemanticInstallResult, SemanticReindexParams,
-    SemanticReindexResult, SemanticRelatedParams, SemanticRelatedResult, SemanticSearchParams,
-    SemanticSearchResult, SemanticStatsResult, SemanticUninstallParams, SemanticUninstallResult,
-    TaskIndexResult, doc_index, doc_semantic_search, doc_semantic_search_with, query_model_id,
-    semantic_index, semantic_install, semantic_reindex, semantic_related, semantic_search,
-    semantic_search_with, semantic_stats, semantic_uninstall,
+    CompanionStatus, DocIndexParams, DocIndexResult, DocLexicalHit, DocSemanticHit,
+    DocSemanticSearchParams, DocSemanticSearchResult, IndexKind, ScoreBreakdown, SemanticHit,
+    SemanticIndexParams, SemanticIndexResult, SemanticInstallParams, SemanticInstallResult,
+    SemanticReindexParams, SemanticReindexResult, SemanticRelatedParams, SemanticRelatedResult,
+    SemanticSearchParams, SemanticSearchResult, SemanticStatsResult, SemanticUninstallParams,
+    SemanticUninstallResult, TaskIndexResult, doc_index, doc_lexical_search, doc_semantic_search,
+    doc_semantic_search_with, query_model_id, semantic_index, semantic_install, semantic_reindex,
+    semantic_related, semantic_search, semantic_search_with, semantic_stats, semantic_uninstall,
 };
 pub use companion::{
     CompanionPaths, INSTALL_REMEDIATION, locate_companion, platform_companion_filename, platform_id,
@@ -70,6 +70,6 @@ pub use rpc::{
 pub use shared_query::SharedQueryEmbedder;
 pub use subprocess::SubprocessEmbedder;
 pub use vector::{
-    Bm25Hit, DocEmbeddingSource, EmbedWorker, SOURCE_KIND_DOC, SOURCE_KIND_TASK, SemanticIndex,
-    SemanticStats, UpsertReport, VectorStore, bm25_top_k,
+    Bm25Hit, DocEmbeddingSource, EmbedWorker, IndexedDocFields, SOURCE_KIND_DOC, SOURCE_KIND_TASK,
+    SemanticIndex, SemanticStats, UpsertReport, VectorStore, bm25_top_k,
 };

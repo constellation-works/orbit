@@ -13,14 +13,13 @@ pub(super) fn workspace_by_orbit_dir(
     conn: &Connection,
     orbit_dir: &Path,
 ) -> Result<Option<WorkspaceCheckoutBinding>, OrbitError> {
-    conn.query_row(
+    cached_optional_row(
+        conn,
         "SELECT workspace_id, repo_root, workspace_path, orbit_dir, created_at, updated_at
          FROM workspace_checkout_bindings WHERE orbit_dir = ?1",
         [path_to_string(orbit_dir)],
         decode_workspace_checkout_binding,
     )
-    .optional()
-    .map_err(|e| OrbitError::Store(e.to_string()))
 }
 
 /// Machine-local checkout for a `repo_root` + `workspace_path` pair. Those two
@@ -34,7 +33,8 @@ pub(super) fn workspace_checkout_by_paths(
     repo_root: &Path,
     workspace_path: &Path,
 ) -> Result<Option<WorkspaceCheckoutBinding>, OrbitError> {
-    conn.query_row(
+    cached_optional_row(
+        conn,
         "SELECT workspace_id, repo_root, workspace_path, orbit_dir, created_at, updated_at
          FROM workspace_checkout_bindings
          WHERE repo_root = ?1 AND workspace_path = ?2
@@ -43,50 +43,45 @@ pub(super) fn workspace_checkout_by_paths(
         params![path_to_string(repo_root), path_to_string(workspace_path)],
         decode_workspace_checkout_binding,
     )
-    .optional()
-    .map_err(|e| OrbitError::Store(e.to_string()))
 }
 
 pub(super) fn workspace_by_id(
     conn: &Connection,
     partition_id: &str,
 ) -> Result<Option<WorkspaceBinding>, OrbitError> {
-    conn.query_row(
+    cached_optional_row(
+        conn,
         "SELECT workspace_id, slug, repo_fingerprint, created_at, updated_at
          FROM workspace_bindings WHERE workspace_id = ?1",
         [partition_id],
         decode_workspace_binding,
     )
-    .optional()
-    .map_err(|e| OrbitError::Store(e.to_string()))
 }
 
 pub(super) fn workspace_checkout_by_id(
     conn: &Connection,
     partition_id: &str,
 ) -> Result<Option<WorkspaceCheckoutBinding>, OrbitError> {
-    conn.query_row(
+    cached_optional_row(
+        conn,
         "SELECT workspace_id, repo_root, workspace_path, orbit_dir, created_at, updated_at
          FROM workspace_checkout_bindings WHERE workspace_id = ?1",
         [partition_id],
         decode_workspace_checkout_binding,
     )
-    .optional()
-    .map_err(|e| OrbitError::Store(e.to_string()))
 }
 
 pub(super) fn task_bundle_by_id(
     conn: &Connection,
     task_id: &str,
 ) -> Result<Option<TaskBundleBinding>, OrbitError> {
-    conn.query_row(
+    cached_optional_row(
+        conn,
         "SELECT task_id, workspace_id, canonical_path, created_at, updated_at
          FROM task_bundle_bindings WHERE task_id = ?1",
         [task_id],
         decode_task_bundle_binding,
     )
-    .optional()
-    .map_err(|e| OrbitError::Store(e.to_string()))
 }
 
 pub(super) fn task_ids_for_workspace(
@@ -94,7 +89,7 @@ pub(super) fn task_ids_for_workspace(
     partition_id: &str,
 ) -> Result<BTreeSet<String>, OrbitError> {
     let mut stmt = conn
-        .prepare(
+        .prepare_cached(
             "SELECT task_id FROM task_bundle_bindings
              WHERE workspace_id = ?1
              ORDER BY task_id ASC",
@@ -189,6 +184,23 @@ impl<'tx> TaskIndexWriter<'tx> {
 
         Ok(())
     }
+}
+
+fn cached_optional_row<T, P, F>(
+    conn: &Connection,
+    sql: &str,
+    params: P,
+    f: F,
+) -> Result<Option<T>, OrbitError>
+where
+    P: rusqlite::Params,
+    F: FnOnce(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+{
+    conn.prepare_cached(sql)
+        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .query_row(params, f)
+        .optional()
+        .map_err(|e| OrbitError::Store(e.to_string()))
 }
 
 /// Indexed form of [`TaskComplexity`]: a populated band, or `""` for unset.

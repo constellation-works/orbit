@@ -8,8 +8,10 @@
 //! - [`upsert`] — `upsert_embeddings`, the BLAKE3-deduped per-field write path,
 //!   plus its private SQL helpers (`delete_field_rows`, content-hash check).
 //! - [`tasks`] — `index_task` / `reindex_tasks` task-corpus entry points.
-//! - [`docs`] — `index_doc` / `reindex_docs` docs-corpus entry points.
-//! - [`queries`] — `delete_source` and `stats` read/cascade operations.
+//! - [`docs`] — `index_doc` / `reindex_docs` docs-corpus entry points, plus
+//!   `indexed_doc_fields`, the read-back of the stored doc frontmatter.
+//! - [`queries`] — `has_sources`, `delete_source`, and `stats` read/cascade
+//!   operations.
 //!
 //! This file owns the `VectorStore` struct itself plus the connection-handle
 //! plumbing (`open`, `open_in_memory`, `connection` — pragma defaults come
@@ -21,6 +23,8 @@ mod queries;
 pub(crate) mod schema;
 mod tasks;
 mod upsert;
+
+pub use docs::IndexedDocFields;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};

@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_search::DocSemanticHit;
+use orbit_search::{
+    DocLexicalHit, DocSearchResult, DocSearchSource, DocSemanticHit, IndexedDocFields, VectorStore,
+};
 
 use super::convert::doc_result_to_global;
 use super::types::GlobalSearchHit;
@@ -9,11 +11,107 @@ use super::{
     DOC_HYBRID_FALLBACK_NOTE, DOC_SEARCH_MIN_CANDIDATES, DOC_SEARCH_OVERFETCH,
     TASK_HYBRID_FALLBACK_NOTE,
 };
+use crate::application::docs::DocRecord;
 
 pub(super) fn doc_search_candidate_limit(limit: usize) -> usize {
     limit
         .saturating_mul(DOC_SEARCH_OVERFETCH)
         .max(DOC_SEARCH_MIN_CANDIDATES)
+}
+
+/// The frontmatter a hybrid doc candidate is completed and tag-filtered
+/// from, whichever corpus read produced it.
+#[derive(Debug, Clone)]
+pub(super) struct DocHybridRecord {
+    pub(super) summary: String,
+    /// `None` for a record read from the index, which stores no doc type.
+    pub(super) doc_type: Option<String>,
+    pub(super) tags: Vec<String>,
+}
+
+impl From<DocRecord> for DocHybridRecord {
+    fn from(record: DocRecord) -> Self {
+        Self {
+            summary: record.frontmatter.summary,
+            doc_type: Some(record.frontmatter.doc_type.as_str().to_string()),
+            tags: record.frontmatter.tags,
+        }
+    }
+}
+
+impl From<IndexedDocFields> for DocHybridRecord {
+    fn from(fields: IndexedDocFields) -> Self {
+        Self {
+            summary: fields.title,
+            doc_type: None,
+            tags: fields.tags,
+        }
+    }
+}
+
+/// Where one hybrid doc query reads the docs corpus — exactly once either way
+/// [DANI-10369].
+pub(super) enum DocHybridCorpus<'a> {
+    /// The doc chunks in the semantic index: BM25 over `corpus_fts` for the
+    /// lexical half, the stored `title`/`tags` for record completion. Nothing
+    /// is read from disk.
+    Index(&'a VectorStore),
+    /// No doc is indexed, so one walk of the docs roots scored the lexical
+    /// half and these are the records it saw.
+    Walk(BTreeMap<String, DocRecord>),
+}
+
+impl DocHybridCorpus<'_> {
+    /// The records for `paths`, in whatever order; a path the corpus does not
+    /// know is absent.
+    pub(super) fn records(
+        &self,
+        paths: &[&str],
+    ) -> Result<BTreeMap<String, DocHybridRecord>, OrbitError> {
+        match self {
+            Self::Index(store) => Ok(store
+                .indexed_doc_fields(paths)?
+                .into_iter()
+                .map(|(path, fields)| (path, fields.into()))
+                .collect()),
+            Self::Walk(records) => Ok(paths
+                .iter()
+                .filter_map(|path| {
+                    records
+                        .get(*path)
+                        .map(|record| ((*path).to_string(), record.clone().into()))
+                })
+                .collect()),
+        }
+    }
+}
+
+/// An index-served lexical hit in the shape the walk produces, so the rest of
+/// the hybrid blend does not care which corpus read answered.
+///
+/// BM25 exposes rank, not a comparable score, so the score is the hit's
+/// position counted from the bottom of `total` hits; the blend min-max
+/// normalizes it against the other lexical candidates anyway.
+pub(super) fn indexed_doc_result(
+    hit: DocLexicalHit,
+    record: &DocHybridRecord,
+    total: usize,
+) -> DocSearchResult {
+    DocSearchResult {
+        record: DocSearchSource {
+            path: hit.source_id,
+            doc_type: String::new(),
+            summary: record.summary.clone(),
+            tags: record.tags.clone(),
+            paths: Vec::new(),
+            related_features: Vec::new(),
+            related_artifacts: Vec::new(),
+            body: String::new(),
+        },
+        score: total.saturating_sub(hit.rank).saturating_add(1),
+        matched_by: vec![hit.best_field],
+        snippet: Some(hit.snippet),
+    }
 }
 
 #[derive(Debug, Clone)]

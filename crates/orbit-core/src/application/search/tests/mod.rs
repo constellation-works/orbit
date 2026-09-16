@@ -1,11 +1,12 @@
 use std::fs;
 
-use orbit_search::{DocSemanticHit, ScoreBreakdown, SemanticHit};
+use orbit_search::{DocEmbeddingSource, DocSemanticHit, NoopEmbedder, ScoreBreakdown, SemanticHit};
 use orbit_store::contracts::TaskCreateParams;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 
 use super::*;
 use crate::OrbitRuntime;
+use crate::application::docs::{git_check_ignore_invocations, reset_git_check_ignore_invocations};
 
 mod federated;
 mod global;
@@ -83,6 +84,27 @@ fn add_doc_with_tags_and_body(
         format!("---\ntype: context\nsummary: {summary}\n{tags_line}---\n\n{body}\n"),
     )
     .expect("write doc");
+}
+
+/// Put a doc in the semantic index without writing it to disk, the way
+/// `orbit docs index` stores one: `title` is the frontmatter summary.
+fn index_doc(runtime: &OrbitRuntime, path: &str, summary: &str, tags: &[&str], body: &str) {
+    runtime
+        .stores()
+        .semantic_index()
+        .store()
+        .expect("open vector store")
+        .index_doc(
+            &DocEmbeddingSource {
+                path: path.to_string(),
+                title: summary.to_string(),
+                tags: tags.iter().map(|tag| tag.to_string()).collect(),
+                body: body.to_string(),
+            },
+            &NoopEmbedder::small(),
+            false,
+        )
+        .expect("index doc");
 }
 
 // L-0026: keep each caller's query unique; in-memory doc files share the temp parent.

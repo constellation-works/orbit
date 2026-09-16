@@ -365,6 +365,169 @@ fn doc_hybrid_fallback_preserves_lexical_filtering_and_order() {
     );
 }
 
+/// [DANI-10369] With doc rows in the index, the lexical half of a hybrid
+/// query is BM25 over `corpus_fts`, not a walk: a doc only the index knows is
+/// found from its stored fields, and a doc only the disk knows is not.
+#[test]
+fn doc_hybrid_serves_lexical_hits_from_the_index_not_the_docs_tree() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    add_doc(&runtime, "docs/disk-only.md", "ftsneedle on disk");
+    index_doc(
+        &runtime,
+        "docs/indexed-only.md",
+        "Indexed summary",
+        &["indexed"],
+        "the ftsneedle body lives in the index",
+    );
+
+    reset_git_check_ignore_invocations();
+    let response = with_doc_semantic_override(Ok(Vec::new()), || {
+        runtime
+            .global_search(GlobalSearchParams {
+                query: Some("ftsneedle".to_string()),
+                hybrid: true,
+                kind: GlobalSearchKind::Doc,
+                limit: 5,
+                ..Default::default()
+            })
+            .expect("index-served lexical fallback")
+    });
+
+    assert_eq!(
+        git_check_ignore_invocations(),
+        0,
+        "the docs tree must not be walked when the index answers"
+    );
+    assert!(
+        response
+            .notes
+            .iter()
+            .any(|note| note.contains("no doc embeddings found"))
+    );
+    assert_eq!(response.results.len(), 1, "{:?}", response.results);
+    let hit = &response.results[0];
+    assert_eq!(hit.path.as_deref(), Some("docs/indexed-only.md"));
+    assert_eq!(hit.source, "lexical");
+    assert_eq!(hit.summary.as_deref(), Some("Indexed summary"));
+    assert_eq!(hit.matched_by, Some(vec!["body".to_string()]));
+    assert_eq!(
+        hit.snippet.as_deref(),
+        Some("the ftsneedle body lives in the index")
+    );
+    assert_eq!(hit.status, None, "the index stores no doc type");
+}
+
+/// [DANI-10369] A semantic-only hit is completed — and tag-filtered — from
+/// the index's stored `title`/`tags`, so the blend never lists the docs tree.
+#[test]
+fn doc_hybrid_completes_semantic_hits_from_the_index() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    index_doc(
+        &runtime,
+        "docs/blendneedle-lexical.md",
+        "blendneedle lexical",
+        &["lexical"],
+        "blendneedle body",
+    );
+    index_doc(
+        &runtime,
+        "docs/blendneedle-semantic.md",
+        "Conceptual match",
+        &["concept"],
+        "unrelated body",
+    );
+    let semantic = vec![doc_semantic_hit("docs/blendneedle-semantic.md", 1.0)];
+    let search = |tags: Vec<String>| {
+        reset_git_check_ignore_invocations();
+        let response = with_doc_semantic_override(Ok(semantic.clone()), || {
+            runtime
+                .global_search(GlobalSearchParams {
+                    query: Some("blendneedle".to_string()),
+                    hybrid: true,
+                    kind: GlobalSearchKind::Doc,
+                    tags,
+                    limit: 5,
+                    ..Default::default()
+                })
+                .expect("doc hybrid search")
+        });
+        assert_eq!(git_check_ignore_invocations(), 0);
+        assert_eq!(response.mode, GlobalSearchMode::Hybrid);
+        response
+    };
+
+    let response = search(Vec::new());
+    let paths = response
+        .results
+        .iter()
+        .map(|hit| hit.path.as_deref().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        vec![
+            "docs/blendneedle-lexical.md",
+            "docs/blendneedle-semantic.md"
+        ]
+    );
+    let semantic_hit = &response.results[1];
+    assert_eq!(semantic_hit.source, "hybrid");
+    assert_eq!(semantic_hit.summary.as_deref(), Some("Conceptual match"));
+    assert_eq!(semantic_hit.best_field.as_deref(), Some("body"));
+    assert_eq!(semantic_hit.snippet.as_deref(), Some("semantic snippet"));
+
+    let filtered = search(vec!["concept".to_string()]);
+    assert_eq!(filtered.results.len(), 1);
+    assert_eq!(
+        filtered.results[0].path.as_deref(),
+        Some("docs/blendneedle-semantic.md")
+    );
+}
+
+/// [DANI-10369] Without doc rows in the index, one walk both scores the
+/// lexical half and supplies the records the semantic hits are completed
+/// from; it used to walk (and spawn `git check-ignore`) twice.
+#[test]
+fn doc_hybrid_walks_the_docs_tree_once_when_nothing_is_indexed() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    add_doc(&runtime, "docs/walkneedle-lexical.md", "walkneedle lexical");
+    add_doc(&runtime, "docs/walkneedle-semantic.md", "Conceptual walk");
+
+    reset_git_check_ignore_invocations();
+    let response = with_doc_semantic_override(
+        Ok(vec![doc_semantic_hit("docs/walkneedle-semantic.md", 1.0)]),
+        || {
+            runtime
+                .global_search(GlobalSearchParams {
+                    query: Some("walkneedle".to_string()),
+                    hybrid: true,
+                    kind: GlobalSearchKind::Doc,
+                    limit: 5,
+                    ..Default::default()
+                })
+                .expect("doc hybrid search")
+        },
+    );
+
+    assert_eq!(
+        git_check_ignore_invocations(),
+        1,
+        "exactly one walk per query"
+    );
+    assert_eq!(response.mode, GlobalSearchMode::Hybrid);
+    let by_path = response
+        .results
+        .iter()
+        .map(|hit| (hit.path.as_deref().unwrap_or_default(), hit))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(by_path.len(), 2, "{:?}", response.results);
+    let semantic_hit = by_path["docs/walkneedle-semantic.md"];
+    assert_eq!(semantic_hit.summary.as_deref(), Some("Conceptual walk"));
+    assert_eq!(semantic_hit.status.as_deref(), Some("context"));
+    let lexical_hit = by_path["docs/walkneedle-lexical.md"];
+    assert_eq!(lexical_hit.summary.as_deref(), Some("walkneedle lexical"));
+    assert_eq!(lexical_hit.status.as_deref(), Some("context"));
+}
+
 #[test]
 fn hybrid_handles_single_candidate_side() {
     let hit = GlobalSearchHit {

@@ -50,7 +50,7 @@ impl WorkspaceIdentity {
     }
 }
 
-/// Bootstrap the runtime `orbit task show <id>` must read.
+/// Bootstrap the read-only runtime `orbit task show <id>` must read.
 ///
 /// With `--workspace`, the selector is a filter: this is the ordinary
 /// registered bootstrap, and a task owned elsewhere simply is not found there.
@@ -66,11 +66,14 @@ pub fn initialize_for_task_show(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     if selector.is_some() {
-        return RegisteredRuntimeFactory::initialize_with_overrides(root_override, selector);
+        return RegisteredRuntimeFactory::initialize_read_only_with_overrides(
+            root_override,
+            selector,
+        );
     }
     let global_root = global_root_for(root_override)?;
     let selected = resolve_task_owner(&global_root, task_id)?;
-    RegisteredRuntimeFactory::open_registered_checkout(
+    RegisteredRuntimeFactory::open_registered_checkout_read_only(
         &global_root,
         &selected.workspace,
         &selected.checkout,

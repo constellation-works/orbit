@@ -33,10 +33,9 @@ fn runtime_free_command_set_is_derived_from_operations() {
     }
 
     let runtime_required: &[&[&str]] = &[
-        &["orbit", "workspace", "list"],
         &["orbit", "migrate", "--confirm"],
         &["orbit", "run", "history"],
-        &["orbit", "task", "list"],
+        &["orbit", "task", "lint", "--fix"],
     ];
     for args in runtime_required {
         assert_eq!(
@@ -48,6 +47,36 @@ fn runtime_free_command_set_is_derived_from_operations() {
     assert_eq!(
         operation_for(&["orbit", "host", "rename", "old", "new"]).runtime_need,
         RuntimeNeed::Required
+    );
+}
+
+#[test]
+fn observation_commands_use_the_read_only_runtime() {
+    let runtime_read_only: &[&[&str]] = &[
+        &["orbit", "workspace", "list"],
+        &["orbit", "workspace", "show"],
+        &["orbit", "task", "list"],
+        &["orbit", "task", "show", "ORB-10200"],
+        &["orbit", "task", "flow"],
+        &["orbit", "task", "lint"],
+        &["orbit", "auto-task", "list"],
+        &["orbit", "auto-task", "show", "daily"],
+        &["orbit", "tool", "list"],
+    ];
+
+    for args in runtime_read_only {
+        assert_eq!(
+            operation_for(args).runtime_need,
+            RuntimeNeed::ReadOnly,
+            "{args:?} must use the read-only runtime"
+        );
+    }
+
+    assert_eq!(
+        operation_for(&["orbit", "task", "show", "ORB-10200"])
+            .task_owner_id
+            .as_deref(),
+        Some("ORB-10200")
     );
 }
 

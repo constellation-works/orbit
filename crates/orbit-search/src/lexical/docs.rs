@@ -55,8 +55,9 @@ pub fn score_doc_record(record: DocSearchSource, query_lower: &str) -> Option<Do
             matched_by.push(format!("tag:{tag}"));
         }
     }
-    let body_lower = record.body.to_ascii_lowercase();
-    let snippet = body_lower.find(query_lower).map(|offset| {
+    // Scan the body in place: lowercasing it first copies every doc in the
+    // corpus once per query, and the copy was only ever read for this find.
+    let snippet = find_ignore_ascii_case(&record.body, query_lower).map(|offset| {
         let mut start = offset.saturating_sub(80);
         while start > 0 && !record.body.is_char_boundary(start) {
             start -= 1;
@@ -80,6 +81,25 @@ pub fn score_doc_record(record: DocSearchSource, query_lower: &str) -> Option<Do
         matched_by,
         snippet,
     })
+}
+
+/// Byte offset of the first occurrence of `needle_lower` in `haystack`,
+/// comparing ASCII letters case-insensitively — what
+/// `haystack.to_ascii_lowercase().find(needle_lower)` returns, without the
+/// copy. `needle_lower` is already lowercased by the caller.
+///
+/// The offset is a char boundary of `haystack`: a match starts where the
+/// needle's first byte does, and that byte is never a UTF-8 continuation.
+// widened for tests per the sibling layout; see test_layout.md
+pub(crate) fn find_ignore_ascii_case(haystack: &str, needle_lower: &str) -> Option<usize> {
+    let needle = needle_lower.as_bytes();
+    if needle.is_empty() {
+        return Some(0);
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .position(|window| window.eq_ignore_ascii_case(needle))
 }
 
 pub fn sort_search_results(results: &mut [SearchResult]) {
