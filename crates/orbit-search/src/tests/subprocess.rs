@@ -72,6 +72,10 @@ mod fake_companion {
     /// Shared JSON-Lines dispatcher for the fake companion. `$EMBED_BODY`
     /// is spliced per test to control embed behavior.
     fn write_companion_script(dir: &Path, embed_body: &str) -> PathBuf {
+        write_companion_script_with_version(dir, embed_body, env!("CARGO_PKG_VERSION"))
+    }
+
+    fn write_companion_script_with_version(dir: &Path, embed_body: &str, version: &str) -> PathBuf {
         let path = dir.join("fake-companion.sh");
         let script = format!(
             r#"#!/bin/sh
@@ -79,7 +83,7 @@ while read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
   case "$line" in
     *'"method":"info"'*)
-      printf '{{"id":%s,"result":{{"model_id":"fake","dim":2,"max_input_tokens":16,"version":null}}}}\n' "$id" ;;
+      printf '{{"id":%s,"result":{{"model_id":"fake","dim":2,"max_input_tokens":16,"version":"{version}"}}}}\n' "$id" ;;
     *'"method":"embed"'*)
       {embed_body} ;;
     *'"method":"token_count"'*)
@@ -93,6 +97,28 @@ done
 "#
         );
         std::fs::write(&path, script).expect("write fake companion");
+        chmod_executable(&path);
+        path
+    }
+
+    fn write_stale_protocol_companion(dir: &Path) -> PathBuf {
+        let path = dir.join("stale-companion.sh");
+        let script = r#"#!/bin/sh
+while read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"info"'*)
+      printf '{"id":%s,"result":{"model_id":"fake","dim":2,"max_input_tokens":16,"version":"0.20.0"}}\n' "$id" ;;
+    *'"method":"embed"'*)
+      printf '{"id":%s,"error":{"code":"invalid_request","message":"missing field `text`"}}\n' "$id" ;;
+    *'"method":"token_count"'*)
+      printf '{"id":%s,"error":{"code":"invalid_request","message":"missing field `text`"}}\n' "$id" ;;
+    *'"method":"exit"'*)
+      printf '{"id":%s,"result":{"ok":true}}\n' "$id"; exit 0 ;;
+  esac
+done
+"#;
+        std::fs::write(&path, script).expect("write stale companion");
         chmod_executable(&path);
         path
     }
@@ -112,6 +138,34 @@ done
                 .token_counts(&["one", "two words"])
                 .expect("batched token count"),
             [1, 2]
+        );
+    }
+
+    #[test]
+    fn stale_companion_is_rejected_before_legacy_missing_text_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let script = write_stale_protocol_companion(temp.path());
+
+        let err = match SubprocessEmbedder::with_path_and_model(script, "fake") {
+            Ok(_) => panic!("stale companion must fail its version handshake"),
+            Err(err) => err,
+        };
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("search companion version 0.20.0"),
+            "error should name the installed companion version: {rendered}"
+        );
+        assert!(
+            rendered.contains(concat!("Orbit version ", env!("CARGO_PKG_VERSION"))),
+            "error should name the running Orbit version: {rendered}"
+        );
+        assert!(
+            rendered.contains("orbit semantic install"),
+            "error should name the install remediation: {rendered}"
+        );
+        assert!(
+            !rendered.contains("missing field `text`"),
+            "raw stale-protocol serde error must not escape: {rendered}"
         );
     }
 
@@ -375,7 +429,7 @@ while read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
   case "$line" in
     *'"method":"info"'*)
-      printf '{"id":%s,"result":{"model_id":"fake","dim":2,"max_input_tokens":16,"version":null}}\n' "$id" ;;
+      printf '{"id":%s,"result":{"model_id":"fake","dim":2,"max_input_tokens":16,"version":"{version}"}}\n' "$id" ;;
     *'"method":"exit"'*)
       sleep 3600 ;;
     *)
@@ -383,6 +437,7 @@ while read -r line; do
   esac
 done
 "#;
+        let script = script.replace("{version}", env!("CARGO_PKG_VERSION"));
         std::fs::write(&path, script).expect("write ignore-exit companion");
         chmod_executable(&path);
         path

@@ -178,6 +178,9 @@ fn write_empty_partition(global_root: &Path, workspace_id: &str) {
 
 #[test]
 fn healthy_fresh_workspace_has_no_failures() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let home_path = home.path().to_string_lossy().into_owned();
+    let _env = orbit_common::test_env::scoped([("HOME", Some(home_path.as_str()))]);
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let results = runtime.doctor_workspace().expect("doctor");
 
@@ -233,6 +236,57 @@ fn healthy_fresh_workspace_has_no_failures() {
     assert_eq!(
         status_of(&results, "orphan-task-stores").status,
         WorkspaceDoctorStatus::Ok
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn stale_companion_warns_even_when_semantic_index_is_empty() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    orbit_common::test_env::harden_dir(temp.path());
+    let script = temp.path().join("stale-companion");
+    fs::write(
+        &script,
+        r##"#!/bin/sh
+printf '%s\n' '{"id":0,"result":{"model_id":"fake","dim":0,"max_input_tokens":0,"version":"0.20.0"}}'
+"##,
+    )
+    .expect("write stale companion");
+    let mut permissions = fs::metadata(&script)
+        .expect("stale companion metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script, permissions).expect("make stale companion executable");
+
+    let script_path = script.to_string_lossy().into_owned();
+    let _env = orbit_common::test_env::scoped([
+        ("ORBIT_SEARCH_COMPANION", Some(script_path.as_str())),
+        ("ORBIT_SEARCH_COMPANION_ALLOW_UNSAFE", Some("1")),
+    ]);
+    let runtime = workspace_runtime(&temp);
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "semantic-index");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    assert!(row.message.contains("0.20.0"), "{}", row.message);
+    assert!(
+        row.message
+            .contains(concat!("Orbit version ", env!("CARGO_PKG_VERSION"))),
+        "{}",
+        row.message
+    );
+    assert!(
+        row.message.contains("orbit semantic install"),
+        "{}",
+        row.message
+    );
+    assert_eq!(
+        row.remediation.as_deref(),
+        Some(
+            "Run `orbit semantic install` to install the matching companion, then rerun `orbit doctor`."
+        )
     );
 }
 
