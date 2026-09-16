@@ -7,8 +7,8 @@ use tempfile::tempdir;
 use super::super::clock::ClockPlatform;
 use super::super::clock_unit::{
     ClockUnitConvergence, ClockUnitDrift, ClockUnitVerdict, RunningBinary,
-    clock_unit_drift_warning_at, converge_clock_unit_with, inspect_clock_unit_at,
-    probe_program_version,
+    clock_reload_pending_path, clock_unit_drift_warning_at, converge_clock_unit_with,
+    inspect_clock_unit_at, probe_program_version,
 };
 use super::clock::MockRunner;
 
@@ -474,6 +474,10 @@ fn converge_rewrites_a_paused_unit_without_starting_it() {
             .contains(&running.display().to_string())
     );
     assert_eq!(runner.commands(), vec!["launchctl list com.orbit.sweep"]);
+    assert!(
+        !clock_reload_pending_path(root.path()).exists(),
+        "a paused clock has no reload to retry"
+    );
 }
 
 /// A rewritten unit the manager refuses to reload is unfinished work, not a
@@ -502,6 +506,247 @@ fn converge_reports_manual_steps_when_the_manager_will_not_reload() {
         [format!("launchctl load {}", unit.display())]
     );
     assert!(convergence.summary().contains("NOT reloaded"));
+    assert!(
+        clock_reload_pending_path(root.path()).exists(),
+        "a failed reload is remembered so the next pass retries it"
+    );
+}
+
+/// The recovery path after a failed reload is to re-run `orbit update` or
+/// `orbit clock repair`. The rewritten file already names this binary, so the
+/// retry must re-register the unit rather than report it current.
+#[test]
+fn launchd_converge_retries_the_reload_a_failed_repair_left_pending() {
+    let root = tempdir().expect("global root");
+    let home = tempdir().expect("home");
+    let running = home.path().join("orbit");
+    fs::write(&running, "binary").expect("running binary");
+    let unit = write_launchd_unit(home.path(), "/opt/homebrew/bin/orbit");
+    // Registered; the unload succeeds and the load fails, leaving the job
+    // unloaded — indistinguishable from a paused clock to `launchctl list`.
+    let first = MockRunner::new(vec![Ok(true), Ok(true), Ok(false)]);
+    let convergence = converge_clock_unit_with(
+        root.path(),
+        &running,
+        ClockPlatform::Launchd,
+        &first,
+        home.path(),
+    )
+    .expect("first pass rewrites the unit");
+    assert!(convergence.needs_follow_up());
+    let rewritten = fs::read_to_string(&unit).expect("rewritten plist");
+
+    let second = MockRunner::new(vec![Ok(true), Ok(true)]);
+    let convergence = converge_clock_unit_with(
+        root.path(),
+        &running,
+        ClockPlatform::Launchd,
+        &second,
+        home.path(),
+    )
+    .expect("second pass retries the reload");
+
+    let ClockUnitConvergence::Reloaded(reload) = &convergence else {
+        panic!("expected a reload retry, got {convergence:?}");
+    };
+    assert_eq!(reload.unit_path, unit);
+    assert_eq!(reload.program, running);
+    assert!(reload.reactivated);
+    assert!(reload.manual_steps.is_empty());
+    assert!(!convergence.needs_follow_up());
+    assert!(
+        convergence.summary().contains("(reloaded)"),
+        "{}",
+        convergence.summary()
+    );
+    assert_eq!(
+        second.commands(),
+        vec![
+            format!("launchctl unload {}", unit.display()),
+            format!("launchctl load {}", unit.display()),
+        ]
+    );
+    assert_eq!(
+        fs::read_to_string(&unit).expect("plist"),
+        rewritten,
+        "the retry only talks to the manager"
+    );
+    assert!(
+        !clock_reload_pending_path(root.path()).exists(),
+        "a successful retry forgets the pending reload"
+    );
+
+    // Once re-registered the unit really is current: no more manager traffic.
+    let third = MockRunner::new(Vec::new());
+    let convergence = converge_clock_unit_with(
+        root.path(),
+        &running,
+        ClockPlatform::Launchd,
+        &third,
+        home.path(),
+    )
+    .expect("third pass inspects the current unit");
+    assert!(matches!(
+        convergence,
+        ClockUnitConvergence::AlreadyCurrent { .. }
+    ));
+    assert!(third.commands().is_empty());
+}
+
+/// systemd has the same shape: a restart the manager refused is retried on
+/// the next pass instead of being reported as current.
+#[test]
+fn systemd_converge_retries_the_restart_a_failed_repair_left_pending() {
+    let root = tempdir().expect("global root");
+    let home = tempdir().expect("home");
+    let running = home.path().join("orbit/bin/orbit");
+    let moved_from = home.path().join("cargo/bin/orbit");
+    for path in [&running, &moved_from] {
+        fs::create_dir_all(path.parent().expect("parent")).expect("program parent");
+        fs::write(path, "binary").expect("program");
+    }
+    write_systemd_unit(home.path(), &moved_from.to_string_lossy());
+    // Enabled; daemon-reload succeeds and the restart fails.
+    let first = MockRunner::new(vec![Ok(true), Ok(true), Ok(false)]);
+    let convergence = converge_clock_unit_with(
+        root.path(),
+        &running,
+        ClockPlatform::Systemd,
+        &first,
+        home.path(),
+    )
+    .expect("first pass rewrites the units");
+    assert!(convergence.needs_follow_up());
+
+    let second = MockRunner::new(vec![Ok(true), Ok(true)]);
+    let convergence = converge_clock_unit_with(
+        root.path(),
+        &running,
+        ClockPlatform::Systemd,
+        &second,
+        home.path(),
+    )
+    .expect("second pass retries the restart");
+
+    let ClockUnitConvergence::Reloaded(reload) = &convergence else {
+        panic!("expected a reload retry, got {convergence:?}");
+    };
+    assert!(reload.reactivated);
+    assert!(!convergence.needs_follow_up());
+    assert_eq!(
+        second.commands(),
+        vec![
+            "systemctl --user daemon-reload",
+            "systemctl --user restart orbit-sweep.timer",
+        ]
+    );
+    assert!(!clock_reload_pending_path(root.path()).exists());
+}
+
+/// A retry the manager refuses again is still unfinished work, and the next
+/// pass keeps retrying.
+#[test]
+fn converge_keeps_reporting_follow_up_while_the_retry_keeps_failing() {
+    let root = tempdir().expect("global root");
+    let home = tempdir().expect("home");
+    let running = home.path().join("orbit");
+    fs::write(&running, "binary").expect("running binary");
+    let unit = write_launchd_unit(home.path(), "/opt/homebrew/bin/orbit");
+    let first = MockRunner::new(vec![Ok(true), Ok(true), Ok(false)]);
+    converge_clock_unit_with(
+        root.path(),
+        &running,
+        ClockPlatform::Launchd,
+        &first,
+        home.path(),
+    )
+    .expect("first pass rewrites the unit");
+
+    let second = MockRunner::new(vec![Ok(true), Ok(false)]);
+    let convergence = converge_clock_unit_with(
+        root.path(),
+        &running,
+        ClockPlatform::Launchd,
+        &second,
+        home.path(),
+    )
+    .expect("second pass retries the reload");
+
+    let ClockUnitConvergence::Reloaded(reload) = &convergence else {
+        panic!("expected a reload retry, got {convergence:?}");
+    };
+    assert!(!reload.reactivated);
+    assert!(convergence.needs_follow_up());
+    assert_eq!(
+        convergence.manual_steps(),
+        [format!("launchctl load {}", unit.display())]
+    );
+    assert!(convergence.summary().contains("NOT reloaded"));
+    assert!(
+        clock_reload_pending_path(root.path()).exists(),
+        "the reload stays pending until the manager accepts it"
+    );
+}
+
+/// A binary that moves again before the retry runs is not a paused clock: the
+/// pending reload says the operator wanted it registered, so the rewrite
+/// re-arms it even though the manager reports it unloaded.
+#[test]
+fn converge_rearms_a_unit_that_drifted_again_after_a_failed_reload() {
+    let root = tempdir().expect("global root");
+    let home = tempdir().expect("home");
+    let first_binary = home.path().join("first/orbit");
+    let second_binary = home.path().join("second/orbit");
+    for path in [&first_binary, &second_binary] {
+        fs::create_dir_all(path.parent().expect("parent")).expect("program parent");
+        fs::write(path, "binary").expect("program");
+    }
+    let unit = write_launchd_unit(home.path(), "/opt/homebrew/bin/orbit");
+    let first = MockRunner::new(vec![Ok(true), Ok(true), Ok(false)]);
+    converge_clock_unit_with(
+        root.path(),
+        &first_binary,
+        ClockPlatform::Launchd,
+        &first,
+        home.path(),
+    )
+    .expect("first pass rewrites the unit");
+
+    // No status probe is configured: the pending reload answers it.
+    let second = MockRunner::new(vec![Ok(true), Ok(true)]);
+    let convergence = converge_clock_unit_with(
+        root.path(),
+        &second_binary,
+        ClockPlatform::Launchd,
+        &second,
+        home.path(),
+    )
+    .expect("second pass rewrites the unit again");
+
+    let ClockUnitConvergence::Rewritten(rewrite) = &convergence else {
+        panic!("expected a rewrite, got {convergence:?}");
+    };
+    assert_eq!(
+        rewrite.drift,
+        ClockUnitDrift::ProgramMoved {
+            previous: first_binary.clone()
+        }
+    );
+    assert!(rewrite.reactivated);
+    assert!(rewrite.manual_steps.is_empty());
+    assert_eq!(
+        second.commands(),
+        vec![
+            format!("launchctl unload {}", unit.display()),
+            format!("launchctl load {}", unit.display()),
+        ]
+    );
+    assert!(
+        fs::read_to_string(&unit)
+            .expect("rewritten plist")
+            .contains(&second_binary.display().to_string())
+    );
+    assert!(!clock_reload_pending_path(root.path()).exists());
 }
 
 /// A unit that runs this binary through the compatibility alias is converged
