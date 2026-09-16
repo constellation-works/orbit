@@ -162,12 +162,17 @@ pub(super) trait CiQueries {
     /// Recent runs across the whole repository, without a branch filter.
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError>;
     fn run_view(&self, run_id: &str) -> Result<Value, OrbitError>;
+    /// `cached_view` is the already-verified, projected payload a caller
+    /// obtained from [`Self::run_view`] for this exact run, if any. Passing
+    /// it lets the per-job log fallback skip re-querying `gh run view` for
+    /// metadata the caller already has.
     fn run_logs(
         &self,
         run_id: &str,
         job_id: u64,
         scope: LogScope,
         max_bytes: usize,
+        cached_view: Option<&Value>,
     ) -> Result<RunLog, OrbitError>;
     /// Read all current heads from `origin` once for this sweep.
     fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError>;
@@ -292,12 +297,17 @@ impl CiQueries for HostCiQueries {
         job_id: u64,
         scope: LogScope,
         max_bytes: usize,
+        cached_view: Option<&Value>,
     ) -> Result<RunLog, OrbitError> {
         let requests = github_cli::RunLogRequests::from_input(
             &json!({"run": run_id, "job": job_id, "scope": scope.as_str()}),
         )?
         .in_directory(&self.repo_root.to_string_lossy());
-        let read = github_cli::read_run_log(&requests, github_cli::LogReadBounds::new(max_bytes))?;
+        let read = github_cli::read_run_log(
+            &requests,
+            github_cli::LogReadBounds::new(max_bytes),
+            cached_view,
+        )?;
 
         Ok(RunLog {
             source: read.source.to_string(),

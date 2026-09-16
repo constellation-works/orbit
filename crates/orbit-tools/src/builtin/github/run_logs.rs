@@ -54,7 +54,7 @@ impl crate::Tool for GithubRunLogsTool {
         let max_bytes =
             super::bounded_limit(&input, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES)? as usize;
         let scope = requests.scope;
-        let read = read_run_log(&requests, LogReadBounds::new(max_bytes))?;
+        let read = read_run_log(&requests, LogReadBounds::new(max_bytes), None)?;
         let log = read.log;
         let evidence = log.checkout_evidence;
 

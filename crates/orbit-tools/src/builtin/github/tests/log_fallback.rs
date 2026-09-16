@@ -147,7 +147,7 @@ impl FakeGh {
     }
 
     fn read(&self, input: Value, max_bytes: usize) -> RunLogRead {
-        read_run_log(&self.requests(input), LogReadBounds::new(max_bytes)).expect("log read")
+        read_run_log(&self.requests(input), LogReadBounds::new(max_bytes), None).expect("log read")
     }
 
     fn calls(&self) -> Vec<String> {
@@ -518,7 +518,7 @@ fn a_failing_run_scoped_read_stays_an_error_instead_of_falling_back() {
     let mut requests = gh.requests(failed_scope(RUN_ID));
     requests.run_log.args = vec!["explode".to_string()];
 
-    let error = match read_run_log(&requests, LogReadBounds::new(16_384)) {
+    let error = match read_run_log(&requests, LogReadBounds::new(16_384), None) {
         Err(error) => error,
         Ok(read) => panic!("a failing read must not fall back: {}", read.log.text),
     };
@@ -544,7 +544,7 @@ fn auth_and_network_failures_do_not_trigger_job_log_recovery() {
         );
         let requests = gh.requests(failed_scope(RUN_ID));
 
-        let error = read_run_log(&requests, LogReadBounds::new(16_384))
+        let error = read_run_log(&requests, LogReadBounds::new(16_384), None)
             .err()
             .expect("transport failure stays an error");
 
@@ -616,7 +616,7 @@ fn live_long_job_logs_retain_complete_command_and_checkout() {
         let requests = RunLogRequests::from_input(&json!({
             "run": "34160850121", "job": job, "scope": "failed", "repo": "constellation-works/orbit",
         })).expect("requests");
-        let read = read_run_log(&requests, LogReadBounds::new(16_384)).expect("live read");
+        let read = read_run_log(&requests, LogReadBounds::new(16_384), None).expect("live read");
         match read.source {
             "job_api_log" => {
                 assert_eq!(read.source_jobs.len(), 1);
@@ -633,7 +633,7 @@ fn live_long_job_logs_retain_complete_command_and_checkout() {
             let requests = RunLogRequests::from_input(&json!({
                 "run": "34160850121", "job": job, "scope": "all", "repo": "constellation-works/orbit",
             })).expect("checkout requests");
-            read_run_log(&requests, LogReadBounds::new(16_384))
+            read_run_log(&requests, LogReadBounds::new(16_384), None)
                 .expect("checkout read")
                 .log
                 .checkout_evidence
