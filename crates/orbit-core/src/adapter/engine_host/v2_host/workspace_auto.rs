@@ -1146,7 +1146,7 @@ pub(super) fn list_epic_descendants(
         });
     }
 
-    let mut remaining = task_lookup
+    let remaining = task_lookup
         .values()
         .filter(|task| {
             is_descendant_of(task, epic_task_id, &task_lookup)
@@ -1156,34 +1156,65 @@ pub(super) fn list_epic_descendants(
                 )
         })
         .map(|task| (task.id.as_str(), task))
-        .collect::<BTreeMap<_, _>>();
-    let mut ordered = Vec::with_capacity(remaining.len());
+        .collect::<BTreeMap<&str, &Task>>();
 
-    while !remaining.is_empty() {
-        let remaining_ids = remaining.keys().copied().collect::<BTreeSet<_>>();
-        let mut ready = remaining
-            .values()
-            .filter(|task| {
-                task.dependencies()
-                    .iter()
-                    .all(|dependency_id| !remaining_ids.contains(dependency_id.as_str()))
-            })
-            .copied()
-            .collect::<Vec<_>>();
-        if ready.is_empty() {
-            return Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!(
-                    "epic `{epic_task_id}` has a dependency cycle among unfinished descendants: {}",
-                    remaining_ids.into_iter().collect::<Vec<_>>().join(", ")
-                ),
-            });
+    // Standard in-degree Kahn: compute each task's dependency edges once, then
+    // drain ready ids wave by wave instead of rescanning every remaining task
+    // (and reallocating its dependency list) on every pass.
+    let mut in_degree = remaining
+        .keys()
+        .map(|&id| (id, 0usize))
+        .collect::<BTreeMap<&str, usize>>();
+    let mut dependents = BTreeMap::<&str, Vec<&str>>::new();
+    for (&id, &task) in &remaining {
+        for dependency_id in task.dependencies() {
+            if let Some((&blocker_id, _)) = remaining.get_key_value(dependency_id.as_str()) {
+                *in_degree.entry(id).or_insert(0) += 1;
+                dependents.entry(blocker_id).or_default().push(id);
+            }
         }
+    }
+
+    let mut ordered = Vec::with_capacity(remaining.len());
+    let mut wave = in_degree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(&id, _)| id)
+        .collect::<Vec<&str>>();
+
+    while !wave.is_empty() {
+        let mut ready = wave.iter().map(|&id| remaining[id]).collect::<Vec<_>>();
         sort_tasks_for_automatic_dispatch(&mut ready);
+        let mut next_wave = Vec::new();
         for task in ready {
-            remaining.remove(task.id.as_str());
+            if let Some(dependent_ids) = dependents.get(task.id.as_str()) {
+                for &dependent_id in dependent_ids {
+                    let degree = in_degree.entry(dependent_id).or_insert(0);
+                    *degree = degree.saturating_sub(1);
+                    if *degree == 0 {
+                        next_wave.push(dependent_id);
+                    }
+                }
+            }
             ordered.push(task.id.clone());
         }
+        wave = next_wave;
+    }
+
+    if ordered.len() != remaining.len() {
+        let ordered_ids = ordered.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        let stuck = remaining
+            .keys()
+            .copied()
+            .filter(|id| !ordered_ids.contains(id))
+            .collect::<Vec<_>>();
+        return Err(DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!(
+                "epic `{epic_task_id}` has a dependency cycle among unfinished descendants: {}",
+                stuck.join(", ")
+            ),
+        });
     }
 
     let empty = ordered.is_empty();
