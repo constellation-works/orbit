@@ -25,7 +25,11 @@ fi
 cargo fmt --all -- --check
 if [[ "$fast" == false ]]; then
   # Enumerating workflow tests compiles their targets; keep it out of ci-fast.
-  "$repo_root/scripts/check-ci-macos.sh"
+  # --workspace-build lists them from the same `--workspace --lib --bins
+  # --tests` artifacts the nextest pass below runs, instead of a per-crate
+  # `cargo test -p` build that resolves features differently and recompiles
+  # the workspace chain a second time. [DANI-10428]
+  "$repo_root/scripts/check-ci-macos.sh" --workspace-build
   cargo clippy --workspace --all-targets -- -D warnings
   if cargo nextest --version >/dev/null 2>&1; then
     cargo nextest run --no-fail-fast --workspace --lib --bins --tests

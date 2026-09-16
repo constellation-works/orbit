@@ -103,7 +103,11 @@ The workflow creates the bounded report with
 That emission mode deliberately refuses non-Darwin and non-GitHub-Actions
 environments. The ordinary `./scripts/check-ci-macos.sh` command remains the
 inventory contract and can be run locally to validate workflow paths and test
-filters, but on Linux it is not macOS execution evidence.
+filters, but on Linux it is not macOS execution evidence. It lists each filter
+with `cargo test -p <crate>`, which reuses the macOS job's per-crate builds;
+`ci-guardrails.sh` passes `--workspace-build` instead so the Linux `ci` job
+lists from the workspace test build its nextest pass already made rather than
+compiling the crates a second time under per-crate feature resolution.
 
 ## Capability-bound legs
 

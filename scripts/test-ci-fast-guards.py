@@ -26,15 +26,30 @@ class GuardrailTests(unittest.TestCase):
         self.log = self.root / "cargo.log"
         self.metadata = self.root / "metadata.json"
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
-                        GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata))
+                        GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
+                        GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"))
         self.write_executable(self.bin / "cargo", '''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["GUARD_TEST_LOG"], "a") as log:
     log.write(json.dumps(sys.argv[1:]) + "\\n")
 if sys.argv[1] == "metadata":
     print(open(os.environ["GUARD_TEST_METADATA"]).read())
+elif sys.argv[1] == "test" and "--message-format" in sys.argv:
+    # `--no-run --message-format json`: report one test binary per package
+    # named in the fixture metadata, the way a workspace build does.
+    for package in json.load(open(os.environ["GUARD_TEST_METADATA"]))["packages"]:
+        print(json.dumps({"reason": "compiler-artifact", "package_id": package["id"],
+                          "profile": {"test": True}, "executable": os.environ["GUARD_TEST_BIN"]}))
 elif sys.argv[1] == "test":
     print("fixture_test: test")
+''')
+        # Stands in for a compiled test binary: logs its argv like the cargo
+        # stub and lists one libtest-style test.
+        self.write_executable(self.bin / "fixture-test-bin", '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(["fixture-test-bin"] + sys.argv[1:]) + "\\n")
+print("fixture_test: test")
 ''')
         self.write_executable(self.bin / "rg", "#!/bin/bash\nexit 1\n")
 
@@ -55,6 +70,8 @@ elif sys.argv[1] == "test":
         workflows = self.root / ".github/workflows"
         workflows.mkdir(parents=True)
         (self.root / "Cargo.toml").touch()
+        self.metadata.write_text(json.dumps(dict(
+            packages=[dict(id="path+file:///fixture/orbit-types#0.1.0", name="orbit-types")])))
         (workflows / "ci-macos.yml").write_text('''on:
   pull_request:
     paths:
@@ -103,11 +120,32 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertIn(["check-codeql-extension-schema.py"], calls)
 
     def test_full_still_checks_workflow_test_matches(self):
+        # The full run lists the workflow's filtered tests from one workspace
+        # build (the artifacts the nextest pass reuses), never from a
+        # per-package `cargo test -p` build. [DANI-10428]
         self.prepare_ci()
         result = self.run_guard("ci-guardrails.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertIn(["test", "-p", "orbit-types", "--locked", "fixture_test", "--", "--list"], calls)
+        self.assertIn(["test", "--workspace", "--lib", "--bins", "--tests", "--locked", "--no-run",
+                       "--message-format", "json"], calls)
+        self.assertIn(["fixture-test-bin", "--list", "fixture_test"], calls)
+        self.assertNotIn("-p", [argument for call in calls for argument in call])
+
+    def test_macos_check_defaults_to_per_package_listing(self):
+        # Without --workspace-build (the macOS job and local runs, whose `-p`
+        # artifacts are already warm) the per-package listing is unchanged.
+        self.prepare_ci()
+        result = self.run_guard("check-ci-macos.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(calls, [["test", "-p", "orbit-types", "--locked", "fixture_test", "--", "--list"]])
+
+    def test_macos_check_rejects_unknown_flags(self):
+        self.prepare_ci()
+        result = self.run_guard("check-ci-macos.sh", "--fast")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("usage:", result.stderr)
 
     def test_full_invokes_cargo_deny_guard(self):
         self.prepare_ci()

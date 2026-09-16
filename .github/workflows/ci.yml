@@ -30,46 +30,6 @@ env:
   MSRV: "1.89"
 
 jobs:
-  # [ORB-10009] Linux counterpart of ci-macos.yml's enforcement leg. The main
-  # `ci` job already compiles and runs these crates inside the workspace-wide
-  # nextest pass, but this job makes the sandbox/policy enforcement suite an
-  # explicit, named gate on Linux: orbit-policy's evaluation matrix
-  # (incl. the ORB-00418 symlink-resolution tests), orbit-tools'
-  # runtime fs-enforcement integration tests (the only enforcement layer on
-  # Linux — there is no kernel sandbox), and orbit-exec's Linux fail-closed
-  # contract tests. Tests that need host capabilities self-skip at runtime
-  # (skip-with-message) rather than relying on compile-time cfg alone, so the
-  # suite stays honest on any ubuntu runner.
-  linux-sandbox:
-    name: Linux Sandbox & Policy Enforcement
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # On pull_request, use the PR head SHA: not the branch name
-          # GitHub deletes on merge, and not github.sha (the ephemeral
-          # merge commit). On push, use github.sha directly so a run that
-          # sat queued still builds and reports on the commit that
-          # triggered it, not whatever the branch points to once it starts.
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-05-07)
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-linux-sandbox-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-linux-sandbox-
-            ${{ runner.os }}-cargo-
-
-      - name: Run Linux sandbox/policy enforcement tests
-        run: cargo test --no-fail-fast -p orbit-exec -p orbit-policy -p orbit-tools --locked
-
   # [ORB-10010] MSRV floor: `rust-version` in [workspace.package] (Cargo.toml).
   # Evidence for 1.89: edition 2024 requires >= 1.85, the highest
   # `rust-version` declared by any dependency in the locked graph is 1.88
@@ -95,15 +55,10 @@ jobs:
         with:
           toolchain: "1.89"
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-msrv-
+      # [DANI-10428] rust-cache keys on the rustc version, so this 1.89 check
+      # cache can never collide with the stable jobs; it prunes stale
+      # registry/target entries before saving instead of growing to the cap.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Check workspace on MSRV toolchain
         run: |
@@ -153,18 +108,16 @@ jobs:
         with:
           components: llvm-tools-preview
 
-      # [ORB-10126] Deps-only cache: the instrumented target/ is dropped from
-      # the cache path (it churns near actions/cache's ~10 GB cap and its
-      # restore competes with fresh instrumented artifacts + profraw for disk).
-      # Only the immutable registry/git deps are cached here.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # [ORB-10126] Deps-only cache: the instrumented target/ is not cached
+      # (it churns near the ~10 GB cap and its restore competes with fresh
+      # instrumented artifacts + profraw for disk). Only the registry/git deps
+      # are cached, pruned to the crates Cargo.lock still references. This
+      # cannot share the ci job's archive: GitHub scopes a cache entry to its
+      # path list, so a deps-only entry and a deps+target entry never match.
+      # [DANI-10428]
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-coverage-deps-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-coverage-deps-
+          cache-targets: false
 
       # Same pinned-tarball convention as the nextest install in the ci job.
       - name: Install cargo-llvm-cov
@@ -239,15 +192,17 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # [DANI-10428] Stable-toolchain build cache. rust-cache prunes target/
+      # to dependency artifacts and the registry to crates Cargo.lock still
+      # references before saving, so the archive stays far below the 10 GB
+      # repo cap instead of evicting every other entry; `shared-key` names the
+      # toolchain rather than the job so any stable job that needs the same
+      # artifacts (the sandbox gate below used to be one) restores this entry.
+      # Dependencies stay valid when a test fails, so save on failure too.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          shared-key: stable
+          cache-on-failure: true
 
       - name: Install cargo-nextest
         run: |
@@ -287,6 +242,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./scripts/ci-guardrails.sh
+
+      # [ORB-10009] Linux counterpart of ci-macos.yml's enforcement leg: an
+      # explicit, named gate for orbit-policy's evaluation matrix (incl. the
+      # ORB-00418 symlink-resolution tests), orbit-tools' runtime
+      # fs-enforcement integration tests (the only enforcement layer on Linux
+      # — there is no kernel sandbox), and orbit-exec's Linux fail-closed
+      # contract tests. Tests that need host capabilities self-skip at runtime
+      # (skip-with-message) rather than relying on compile-time cfg alone.
+      # [DANI-10428] This used to be a separate job that compiled the three
+      # crates under `cargo test -p` feature resolution — a second build of
+      # the same crates. The nextest filterset below selects them out of the
+      # exact `--workspace --lib --bins --tests` artifacts the guardrails step
+      # already built and ran, so the gate costs a re-run and no compile.
+      - name: Linux sandbox/policy enforcement gate
+        run: >-
+          cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests
+          -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)'
 
       # [ORB-10126] Confirm disk headroom survived the workspace build/test.
       - name: Report disk usage
