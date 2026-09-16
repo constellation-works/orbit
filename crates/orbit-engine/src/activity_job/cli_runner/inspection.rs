@@ -137,8 +137,9 @@ impl SourceInspection {
                     &format!("--object-format={}", format.trim()),
                 ],
             )?;
-            // Fetch only this immutable revision and its history into private
-            // objects. Avoid alternates so sandboxed Git never needs the primary.
+            // Fetch only this immutable revision as a shallow private object set.
+            // The detached checkout needs no ancestry; avoiding alternates also
+            // keeps sandboxed Git independent from the primary object database.
             git(
                 &inspection.root,
                 &[
@@ -147,6 +148,8 @@ impl SourceInspection {
                     "fetch",
                     "--quiet",
                     "--no-tags",
+                    "--depth",
+                    "1",
                     common,
                     revision,
                 ],
