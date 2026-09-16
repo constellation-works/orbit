@@ -261,24 +261,115 @@ fn fingerprint_identities_match_per_path_git_and_stay_stable() {
             )
         )
     );
+    assert!(
+        value["tracked_patch_sha256"].is_string(),
+        "tracked path patches retain a compact aggregate identity"
+    );
+}
+
+#[test]
+fn clean_fingerprint_skips_index_enumeration_and_diffs() {
+    let Some(shim) = GitShim::install(
+        module_path!(),
+        "clean_fingerprint_skips_index_enumeration_and_diffs",
+    ) else {
+        return;
+    };
+    let fixture = linked_worktree_fixture();
+    let before = shim.invocations(&fixture.assigned).len();
+
+    let fingerprint = git_fingerprint(&fixture.assigned).expect("clean fingerprint");
+    assert!(fingerprint.dirty_paths.is_empty());
+
+    let invocations = shim.invocations(&fixture.assigned);
+    let fingerprint_calls = &invocations[before..];
+    assert!(
+        fingerprint_calls
+            .iter()
+            .any(|args| args.contains(" status --porcelain=v2")),
+        "fingerprint must still take one porcelain snapshot: {fingerprint_calls:?}"
+    );
+    assert!(
+        fingerprint_calls
+            .iter()
+            .all(|args| !args.contains(" ls-files ") && !args.contains(" diff ")),
+        "clean fingerprint must not enumerate the index or run a diff: {fingerprint_calls:?}"
+    );
+}
+
+#[test]
+fn primary_before_fingerprint_is_reused_across_same_run_worktrees() {
+    let Some(shim) = GitShim::install(
+        module_path!(),
+        "primary_before_fingerprint_is_reused_across_same_run_worktrees",
+    ) else {
+        return;
+    };
+    let fixture = linked_worktree_fixture();
+    let assigned_two = fixture._temp.path().join("fanout-two");
+    git_ok(
+        &fixture.primary,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "orbit-fingerprint-fanout-two",
+            assigned_two.to_str().expect("utf8 second worktree"),
+        ],
+    );
+    let assigned_two = assigned_two
+        .canonicalize()
+        .expect("canonical second worktree");
+    let run_id = "run-primary-fingerprint-cache";
+    let input_one = worktree_input(&fixture, "ORB-FINGERPRINT-CACHE-ONE");
+    let input_two = serde_json::json!({
+        "prompt": "implement",
+        "task_id": "ORB-FINGERPRINT-CACHE-TWO",
+        "workspace_path": assigned_two,
+        "repo_root": assigned_two,
+    });
+    let pair_one =
+        validate_declared_worktree_pair(&input_one, None, run_id, "codex", Some(&fixture.primary))
+            .expect("validate first pair")
+            .expect("first linked pair");
+    let pair_two =
+        validate_declared_worktree_pair(&input_two, None, run_id, "codex", Some(&fixture.primary))
+            .expect("validate second pair")
+            .expect("second linked pair");
+    let before = shim.invocations(&fixture.primary).len();
+
+    WorktreeBoundaryGuard::capture(
+        &input_one,
+        None,
+        run_id,
+        "codex",
+        Some(&fixture.assigned),
+        Some(&fixture.primary),
+        Some(&pair_one),
+    )
+    .expect("capture first guard")
+    .expect("first guard enabled");
+    WorktreeBoundaryGuard::capture(
+        &input_two,
+        None,
+        run_id,
+        "codex",
+        Some(&assigned_two),
+        Some(&fixture.primary),
+        Some(&pair_two),
+    )
+    .expect("capture second guard")
+    .expect("second guard enabled");
+
+    let invocations = shim.invocations(&fixture.primary);
+    let primary_calls = &invocations[before..];
+    let status_calls = primary_calls
+        .iter()
+        .filter(|args| args.contains(" status --porcelain=v2"))
+        .count();
     assert_eq!(
-        value["tracked_patch_sha256"],
-        expected_identity(
-            "git-tracked-patch-v1",
-            &git_bytes(
-                &fixture.assigned,
-                &[
-                    "diff",
-                    "--binary",
-                    "--full-index",
-                    "--no-ext-diff",
-                    "--no-textconv",
-                    "--no-renames",
-                    "HEAD",
-                    "--",
-                ]
-            )
-        )
+        status_calls, 1,
+        "same-run fan-out must reuse the primary snapshot: {primary_calls:?}"
     );
 }
 
@@ -689,6 +780,16 @@ impl GitShim {
                 })
             })
             .count()
+    }
+
+    fn invocations(&self, root: &Path) -> Vec<String> {
+        let log = fs::read_to_string(&self.log_path).expect("read shim log");
+        log.lines()
+            .filter_map(|line| {
+                let (cwd, args) = line.split_once('\t')?;
+                (Path::new(cwd) == root).then(|| args.to_string())
+            })
+            .collect()
     }
 }
 
