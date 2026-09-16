@@ -128,7 +128,6 @@ fn seed_failed_delivery_run(
         0,
         "worktree",
         &json!({"job_run_id": run.run_id, "batch_id": run.run_id, "workspace_path": "/tmp/wt"}),
-        &json!({"worktree": {"job_run_id": run.run_id, "batch_id": run.run_id}}),
     )
     .expect("checkpoint worktree step");
     <OrbitRuntime as RuntimeHost>::checkpoint_step(
@@ -137,10 +136,6 @@ fn seed_failed_delivery_run(
         1,
         "implement_bundle",
         &json!({"implemented": true}),
-        &json!({
-            "worktree": {"job_run_id": run.run_id, "batch_id": run.run_id},
-            "implement_bundle": {"implemented": true},
-        }),
     )
     .expect("checkpoint implement step");
 

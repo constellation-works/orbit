@@ -3706,7 +3706,7 @@ fn rendered_implement_input_from_asset(
     );
     let context = TemplateContext {
         item: Some(serde_json::json!(task_id)),
-        steps,
+        steps: std::sync::Arc::new(steps),
         ..TemplateContext::default()
     };
     let rendered = render_asset_value(template_input, &context);
@@ -3758,7 +3758,7 @@ fn rendered_finish_input_from_epic_pipeline(
     );
     let context = TemplateContext {
         input: serde_json::json!({ "epic_task_id": task_id }),
-        steps,
+        steps: std::sync::Arc::new(steps),
         ..TemplateContext::default()
     };
     let rendered = render_asset_value(template_input, &context);

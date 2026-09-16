@@ -236,16 +236,15 @@ impl RuntimeHost for ResumeFailureHost {
         &self,
         run_id: &str,
         step_index: u32,
-        _step_id: &str,
+        step_id: &str,
         output: &Value,
-        pipeline_snapshot: &Value,
     ) -> Result<(), DispatchError> {
         let mut states = self.run_states.lock().expect("run states lock");
         let state = states
             .get_mut(run_id)
             .ok_or_else(|| DispatchError::JobExecution(format!("missing state for {run_id}")))?;
         state.record_step(step_index, JobRunState::Success, Some(output.clone()), None);
-        state.sync_pipeline(pipeline_snapshot.clone());
+        state.record_pipeline_output(step_id, output.clone());
         Ok(())
     }
 

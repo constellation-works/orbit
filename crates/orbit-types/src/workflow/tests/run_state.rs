@@ -251,3 +251,45 @@ fn the_stop_survives_a_state_round_trip_and_is_omitted_when_absent() {
     let decoded: PipelineState = serde_json::from_str(&encoded).expect("deserialize state");
     assert_eq!(decoded.drain_admissions_stop, state.drain_admissions_stop);
 }
+
+#[test]
+fn recording_a_step_output_merges_by_step_id_and_keeps_other_keys() {
+    // Per-step checkpoints hand over one step's output at a time; the
+    // accumulated pipeline must grow by key, never be replaced, so an
+    // operator control or an earlier step's entry written into the same
+    // document survives the checkpoint that follows it.
+    let mut state = PipelineState::new(
+        "jrun-ckpt".to_string(),
+        "task_auto_pipeline".to_string(),
+        serde_json::json!({"seconds": 0}),
+    );
+    state.record_pipeline_output("worktree", serde_json::json!({"workspace_path": "/wt"}));
+    state.record_pipeline_output("implement", serde_json::json!({"implemented": true}));
+    state.record_pipeline_output("worktree", serde_json::json!({"workspace_path": "/wt2"}));
+
+    assert_eq!(
+        state.pipeline,
+        serde_json::json!({
+            "seconds": 0,
+            "worktree": {"workspace_path": "/wt2"},
+            "implement": {"implemented": true},
+        })
+    );
+}
+
+#[test]
+fn recording_a_step_output_replaces_a_non_object_pipeline() {
+    let mut state = PipelineState::new(
+        "jrun-ckpt".to_string(),
+        "task_auto_pipeline".to_string(),
+        serde_json::Value::Null,
+    );
+    assert!(state.pipeline.is_null());
+
+    state.record_pipeline_output("worktree", serde_json::json!({"ok": true}));
+
+    assert_eq!(
+        state.pipeline,
+        serde_json::json!({"worktree": {"ok": true}})
+    );
+}

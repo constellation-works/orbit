@@ -15,7 +15,7 @@ use super::*;
 /// checkpoint failures) while delegating dispatch to a `ScriptedHost`.
 struct CheckpointHost {
     inner: ScriptedHost,
-    checkpoints: StdMutex<Vec<(u32, String, Value, Value)>>,
+    checkpoints: StdMutex<Vec<(u32, String, Value)>>,
     inputs: StdMutex<Vec<(String, Value)>>,
     fail_checkpoints: bool,
 }
@@ -37,7 +37,7 @@ impl CheckpointHost {
         }
     }
 
-    fn checkpoints(&self) -> Vec<(u32, String, Value, Value)> {
+    fn checkpoints(&self) -> Vec<(u32, String, Value)> {
         self.checkpoints.lock().expect("checkpoints").clone()
     }
 
@@ -93,7 +93,6 @@ impl RuntimeHost for CheckpointHost {
         step_index: u32,
         step_id: &str,
         output: &Value,
-        pipeline_snapshot: &Value,
     ) -> Result<(), DispatchError> {
         if self.fail_checkpoints {
             return Err(DispatchError::JobExecution(
@@ -104,7 +103,6 @@ impl RuntimeHost for CheckpointHost {
             step_index,
             step_id.to_string(),
             output.clone(),
-            pipeline_snapshot.clone(),
         ));
         Ok(())
     }
@@ -143,13 +141,12 @@ fn completed_top_level_steps_checkpoint_through_host() {
     assert_eq!(checkpoints[0].0, 0);
     assert_eq!(checkpoints[0].1, "s0");
     assert_eq!(checkpoints[0].2, json!({"v": 0}));
-    assert_eq!(checkpoints[0].3, json!({"s0": {"v": 0}}));
     assert_eq!(checkpoints[1].0, 1);
     assert_eq!(checkpoints[1].1, "s1");
     assert_eq!(
-        checkpoints[1].3,
-        json!({"s0": {"v": 0}, "s1": {"v": 1}}),
-        "snapshot is cumulative"
+        checkpoints[1].2,
+        json!({"v": 1}),
+        "checkpoint payload is the completing step's output alone"
     );
 }
 
@@ -231,14 +228,13 @@ fn resume_skips_checkpointed_steps_and_feeds_their_outputs() {
     );
     assert_eq!(pipeline.get("s1"), Some(&json!({"v": 1})));
     assert_eq!(pipeline.get("s2"), Some(&json!({"v": 2})));
-    // Remaining steps checkpoint on top of the seeded snapshot.
+    // Only the re-executed steps checkpoint; the skipped step's checkpoint
+    // is already durable in the source run.
     let checkpoints = host.checkpoints();
     assert_eq!(checkpoints.len(), 2);
     assert_eq!(checkpoints[0].0, 1);
-    assert_eq!(
-        checkpoints[0].3.get("s0"),
-        Some(&json!({"v": "checkpointed-0"}))
-    );
+    assert_eq!(checkpoints[0].2, json!({"v": 1}));
+    assert_eq!(checkpoints[1].0, 2);
 }
 
 #[test]
@@ -320,7 +316,6 @@ fn resume_reexecuted_pr_output_reaches_promotion_and_checkpoint() {
     assert_eq!(checkpoints[0].0, 1);
     assert_eq!(checkpoints[0].1, "pr_open");
     assert_eq!(checkpoints[0].2["pr_number"], json!("618"));
-    assert_eq!(checkpoints[0].3["pr_open"]["pr_number"], json!("618"));
     assert_eq!(resume.step_states.get(&1), Some(&JobRunState::Failed));
 }
 
@@ -442,9 +437,9 @@ fn resume_starts_at_the_failed_push_and_reuses_checkpoints_idempotently() {
     // The resumed run's own checkpoints resume again without re-pushing —
     // what a worker restart (or a second resume) does.
     let mut second = resume.clone();
-    for (index, step_id, output, _) in host.checkpoints() {
-        second.record_step(index, JobRunState::Success, Some(output), None);
-        let _ = step_id;
+    for (index, step_id, output) in host.checkpoints() {
+        second.record_step(index, JobRunState::Success, Some(output.clone()), None);
+        second.record_pipeline_output(&step_id, output);
     }
     let replay_host = CheckpointHost::new(scripted());
     let replayed = execute_job_with_resume(

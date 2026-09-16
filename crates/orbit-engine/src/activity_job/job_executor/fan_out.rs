@@ -9,8 +9,7 @@ pub(super) fn run_fan_out(
     fan_in: &FanInSpec,
     ctx: &ExecCtx<'_>,
 ) -> Result<StepOutcome, DispatchError> {
-    let tctx = ctx.template_ctx();
-    let items = render_items_expression(&block.items, &tctx, "fan_out.items")?;
+    let items = render_items_expression(&block.items, &ctx.template_ctx(), "fan_out.items")?;
     let worker_count = items.len() as u32;
 
     emit_job_event_lossy(
@@ -63,7 +62,9 @@ pub(super) fn run_fan_out(
             let audit = ctx.audit.clone();
             let host = ctx.host;
             let base_input = ctx.input.clone();
-            let pipeline_snapshot = ctx.pipeline.lock().expect("pipeline poisoned").clone();
+            // Workers share the parent's map as taken at dispatch; a worker's
+            // own writes copy on write and never reach the parent.
+            let pipeline_snapshot = ctx.pipeline_snapshot();
             let results_ref = &results;
             let inherited_parent_stack = inherited_parent_stack.clone();
 

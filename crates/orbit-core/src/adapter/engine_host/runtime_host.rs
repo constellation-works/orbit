@@ -540,7 +540,10 @@ impl RuntimeHost for OrbitRuntime {
 
     /// [ORB-10002] Persist a per-step checkpoint into the run's
     /// `PipelineState` so an interrupted run can be resumed without
-    /// re-executing completed steps. A missing run row (direct `execute_job`
+    /// re-executing completed steps. The step's output lands in
+    /// `step_outputs[step_index]` (what resume seeds from) and is merged into
+    /// `pipeline[step_id]` (what mid-run readers such as step recovery and
+    /// `orbit run show` key by). A missing run row (direct `execute_job`
     /// callers that never persisted a run) is a silent no-op — there is
     /// nothing durable to checkpoint into.
     fn checkpoint_step(
@@ -549,7 +552,6 @@ impl RuntimeHost for OrbitRuntime {
         step_index: u32,
         step_id: &str,
         output: &Value,
-        pipeline_snapshot: &Value,
     ) -> Result<(), DispatchError> {
         // [ORB-11253] Read-modify-write in one transaction rather than a
         // separate read and write: an operator run control written into this
@@ -564,7 +566,7 @@ impl RuntimeHost for OrbitRuntime {
                     Some(output.clone()),
                     None,
                 );
-                state.sync_pipeline(pipeline_snapshot.clone());
+                state.record_pipeline_output(step_id, output.clone());
                 Ok(())
             })
             .map(|_| ())

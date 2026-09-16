@@ -1579,7 +1579,7 @@ fn recovery_exec_ctx<'a>(host: &'a dyn RuntimeHost) -> ExecCtx<'a> {
         audit: std::sync::Arc::new(test_writer("run-recovery-role")),
         host,
         input: json!({}),
-        pipeline: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+        pipeline: std::sync::Arc::new(std::sync::Mutex::new(PipelineSteps::default())),
         recovery_activity: None,
         failure_activity: None,
         item: None,
