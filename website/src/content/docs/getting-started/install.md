@@ -39,6 +39,11 @@ make install
 This installs into `~/.orbit/bin` as well (override with `INSTALL_BIN_DIR=...`), so a
 source build replaces a release install instead of shadowing it elsewhere on `PATH`.
 
+After installing, `install.sh` runs `orbit clock repair`. The host scheduler clock unit
+names an orbit binary by absolute path, so installing to a new location would otherwise
+leave launchd or systemd invoking the previous one — which fails every minute without
+saying so. It reports what it changed, and does nothing on a host with no clock unit.
+
 ### Pinned versions and custom install directory
 
 ```bash

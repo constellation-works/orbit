@@ -52,7 +52,7 @@ fn clock_unit_version_mismatch_is_a_named_failure() {
         row.remediation
             .as_deref()
             .expect("remediation")
-            .contains("orbit clock enable")
+            .contains("orbit clock repair")
     );
 }
 

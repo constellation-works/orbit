@@ -13,7 +13,7 @@ use super::super::clock::{
     validated_sweep_log_path,
 };
 
-struct MockRunner {
+pub(super) struct MockRunner {
     results: Mutex<Vec<Result<bool, OrbitError>>>,
     outputs: Mutex<Vec<Result<Option<String>, OrbitError>>>,
     probes: Mutex<Vec<Result<ManagerCommandOutput, OrbitError>>>,
@@ -21,7 +21,7 @@ struct MockRunner {
 }
 
 impl MockRunner {
-    fn new(results: Vec<Result<bool, OrbitError>>) -> Self {
+    pub(super) fn new(results: Vec<Result<bool, OrbitError>>) -> Self {
         Self {
             results: Mutex::new(results.into_iter().rev().collect()),
             outputs: Mutex::new(Vec::new()),
@@ -55,7 +55,7 @@ impl MockRunner {
         }
     }
 
-    fn commands(&self) -> Vec<String> {
+    pub(super) fn commands(&self) -> Vec<String> {
         self.commands.lock().expect("test command log lock").clone()
     }
 }

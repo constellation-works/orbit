@@ -6,7 +6,10 @@ use clap::Args;
 use orbit_cmd::registry_routines::{run_sweep, run_sweep_at};
 use orbit_core::{
     OrbitError, OrbitRuntime,
-    application::routines::{AutoTaskSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome},
+    application::routines::{
+        AutoTaskSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
+        clock_unit_drift_warning,
+    },
 };
 use serde_json::json;
 
@@ -83,6 +86,13 @@ impl ClockTickArgs {
         let workspace_selector = workspace_selector
             .map(str::trim)
             .filter(|selector| !selector.is_empty());
+        // The scheduled pass runs the program the unit names, so this only
+        // fires for a hand-run pass from another install — which is exactly
+        // the evidence that unattended ticks are using a different binary.
+        if let Some(warning) = clock_unit_drift_warning() {
+            eprintln!("{warning}");
+        }
+
         let outcome = run_sweep_for_selected_root(root_override, workspace_selector, options)?;
         let document = outcome_json(&outcome, self.dry_run);
 

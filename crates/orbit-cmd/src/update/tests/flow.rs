@@ -5,7 +5,7 @@ use crate::update::channel::{
     CANONICAL_HOMEBREW_FORMULA, InstallChannel, LEGACY_HOMEBREW_FORMULA, homebrew_remediation,
 };
 use crate::update::tests::fixture::{
-    FakeBinary, Fixture, PausingLatestSource, request, tar_gz, tar_gz_named,
+    CLOCK_REPAIR_REPORT, FakeBinary, Fixture, PausingLatestSource, request, tar_gz, tar_gz_named,
 };
 use crate::update::{
     EXIT_NEEDS_RECOVERY, EXIT_UPDATE_AVAILABLE, UpdateEnvironment, UpdateOutcome, run_update,
@@ -27,16 +27,25 @@ fn updating_to_latest_replaces_the_binary_then_migrates_before_syncing_assets() 
     assert!(report.archive_sha256.is_some());
     assert_eq!(fixture.installed_reports(), "orbit 0.19.0");
     // The replacement executable is the one that converges state, and layout
-    // migration runs before managed-asset reconciliation.
+    // migration runs before managed-asset reconciliation. The host clock unit
+    // is repointed last, so it names the binary this run installed.
     assert_eq!(
         fixture.invocations(),
         vec![
             fixture.invocation("0.19.0", "migrate --confirm"),
             fixture.invocation("0.19.0", "workspace sync"),
+            fixture.invocation("0.19.0", "clock repair"),
         ]
     );
     assert_eq!(report.workspace_root, Some(fixture.workspace_root()));
     assert!(report.steps.iter().all(|step| !step.failed()));
+    // A rewrite the operator never asked for has to be visible in the report.
+    let clock = report
+        .steps
+        .iter()
+        .find(|step| step.command == "clock repair")
+        .expect("clock convergence step");
+    assert_eq!(clock.detail.as_deref(), Some(CLOCK_REPAIR_REPORT));
 }
 
 #[test]
@@ -185,12 +194,13 @@ fn rerunning_at_the_installed_version_reconverges_without_replacing_anything() {
     assert!(!report.replaced);
     assert!(report.backup_path.is_none());
     // Convergence still runs: re-running `orbit update` is the documented way
-    // to finish a run whose migration or sync failed.
+    // to finish a run whose migration, sync, or clock repair failed.
     assert_eq!(
         fixture.invocations(),
         vec![
             fixture.invocation("0.19.0", "migrate --confirm"),
             fixture.invocation("0.19.0", "workspace sync"),
+            fixture.invocation("0.19.0", "clock repair"),
         ]
     );
 }
@@ -400,9 +410,18 @@ fn a_failed_migration_is_reported_as_needing_recovery_not_as_success() {
     assert!(report.replaced);
     assert_eq!(fixture.installed_reports(), "orbit 0.19.0");
     // Managed-asset sync does not run into a workspace whose layout migration
-    // did not finish.
-    assert_eq!(report.steps.len(), 1);
+    // did not finish, and the clock is not re-armed against it either.
+    assert_eq!(report.steps.len(), 2);
     assert!(report.steps[0].failed());
+    assert_eq!(report.steps[1].command, "clock repair");
+    assert!(
+        report.steps[1]
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("an earlier convergence step failed")),
+        "{:?}",
+        report.steps[1].detail
+    );
     assert!(
         report.steps[0]
             .detail
@@ -433,9 +452,10 @@ fn a_failed_managed_asset_sync_also_reports_needing_recovery() {
     let report = run_update(&fixture.environment(), &request()).expect("run completes");
 
     assert_eq!(report.outcome, UpdateOutcome::NeedsRecovery);
-    assert_eq!(report.steps.len(), 2);
+    assert_eq!(report.steps.len(), 3);
     assert!(!report.steps[0].failed());
     assert!(report.steps[1].failed());
+    assert_eq!(report.steps[2].command, "clock repair");
     assert!(
         report
             .recovery
@@ -447,7 +467,7 @@ fn a_failed_managed_asset_sync_also_reports_needing_recovery() {
 }
 
 #[test]
-fn outside_a_workspace_the_convergence_steps_are_skipped_with_a_reason() {
+fn outside_a_workspace_the_workspace_steps_are_skipped_but_the_clock_still_converges() {
     let fixture = Fixture::new("0.18.0");
     fixture.publish("0.19.0", FakeBinary::Healthy);
 
@@ -455,17 +475,21 @@ fn outside_a_workspace_the_convergence_steps_are_skipped_with_a_reason() {
         run_update(&fixture.environment_without_workspace(), &request()).expect("update succeeds");
 
     assert_eq!(report.outcome, UpdateOutcome::Updated);
-    assert_eq!(report.steps.len(), 2);
+    assert_eq!(report.steps.len(), 3);
     assert!(report.steps.iter().all(|step| !step.failed()));
     assert!(
-        report.steps.iter().all(|step| step
+        report.steps[..2].iter().all(|step| step
             .detail
             .as_deref()
             .is_some_and(|detail| detail.contains("not an initialized Orbit workspace"))),
         "{:?}",
         report.steps
     );
-    assert!(fixture.invocations().is_empty());
+    // The clock unit is host state, not workspace state: it is converged even
+    // where there is no workspace to migrate.
+    assert_eq!(report.steps[2].command, "clock repair");
+    assert_eq!(report.steps[2].detail.as_deref(), Some(CLOCK_REPAIR_REPORT));
+    assert_eq!(fixture.invocations(), vec!["0.19.0: clock repair"]);
 }
 
 #[test]

@@ -49,6 +49,12 @@ The clock is host infrastructure, configured per machine and never versioned.
 Pausing it stops scheduled ticks; a manual `orbit clock tick` still works, and no
 individual routine's state changes.
 
+The unit names the orbit binary by absolute path, so moving or replacing that
+binary is what breaks unattended scheduling — the unit keeps its cadence and
+fails every wake-up. `orbit update` repairs the unit as its last convergence
+step, and `orbit clock repair` does it on demand for an install some other
+package manager made.
+
 ## Routine
 
 A routine is a **versioned trigger**. It is one YAML file under
