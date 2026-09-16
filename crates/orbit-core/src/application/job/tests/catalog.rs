@@ -11,7 +11,10 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
-use super::super::catalog::{DEFAULT_JOB_FILES, JobCatalogFilter, seed_default_jobs};
+use super::super::catalog::{
+    DEFAULT_JOB_FILES, JobCatalogFilter, reset_v2_job_catalog_loads, seed_default_jobs,
+    v2_job_catalog_loads,
+};
 use crate::OrbitRuntime;
 use crate::application::job::pipeline::PIPELINE_WAIT_MAX_TIMEOUT_SECONDS;
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
@@ -2376,6 +2379,56 @@ fn workspace_job_overrides_global_default_in_catalog_lookup_but_not_execution_lo
         .expect("job lookup");
     assert_eq!(path, global_job);
     assert_eq!(spec.max_active_runs, 1);
+}
+
+#[test]
+fn execution_name_index_matches_named_execution_lookup() {
+    let (_root, runtime, global_root, workspace_root) = test_runtime();
+    let workspace_dir = workspace_root.join("resources/jobs");
+    let global_dir = global_root.join("resources/jobs");
+    write_job(&workspace_dir.join("custom.yaml"), "custom", "workspace", 7);
+    write_job(
+        &workspace_dir.join("task_pr_pipeline.yaml"),
+        "task_pr_pipeline",
+        "workspace_only",
+        7,
+    );
+    write_job(
+        &global_dir.join("task_auto_pipeline.yaml"),
+        "task_auto_pipeline",
+        "global",
+        1,
+    );
+    write_job(
+        &workspace_dir.join("task_auto_pipeline.yaml"),
+        "task_auto_pipeline",
+        "workspace",
+        7,
+    );
+
+    reset_v2_job_catalog_loads();
+    let names = runtime
+        .load_v2_job_execution_names()
+        .expect("execution names");
+    assert_eq!(v2_job_catalog_loads(), 1);
+
+    assert!(names.contains("custom"));
+    assert!(names.contains("task_auto_pipeline"));
+    assert!(
+        !names.contains("task_pr_pipeline"),
+        "a workspace-only default job name is not resolvable for named execution"
+    );
+    assert!(runtime.load_v2_job_asset_by_name("custom").is_ok());
+    assert!(
+        runtime
+            .load_v2_job_asset_by_name("task_auto_pipeline")
+            .is_ok()
+    );
+    assert!(
+        runtime
+            .load_v2_job_asset_by_name("task_pr_pipeline")
+            .is_err()
+    );
 }
 
 #[test]

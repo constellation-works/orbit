@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use orbit_common::{NotFoundKind, OrbitError};
@@ -12,6 +13,21 @@ use crate::OrbitRuntime;
 use crate::application::{
     ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets,
 };
+
+#[cfg(test)]
+thread_local! {
+    static V2_JOB_CATALOG_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_v2_job_catalog_loads() {
+    V2_JOB_CATALOG_LOADS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn v2_job_catalog_loads() -> usize {
+    V2_JOB_CATALOG_LOADS.with(std::cell::Cell::get)
+}
 
 /// Shippable default workflow assets, seeded under
 /// `<orbit_root>/resources/jobs/<name>.yaml` on `orbit init`. The entries
@@ -253,10 +269,34 @@ impl OrbitRuntime {
         self.load_v2_job_catalog(self.v2_job_asset_dirs())
     }
 
+    /// Job names [`Self::load_v2_job_asset_by_name`] would resolve, parsed once
+    /// so routine collection can check membership without re-reading every YAML
+    /// per definition.
+    ///
+    /// Default job names stay bound to env/global layers (L-0060): a workspace
+    /// copy of a shipped default does not make the name resolvable for
+    /// execution, so it must not pass load-time target checks either.
+    pub(crate) fn load_v2_job_execution_names(&self) -> Result<BTreeSet<String>, OrbitError> {
+        let catalog = self.load_v2_job_catalog(self.v2_job_membership_dirs())?;
+        let jobs_dir = &self.paths().jobs_dir;
+        Ok(catalog
+            .iter()
+            .filter_map(|(name, path, _)| {
+                if is_default_job_name(name) && path.starts_with(jobs_dir) {
+                    None
+                } else {
+                    Some(name.to_string())
+                }
+            })
+            .collect())
+    }
+
     fn load_v2_job_catalog(
         &self,
         dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
     ) -> Result<V2JobCatalog, OrbitError> {
+        #[cfg(test)]
+        V2_JOB_CATALOG_LOADS.with(|count| count.set(count.get() + 1));
         let mut catalog = V2JobCatalog::new();
         for dir in dirs {
             if dir.path().is_dir() {
@@ -286,6 +326,22 @@ impl OrbitRuntime {
         dirs.push(
             self.paths().global_dir.join("resources/jobs"),
             V2JobCatalogDirKind::Global,
+        );
+        dirs.into_vec()
+    }
+
+    fn v2_job_membership_dirs(&self) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
+        let mut dirs = CatalogDirectoryList::default();
+        // Same layering as named execution, with the workspace dir always
+        // present so one parse covers both default and custom job names.
+        push_v2_job_env_dirs(&mut dirs, v2_job_env_dirs().as_deref());
+        dirs.push(
+            self.paths().global_dir.join("resources/jobs"),
+            V2JobCatalogDirKind::Global,
+        );
+        dirs.push(
+            self.paths().jobs_dir.clone(),
+            V2JobCatalogDirKind::Workspace,
         );
         dirs.into_vec()
     }

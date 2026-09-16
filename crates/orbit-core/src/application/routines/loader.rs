@@ -7,7 +7,8 @@ pub use orbit_automation::routines::loader::{
 };
 use orbit_common::OrbitError;
 use orbit_types::workspace::Workspace;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 /// Registered workspaces with their runtimes, ready for routine discovery
 /// and dispatch, plus the workspaces that failed to open (reported loudly —
@@ -28,6 +29,7 @@ pub trait RoutineWorkspaceProvider {
 }
 
 pub fn collect_routines(workspaces: &[(Workspace, OrbitRuntime)]) -> RoutineCollection {
+    let job_names_by_root = preload_job_execution_names(workspaces);
     let sources = workspaces
         .iter()
         .map(|(workspace, runtime)| RoutineSource {
@@ -36,9 +38,21 @@ pub fn collect_routines(workspaces: &[(Workspace, OrbitRuntime)]) -> RoutineColl
         })
         .collect::<Vec<_>>();
     orbit_automation::routines::loader::collect_routines(&sources, &|root, job| {
-        workspaces
-            .iter()
-            .find(|(_, runtime)| runtime.shared_root() == root)
-            .is_some_and(|(_, runtime)| runtime.load_v2_job_asset_by_name(job).is_ok())
+        job_names_by_root
+            .get(root)
+            .and_then(|names| names.as_ref().ok())
+            .is_some_and(|names| names.contains(job))
     })
+}
+
+fn preload_job_execution_names(
+    workspaces: &[(Workspace, OrbitRuntime)],
+) -> BTreeMap<PathBuf, Result<BTreeSet<String>, OrbitError>> {
+    let mut job_names_by_root = BTreeMap::new();
+    for (_, runtime) in workspaces {
+        job_names_by_root
+            .entry(runtime.shared_root())
+            .or_insert_with(|| runtime.load_v2_job_execution_names());
+    }
+    job_names_by_root
 }
