@@ -14,6 +14,7 @@ use tempfile::tempdir;
 
 struct CountingTaskStore {
     inner: std::sync::Arc<dyn TaskStoreBackend>,
+    task_candidates_calls: std::sync::atomic::AtomicUsize,
     list_tasks_calls: std::sync::atomic::AtomicUsize,
 }
 
@@ -21,8 +22,14 @@ impl CountingTaskStore {
     fn new(inner: std::sync::Arc<dyn TaskStoreBackend>) -> Self {
         Self {
             inner,
+            task_candidates_calls: std::sync::atomic::AtomicUsize::new(0),
             list_tasks_calls: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    fn task_candidates_calls(&self) -> usize {
+        self.task_candidates_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn list_tasks_calls(&self) -> usize {
@@ -37,6 +44,8 @@ impl TaskStoreBackend for CountingTaskStore {
         filter: &orbit_store::contracts::TaskListFilter,
         limit: usize,
     ) -> Result<orbit_store::contracts::TaskCandidates, orbit_common::OrbitError> {
+        self.task_candidates_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inner.task_candidates(filter, limit)
     }
 
@@ -656,7 +665,7 @@ fn reserve_locks_publishes_empty_waiting_on_deps_when_dependencies_are_met() {
 }
 
 #[test]
-fn reserve_locks_loads_the_task_store_once_per_poll() {
+fn reserve_locks_reads_envelopes_without_hydrating_task_bundles() {
     let mut runtime = OrbitRuntime::in_memory().expect("build runtime");
     let ready = seed_task(&runtime, "Ready", TaskStatus::Backlog, Vec::new());
     let counting_store = std::sync::Arc::new(CountingTaskStore::new(
@@ -671,9 +680,14 @@ fn reserve_locks_loads_the_task_store_once_per_poll() {
 
     assert_eq!(output["reserved"], json!(true));
     assert_eq!(
-        counting_store.list_tasks_calls(),
+        counting_store.task_candidates_calls(),
         1,
-        "one ReserveLocks poll must load its lock index once"
+        "one ReserveLocks poll must load its envelope candidate index once"
+    );
+    assert_eq!(
+        counting_store.list_tasks_calls(),
+        0,
+        "ReserveLocks must not hydrate all task bundles"
     );
 }
 

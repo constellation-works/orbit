@@ -173,7 +173,8 @@ fn requested_task_files_prune_missing_context_entries() {
         &["docs/design/groundhog.md", "docs/design/missing.md"],
     );
 
-    let index = TaskLockIndex::load(&runtime).expect("index tasks");
+    let index = TaskLockIndex::load(&runtime, std::slice::from_ref(&task.id))
+        .expect("index task envelopes");
     let requested =
         requested_task_files_indexed(&index, &[task.id], runtime.paths().repo_root.as_path())
             .expect("collect requested task files");
@@ -219,7 +220,8 @@ fn active_epic_root_holds_union_of_descendant_context_files() {
 
     assert_eq!(
         requested_task_files_indexed(
-            &TaskLockIndex::load(&runtime).expect("index tasks"),
+            &TaskLockIndex::load(&runtime, std::slice::from_ref(&epic.id))
+                .expect("index task envelopes"),
             std::slice::from_ref(&epic.id),
             runtime.paths().repo_root.as_path()
         )
@@ -260,7 +262,7 @@ fn task_lock_conflicts_ignore_missing_held_context_entries() {
     );
 
     let conflicts = task_lock_conflicts_indexed(
-        &TaskLockIndex::load(&runtime).expect("index tasks"),
+        &TaskLockIndex::load(&runtime, &[]).expect("index task envelopes"),
         &[],
         &[
             "docs/design/groundhog.md".to_string(),
@@ -294,7 +296,7 @@ fn task_lock_conflicts_use_selector_anchor_overlap() {
     );
 
     let conflicts = task_lock_conflicts_indexed(
-        &TaskLockIndex::load(&runtime).expect("index tasks"),
+        &TaskLockIndex::load(&runtime, &[]).expect("index task envelopes"),
         &[],
         &["file:src/lib.rs".to_string(), "dir:src".to_string()],
         runtime.paths().repo_root.as_path(),

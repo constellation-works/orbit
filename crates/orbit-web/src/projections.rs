@@ -13,7 +13,7 @@ use orbit_core::{
     AuditEvent, JobRun, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus,
     resolve_task_dependencies,
 };
-use orbit_types::task::ArtifactManifestFileV2;
+use orbit_types::task::{ArtifactManifestFileV2, TaskEnvelopeV2};
 use orbit_types::workflow::{JobV2Step, JobV2StepBody};
 use serde_json::{Value, json};
 
@@ -305,7 +305,7 @@ fn dependency_labels(task: &Task, status_by_id: &BTreeMap<String, TaskStatus>) -
         .collect()
 }
 
-pub(crate) fn task_lock_to_json(task: &Task) -> Value {
+pub(crate) fn task_lock_to_json(task: &TaskEnvelopeV2) -> Value {
     json!({
         "id": task.id,
         "title": task.title,
@@ -328,16 +328,17 @@ pub(crate) fn task_locks_json(runtime: &OrbitRuntime) -> Result<Value, OrbitErro
     }))
 }
 
-fn task_locks(runtime: &OrbitRuntime) -> Result<(Vec<Task>, BTreeSet<String>), OrbitError> {
-    let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
-        filter: orbit_core::application::task::TaskListFilter {
+fn task_locks(
+    runtime: &OrbitRuntime,
+) -> Result<(Vec<TaskEnvelopeV2>, BTreeSet<String>), OrbitError> {
+    let candidates = runtime.task_candidates(
+        &orbit_core::application::task::TaskListFilter {
             statuses: Some(vec![TaskStatus::InProgress, TaskStatus::Review]),
             ..Default::default()
         },
-        limit: 10_000,
-        ..Default::default()
-    })?;
-    let mut tasks: Vec<_> = page.items.into_iter().map(|row| row.task).collect();
+        usize::MAX,
+    )?;
+    let mut tasks = candidates.items;
 
     tasks.sort_by_key(|task| {
         (
