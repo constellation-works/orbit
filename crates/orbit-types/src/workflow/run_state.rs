@@ -285,6 +285,18 @@ impl PipelineState {
         self.updated_at = Utc::now();
     }
 
+    /// Record one completed step's output under its step id in the
+    /// accumulated pipeline, replacing a non-object pipeline value.
+    pub fn record_pipeline_output(&mut self, step_id: &str, output: Value) {
+        if !self.pipeline.is_object() {
+            self.pipeline = Value::Object(Default::default());
+        }
+        if let Some(pipeline) = self.pipeline.as_object_mut() {
+            pipeline.insert(step_id.to_string(), output);
+        }
+        self.updated_at = Utc::now();
+    }
+
     /// Replace the accumulated pipeline snapshot directly.
     pub fn sync_pipeline(&mut self, pipeline: Value) {
         self.pipeline = pipeline;

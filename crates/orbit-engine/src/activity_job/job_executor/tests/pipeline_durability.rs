@@ -74,6 +74,12 @@ fn pipeline_snapshot_inherited_by_fanout_workers_at_dispatch_time() {
     // Upstream value still present after fan_out completes — the snapshot
     // taken into workers does not replace the parent pipeline.
     assert_eq!(pipeline.get("seed"), Some(&json!({"value": 42})));
+    // Workers share the parent's map by reference at dispatch; a worker's
+    // own step record copies on write and never reaches the parent.
+    assert!(
+        !pipeline.contains_key("worker"),
+        "worker-local step output must not leak into the parent pipeline"
+    );
     let scatter = pipeline
         .get("scatter")
         .and_then(Value::as_array)

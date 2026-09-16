@@ -2290,7 +2290,8 @@ spec:
 }
 
 /// [ORB-10002] Host checkpoint persistence: `checkpoint_step` records the
-/// step into the run's `PipelineState` (state, output, snapshot, cursor).
+/// step into the run's `PipelineState` (state, output, cursor) and merges
+/// the output into `pipeline[step_id]`; the payload is one step's output.
 #[test]
 fn checkpoint_step_records_into_run_state() {
     let (_root, runtime, _repo_root, _global_root) = test_runtime();
@@ -2316,7 +2317,6 @@ fn checkpoint_step_records_into_run_state() {
         0,
         "nap0",
         &json!({"ok": 0}),
-        &json!({"nap0": {"ok": 0}}),
     )
     .expect("checkpoint step 0");
     <OrbitRuntime as RuntimeHost>::checkpoint_step(
@@ -2325,7 +2325,6 @@ fn checkpoint_step_records_into_run_state() {
         1,
         "nap1",
         &json!({"ok": 1}),
-        &json!({"nap0": {"ok": 0}, "nap1": {"ok": 1}}),
     )
     .expect("checkpoint step 1");
 
@@ -2343,9 +2342,12 @@ fn checkpoint_step_records_into_run_state() {
     );
     assert_eq!(state.step_outputs.get(&0), Some(&json!({"ok": 0})));
     assert_eq!(state.next_step_index, 2);
+    assert_eq!(state.pipeline.get("nap0"), Some(&json!({"ok": 0})));
+    assert_eq!(state.pipeline.get("nap1"), Some(&json!({"ok": 1})));
     assert_eq!(
-        state.pipeline,
-        json!({"nap0": {"ok": 0}, "nap1": {"ok": 1}})
+        state.pipeline.get("seconds"),
+        Some(&json!(0)),
+        "checkpoints merge by step id and keep the seeded input keys"
     );
 }
 
@@ -2359,7 +2361,6 @@ fn checkpoint_step_without_run_row_is_noop() {
         "jrun-never-persisted",
         0,
         "nap0",
-        &json!({}),
         &json!({}),
     )
     .expect("no-op checkpoint");
@@ -2418,7 +2419,6 @@ fn interrupted_run_resumes_skipping_checkpointed_steps() {
         0,
         "nap0",
         &json!({"checkpointed": true}),
-        &json!({"nap0": {"checkpointed": true}}),
     )
     .expect("persist step 0 checkpoint");
     child.kill().expect("SIGKILL fake worker");

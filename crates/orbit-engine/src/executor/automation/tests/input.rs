@@ -66,7 +66,7 @@ fn legacy_batch_id_template_output_resolves_as_job_run_id() {
         }),
     );
     let context = TemplateContext {
-        steps,
+        steps: std::sync::Arc::new(steps),
         ..TemplateContext::default()
     };
     let batch_id =
