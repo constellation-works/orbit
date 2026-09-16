@@ -1,10 +1,13 @@
 //! Unit tests for `tasks` — sibling layout under store/tests/.
 
+use std::sync::Mutex;
+
 use chrono::Utc;
+use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 
-use crate::NoopEmbedder;
 use crate::vector::{SOURCE_KIND_TASK, VectorStore};
+use crate::{Embedder, NoopEmbedder};
 
 fn task(id: &str, title: &str, description: &str) -> Task {
     Task {
@@ -106,4 +109,80 @@ fn reindex_tasks_removes_legacy_field_rows_after_rename() {
 
     assert_eq!(embeddings, 0);
     assert_eq!(fts, 0);
+}
+
+#[test]
+fn reindex_tasks_batches_chunks_across_sources_and_skips_unchanged_fields() {
+    const TASKS: usize = 40;
+
+    let store = VectorStore::open_in_memory().unwrap();
+    let embedder = RecordingEmbedder::new();
+    let tasks = (0..TASKS)
+        .map(|index| {
+            task(
+                &format!("T{index:03}"),
+                &format!("Title {index}"),
+                &format!("Description {index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let first = store.reindex_tasks(&tasks, &embedder, false).unwrap();
+    assert_eq!(first.upsert.embedded_chunks, TASKS * 4);
+    assert_eq!(first.upsert.skipped_fields, 0);
+    assert_eq!(embedder.batch_sizes(), vec![64, 64, 32]);
+
+    let second = store.reindex_tasks(&tasks, &embedder, false).unwrap();
+    assert_eq!(second.upsert.embedded_chunks, 0);
+    assert_eq!(second.upsert.skipped_fields, TASKS * 4);
+    assert_eq!(
+        embedder.batch_sizes(),
+        vec![64, 64, 32],
+        "unchanged fields must not issue embed RPCs"
+    );
+}
+
+struct RecordingEmbedder {
+    inner: NoopEmbedder,
+    batch_sizes: Mutex<Vec<usize>>,
+}
+
+impl RecordingEmbedder {
+    fn new() -> Self {
+        Self {
+            inner: NoopEmbedder::small(),
+            batch_sizes: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn batch_sizes(&self) -> Vec<usize> {
+        self.batch_sizes.lock().unwrap().clone()
+    }
+}
+
+impl Embedder for RecordingEmbedder {
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    fn max_input_tokens(&self) -> usize {
+        self.inner.max_input_tokens()
+    }
+
+    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, OrbitError> {
+        self.batch_sizes.lock().unwrap().push(texts.len());
+        self.inner.embed(texts)
+    }
+
+    fn token_count(&self, text: &str) -> Result<usize, OrbitError> {
+        self.inner.token_count(text)
+    }
+
+    fn token_boundaries(&self, text: &str) -> Result<Vec<usize>, OrbitError> {
+        self.inner.token_boundaries(text)
+    }
 }

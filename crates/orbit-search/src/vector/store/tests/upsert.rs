@@ -326,6 +326,82 @@ fn concurrent_same_source_delete_is_not_resurrected_by_in_flight_upsert() {
     assert!(field_contents(&store, "S1").is_empty());
 }
 
+#[test]
+fn conflicting_source_rolls_back_other_sources_in_the_same_write_batch() {
+    let store = VectorStore::open_in_memory().unwrap();
+    let noop = NoopEmbedder::small();
+    store
+        .upsert_embeddings(
+            "task",
+            "CONFLICT",
+            &[EmbeddingField::new("purpose", "old")],
+            &noop,
+            false,
+        )
+        .unwrap();
+
+    let started = Arc::new(Barrier::new(2));
+    let release = Arc::new(Barrier::new(2));
+    let embedder = BarrierEmbedder {
+        inner: noop.clone(),
+        started: Arc::clone(&started),
+        release: Arc::clone(&release),
+    };
+
+    let store_for_batch = store.clone();
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let sources = [
+            (
+                "FIRST".to_string(),
+                vec![EmbeddingField::new("purpose", "first write")],
+            ),
+            (
+                "CONFLICT".to_string(),
+                vec![EmbeddingField::new("purpose", "stale replacement")],
+            ),
+        ];
+        let source_refs = sources
+            .iter()
+            .map(|(source_id, fields)| (source_id.as_str(), fields.as_slice()))
+            .collect::<Vec<_>>();
+        let result =
+            store_for_batch.upsert_embedding_sources("task", &source_refs, &embedder, false);
+        done_tx
+            .send(result.err().map(|error| error.to_string()))
+            .unwrap();
+    });
+    wait_until_inference_started(&started);
+
+    store
+        .upsert_embeddings(
+            "task",
+            "CONFLICT",
+            &[EmbeddingField::new("purpose", "newer")],
+            &noop,
+            false,
+        )
+        .unwrap();
+
+    release.wait();
+    let error = done_rx
+        .recv_timeout(UNBLOCKED_WAIT)
+        .expect("batched upsert should finish after release")
+        .expect("conflicting source should abort its write batch");
+    assert!(
+        error.contains("changed during embedding"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        field_contents(&store, "FIRST").is_empty(),
+        "the earlier source write must roll back with its transaction batch"
+    );
+    assert_eq!(
+        field_contents(&store, "CONFLICT"),
+        BTreeMap::from([("purpose".to_string(), "newer".to_string())])
+    );
+}
+
 fn field_contents(store: &VectorStore, source_id: &str) -> BTreeMap<String, String> {
     let conn = store.connection();
     let conn = conn.lock().unwrap();
