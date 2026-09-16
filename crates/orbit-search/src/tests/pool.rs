@@ -140,12 +140,12 @@ fn task_and_doc_branches_of_one_hybrid_query_share_an_embedder() {
 fn neighbor_lookup_reuses_the_query_embedder() {
     let store = indexed_store();
     let (pool, spawns) = counting_pool();
-    let tasks = vec![task("ORB-00001", "Reuse the companion")];
+    let target = task("ORB-00001", "Reuse the companion");
 
     semantic_search(&store, &pool, search_params("warm the pool")).unwrap();
     semantic_related(
         &store,
-        &tasks,
+        &target,
         &pool,
         SemanticRelatedParams {
             task_id: "ORB-00001".to_string(),
