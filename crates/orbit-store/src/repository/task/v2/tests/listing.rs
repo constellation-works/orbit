@@ -327,6 +327,7 @@ fn metadata_filters_preserve_ties_and_legacy_tag_normalization() {
         .collect::<Vec<_>>();
     let page = store.query_task_rows(&filter, 2, None).unwrap();
     assert_eq!(page.total, 3);
+    assert_eq!(page.total_without_cursor, 3);
     assert_eq!(
         page.items
             .iter()
@@ -347,6 +348,46 @@ fn metadata_filters_preserve_ties_and_legacy_tag_normalization() {
         .unwrap();
     assert_eq!(continuation.items.len(), 1);
     assert_eq!(continuation.items[0].task.id, expected[2]);
+    assert_eq!(continuation.total, 1);
+    assert_eq!(continuation.total_without_cursor, 3);
+}
+
+#[test]
+fn cursor_page_keeps_unbounded_total_on_the_indexed_path() {
+    let temp = TempDir::new().unwrap();
+    let store = corpus(&temp, 3);
+    let page = store
+        .query_task_rows(&TaskListFilter::default(), 2, None)
+        .unwrap();
+    assert_eq!(page.total, 3);
+    assert_eq!(page.total_without_cursor, 3);
+    assert_eq!(page.items.len(), 2);
+    let boundary = page.items.last().unwrap();
+    let continuation = store
+        .query_task_rows(
+            &TaskListFilter {
+                scan_before: Some((boundary.task.created_at, boundary.task.id.clone())),
+                ..Default::default()
+            },
+            2,
+            None,
+        )
+        .unwrap();
+    assert_eq!(continuation.items.len(), 1);
+    assert_eq!(continuation.total, 1);
+    assert_eq!(continuation.total_without_cursor, 3);
+    let candidates = store
+        .task_candidates(
+            &TaskListFilter {
+                scan_before: Some((boundary.task.created_at, boundary.task.id.clone())),
+                ..Default::default()
+            },
+            2,
+        )
+        .unwrap();
+    assert_eq!(candidates.items.len(), 1);
+    assert_eq!(candidates.total, 1);
+    assert_eq!(candidates.total_without_cursor, 3);
 }
 
 fn upsert_proof(store: &TaskV2Store, id: &str, content: &[u8]) {

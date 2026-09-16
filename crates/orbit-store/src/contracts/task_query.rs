@@ -44,14 +44,14 @@ impl TaskListFilter {
     }
 
     pub(crate) fn matches(&self, task: &TaskEnvelopeV2) -> bool {
-        self.scan_before.as_ref().is_none_or(|(at, id)| {
-            task.created_at < *at || (task.created_at == *at && task.id > *id)
-        }) && self.search.as_ref().is_none_or(|query| {
-            task.id.to_lowercase().contains(query) || task.title.to_lowercase().contains(query)
-        }) && self
-            .statuses
-            .as_ref()
-            .is_none_or(|values| values.contains(&task.status))
+        self.matches_cursor(task)
+            && self.search.as_ref().is_none_or(|query| {
+                task.id.to_lowercase().contains(query) || task.title.to_lowercase().contains(query)
+            })
+            && self
+                .statuses
+                .as_ref()
+                .is_none_or(|values| values.contains(&task.status))
             && self.priority.is_none_or(|value| task.priority == value)
             && self.task_type.is_none_or(|value| task.task_type == value)
             && self.parent_id.as_ref().is_none_or(|value| {
@@ -107,13 +107,29 @@ impl TaskListFilter {
                 .as_ref()
                 .is_none_or(|values| !values.is_empty())
     }
+
+    pub(crate) fn without_cursor(&self) -> Self {
+        Self {
+            scan_before: None,
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn matches_cursor(&self, task: &TaskEnvelopeV2) -> bool {
+        self.scan_before.as_ref().is_none_or(|(at, id)| {
+            task.created_at < *at || (task.created_at == *at && task.id > *id)
+        })
+    }
 }
 
 /// Ordered metadata matches. Counts do not certify off-page bundle integrity.
 #[derive(Debug, Default)]
 pub struct TaskCandidates {
     pub items: Vec<TaskEnvelopeV2>,
+    /// Matches remaining after `scan_before`, before `limit`.
     pub total: usize,
+    /// Matches ignoring `scan_before`. Equals [`Self::total`] when no cursor.
+    pub total_without_cursor: usize,
 }
 
 /// One fully validated bundle, retaining sidecars from that same read.
@@ -128,7 +144,10 @@ pub struct TaskRow {
 #[derive(Debug, Default)]
 pub struct TaskPage {
     pub items: Vec<TaskRow>,
+    /// Matches remaining after `scan_before` (and any residual), before `limit`.
     pub total: usize,
+    /// Matches ignoring `scan_before`. Equals [`Self::total`] when no cursor.
+    pub total_without_cursor: usize,
     /// Dependency statuses captured after index freshness/rebuild work: every
     /// task in the listed workspace plus each relation target the hydrated
     /// rows name, wherever that target is registered.

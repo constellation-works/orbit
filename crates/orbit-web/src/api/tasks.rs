@@ -390,12 +390,12 @@ fn task_list_page_json(
     query: &TaskPageQuery,
     scope: &str,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let total = runtime.task_candidates(&query.count_filter(), 0)?.total;
     let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
         filter: query.filter(),
         limit: query.limit(),
         ..Default::default()
     })?;
+    let total = page.total_without_cursor;
     let status_by_id = page.status_by_id;
     let projection = TaskListProjection::new(runtime);
     let items = page
