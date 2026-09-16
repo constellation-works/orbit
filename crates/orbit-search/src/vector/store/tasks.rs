@@ -1,7 +1,8 @@
 //! Task-corpus indexing entry points.
 //!
 //! `index_task` and `reindex_tasks` are the convenience wrappers that wire
-//! `task_embedding_fields(...)` (per-field extraction) into `upsert_embeddings`.
+//! `task_embedding_fields(...)` (per-field extraction) into the single- and
+//! multi-source upsert paths.
 
 use std::collections::BTreeSet;
 
@@ -49,24 +50,32 @@ impl VectorStore {
         embedder: &dyn Embedder,
         force: bool,
     ) -> Result<TaskReindexReport, OrbitError> {
-        let mut upsert = UpsertReport::default();
         let live = tasks
             .iter()
             .map(|task| task.id.clone())
             .collect::<BTreeSet<_>>();
-        for task in tasks {
-            let report = self.index_task(task, embedder, force)?;
-            upsert.embedded_chunks += report.embedded_chunks;
-            upsert.skipped_fields += report.skipped_fields;
-        }
+        let stale_sources = self
+            .source_ids(SOURCE_KIND_TASK)?
+            .difference(&live)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut sources = tasks
+            .iter()
+            .map(|task| (task.id.clone(), task_embedding_fields(task)))
+            .collect::<Vec<_>>();
+        sources.extend(
+            stale_sources
+                .iter()
+                .cloned()
+                .map(|source_id| (source_id, Vec::new())),
+        );
+        let source_refs = sources
+            .iter()
+            .map(|(source_id, fields)| (source_id.as_str(), fields.as_slice()))
+            .collect::<Vec<_>>();
+        let upsert =
+            self.upsert_embedding_sources(SOURCE_KIND_TASK, &source_refs, embedder, force)?;
 
-        let mut stale_sources = Vec::new();
-        for source_id in self.source_ids(SOURCE_KIND_TASK)? {
-            if !live.contains(&source_id) {
-                self.delete_source(SOURCE_KIND_TASK, &source_id)?;
-                stale_sources.push(source_id);
-            }
-        }
         Ok(TaskReindexReport {
             upsert,
             stale_sources,
