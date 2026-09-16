@@ -1,8 +1,45 @@
 nextest-version = { required = "0.9.48" }
 
+# Tests that cannot share a thread with one another.
+#
+# Nextest already runs every test in its own process, and both crates own a
+# process-wide guard for the tests that touch ambient state --
+# `orbit_common::test_env::ScopedEnv` and, in `orbit-cli`,
+# `tests::env_isolation::EnvGuard`. These groups are a third layer for the two
+# cases where a test's blast radius reaches past its own process: a mutation of
+# process-global state, and a claim on a machine-global resource.
+#
+# Keep them narrow. The filters below name modules, not packages. The previous
+# filter was `package(orbit-cli) | package(orbit-core)`, which pinned 2,351
+# tests -- about 41% of the workspace -- to a single thread. That swept in every
+# `orbit-cli` integration test, the slowest binaries in the tree and the ones
+# with the least claim to a slot here: they never touch the parent process's
+# environment, because they hand fixture state to the spawned `orbit` child
+# through `Command::env` / `env_remove`
+# (see CONTRIBUTING.md, "Safe Mutable CLI Fixtures").
 [test-groups]
+# Mutates process-global state: `std::env::set_var` / `remove_var` /
+# `set_current_dir`, directly or through one of the shared env guards. A new
+# test module that does any of that belongs in the matching filter below.
 stateful-runtime = { max-threads = 1 }
+# Claims a machine-global resource. `free_port()` binds :0, reads the port back
+# and drops the listener before handing the number to a spawned server, so two
+# of these running at once can be assigned the same port.
+ephemeral-port = { max-threads = 1 }
 
+# orbit-core unit tests that mutate the process environment or cwd.
 [[profile.default.overrides]]
-filter = 'package(orbit-cli) | package(orbit-core)'
+filter = 'package(orbit-core) & kind(lib) & test(/^(adapter::command::tests::|adapter::engine_host::tests::runtime_host::|adapter::engine_host::v2_host::tests::(recovery_execution_sandbox|sandbox_nested)::|adapter::tool_host::artifact_redaction::tests::|adapter::tool_host::tests::(command_tools|friction_tools|task_tools|workflow_tools)::|application::job::run::tests::(owner|reconcile)::|application::routines::tests::sweep::|application::search::tests::(global|types)::|bootstrap::init::tests::|bootstrap::tests::global_defaults::|runtime::engine::tests::crew::|runtime::task::tests::locks::|runtime::tests::(authorization|resolve|run_input|runtime|workspace_claim)::)/)'
 test-group = 'stateful-runtime'
+
+# orbit-cli unit tests that mutate the process environment or cwd. They live in
+# the `orbit` binary target, not a lib target.
+[[profile.default.overrides]]
+filter = 'package(orbit-cli) & kind(bin) & test(/^(tests::(audit_middleware|env_isolation)::|command::init::tests::seed::|command::mcp::command::tests::|command::mcp::setup::tests::workspace::|command::run::tests::ship::|command::tests::(friction|init)::|command::workspace::tests::(init|init_report|shared_root|teardown)::)/)'
+test-group = 'stateful-runtime'
+
+# `web_serve_root` and `web_serve_shutdown` both pick a port with `free_port()`
+# and spawn `orbit web serve` on it.
+[[profile.default.overrides]]
+filter = 'binary(/^web_serve_/)'
+test-group = 'ephemeral-port'
