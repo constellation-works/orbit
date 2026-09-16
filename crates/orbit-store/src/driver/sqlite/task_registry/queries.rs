@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComplexity, TaskEnvelopeV2, normalize_task_tags};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Statement, Transaction, params};
 
 use super::util::{path_to_string, relation_type_name, terminal_month};
 use crate::contracts::{TaskBundleBinding, WorkspaceBinding, WorkspaceCheckoutBinding};
@@ -107,13 +107,17 @@ pub(super) fn task_ids_for_workspace(
         .map_err(|e| OrbitError::Store(e.to_string()))
 }
 
-pub(super) fn write_task_index_rows(
-    tx: &rusqlite::Transaction<'_>,
-    partition_id: &str,
-    envelope: &TaskEnvelopeV2,
-) -> Result<(), OrbitError> {
-    tx.execute(
-        "INSERT INTO task_bundle_index (
+pub(super) struct TaskIndexWriter<'tx> {
+    index: Statement<'tx>,
+    tag: Statement<'tx>,
+    relation: Statement<'tx>,
+}
+
+impl<'tx> TaskIndexWriter<'tx> {
+    pub(super) fn prepare(tx: &'tx Transaction<'_>) -> Result<Self, OrbitError> {
+        let index = tx
+            .prepare(
+                "INSERT INTO task_bundle_index (
             task_id, workspace_id, status, priority, job_run_id, created_at, updated_at, terminal_month, complexity
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
         ON CONFLICT(task_id) DO UPDATE SET
@@ -125,45 +129,66 @@ pub(super) fn write_task_index_rows(
             updated_at = excluded.updated_at,
             terminal_month = excluded.terminal_month,
             complexity = excluded.complexity",
-        params![
-            &envelope.id,
-            partition_id,
-            envelope.status.to_string(),
-            envelope.priority.to_string(),
-            envelope.job_run_id.as_deref(),
-            envelope.created_at.to_rfc3339(),
-            envelope.updated_at.to_rfc3339(),
-            terminal_month(envelope.status, envelope.updated_at),
-            indexed_complexity(envelope.complexity),
-        ],
-    )
-    .map_err(|e| OrbitError::Store(e.to_string()))?;
-
-    for tag in normalize_task_tags(envelope.tags.clone()) {
-        tx.execute(
-            "INSERT OR IGNORE INTO task_bundle_tags(task_id, workspace_id, tag)
+            )
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let tag = tx
+            .prepare(
+                "INSERT OR IGNORE INTO task_bundle_tags(task_id, workspace_id, tag)
              VALUES (?1, ?2, ?3)",
-            params![&envelope.id, partition_id, &tag],
-        )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
-    }
-
-    for relation in &envelope.relations {
-        tx.execute(
-            "INSERT OR IGNORE INTO task_bundle_relations(
+            )
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        let relation = tx
+            .prepare(
+                "INSERT OR IGNORE INTO task_bundle_relations(
                 source_task_id, workspace_id, relation_type, target_task_id
             ) VALUES (?1, ?2, ?3, ?4)",
-            params![
-                &envelope.id,
-                partition_id,
-                relation_type_name(relation.relation_type),
-                &relation.target
-            ],
-        )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+            )
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        Ok(Self {
+            index,
+            tag,
+            relation,
+        })
     }
 
-    Ok(())
+    pub(super) fn write(
+        &mut self,
+        partition_id: &str,
+        envelope: &TaskEnvelopeV2,
+    ) -> Result<(), OrbitError> {
+        self.index
+            .execute(params![
+                &envelope.id,
+                partition_id,
+                envelope.status.to_string(),
+                envelope.priority.to_string(),
+                envelope.job_run_id.as_deref(),
+                envelope.created_at.to_rfc3339(),
+                envelope.updated_at.to_rfc3339(),
+                terminal_month(envelope.status, envelope.updated_at),
+                indexed_complexity(envelope.complexity),
+            ])
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+        for tag in normalize_task_tags(envelope.tags.clone()) {
+            self.tag
+                .execute(params![&envelope.id, partition_id, &tag])
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+        }
+
+        for relation in &envelope.relations {
+            self.relation
+                .execute(params![
+                    &envelope.id,
+                    partition_id,
+                    relation_type_name(relation.relation_type),
+                    &relation.target
+                ])
+                .map_err(|e| OrbitError::Store(e.to_string()))?;
+        }
+
+        Ok(())
+    }
 }
 
 /// Indexed form of [`TaskComplexity`]: a populated band, or `""` for unset.
