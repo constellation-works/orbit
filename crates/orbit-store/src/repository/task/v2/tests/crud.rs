@@ -334,7 +334,7 @@ fn filters_and_searches_v2_tasks() {
 }
 
 #[test]
-fn search_tasks_matches_text_artifacts() {
+fn search_tasks_matches_artifact_paths_but_does_not_read_contents() {
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     store
@@ -354,18 +354,21 @@ fn search_tasks_matches_text_artifacts() {
         )
         .expect("upsert artifact");
 
-    for query in ["needle-artifact-body", "reports/search.md"] {
-        assert_eq!(
-            store
-                .search_tasks(query)
-                .expect("search")
-                .into_iter()
-                .map(|task| task.id)
-                .collect::<Vec<_>>(),
-            vec!["ORB-00000"],
-            "query {query} should match v2 non-envelope content"
-        );
-    }
+    assert!(
+        store
+            .search_tasks("needle-artifact-body")
+            .expect("artifact contents are outside interactive search")
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .search_tasks("reports/search.md")
+            .expect("artifact path search")
+            .into_iter()
+            .map(|task| task.id)
+            .collect::<Vec<_>>(),
+        vec!["ORB-00000"]
+    );
     assert!(
         store
             .search_tasks("definitely-missing-query")
@@ -428,10 +431,16 @@ fn search_tasks_skips_binary_artifacts_without_poisoning_results() {
         )
         .expect("upsert text artifact");
 
-    assert_eq!(
+    assert!(
         store
             .search_tasks("needle-safe-text")
-            .expect("search skips binary")
+            .expect("search skips artifact payloads")
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .search_tasks("reports/text.txt")
+            .expect("searches artifact manifest paths")
             .into_iter()
             .map(|task| task.id)
             .collect::<Vec<_>>(),

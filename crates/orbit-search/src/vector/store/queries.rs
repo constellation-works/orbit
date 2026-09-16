@@ -16,6 +16,22 @@ use super::VectorStore;
 use crate::vector::{SemanticStats, SourceModelCount};
 
 impl VectorStore {
+    /// Whether the lexical corpus contains at least one row of `source_kind`.
+    /// This is deliberately an indexed `EXISTS` probe rather than a source-ID
+    /// listing: interactive search only needs to choose its retrieval path.
+    pub fn has_source_kind(&self, source_kind: &str) -> Result<bool, OrbitError> {
+        let conn = self.connection();
+        let conn = conn
+            .lock()
+            .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))?;
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM chunks WHERE source_kind = ?1 LIMIT 1)",
+            params![source_kind],
+            |row| row.get(0),
+        )
+        .map_err(|error| OrbitError::Store(error.to_string()))
+    }
+
     pub fn source_ids(&self, source_kind: &str) -> Result<BTreeSet<String>, OrbitError> {
         let conn = self.connection();
         let conn = conn
