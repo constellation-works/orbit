@@ -592,22 +592,22 @@ pub trait RuntimeHost: Send + Sync {
     }
 
     /// Persist a durable checkpoint after a completed top-level job step
-    /// (ORB-10002). `pipeline_snapshot` is the executor's accumulated
-    /// step-output map (step id → raw output) at the moment the step
-    /// finished; `output` is the completing step's own raw output.
+    /// (ORB-10002). `output` is the completing step's own raw output — the
+    /// whole payload; the host accumulates outputs by `step_id`, so the
+    /// bytes handed over per checkpoint never grow with the run.
     ///
     /// Hosts with run persistence (orbit-core) record this into the run's
-    /// `PipelineState` so an interrupted run can be resumed without
-    /// re-executing completed steps. The default is a no-op for hosts
-    /// without run storage (tests, smoke examples). Checkpoint failures are
-    /// non-fatal to the run: the executor logs and continues.
+    /// `PipelineState` (`step_outputs[step_index]`, `pipeline[step_id]`) so
+    /// an interrupted run can be resumed without re-executing completed
+    /// steps. The default is a no-op for hosts without run storage (tests,
+    /// smoke examples). Checkpoint failures are non-fatal to the run: the
+    /// executor logs and continues.
     fn checkpoint_step(
         &self,
         _run_id: &str,
         _step_index: u32,
         _step_id: &str,
         _output: &Value,
-        _pipeline_snapshot: &Value,
     ) -> Result<(), DispatchError> {
         Ok(())
     }

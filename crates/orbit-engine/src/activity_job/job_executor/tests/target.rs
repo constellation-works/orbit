@@ -131,7 +131,7 @@ fn exec_ctx<'a>(host: &'a dyn RuntimeHost) -> ExecCtx<'a> {
         audit: std::sync::Arc::new(test_writer("run-crew-override")),
         host,
         input: json!({ "crew": "run-default" }),
-        pipeline: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+        pipeline: std::sync::Arc::new(std::sync::Mutex::new(PipelineSteps::default())),
         recovery_activity: None,
         failure_activity: None,
         item: None,

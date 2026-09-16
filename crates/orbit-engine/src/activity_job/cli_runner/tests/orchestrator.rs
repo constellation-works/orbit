@@ -26,12 +26,15 @@ use super::super::super::dispatcher::DispatchError;
 use super::super::super::dispatcher::ResolvedSandbox;
 use super::super::super::sqlite_sink::V2SqliteSink;
 use super::super::super::workspace::{WorktreeBoundaryGuard, validate_declared_worktree_pair};
-use super::super::orchestrator::{provider_child_environment, resolved_activity_fs_profile_name};
+use super::super::orchestrator::{
+    provider_child_environment, resolved_activity_fs_profile_name, stdout_text_preview,
+};
 use super::super::run_cli_backend;
 use super::test_support::{
     RecordingSink, TestHost, capture_events, sandbox_for_test, test_agent_loop_spec,
     test_agent_loop_spec_for, write_executable,
 };
+use orbit_common::security::redaction::argv_redactor;
 
 #[test]
 fn cli_activity_fs_profile_resolver_preserves_named_profile() {
@@ -1451,6 +1454,41 @@ fn run_cli_backend_bounds_stdout_text_preview_and_keeps_envelope_status_from_ful
     assert!(
         message.contains("envelope status") && message.contains("failed"),
         "demote message should explain envelope status; got {message:?}"
+    );
+}
+
+#[test]
+fn stdout_text_preview_redacts_a_secret_that_straddles_the_64kib_cut() {
+    let secret = "orbit-preview-window-secret-value";
+    let _guard = EnvVarGuard::set("ORBIT_PREVIEW_WINDOW_TEST_TOKEN", secret);
+    // Leave room for `[REDACTED_ENV]` inside the final 64 KiB prefix after
+    // substitution. The secret itself still crosses the raw 64 KiB cut.
+    let raw = format!(
+        "{}{secret}{}",
+        "x".repeat(64 * 1024 - 40),
+        "y".repeat(8 * 1024)
+    );
+    let preview = stdout_text_preview(&raw, argv_redactor(), false);
+    assert!(preview.truncated);
+    assert!(preview.text.len() <= 64 * 1024);
+    assert!(
+        !preview.text.contains(secret),
+        "secret straddling the 64 KiB cut must be redacted in the windowed preview"
+    );
+    assert!(preview.text.contains("[REDACTED_ENV]"));
+}
+
+#[test]
+fn stdout_text_preview_does_not_redact_a_secret_only_past_the_window() {
+    let secret = "orbit-preview-far-tail-secret-value";
+    let _guard = EnvVarGuard::set("ORBIT_PREVIEW_TAIL_TEST_TOKEN", secret);
+    let raw = format!("{}{secret}", "x".repeat(80 * 1024));
+    let preview = stdout_text_preview(&raw, argv_redactor(), false);
+    assert!(preview.truncated);
+    assert!(!preview.text.contains(secret));
+    assert!(
+        !preview.text.contains("[REDACTED_ENV]"),
+        "redaction must not run over the discarded tail of a prefix preview"
     );
 }
 
@@ -3668,7 +3706,7 @@ fn rendered_implement_input_from_asset(
     );
     let context = TemplateContext {
         item: Some(serde_json::json!(task_id)),
-        steps,
+        steps: std::sync::Arc::new(steps),
         ..TemplateContext::default()
     };
     let rendered = render_asset_value(template_input, &context);
@@ -3720,7 +3758,7 @@ fn rendered_finish_input_from_epic_pipeline(
     );
     let context = TemplateContext {
         input: serde_json::json!({ "epic_task_id": task_id }),
-        steps,
+        steps: std::sync::Arc::new(steps),
         ..TemplateContext::default()
     };
     let rendered = render_asset_value(template_input, &context);

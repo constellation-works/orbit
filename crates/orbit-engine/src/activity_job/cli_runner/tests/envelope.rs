@@ -3,13 +3,14 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use orbit_agent::ParsedStdout;
 use orbit_store::{InvocationInsertParams, InvocationQuery, Store};
 use orbit_types::telemetry::TokenUsage;
 use serde_json::Value;
 
 use super::super::envelope::{
-    cli_agent_envelope_json, parse_cli_invocation_trace, task_id_from_input, task_ids_from_input,
-    user_prompt_from_input,
+    cli_agent_envelope_json, parse_cli_invocation_trace_from, task_id_from_input,
+    task_ids_from_input, user_prompt_from_input,
 };
 use super::test_support::{TestHost, test_agent_loop_spec};
 
@@ -177,7 +178,7 @@ fn parse_cli_invocation_trace_extracts_gemini_cli_stats_tokens() {
     .to_string();
 
     assert_eq!(
-        parse_cli_invocation_trace(stdout.as_bytes(), b"", Some(0), 99, true)
+        parse_cli_invocation_trace_from(&ParsedStdout::parse(&stdout), b"", Some(0), 99, true)
             .map(|trace| trace.usage),
         Some(TokenUsage {
             input: 12,
@@ -217,8 +218,9 @@ fn claude_cache_creation_ttl_split_ingests_at_the_one_hour_rate() {
         }
     })
     .to_string();
-    let trace = parse_cli_invocation_trace(stdout.as_bytes(), b"", Some(0), 99, true)
-        .expect("Claude CLI envelope parses");
+    let trace =
+        parse_cli_invocation_trace_from(&ParsedStdout::parse(&stdout), b"", Some(0), 99, true)
+            .expect("Claude CLI envelope parses");
     assert_eq!(trace.provider_model.as_deref(), Some("claude-opus-4-8[1m]"));
     assert_eq!(trace.provider_cost_usd, Some(1.014_018));
     let store = Store::open_in_memory().expect("open store");
@@ -264,7 +266,8 @@ fn parse_cli_invocation_trace_accepts_grok_json_text_envelope() {
     .to_string();
 
     assert!(
-        parse_cli_invocation_trace(stdout.as_bytes(), b"", Some(0), 99, true).is_some(),
+        parse_cli_invocation_trace_from(&ParsedStdout::parse(&stdout), b"", Some(0), 99, true)
+            .is_some(),
         "grok --output-format json stdout should expose the embedded Orbit envelope"
     );
 }

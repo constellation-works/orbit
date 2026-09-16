@@ -1,5 +1,6 @@
 // Content moved from tests.rs per ORB-00231
 
+mod listing;
 mod read_pool;
 mod schema;
 
@@ -1911,10 +1912,10 @@ fn generated_task_index_filters_by_status_priority_and_tags() {
             .indexed_task_ids_filtered(
                 &workspace.partition_id,
                 &TaskIndexFilter {
-                    status: Some(TaskStatus::Review),
+                    statuses: vec![TaskStatus::Review],
                     priority: Some(TaskPriority::High),
-                    job_run_id: None,
                     tags: vec!["review".into()],
+                    ..Default::default()
                 },
             )
             .expect("filtered ids"),
@@ -1925,10 +1926,8 @@ fn generated_task_index_filters_by_status_priority_and_tags() {
             .indexed_task_ids_filtered(
                 &workspace.partition_id,
                 &TaskIndexFilter {
-                    status: None,
-                    priority: None,
-                    job_run_id: None,
                     tags: vec!["task-artifacts".into(), "v2".into()],
+                    ..Default::default()
                 },
             )
             .expect("tagged ids"),
@@ -2111,10 +2110,8 @@ fn unregister_task_bundle_preserves_sibling_workspace_indexes() {
         .indexed_task_ids_filtered(
             &workspace_b.partition_id,
             &TaskIndexFilter {
-                status: None,
-                priority: None,
-                job_run_id: None,
                 tags: vec!["sibling".into()],
+                ..Default::default()
             },
         )
         .expect("tagged tasks before unregister");
@@ -2142,10 +2139,8 @@ fn unregister_task_bundle_preserves_sibling_workspace_indexes() {
             .indexed_task_ids_filtered(
                 &workspace_b.partition_id,
                 &TaskIndexFilter {
-                    status: None,
-                    priority: None,
-                    job_run_id: None,
                     tags: vec!["sibling".into()],
+                    ..Default::default()
                 },
             )
             .expect("tagged tasks after unregister"),

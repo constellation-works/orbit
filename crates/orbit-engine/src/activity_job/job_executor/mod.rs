@@ -170,7 +170,7 @@ pub fn execute_job_with_resume(
         audit: audit.clone(),
         host,
         input: base_input.clone(),
-        pipeline: Arc::new(Mutex::new(pipeline)),
+        pipeline: Arc::new(Mutex::new(pipeline_steps_from_raw(pipeline))),
         recovery_activity,
         failure_activity,
         item: None,
@@ -226,18 +226,9 @@ pub fn execute_job_with_resume(
         checkpoint_completed_step(&ctx, step_index, &step.id, &outcome.output);
     }
 
-    let pipeline = Value::Object(
-        ctx.pipeline
-            .lock()
-            .expect("pipeline poisoned")
-            .clone()
-            .into_iter()
-            .collect(),
-    );
-
     Ok(JobOutcome {
         success: overall_ok,
-        pipeline,
+        pipeline: ctx.pipeline_value(),
         message: (!overall_ok).then_some(overall_message).flatten(),
         audit_failures: audit.audit_failure_count(),
         degraded_audit: audit.degraded_audit(),
@@ -280,20 +271,14 @@ fn step_completed_in_resume(resume: Option<&PipelineState>, step_index: u32) -> 
 }
 
 /// [ORB-10002] Persist a checkpoint for a completed top-level step through
-/// the host. Non-fatal: a checkpoint write failure degrades resumability but
-/// must never fail an otherwise-successful run.
+/// the host. The payload is this step's output alone; the host accumulates
+/// outputs by step id, so persisted bytes per checkpoint stay O(step output).
+/// Non-fatal: a checkpoint write failure degrades resumability but must
+/// never fail an otherwise-successful run.
 fn checkpoint_completed_step(ctx: &ExecCtx<'_>, step_index: u32, step_id: &str, output: &Value) {
-    let snapshot = Value::Object(
-        ctx.pipeline
-            .lock()
-            .expect("pipeline poisoned")
-            .clone()
-            .into_iter()
-            .collect(),
-    );
-    if let Err(error) =
-        ctx.host
-            .checkpoint_step(&ctx.run_id, step_index, step_id, output, &snapshot)
+    if let Err(error) = ctx
+        .host
+        .checkpoint_step(&ctx.run_id, step_index, step_id, output)
     {
         tracing::warn!(
             target: "orbit.engine.job_executor",

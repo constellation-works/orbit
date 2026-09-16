@@ -1,5 +1,8 @@
+use std::collections::BTreeSet;
+
 use super::*;
 use crate::contracts::{TaskCandidates, TaskListFilter, TaskPage, TaskResidualFilter, TaskRow};
+use crate::driver::sqlite::task_registry::is_terminal_status;
 
 impl TaskV2Store {
     pub(crate) fn task_candidates(
@@ -7,37 +10,66 @@ impl TaskV2Store {
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<TaskCandidates, OrbitError> {
-        let envelopes = match self.validated_envelopes()? {
-            Some(envelopes) => envelopes,
-            None => {
-                // Rebuild/fallback validates task fields on every encountered
-                // bundle (envelope, bodies, events, event/envelope status).
-                // Artifact payload hashing is deferred; never swallow a
-                // task-field error while repairing a generated index.
-                let envelopes = self
-                    .bundle_store
-                    .list_bundles()?
-                    .into_iter()
-                    .map(|bundle| bundle.envelope)
-                    .collect::<Vec<_>>();
-                if let Err(error) = self
-                    .registry
-                    .replace_workspace_task_indexes(&self.workspace_id, &envelopes)
-                {
-                    orbit_common::tracing::warn!(%error, "task index repair failed; using bundle scan metadata");
-                }
-                envelopes
-            }
-        };
         let filter = filter.normalized();
-        let mut items = envelopes
+        if let Some(unsettled) = self.validate_index()? {
+            return self.indexed_candidates(&filter, limit, unsettled);
+        }
+        // Rebuild/fallback validates task fields on every encountered
+        // bundle (envelope, bodies, events, event/envelope status).
+        // Artifact payload hashing is deferred; never swallow a
+        // task-field error while repairing a generated index.
+        let envelopes = self
+            .bundle_store
+            .list_bundles()?
             .into_iter()
-            .filter(|task| filter.matches(task))
+            .map(|bundle| bundle.envelope)
             .collect::<Vec<_>>();
-        sort_by_created_desc_id_asc(&mut items, |task| &task.created_at, |task| &task.id);
-        let total = items.len();
-        items.truncate(limit);
-        Ok(TaskCandidates { items, total })
+        if let Err(error) = self
+            .registry
+            .replace_workspace_task_indexes(&self.workspace_id, &envelopes)
+        {
+            orbit_common::tracing::warn!(%error, "task index repair failed; using bundle scan metadata");
+        }
+        Ok(select_candidates(envelopes, &filter, limit))
+    }
+
+    /// Selection over a validated index. SQL answers every predicate it
+    /// projects, the ordering, and — when nothing is left for `matches` —
+    /// the limit and the total, so only the selected envelopes leave the
+    /// cache. Otherwise the index narrows the candidates and the remaining
+    /// predicates run over those envelopes before the limit.
+    fn indexed_candidates(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+        unsettled: Vec<String>,
+    ) -> Result<TaskCandidates, OrbitError> {
+        if filter.statuses.as_ref().is_some_and(Vec::is_empty) {
+            return Ok(TaskCandidates::default());
+        }
+        let bounded = filter.is_fully_indexed();
+        let selection = self.registry.indexed_task_selection(
+            &self.workspace_id,
+            &filter.index_filter(unsettled),
+            filter.terminal_last,
+            (bounded && limit < usize::MAX).then_some(limit),
+        )?;
+        // A row that no longer matches was rewritten after the scan; leaving
+        // it out here keeps every returned candidate true to the filter, and
+        // hydration re-checks the selected page against the bundle anyway.
+        let envelopes = selection
+            .ids
+            .iter()
+            .filter_map(|id| self.envelope_cache.cached(id))
+            .filter(|envelope| filter.matches(envelope))
+            .collect::<Vec<_>>();
+        if bounded {
+            return Ok(TaskCandidates {
+                items: envelopes,
+                total: selection.total,
+            });
+        }
+        Ok(select_candidates(envelopes, filter, limit))
     }
 
     pub(crate) fn query_task_rows(
@@ -55,7 +87,7 @@ impl TaskV2Store {
                 limit
             },
         )?;
-        let status_by_id = self.task_status_index()?;
+        let status_by_id = self.listing_status_index(&candidates.items)?;
         let mut items = Vec::with_capacity(candidates.items.len());
         for candidate in candidates.items {
             let Some(bundle) = self.bundle_store.read_bundle_if_settled(&candidate.id)? else {
@@ -90,18 +122,24 @@ impl TaskV2Store {
         limit: usize,
         residual: TaskResidualFilter<'_>,
     ) -> Result<TaskPage, OrbitError> {
-        let bundles = self.bundle_store.list_bundles()?;
-        let status_by_id = self.task_status_index()?;
-        let mut items = Vec::new();
+        let mut bundles = self.bundle_store.list_bundles()?;
+        bundles.retain(|bundle| filter.matches(&bundle.envelope));
+        let status_by_id =
+            self.listing_status_index(bundles.iter().map(|bundle| &bundle.envelope))?;
+        let mut items = Vec::with_capacity(bundles.len());
         for bundle in bundles {
-            if filter.matches(&bundle.envelope) {
-                let row = self.row_from_bundle(bundle)?;
-                if residual.is_none_or(|matches| matches(&row.task, &status_by_id)) {
-                    items.push(row);
-                }
+            let row = self.row_from_bundle(bundle)?;
+            if residual.is_none_or(|matches| matches(&row.task, &status_by_id)) {
+                items.push(row);
             }
         }
-        sort_by_created_desc_id_asc(&mut items, |row| &row.task.created_at, |row| &row.task.id);
+        sort_listing(
+            &mut items,
+            filter.terminal_last,
+            |row| &row.task.created_at,
+            |row| &row.task.id,
+            |row| row.task.status,
+        );
         let total = items.len();
         items.truncate(limit);
         Ok(TaskPage {
@@ -109,6 +147,23 @@ impl TaskV2Store {
             total,
             status_by_id,
         })
+    }
+
+    /// The dependency-status projection one listing needs: this workspace
+    /// plus every relation target the selected envelopes name, resolved
+    /// wherever it is registered (see `TaskRegistryStore::task_status_index_for`).
+    /// Taken before hydration so the residual predicate can run row by row.
+    fn listing_status_index<'a>(
+        &self,
+        selected: impl IntoIterator<Item = &'a TaskEnvelopeV2>,
+    ) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
+        let targets = selected
+            .into_iter()
+            .flat_map(|envelope| envelope.relations.iter())
+            .map(|relation| relation.target.clone())
+            .collect::<BTreeSet<_>>();
+        self.registry
+            .task_status_index_for(&self.workspace_id, &targets)
     }
 
     pub(crate) fn get_task_row(
@@ -166,5 +221,44 @@ impl TaskV2Store {
             history,
             artifacts,
         })
+    }
+}
+
+/// Filter, order, count, and bound envelopes in memory: the path for a
+/// rebuilt index and for predicates the index does not project.
+fn select_candidates(
+    envelopes: Vec<TaskEnvelopeV2>,
+    filter: &TaskListFilter,
+    limit: usize,
+) -> TaskCandidates {
+    let mut items = envelopes
+        .into_iter()
+        .filter(|task| filter.matches(task))
+        .collect::<Vec<_>>();
+    sort_listing(
+        &mut items,
+        filter.terminal_last,
+        |task| &task.created_at,
+        |task| &task.id,
+        |task| task.status,
+    );
+    let total = items.len();
+    items.truncate(limit);
+    TaskCandidates { items, total }
+}
+
+/// Canonical listing order — newest first, task ID ascending for ties — and,
+/// with `terminal_last`, the status-aware partition: tasks in a terminal
+/// status move behind the rest while each partition keeps that order.
+fn sort_listing<T>(
+    items: &mut [T],
+    terminal_last: bool,
+    created_at: impl Fn(&T) -> &chrono::DateTime<Utc>,
+    id: impl Fn(&T) -> &str,
+    status: impl Fn(&T) -> TaskStatus,
+) {
+    sort_by_created_desc_id_asc(items, created_at, id);
+    if terminal_last {
+        items.sort_by_key(|item| is_terminal_status(status(item)));
     }
 }

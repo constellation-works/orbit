@@ -40,6 +40,8 @@ const REDACTED_ENV_VALUE: &str = "[REDACTED_ENV]";
 static DEFAULT_PATTERN_REDACTOR: OnceLock<PatternRedactor> = OnceLock::new();
 static ARGV_PATTERN_REDACTOR: OnceLock<PatternRedactor> = OnceLock::new();
 static HIGH_CONFIDENCE_SINGLE_TOKEN_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
+#[cfg_attr(any(test, feature = "test-util"), allow(dead_code))]
+static SENSITIVE_ENV_VALUES: OnceLock<Vec<String>> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
 // Env-var value scrubbing
@@ -53,9 +55,10 @@ static HIGH_CONFIDENCE_SINGLE_TOKEN_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::n
 /// Only values that pass `is_redactable_value` are substituted, so an
 /// ordinary word held by a sensitive-named variable is left untouched.
 pub fn redact_sensitive_env_text(raw: &str) -> String {
+    let secrets = sensitive_env_values();
     let mut redacted = raw.to_string();
-    for secret in sensitive_env_values() {
-        redacted = redacted.replace(&secret, REDACTED_ENV_VALUE);
+    for secret in secrets.iter() {
+        redacted = redacted.replace(secret.as_str(), REDACTED_ENV_VALUE);
     }
     redacted
 }
@@ -567,7 +570,7 @@ fn home_dir_string() -> Option<String> {
         })
 }
 
-fn sensitive_env_values() -> Vec<String> {
+fn collect_sensitive_env_values() -> Vec<String> {
     let mut values = std::env::vars()
         .filter(|(name, value)| is_sensitive_env_name(name) && is_redactable_value(value))
         .map(|(_, value)| value)
@@ -575,6 +578,27 @@ fn sensitive_env_values() -> Vec<String> {
     values.sort_by_key(|value| std::cmp::Reverse(value.len()));
     values.dedup();
     values
+}
+
+#[cfg_attr(any(test, feature = "test-util"), allow(dead_code))]
+fn cached_sensitive_env_values() -> &'static [String] {
+    SENSITIVE_ENV_VALUES
+        .get_or_init(collect_sensitive_env_values)
+        .as_slice()
+}
+
+fn sensitive_env_values() -> Cow<'static, [String]> {
+    // Tests mutate process env after startup (`EnvVarGuard`). A process-wide
+    // snapshot would miss those values, so re-collect. Production binaries
+    // do not enable `test-util`.
+    #[cfg(any(test, feature = "test-util"))]
+    {
+        Cow::Owned(collect_sensitive_env_values())
+    }
+    #[cfg(not(any(test, feature = "test-util")))]
+    {
+        Cow::Borrowed(cached_sensitive_env_values())
+    }
 }
 
 /// Decide whether a sensitive-named env value is eligible for substitution

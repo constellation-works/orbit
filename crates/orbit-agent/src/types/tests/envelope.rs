@@ -322,6 +322,21 @@ fn production_node_bound_fails_closed_on_a_huge_decoy_array() {
 }
 
 #[test]
+fn parsed_stdout_reuses_one_json_parse_for_peek_check_and_validate() {
+    let stdout = success_envelope().to_string();
+    let parsed = ParsedStdout::parse(&stdout);
+    assert_eq!(parsed.peek_response_status().as_deref(), Some("success"));
+    assert_eq!(parsed.peek_declared_response_failure(), None);
+    parsed
+        .response_envelope_protocol_check()
+        .expect("success envelope is a completed frame");
+    let (_, status, _) = parsed
+        .parse_and_validate(&exec(&stdout, Some(0)))
+        .expect("parsed snapshot validates");
+    assert_eq!(status, AgentResponseStatus::Success);
+}
+
+#[test]
 fn declared_failure_inside_a_string_field_still_parses() {
     let result = format!("could not continue\n{}", failed_envelope());
     let stdout = json!({ "result": result }).to_string();

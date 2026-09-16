@@ -503,14 +503,7 @@ pub(super) fn attempt_failure_activity(
     let Some(failure) = &ctx.failure_activity else {
         return;
     };
-    let pipeline = Value::Object(
-        ctx.pipeline
-            .lock()
-            .expect("pipeline poisoned")
-            .clone()
-            .into_iter()
-            .collect(),
-    );
+    let pipeline = ctx.pipeline_value();
     let error_code = match original_err {
         DispatchError::WorktreeIntegrity { code, .. } => *code,
         DispatchError::RecoverableVcsConflict { .. } => "recoverable_vcs_conflict",
