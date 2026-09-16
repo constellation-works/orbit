@@ -7,7 +7,7 @@ use crate::commands::resolve_query_model;
 use crate::vector::VectorStore;
 use crate::vector::query::{CosineHit, cosine_top_k, snippet_for_hit};
 use crate::vector::store::SOURCE_KIND_DOC;
-use crate::{Embedder, SubprocessEmbedder};
+use crate::{Embedder, EmbedderPool};
 
 const DEFAULT_LIMIT: usize = 10;
 const RETRIEVER_OVERFETCH: usize = 4;
@@ -46,11 +46,12 @@ pub struct DocSemanticHit {
 
 pub fn run(
     vector_store: &VectorStore,
+    embedders: &EmbedderPool,
     params: DocSemanticSearchParams,
 ) -> Result<DocSemanticSearchResult, OrbitError> {
     let model = resolve_query_model(params.model.as_deref())?;
-    let embedder = SubprocessEmbedder::with_model(model.alias)?;
-    run_with_embedder(vector_store, &embedder, params)
+    let embedder = embedders.embedder(model.alias)?;
+    run_with_embedder(vector_store, embedder.as_ref(), params)
 }
 
 pub(crate) fn run_with_embedder(

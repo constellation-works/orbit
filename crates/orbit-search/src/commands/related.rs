@@ -6,7 +6,7 @@ use crate::commands::resolve_query_model;
 use crate::commands::search::{ScoreBreakdown, SemanticHit, truncate_snippet};
 use crate::vector::VectorStore;
 use crate::vector::query::{FusedCandidate, cosine_top_k, rollup_to_tasks, snippet_for_hit};
-use crate::{Embedder, SubprocessEmbedder};
+use crate::{Embedder, EmbedderPool};
 
 const DEFAULT_LIMIT: usize = 10;
 const RETRIEVER_OVERFETCH: usize = 4;
@@ -37,11 +37,12 @@ pub struct SemanticRelatedResult {
 pub fn run(
     vector_store: &VectorStore,
     target: &Task,
+    embedders: &EmbedderPool,
     params: SemanticRelatedParams,
 ) -> Result<SemanticRelatedResult, OrbitError> {
     let model = resolve_query_model(params.model.as_deref())?;
-    let embedder = SubprocessEmbedder::with_model(model.alias)?;
-    run_with_embedder(vector_store, target, &embedder, params)
+    let embedder = embedders.embedder(model.alias)?;
+    run_with_embedder(vector_store, target, embedder.as_ref(), params)
 }
 
 pub(crate) fn run_with_embedder(

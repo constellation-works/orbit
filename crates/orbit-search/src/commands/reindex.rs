@@ -6,7 +6,7 @@ use std::str::FromStr;
 use crate::commands::doc_index::DocIndexResult;
 use crate::commands::parse_model;
 use crate::vector::{UpsertReport, VectorStore};
-use crate::{Embedder, SubprocessEmbedder};
+use crate::{Embedder, EmbedderPool};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -101,11 +101,12 @@ pub type SemanticReindexResult = TaskIndexResult;
 pub fn run(
     vector_store: &VectorStore,
     tasks: &[Task],
+    embedders: &EmbedderPool,
     params: SemanticIndexParams,
 ) -> Result<TaskIndexResult, OrbitError> {
     let model = parse_model(params.model.as_deref())?;
-    let embedder = SubprocessEmbedder::with_model(model.alias)?;
-    run_with_embedder(vector_store, tasks, &embedder, params.force)
+    let embedder = embedders.embedder(model.alias)?;
+    run_with_embedder(vector_store, tasks, embedder.as_ref(), params.force)
 }
 
 pub(crate) fn run_with_embedder(

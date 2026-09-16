@@ -147,7 +147,12 @@ impl OrbitRuntime {
     pub fn index_docs(&self, params: DocIndexParams) -> Result<DocIndexResult, OrbitError> {
         let roots = self.docs_roots()?;
         let sources = doc_embedding_sources(&self.paths().repo_root, &roots)?;
-        orbit_search::doc_index(self.stores().semantic_index().store()?, &sources, params)
+        orbit_search::doc_index(
+            self.stores().semantic_index().store()?,
+            &sources,
+            self.stores().semantic_embedders(),
+            params,
+        )
     }
 
     /// How much of the live docs corpus has a doc embedding row.

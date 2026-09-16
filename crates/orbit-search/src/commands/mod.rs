@@ -32,7 +32,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::Task;
 
 use crate::vector::{DocEmbeddingSource, VectorStore};
-use crate::{CompanionPaths, ModelSpec, default_model};
+use crate::{CompanionPaths, EmbedderPool, ModelSpec, default_model};
 
 pub(crate) const DEFAULT_RELEASE_BASE_URL: &str =
     "https://github.com/constellation-works/orbit/releases/latest/download";
@@ -94,25 +94,28 @@ pub fn semantic_uninstall(
 pub fn semantic_index(
     vector_store: &VectorStore,
     tasks: &[Task],
+    embedders: &EmbedderPool,
     params: SemanticIndexParams,
 ) -> Result<TaskIndexResult, OrbitError> {
-    reindex::run(vector_store, tasks, params)
+    reindex::run(vector_store, tasks, embedders, params)
 }
 
 pub fn semantic_reindex(
     vector_store: &VectorStore,
     tasks: &[Task],
+    embedders: &EmbedderPool,
     params: SemanticReindexParams,
 ) -> Result<SemanticReindexResult, OrbitError> {
-    semantic_index(vector_store, tasks, params)
+    semantic_index(vector_store, tasks, embedders, params)
 }
 
 pub fn doc_index(
     vector_store: &VectorStore,
     docs: &[DocEmbeddingSource],
+    embedders: &EmbedderPool,
     params: DocIndexParams,
 ) -> Result<DocIndexResult, OrbitError> {
-    doc_index::run(vector_store, docs, params)
+    doc_index::run(vector_store, docs, embedders, params)
 }
 
 pub fn semantic_stats(
@@ -124,9 +127,10 @@ pub fn semantic_stats(
 
 pub fn semantic_search(
     vector_store: &VectorStore,
+    embedders: &EmbedderPool,
     params: SemanticSearchParams,
 ) -> Result<SemanticSearchResult, OrbitError> {
-    search::run(vector_store, params)
+    search::run(vector_store, embedders, params)
 }
 
 /// [`semantic_search`] against an embedder the caller already built.
@@ -144,9 +148,10 @@ pub fn semantic_search_with(
 
 pub fn doc_semantic_search(
     vector_store: &VectorStore,
+    embedders: &EmbedderPool,
     params: DocSemanticSearchParams,
 ) -> Result<DocSemanticSearchResult, OrbitError> {
-    doc_search::run(vector_store, params)
+    doc_search::run(vector_store, embedders, params)
 }
 
 /// [`doc_semantic_search`] against an embedder the caller already built.
@@ -161,9 +166,10 @@ pub fn doc_semantic_search_with(
 pub fn semantic_related(
     vector_store: &VectorStore,
     target: &Task,
+    embedders: &EmbedderPool,
     params: SemanticRelatedParams,
 ) -> Result<SemanticRelatedResult, OrbitError> {
-    related::run(vector_store, target, params)
+    related::run(vector_store, target, embedders, params)
 }
 
 #[cfg(test)]

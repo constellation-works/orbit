@@ -21,6 +21,8 @@
 //! - [`rpc`] — the JSON-Lines protocol shared with `orbit-search-companion`.
 //! - [`companion`] — discovery of the installed companion binary.
 //! - [`noop`] — a deterministic test fake that needs no companion subprocess.
+//! - [`pool`] — [`EmbedderPool`], the runtime's one owner of live companions:
+//!   one per model for the life of the host process.
 //! - [`subprocess`] — the production [`Embedder`] impl that talks to the
 //!   companion over stdio.
 //! - [`shared_query`] — one query-side embedder shared by a fan-out, so a
@@ -33,6 +35,7 @@ mod companion;
 mod embedder;
 pub mod lexical;
 mod noop;
+mod pool;
 mod rpc;
 mod shared_query;
 mod subprocess;
@@ -59,6 +62,7 @@ pub use lexical::docs::{
     DocSearchResult, DocSearchSource, SearchResult, score_doc_record, sort_search_results,
 };
 pub use noop::NoopEmbedder;
+pub use pool::EmbedderPool;
 pub use rpc::{
     RpcError, RpcRequest, RpcResponse, RpcResult, UNCORRELATED_REQUEST_ID, rpc_error_to_orbit,
     unparsed_request_id,

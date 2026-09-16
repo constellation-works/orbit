@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::commands::parse_model;
 use crate::vector::{DocEmbeddingSource, UpsertReport, VectorStore};
-use crate::{Embedder, SubprocessEmbedder};
+use crate::{Embedder, EmbedderPool};
 
 #[derive(Debug, Clone)]
 pub struct DocIndexParams {
@@ -22,11 +22,12 @@ pub struct DocIndexResult {
 pub fn run(
     vector_store: &VectorStore,
     docs: &[DocEmbeddingSource],
+    embedders: &EmbedderPool,
     params: DocIndexParams,
 ) -> Result<DocIndexResult, OrbitError> {
     let model = parse_model(params.model.as_deref())?;
-    let embedder = SubprocessEmbedder::with_model(model.alias)?;
-    run_with_embedder(vector_store, docs, &embedder, params.force)
+    let embedder = embedders.embedder(model.alias)?;
+    run_with_embedder(vector_store, docs, embedder.as_ref(), params.force)
 }
 
 pub(crate) fn run_with_embedder(
