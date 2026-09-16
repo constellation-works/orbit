@@ -36,7 +36,7 @@ use orbit_common::OrbitError;
 use orbit_common::process::jitter::JitterRng;
 
 use crate::companion::locate_companion;
-use crate::embedder::{DEFAULT_MODEL, Embedder};
+use crate::embedder::Embedder;
 use crate::rpc::{RpcRequest, RpcResponse, RpcResult, rpc_error_to_orbit};
 
 /// Total request attempts (first try + respawn retries).
@@ -172,20 +172,18 @@ struct ChildIo {
 }
 
 impl SubprocessEmbedder {
-    pub fn new() -> Result<Self, OrbitError> {
-        Self::with_model(DEFAULT_MODEL)
-    }
-
-    pub fn with_model(model: &str) -> Result<Self, OrbitError> {
-        Self::with_path_and_model(locate_companion()?, model)
-    }
-
     pub fn with_path_and_model(path: PathBuf, model: &str) -> Result<Self, OrbitError> {
         Self::with_path_model_and_stderr(path, model, CompanionStderr::Inherit)
     }
 
-    pub(crate) fn quiet_with_model(model: &str) -> Result<Self, OrbitError> {
-        Self::with_path_model_and_stderr(locate_companion()?, model, CompanionStderr::Suppress)
+    /// Companion for `model` under a caller-chosen stderr policy. The
+    /// [`EmbedderPool`](crate::EmbedderPool) owns that choice, because one
+    /// shared child cannot be loud for one caller and quiet for another.
+    pub(crate) fn with_model_and_stderr(
+        model: &str,
+        stderr: CompanionStderr,
+    ) -> Result<Self, OrbitError> {
+        Self::with_path_model_and_stderr(locate_companion()?, model, stderr)
     }
 
     fn with_path_model_and_stderr(

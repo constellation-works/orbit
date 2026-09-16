@@ -461,7 +461,9 @@ impl OrbitRuntime {
         let store = self.stores().semantic_index().store()?;
         let result = match embedder {
             Some(embedder) => orbit_search::semantic_search_with(store, embedder, params)?,
-            None => orbit_search::semantic_search(store, params)?,
+            None => {
+                orbit_search::semantic_search(store, self.stores().semantic_embedders(), params)?
+            }
         };
         Ok(result.results)
     }
@@ -678,7 +680,11 @@ impl OrbitRuntime {
         let store = self.stores().semantic_index().store()?;
         let result = match embedder {
             Some(embedder) => orbit_search::doc_semantic_search_with(store, embedder, params)?,
-            None => orbit_search::doc_semantic_search(store, params)?,
+            None => orbit_search::doc_semantic_search(
+                store,
+                self.stores().semantic_embedders(),
+                params,
+            )?,
         };
         Ok(result.results)
     }

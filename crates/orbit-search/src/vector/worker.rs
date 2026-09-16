@@ -4,14 +4,18 @@
 //! blocking the caller. Short-lived CLI runtimes use [`EmbedWorker::disabled`]
 //! instead: process exit can interrupt a detached companion, so CLI refresh
 //! is `orbit semantic index`. Failures log at debug and never propagate.
+//!
+//! The companion itself belongs to the host's [`EmbedderPool`], which the
+//! query path draws from too — indexing a mutation and answering a query use
+//! the same warm child rather than one companion each.
 
+use std::sync::Arc;
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::thread;
 
 use orbit_types::task::Task;
 
-use crate::SubprocessEmbedder;
-use crate::embedder::Embedder;
+use crate::EmbedderPool;
 
 use super::store::VectorStore;
 
@@ -31,10 +35,11 @@ pub struct EmbedWorker {
 impl EmbedWorker {
     /// Incremental indexer for a process that retains this runtime.
     ///
-    /// The companion is created lazily on the first job so a missing install
-    /// fails before spawn retry, matching [`SubprocessEmbedder::quiet_with_model`].
-    pub fn start(store: VectorStore) -> Self {
-        Self::spawn(store, None)
+    /// The companion is created lazily on the first job — by `embedders`, so a
+    /// missing install fails before spawn retry and a host that already warmed
+    /// a companion for a query reuses it here.
+    pub fn start(store: VectorStore, embedders: Arc<EmbedderPool>) -> Self {
+        Self::spawn(store, embedders)
     }
 
     /// No background thread and no companion. `enqueue` is a silent no-op.
@@ -42,17 +47,9 @@ impl EmbedWorker {
         Self { sender: None }
     }
 
-    /// Incremental indexer with a caller-supplied embedder. Used by tests so
-    /// indexing is observed through the vector store without a real companion.
-    #[cfg(test)]
-    pub(crate) fn start_with_embedder(store: VectorStore, embedder: Box<dyn Embedder>) -> Self {
-        Self::spawn(store, Some(embedder))
-    }
-
-    fn spawn(store: VectorStore, seeded_embedder: Option<Box<dyn Embedder>>) -> Self {
+    fn spawn(store: VectorStore, embedders: Arc<EmbedderPool>) -> Self {
         let (sender, receiver) = mpsc::sync_channel::<EmbedJob>(128);
         thread::spawn(move || {
-            let mut embedder = seeded_embedder;
             while let Ok(first) = receiver.recv() {
                 let mut batch = vec![first];
                 while batch.len() < EMBED_BATCH_SIZE {
@@ -61,26 +58,19 @@ impl EmbedWorker {
                         Err(_) => break,
                     }
                 }
-                if embedder.is_none() {
-                    match SubprocessEmbedder::quiet_with_model(crate::DEFAULT_MODEL) {
-                        Ok(value) => embedder = Some(Box::new(value)),
-                        Err(error) => {
-                            orbit_common::tracing::debug!(
-                                target: "orbit.search.indexer",
-                                error = %error,
-                                "semantic indexing skipped because embedder initialization failed",
-                            );
-                            continue;
-                        }
+                let embedder = match embedders.embedder(crate::DEFAULT_MODEL) {
+                    Ok(embedder) => embedder,
+                    Err(error) => {
+                        orbit_common::tracing::debug!(
+                            target: "orbit.search.indexer",
+                            error = %error,
+                            "semantic indexing skipped because embedder initialization failed",
+                        );
+                        continue;
                     }
-                }
-                let Some(active_embedder) = embedder.as_ref() else {
-                    continue;
                 };
                 for job in &batch {
-                    if let Err(error) =
-                        store.index_task(&job.task, active_embedder.as_ref(), job.force)
-                    {
+                    if let Err(error) = store.index_task(&job.task, embedder.as_ref(), job.force) {
                         orbit_common::tracing::debug!(
                             target: "orbit.search.indexer",
                             task_id = job.task.id.as_str(),

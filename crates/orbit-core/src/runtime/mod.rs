@@ -673,6 +673,16 @@ impl OrbitRuntime {
         self.context.stores()
     }
 
+    /// Hand this runtime's companions to a sub-runtime opened for one
+    /// federated target, so the fan-out loads each model once instead of once
+    /// per workspace.
+    pub(crate) fn share_semantic_embedders(
+        &mut self,
+        embedders: std::sync::Arc<orbit_search::EmbedderPool>,
+    ) {
+        self.context.share_semantic_embedders(embedders);
+    }
+
     pub(crate) fn skill_catalog(&self) -> &crate::skill_catalog::SkillCatalog {
         self.context.skill_catalog()
     }
