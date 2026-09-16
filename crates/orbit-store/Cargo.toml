@@ -30,7 +30,5 @@ tempfile.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
-orbit-common = { path = "../orbit-common", features = ["sqlite", "test-util"] }
-rusqlite = { workspace = true, features = ["trace"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -21,6 +21,5 @@ toml_edit.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-orbit-common = { path = "../orbit-common", features = ["test-util"] }
 tempfile.workspace = true
 tracing-subscriber.workspace = true

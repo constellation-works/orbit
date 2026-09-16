@@ -1,7 +1,6 @@
 #![allow(missing_docs)]
 
 use std::collections::{BTreeSet, HashMap};
-use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -1460,7 +1459,8 @@ fn run_cli_backend_bounds_stdout_text_preview_and_keeps_envelope_status_from_ful
 #[test]
 fn stdout_text_preview_redacts_a_secret_that_straddles_the_64kib_cut() {
     let secret = "orbit-preview-window-secret-value";
-    let _guard = EnvVarGuard::set("ORBIT_PREVIEW_WINDOW_TEST_TOKEN", secret);
+    let _guard =
+        orbit_common::test_env::scoped([("ORBIT_PREVIEW_WINDOW_TEST_TOKEN", Some(secret))]);
     // Leave room for `[REDACTED_ENV]` inside the final 64 KiB prefix after
     // substitution. The secret itself still crosses the raw 64 KiB cut.
     let raw = format!(
@@ -1481,7 +1481,7 @@ fn stdout_text_preview_redacts_a_secret_that_straddles_the_64kib_cut() {
 #[test]
 fn stdout_text_preview_does_not_redact_a_secret_only_past_the_window() {
     let secret = "orbit-preview-far-tail-secret-value";
-    let _guard = EnvVarGuard::set("ORBIT_PREVIEW_TAIL_TEST_TOKEN", secret);
+    let _guard = orbit_common::test_env::scoped([("ORBIT_PREVIEW_TAIL_TEST_TOKEN", Some(secret))]);
     let raw = format!("{}{secret}", "x".repeat(80 * 1024));
     let preview = stdout_text_preview(&raw, argv_redactor(), false);
     assert!(preview.truncated);
@@ -1551,7 +1551,7 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
 fn run_cli_backend_redacts_live_env_values_in_stored_blobs() {
     let temp = tempdir().expect("tempdir");
     let secret = "live-cli-blob-secret-value";
-    let _guard = EnvVarGuard::set("ORBIT_CLI_BLOB_TEST_TOKEN", secret);
+    let _guard = orbit_common::test_env::scoped([("ORBIT_CLI_BLOB_TEST_TOKEN", Some(secret))]);
     let script = temp.path().join("codex");
     write_executable(
         &script,
@@ -4582,35 +4582,6 @@ fn run_cli_backend_omits_agent_model_and_task_env_vars_when_unknown() {
     )));
     assert!(!vars.iter().any(|(key, _)| key == "AGENT_MODEL"));
     assert!(!vars.iter().any(|(key, _)| key == "AGENT_TASK"));
-}
-
-struct EnvVarGuard {
-    key: &'static str,
-    previous: Option<OsString>,
-}
-
-impl EnvVarGuard {
-    fn set(key: &'static str, value: &str) -> Self {
-        let previous = std::env::var_os(key);
-        // SAFETY: this test uses a dedicated variable name and restores the
-        // previous value on drop.
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        Self { key, previous }
-    }
-}
-
-impl Drop for EnvVarGuard {
-    fn drop(&mut self) {
-        // SAFETY: see EnvVarGuard::set.
-        unsafe {
-            match &self.previous {
-                Some(value) => std::env::set_var(self.key, value),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
 }
 
 /// Regression for T20260508-17: a structured-output activity that opts into

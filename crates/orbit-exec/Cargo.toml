@@ -22,10 +22,5 @@ wait-timeout.workspace = true
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
-[dev-dependencies]
-# `test_env::scoped` — one shared ambient-environment guard, so launcher tests
-# state the environment they reason about instead of inheriting the shell.
-orbit-common = { path = "../orbit-common", features = ["test-util"] }
-
 [target.'cfg(unix)'.dev-dependencies]
 libc.workspace = true

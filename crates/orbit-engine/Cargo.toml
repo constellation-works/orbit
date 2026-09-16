@@ -11,9 +11,6 @@ stability = "internal"
 [lints]
 workspace = true
 
-[features]
-test-support = []
-
 [dependencies]
 chrono.workspace = true
 libc = { workspace = true }
@@ -35,9 +32,4 @@ wait-timeout.workspace = true
 
 [dev-dependencies]
 jsonschema.workspace = true
-orbit-common = { path = "../orbit-common", features = ["test-util"] }
 tracing-subscriber.workspace = true
-
-[[test]]
-name = "v2_cli_agent"
-required-features = ["test-support"]

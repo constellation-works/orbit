@@ -23,11 +23,20 @@ pub trait EnvelopeSink: Send + Sync {
     /// Persist one envelope event. An `Err` is recorded by the writer as a
     /// non-fatal audit failure rather than crashing the run.
     fn write_envelope(&self, event: &V2AuditEvent) -> Result<(), OrbitError>;
+
+    /// Read persisted events when the sink supports inspection.
+    fn events_snapshot(&self) -> Result<Option<Vec<V2AuditEvent>>, OrbitError> {
+        Ok(None)
+    }
 }
 
 impl EnvelopeSink for V2SqliteSink {
     fn write_envelope(&self, event: &V2AuditEvent) -> Result<(), OrbitError> {
         V2SqliteSink::write_envelope(self, event)
+    }
+
+    fn events_snapshot(&self) -> Result<Option<Vec<V2AuditEvent>>, OrbitError> {
+        self.snapshot_events().map(Some)
     }
 }
 
@@ -45,7 +54,7 @@ pub struct V2AuditWriter {
     workspace_path: Option<String>,
     inner: Arc<dyn AuditSink>,
     envelope_sink: Option<Arc<dyn EnvelopeSink>>,
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     events: Mutex<Vec<V2AuditEvent>>,
     emitted_event_count: AtomicU64,
     event_counter: Mutex<u64>,
@@ -70,6 +79,10 @@ pub(crate) struct ParentStackGuard<'a> {
 pub enum WriteError {
     #[error("audit writer mutex poisoned")]
     Poisoned,
+    #[error("audit event snapshot is unavailable for this sink")]
+    SnapshotUnavailable,
+    #[error("read persisted audit events: {0}")]
+    Snapshot(#[source] OrbitError),
 }
 
 impl V2AuditWriter {
@@ -84,7 +97,7 @@ impl V2AuditWriter {
             workspace_path: None,
             inner,
             envelope_sink: None,
-            #[cfg(any(test, feature = "test-support"))]
+            #[cfg(test)]
             events: Mutex::new(Vec::new()),
             emitted_event_count: AtomicU64::new(0),
             event_counter: Mutex::new(0),
@@ -184,7 +197,7 @@ impl V2AuditWriter {
             // the complete set of attempted envelope writes.
             self.note_audit_failure(event.envelope.event_type.as_str(), &error);
         }
-        #[cfg(any(test, feature = "test-support"))]
+        #[cfg(test)]
         self.events
             .lock()
             .map_err(|_| WriteError::Poisoned)?
@@ -357,13 +370,24 @@ impl V2AuditWriter {
 
     /// Snapshot of emitted events, retained only for tests that inspect
     /// envelope contents.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub fn events_snapshot(&self) -> Result<Vec<V2AuditEvent>, WriteError> {
         Ok(self
             .events
             .lock()
             .map_err(|_| WriteError::Poisoned)?
             .clone())
+    }
+
+    /// Read envelope events from the configured persistence sink.
+    #[cfg(not(test))]
+    pub fn events_snapshot(&self) -> Result<Vec<V2AuditEvent>, WriteError> {
+        self.envelope_sink
+            .as_ref()
+            .ok_or(WriteError::SnapshotUnavailable)?
+            .events_snapshot()
+            .map_err(WriteError::Snapshot)?
+            .ok_or(WriteError::SnapshotUnavailable)
     }
 
     /// Access to the inner loop-level sink for the loop engine to emit
