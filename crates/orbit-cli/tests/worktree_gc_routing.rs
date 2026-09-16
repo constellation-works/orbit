@@ -44,6 +44,7 @@ use std::process::Command as StdCommand;
 use std::time::{Duration, Instant};
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use chrono::{Duration as ChronoDuration, Utc};
 use orbit_common::test_env;
 use serde_json::Value;
 use tempfile::tempdir;
@@ -109,6 +110,9 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
     let (worktree_b, task_b) = seed_eligible_worktree(&workspace_b, &home, "B");
     assert!(worktree_a.exists(), "workspace A fixture worktree missing");
     assert!(worktree_b.exists(), "workspace B fixture worktree missing");
+    let expected_worktree_b = worktree_b
+        .canonicalize()
+        .expect("workspace B fixture worktree path is resolvable");
 
     // The routine's own job asset defaults to a 24h `older_than_hours`
     // floor; drop it so a freshly finished fixture run is eligible without
@@ -155,16 +159,16 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
 
     // The routine has never been observed before, so this first pass only
     // records a baseline cursor (avoiding a catch-up burst of fires) rather
-    // than dispatching. Cross into the next whole minute — `* * * * *`'s
-    // finest granularity — before sweeping again, which is when the cursor
-    // makes it due.
+    // than dispatching. Move that fixture cursor just before the current
+    // minute so the next sweep has a natural due slot without waiting for the
+    // wall clock to cross a boundary.
     let baseline = fire_sweep();
     assert!(
         routine_report(&baseline, "worktree-gc-workspace-b").is_some(),
         "sweep never evaluated workspace B's worktree_gc routine: {baseline}"
     );
 
-    sleep_past_next_minute_boundary();
+    make_routine_due(&home, "worktree-gc-workspace-b");
 
     let fired = fire_sweep();
     let report = routine_report(&fired, "worktree-gc-workspace-b").unwrap_or_else(|| {
@@ -185,7 +189,17 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
         .unwrap_or_else(|| panic!("fired report carried no run_id: {report}"))
         .to_string();
 
-    wait_until(Duration::from_secs(20), || !worktree_b.exists());
+    wait_until(Duration::from_secs(20), || {
+        if worktree_b.exists() {
+            return false;
+        }
+        run_json(
+            &workspace_b.repo,
+            &home,
+            &["run", "show", &gc_run_id, "--json"],
+        )["run"]["state"]
+            == "success"
+    });
 
     assert!(
         !worktree_b.exists(),
@@ -220,7 +234,11 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
             report["action"] == "removed"
                 && report["task_id"] == task_b.as_str()
                 && report["path"].as_str()
-                    == Some(worktree_b.to_str().expect("worktree path is utf-8"))
+                    == Some(
+                        expected_worktree_b
+                            .to_str()
+                            .expect("canonical worktree path is utf-8"),
+                    )
         }),
         "reap output did not attribute the removal to workspace B's fixture worktree: {reap}"
     );
@@ -429,11 +447,25 @@ fn routine_report<'a>(sweep_report: &'a Value, routine_name: &str) -> Option<&'a
         .find(|report| report["routine"].as_str() == Some(routine_name))
 }
 
-fn sleep_past_next_minute_boundary() {
-    use chrono::{Timelike, Utc};
-    let now = Utc::now();
-    let remaining = 60 - now.second();
-    std::thread::sleep(Duration::from_secs(u64::from(remaining) + 2));
+fn make_routine_due(home: &Path, routine_name: &str) {
+    let database = home.join(".orbit/orbit.db");
+    let connection = rusqlite::Connection::open(&database).unwrap_or_else(|error| {
+        panic!(
+            "open routine scheduler database {}: {error}",
+            database.display()
+        )
+    });
+    let baseline_at = (Utc::now() - ChronoDuration::minutes(1)).to_rfc3339();
+    let updated = connection
+        .execute(
+            "UPDATE routine_cursors SET baseline_at = ?1, last_slot = NULL WHERE routine_name = ?2",
+            rusqlite::params![baseline_at, routine_name],
+        )
+        .unwrap_or_else(|error| panic!("backdate routine cursor {routine_name}: {error}"));
+    assert_eq!(
+        updated, 1,
+        "expected a recorded cursor for routine {routine_name}"
+    );
 }
 
 fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) {
