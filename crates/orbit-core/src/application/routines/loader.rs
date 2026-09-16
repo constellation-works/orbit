@@ -2,12 +2,12 @@
 
 use crate::OrbitRuntime;
 pub use orbit_automation::routines::loader::{
-    LoadedRoutine, RetiredRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin,
-    RoutineSource,
+    LoadedRoutine, RetiredRoutine, RoutineCatalogLookup, RoutineCollection, RoutineLoadError,
+    RoutineOrigin, RoutineSource,
 };
 use orbit_common::OrbitError;
 use orbit_types::workspace::Workspace;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Registered workspaces with their runtimes, ready for routine discovery
@@ -40,19 +40,29 @@ pub fn collect_routines(workspaces: &[(Workspace, OrbitRuntime)]) -> RoutineColl
     orbit_automation::routines::loader::collect_routines(&sources, &|root, job| {
         job_names_by_root
             .get(root)
-            .and_then(|names| names.as_ref().ok())
-            .is_some_and(|names| names.contains(job))
+            .map(|membership| RoutineCatalogLookup {
+                resolves: membership.names.contains(job),
+                error: (!membership.errors.is_empty()).then(|| {
+                    membership
+                        .errors
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                }),
+            })
+            .unwrap_or_default()
     })
 }
 
 fn preload_job_execution_names(
     workspaces: &[(Workspace, OrbitRuntime)],
-) -> BTreeMap<PathBuf, Result<BTreeSet<String>, OrbitError>> {
+) -> BTreeMap<PathBuf, crate::application::job::catalog::V2JobExecutionMembership> {
     let mut job_names_by_root = BTreeMap::new();
     for (_, runtime) in workspaces {
         job_names_by_root
             .entry(runtime.shared_root())
-            .or_insert_with(|| runtime.load_v2_job_execution_names());
+            .or_insert_with(|| runtime.load_v2_job_execution_membership());
     }
     job_names_by_root
 }

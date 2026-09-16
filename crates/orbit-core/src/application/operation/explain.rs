@@ -10,7 +10,7 @@
 //! authorizes anything.
 
 use chrono::Utc;
-use orbit_automation::routines::loader::{RoutineSource, collect_routines};
+use orbit_automation::routines::loader::{RoutineCatalogLookup, RoutineSource, collect_routines};
 use orbit_common::OrbitError;
 use orbit_config::{OperationLayer, PreparationPreference, RecoveryPreference, ReviewPolicy};
 use orbit_types::workflow::OperationAdmission;
@@ -173,7 +173,10 @@ impl OrbitRuntime {
                 workspace: "workspace".to_string(),
                 orbit_dir: self.shared_root(),
             }],
-            &|_, _| true,
+            &|_, _| RoutineCatalogLookup {
+                resolves: true,
+                error: None,
+            },
         );
         collection
             .routines

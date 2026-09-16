@@ -113,6 +113,17 @@ pub struct RoutineLoadError {
     pub message: String,
 }
 
+/// Result of resolving a routine target against the source workspace's job
+/// catalog. A target can resolve from a healthy layer even when another layer
+/// produced a load diagnostic that must still be reported.
+#[derive(Debug, Clone, Default)]
+pub struct RoutineCatalogLookup {
+    /// Whether the requested job name resolves for execution.
+    pub resolves: bool,
+    /// A catalog diagnostic to report alongside a successfully resolved target.
+    pub error: Option<String>,
+}
+
 /// Result of one discovery pass across all routine sources.
 #[derive(Debug, Default)]
 pub struct RoutineCollection {
@@ -120,7 +131,8 @@ pub struct RoutineCollection {
     pub routines: Vec<LoadedRoutine>,
     /// Definitions targeting a retired job, skipped without an error.
     pub retired: Vec<RetiredRoutine>,
-    /// Everything that failed fail-closed.
+    /// Routine/source load failures and catalog diagnostics reported during
+    /// discovery.
     pub errors: Vec<RoutineLoadError>,
 }
 
@@ -137,7 +149,7 @@ pub struct RoutineSource {
 /// dropped and each conflicting source is named.
 pub fn collect_routines(
     workspaces: &[RoutineSource],
-    catalog: &dyn Fn(&Path, &str) -> bool,
+    catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
 ) -> RoutineCollection {
     let mut collection = RoutineCollection::default();
 
@@ -151,7 +163,7 @@ pub fn collect_routines(
 
 fn load_source_workspace(
     source: &RoutineSource,
-    catalog: &dyn Fn(&Path, &str) -> bool,
+    catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
     collection: &mut RoutineCollection,
 ) {
     let routines_dir = source.orbit_dir.join(ROUTINES_DIR);
@@ -160,6 +172,8 @@ fn load_source_workspace(
         return;
     }
 
+    let mut catalog_errors = std::collections::BTreeSet::new();
+
     // Committed definitions: top-level YAML files. The `local/` subdirectory is
     // a directory (never a file) so it is skipped here and scanned separately.
     load_origin_dir(
@@ -167,6 +181,7 @@ fn load_source_workspace(
         RoutineOrigin::Committed,
         source,
         catalog,
+        &mut catalog_errors,
         collection,
     );
 
@@ -178,6 +193,7 @@ fn load_source_workspace(
             RoutineOrigin::Local,
             source,
             catalog,
+            &mut catalog_errors,
             collection,
         );
     }
@@ -190,7 +206,8 @@ fn load_origin_dir(
     dir: &Path,
     origin: RoutineOrigin,
     source: &RoutineSource,
-    catalog: &dyn Fn(&Path, &str) -> bool,
+    catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
+    catalog_errors: &mut std::collections::BTreeSet<String>,
     collection: &mut RoutineCollection,
 ) {
     let paths = match yaml_files_in(dir) {
@@ -207,8 +224,28 @@ fn load_origin_dir(
 
     for path in paths {
         match load_routine_file(&path, origin, source, catalog) {
-            Ok(RoutineLoad::Active(routine)) => collection.routines.push(*routine),
-            Ok(RoutineLoad::Retired(routine)) => collection.retired.push(routine),
+            Ok(RoutineLoadOutcome {
+                routine,
+                catalog_error,
+            }) => {
+                if let Some(error) = catalog_error {
+                    let message = format!(
+                        "failed to load job catalog for workspace '{}': {error}",
+                        source.workspace
+                    );
+                    if catalog_errors.insert(message.clone()) {
+                        collection.errors.push(RoutineLoadError {
+                            source_workspace: source.workspace.clone(),
+                            path: None,
+                            message,
+                        });
+                    }
+                }
+                match routine {
+                    RoutineLoad::Active(routine) => collection.routines.push(*routine),
+                    RoutineLoad::Retired(routine) => collection.retired.push(routine),
+                }
+            }
             Err(message) => collection.errors.push(RoutineLoadError {
                 source_workspace: source.workspace.clone(),
                 path: Some(path),
@@ -278,30 +315,48 @@ fn load_routine_file(
     path: &Path,
     origin: RoutineOrigin,
     source: &RoutineSource,
-    catalog: &dyn Fn(&Path, &str) -> bool,
-) -> Result<RoutineLoad, String> {
+    catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
+) -> Result<RoutineLoadOutcome, String> {
     let raw = std::fs::read_to_string(path).map_err(|error| format!("read failed: {error}"))?;
     let definition = parse_routine_yaml(&raw).map_err(|error| error.to_string())?;
 
+    let job_name = definition.target.job_name();
+    let catalog_lookup = catalog(&source.orbit_dir, job_name);
     // A routine whose target is a job a prior release shipped and this one
     // dropped is retired, not broken: it is skipped and reported as such so
     // the clock tick does not log the same load error forever. The catalog
     // wins when the workspace defines a job of that name itself.
-    let job_name = definition.target.job_name();
-    if !catalog(&source.orbit_dir, job_name)
+    if !catalog_lookup.resolves
+        && catalog_lookup.error.is_none()
         && let Some(reason) = retired_routine_job_reason(job_name)
     {
-        return Ok(RoutineLoad::Retired(RetiredRoutine {
-            name: definition.name,
-            origin,
-            source_workspace: source.workspace.clone(),
-            path: path.to_path_buf(),
-            job: job_name.to_string(),
-            reason: format!(
-                "target 'job:{job_name}' is retired in this Orbit ({reason}); run `orbit workspace sync` in workspace '{}' to retire the definition",
+        return Ok(RoutineLoadOutcome {
+            routine: RoutineLoad::Retired(RetiredRoutine {
+                name: definition.name,
+                origin,
+                source_workspace: source.workspace.clone(),
+                path: path.to_path_buf(),
+                job: job_name.to_string(),
+                reason: format!(
+                    "target 'job:{job_name}' is retired in this Orbit ({reason}); run `orbit workspace sync` in workspace '{}' to retire the definition",
+                    source.workspace
+                ),
+            }),
+            catalog_error: None,
+        });
+    }
+
+    if !catalog_lookup.resolves {
+        if let Some(error) = catalog_lookup.error {
+            return Err(format!(
+                "failed to load job catalog for workspace '{}': {error}",
                 source.workspace
-            ),
-        }));
+            ));
+        }
+        return Err(format!(
+            "target 'job:{job_name}' does not resolve in workspace '{}': no such job in its catalog",
+            source.workspace
+        ));
     }
 
     // [ORB-12236] Definitions carry no host pin. A file that still has one
@@ -323,23 +378,21 @@ fn load_routine_file(
         parse_cron(&definition.trigger.cron).map_err(|error| error.to_string())?;
     }
 
-    // Load-time target resolution through the source workspace's catalog,
-    // like `target:` steps in JobV2: an unresolvable target is a load error,
-    // not a fire-time surprise (ADR-0206).
-    if !catalog(&source.orbit_dir, job_name) {
-        return Err(format!(
-            "target 'job:{job_name}' does not resolve in workspace '{}': no such job in its catalog",
-            source.workspace
-        ));
-    }
+    Ok(RoutineLoadOutcome {
+        routine: RoutineLoad::Active(Box::new(LoadedRoutine {
+            definition,
+            origin,
+            source_workspace: source.workspace.clone(),
+            source_orbit_dir: source.orbit_dir.clone(),
+            path: path.to_path_buf(),
+        })),
+        catalog_error: catalog_lookup.error,
+    })
+}
 
-    Ok(RoutineLoad::Active(Box::new(LoadedRoutine {
-        definition,
-        origin,
-        source_workspace: source.workspace.clone(),
-        source_orbit_dir: source.orbit_dir.clone(),
-        path: path.to_path_buf(),
-    })))
+struct RoutineLoadOutcome {
+    routine: RoutineLoad,
+    catalog_error: Option<String>,
 }
 
 /// Names must be unique across every routine source *and origin* on a host; a

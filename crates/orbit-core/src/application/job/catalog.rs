@@ -124,6 +124,16 @@ impl JobCatalogEntry {
     }
 }
 
+/// Names and diagnostics collected while building the membership index used by
+/// routine discovery. A broken lower-precedence layer must not erase names
+/// from a layer that still resolves for execution, but its error must remain
+/// available to the caller for operator-visible reporting.
+#[derive(Debug)]
+pub(crate) struct V2JobExecutionMembership {
+    pub(crate) names: BTreeSet<String>,
+    pub(crate) errors: Vec<OrbitError>,
+}
+
 impl OrbitRuntime {
     /// Capture integration identity at named submission, before the worker
     /// merges job defaults. Both collection and pilot admission then consume
@@ -286,12 +296,20 @@ impl OrbitRuntime {
     /// tell "came from the workspace copy" apart from "came from the shared
     /// global directory". Skip the exclusion entirely when the two paths
     /// coincide, rather than filtering out every default job name.
+    #[allow(dead_code)]
     pub(crate) fn load_v2_job_execution_names(&self) -> Result<BTreeSet<String>, OrbitError> {
-        let catalog = self.load_v2_job_catalog(self.v2_job_membership_dirs())?;
+        Ok(self.load_v2_job_execution_membership().names)
+    }
+
+    /// Build the execution-name index once while retaining errors from any
+    /// layer that could not be loaded. The named execution path remains strict
+    /// and will re-read its eligible directories before dispatch.
+    pub(crate) fn load_v2_job_execution_membership(&self) -> V2JobExecutionMembership {
+        let (catalog, errors) = self.load_v2_job_catalog_best_effort(self.v2_job_membership_dirs());
         let jobs_dir = &self.paths().jobs_dir;
         let global_jobs_dir = self.paths().global_dir.join("resources/jobs");
         let workspace_dir_is_distinct = *jobs_dir != global_jobs_dir;
-        Ok(catalog
+        let names = catalog
             .iter()
             .filter_map(|(name, path, _)| {
                 if workspace_dir_is_distinct
@@ -303,7 +321,8 @@ impl OrbitRuntime {
                     Some(name.to_string())
                 }
             })
-            .collect())
+            .collect();
+        V2JobExecutionMembership { names, errors }
     }
 
     fn load_v2_job_catalog(
@@ -321,6 +340,24 @@ impl OrbitRuntime {
             }
         }
         Ok(catalog)
+    }
+
+    fn load_v2_job_catalog_best_effort(
+        &self,
+        dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
+    ) -> (V2JobCatalog, Vec<OrbitError>) {
+        #[cfg(test)]
+        V2_JOB_CATALOG_LOADS.with(|count| count.set(count.get() + 1));
+        let mut catalog = V2JobCatalog::new();
+        let mut errors = Vec::new();
+        for dir in dirs {
+            if dir.path().is_dir()
+                && let Err(error) = catalog.load_dir_prefer_existing(dir.path())
+            {
+                errors.push(catalog_error_to_orbit(error));
+            }
+        }
+        (catalog, errors)
     }
 
     fn v2_job_asset_dirs(&self) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
