@@ -330,7 +330,7 @@ ship, workspace claim held).
 | Ship returns 409 `ship_run_in_flight` | That task already has a non-terminal ship run. Open the named `run_id`. |
 | 409 `workspace_claim_held` | Another operator holds the workspace claim. Wait for expiry or inspect the holder; do not retry in a loop. |
 | Top-bar **Failed runs** disagrees with Diagnostics → Errors | Different denominators. See [Runs and errors](#runs-and-errors). |
-| Stale workspace list after `orbit workspace init` | A running server reloads the registry on request boundaries; click **Refresh**. A malformed refresh keeps the last good snapshot. |
+| Stale workspace list after `orbit workspace init` | A running server reloads `workspaces.json` on the next request after that file's mtime or length changes; click **Refresh**. A malformed refresh keeps the last good snapshot. |
 
 Readiness with per-workspace store and log-sink checks:
 

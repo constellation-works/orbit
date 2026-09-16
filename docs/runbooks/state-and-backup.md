@@ -72,17 +72,21 @@ the retired links until it is restarted.
 > crew discovery, or authorization.
 
 > **Live registry refresh (ORB-10294).** A running `orbit web serve` no longer needs a
-> restart to pick up `workspaces.json` changes. It reloads the registry at each request
-> boundary, so a native `orbit workspace init` / `remove` — or a re-pointed checkout
-> binding — becomes visible through `/api/workspaces` and routable through the
-> workspace-scoped API on the next request; a removed workspace's cached runtime is evicted
-> without disturbing the others. **Operator recovery semantics:** a checkout path that
-> disappears after startup is reported `invalid` (inactive) rather than deleted — restore or
-> re-point the path and the next request re-activates it, no restart needed. A malformed or
-> half-written `workspaces.json` (e.g. an editor mid-save) never replaces the last good
-> in-memory set: the server keeps serving the previous workspaces and logs a credential-safe
-> diagnostic (the registry path plus the parse error, never the file contents) until the file
-> parses again. A malformed registry present *at server startup* is still fatal — fix the file
+> restart to pick up `workspaces.json` changes. Request handlers `stat` the registry file
+> and reload it only when mtime or length has changed, so a native `orbit workspace init` /
+> `remove` — or a re-pointed checkout binding — becomes visible through `/api/workspaces`
+> and routable through the workspace-scoped API on the next request after that write; a
+> removed workspace's cached runtime is evicted without disturbing the others. Unchanged
+> requests do not re-read or re-validate the file and do not serialize on the refresh
+> lock. **Operator recovery semantics:** a checkout path that disappears after a registry
+> write that `orbit web` reloads is reported `invalid` (inactive) rather than deleted —
+> restore or re-point the path *and rewrite `workspaces.json`* (for example `orbit
+> workspace` init/remove/rebind) so the next request re-activates it; restoring the
+> directory alone does not change the registry fingerprint. A malformed or half-written
+> `workspaces.json` (e.g. an editor mid-save) never replaces the last good in-memory set:
+> the server keeps serving the previous workspaces and logs a credential-safe diagnostic
+> (the registry path plus the parse error, never the file contents) until the file parses
+> again. A malformed registry present *at server startup* is still fatal — fix the file
 > before launching. See [remote-access design §2.1](../design/remote-access/2_design.md) and
 > [Registry snapshots are authoritative; runtimes are cached](../design/remote-access/4_decisions.md#registry-snapshots-are-authoritative-runtimes-are-cached).
 

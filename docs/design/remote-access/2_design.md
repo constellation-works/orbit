@@ -44,7 +44,7 @@ Startup:
 
 DashboardState stores an immutable workspace snapshot with a monotonically increasing generation and a lazy runtime cache.
 
-At each relevant request boundary, Web reloads the registry, validates it, and pins one complete snapshot. Workspace metadata, default selection, runtime resolution, and aggregate results for that request all use the same generation.
+At each relevant request boundary, Web pins one complete snapshot. It `stat`s `workspaces.json` and reloads/validates the registry only when mtime or length has changed; otherwise the pin is an `Arc` clone and does not take the refresh lock. Workspace metadata, default selection, runtime resolution, and aggregate results for that request all use the same generation.
 
 A successful refresh atomically swaps the snapshot and evicts cached runtimes whose workspace was removed, became inactive, or changed binding. A malformed refresh logs a content-safe error and retains the last valid snapshot. Initial-load failure remains fatal.
 

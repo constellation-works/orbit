@@ -840,9 +840,10 @@ async fn create_task_with_unknown_workspace_is_404_and_creates_nothing() {
 
 // ---------------------------------------------------------------------------
 // ORB-10294: refresh orbit-web workspace state after native registry mutations.
-// A registry-backed `DashboardState` reloads `~/.orbit/workspaces.json` at each
-// request boundary, so native `orbit workspace init/remove` and binding changes
-// are honored without a restart.
+// A registry-backed `DashboardState` reloads `~/.orbit/workspaces.json` when
+// that file's mtime or length changes, so native `orbit workspace init/remove`
+// and binding changes are honored without a restart. Unchanged request
+// boundaries skip `load` and do not take `refresh_lock`.
 // ---------------------------------------------------------------------------
 
 /// Write a registry file at `<global_root>/workspaces.json` binding each
