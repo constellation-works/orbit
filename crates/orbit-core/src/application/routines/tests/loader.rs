@@ -18,6 +18,7 @@ use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use tempfile::{TempDir, tempdir};
 
 use crate::OrbitRuntime;
+use crate::application::job::catalog::{reset_v2_job_catalog_loads, v2_job_catalog_loads};
 use crate::application::routines::loader::{
     LoadedRoutine, RoutineCollection, RoutineOrigin, collect_routines,
 };
@@ -343,4 +344,47 @@ fn unknown_target_is_still_a_load_error() {
             .map(|e| e.message.as_str())
             .collect::<Vec<_>>()
     );
+}
+
+// ---- catalog parse cost ---------------------------------------------------
+
+/// Membership checks must not re-parse every job YAML per routine definition.
+#[test]
+fn collect_routines_parses_each_workspace_catalog_once() {
+    let ws = seed_source_workspace();
+    for name in ["alpha", "beta", "gamma"] {
+        write_routine(&ws.routines_dir, &format!("{name}.yaml"), &definition(name));
+    }
+
+    reset_v2_job_catalog_loads();
+    let collection = collect(&ws);
+    assert_eq!(
+        v2_job_catalog_loads(),
+        1,
+        "one catalog parse per workspace, not per routine"
+    );
+    assert_eq!(collection.routines.len(), 3);
+    assert!(collection.errors.is_empty(), "{:?}", collection.errors);
+}
+
+#[test]
+fn collect_routines_parses_one_catalog_per_workspace() {
+    let first = seed_source_workspace();
+    let second = seed_source_workspace();
+    write_routine(&first.routines_dir, "one.yaml", &definition("one"));
+    write_routine(&second.routines_dir, "two.yaml", &definition("two"));
+    write_routine(&second.routines_dir, "three.yaml", &definition("three"));
+
+    reset_v2_job_catalog_loads();
+    let collection = collect_routines(&[
+        (first.workspace.clone(), first.runtime.clone()),
+        (second.workspace.clone(), second.runtime.clone()),
+    ]);
+    assert_eq!(
+        v2_job_catalog_loads(),
+        2,
+        "each workspace catalog is parsed once even when a workspace has several routines"
+    );
+    assert_eq!(collection.routines.len(), 3);
+    assert!(collection.errors.is_empty(), "{:?}", collection.errors);
 }
