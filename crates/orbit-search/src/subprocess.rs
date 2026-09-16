@@ -37,7 +37,9 @@ use orbit_common::process::jitter::JitterRng;
 
 use crate::companion::locate_companion;
 use crate::embedder::Embedder;
-use crate::rpc::{RpcRequest, RpcResponse, RpcResult, rpc_error_to_orbit};
+use crate::rpc::{
+    RpcRequest, RpcResponse, RpcResult, companion_version_mismatch, rpc_error_to_orbit,
+};
 
 /// Total request attempts (first try + respawn retries).
 pub(crate) const RPC_MAX_ATTEMPTS: u32 = 3;
@@ -225,13 +227,16 @@ impl SubprocessEmbedder {
             model_id,
             dim,
             max_input_tokens,
-            ..
+            version,
         } = info
         else {
             return Err(OrbitError::AgentProtocolViolation(
                 "companion returned non-info response to info request".to_string(),
             ));
         };
+        if let Some(message) = companion_version_mismatch(version.as_deref()) {
+            return Err(OrbitError::Execution(message));
+        }
         embedder.model_id = model_id;
         embedder.dim = dim;
         embedder.max_input_tokens = max_input_tokens;

@@ -94,6 +94,25 @@ pub struct RpcError {
     pub message: String,
 }
 
+/// Return an actionable diagnostic when an installed companion cannot be
+/// trusted to speak this binary's RPC contract.
+pub(crate) fn companion_version_mismatch(version: Option<&str>) -> Option<String> {
+    const ORBIT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+    let detail = match version {
+        Some(version) if version == ORBIT_VERSION => return None,
+        Some(version) => format!(
+            "search companion version {version} does not match Orbit version {ORBIT_VERSION}"
+        ),
+        None => format!(
+            "search companion version is unknown; Orbit version {ORBIT_VERSION} cannot be verified"
+        ),
+    };
+    Some(format!(
+        "{detail}; run `orbit semantic install` to install the matching companion"
+    ))
+}
+
 /// Translate a companion [`RpcError`] into the workspace-public [`OrbitError`]
 /// surface at the subprocess boundary.
 ///

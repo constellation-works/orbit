@@ -321,6 +321,17 @@ fn doctor_check_semantic_index(runtime: &OrbitRuntime) -> WorkspaceDoctorResult 
             format!("cannot read semantic index: {error}"),
         ),
         Ok(stats) => {
+            if stats.companion.installed
+                && let Some(message) =
+                    companion_version_mismatch(stats.companion.version.as_deref())
+            {
+                return actionable_check(
+                    "semantic-index",
+                    WorkspaceDoctorStatus::Warning,
+                    message,
+                    "Run `orbit semantic install` to install the matching companion, then rerun `orbit doctor`.".to_string(),
+                );
+            }
             let total: usize = stats.rows.counts.iter().map(|count| count.rows).sum();
             if total == 0 {
                 check(
@@ -347,6 +358,23 @@ fn doctor_check_semantic_index(runtime: &OrbitRuntime) -> WorkspaceDoctorResult 
             }
         }
     }
+}
+
+fn companion_version_mismatch(version: Option<&str>) -> Option<String> {
+    const ORBIT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+    let detail = match version {
+        Some(version) if version == ORBIT_VERSION => return None,
+        Some(version) => format!(
+            "search companion version {version} does not match Orbit version {ORBIT_VERSION}"
+        ),
+        None => format!(
+            "search companion version is unknown; Orbit version {ORBIT_VERSION} cannot be verified"
+        ),
+    };
+    Some(format!(
+        "{detail}; run `orbit semantic install` to install the matching companion"
+    ))
 }
 
 /// Doc embedding coverage, separate from `semantic-index`: that check only
