@@ -23,7 +23,7 @@ pub(crate) const WORKSPACE_SELECTOR_PARAM: &str = "workspace";
 /// The two states are advertised differently because they place different
 /// obligations on the caller: a bound session may omit the selector, an
 /// unbound one is refused without it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum WorkspaceBinding {
     Bound,
     Unbound,
@@ -48,7 +48,7 @@ const FEDERATED_SELECTOR_DESCRIPTION: &str = "Copy the `selector` field from fed
      Do not parse or construct the token. A call without a host-qualified selector is refused.";
 
 /// How this session advertises the workspace selector on workspace-scoped tools.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum SelectorAdvertisement {
     /// v1 local/remote MCP: registered name, `ws_*`, or absolute path.
     Authoritative(WorkspaceBinding),
