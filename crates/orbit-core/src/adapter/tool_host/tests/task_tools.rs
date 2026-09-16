@@ -2230,6 +2230,41 @@ fn task_write_responses_omit_sidecars_unless_projected() {
 }
 
 #[test]
+fn task_write_response_projects_relations_with_a_friction_target() {
+    // DANI-10379 regression: `resolves` relations may legitimately target a
+    // friction id (e.g. `F2026-05-001`) rather than a task id. Projecting
+    // `relations` on a write response must skip point-reading non-task
+    // targets instead of sending them through `get_task_row`, which rejects
+    // them with `InvalidInput` rather than reporting `NotFound`.
+    let (_root, runtime, _repo_root) = test_runtime();
+    let friction_target = "F2026-05-001";
+    let added = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({
+                "title": "Resolve a friction via relation",
+                "description": "Write responses must not point-read non-task relation targets.",
+                "complexity": "low",
+                "workspace": ".",
+                "relations": [
+                    {"type": "resolves", "target": friction_target}
+                ],
+                "fields": ["id", "relations"],
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("projecting relations with a friction target does not error");
+
+    let relations = added["relations"].as_array().expect("relations array");
+    let resolves = relations
+        .iter()
+        .find(|relation| relation["type"] == "resolves")
+        .expect("resolves relation");
+    assert_eq!(resolves["target"], json!(friction_target));
+}
+
+#[test]
 fn foreign_task_references_are_marked_and_do_not_block_readiness() {
     let (_root, runtime, _repo_root) = test_runtime();
     let foreign_id = "DK-00042";

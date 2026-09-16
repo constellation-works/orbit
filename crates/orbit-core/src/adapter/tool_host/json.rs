@@ -5,9 +5,9 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     ArtifactPresentation, MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, TaskComment,
-    TaskHistoryEntry, TaskStatus, artifact_presentation, resolve_task_dependencies,
-    resolve_task_relations, serialize_task_artifacts, task_show_record_field_json,
-    unknown_task_show_field_message,
+    TaskHistoryEntry, TaskStatus, artifact_presentation, is_valid_orb_task_id,
+    resolve_task_dependencies, resolve_task_relations, serialize_task_artifacts,
+    task_show_record_field_json, unknown_task_show_field_message,
 };
 use serde_json::{Map, Value, json};
 
@@ -103,6 +103,12 @@ fn serialize_task_record(
 /// [`task_to_json`]. Individual task reads must not replace that bounded page
 /// with a registry-wide scan, so they point-read the handful of dependency and
 /// relation targets instead.
+///
+/// Relation targets are not always task ids — a `resolves` relation may
+/// legitimately point at a friction, ADR, or learning id (e.g.
+/// `F2026-05-001`). Only ids that parse as task ids are point-read; other
+/// namespaces are skipped rather than sent through `get_task_row`, which
+/// rejects them as invalid input instead of reporting them not found.
 fn task_reference_status_index(
     runtime: &OrbitRuntime,
     task: &Task,
@@ -115,6 +121,7 @@ fn task_reference_status_index(
                 .iter()
                 .map(|relation| relation.target.clone()),
         )
+        .filter(|id| is_valid_orb_task_id(id))
         .collect::<BTreeSet<_>>();
     let mut status_by_id = BTreeMap::new();
     for id in referenced_ids {
