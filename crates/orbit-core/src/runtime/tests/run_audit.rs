@@ -296,6 +296,108 @@ fn collect_run_cli_invocations_derives_step_ids_from_parent_chain() {
 }
 
 #[test]
+fn collect_run_cli_invocations_bounded_stops_after_limit() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let audit_root = runtime.data_root().join("state").join("audit");
+    let blob_store = BlobStore::new(audit_root.join("blobs"));
+    let stdout_one = blob_store.write(b"one\n").expect("write stdout one");
+    let stdout_two = blob_store.write(b"two\n").expect("write stdout two");
+    let stdout_three = blob_store.write(b"three\n").expect("write stdout three");
+    let run_id = "jrun-bounded-limit";
+    seed_v2_audit_events(
+        &runtime,
+        run_id,
+        [
+            json!({
+                "event_id": "evt-one",
+                "body_kind": "cli_invocation_finished",
+                "stdout_blob_ref": stdout_one,
+                "exit_code": 1
+            }),
+            json!({
+                "event_id": "evt-two",
+                "body_kind": "cli_invocation_finished",
+                "stdout_blob_ref": stdout_two,
+                "exit_code": 2
+            }),
+            json!({
+                "event_id": "evt-three",
+                "body_kind": "cli_invocation_finished",
+                "stdout_blob_ref": stdout_three,
+                "exit_code": 3
+            }),
+        ],
+    );
+
+    let records = runtime
+        .collect_run_cli_invocations_bounded(run_id, Some(2), None)
+        .expect("collect bounded records");
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].event_id, "evt-one");
+    assert_eq!(records[0].stdout, "one\n");
+    assert_eq!(records[1].event_id, "evt-two");
+    assert_eq!(records[1].stdout, "two\n");
+}
+
+#[test]
+fn collect_run_cli_invocations_bounded_reads_preview_window_plus_current_line() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let audit_root = runtime.data_root().join("state").join("audit");
+    let blob_store = BlobStore::new(audit_root.join("blobs"));
+    let mut stdout = vec![b'a'; 32];
+    stdout.push(b'\n');
+    stdout.extend(vec![b'b'; 64 * 1024]);
+    let stdout_ref = blob_store.write(&stdout).expect("write large stdout");
+    let run_id = "jrun-bounded-preview";
+    seed_v2_audit_events(
+        &runtime,
+        run_id,
+        [json!({
+            "event_id": "evt-cli",
+            "body_kind": "cli_invocation_finished",
+            "stdout_blob_ref": stdout_ref,
+            "exit_code": 0
+        })],
+    );
+
+    let records = runtime
+        .collect_run_cli_invocations_bounded(run_id, Some(1), Some(32))
+        .expect("collect preview records");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].stdout, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+    assert!(records[0].stdout.len() < stdout.len());
+}
+
+#[test]
+fn collect_run_cli_invocations_bounded_caps_a_newline_free_blob() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let audit_root = runtime.data_root().join("state").join("audit");
+    let blob_store = BlobStore::new(audit_root.join("blobs"));
+    let stdout = vec![b'x'; 64 * 1024];
+    let stdout_ref = blob_store
+        .write(&stdout)
+        .expect("write newline-free stdout");
+    let run_id = "jrun-bounded-no-newline";
+    seed_v2_audit_events(
+        &runtime,
+        run_id,
+        [json!({
+            "event_id": "evt-cli",
+            "body_kind": "cli_invocation_finished",
+            "stdout_blob_ref": stdout_ref,
+            "exit_code": 0
+        })],
+    );
+
+    let records = runtime
+        .collect_run_cli_invocations_bounded(run_id, Some(1), Some(32))
+        .expect("collect preview records");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].stdout.len(), 64);
+    assert!(records[0].stdout.chars().all(|ch| ch == 'x'));
+}
+
+#[test]
 fn missing_run_audit_file_returns_no_cli_invocations() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let records = runtime

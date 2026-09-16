@@ -131,6 +131,31 @@ fn write_creates_private_blob_file_and_dirs() {
 }
 
 #[test]
+fn read_prefix_returns_at_most_max_bytes_without_loading_the_rest() {
+    let temp = tempdir().expect("tempdir");
+    let store = BlobStore::new(temp.path());
+    let content = vec![b'x'; 64 * 1024];
+    let hash = store.write(&content).expect("write blob");
+
+    let prefix = store.read_prefix(&hash, 32).expect("read prefix");
+    assert_eq!(prefix, content[..32]);
+    assert_eq!(
+        store.read(&hash).expect("read full blob").len(),
+        content.len()
+    );
+}
+
+#[test]
+fn read_prefix_returns_the_whole_blob_when_shorter_than_max() {
+    let temp = tempdir().expect("tempdir");
+    let store = BlobStore::new(temp.path());
+    let hash = store.write(b"short\n").expect("write blob");
+
+    let prefix = store.read_prefix(&hash, 4096).expect("read prefix");
+    assert_eq!(prefix, b"short\n");
+}
+
+#[test]
 fn write_repairs_a_corrupt_existing_blob() {
     let temp = tempdir().expect("tempdir");
     let store = BlobStore::new(temp.path());
