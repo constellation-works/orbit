@@ -1,7 +1,7 @@
 //! Host observe/admission fixtures for incident inventory reuse [ORB-11633].
 
 use super::super::{
-    members::Host,
+    members::{Host, head_invocations, reset_head_invocations},
     preparation,
     source::{ls_tree_invocations, reset_ls_tree_invocations},
 };
@@ -264,6 +264,31 @@ fn preparation_page_lists_instructions_once_for_all_eligible_tasks() {
         ls_tree_invocations(),
         1,
         "one revision-scoped instruction listing serves the entire page"
+    );
+}
+
+#[test]
+fn preparation_admission_resolves_branch_head_once_per_call() {
+    let (_root, runtime, repo) = test_runtime();
+    let id = create_proposed_task(&runtime, &repo, "once");
+    let trigger = preparation_trigger();
+    let host = Host::new(&runtime, &trigger);
+    let page = host.observe(None, Utc::now()).unwrap();
+    assert_eq!(page.candidates.len(), 1);
+    let mut member = page.candidates[0].clone();
+    assert_eq!(member.task_ids, vec![id.clone()]);
+    // Same material twice: the pre-fix loop would resolve head per id.
+    member.task_ids = vec![id.clone(), id];
+
+    reset_head_invocations();
+    assert!(matches!(
+        host.admission(&member).unwrap(),
+        MemberAdmission::Admit
+    ));
+    assert_eq!(
+        head_invocations(),
+        1,
+        "admission must resolve the branch head once per call, not per task id"
     );
 }
 
