@@ -100,6 +100,9 @@ impl OrbitRuntime {
         let poll = Duration::from_secs(poll_interval_seconds.max(PIPELINE_WAIT_MIN_POLL_SECONDS));
 
         loop {
+            // One stale-run pass per poll tick; collect then reads awaited
+            // rows without repeating per-run owner probes.
+            self.reconcile_stale_job_runs(None)?;
             let snapshot = self.collect_pipeline_wait_entries(run_ids, false)?;
             if snapshot
                 .iter()
@@ -142,12 +145,9 @@ impl OrbitRuntime {
         run_ids
             .iter()
             .map(|run_id| {
-                let run = match self.show_job_run(run_id) {
-                    Ok(run) => run,
-                    Err(OrbitError::NotFound {
-                        kind: NotFoundKind::JobRun,
-                        ..
-                    }) => {
+                let run = match self.get_job_run_backend(run_id) {
+                    Ok(Some(run)) => run,
+                    Ok(None) => {
                         return Ok(PipelineWaitEntry {
                             run_id: run_id.clone(),
                             status: "failed".to_string(),

@@ -39,5 +39,9 @@ pub(crate) use owner::{RunOwnerLiveness, run_owner_liveness};
 pub use projection::{
     ActivityInvocationEvidence, job_run_to_json, job_run_to_json_with_activity_provenance,
 };
+#[cfg(test)]
+pub(crate) use query::job_run_get_counter;
+#[cfg(test)]
+pub(crate) use reconcile::reconcile_pass_counter;
 pub use types::{JobRunCancelResult, JobRunListParams, JobRunOrder};
 pub use worker_limit::{DrainWorkerLimitChange, DrainWorkerLimitRequest};

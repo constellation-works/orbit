@@ -127,6 +127,8 @@ impl OrbitRuntime {
         job_id: Option<&str>,
         pass: &mut ReconcilePass,
     ) -> Result<usize, OrbitError> {
+        #[cfg(test)]
+        reconcile_pass_counter::record(self);
         let runs = if let Some(job_id) = job_id {
             self.stores()
                 .jobs()
@@ -506,4 +508,67 @@ fn stale_job_run_diagnostic(run: &JobRun) -> Option<(String, String)> {
 fn terminal_run_timing_is_incomplete(run: &JobRun) -> bool {
     run.state.is_terminal()
         && (run.finished_at.is_none() || (run.duration_ms.is_none() && run.started_at.is_some()))
+}
+
+/// Counts `reconcile_stale_job_runs_with_pass` so tests can prove pipeline
+/// wait opens one pass per poll tick, not one per awaited run.
+#[cfg(test)]
+pub(crate) mod reconcile_pass_counter {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+
+    use orbit_store::contracts::JobRunStoreBackend;
+
+    use crate::OrbitRuntime;
+
+    type StoreKey = usize;
+
+    static COUNTS: LazyLock<Mutex<HashMap<StoreKey, usize>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    pub(crate) struct Counter {
+        key: StoreKey,
+    }
+
+    fn key(runs: &dyn JobRunStoreBackend) -> StoreKey {
+        runs as *const dyn JobRunStoreBackend as *const () as usize
+    }
+
+    pub(crate) fn track(runtime: &OrbitRuntime) -> Counter {
+        let key = key(runtime.stores().jobs());
+        COUNTS
+            .lock()
+            .expect("test reconcile-pass counters are not poisoned")
+            .insert(key, 0);
+        Counter { key }
+    }
+
+    pub(crate) fn record(runtime: &OrbitRuntime) {
+        if let Some(count) = COUNTS
+            .lock()
+            .expect("test reconcile-pass counters are not poisoned")
+            .get_mut(&key(runtime.stores().jobs()))
+        {
+            *count += 1;
+        }
+    }
+
+    impl Counter {
+        pub(crate) fn passes(&self) -> usize {
+            *COUNTS
+                .lock()
+                .expect("test reconcile-pass counters are not poisoned")
+                .get(&self.key)
+                .expect("tracked reconcile-pass counter exists")
+        }
+    }
+
+    impl Drop for Counter {
+        fn drop(&mut self) {
+            COUNTS
+                .lock()
+                .expect("test reconcile-pass counters are not poisoned")
+                .remove(&self.key);
+        }
+    }
 }

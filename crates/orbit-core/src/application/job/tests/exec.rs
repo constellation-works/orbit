@@ -1913,6 +1913,55 @@ fn configured_pipeline_wait_deadline_reports_link_and_leaves_child_running() {
 }
 
 #[test]
+fn pipeline_wait_reconciles_once_per_poll_tick_not_once_per_awaited_run() {
+    use crate::application::job::run::reconcile_pass_counter;
+
+    let (_root, runtime, _repo_root, _global_root) = test_runtime();
+    let timeout_seconds = 2;
+    let poll_seconds = 1;
+
+    let one = running_wait_fixture(&runtime, "qa_wait_pass_one");
+    let clock = FastPipelineWaitClock::new(&runtime, &one, None);
+    let one_passes = reconcile_pass_counter::track(&runtime);
+    runtime
+        .wait_pipeline_runs_with_clock(
+            std::slice::from_ref(&one),
+            timeout_seconds,
+            poll_seconds,
+            Some("wait-pass-count"),
+            &clock,
+        )
+        .expect("wait one run");
+    let passes_for_one = one_passes.passes();
+    drop(one_passes);
+
+    let many: Vec<String> = (0..3)
+        .map(|index| running_wait_fixture(&runtime, &format!("qa_wait_pass_many_{index}")))
+        .collect();
+    let clock = FastPipelineWaitClock::new(&runtime, &many[0], None);
+    let many_passes = reconcile_pass_counter::track(&runtime);
+    runtime
+        .wait_pipeline_runs_with_clock(
+            &many,
+            timeout_seconds,
+            poll_seconds,
+            Some("wait-pass-count"),
+            &clock,
+        )
+        .expect("wait many runs");
+
+    assert_eq!(
+        passes_for_one, 3,
+        "timeout=2s poll=1s must reconcile once per loop tick (initial + two sleeps + timeout tick)"
+    );
+    assert_eq!(
+        many_passes.passes(),
+        passes_for_one,
+        "reconcile passes must follow poll ticks, not awaited-run count"
+    );
+}
+
+#[test]
 fn pipeline_wait_keeps_a_bounded_generic_default_and_validates_the_ceiling() {
     assert_eq!(
         OrbitRuntime::normalize_pipeline_wait_timeout(None).expect("default wait timeout"),

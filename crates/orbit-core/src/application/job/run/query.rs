@@ -51,9 +51,12 @@ impl OrbitRuntime {
         let run = self
             .get_job_run_backend(run_id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
-        self.reconcile_stale_job_run(&run)?;
-        self.get_job_run_backend(run_id)?
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))
+        if self.reconcile_stale_job_run(&run)? {
+            self.get_job_run_backend(run_id)?
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))
+        } else {
+            Ok(run)
+        }
     }
 
     // History/list backends and get_job_run_backend live here; the two-pass
@@ -89,6 +92,8 @@ impl OrbitRuntime {
     }
 
     pub(crate) fn get_job_run_backend(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
+        #[cfg(test)]
+        job_run_get_counter::record(self, run_id);
         self.stores().jobs().get_job_run(run_id)
     }
 }
@@ -103,5 +108,71 @@ fn job_run_query(params: JobRunListParams) -> JobRunQuery {
         limit: params.limit,
         order_by: params.order_by,
         include_steps: true,
+    }
+}
+
+/// Counts `get_job_run_backend` calls so tests can prove `show_job_run` does
+/// not reread a row when reconciliation is a no-op.
+#[cfg(test)]
+pub(crate) mod job_run_get_counter {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+
+    use orbit_store::contracts::JobRunStoreBackend;
+
+    use crate::OrbitRuntime;
+
+    type StoreRun = (usize, String);
+
+    static COUNTS: LazyLock<Mutex<HashMap<StoreRun, usize>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    pub(crate) struct Counter {
+        key: StoreRun,
+    }
+
+    fn key(runs: &dyn JobRunStoreBackend, run_id: &str) -> StoreRun {
+        (
+            runs as *const dyn JobRunStoreBackend as *const () as usize,
+            run_id.to_string(),
+        )
+    }
+
+    pub(crate) fn track(runtime: &OrbitRuntime, run_id: &str) -> Counter {
+        let key = key(runtime.stores().jobs(), run_id);
+        COUNTS
+            .lock()
+            .expect("test get counters are not poisoned")
+            .insert(key.clone(), 0);
+        Counter { key }
+    }
+
+    pub(crate) fn record(runtime: &OrbitRuntime, run_id: &str) {
+        if let Some(count) = COUNTS
+            .lock()
+            .expect("test get counters are not poisoned")
+            .get_mut(&key(runtime.stores().jobs(), run_id))
+        {
+            *count += 1;
+        }
+    }
+
+    impl Counter {
+        pub(crate) fn reads(&self) -> usize {
+            *COUNTS
+                .lock()
+                .expect("test get counters are not poisoned")
+                .get(&self.key)
+                .expect("tracked get counter exists")
+        }
+    }
+
+    impl Drop for Counter {
+        fn drop(&mut self) {
+            COUNTS
+                .lock()
+                .expect("test get counters are not poisoned")
+                .remove(&self.key);
+        }
     }
 }

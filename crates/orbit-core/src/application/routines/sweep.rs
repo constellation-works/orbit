@@ -6,7 +6,8 @@
 //! failures (registry unreadable, store unopenable) — an unconfigured host
 //! is a clean no-op, because launchd/systemd will invoke this forever.
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use super::RoutineHostIdentity;
@@ -23,13 +24,14 @@ pub use orbit_automation::routines::sweep::{
 };
 use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::{self, LogRotationConfig};
-use orbit_types::workflow::JobRunState;
+use orbit_types::workflow::{JobRun, JobRunState};
 use orbit_types::workspace::Workspace;
 use serde_json::json;
 
 /// Production dispatch over the per-workspace runtimes discovered this pass.
 pub(crate) struct RuntimeDispatch<'a> {
     runtimes: BTreeMap<PathBuf, &'a OrbitRuntime>,
+    shown_runs: RefCell<HashMap<(PathBuf, String), JobRun>>,
 }
 
 /// Refresh each discovered workspace's read-side token projection once per
@@ -94,16 +96,12 @@ impl RoutineDispatch for RuntimeDispatch<'_> {
     }
 
     fn run_state(&self, source_orbit_dir: &Path, run_id: &str) -> Option<JobRunState> {
-        self.runtimes
-            .get(source_orbit_dir)
-            .and_then(|runtime| runtime.show_job_run(run_id).ok())
+        self.shown_job_run(source_orbit_dir, run_id)
             .map(|run| run.state)
     }
 
     fn run_owner_liveness(&self, source_orbit_dir: &Path, run_id: &str) -> RunOwnerLiveness {
-        self.runtimes
-            .get(source_orbit_dir)
-            .and_then(|runtime| runtime.show_job_run(run_id).ok())
+        self.shown_job_run(source_orbit_dir, run_id)
             // An unreadable run is not evidence that its worker stopped.
             .map_or(RunOwnerLiveness::Unknown, |run| {
                 match run_owner_liveness(&run) {
@@ -112,6 +110,21 @@ impl RoutineDispatch for RuntimeDispatch<'_> {
                     crate::application::job::RunOwnerLiveness::Unknown => RunOwnerLiveness::Unknown,
                 }
             })
+    }
+}
+
+impl RuntimeDispatch<'_> {
+    fn shown_job_run(&self, source_orbit_dir: &Path, run_id: &str) -> Option<JobRun> {
+        let key = (source_orbit_dir.to_path_buf(), run_id.to_string());
+        if let Some(run) = self.shown_runs.borrow().get(&key) {
+            return Some(run.clone());
+        }
+        let run = self
+            .runtimes
+            .get(source_orbit_dir)
+            .and_then(|runtime| runtime.show_job_run(run_id).ok())?;
+        self.shown_runs.borrow_mut().insert(key, run.clone());
+        Some(run)
     }
 }
 
@@ -195,6 +208,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
             .iter()
             .map(|(_, runtime)| (runtime.shared_root(), runtime))
             .collect(),
+        shown_runs: RefCell::new(HashMap::new()),
     };
 
     let mut reports = run_sweep_core(store.as_ref(), &collection, &dispatch, options, now_utc)?;
