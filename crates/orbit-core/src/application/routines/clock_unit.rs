@@ -15,6 +15,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::atomic_write_text;
 
 use super::clock::{
     ClockCommandRunner, ClockPlatform, NativeClockCommandRunner, launchd_manual_steps,
@@ -25,6 +26,15 @@ use super::clock::{
 
 /// How long to wait for `<program> --version` before treating it as unrunnable.
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Marker written next to `clock.toml` when a convergence pass rewrote a
+/// registered unit but the manager would not re-register it.
+///
+/// `launchctl load` failing after the `unload` leaves the job unloaded, which
+/// is exactly what a clock the operator paused looks like to `launchctl list`.
+/// The marker is the only signal that tells the next pass apart from a paused
+/// clock, so it retries activation instead of reporting the unit current.
+const CLOCK_RELOAD_PENDING_FILE: &str = "clock.reload-pending";
 
 /// The binary this process is, used as the comparison baseline.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -390,6 +400,9 @@ pub enum ClockUnitConvergence {
     },
     /// The unit named a stale program and was rewritten to this binary.
     Rewritten(ClockUnitRewrite),
+    /// The unit already names this binary, but an earlier rewrite left it
+    /// unregistered, so this pass retried activation without touching the file.
+    Reloaded(ClockUnitReload),
 }
 
 /// The repair a convergence pass applied.
@@ -407,6 +420,19 @@ pub struct ClockUnitRewrite {
     /// clock is rewritten but deliberately left inactive.
     pub reactivated: bool,
     /// Commands the operator must run when re-registration failed.
+    pub manual_steps: Vec<String>,
+}
+
+/// The activation retry a convergence pass applied to an already-current unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClockUnitReload {
+    /// Unit file whose registration was retried.
+    pub unit_path: PathBuf,
+    /// Program it names, which is this binary.
+    pub program: PathBuf,
+    /// Whether the unit manager re-registered the unit this time.
+    pub reactivated: bool,
+    /// Commands the operator must run when re-registration failed again.
     pub manual_steps: Vec<String>,
 }
 
@@ -437,6 +463,18 @@ impl ClockUnitConvergence {
                     rewrite.program.display()
                 )
             }
+            Self::Reloaded(reload) => {
+                let activation = if reload.reactivated {
+                    "reloaded"
+                } else {
+                    "still NOT reloaded"
+                };
+                format!(
+                    "clock unit {} already runs this binary ({}) but an earlier repair left it unregistered ({activation})",
+                    reload.unit_path.display(),
+                    reload.program.display()
+                )
+            }
         }
     }
 
@@ -445,6 +483,7 @@ impl ClockUnitConvergence {
         match self {
             Self::NoUnitInstalled | Self::AlreadyCurrent { .. } => &[],
             Self::Rewritten(rewrite) => &rewrite.manual_steps,
+            Self::Reloaded(reload) => &reload.manual_steps,
         }
     }
 
@@ -481,42 +520,55 @@ pub(super) fn converge_clock_unit_with(
     let Some(installed) = installed_clock_unit_at(home, platform) else {
         return Ok(ClockUnitConvergence::NoUnitInstalled);
     };
+    let reload_pending = clock_reload_pending_path(global_root).exists();
     let Some(drift) = clock_unit_drift(&installed, program) else {
-        return Ok(ClockUnitConvergence::AlreadyCurrent {
+        if !reload_pending {
+            return Ok(ClockUnitConvergence::AlreadyCurrent {
+                unit_path: installed.unit_path,
+                program: program.to_path_buf(),
+            });
+        }
+        // The file already names this binary, but the pass that wrote it could
+        // not re-register it. Retrying only the activation is what makes
+        // `orbit update` / `orbit clock repair` safe to re-run after that.
+        let (reactivated, manual_steps) = activate_unit(platform, runner, home);
+        if reactivated {
+            clear_clock_reload_pending(global_root)?;
+        }
+        return Ok(ClockUnitConvergence::Reloaded(ClockUnitReload {
             unit_path: installed.unit_path,
             program: program.to_path_buf(),
-        });
+            reactivated,
+            manual_steps,
+        }));
     };
 
     // Ask the manager whether the unit is registered *before* rewriting it: a
-    // clock the operator paused must come back paused, not running.
-    let was_registered = runner
-        .run(&manager_status_command(platform))
-        .unwrap_or(false);
+    // clock the operator paused must come back paused, not running. A unit an
+    // earlier failed reload left unloaded is not paused, so a pending marker
+    // counts as registered.
+    let was_registered = reload_pending
+        || runner
+            .run(&manager_status_command(platform))
+            .unwrap_or(false);
     let settings = load_clock_settings(global_root)?;
     let orbit_bin = program.to_string_lossy().to_string();
-    let (files_written, reactivated, manual_steps) = match platform {
+    let files_written = match platform {
         ClockPlatform::Launchd => {
-            let plist_path = write_launchd_unit(global_root, &orbit_bin, settings, home)?;
-            let reactivated = was_registered && reload_launchd_unit(runner, home);
-            let manual_steps = if was_registered {
-                launchd_manual_steps(reactivated, &plist_path)
-            } else {
-                Vec::new()
-            };
-            (vec![plist_path], reactivated, manual_steps)
+            vec![write_launchd_unit(global_root, &orbit_bin, settings, home)?]
         }
-        ClockPlatform::Systemd => {
-            let files_written = write_systemd_units(&orbit_bin, settings, home)?;
-            let reactivated = was_registered && restart_systemd_unit(runner);
-            let manual_steps = if was_registered {
-                systemd_manual_steps(reactivated)
-            } else {
-                Vec::new()
-            };
-            (files_written, reactivated, manual_steps)
-        }
+        ClockPlatform::Systemd => write_systemd_units(&orbit_bin, settings, home)?,
     };
+    let (reactivated, manual_steps) = if was_registered {
+        activate_unit(platform, runner, home)
+    } else {
+        (false, Vec::new())
+    };
+    if was_registered && !reactivated {
+        mark_clock_reload_pending(global_root, &installed.unit_path)?;
+    } else if reload_pending {
+        clear_clock_reload_pending(global_root)?;
+    }
 
     Ok(ClockUnitConvergence::Rewritten(ClockUnitRewrite {
         unit_path: installed.unit_path,
@@ -526,6 +578,56 @@ pub(super) fn converge_clock_unit_with(
         reactivated,
         manual_steps,
     }))
+}
+
+/// Re-register the installed unit with its manager and name the commands the
+/// operator has to run when the manager refuses.
+fn activate_unit(
+    platform: ClockPlatform,
+    runner: &dyn ClockCommandRunner,
+    home: &Path,
+) -> (bool, Vec<String>) {
+    match platform {
+        ClockPlatform::Launchd => {
+            let reactivated = reload_launchd_unit(runner, home);
+            let manual_steps = launchd_manual_steps(reactivated, &launchd_plist_path(home));
+            (reactivated, manual_steps)
+        }
+        ClockPlatform::Systemd => {
+            let reactivated = restart_systemd_unit(runner);
+            (reactivated, systemd_manual_steps(reactivated))
+        }
+    }
+}
+
+/// Where the reload-pending marker lives for this Orbit root.
+pub(super) fn clock_reload_pending_path(global_root: &Path) -> PathBuf {
+    global_root.join(CLOCK_RELOAD_PENDING_FILE)
+}
+
+fn mark_clock_reload_pending(global_root: &Path, unit_path: &Path) -> Result<(), OrbitError> {
+    let path = clock_reload_pending_path(global_root);
+    let content = format!(
+        "# Orbit rewrote the sweep clock unit but the unit manager did not re-register it.\n\
+         # `orbit clock repair` retries the reload while this file exists.\n{}\n",
+        unit_path.display()
+    );
+    atomic_write_text(&path, &content)
+        .map_err(|error| OrbitError::Io(format!("write {}: {error}", path.display())))
+}
+
+/// Forget a pending reload: activation succeeded, or the operator set the
+/// clock's state explicitly and a retry would second-guess them.
+pub(super) fn clear_clock_reload_pending(global_root: &Path) -> Result<(), OrbitError> {
+    let path = clock_reload_pending_path(global_root);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(OrbitError::Io(format!(
+            "remove {}: {error}",
+            path.display()
+        ))),
+    }
 }
 
 /// The installed unit and the program it names, without probing that program.

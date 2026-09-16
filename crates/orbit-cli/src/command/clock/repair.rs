@@ -17,7 +17,8 @@ pub(crate) fn execute(global_root: &Path) -> CommandOut {
     }
     // A rewritten unit the manager would not re-register still does not tick,
     // so the caller — `orbit update` convergence included — has to see this as
-    // unfinished work rather than a clean repair.
+    // unfinished work rather than a clean repair. Re-running the command after
+    // that retries the registration rather than reporting the unit current.
     let exit_code = i32::from(convergence.needs_follow_up());
     Ok(Payload::detail(document(&convergence), text)
         .with_exit_code(exit_code)
@@ -46,6 +47,14 @@ fn document(convergence: &ClockUnitConvergence) -> serde_json::Value {
             "files_written": rewrite.files_written.iter().map(|path| display(path)).collect::<Vec<_>>(),
             "reactivated": rewrite.reactivated,
             "manual_steps": rewrite.manual_steps,
+        }),
+        ClockUnitConvergence::Reloaded(reload) => json!({
+            "action": "reloaded",
+            "summary": convergence.summary(),
+            "unit_path": display(&reload.unit_path),
+            "program": display(&reload.program),
+            "reactivated": reload.reactivated,
+            "manual_steps": reload.manual_steps,
         }),
     }
 }

@@ -13,7 +13,8 @@ use orbit_common::fs::io::atomic_write_text;
 use serde::{Deserialize, Serialize};
 
 use super::clock_unit::{
-    ClockUnitVerdict, RunningBinary, inspect_clock_unit_at, probe_program_version,
+    ClockUnitVerdict, RunningBinary, clear_clock_reload_pending, inspect_clock_unit_at,
+    probe_program_version,
 };
 
 const LAUNCHD_PLIST_TEMPLATE: &str = include_str!("../../../assets/clock/com.orbit.sweep.plist");
@@ -433,10 +434,14 @@ pub(super) fn install_clock_with(
     runner: &dyn ClockCommandRunner,
     home: &Path,
 ) -> Result<ClockInstallReport, OrbitError> {
-    match platform {
-        ClockPlatform::Launchd => install_launchd(global_root, orbit_bin, settings, runner, home),
-        ClockPlatform::Systemd => install_systemd(orbit_bin, settings, runner, home),
+    let report = match platform {
+        ClockPlatform::Launchd => install_launchd(global_root, orbit_bin, settings, runner, home)?,
+        ClockPlatform::Systemd => install_systemd(orbit_bin, settings, runner, home)?,
+    };
+    if report.activated {
+        clear_clock_reload_pending(global_root)?;
     }
+    Ok(report)
 }
 
 fn install_launchd(
@@ -823,6 +828,20 @@ pub fn set_clock_enabled(global_root: &Path, enabled: bool) -> Result<ClockStatu
 }
 
 pub(super) fn set_clock_enabled_with(
+    global_root: &Path,
+    enabled: bool,
+    platform: ClockPlatform,
+    runner: &dyn ClockCommandRunner,
+    home: &Path,
+) -> Result<ClockStatus, OrbitError> {
+    let status = apply_clock_enabled(global_root, enabled, platform, runner, home)?;
+    // The operator just said what state the clock should be in; a reload a
+    // failed repair left pending must not re-arm a clock paused after it.
+    clear_clock_reload_pending(global_root)?;
+    Ok(status)
+}
+
+fn apply_clock_enabled(
     global_root: &Path,
     enabled: bool,
     platform: ClockPlatform,

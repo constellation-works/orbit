@@ -12,7 +12,9 @@ use super::super::clock::{
     render_systemd_service, render_systemd_timer, save_clock_settings, set_clock_cadence_with,
     set_clock_enabled_with, validated_sweep_log_path,
 };
-use super::super::clock_unit::{RunningBinary, probe_program_version};
+use super::super::clock_unit::{
+    RunningBinary, clock_reload_pending_path, converge_clock_unit_with, probe_program_version,
+};
 
 pub(super) struct MockRunner {
     results: Mutex<Vec<Result<bool, OrbitError>>>,
@@ -621,6 +623,86 @@ fn enable_is_idempotent_for_current_on_active_sec_timer() {
             systemd_show_command().to_string(),
         ]
     );
+}
+
+/// The operator pausing the clock after a failed repair is the final word: a
+/// later `orbit clock repair` must not retry the reload and resume it.
+#[test]
+fn disable_forgets_a_reload_a_failed_repair_left_pending() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    let running = home.path().join("orbit");
+    fs::write(&running, "binary").expect("running binary");
+    write_launchd_unit(home.path(), INSTALLED_PROGRAM);
+    let repair = MockRunner::new(vec![Ok(true), Ok(true), Ok(false)]);
+    converge_clock_unit_with(
+        root.path(),
+        &running,
+        ClockPlatform::Launchd,
+        &repair,
+        home.path(),
+    )
+    .expect("repair rewrites the unit");
+    assert!(clock_reload_pending_path(root.path()).exists());
+
+    // Loaded per `launchctl list`, and the unload succeeds.
+    let pause = MockRunner::new(vec![Ok(true), Ok(true)]);
+    let status = set_clock_enabled_with(
+        root.path(),
+        false,
+        ClockPlatform::Launchd,
+        &pause,
+        home.path(),
+    )
+    .expect("pause the clock");
+    assert!(!status.enabled);
+    assert!(!clock_reload_pending_path(root.path()).exists());
+
+    let retry = MockRunner::new(Vec::new());
+    let convergence = converge_clock_unit_with(
+        root.path(),
+        &running,
+        ClockPlatform::Launchd,
+        &retry,
+        home.path(),
+    )
+    .expect("repair leaves the paused clock alone");
+    assert!(!convergence.needs_follow_up());
+    assert!(retry.commands().is_empty());
+}
+
+/// A fresh `orbit routine init --install-clock` that activates the unit
+/// supersedes any reload an earlier repair left pending.
+#[test]
+fn install_forgets_a_reload_a_failed_repair_left_pending() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    let running = home.path().join("orbit");
+    fs::write(&running, "binary").expect("running binary");
+    write_launchd_unit(home.path(), INSTALLED_PROGRAM);
+    let repair = MockRunner::new(vec![Ok(true), Ok(true), Ok(false)]);
+    converge_clock_unit_with(
+        root.path(),
+        &running,
+        ClockPlatform::Launchd,
+        &repair,
+        home.path(),
+    )
+    .expect("repair rewrites the unit");
+    assert!(clock_reload_pending_path(root.path()).exists());
+
+    let install = MockRunner::new(vec![Ok(true), Ok(true)]);
+    let report = install_clock_with(
+        root.path(),
+        &running.to_string_lossy(),
+        ClockSettings::default(),
+        ClockPlatform::Launchd,
+        &install,
+        home.path(),
+    )
+    .expect("install activates the unit");
+    assert!(report.activated);
+    assert!(!clock_reload_pending_path(root.path()).exists());
 }
 
 #[test]

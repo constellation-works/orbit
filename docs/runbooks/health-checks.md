@@ -272,6 +272,12 @@ non-zero when the manager would not reload the rewritten unit. A unit that alrea
 binary is left alone, and a paused clock is corrected on disk without being resumed — use
 `orbit clock enable` to resume it.
 
+A failed reload is remembered in `~/.orbit/clock.reload-pending`: re-running `orbit clock
+repair` (or `orbit update`) retries the `launchctl load` / `systemctl --user restart` even
+though the unit file already names this binary, reports `reloaded` once the manager accepts
+it, and keeps exiting non-zero until then. `orbit clock enable` and `orbit clock disable` clear
+the pending retry — the operator's explicit choice wins over a repair that is still catching up.
+
 Operators do not have to reach for it after an ordinary upgrade: `orbit update` runs
 `orbit clock repair` as its last convergence step, so a unit orphaned by an install at a new
 path is repaired in the same command that moved the binary. The path that still needs a
