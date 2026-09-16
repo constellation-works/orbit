@@ -67,17 +67,23 @@ pub(super) async fn list_auto_tasks(
         ))
         .into_response();
     };
-    match resolve_workspace(&state, workspace) {
-        Ok((workspace_name, runtime)) => Json(list_json(
-            &runtime,
-            workspace,
-            &workspace_name,
-            generated_at,
-        ))
-        .into_response(),
-        Err(reason) => {
-            Json(read_only_envelope(generated_at, Some(workspace), &reason)).into_response()
+    let workspace = workspace.to_string();
+    match blocking("auto-task list", {
+        let state = state.clone();
+        let workspace = workspace.clone();
+        move || {
+            Ok(match resolve_workspace(&state, &workspace) {
+                Ok((workspace_name, runtime)) => {
+                    list_json(&runtime, &workspace, &workspace_name, generated_at)
+                }
+                Err(reason) => read_only_envelope(generated_at, Some(&workspace), &reason),
+            })
         }
+    })
+    .await
+    {
+        Ok(value) => Json(value).into_response(),
+        Err(response) => *response,
     }
 }
 
@@ -91,11 +97,9 @@ pub(super) async fn toggle_auto_task(
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
     };
-    let runtime = match resolve_workspace(&state, &workspace) {
-        Ok((_, runtime)) => runtime,
-        Err(reason) => {
-            return selection_conflict("workspace_mismatch", reason);
-        }
+    let runtime = match resolve_workspace_blocking(&state, &workspace).await {
+        Ok(runtime) => runtime,
+        Err(response) => return *response,
     };
     let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE) {
         Ok(caller) => caller,
@@ -210,11 +214,9 @@ pub(super) async fn mint_auto_task(
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
     };
-    let runtime = match resolve_workspace(&state, &workspace) {
-        Ok((_, runtime)) => runtime,
-        Err(reason) => {
-            return selection_conflict("workspace_mismatch", reason);
-        }
+    let runtime = match resolve_workspace_blocking(&state, &workspace).await {
+        Ok(runtime) => runtime,
+        Err(response) => return *response,
     };
     if !body.acknowledge_unconditional {
         return (
@@ -293,6 +295,24 @@ pub(super) async fn mint_auto_task(
         "message": format!("Minted {} ({})", minted.id, minted.status),
     }))
     .into_response()
+}
+
+async fn resolve_workspace_blocking(
+    state: &DashboardState,
+    workspace: &str,
+) -> Result<Arc<OrbitRuntime>, Box<Response>> {
+    let state = state.clone();
+    let workspace = workspace.to_string();
+    match blocking("resolve workspace", {
+        let workspace = workspace.clone();
+        move || Ok(resolve_workspace(&state, &workspace))
+    })
+    .await
+    {
+        Ok(Ok((_, runtime))) => Ok(runtime),
+        Ok(Err(reason)) => Err(Box::new(selection_conflict("workspace_mismatch", reason))),
+        Err(response) => Err(response),
+    }
 }
 
 pub(super) fn resolve_workspace(

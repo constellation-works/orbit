@@ -81,9 +81,24 @@ pub(crate) async fn detailed_response(
     // Refresh and pin one snapshot so the probed runtimes and the reported
     // `workspaces_open` count come from a single coherent generation — an
     // evicted/removed workspace does not linger, and a concurrent rebind cannot
-    // make the report probe or tag the wrong checkout.
-    let pinned = state.pin();
-    let open = pinned.open_runtimes();
+    // make the report probe or tag the wrong checkout. Registry IO belongs on
+    // the blocking pool, not a tokio worker.
+    let state_for_pin = state.clone();
+    let open = match tokio::task::spawn_blocking(move || {
+        let pinned = state_for_pin.pin();
+        pinned.open_runtimes()
+    })
+    .await
+    {
+        Ok(open) => open,
+        Err(join_error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("health pin panicked: {join_error}") })),
+            )
+                .into_response();
+        }
+    };
     let mut checks: Vec<CheckOutcome> = Vec::new();
 
     for (workspace, runtime) in &open {

@@ -72,6 +72,21 @@ jobs:
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(calls, [["fmt", "--all", "--", "--check"]])
 
+    def test_fast_invokes_web_blocking_handler_check(self):
+        self.prepare_ci()
+        self.write_executable(
+            self.scripts / "check-web-blocking-handlers.py",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(["check-web-blocking-handlers.py"] + sys.argv[1:]) + "\\n")
+''',
+        )
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(["check-web-blocking-handlers.py"], calls)
+
     def test_fast_invokes_codeql_extension_schema_check(self):
         self.prepare_ci()
         self.write_executable(

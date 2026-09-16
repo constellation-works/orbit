@@ -10,7 +10,7 @@ use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{bad_request, blocking, bounded_limit, map_runtime_error, server_error, validate_id};
+use super::{bad_request, blocking, bounded_limit, map_runtime_error, validate_id};
 use crate::projections::job_catalog_to_json_with_last_run;
 
 const JOB_RUN_DEFAULT_LIMIT: usize = 25;
@@ -67,7 +67,11 @@ impl JobRunListState {
 
 pub(super) async fn list_jobs(Ws(runtime): Ws) -> Response {
     use orbit_core::application::job::JobCatalogFilter;
-    match runtime.list_job_catalog_with_last_run(true, JobCatalogFilter::All) {
+    match blocking("list jobs", move || {
+        runtime.list_job_catalog_with_last_run(true, JobCatalogFilter::All)
+    })
+    .await
+    {
         Ok(rows) => {
             let values: Vec<Value> = rows
                 .iter()
@@ -77,7 +81,7 @@ pub(super) async fn list_jobs(Ws(runtime): Ws) -> Response {
                 .collect();
             Json(Value::Array(values)).into_response()
         }
-        Err(e) => server_error(e),
+        Err(response) => *response,
     }
 }
 
@@ -87,9 +91,13 @@ pub(super) async fn list_job_runs(Ws(runtime): Ws, Query(q): Query<JobRunListQue
         Ok(state) => state,
         Err(message) => return bad_request(message),
     };
-    match job_runs_page(&runtime, &q, state, limit) {
+    match blocking("list job runs", move || {
+        job_runs_page(&runtime, &q, state, limit)
+    })
+    .await
+    {
         Ok(value) => Json(value).into_response(),
-        Err(e) => server_error(e),
+        Err(response) => *response,
     }
 }
 
