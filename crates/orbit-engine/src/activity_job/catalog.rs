@@ -279,6 +279,26 @@ impl V2JobCatalog {
             .map(|_| ())
     }
 
+    /// Load one job directory while retaining valid siblings when a file has
+    /// an invalid schema or document. Non-parse failures and duplicate names
+    /// remain hard errors. The returned diagnostics are the parse failures
+    /// encountered in this directory.
+    pub fn load_dir_prefer_existing_best_effort(
+        &mut self,
+        dir: &Path,
+    ) -> Result<Vec<CatalogError>, CatalogError> {
+        let mut errors = Vec::new();
+        self.inner
+            .load_dir_best_effort(
+                dir,
+                &JobCatalogAdapter,
+                ExistingNamePolicy::PreferExisting,
+                |_| true,
+                &mut errors,
+            )
+            .map(|_| errors)
+    }
+
     pub fn get(&self, name: &str) -> Option<(&Path, &JobV2)> {
         Some((
             self.inner.sources.get(name)?.as_path(),
@@ -317,7 +337,43 @@ impl<T> LayeredCatalog<T> {
         dir: &Path,
         adapter: &A,
         existing_name_policy: ExistingNamePolicy,
+        include_name: F,
+    ) -> Result<Vec<PathBuf>, CatalogError>
+    where
+        A: CatalogAdapter<Asset = T>,
+        F: FnMut(&str) -> bool,
+    {
+        self.load_dir_inner(dir, adapter, existing_name_policy, include_name, None)
+    }
+
+    fn load_dir_best_effort<A, F>(
+        &mut self,
+        dir: &Path,
+        adapter: &A,
+        existing_name_policy: ExistingNamePolicy,
+        include_name: F,
+        errors: &mut Vec<CatalogError>,
+    ) -> Result<Vec<PathBuf>, CatalogError>
+    where
+        A: CatalogAdapter<Asset = T>,
+        F: FnMut(&str) -> bool,
+    {
+        self.load_dir_inner(
+            dir,
+            adapter,
+            existing_name_policy,
+            include_name,
+            Some(errors),
+        )
+    }
+
+    fn load_dir_inner<A, F>(
+        &mut self,
+        dir: &Path,
+        adapter: &A,
+        existing_name_policy: ExistingNamePolicy,
         mut include_name: F,
+        mut parse_errors: Option<&mut Vec<CatalogError>>,
     ) -> Result<Vec<PathBuf>, CatalogError>
     where
         A: CatalogAdapter<Asset = T>,
@@ -330,7 +386,18 @@ impl<T> LayeredCatalog<T> {
                 path: path.to_path_buf(),
                 source,
             })?;
-            let Some(asset) = adapter.load(path, &yaml, &mut skipped)? else {
+            let asset = match adapter.load(path, &yaml, &mut skipped) {
+                Ok(asset) => asset,
+                Err(error @ CatalogError::Parse { .. }) => {
+                    if let Some(errors) = parse_errors.as_deref_mut() {
+                        errors.push(error);
+                        return Ok(());
+                    }
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            };
+            let Some(asset) = asset else {
                 return Ok(());
             };
             if let Some((_, prev)) = local_entries.get(&asset.name) {

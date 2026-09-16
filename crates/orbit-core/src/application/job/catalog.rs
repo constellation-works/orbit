@@ -335,7 +335,7 @@ impl OrbitRuntime {
         for dir in dirs {
             if dir.path().is_dir() {
                 catalog
-                    .load_dir_prefer_existing(dir.path())
+                    .load_dir_prefer_existing_best_effort(dir.path())
                     .map_err(catalog_error_to_orbit)?;
             }
         }
@@ -351,10 +351,13 @@ impl OrbitRuntime {
         let mut catalog = V2JobCatalog::new();
         let mut errors = Vec::new();
         for dir in dirs {
-            if dir.path().is_dir()
-                && let Err(error) = catalog.load_dir_prefer_existing(dir.path())
-            {
-                errors.push(catalog_error_to_orbit(error));
+            if dir.path().is_dir() {
+                match catalog.load_dir_prefer_existing_best_effort(dir.path()) {
+                    Ok(parse_errors) => {
+                        errors.extend(parse_errors.into_iter().map(catalog_error_to_orbit));
+                    }
+                    Err(error) => errors.push(catalog_error_to_orbit(error)),
+                }
             }
         }
         (catalog, errors)

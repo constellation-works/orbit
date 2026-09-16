@@ -2494,19 +2494,38 @@ fn duplicate_jobs_within_one_catalog_directory_remain_invalid() {
 }
 
 #[test]
-fn malformed_job_assets_remain_hard_catalog_errors() {
-    let (_root, runtime, _global_root, workspace_root) = test_runtime();
-    let malformed = workspace_root.join("resources/jobs/malformed.yaml");
-    std::fs::create_dir_all(malformed.parent().expect("job path has parent"))
-        .expect("create jobs dir");
-    std::fs::write(&malformed, "schemaVersion: 2\nkind: Job\nspec: [")
-        .expect("write malformed job");
+fn malformed_job_assets_do_not_hide_healthy_jobs_in_a_shared_root() {
+    let root = tempdir().expect("tempdir");
+    let shared_root = root.path().join("shared");
+    std::fs::create_dir_all(&shared_root).expect("create shared root");
+    let runtime = OrbitRuntime::from_roots(&shared_root, &shared_root).expect("build runtime");
+    let jobs_dir = shared_root.join("resources/jobs");
+    let default_yaml = DEFAULT_JOB_FILES
+        .iter()
+        .find_map(|(name, yaml)| (*name == "task_auto_pipeline").then_some(*yaml))
+        .expect("task auto pipeline default exists");
+    std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
+    std::fs::write(jobs_dir.join("task_auto_pipeline.yaml"), default_yaml)
+        .expect("write healthy default job");
+    std::fs::write(
+        jobs_dir.join("malformed.yaml"),
+        "schemaVersion: 2\nkind: Job\nspec: [",
+    )
+    .expect("write malformed job");
 
-    let err = runtime
+    let jobs = runtime
         .list_job_catalog_with_last_run(true, JobCatalogFilter::All)
-        .expect_err("malformed job should fail catalog loading");
-    assert!(err.to_string().contains("malformed.yaml"), "{err}");
-    assert!(err.to_string().contains("parse"), "{err}");
+        .expect("healthy jobs remain listable");
+    assert_eq!(jobs.len(), 1, "the malformed file must be skipped");
+    assert!(
+        jobs.iter()
+            .any(|(entry, _)| entry.job_id == "task_auto_pipeline"),
+        "healthy job must remain in the catalog: {jobs:?}"
+    );
+    let shown = runtime
+        .show_job_catalog_entry("task_auto_pipeline")
+        .expect("healthy job remains showable");
+    assert_eq!(shown.job_id, "task_auto_pipeline");
 }
 
 /// [ORB-11187] The completion policy is one shared input threaded through every

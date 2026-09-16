@@ -79,6 +79,37 @@ fn seed_source_workspace() -> SourceWorkspace {
     }
 }
 
+fn seed_shared_source_workspace() -> SourceWorkspace {
+    let tmp = tempdir().unwrap();
+    let shared_root = tmp.path().join("shared");
+    let routines_dir = shared_root.join("routines");
+    let local_dir = routines_dir.join("local");
+    fs::create_dir_all(shared_root.join("state")).unwrap();
+    fs::create_dir_all(&local_dir).unwrap();
+    fs::create_dir_all(shared_root.join("resources/jobs")).unwrap();
+
+    let workspace = Workspace {
+        id: "ws-shared".to_string(),
+        name: "polaris".to_string(),
+        owner_machine_id: None,
+        git_remote: None,
+        ship_mode: None,
+        base_branch: "agent-main".to_string(),
+        status: WorkspaceStatus::Active,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    let runtime = OrbitRuntime::from_roots(&shared_root, &shared_root).unwrap();
+
+    SourceWorkspace {
+        _tmp: tmp,
+        workspace,
+        runtime,
+        routines_dir,
+        local_dir,
+    }
+}
+
 fn write_routine(dir: &Path, file: &str, body: &str) {
     fs::write(dir.join(file), body).unwrap();
 }
@@ -441,6 +472,11 @@ fn default_routine_survives_a_distinct_workspace_job_catalog_error() {
         .iter()
         .map(|error| error.message.as_str())
         .collect::<Vec<_>>();
+    assert_eq!(
+        messages.len(),
+        1,
+        "one malformed catalog file yields one diagnostic"
+    );
     assert!(
         messages.iter().any(|message| {
             message.contains("failed to load job catalog") && message.contains("malformed.yaml")
@@ -452,5 +488,61 @@ fn default_routine_survives_a_distinct_workspace_job_catalog_error() {
             .iter()
             .all(|message| !message.contains("no such job in its catalog")),
         "a catalog failure must not be reported as missing default job: {messages:?}"
+    );
+}
+
+#[test]
+fn routine_targeting_healthy_job_survives_malformed_job_in_shared_root() {
+    let ws = seed_shared_source_workspace();
+    let default_yaml = DEFAULT_JOB_FILES
+        .iter()
+        .find_map(|(name, yaml)| (*name == "task_auto_pipeline").then_some(*yaml))
+        .expect("task auto pipeline default exists");
+    let jobs_dir = ws.runtime.shared_root().join("resources/jobs");
+    fs::write(jobs_dir.join("task_auto_pipeline.yaml"), default_yaml)
+        .expect("seed shared default job");
+    fs::write(
+        jobs_dir.join("malformed.yaml"),
+        "schemaVersion: 2\nkind: Job\nspec: [",
+    )
+    .expect("write malformed shared job");
+    write_routine(
+        &ws.routines_dir,
+        "default-target.yaml",
+        "schemaVersion: 1\nname: default-target-polaris\n\
+         trigger: { cron: \"* * * * *\" }\ntarget: job:task_auto_pipeline\n",
+    );
+
+    let collection = collect(&ws);
+    assert!(
+        find(&collection, "default-target-polaris").is_some(),
+        "healthy shared job target should keep its routine: {:?}",
+        collection
+            .routines
+            .iter()
+            .map(|routine| &routine.definition.name)
+            .collect::<Vec<_>>()
+    );
+    let messages = collection
+        .errors
+        .iter()
+        .map(|error| error.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        messages.len(),
+        1,
+        "one malformed catalog file yields one diagnostic"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("malformed.yaml")),
+        "shared catalog error should name the bad file: {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.contains("no such job in its catalog")),
+        "healthy target must not be reported missing: {messages:?}"
     );
 }
