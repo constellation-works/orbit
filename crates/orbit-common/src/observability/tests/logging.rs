@@ -1,7 +1,6 @@
 // Shared test helpers and utilities. Visible to child test submodules (subscriber, redaction)
 // because they are descendants. These use private items of the parent logging module for
-// test setup (e.g. jsonl_layer_at_path, emit_log_init_warning) which is allowed for
-// submodules.
+// test setup (e.g. jsonl_layer_at_path) which is allowed for submodules.
 
 use std::{
     ffi::OsString,
@@ -19,9 +18,7 @@ use tracing_subscriber::{
     layer::SubscriberExt,
 };
 
-use super::super::logging::{
-    RedactingFields, emit_log_init_warning, env_filter, jsonl_layer_at_path,
-};
+use super::super::logging::{RedactingFields, env_filter, jsonl_layer_at_path};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -30,15 +27,14 @@ fn with_test_subscriber_at_path<W>(
     log_path: &Path,
     stderr_writer: W,
     f: impl FnOnce(),
-) -> io::Result<()>
-where
+) where
     W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
 {
     let filter = env_filter(default_filter);
     let stderr_layer = fmt::layer()
         .with_writer(stderr_writer)
         .fmt_fields(RedactingFields::default());
-    let (file_layer, guard) = jsonl_layer_at_path(log_path)?;
+    let (file_layer, guard) = jsonl_layer_at_path(log_path);
     let subscriber = Registry::default()
         .with(filter)
         .with(stderr_layer)
@@ -46,44 +42,6 @@ where
     let dispatch = Dispatch::new(subscriber);
     tracing::dispatcher::with_default(&dispatch, f);
     drop(guard);
-    Ok(())
-}
-
-fn with_test_subscriber_allowing_file_failure<W>(
-    default_filter: &str,
-    log_path: &Path,
-    stderr_writer: W,
-    f: impl FnOnce(),
-) -> Option<String>
-where
-    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
-{
-    let filter = env_filter(default_filter);
-    let stderr_layer = fmt::layer()
-        .with_writer(stderr_writer)
-        .fmt_fields(RedactingFields::default());
-    match jsonl_layer_at_path(log_path) {
-        Ok((file_layer, guard)) => {
-            let subscriber = Registry::default()
-                .with(filter)
-                .with(stderr_layer)
-                .with(file_layer);
-            let dispatch = Dispatch::new(subscriber);
-            tracing::dispatcher::with_default(&dispatch, f);
-            drop(guard);
-            None
-        }
-        Err(err) => {
-            let warning = err.to_string();
-            let subscriber = Registry::default().with(filter).with(stderr_layer);
-            let dispatch = Dispatch::new(subscriber);
-            tracing::dispatcher::with_default(&dispatch, || {
-                emit_log_init_warning(&warning);
-                f();
-            });
-            Some(warning)
-        }
-    }
 }
 
 fn read_jsonl_values(path: &Path) -> Vec<Value> {
@@ -199,8 +157,7 @@ mod redaction {
 
         with_test_subscriber_at_path("info", &log_path, io::sink, || {
             tracing::info!(count = 42, ok = true, secret = "Authorization: Bearer abc");
-        })
-        .expect("subscriber should run");
+        });
 
         let values = read_jsonl_values(&log_path);
         assert_eq!(values.len(), 1);
@@ -224,8 +181,7 @@ mod redaction {
 
         with_test_subscriber_at_path("info", &log_path, io::sink, || {
             tracing::info!(password = "plain-public-value");
-        })
-        .expect("subscriber should run");
+        });
 
         let values = read_jsonl_values(&log_path);
         assert_eq!(values.len(), 1);
@@ -241,8 +197,7 @@ mod redaction {
 
         with_test_subscriber_at_path("info", &log_path, io::sink, || {
             tracing::info!("Bearer abc123 leaked");
-        })
-        .expect("subscriber should run");
+        });
 
         let values = read_jsonl_values(&log_path);
         assert_eq!(values.len(), 1);
@@ -277,8 +232,7 @@ mod redaction {
                 header: "Authorization: Bearer abc456",
             };
             tracing::info!(payload = ?payload);
-        })
-        .expect("subscriber should run");
+        });
 
         let values = read_jsonl_values(&log_path);
         assert_eq!(values.len(), 1);
@@ -304,8 +258,7 @@ mod redaction {
                 error = &error as &(dyn std::error::Error + 'static),
                 "operation failed"
             );
-        })
-        .expect("subscriber should run");
+        });
 
         let stderr_text = String::from_utf8(stderr_buffer.lock().expect("stderr lock").clone())
             .expect("stderr utf8");
@@ -331,8 +284,7 @@ mod redaction {
         with_test_subscriber_at_path("info", &log_path, io::sink, || {
             let payload = b"Authorization: Bearer byte-secret".as_slice();
             tracing::info!(payload = payload);
-        })
-        .expect("subscriber should run");
+        });
 
         let values = read_jsonl_values(&log_path);
         assert_eq!(values.len(), 1);
@@ -369,10 +321,12 @@ mod subscriber {
     use regex::Regex;
     use serde_json::Value;
     use tempfile::tempdir;
+    use tracing::Dispatch;
+    use tracing_subscriber::{Registry, layer::SubscriberExt};
 
     use super::{
-        BufferMakeWriter, ENV_LOCK, EnvVarGuard, read_jsonl_values,
-        with_test_subscriber_allowing_file_failure, with_test_subscriber_at_path,
+        BufferMakeWriter, ENV_LOCK, EnvVarGuard, jsonl_layer_at_path, read_jsonl_values,
+        with_test_subscriber_at_path,
     };
 
     #[test]
@@ -385,8 +339,7 @@ mod subscriber {
         with_test_subscriber_at_path("trace", &log_path, io::sink, || {
             tracing::debug!(target: "orbit_common::filter_probe", accepted = true);
             tracing::trace!(target: "orbit_common::filter_probe", rejected = true);
-        })
-        .expect("subscriber should run");
+        });
 
         let values = read_jsonl_values(&log_path);
         assert_eq!(values.len(), 1);
@@ -404,8 +357,7 @@ mod subscriber {
 
         with_test_subscriber_at_path("info", &log_path, io::sink, || {
             tracing::info!(provider = "codex", stream = "stdout", line = "hi");
-        })
-        .expect("subscriber should run");
+        });
 
         let values = read_jsonl_values(&log_path);
         assert_eq!(values.len(), 1);
@@ -439,8 +391,7 @@ mod subscriber {
                 task_id = "T20260426-2343",
                 line = "hello"
             );
-        })
-        .expect("subscriber should run");
+        });
 
         let values = read_jsonl_values(&log_path);
         assert_eq!(values.len(), 1);
@@ -462,8 +413,7 @@ mod subscriber {
 
         with_test_subscriber_at_path("info", &log_path, io::sink, || {
             tracing::info!(line = "after-sentinel");
-        })
-        .expect("subscriber should run");
+        });
 
         let content = fs::read_to_string(&log_path).expect("read log");
         let lines = content.lines().collect::<Vec<_>>();
@@ -486,13 +436,73 @@ mod subscriber {
 
         with_test_subscriber_at_path("info", &log_path, io::sink, || {
             tracing::info!(line = "private-log");
-        })
-        .expect("subscriber should run");
+        });
 
         assert_eq!(mode(&log_path), 0o600);
         assert_eq!(mode(&orbit_dir), 0o700);
         assert_eq!(mode(&state_dir), 0o700);
         assert_eq!(mode(&log_dir), 0o700);
+    }
+
+    #[test]
+    fn jsonl_layer_does_not_create_or_open_the_file_until_the_first_event() {
+        let _env = ENV_LOCK.lock().expect("lock env");
+        let dir = tempdir().expect("tempdir");
+        let log_dir = dir.path().join("logs");
+        let log_path = log_dir.join("orbit.jsonl");
+
+        let (file_layer, guard) = jsonl_layer_at_path(&log_path);
+        let subscriber = Registry::default().with(file_layer);
+        let dispatch = Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, || {});
+        drop(guard);
+
+        assert!(
+            !log_dir.exists(),
+            "lazy JSONL layer must not create the log directory at construction"
+        );
+        assert!(
+            !log_path.exists(),
+            "lazy JSONL layer must not open the active file at construction"
+        );
+    }
+
+    #[test]
+    fn first_jsonl_event_rolls_an_oversized_active_file() {
+        let _env = ENV_LOCK.lock().expect("lock env");
+        let _rust_log = EnvVarGuard::remove("RUST_LOG");
+        let home = tempdir().expect("home");
+        let _home = EnvVarGuard::set("HOME", home.path().as_os_str().to_owned());
+        let _userprofile = EnvVarGuard::set("USERPROFILE", home.path().as_os_str().to_owned());
+        fs::create_dir_all(home.path().join(".orbit")).expect("orbit dir");
+        fs::write(
+            home.path().join(".orbit/config.toml"),
+            "[runtime]\nlog_retention_days = 7\nlog_max_total_mb = 10\nlog_max_file_mb = 1\n",
+        )
+        .expect("write config");
+
+        let dir = tempdir().expect("tempdir");
+        let log_path = dir.path().join("orbit.jsonl");
+        fs::write(&log_path, vec![b'x'; 2 * 1024 * 1024]).expect("oversized active file");
+
+        with_test_subscriber_at_path("info", &log_path, io::sink, || {
+            tracing::info!(line = "after-roll");
+        });
+
+        let archives: Vec<_> = fs::read_dir(dir.path())
+            .expect("read log dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("orbit.jsonl."))
+            .collect();
+        assert_eq!(
+            archives.len(),
+            1,
+            "oversized active file should roll to one archive, got {archives:?}"
+        );
+        let values = read_jsonl_values(&log_path);
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0]["fields"]["line"], "after-roll");
     }
 
     #[test]
@@ -506,16 +516,17 @@ mod subscriber {
         let stderr = BufferMakeWriter::default();
         let stderr_buffer = stderr.buffer();
 
-        let warning = with_test_subscriber_allowing_file_failure("info", &log_path, stderr, || {
+        with_test_subscriber_at_path("info", &log_path, stderr, || {
             tracing::info!(line = "stderr-still-works");
-        })
-        .expect("file layer should fail");
+        });
 
-        assert!(warning.contains("cannot create JSONL tracing log directory"));
         let stderr_text = String::from_utf8(stderr_buffer.lock().expect("stderr lock").clone())
             .expect("stderr utf8");
-        assert!(stderr_text.contains("failed to initialize JSONL tracing log"));
         assert!(stderr_text.contains("stderr-still-works"));
+        assert!(
+            !log_path.exists(),
+            "a blocked parent must not produce a JSONL file"
+        );
     }
 
     #[cfg(unix)]

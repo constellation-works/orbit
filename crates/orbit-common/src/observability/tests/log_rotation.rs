@@ -8,6 +8,7 @@ use tempfile::TempDir;
 use crate::fs::io::append_private_file;
 use crate::observability::log_rotation::{
     LogRotationConfig, maybe_roll, prune_archives, rotate_and_prune,
+    rotate_if_active_exceeds_budget,
 };
 
 fn archive_names(dir: &std::path::Path) -> Vec<String> {
@@ -133,6 +134,69 @@ fn retention_deletes_oldest_archives_beyond_total_size_budget() {
     assert!(!a.exists(), "oldest archive should be deleted first");
     assert!(!b.exists(), "second-oldest deleted to fit the budget");
     assert!(c.exists(), "newest archive kept within budget");
+}
+
+#[test]
+fn over_budget_active_file_rolls_and_prunes_old_archives() {
+    let dir = TempDir::new().expect("tempdir");
+    let active = dir.path().join("orbit.jsonl");
+    std::fs::write(&active, "x".repeat(100)).expect("write active");
+    let old = dir.path().join("orbit.jsonl.OLD");
+    std::fs::write(&old, "old").expect("write old archive");
+    backdate(&old, Duration::from_secs(10 * 86_400));
+
+    let config = LogRotationConfig {
+        retention_days: 7,
+        max_total_bytes: 10_000_000,
+        max_file_bytes: 50,
+    };
+    rotate_if_active_exceeds_budget(&active, &config);
+
+    assert!(!active.exists(), "oversized active file should roll");
+    assert!(
+        !old.exists(),
+        "full rotate_and_prune must run when the active file is over budget"
+    );
+    assert_eq!(archive_names(dir.path()).len(), 1);
+}
+
+#[test]
+fn within_budget_does_not_prune_archives() {
+    let dir = TempDir::new().expect("tempdir");
+    let active = dir.path().join("orbit.jsonl");
+    std::fs::write(&active, "small\n").expect("write active");
+    let old = dir.path().join("orbit.jsonl.OLD");
+    std::fs::write(&old, "old").expect("write old archive");
+    backdate(&old, Duration::from_secs(10 * 86_400));
+
+    let config = LogRotationConfig {
+        retention_days: 7,
+        max_total_bytes: 10_000_000,
+        max_file_bytes: 1_000,
+    };
+    rotate_if_active_exceeds_budget(&active, &config);
+
+    assert!(active.exists(), "within-budget file must not be rolled");
+    assert!(
+        old.exists(),
+        "must not walk or prune archives when the active file is within budget"
+    );
+}
+
+#[test]
+fn missing_active_file_does_not_walk_archives() {
+    let dir = TempDir::new().expect("tempdir");
+    let active = dir.path().join("orbit.jsonl");
+    let old = dir.path().join("orbit.jsonl.OLD");
+    std::fs::write(&old, "old").expect("write old archive");
+    backdate(&old, Duration::from_secs(10 * 86_400));
+
+    rotate_if_active_exceeds_budget(&active, &LogRotationConfig::default());
+
+    assert!(
+        old.exists(),
+        "a missing active file must skip the archive walk"
+    );
 }
 
 #[test]

@@ -186,6 +186,27 @@ fn repair_crew_flag_suggestion(mut err: clap::error::Error) -> clap::error::Erro
     err
 }
 
+/// Long-lived commands that must reap JSONL archives even when the active
+/// file is within budget. `--help` never reaches here: clap exits in
+/// [`parse_cli`]. Short-lived commands rotate only if a later JSONL write
+/// finds an oversized active file (one `metadata()` check, no directory walk).
+fn command_rotates_jsonl_on_start(command: &command::Commands) -> bool {
+    match command {
+        command::Commands::Mcp(mcp) => matches!(
+            mcp.command,
+            command::mcp::McpSubcommand::Serve(_) | command::mcp::McpSubcommand::Listen(_)
+        ),
+        command::Commands::Web(web) => {
+            matches!(web.command, command::web::WebSubcommand::Serve(_))
+        }
+        command::Commands::Sweep(_) => true,
+        command::Commands::Clock(clock) => {
+            matches!(clock.command, command::clock::ClockSubcommand::Tick(_))
+        }
+        _ => false,
+    }
+}
+
 /// Parse argv into the derived CLI plus the two inputs to mode resolution.
 fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
     let args = command::mcp::normalize_ssh_login_shell_args(std::env::args_os());
@@ -207,6 +228,9 @@ fn main() {
     output::pipe::install_handler();
 
     let (cli, requested_format, legacy_json) = parse_cli();
+    if command_rotates_jsonl_on_start(&cli.command) {
+        orbit_common::observability::logging::rotate_global_jsonl_best_effort();
+    }
     // Resolved once per invocation, before dispatch, and passed to the one
     // renderer that consumes it. Nothing downstream re-derives these answers.
     let sink = OutputSink::from_process(requested_format, legacy_json);
