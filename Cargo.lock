@@ -2284,6 +2284,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-subscriber",
+ "wait-timeout",
 ]
 
 [[package]]
