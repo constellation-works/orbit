@@ -266,6 +266,8 @@ impl OrbitRuntime {
     }
 
     /// Refreshes the read-side token scoreboard from persisted invocation telemetry.
+    ///
+    /// No-op when the invocation watermark matches the last successful write.
     pub(crate) fn refresh_token_scoreboard(&self) -> Result<(), OrbitError> {
         let store = open_invocation_store(self)?;
         orbit_store::token_scoreboard::write_token_scoreboard(

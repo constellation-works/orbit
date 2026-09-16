@@ -35,7 +35,9 @@ pub(crate) struct RuntimeDispatch<'a> {
 }
 
 /// Refresh each discovered workspace's read-side token projection once per
-/// successful sweep. A stale projection must not stop routine evaluation.
+/// successful sweep. The writer skips the rewrite when no invocation has
+/// landed since the last stamp. A stale projection must not stop routine
+/// evaluation.
 pub(crate) fn refresh_discovered_token_scoreboards(workspaces: &[(Workspace, OrbitRuntime)]) {
     for (workspace, runtime) in workspaces {
         if let Err(error) = runtime.refresh_token_scoreboard() {
