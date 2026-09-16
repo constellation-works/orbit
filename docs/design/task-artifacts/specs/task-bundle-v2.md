@@ -230,7 +230,7 @@ The file bundle does not provide all-or-nothing transactions across Markdown sid
 - `task.yaml` remains canonical for structured metadata.
 - JSONL tail corruption is repaired only at the final partial row; corruption before the tail is an error.
 - The last event with `to_status` must match `task.yaml.status`; a mismatch on a *settled* bundle is corruption and must fail reads. A mismatch observed while a writer is mid-publication is not corruption and must not be observable at all — see [Concurrent reads and lifecycle writes](#concurrent-reads-and-lifecycle-writes).
-- Generated indexes are invalid when count or `updated_at` stamps differ from registered bundle envelopes and must be rebuilt from bundles.
+- Generated indexes are invalid when the row count, `updated_at`, or any indexed listing field (status, priority, job run, `created_at`, tags) differs from registered bundle envelopes and must be rebuilt from bundles.
 - Artifact manifest entries must reference existing relative files with matching size and SHA-256; unmanifested files are ignored until a future compaction/prune command removes them.
 
 Malformed registered bundles surface as a typed `task_bundle_corrupt`
@@ -322,10 +322,14 @@ Last revised by `claude` on 2026-08-09 for [ORB-10343].
 ## Bounded list reads
 
 ORB-11205: bounded task queries validate the generated index against every
-registered, settled envelope, then apply metadata predicates and newest-first
-ordering (task ID ascending for ties) before loading bundles. Exact totals
-count metadata matches; they do not certify off-page body, event, or artifact
-integrity. A selected bundle with envelope, body, or event-log damage fails
+registered, settled envelope, then select from the index: SQL answers the
+status, priority, job-run, tag and continuation predicates, newest-first
+ordering (task ID ascending for ties), the limit and the total, so only the
+selected envelopes leave the parse cache and only the selected bundles load.
+Predicates the index does not project (search, type, parent, external
+references) narrow the indexed candidates in memory before the limit. Exact
+totals count metadata matches; they do not certify off-page body, event, or
+artifact integrity. A selected bundle with envelope, body, or event-log damage fails
 the request and is never replaced with another row. Listing and search
 materialization use a locked lightweight bundle read: they still apply the
 canonical bundle lock and event/envelope status consistency, but they do not
@@ -336,19 +340,30 @@ full-bundle verification.
 Status, type, priority, parent, job run, tags and external-reference predicates
 use metadata. Readiness and context-path predicates currently use an explicit
 residual fallback, hydrating metadata matches before filtering and limiting.
+The default status-aware listing (`orbit task list`, MCP `task.list`) is one
+such query with terminal statuses ordered last, not two queries: the index
+orders non-terminal tasks before done, archived and rejected ones, each
+partition newest first, and the limit spans both.
 Missing/stale indexes require a lightweight bundle scan (task fields only) and
 best-effort index repair; task-field errors encountered reading that scan
 propagate. An update racing selected-row hydration causes one rescan with
 filter-before-limit semantics. In-flight creation/deletion retains the
 existing list-read tolerance.
 
+Each page carries the dependency-status projection its rows need: every task
+in the listed workspace plus each relation target the selected envelopes name,
+resolved wherever it is registered (plus one indexed task per otherwise
+unrepresented foreign prefix, so a missing target under a known prefix keeps
+its `missing` label). Nothing else from other workspaces is projected.
+
 Dashboard list and detail projections retain comments, history and the sorted
 artifact manifest from each validated bundle. The aggregate selects the global
 newest 50 from workspace metadata before hydration and shares one request-scoped
 global dependency-status projection. Storage and rendering run on the blocking
 pool, including cold workspace selection and runtime construction in the
-shared workspace extractor. Envelope validation and dependency-status work remain linear in corpus
-size; there is no persistent validation cache or content integrity audit added.
+shared workspace extractor. Envelope validation remains linear in the
+workspace's corpus size; there is no persistent validation cache or content
+integrity audit added.
 
 ### Reproducing the bounded-read measurements
 

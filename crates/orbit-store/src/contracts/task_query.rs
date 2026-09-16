@@ -5,6 +5,8 @@ use orbit_types::task::{
     TaskPriority, TaskRelationType, TaskStatus, TaskType, normalize_task_tags,
 };
 
+use super::TaskIndexFilter;
+
 /// Predicates answered by envelope metadata. `None` statuses means all statuses.
 #[derive(Debug, Clone, Default)]
 pub struct TaskListFilter {
@@ -20,6 +22,11 @@ pub struct TaskListFilter {
     pub tags: Vec<String>,
     pub external_ref: Option<ExternalRef>,
     pub has_external_ref_system: Option<String>,
+    /// Order tasks in a terminal status (done, archived, rejected) after the
+    /// rest, each partition newest first. This is the status-aware default
+    /// listing; `scan_before` continuation assumes the canonical order and is
+    /// not combined with it.
+    pub terminal_last: bool,
 }
 
 impl TaskListFilter {
@@ -72,6 +79,34 @@ impl TaskListFilter {
                     .any(|candidate| candidate.system == *value)
             })
     }
+
+    /// The predicates the generated index answers in SQL. Whatever `matches`
+    /// checks beyond these is applied to the selected envelopes afterwards.
+    pub(crate) fn index_filter(&self, excluded_ids: Vec<String>) -> TaskIndexFilter {
+        TaskIndexFilter {
+            statuses: self.statuses.clone().unwrap_or_default(),
+            priority: self.priority,
+            job_run_id: self.job_run_id.clone(),
+            tags: self.tags.clone(),
+            scan_before: self.scan_before.clone(),
+            excluded_ids,
+        }
+    }
+
+    /// Whether [`index_filter`](Self::index_filter) covers every predicate, so
+    /// the index can also bound the selection with `LIMIT` and count the total.
+    /// An explicit empty status set matches nothing and is left to `matches`.
+    pub(crate) fn is_fully_indexed(&self) -> bool {
+        self.search.is_none()
+            && self.task_type.is_none()
+            && self.parent_id.is_none()
+            && self.external_ref.is_none()
+            && self.has_external_ref_system.is_none()
+            && self
+                .statuses
+                .as_ref()
+                .is_none_or(|values| !values.is_empty())
+    }
 }
 
 /// Ordered metadata matches. Counts do not certify off-page bundle integrity.
@@ -94,7 +129,9 @@ pub struct TaskRow {
 pub struct TaskPage {
     pub items: Vec<TaskRow>,
     pub total: usize,
-    /// Global dependency statuses captured after index freshness/rebuild work.
+    /// Dependency statuses captured after index freshness/rebuild work: every
+    /// task in the listed workspace plus each relation target the hydrated
+    /// rows name, wherever that target is registered.
     pub status_by_id: std::collections::BTreeMap<String, TaskStatus>,
 }
 

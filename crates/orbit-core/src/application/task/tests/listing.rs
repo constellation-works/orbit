@@ -116,3 +116,66 @@ fn replica_visibility_is_preserved_for_candidates_and_bounded_rows() {
     assert!(page.items.is_empty());
     assert!(replica.get_listed_task_row(&task.id).unwrap().is_none());
 }
+
+#[test]
+fn status_aware_listing_fills_the_page_with_active_work_before_terminal_tasks() {
+    let (_root, runtime) = test_runtime();
+    let runtime = runtime.with_actor(crate::ActorIdentity::human("human"));
+    let mut ids = Vec::new();
+    for (index, status) in [
+        TaskStatus::Done,
+        TaskStatus::Backlog,
+        TaskStatus::Rejected,
+        TaskStatus::Review,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: format!("Task {index}"),
+                description: "Fixture".to_string(),
+                status: Some(status),
+                ..Default::default()
+            })
+            .unwrap();
+        ids.push(task.id);
+    }
+
+    let page = runtime
+        .query_task_rows_status_aware(&TaskListQuery {
+            limit: 3,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(page.total, 4);
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|row| row.task.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![ids[3].as_str(), ids[1].as_str(), ids[2].as_str()],
+        "non-terminal newest first, then terminal newest first"
+    );
+    assert_eq!(page.status_by_id.len(), 4);
+
+    // An explicit status filter keeps the canonical newest-first order.
+    let page = runtime
+        .query_task_rows_status_aware(&TaskListQuery {
+            filter: TaskListFilter {
+                statuses: Some(vec![TaskStatus::Done, TaskStatus::Backlog]),
+                ..Default::default()
+            },
+            limit: 3,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(page.total, 2);
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|row| row.task.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![ids[1].as_str(), ids[0].as_str()]
+    );
+}
