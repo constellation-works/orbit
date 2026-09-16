@@ -3,7 +3,10 @@ use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_raw_string, optional_string, optional_string_alias,
     optional_string_list_alias, required_string,
 };
-use orbit_types::task::{TaskPriority, TaskStatus, validate_relative_artifact_path};
+use orbit_types::task::{
+    TaskPriority, TaskStatus, is_task_show_projection_field, unknown_task_show_field_message,
+    validate_relative_artifact_path,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -14,8 +17,8 @@ use super::input::{
     parse_relations, parse_task_priority, parse_task_status, parse_task_type,
 };
 use super::json::{
-    serialize_task, serialize_task_artifact_read, serialize_task_lint_report, task_fields_to_json,
-    task_to_json,
+    serialize_task, serialize_task_artifact_read, serialize_task_lint_report,
+    serialize_task_write_response, task_fields_to_json, task_to_json,
 };
 
 pub(super) fn add(
@@ -26,6 +29,7 @@ pub(super) fn add(
 ) -> Result<Value, OrbitError> {
     let title = required_string(&input, &["title"], "title")?;
     let description = required_string(&input, &["description"], "description")?;
+    let response_fields = write_response_fields(&input)?;
     // `workspace` is required for the existing MCP/CLI routing that selects
     // this runtime before dispatch reaches here; context selectors always
     // canonicalize against the repository root regardless of its value.
@@ -83,7 +87,7 @@ pub(super) fn add(
         agent,
         model,
     )?;
-    let mut response = serialize_task(runtime, &task)?;
+    let mut response = serialize_task_write_response(runtime, &task, response_fields.as_deref())?;
     warnings.extend(compute_task_add_warnings(
         &raw_context_files,
         task.task_type,
@@ -163,6 +167,7 @@ pub(super) fn reject(
 ) -> Result<Value, OrbitError> {
     let id = required_string(&input, &["id"], "id")?;
     let note = required_string(&input, &["note"], "note")?;
+    let response_fields = write_response_fields(&input)?;
     let task = runtime.reject_task_with_identity(
         &id,
         note,
@@ -170,7 +175,7 @@ pub(super) fn reject(
         agent,
         model,
     )?;
-    serialize_task(runtime, &task)
+    serialize_task_write_response(runtime, &task, response_fields.as_deref())
 }
 
 pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
@@ -280,6 +285,7 @@ pub(super) fn update(
         ));
     }
     let id = required_string(&input, &["id"], "id")?;
+    let response_fields = write_response_fields(&input)?;
     let requested_status = optional_string(&input, "status")?
         .map(|value| parse_task_status("status", &value))
         .transpose()?;
@@ -313,7 +319,7 @@ pub(super) fn update(
                     )?
                 }
             };
-            return serialize_task(runtime, &task);
+            return serialize_task_write_response(runtime, &task, response_fields.as_deref());
         }
     }
     if input.get("note").is_some() {
@@ -330,7 +336,7 @@ pub(super) fn update(
         model,
         owner.map(|owner| owner.owner_run_id),
     )?;
-    serialize_task(runtime, &task)
+    serialize_task_write_response(runtime, &task, response_fields.as_deref())
 }
 
 enum GuardedLifecycleWrite {
@@ -338,7 +344,33 @@ enum GuardedLifecycleWrite {
     Start,
 }
 
-const APPROVAL_ALLOWED_FIELDS: &[&str] = &["id", "status", "note", "comment", "model", "workspace"];
+/// Read-only projection controls are accepted by mutating task tools solely
+/// for shaping their response. In particular, `comments` and `history` are
+/// omitted from the default write response and can be requested explicitly.
+fn write_response_fields(input: &Value) -> Result<Option<Vec<String>>, OrbitError> {
+    let fields = optional_csv_or_string_list_alias(input, &["fields", "field"])?;
+    if let Some(fields) = &fields
+        && let Some(unknown) = fields
+            .iter()
+            .find(|field| !is_task_show_projection_field(field))
+    {
+        return Err(OrbitError::InvalidInput(unknown_task_show_field_message(
+            unknown,
+        )));
+    }
+    Ok(fields)
+}
+
+const APPROVAL_ALLOWED_FIELDS: &[&str] = &[
+    "id",
+    "status",
+    "note",
+    "comment",
+    "model",
+    "workspace",
+    "fields",
+    "field",
+];
 
 /// Choose the special transition body only when this write actually needs it.
 ///
