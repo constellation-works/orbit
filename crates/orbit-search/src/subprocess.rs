@@ -256,9 +256,9 @@ impl SubprocessEmbedder {
                 id: self.next_request_id(),
                 texts,
             },
-            RpcRequest::TokenCount { text, .. } => RpcRequest::TokenCount {
+            RpcRequest::TokenCount { texts, .. } => RpcRequest::TokenCount {
                 id: self.next_request_id(),
-                text,
+                texts,
             },
             RpcRequest::TokenBoundaries { text, .. } => RpcRequest::TokenBoundaries {
                 id: self.next_request_id(),
@@ -640,12 +640,26 @@ impl Embedder for SubprocessEmbedder {
     }
 
     fn token_count(&self, text: &str) -> Result<usize, OrbitError> {
+        let mut counts = self.token_counts(&[text])?;
+        counts.pop().ok_or_else(|| {
+            OrbitError::AgentProtocolViolation(
+                "companion returned no token count for one input".to_string(),
+            )
+        })
+    }
+
+    fn token_counts(&self, texts: &[&str]) -> Result<Vec<usize>, OrbitError> {
         let result = self.request(RpcRequest::TokenCount {
             id: 0,
-            text: text.to_string(),
+            texts: texts.iter().map(|text| (*text).to_string()).collect(),
         })?;
         match result {
-            RpcResult::TokenCount { tokens } => Ok(tokens),
+            RpcResult::TokenCount { tokens } if tokens.len() == texts.len() => Ok(tokens),
+            RpcResult::TokenCount { tokens } => Err(OrbitError::AgentProtocolViolation(format!(
+                "companion returned {} token counts for {} inputs",
+                tokens.len(),
+                texts.len()
+            ))),
             _ => Err(OrbitError::AgentProtocolViolation(
                 "companion returned non-token_count response".to_string(),
             )),

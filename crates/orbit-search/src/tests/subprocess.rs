@@ -82,6 +82,8 @@ while read -r line; do
       printf '{{"id":%s,"result":{{"model_id":"fake","dim":2,"max_input_tokens":16,"version":null}}}}\n' "$id" ;;
     *'"method":"embed"'*)
       {embed_body} ;;
+    *'"method":"token_count"'*)
+      printf '{{"id":%s,"result":{{"tokens":[1,2]}}}}\n' "$id" ;;
     *'"method":"exit"'*)
       printf '{{"id":%s,"result":{{"ok":true}}}}\n' "$id"; exit 0 ;;
     *)
@@ -93,6 +95,24 @@ done
         std::fs::write(&path, script).expect("write fake companion");
         chmod_executable(&path);
         path
+    }
+
+    #[test]
+    fn token_counts_use_one_batched_companion_request() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let script = write_companion_script(
+            temp.path(),
+            r#"printf '{"id":%s,"result":{"vectors":[]}}\n' "$id""#,
+        );
+        let embedder =
+            SubprocessEmbedder::with_path_and_model(script, "fake").expect("construct embedder");
+
+        assert_eq!(
+            embedder
+                .token_counts(&["one", "two words"])
+                .expect("batched token count"),
+            [1, 2]
+        );
     }
 
     #[test]

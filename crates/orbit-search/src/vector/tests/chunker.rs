@@ -41,6 +41,14 @@ impl Embedder for CountingEmbedder {
         Ok(text.split_whitespace().count().max(1))
     }
 
+    fn token_counts(&self, texts: &[&str]) -> Result<Vec<usize>, OrbitError> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Ok(texts
+            .iter()
+            .map(|text| text.split_whitespace().count().max(1))
+            .collect())
+    }
+
     fn token_boundaries(&self, text: &str) -> Result<Vec<usize>, OrbitError> {
         Ok(word_ends(text))
     }
@@ -82,6 +90,43 @@ impl Embedder for ContextSensitiveEmbedder {
     }
 }
 
+struct CharacterTokenEmbedder;
+
+impl Embedder for CharacterTokenEmbedder {
+    fn model_id(&self) -> &str {
+        "character-token"
+    }
+
+    fn dim(&self) -> usize {
+        1
+    }
+
+    fn max_input_tokens(&self) -> usize {
+        512
+    }
+
+    fn embed(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, OrbitError> {
+        Ok(Vec::new())
+    }
+
+    fn token_count(&self, text: &str) -> Result<usize, OrbitError> {
+        Ok(text
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .count()
+            .max(1))
+    }
+
+    fn token_boundaries(&self, text: &str) -> Result<Vec<usize>, OrbitError> {
+        Ok(text
+            .char_indices()
+            .filter_map(|(index, character)| {
+                (!character.is_whitespace()).then_some(index + character.len_utf8())
+            })
+            .collect())
+    }
+}
+
 fn word_ends(text: &str) -> Vec<usize> {
     let mut ends = Vec::new();
     let mut in_word = false;
@@ -108,10 +153,14 @@ fn paragraph_chunker_overlaps_at_boundaries() {
     let chunks = chunk_text(text, &embedder, 5, 3).unwrap();
 
     assert_eq!(chunks.len(), 3);
-    assert!(chunks[0].contains("one two three"));
-    assert!(chunks[1].contains("one two three"));
-    assert!(chunks[1].contains("four five six"));
-    assert!(chunks[2].contains("four five six"));
+    assert_eq!(
+        chunks,
+        [
+            "one two three",
+            "one two three\n\nfour five six",
+            "four five six\n\nseven eight nine",
+        ]
+    );
 }
 
 /// Flushing the buffer ahead of an over-long paragraph must reset the token
@@ -146,12 +195,39 @@ fn long_paragraph_uses_at_most_one_hundred_token_count_calls() {
 
     let chunks = chunk_text(&text, &embedder, 100, 0).unwrap();
 
-    // The old expanding-prefix loop made 5,052 token-count calls here:
-    // one whole-text count, one paragraph count, and 101 per 100-word chunk.
-    // Exact token boundaries reduce the measured total to 52; keep 100 as a
-    // generous regression bound for this fixture.
+    // Preserve the established no-overlap fixture boundaries while keeping
+    // the earlier preferred-boundary optimization covered.
     assert_eq!(chunks.len(), 50);
     assert!(embedder.calls() <= 100, "calls: {}", embedder.calls());
+}
+
+#[test]
+fn long_paragraph_with_overlap_scales_token_count_calls_with_chunks() {
+    let embedder = CountingEmbedder::default();
+    let text = (0..5_000)
+        .map(|index| format!("word{index}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let chunks = chunk_text(&text, &embedder, 100, 50).unwrap();
+
+    // One whole-text count, one batched paragraph count, and one validation per
+    // emitted chunk. Overlap placement uses the already-fetched token
+    // boundaries and performs no scalar counts.
+    assert_eq!(chunks.len(), 99);
+    assert!(
+        embedder.calls() <= chunks.len() + 2,
+        "{} calls for {} chunks",
+        embedder.calls(),
+        chunks.len()
+    );
+}
+
+#[test]
+fn long_paragraph_overlap_starts_after_a_partly_covered_word() {
+    let chunks = chunk_text("aa bb cc dd", &CharacterTokenEmbedder, 4, 3).unwrap();
+
+    assert_eq!(chunks, ["aa bb", "bb cc", "cc dd"]);
 }
 
 #[test]
@@ -163,6 +239,11 @@ fn validates_context_sensitive_chunks_against_the_model_limit() {
         chunks
             .iter()
             .all(|chunk| embedder.token_count(chunk).unwrap() <= 3)
+    );
+    assert_eq!(
+        chunks,
+        ["alpha beta", "gamma delta epsilon"],
+        "context-sensitive shrink must preserve the established boundaries"
     );
     assert_eq!(
         chunks
@@ -179,8 +260,10 @@ fn long_paragraph_handles_unicode_empty_text_and_an_oversized_word() {
 
     let unicode = "héllo 世界 alpha beta gamma";
     let chunks = chunk_text(unicode, &embedder, 2, 1).unwrap();
-    assert!(chunks.iter().any(|chunk| chunk.contains("héllo 世界")));
-    assert!(chunks.iter().any(|chunk| chunk.contains("gamma")));
+    assert_eq!(
+        chunks,
+        ["héllo 世界", "世界 alpha", "alpha beta", "beta gamma"]
+    );
     assert_eq!(
         chunk_text("", &embedder, 2, 1).unwrap(),
         vec![String::new()]
