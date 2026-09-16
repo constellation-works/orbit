@@ -71,6 +71,31 @@ pub fn run_step(
     root_argument: Option<&Path>,
     args: &[&str],
 ) -> ConvergenceStep {
+    run_step_reporting(executable, cwd, root_argument, args, false)
+}
+
+/// [`run_step`] for a step whose own output is the report.
+///
+/// Most convergence steps are silent when they work, so their success needs no
+/// detail. A step that repairs host state — rewriting the clock unit at a
+/// moved binary path — has to say what it changed, or the operator learns
+/// nothing from a bare `ok`.
+pub fn run_reporting_step(
+    executable: &Path,
+    cwd: &Path,
+    root_argument: Option<&Path>,
+    args: &[&str],
+) -> ConvergenceStep {
+    run_step_reporting(executable, cwd, root_argument, args, true)
+}
+
+fn run_step_reporting(
+    executable: &Path,
+    cwd: &Path,
+    root_argument: Option<&Path>,
+    args: &[&str],
+    report_output: bool,
+) -> ConvergenceStep {
     let command = args.join(" ");
     let mut process = Command::new(executable);
     if let Some(root) = root_argument {
@@ -82,7 +107,9 @@ pub fn run_step(
             command,
             status: StepStatus::Succeeded,
             exit_code: output.status.code(),
-            detail: None,
+            detail: report_output
+                .then(|| first_line(&String::from_utf8_lossy(&output.stdout)))
+                .flatten(),
         },
         Ok(output) => ConvergenceStep {
             command,
@@ -179,6 +206,15 @@ fn run_process(command: &mut Command) -> std::io::Result<Output> {
             other => return other,
         }
     }
+}
+
+/// The first non-empty line of a step's own report.
+fn first_line(value: &str) -> Option<String> {
+    value
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(truncate)
 }
 
 fn truncate(value: &str) -> String {

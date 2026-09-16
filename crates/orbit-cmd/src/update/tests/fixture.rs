@@ -81,6 +81,10 @@ pub fn test_trusted_keys() -> &'static [TrustedReleaseKey] {
 /// The release target the fixture publishes for.
 pub const TEST_TARGET: &str = "x86_64-unknown-linux-gnu";
 
+/// What the fake binary's `clock repair` reports on stdout, standing in for a
+/// real rewrite of a unit whose program had moved.
+pub const CLOCK_REPAIR_REPORT: &str = "rewrote clock unit ~/Library/LaunchAgents/com.orbit.sweep.plist: it ran /opt/homebrew/bin/orbit, which no longer exists, and now runs ~/.orbit/bin/orbit (reloaded)";
+
 /// How the fake replacement binary behaves when it is run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FakeBinary {
@@ -349,6 +353,7 @@ fn script(version: &str, log: &Path, behavior: FakeBinary) -> Vec<u8> {
          all_args=\"$*\"\n\
          if [ \"$1\" = --root ]; then shift 2; fi\n\
          echo \"{version}: $all_args\" >> '{log}'\n\
+         if [ \"$1\" = clock ]; then echo '{CLOCK_REPAIR_REPORT}'; fi\n\
          {failure}exit 0\n",
         log = log.display()
     )

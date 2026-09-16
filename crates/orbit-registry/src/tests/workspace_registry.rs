@@ -754,6 +754,21 @@ fn registry_io_rejects_a_symlinked_registry_file() {
 }
 
 #[test]
+fn loading_from_a_missing_root_reads_an_empty_registry_without_creating_it() {
+    let root = tempdir().expect("tempdir");
+    let registry_dir = root.path().join("custom-orbit");
+    let path = registry_dir.join("workspaces.json");
+
+    let registry = load_registry_from(&path).expect("missing root reads as empty");
+    assert!(registry.workspaces.is_empty());
+
+    let loaded = load_registry_from_read_only(&path).expect("missing root reads as empty");
+    assert!(loaded.registry.workspaces.is_empty());
+    assert!(!loaded.migration_required);
+    assert!(!registry_dir.exists(), "read must not create the root");
+}
+
+#[test]
 fn registry_lock_rejects_a_missing_parent_without_creating_it() {
     let root = tempdir().expect("tempdir");
     let registry_dir = root.path().join("custom-orbit");

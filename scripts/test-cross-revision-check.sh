@@ -9,7 +9,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HELPER="$ROOT/scripts/cross-revision-check.sh"
-TMP="$(mktemp -d)"
+# Physical path: the helper resolves --workdir with `pwd -P`, and macOS
+# mktemp hands out /var/folders/... which is a symlink to /private/var/...
+TMP="$(cd "$(mktemp -d)" && pwd -P)"
 SRC="$TMP/src"
 START_EPOCH="$(date +%s)"
 PRESERVED_WORK=""

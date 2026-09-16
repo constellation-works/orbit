@@ -1,14 +1,16 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_types::task::TaskStatus;
 
 use super::*;
 use crate::application::search::federated::{
-    MAX_FEDERATED_WORKSPACES, apply_workspace_cap, describe_model_mismatch,
-    ensure_federated_scope_permitted, ensure_federated_scope_supported, with_managed_run_override,
+    MAX_FEDERATED_CONCURRENCY, MAX_FEDERATED_WORKSPACES, apply_workspace_cap,
+    describe_model_mismatch, ensure_federated_scope_permitted, ensure_federated_scope_supported,
+    federated_worker_count, with_managed_run_override,
 };
 use crate::runtime::workspace_catalog::{
     FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope,
@@ -43,6 +45,79 @@ impl WorkspaceCatalog for FakeCatalog {
             .iter()
             .find(|(candidate, _)| candidate.workspace_id == target.workspace_id)
             .and_then(|(_, runtime)| runtime.clone())
+            .ok_or_else(|| {
+                OrbitError::WorkspaceError(format!("checkout for '{}' is gone", target.name))
+            })
+    }
+}
+
+/// A catalog whose `open` blocks until `expected` opens are in flight, so a
+/// serial fan-out cannot satisfy it and a concurrent one settles immediately.
+///
+/// The wait is bounded: a regression to serial execution fails the assertion
+/// on the observed peak rather than hanging the suite.
+struct BarrierCatalog {
+    entries: Vec<(FederatedWorkspaceTarget, OrbitRuntime)>,
+    expected: usize,
+    state: Mutex<InFlight>,
+    settled: Condvar,
+}
+
+#[derive(Default)]
+struct InFlight {
+    current: usize,
+    peak: usize,
+}
+
+impl BarrierCatalog {
+    fn new(entries: Vec<(FederatedWorkspaceTarget, OrbitRuntime)>, expected: usize) -> Arc<Self> {
+        Arc::new(Self {
+            entries,
+            expected,
+            state: Mutex::new(InFlight::default()),
+            settled: Condvar::new(),
+        })
+    }
+
+    fn peak(&self) -> usize {
+        self.state.lock().expect("in-flight state").peak
+    }
+}
+
+impl WorkspaceCatalog for BarrierCatalog {
+    fn resolve_scope(
+        &self,
+        _scope: &WorkspaceScope,
+    ) -> Result<Vec<FederatedWorkspaceTarget>, OrbitError> {
+        Ok(self
+            .entries
+            .iter()
+            .map(|(target, _)| target.clone())
+            .collect())
+    }
+
+    fn open(&self, target: &FederatedWorkspaceTarget) -> Result<OrbitRuntime, OrbitError> {
+        let mut state = self.state.lock().expect("in-flight state");
+        state.current += 1;
+        state.peak = state.peak.max(state.current);
+        self.settled.notify_all();
+        while state.current < self.expected {
+            let (guard, timeout) = self
+                .settled
+                .wait_timeout(state, Duration::from_secs(5))
+                .expect("in-flight state");
+            state = guard;
+            if timeout.timed_out() {
+                break;
+            }
+        }
+        state.current -= 1;
+        drop(state);
+
+        self.entries
+            .iter()
+            .find(|(candidate, _)| candidate.workspace_id == target.workspace_id)
+            .map(|(_, runtime)| runtime.clone())
             .ok_or_else(|| {
                 OrbitError::WorkspaceError(format!("checkout for '{}' is gone", target.name))
             })
@@ -264,6 +339,53 @@ fn an_empty_scope_returns_no_hits_and_says_so() {
             .iter()
             .any(|note| note.contains("no registered workspace"))
     );
+}
+
+#[test]
+fn per_workspace_queries_run_concurrently() {
+    let query = "concurrent";
+    let entries = (0..4)
+        .map(|index| (target(&format!("ws{index}")), seeded_runtime(query, 2)))
+        .collect::<Vec<_>>();
+    let expected = entries.len();
+    let catalog = BarrierCatalog::new(entries, expected);
+    let runtime = OrbitRuntime::in_memory()
+        .expect("hub runtime")
+        .with_workspace_catalog(Arc::clone(&catalog) as Arc<dyn WorkspaceCatalog>);
+
+    let response = with_managed_run_override(false, || {
+        runtime
+            .global_search(federated_query(query, 8))
+            .expect("federated search")
+    });
+
+    assert_eq!(
+        catalog.peak(),
+        expected,
+        "every workspace query must be able to run at once under the pool bound"
+    );
+    // Ordering is the target order, not the completion order.
+    assert_eq!(
+        response
+            .workspaces
+            .iter()
+            .map(|report| report.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ws0", "ws1", "ws2", "ws3"]
+    );
+}
+
+#[test]
+fn the_fan_out_pool_is_bounded_and_never_wider_than_the_scope() {
+    assert_eq!(federated_worker_count(0), 0);
+    assert_eq!(federated_worker_count(1), 1);
+    assert_eq!(federated_worker_count(3), 3);
+    assert_eq!(
+        federated_worker_count(MAX_FEDERATED_WORKSPACES),
+        MAX_FEDERATED_CONCURRENCY,
+        "the widest possible scope still runs on a bounded pool"
+    );
+    const { assert!(MAX_FEDERATED_CONCURRENCY <= MAX_FEDERATED_WORKSPACES) };
 }
 
 #[test]

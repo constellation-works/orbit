@@ -41,10 +41,18 @@ orbit clock status
 orbit clock set --cadence-seconds 300   # whole-minute cadence, in seconds
 orbit clock pause
 orbit clock enable
+orbit clock repair                      # repoint the unit at this binary
 ```
 
 Pausing the clock stops scheduled ticks. A manual `orbit clock tick` still works,
 and it does not change any individual routine's pause state.
+
+The installed unit names the orbit binary by absolute path, so installing orbit
+somewhere else — or removing the install the unit names — stops unattended
+sweeps while `orbit clock status` still reports the clock as enabled.
+`orbit update` repairs the unit itself as its last step; `orbit clock repair` is
+the same repair for a binary another package manager installed. Repair rewrites
+and re-registers the unit; it never resumes a clock you paused.
 
 You can always run the pass by hand, which is the right way to try a change:
 

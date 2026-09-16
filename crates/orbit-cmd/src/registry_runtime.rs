@@ -275,9 +275,25 @@ impl RegisteredRuntimeFactory {
         global_root: &Path,
         selector: &str,
     ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
-        let registry_path = workspace_registry::registry_path_for(global_root);
-        let registry = load_registry_for_selector_resolution(&registry_path)?;
-        let (workspace, checkout, local_root) = resolve_cli_workspace_binding(&registry, selector)?;
+        let registry = Self::load_registry_for_selectors(global_root)?;
+        Self::resolve_selector_in(&registry, selector)
+    }
+
+    /// The registry read [`Self::resolve_workspace_selector`] performs, exposed
+    /// so a caller resolving several selectors at once reads `workspaces.json`
+    /// once rather than once per selector [DANI-10365].
+    pub(crate) fn load_registry_for_selectors(
+        global_root: &Path,
+    ) -> Result<WorkspaceRegistry, OrbitError> {
+        load_registry_for_selector_resolution(&workspace_registry::registry_path_for(global_root))
+    }
+
+    /// [`Self::resolve_workspace_selector`] against a registry already loaded.
+    pub(crate) fn resolve_selector_in(
+        registry: &WorkspaceRegistry,
+        selector: &str,
+    ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
+        let (workspace, checkout, local_root) = resolve_cli_workspace_binding(registry, selector)?;
         if workspace.status != WorkspaceStatus::Active {
             return Err(inactive_cli_workspace(workspace, checkout));
         }
