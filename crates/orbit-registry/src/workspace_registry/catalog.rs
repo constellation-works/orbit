@@ -578,20 +578,75 @@ pub struct WorkspaceRegistryHostContext {
 }
 
 /// Parse, migrate, and validate one workspace registry JSON document.
+///
+/// The happy path is one typed deserialize straight from the text: the
+/// document is not materialised as a [`Value`] first, so every `orbit`
+/// invocation parses `workspaces.json` once [DANI-10371]. Only a document the
+/// typed pass rejects is re-read through [`RegistryProbe`], which keeps the
+/// registry-worded diagnostics for versions and role tokens and the legacy
+/// migration branch.
 pub fn parse_workspace_registry(
     content: &str,
     context: &WorkspaceRegistryHostContext,
 ) -> Result<(WorkspaceRegistry, bool), OrbitError> {
-    let value: Value = serde_json::from_str(content)
-        .map_err(|error| invalid_registry(format!("malformed JSON: {error}")))?;
-    let Some(version_value) = value.get("schema_version") else {
-        let mut migrated = migrate_legacy_registry(value, context)?;
+    let mut registry: WorkspaceRegistry = match serde_json::from_str(content) {
+        Ok(registry) => registry,
+        Err(error) => return diagnose_registry_document(content, context, error),
+    };
+    check_schema_version(u64::from(registry.schema_version))?;
+    let changed = validate_workspace_registry(&mut registry, context)?;
+    Ok((registry, changed))
+}
+
+/// The fields checked before a typed deserialize is trusted to explain a
+/// failure: a missing `schema_version` selects legacy migration, and a version
+/// or role-token problem is reported in registry terms rather than as a serde
+/// variant error.
+#[derive(Debug, Deserialize)]
+struct RegistryProbe {
+    schema_version: Option<Value>,
+    #[serde(default)]
+    checkouts: Vec<CheckoutRoleProbe>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckoutRoleProbe {
+    workspace_id: Option<String>,
+    role: Option<Value>,
+}
+
+/// Explain why the typed deserialize of `content` failed, or migrate it when
+/// it is a legacy document. `typed_error` is the answer when the probe finds
+/// nothing more specific to say.
+fn diagnose_registry_document(
+    content: &str,
+    context: &WorkspaceRegistryHostContext,
+    typed_error: serde_json::Error,
+) -> Result<(WorkspaceRegistry, bool), OrbitError> {
+    if !typed_error.is_data() {
+        return Err(invalid_registry(format!("malformed JSON: {typed_error}")));
+    }
+    let probe: RegistryProbe = serde_json::from_str(content).map_err(|error| {
+        if error.is_data() {
+            invalid_registry(error.to_string())
+        } else {
+            invalid_registry(format!("malformed JSON: {error}"))
+        }
+    })?;
+    let Some(version_value) = probe.schema_version else {
+        let mut migrated = migrate_legacy_registry(content, context)?;
         validate_workspace_registry(&mut migrated, context)?;
         return Ok((migrated, true));
     };
     let version = version_value.as_u64().ok_or_else(|| {
         invalid_registry("schema_version must be a non-negative integer".to_string())
     })?;
+    check_schema_version(version)?;
+    validate_role_tokens(&probe.checkouts)?;
+    Err(invalid_registry(typed_error.to_string()))
+}
+
+fn check_schema_version(version: u64) -> Result<(), OrbitError> {
     if version > u64::from(WORKSPACE_REGISTRY_SCHEMA_VERSION) {
         return Err(invalid_registry(format!(
             "unsupported schema_version {version}; this build supports up to {WORKSPACE_REGISTRY_SCHEMA_VERSION}. Upgrade Orbit; the file is left unchanged"
@@ -602,24 +657,13 @@ pub fn parse_workspace_registry(
             "invalid schema_version {version}; expected {WORKSPACE_REGISTRY_SCHEMA_VERSION}"
         )));
     }
-
-    validate_role_tokens(&value)?;
-    let mut registry: WorkspaceRegistry =
-        serde_json::from_value(value).map_err(|error| invalid_registry(error.to_string()))?;
-    let changed = validate_workspace_registry(&mut registry, context)?;
-    Ok((registry, changed))
+    Ok(())
 }
 
-fn validate_role_tokens(value: &Value) -> Result<(), OrbitError> {
-    let Some(checkouts) = value.get("checkouts").and_then(Value::as_array) else {
-        return Ok(());
-    };
+fn validate_role_tokens(checkouts: &[CheckoutRoleProbe]) -> Result<(), OrbitError> {
     for checkout in checkouts {
-        let workspace_id = checkout
-            .get("workspace_id")
-            .and_then(Value::as_str)
-            .unwrap_or("<unknown>");
-        let Some(role) = checkout.get("role") else {
+        let workspace_id = checkout.workspace_id.as_deref().unwrap_or("<unknown>");
+        let Some(role) = &checkout.role else {
             continue;
         };
         match role.as_str() {
@@ -875,10 +919,10 @@ struct LegacyWorkspace {
 }
 
 fn migrate_legacy_registry(
-    value: Value,
+    content: &str,
     context: &WorkspaceRegistryHostContext,
 ) -> Result<WorkspaceRegistry, OrbitError> {
-    let legacy: LegacyWorkspaceRegistry = serde_json::from_value(value)
+    let legacy: LegacyWorkspaceRegistry = serde_json::from_str(content)
         .map_err(|error| invalid_registry(format!("invalid legacy registry: {error}")))?;
     let valid_ids: HashSet<String> = legacy
         .workspaces
