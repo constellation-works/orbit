@@ -103,12 +103,7 @@ impl TaskV2Store {
 
     /// Materialize tasks on the lightweight bundle path: no artifact hashing.
     pub(crate) fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
-        if let Some(tasks) = self.indexed_tasks(TaskIndexFilter {
-            status: None,
-            priority: None,
-            job_run_id: None,
-            tags: Vec::new(),
-        })? {
+        if let Some(tasks) = self.indexed_tasks(TaskIndexFilter::default())? {
             return Ok(tasks);
         }
 
@@ -132,10 +127,10 @@ impl TaskV2Store {
         has_external_ref_system: Option<&str>,
     ) -> Result<Vec<Task>, OrbitError> {
         let mut tasks = match self.indexed_tasks(TaskIndexFilter {
-            status,
+            statuses: status.into_iter().collect(),
             priority,
             job_run_id: job_run_id.map(ToOwned::to_owned),
-            tags: Vec::new(),
+            ..Default::default()
         })? {
             Some(tasks) => tasks,
             None => self.list_tasks()?,
@@ -165,10 +160,8 @@ impl TaskV2Store {
             return self.list_tasks();
         }
         if let Some(tasks) = self.indexed_tasks(TaskIndexFilter {
-            status: None,
-            priority: None,
-            job_run_id: None,
             tags: required_tags.clone(),
+            ..Default::default()
         })? {
             return Ok(tasks);
         }
@@ -215,10 +208,8 @@ impl TaskV2Store {
     fn candidate_bundles_by_tags(&self, tags: &[String]) -> Result<Vec<TaskBundleV2>, OrbitError> {
         let required_tags = normalize_task_tags(tags.to_vec());
         if let Some(bundles) = self.indexed_bundles(TaskIndexFilter {
-            status: None,
-            priority: None,
-            job_run_id: None,
             tags: required_tags.clone(),
+            ..Default::default()
         })? {
             return Ok(bundles);
         }

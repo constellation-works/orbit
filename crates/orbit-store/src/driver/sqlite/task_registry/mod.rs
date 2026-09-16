@@ -6,10 +6,13 @@
 //! `queries` contains internal SQL helpers and row-to-type mapping.
 //! `util` contains shared path, time, relation, and WAL helpers used by the registry.
 //! `store` contains the `TaskRegistryStore` implementation and transaction orchestration.
+//! `listing` contains the index reads behind bounded task listing: freshness rows,
+//! filtered selection, and the workspace-scoped status projection.
 //! `tests` contains the registry unit tests; split it further if it grows past the file-size budget.
 
 use std::path::{Path, PathBuf};
 
+mod listing;
 mod partition_id;
 mod queries;
 mod schema;
@@ -60,11 +63,13 @@ pub fn task_workspaces_dir(global_root: &Path) -> PathBuf {
 }
 
 pub use crate::contracts::{
-    AllocatorSeedOutcome, BindWorkspaceParams, DanglingRelationTarget, RegisterWorkspaceParams,
-    TaskBundleBinding, TaskIndexFilter, WorkspaceBinding, WorkspaceCheckoutBinding,
+    AllocatorSeedOutcome, BindWorkspaceParams, DanglingRelationTarget, IndexedTaskRow,
+    RegisterWorkspaceParams, TaskBundleBinding, TaskIndexFilter, TaskIndexSelection,
+    WorkspaceBinding, WorkspaceCheckoutBinding,
 };
 pub use store::TaskRegistryStore;
 pub(crate) use store::parse_orb_task_number;
+pub(crate) use util::is_terminal_status;
 
 #[cfg(test)]
 mod tests;

@@ -1174,66 +1174,20 @@ impl TaskRegistryStore {
         Ok(dangling)
     }
 
+    /// Every id `filter` selects, newest first; see
+    /// [`indexed_task_selection`](Self::indexed_task_selection) for the
+    /// bounded, counted form listing uses.
     pub fn indexed_task_ids_filtered(
         &self,
         partition_id: &str,
         filter: &TaskIndexFilter,
     ) -> Result<Vec<String>, OrbitError> {
-        let partition_id = validate_partition_id(partition_id)?;
-        let required_tags = normalize_task_tags(filter.tags.clone());
-        let mut sql = String::from("SELECT task_id FROM task_bundle_index WHERE workspace_id = ?");
-        let mut values = vec![partition_id.clone()];
-        if let Some(status) = filter.status {
-            sql.push_str(" AND status = ?");
-            values.push(status.to_string());
-        }
-        if let Some(priority) = filter.priority {
-            sql.push_str(" AND priority = ?");
-            values.push(priority.to_string());
-        }
-        if let Some(job_run_id) = &filter.job_run_id {
-            sql.push_str(" AND job_run_id = ?");
-            values.push(job_run_id.clone());
-        }
-        sql.push_str(" ORDER BY created_at DESC, task_id ASC");
-
-        let conn = self.read()?;
-        let mut stmt = conn
-            .prepare(&sql)
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        let rows = stmt
-            .query_map(params_from_iter(values.iter()), |row| {
-                row.get::<_, String>(0)
-            })
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        let mut ids = rows
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-
-        if required_tags.is_empty() {
-            return Ok(ids);
-        }
-
-        let mut tag_sets = Vec::new();
-        let mut tag_stmt = conn
-            .prepare(
-                "SELECT task_id FROM task_bundle_tags
-                 WHERE workspace_id = ?1 AND tag = ?2
-                 ORDER BY task_id ASC",
-            )
-            .map_err(|e| OrbitError::Store(e.to_string()))?;
-        for tag in required_tags {
-            let rows = tag_stmt
-                .query_map(params![&partition_id, &tag], |row| row.get::<_, String>(0))
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
-            let set = rows
-                .collect::<Result<BTreeSet<_>, _>>()
-                .map_err(|e| OrbitError::Store(e.to_string()))?;
-            tag_sets.push(set);
-        }
-
-        ids.retain(|id| tag_sets.iter().all(|set| set.contains(id)));
-        Ok(ids)
+        let filter = TaskIndexFilter {
+            tags: normalize_task_tags(filter.tags.clone()),
+            ..filter.clone()
+        };
+        self.indexed_task_selection(partition_id, &filter, false, None)
+            .map(|selection| selection.ids)
     }
 
     pub fn indexed_relation_targets(

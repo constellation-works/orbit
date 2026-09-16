@@ -1,12 +1,12 @@
 //! Freshness-stamped reuse of parsed task envelopes.
 //!
-//! Indexed selection needs every registered task's envelope metadata on every
-//! listing — filters, ordering, and the candidate rows themselves are answered
-//! from envelope fields — so the freshness scan used to re-read and re-parse
-//! one `task.yaml` per registered task even when nothing had changed. This
-//! cache keeps each parse and re-validates it against the envelope file's
+//! Indexed selection validates the generated index against every registered
+//! task's envelope on every listing, so the freshness scan used to re-read and
+//! re-parse one `task.yaml` per registered task even when nothing had changed.
+//! This cache keeps each parse and re-validates it against the envelope file's
 //! stamp before every reuse, turning the steady-state scan into one metadata
-//! probe per task.
+//! probe per task; the rows the index then selects are served from the same
+//! parses.
 //!
 //! # Freshness policy
 //!
@@ -80,12 +80,28 @@ impl EnvelopeCache {
         })
     }
 
-    /// The envelope parsed from the file this stamp describes, if it is still
-    /// the file the entry was taken from.
-    pub(super) fn reuse(&self, task_id: &str, stamp: &EnvelopeStamp) -> Option<TaskEnvelopeV2> {
+    /// Run `inspect` on the envelope parsed from the file this stamp
+    /// describes, if it is still the file the entry was taken from. The
+    /// freshness scan compares a few fields per task this way instead of
+    /// cloning every envelope it does not go on to select.
+    pub(super) fn inspect_fresh<T>(
+        &self,
+        task_id: &str,
+        stamp: &EnvelopeStamp,
+        inspect: impl FnOnce(&TaskEnvelopeV2) -> T,
+    ) -> Option<T> {
         let entries = self.entries();
         let (cached, envelope) = entries.get(task_id)?;
-        (cached == stamp).then(|| envelope.clone())
+        (cached == stamp).then(|| inspect(envelope))
+    }
+
+    /// The most recent parse remembered for `task_id`, without re-proving its
+    /// stamp: for the ids a selection returns right after the freshness scan
+    /// stamped every registered task.
+    pub(super) fn cached(&self, task_id: &str) -> Option<TaskEnvelopeV2> {
+        self.entries()
+            .get(task_id)
+            .map(|(_, envelope)| envelope.clone())
     }
 
     pub(super) fn remember(&self, task_id: &str, stamp: EnvelopeStamp, envelope: &TaskEnvelopeV2) {
