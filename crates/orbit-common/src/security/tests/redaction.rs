@@ -1,9 +1,9 @@
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use super::super::redaction::{
-    PatternRedactor, credential_safe_location, is_high_confidence_single_token_credential,
-    is_redactable_value, is_sensitive_env_name, redact_all, redact_home_dir,
-    redact_sensitive_env_text,
+    PatternRedactor, argv_redactor, credential_safe_location, default_pattern_redactor,
+    is_high_confidence_single_token_credential, is_redactable_value, is_sensitive_env_name,
+    redact_all, redact_home_dir, redact_sensitive_env_text,
 };
 
 #[test]
@@ -177,6 +177,29 @@ fn provider_key_redaction_keeps_standalone_and_argv_forms() {
         assert!(!redacted.contains("sk-"), "{redacted}");
         assert!(redacted.contains(marker), "{redacted}");
     }
+}
+
+#[test]
+fn http_and_argv_redactors_are_process_cached() {
+    assert!(std::ptr::eq(
+        default_pattern_redactor(),
+        default_pattern_redactor()
+    ));
+    assert!(std::ptr::eq(argv_redactor(), argv_redactor()));
+    assert!(!std::ptr::eq(
+        default_pattern_redactor() as *const PatternRedactor,
+        argv_redactor() as *const PatternRedactor
+    ));
+
+    let key = "--api-key=sk-short";
+    assert_eq!(
+        PatternRedactor::http_default().apply_str(key),
+        default_pattern_redactor().apply_str(key)
+    );
+    assert_eq!(
+        PatternRedactor::with_argv_secrets().apply_str(key),
+        argv_redactor().apply_str(key)
+    );
 }
 
 #[test]

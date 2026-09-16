@@ -38,6 +38,7 @@ use crate::{
 
 const REDACTED_ENV_VALUE: &str = "[REDACTED_ENV]";
 static DEFAULT_PATTERN_REDACTOR: OnceLock<PatternRedactor> = OnceLock::new();
+static ARGV_PATTERN_REDACTOR: OnceLock<PatternRedactor> = OnceLock::new();
 static HIGH_CONFIDENCE_SINGLE_TOKEN_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
@@ -626,16 +627,26 @@ pub fn is_sensitive_env_name(name: &str) -> bool {
 /// Builds to `default()` cover Authorization / x-api-key / URL key params /
 /// Bearer / raw header lines, high-confidence provider credentials, and
 /// structurally recognizable SSH fingerprints, public-key comments, and
-/// connection hosts. Use [`PatternRedactor::with_argv_secrets`] to also catch
-/// short bare `sk-…` tokens — needed when scrubbing subprocess argv where a
-/// provider key sometimes ends up mis-configured.
+/// connection hosts. Use [`argv_redactor`] or [`PatternRedactor::with_argv_secrets`]
+/// to also catch short bare `sk-…` tokens — needed when scrubbing subprocess
+/// argv where a provider key sometimes ends up mis-configured.
+///
+/// Pattern compilation is process-cached. [`Regex`] is Arc-backed, so cloning
+/// a redactor does not recompile.
+#[derive(Clone)]
 pub struct PatternRedactor {
     patterns: Vec<(Regex, &'static str)>,
 }
 
 impl PatternRedactor {
     /// Shared default for unknown-shape persisted text.
+    ///
+    /// Clones the process-cached HTTP redactor; patterns are compiled once.
     pub fn http_default() -> Self {
+        default_pattern_redactor().clone()
+    }
+
+    fn compile_http_default() -> Self {
         let patterns = vec![
             (
                 Regex::new(r#"(?i)"authorization"\s*:\s*"[^"]*""#).expect("valid regex"),
@@ -790,8 +801,15 @@ impl PatternRedactor {
 
     /// HTTP defaults plus a bare `sk-…` token pattern suitable for scrubbing
     /// CLI argv where a provider key occasionally ends up as a flag value.
+    ///
+    /// Clones the process-cached argv redactor; patterns are compiled once.
+    /// Prefer [`argv_redactor`] when an owned clone is not needed.
     pub fn with_argv_secrets() -> Self {
-        let mut me = Self::http_default();
+        argv_redactor().clone()
+    }
+
+    fn compile_argv_secrets() -> Self {
+        let mut me = default_pattern_redactor().clone();
         me.patterns.push((
             Regex::new(r"(^|[^\p{L}\p{N}_-])sk-[A-Za-z0-9_\-]+").expect("valid regex"),
             "${1}[REDACTED_API_KEY]",
@@ -857,8 +875,13 @@ pub fn is_high_confidence_single_token_credential(input: &str) -> bool {
         .any(|pattern| pattern.is_match(trimmed))
 }
 
+/// Process-cached argv redactor (HTTP defaults plus the short `sk-…` pattern).
+pub fn argv_redactor() -> &'static PatternRedactor {
+    ARGV_PATTERN_REDACTOR.get_or_init(PatternRedactor::compile_argv_secrets)
+}
+
 pub(crate) fn default_pattern_redactor() -> &'static PatternRedactor {
-    DEFAULT_PATTERN_REDACTOR.get_or_init(PatternRedactor::http_default)
+    DEFAULT_PATTERN_REDACTOR.get_or_init(PatternRedactor::compile_http_default)
 }
 
 fn high_confidence_single_token_patterns() -> &'static [Regex] {
