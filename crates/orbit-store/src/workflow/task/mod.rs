@@ -502,18 +502,25 @@ pub fn import_tasks(
         registry.bump_allocator_to_at_least(floor)?;
     }
 
-    // Allocate new ids for collisions (deterministic order by source id).
+    // Allocate new ids for collisions (deterministic order by source id). The
+    // whole run is reserved with a single counter bump, so a renumber of N
+    // tasks costs one commit rather than N.
     to_renumber.sort_by(|a, b| a.source_id.cmp(&b.source_id));
-    let mut id_remap: BTreeMap<String, String> = BTreeMap::new();
-    for staged in &to_renumber {
-        let new_id = registry.allocate_task_id(&target.workspace_id)?;
-        id_remap.insert(staged.source_id.clone(), new_id);
-    }
+    let new_ids = registry.allocate_task_ids(&target.workspace_id, to_renumber.len())?;
+    let id_remap: BTreeMap<String, String> = to_renumber
+        .iter()
+        .map(|staged| staged.source_id.clone())
+        .zip(new_ids)
+        .collect();
 
     // Write kept + renumbered bundles, rewriting relation targets in the set,
     // then replace the mirrors their owner has changed.
     let write_result = (|| -> Result<Vec<u32>, OrbitError> {
         let mut landed_numbers = Vec::new();
+        // Every binding this import lands is collected and registered in one
+        // transaction below: the bundles are already durable on disk, and one
+        // commit for the set replaces one WAL fsync per task.
+        let mut pending_bindings: Vec<(String, PathBuf)> = Vec::new();
         for staged in kept.iter().chain(to_renumber.iter()) {
             let final_id = id_remap
                 .get(&staged.source_id)
@@ -536,8 +543,7 @@ pub fn import_tasks(
                 write_bundle_at(&dir, &bundle)?;
             }
             guard.written_dirs.push(dir.clone());
-            registry.register_task_bundle(&final_id, &target.workspace_id, &dir)?;
-            guard.registered_ids.push(final_id.clone());
+            pending_bindings.push((final_id.clone(), dir));
             if let Some(number) = local_task_number(&final_id, &local_prefix) {
                 landed_numbers.push(number);
             }
@@ -560,12 +566,7 @@ pub fn import_tasks(
                 || replace_bundle_at(&replacement.bundle_dir, &staged.bundle, &staged.staging_dir),
             )?;
             if replacement.register_binding {
-                registry.register_task_bundle(
-                    &staged.source_id,
-                    &target.workspace_id,
-                    &replacement.bundle_dir,
-                )?;
-                guard.registered_ids.push(staged.source_id.clone());
+                pending_bindings.push((staged.source_id.clone(), replacement.bundle_dir.clone()));
             }
             records.push(ImportedTask {
                 source_id: staged.source_id.clone(),
@@ -573,6 +574,11 @@ pub fn import_tasks(
                 action: ImportAction::Updated,
             });
         }
+
+        registry.register_task_bundles(&target.workspace_id, &pending_bindings)?;
+        guard
+            .registered_ids
+            .extend(pending_bindings.into_iter().map(|(task_id, _)| task_id));
         Ok(landed_numbers)
     })();
 
