@@ -12,7 +12,9 @@
 //! crates, which cannot see this crate's `#[cfg(test)]` items, share one
 //! implementation rather than each re-deriving the retry.
 
+#[cfg(target_os = "linux")]
 use std::io;
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
 /// How long [`retry_executable_busy`] keeps retrying before giving up.

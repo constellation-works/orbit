@@ -6,6 +6,8 @@ use std::fs::File;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 
+#[cfg(target_os = "linux")]
+use super::super::spawn::linux_bwrap_mount_authority;
 use orbit_exec::BwrapProbeOutcome;
 #[cfg(target_os = "linux")]
 use orbit_exec::{LinuxBwrapMountAuthority, compile_linux_bwrap_argv_with_authority, probe_bwrap};
@@ -15,8 +17,7 @@ use tempfile::tempdir;
 use super::super::super::dispatcher::ResolvedSandbox;
 use super::super::spawn::{
     SUPPORTED_SYSTEM_BIN_DIRS, SpawnError, SpawnedChild, copilot_model_unavailable_diagnostic,
-    linux_bwrap_failed_write_diagnostic, linux_bwrap_mount_authority,
-    macos_keychain_auth_diagnostic_with, orbit_tool_env_with,
+    linux_bwrap_failed_write_diagnostic, macos_keychain_auth_diagnostic_with, orbit_tool_env_with,
     prepare_linux_sandbox_for_dispatch_with_probe, prepare_macos_codex_ca_environment_with,
     reject_unsatisfiable_managed_grants, resolve_provider_launcher_with,
     resolve_provider_launcher_with_extra_dirs, spawn_bare, spawn_macos_sandboxed_with,
