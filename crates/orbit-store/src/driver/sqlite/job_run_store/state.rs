@@ -89,7 +89,7 @@ impl Store {
         run_id: &str,
         state: &PipelineState,
     ) -> Result<(), OrbitError> {
-        let state_json = serde_json::to_string_pretty(state)
+        let state_json = serde_json::to_string(state)
             .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
         let conn = self
             .conn
@@ -150,7 +150,7 @@ impl Store {
             let mut pipeline_state: PipelineState = serde_json::from_str(&raw_pipeline_state)
                 .map_err(|e| OrbitError::Store(format!("invalid pipeline_state_json: {e}")))?;
             update(state, &mut pipeline_state)?;
-            let state_json = serde_json::to_string_pretty(&pipeline_state)
+            let state_json = serde_json::to_string(&pipeline_state)
                 .map_err(|e| OrbitError::Store(format!("serialize pipeline state: {e}")))?;
             tx.tx
                 .execute(

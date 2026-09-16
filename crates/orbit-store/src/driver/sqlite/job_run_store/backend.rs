@@ -312,7 +312,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                     &run,
                     Some(&child_state),
                 )?;
-                let parent_state_json = serde_json::to_string_pretty(&parent_state)
+                let parent_state_json = serde_json::to_string(&parent_state)
                     .map_err(|error| OrbitError::Store(format!("serialize pipeline state: {error}")))?;
                 tx.tx
                     .execute(
