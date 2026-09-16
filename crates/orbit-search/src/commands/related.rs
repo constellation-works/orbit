@@ -1,4 +1,4 @@
-use orbit_common::{NotFoundKind, OrbitError};
+use orbit_common::OrbitError;
 use orbit_types::task::Task;
 use serde::{Deserialize, Serialize};
 
@@ -36,24 +36,20 @@ pub struct SemanticRelatedResult {
 
 pub fn run(
     vector_store: &VectorStore,
-    tasks: &[Task],
+    target: &Task,
     params: SemanticRelatedParams,
 ) -> Result<SemanticRelatedResult, OrbitError> {
     let model = resolve_query_model(params.model.as_deref())?;
     let embedder = SubprocessEmbedder::with_model(model.alias)?;
-    run_with_embedder(vector_store, tasks, &embedder, params)
+    run_with_embedder(vector_store, target, &embedder, params)
 }
 
 pub(crate) fn run_with_embedder(
     vector_store: &VectorStore,
-    tasks: &[Task],
+    target: &Task,
     embedder: &dyn Embedder,
     params: SemanticRelatedParams,
 ) -> Result<SemanticRelatedResult, OrbitError> {
-    let target = tasks
-        .iter()
-        .find(|task| task.id == params.task_id)
-        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, params.task_id.clone()))?;
     let query = format!("{}\n\n{}", target.title.trim(), target.description.trim());
     let query = query.trim();
     if query.is_empty() {

@@ -95,7 +95,7 @@ fn related_excludes_self_and_uses_cosine_only() {
 
     let result = run_with_embedder(
         &store,
-        &tasks,
+        &tasks[0],
         &embedder,
         SemanticRelatedParams {
             task_id: "T1".to_string(),
@@ -110,4 +110,26 @@ fn related_excludes_self_and_uses_cosine_only() {
     assert!(result.results[0].score_breakdown.cosine_rank.is_some());
     assert!(result.results[0].score_breakdown.bm25_rank.is_none());
     assert!(result.results[0].score_breakdown.rrf.is_none());
+}
+
+#[test]
+fn related_rejects_blank_title_and_description() {
+    let store = VectorStore::open_in_memory().unwrap();
+    let embedder = KeywordEmbedder;
+    let target = task("T1", "   ", "");
+    let error = run_with_embedder(
+        &store,
+        &target,
+        &embedder,
+        SemanticRelatedParams {
+            task_id: "T1".to_string(),
+            limit: 1,
+            model: None,
+        },
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, OrbitError::InvalidInput(ref message) if message.contains("T1")),
+        "expected InvalidInput for blank target, got {error:?}"
+    );
 }

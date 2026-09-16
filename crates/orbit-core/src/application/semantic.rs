@@ -87,7 +87,7 @@ impl OrbitRuntime {
         &self,
         params: SemanticRelatedParams,
     ) -> Result<SemanticRelatedResult, OrbitError> {
-        let tasks = self.stores().tasks().list_tasks()?;
-        orbit_search::semantic_related(self.stores().semantic_index().store()?, &tasks, params)
+        let target = self.get_task(&params.task_id)?;
+        orbit_search::semantic_related(self.stores().semantic_index().store()?, &target, params)
     }
 }

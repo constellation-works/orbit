@@ -160,10 +160,10 @@ pub fn doc_semantic_search_with(
 
 pub fn semantic_related(
     vector_store: &VectorStore,
-    tasks: &[Task],
+    target: &Task,
     params: SemanticRelatedParams,
 ) -> Result<SemanticRelatedResult, OrbitError> {
-    related::run(vector_store, tasks, params)
+    related::run(vector_store, target, params)
 }
 
 #[cfg(test)]
