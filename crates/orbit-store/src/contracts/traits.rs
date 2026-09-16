@@ -257,6 +257,13 @@ pub trait InvocationStoreBackend: Send + Sync {
         limit: usize,
     ) -> Result<Vec<TaskInvocationMetrics>, OrbitError>;
     fn list_tool_invocation_metrics(&self) -> Result<Vec<ToolInvocationMetrics>, OrbitError>;
+    /// Insert-only change signal for the token scoreboard skip path.
+    ///
+    /// `Some(n)` is `MAX(id)` over `invocations` (`0` when the table is empty).
+    /// `None` means the backend cannot cheaply detect changes; callers rewrite.
+    fn invocation_scoreboard_watermark(&self) -> Result<Option<u64>, OrbitError> {
+        Ok(None)
+    }
 }
 
 pub trait V2AuditStoreBackend: Send + Sync {

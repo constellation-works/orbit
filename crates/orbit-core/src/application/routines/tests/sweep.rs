@@ -104,24 +104,65 @@ fn sweep_refreshes_token_scoreboard_for_each_discovered_workspace() {
         })
         .expect("persist invocation");
 
-    refresh_discovered_token_scoreboards(&[(
-        Workspace {
-            id: "ws-scoreboard".to_string(),
-            name: "scoreboard".to_string(),
-            owner_machine_id: None,
-            git_remote: None,
-            ship_mode: None,
-            base_branch: "agent-main".to_string(),
-            status: WorkspaceStatus::Active,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        },
-        runtime,
-    )]);
+    let workspace = Workspace {
+        id: "ws-scoreboard".to_string(),
+        name: "scoreboard".to_string(),
+        owner_machine_id: None,
+        git_remote: None,
+        ship_mode: None,
+        base_branch: "agent-main".to_string(),
+        status: WorkspaceStatus::Active,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    refresh_discovered_token_scoreboards(&[(workspace.clone(), runtime.clone())]);
 
-    let tokens = std::fs::read_to_string(workspace_root.join("state/scoreboard/tokens.json"))
-        .expect("scoreboard refreshed during sweep");
+    let tokens_path = workspace_root.join("state/scoreboard/tokens.json");
+    let tokens = std::fs::read_to_string(&tokens_path).expect("scoreboard refreshed during sweep");
     assert!(tokens.contains("codex"), "{tokens}");
+
+    refresh_discovered_token_scoreboards(&[(workspace.clone(), runtime.clone())]);
+    let unchanged = std::fs::read_to_string(&tokens_path).expect("scoreboard still present");
+    assert_eq!(
+        tokens, unchanged,
+        "sweep must not rewrite tokens.json when no invocation landed"
+    );
+
+    runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            job_run_id: "jrun-scoreboard-two".to_string(),
+            activity_id: "implement".to_string(),
+            agent: "claude".to_string(),
+            model: Some("claude-test".to_string()),
+            task_ids: Vec::new(),
+            trace: InvocationTrace {
+                usage: TokenUsage {
+                    input: 7,
+                    ..TokenUsage::default()
+                },
+                ..InvocationTrace::default()
+            },
+        })
+        .expect("persist second invocation");
+    refresh_discovered_token_scoreboards(&[(workspace, runtime)]);
+    let refreshed =
+        std::fs::read_to_string(&tokens_path).expect("scoreboard refreshed after insert");
+    assert_ne!(tokens, refreshed);
+    assert!(refreshed.contains("claude"), "{refreshed}");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&refreshed).expect("tokens.json remains valid JSON");
+    let object = parsed.as_object().expect("tokens.json object");
+    for key in [
+        "generated_at",
+        "activities",
+        "agents",
+        "top_tasks",
+        "tools",
+        "known_limitations",
+    ] {
+        assert!(object.contains_key(key), "missing {key} in {refreshed}");
+    }
+    assert_eq!(object.len(), 6, "{refreshed}");
 }
 
 struct ScriptedWorkspaces {

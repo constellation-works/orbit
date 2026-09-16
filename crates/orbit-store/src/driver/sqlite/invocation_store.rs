@@ -59,4 +59,8 @@ impl crate::contracts::InvocationStoreBackend for crate::driver::sqlite::connect
     ) -> Result<Vec<crate::contracts::ToolInvocationMetrics>, orbit_common::OrbitError> {
         Self::list_tool_invocation_metrics(self)
     }
+
+    fn invocation_scoreboard_watermark(&self) -> Result<Option<u64>, orbit_common::OrbitError> {
+        Self::invocation_scoreboard_watermark(self)
+    }
 }

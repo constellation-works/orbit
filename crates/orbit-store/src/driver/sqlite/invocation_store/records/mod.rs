@@ -90,6 +90,15 @@ impl Store {
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
     }
 
+    /// Cheap insert-only watermark for the token scoreboard skip path.
+    pub fn invocation_scoreboard_watermark(&self) -> Result<Option<u64>, OrbitError> {
+        let conn = self.read()?;
+        let max_id: Option<i64> = conn
+            .query_row("SELECT MAX(id) FROM invocations", [], |row| row.get(0))
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        Ok(Some(max_id.unwrap_or(0) as u64))
+    }
+
     pub fn list_invocation_records(
         &self,
         filter: &InvocationQuery,
