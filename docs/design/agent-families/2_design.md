@@ -4,7 +4,7 @@ type: design
 title: "Agent Families — Design"
 owner: human
 last_updated: 2026-08-09
-last_validated: 2026-08-29
+last_validated: 2026-09-16
 status: Draft
 feature: agent-families
 doc_role: design
@@ -28,11 +28,11 @@ Workspace config defines one concrete assignment under each `[crews.<name>]`: fl
 
 `crates/orbit-config/src/raw.rs` owns the TOML shape, and `crates/orbit-config/src/resolved.rs` materializes it into `Crew` values from `orbit-types`. Runtime loading rejects incomplete crews, retired `planner`/`implementer`/`reviewer` role sub-tables with guidance to write flat `model` and `provider` fields, and `[workflow].default_crew` values that do not name a defined crew. A retired `backend` key is accepted only as inert `cli` or rejected with migration guidance.
 
-The built-in runtime registry uses model-specific standard crews: Claude provides `opus`, `sonnet`, and `fable`; Codex provides `sol`, `terra`, and `luna`; Antigravity provides `antigravity`; Gemini CLI still provides the legacy `gemini` crew; Grok provides `grok`; Copilot provides `copilot`; Cursor provides `cursor`; and Pi provides `pi`. Fresh `orbit init` config filters that registry by detected provider CLIs and chooses the first emitted standard crew as `[workflow].default_crew` (`opus`, `astra`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, or `pi`).
+The built-in runtime registry uses model-specific standard crews: Claude provides `opus`, `sonnet`, and `fable`; Codex provides `astra`, `sol`, `terra`, and `luna`; Antigravity provides `antigravity`; Gemini CLI still provides the legacy `gemini` crew; Grok provides `grok`; Copilot provides `copilot`; Cursor provides `cursor`; Pi provides `pi`; and OpenCode provides `opencode`. Non-interactive fresh `orbit init` config filters that registry by detected provider CLIs and chooses the first emitted standard crew as `[workflow].default_crew` (`opus`, `astra`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, or `opencode`); interactive init may instead make the chosen `[crews.custom]` assignment the default.
 
-It adds `qa` on Terra when Codex is available, otherwise on Sonnet when Claude is available. With no supported provider CLI, initialization emits neither crews nor a dangling default.
+Non-interactive initialization adds `system` with the preferred bounded assignment: Codex Luna, Claude Sonnet, Grok, Antigravity, Gemini, Copilot, Cursor, Pi, or OpenCode, in that order. Interactive init chooses the system assignment separately and does not seed `qa`; the legacy `qa` name remains loadable for existing user-authored configuration. With no supported provider CLI, initialization emits neither crews nor a dangling default.
 
-`copilot`, `cursor`, `pi`, and `antigravity` are crews named for their *provider* rather than their model: those lanes can select models supplied by other vendors, so model-named crews would hide which execution lane actually runs. Antigravity (`agy`) is the current Google terminal CLI; `gemini` remains the model family and the legacy Gemini CLI lane. See [CONFIG.md § Antigravity CLI](../../CONFIG.md#antigravity-cli). [ORB-10946] [ORB-10945] [ORB-11299]
+`copilot`, `cursor`, `pi`, `antigravity`, and `opencode` are crews named for their *provider* rather than their model: those lanes can select models supplied by other vendors, so model-named crews would hide which execution lane actually runs. Antigravity (`agy`) is the current Google terminal CLI; `gemini` remains the model family and the legacy Gemini CLI lane. See [CONFIG.md § Antigravity CLI](../../CONFIG.md#antigravity-cli). [ORB-10946] [ORB-10945] [ORB-11299]
 
 ## 3. Task and Tool Surface
 
