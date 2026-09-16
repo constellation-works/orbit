@@ -24,16 +24,17 @@ pub(super) fn record_git_check_ignore_invocation() {
 
 /// Reset the git-check-ignore invocation counter (test helper).
 /// Visibility widened for ORB-00250 sibling tests (tests/walk.rs + shared
-/// helpers in tests/mod.rs) per docs/design-patterns/test_layout.md.
+/// helpers in tests/mod.rs) per docs/design-patterns/test_layout.md, and
+/// again to the crate so the hybrid search tests can count walks [DANI-10369].
 #[cfg(test)]
-pub(super) fn reset_git_check_ignore_invocations() {
+pub(crate) fn reset_git_check_ignore_invocations() {
     GIT_CHECK_IGNORE_INVOCATIONS.with(|calls| calls.set(0));
 }
 
 /// Return the current git-check-ignore invocation count (test helper).
-/// Visibility widened for ORB-00250 sibling tests.
+/// Visibility widened for ORB-00250 sibling tests and the hybrid search tests.
 #[cfg(test)]
-pub(super) fn git_check_ignore_invocations() -> usize {
+pub(crate) fn git_check_ignore_invocations() -> usize {
     GIT_CHECK_IGNORE_INVOCATIONS.with(std::cell::Cell::get)
 }
 

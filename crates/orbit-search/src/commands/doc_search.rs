@@ -1,11 +1,14 @@
-use std::collections::BTreeMap;
+//! Doc-corpus queries against the semantic index: the cosine half of hybrid
+//! doc search and, since [DANI-10369], its BM25 lexical half.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::resolve_query_model;
 use crate::vector::VectorStore;
-use crate::vector::query::{CosineHit, cosine_top_k, snippet_for_hit};
+use crate::vector::query::{CosineHit, bm25_top_k, cosine_top_k, snippet_for_hit};
 use crate::vector::store::SOURCE_KIND_DOC;
 use crate::{Embedder, EmbedderPool};
 
@@ -42,6 +45,67 @@ pub struct DocSemanticHit {
     pub best_field: String,
     pub snippet: String,
     pub score: f32,
+}
+
+/// One doc the BM25 side of hybrid doc search returned, at its best-ranked
+/// chunk. The field names are the index's (`title`, `tags`, `body`, `path`),
+/// the same ones a [`DocSemanticHit`] reports.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DocLexicalHit {
+    pub source_id: String,
+    pub best_field: String,
+    pub snippet: String,
+    /// 1-based position among the docs BM25 returned.
+    pub rank: usize,
+}
+
+/// The lexical half of hybrid doc search, answered from `corpus_fts` instead
+/// of a walk of the docs roots: BM25 over every indexed doc chunk, rolled up
+/// to one hit per doc at its best-ranked chunk [DANI-10369].
+///
+/// Only the index is consulted, so a doc changed on disk since `orbit docs
+/// index` ran is matched as indexed — the same staleness the cosine half
+/// already has.
+pub fn doc_lexical_search(
+    vector_store: &VectorStore,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<DocLexicalHit>, OrbitError> {
+    let retriever_limit = limit.saturating_mul(RETRIEVER_OVERFETCH).max(limit);
+    let chunks = bm25_top_k(
+        vector_store,
+        query,
+        Some(SOURCE_KIND_DOC),
+        None,
+        retriever_limit,
+    )?;
+
+    let mut seen = BTreeSet::new();
+    let mut hits = Vec::new();
+    for chunk in chunks {
+        if hits.len() == limit {
+            break;
+        }
+        if !seen.insert(chunk.source_id.clone()) {
+            continue;
+        }
+        let snippet = snippet_for_hit(
+            vector_store,
+            SOURCE_KIND_DOC,
+            &chunk.source_id,
+            &chunk.field,
+            None,
+            Some(chunk.rowid),
+        )?
+        .unwrap_or_default();
+        hits.push(DocLexicalHit {
+            source_id: chunk.source_id,
+            best_field: chunk.field,
+            snippet: truncate_snippet(&snippet),
+            rank: hits.len() + 1,
+        });
+    }
+    Ok(hits)
 }
 
 pub fn run(

@@ -62,7 +62,9 @@ pub(super) fn doc_result_to_global(
         path: Some(result.record.path),
         title: None,
         summary: Some(result.record.summary),
-        status: Some(result.record.doc_type),
+        // A result served from the doc index has no type to report: the
+        // index does not store one [DANI-10369].
+        status: Some(result.record.doc_type).filter(|doc_type| !doc_type.is_empty()),
         best_field: None,
         snippet: result.snippet,
         score,

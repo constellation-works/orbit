@@ -15,7 +15,10 @@ mod stats;
 mod uninstall;
 
 pub use doc_index::{DocIndexParams, DocIndexResult};
-pub use doc_search::{DocSemanticHit, DocSemanticSearchParams, DocSemanticSearchResult};
+pub use doc_search::{
+    DocLexicalHit, DocSemanticHit, DocSemanticSearchParams, DocSemanticSearchResult,
+    doc_lexical_search,
+};
 pub use install::{SemanticInstallParams, SemanticInstallResult};
 pub use reindex::{
     IndexKind, SemanticIndexParams, SemanticIndexResult, SemanticReindexParams,

@@ -1,6 +1,6 @@
 //! Unit tests for `doc_search` — sibling layout under commands/tests/.
 
-use super::super::doc_search::{DocSemanticSearchParams, run_with_embedder};
+use super::super::doc_search::{DocSemanticSearchParams, doc_lexical_search, run_with_embedder};
 
 use crate::vector::{DocEmbeddingSource, VectorStore};
 use crate::{Embedder, NoopEmbedder};
@@ -92,4 +92,50 @@ fn doc_semantic_search_filters_to_doc_rows() {
     .unwrap();
 
     assert_eq!(result.results[0].source_id, "docs/concept.md");
+}
+
+/// [DANI-10369] The lexical half of hybrid doc search reads `corpus_fts`:
+/// every matching chunk rolls up to its doc, docs keep BM25 order, and the
+/// snippet is the best chunk's stored text — nothing is read from disk.
+#[test]
+fn doc_lexical_search_rolls_chunks_up_to_docs_in_bm25_order() {
+    let store = VectorStore::open_in_memory().unwrap();
+    let embedder = NoopEmbedder::small();
+    store
+        .reindex_docs(
+            &[
+                doc("docs/twice.md", "neutrino here and neutrino there"),
+                doc("docs/once.md", "one neutrino mention"),
+                doc("docs/never.md", "nothing relevant"),
+            ],
+            &embedder,
+            false,
+        )
+        .unwrap();
+    store
+        .upsert_embeddings(
+            "task",
+            "ORB-00000",
+            &[crate::vector::EmbeddingField::new("title", "neutrino task")],
+            &embedder,
+            false,
+        )
+        .unwrap();
+
+    let hits = doc_lexical_search(&store, "neutrino", 10).unwrap();
+
+    let ids = hits
+        .iter()
+        .map(|hit| hit.source_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["docs/twice.md", "docs/once.md"]);
+    assert_eq!(
+        hits.iter().map(|hit| hit.rank).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    assert_eq!(hits[0].best_field, "body");
+    assert_eq!(hits[0].snippet, "neutrino here and neutrino there");
+
+    assert_eq!(doc_lexical_search(&store, "neutrino", 1).unwrap().len(), 1);
+    assert!(doc_lexical_search(&store, "   ", 10).unwrap().is_empty());
 }
