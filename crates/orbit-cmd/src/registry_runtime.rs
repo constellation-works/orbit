@@ -1,5 +1,7 @@
 //! Application composition over Registry's workspace catalog and Core's runtime seams.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -755,14 +757,33 @@ fn find_checkout_for_git_common_dir<'a>(
     selected: &Path,
 ) -> Option<&'a WorkspaceCheckout> {
     let selected_common = git_common_dir(selected)?;
-    let mut matches = registry.checkouts.iter().filter(|checkout| {
+    let mut recorded = registry.checkouts.iter().filter(|checkout| {
+        recorded_git_common_dir(checkout).is_some_and(|common| common == selected_common)
+    });
+    if let Some(first) = recorded.next() {
+        return recorded.next().is_none().then_some(first);
+    }
+    // Recorded `.git` missed every checkout (for example a gitfile worktree
+    // registered as the catalog checkout). Spawn only on that zero-hit path.
+    let mut spawned = registry.checkouts.iter().filter(|checkout| {
         git_common_dir(&checkout.repo_root).is_some_and(|common| common == selected_common)
     });
-    let first = matches.next()?;
-    matches.next().is_none().then_some(first)
+    let first = spawned.next()?;
+    spawned.next().is_none().then_some(first)
+}
+
+/// The Git common dir recorded for a catalog checkout: `{orbit_dir}/../.git`
+/// when that path is a directory. Linked-worktree gitfiles are not the common
+/// dir and return `None` so the caller can fall back to a git spawn.
+fn recorded_git_common_dir(checkout: &WorkspaceCheckout) -> Option<PathBuf> {
+    let git_dir = checkout.orbit_dir.parent()?.join(".git");
+    git_dir.is_dir().then(|| canonical_path(&git_dir))
 }
 
 fn git_common_dir(path: &Path) -> Option<PathBuf> {
+    #[cfg(test)]
+    GIT_PROCESS_SPAWNS.with(|count| count.set(count.get() + 1));
+
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(path)
@@ -786,27 +807,38 @@ fn local_root_for_selected_path(checkout: &WorkspaceCheckout, selected: &Path) -
     if canonical_path(&checkout.orbit_dir) == selected {
         return checkout.orbit_dir.clone();
     }
-    git_checkout_root(selected)
+    git_workdir_root(selected)
         .map(|root| root.join(".orbit"))
         .unwrap_or_else(|| checkout.orbit_dir.clone())
 }
 
-fn git_checkout_root(path: &Path) -> Option<PathBuf> {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .args(["rev-parse", "--path-format=absolute", "--show-toplevel"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+/// Worktree root of `path` from the filesystem `.git` marker, without spawning
+/// git. A linked worktree's `.git` is a file; a primary checkout's is a directory.
+fn git_workdir_root(path: &Path) -> Option<PathBuf> {
+    path.ancestors().find_map(|ancestor| {
+        let git_marker = ancestor.join(".git");
+        (git_marker.is_dir() || git_marker.is_file()).then(|| canonical_path(ancestor))
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static GIT_PROCESS_SPAWNS: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) struct GitProcessProbes;
+
+#[cfg(test)]
+impl GitProcessProbes {
+    pub(crate) fn capture() -> Self {
+        GIT_PROCESS_SPAWNS.with(|count| count.set(0));
+        Self
     }
-    let raw = String::from_utf8(output.stdout).ok()?;
-    let trimmed = raw.lines().next()?.trim();
-    if trimmed.is_empty() {
-        return None;
+
+    pub(crate) fn git_process_spawns(&self) -> usize {
+        GIT_PROCESS_SPAWNS.with(Cell::get)
     }
-    Some(canonical_path(Path::new(trimmed)))
 }
 
 fn same_cli_checkout(runtime: &OrbitRuntime, checkout: &WorkspaceCheckout) -> bool {
