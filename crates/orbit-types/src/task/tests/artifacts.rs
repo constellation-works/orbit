@@ -375,6 +375,46 @@ mod relations {
         }];
         assert!(validate_task_relations_for_source("ORB-00001", &relations, &existing).is_ok());
     }
+
+    /// `CYCLIC_RELATION_TYPES` is what a store narrows its stored-edge query
+    /// to, so a type the cycle check walks but the list omits would make the
+    /// narrowed query miss a real cycle.
+    #[test]
+    fn relation_families_agree() {
+        let every_type = [
+            TaskRelationType::BlockedBy,
+            TaskRelationType::ChildOf,
+            TaskRelationType::SpawnedFrom,
+            TaskRelationType::RegressionFrom,
+            TaskRelationType::Supersedes,
+            TaskRelationType::RelatedTo,
+            TaskRelationType::Produces,
+            TaskRelationType::Resolves,
+        ];
+        for relation_type in every_type {
+            // Adding a variant breaks this match: extend `every_type` and
+            // `CYCLIC_RELATION_TYPES` together, then re-run.
+            let walks_reachability = match relation_type {
+                TaskRelationType::BlockedBy | TaskRelationType::ChildOf => true,
+                TaskRelationType::SpawnedFrom
+                | TaskRelationType::RegressionFrom
+                | TaskRelationType::Supersedes
+                | TaskRelationType::RelatedTo
+                | TaskRelationType::Produces
+                | TaskRelationType::Resolves => false,
+            };
+            assert_eq!(
+                cyclic_relation_family(relation_type).is_some(),
+                walks_reachability,
+                "{relation_type:?} changed cycle family without updating this test"
+            );
+            assert_eq!(
+                CYCLIC_RELATION_TYPES.contains(&relation_type),
+                walks_reachability,
+                "{relation_type:?} disagrees between the cycle family map and CYCLIC_RELATION_TYPES"
+            );
+        }
+    }
 }
 
 mod presentation {

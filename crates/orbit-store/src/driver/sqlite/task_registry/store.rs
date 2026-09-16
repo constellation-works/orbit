@@ -4,10 +4,10 @@ use std::sync::{Arc, Mutex};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
-    ORB_TASK_ID_MAX, TaskEnvelopeV2, TaskRelation, TaskRelationEdge, TaskRelationType, TaskStatus,
-    complexity_bucket, complexity_bucket_ord, format_task_id, is_valid_orb_task_id,
-    is_valid_task_id_prefix, normalize_task_tags, parse_task_number, task_id_prefix,
-    validate_orb_task_id, validate_task_relations_for_source,
+    CYCLIC_RELATION_TYPES, ORB_TASK_ID_MAX, TaskEnvelopeV2, TaskRelation, TaskRelationEdge,
+    TaskRelationType, TaskStatus, complexity_bucket, complexity_bucket_ord, format_task_id,
+    is_valid_orb_task_id, is_valid_task_id_prefix, normalize_task_tags, parse_task_number,
+    task_id_prefix, validate_orb_task_id, validate_task_relations_for_source,
 };
 use rusqlite::{Connection, TransactionBehavior, params, params_from_iter};
 
@@ -1653,34 +1653,13 @@ fn validate_relations_in_registry(
     validate_relation_targets_exist(conn, source_workspace_id, Some(source_task_id), relations)?;
 
     let replaced_sources = replaced_sources.iter().collect::<BTreeSet<_>>();
-    let mut stmt = conn
-        .prepare(
-            "SELECT source_task_id, relation_type, target_task_id
-             FROM task_bundle_relations
-             ORDER BY source_task_id, relation_type, target_task_id",
-        )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
+    let seeds = cycle_walk_seeds(relations, replacement_edges);
+    let mut existing_edges = reachable_cycle_family_edges(conn, &seeds)?
+        .into_iter()
+        .filter(|edge| {
+            !replaced_sources.contains(&edge.source) && is_valid_orb_task_id(&edge.target)
         })
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
-    let mut existing_edges = Vec::new();
-    for row in rows {
-        let (source, relation_type, target) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
-        if replaced_sources.contains(&source) || !is_valid_orb_task_id(&target) {
-            continue;
-        }
-        existing_edges.push(TaskRelationEdge {
-            source,
-            relation_type: parse_relation_type_name(&relation_type).map_err(OrbitError::Store)?,
-            target,
-        });
-    }
+        .collect::<Vec<_>>();
     existing_edges.extend(
         replacement_edges
             .iter()
@@ -1689,6 +1668,122 @@ fn validate_relations_in_registry(
     );
     validate_task_relations_for_source(source_task_id, relations, &existing_edges)
         .map_err(Into::into)
+}
+
+/// Where the cycle check can start walking, and therefore what the registry
+/// subgraph must be closed over.
+///
+/// The validator only probes reachability forward from a new relation's
+/// target, so those targets are the primary seeds. A replacement edge is not
+/// in the registry yet, so any path crossing one resumes at its target —
+/// seeding those as well keeps the fetched subgraph closed over the batch's
+/// own unwritten edges. Only cycle-family targets matter; the other relation
+/// types are queryable metadata the walk never follows.
+fn cycle_walk_seeds(
+    relations: &[TaskRelation],
+    replacement_edges: &[TaskRelationEdge],
+) -> BTreeSet<String> {
+    let relation_targets = relations
+        .iter()
+        .filter(|relation| CYCLIC_RELATION_TYPES.contains(&relation.relation_type))
+        .map(|relation| relation.target.clone());
+    let replacement_targets = replacement_edges
+        .iter()
+        .filter(|edge| CYCLIC_RELATION_TYPES.contains(&edge.relation_type))
+        .map(|edge| edge.target.clone());
+    relation_targets
+        .chain(replacement_targets)
+        .filter(|target| is_valid_orb_task_id(target))
+        .collect()
+}
+
+/// The subgraph walk from [`reachable_cycle_family_edges`], as SQL over
+/// `seed_count` bound seed ids.
+///
+/// Separate from its caller so `relation_subgraph_query_stays_indexed` can put
+/// it through `EXPLAIN QUERY PLAN`; both of its joins have to resolve as index
+/// searches.
+pub(super) fn reachable_cycle_family_sql(seed_count: usize) -> String {
+    let seed_rows = (1..=seed_count)
+        .map(|index| format!("SELECT ?{index}"))
+        .collect::<Vec<_>>()
+        .join(" UNION ");
+    let families = CYCLIC_RELATION_TYPES
+        .iter()
+        .map(|relation_type| format!("'{}'", relation_type_name(*relation_type)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // `UNION` (not `UNION ALL`) is what terminates the walk on an existing
+    // cycle: the registry is not guaranteed acyclic from this query's side.
+    //
+    // The collecting select uses `CROSS JOIN` purely to pin the join order.
+    // SQLite has no cardinality estimate for a recursive CTE, and its choice
+    // here is not stable: with a plain join the same statement plans as a
+    // `SEARCH` against this registry's schema but as a full `SCAN` of
+    // `task_bundle_relations` against a reduced one. A scan is exactly the
+    // cost this query exists to avoid, so the order is not left to the
+    // planner. `relation_subgraph_query_stays_indexed` checks the result.
+    format!(
+        "WITH RECURSIVE reachable(task_id) AS (
+             {seed_rows}
+             UNION
+             SELECT edge.target_task_id
+             FROM task_bundle_relations AS edge
+             JOIN reachable ON edge.source_task_id = reachable.task_id
+             WHERE edge.relation_type IN ({families})
+         )
+         SELECT edge.source_task_id, edge.relation_type, edge.target_task_id
+         FROM reachable
+         CROSS JOIN task_bundle_relations AS edge
+             ON edge.source_task_id = reachable.task_id
+         WHERE edge.relation_type IN ({families})
+         ORDER BY edge.source_task_id, edge.relation_type, edge.target_task_id"
+    )
+}
+
+/// The cycle-family edges forward-reachable from `seeds`, as one recursive
+/// walk of the registry's relation rows.
+///
+/// This is exactly the subgraph the cycle check can observe, so fetching the
+/// whole `task_bundle_relations` table on every task write only ever bought
+/// rows the validator would ignore. The walk deliberately crosses workspace
+/// boundaries — a relation may target a task in another workspace, and a cycle
+/// through one is still a cycle — so it cannot be narrowed to a
+/// `workspace_id = ?` filter.
+///
+/// Rows belonging to a replaced source are filtered by the caller rather than
+/// here: traversing through a stale edge can only over-collect real edges, and
+/// an over-collected edge whose only link into the graph was that stale edge
+/// is unreachable from the seeds and cannot change the verdict.
+fn reachable_cycle_family_edges(
+    conn: &Connection,
+    seeds: &BTreeSet<String>,
+) -> Result<Vec<TaskRelationEdge>, OrbitError> {
+    if seeds.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(&reachable_cycle_family_sql(seeds.len()))
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    let rows = stmt
+        .query_map(params_from_iter(seeds.iter()), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    let mut edges = Vec::new();
+    for row in rows {
+        let (source, relation_type, target) = row.map_err(|e| OrbitError::Store(e.to_string()))?;
+        edges.push(TaskRelationEdge {
+            source,
+            relation_type: parse_relation_type_name(&relation_type).map_err(OrbitError::Store)?,
+            target,
+        });
+    }
+    Ok(edges)
 }
 
 fn validate_relation_targets_exist(
@@ -1703,36 +1798,64 @@ fn validate_relation_targets_exist(
             source_workspace_id.to_string(),
         ));
     }
-    let known_prefixes = known_task_prefixes(conn)?;
+    let candidates = relations
+        .iter()
+        .filter(|relation| {
+            is_valid_orb_task_id(&relation.target)
+                && source_task_id != Some(relation.target.as_str())
+        })
+        .map(|relation| relation.target.clone())
+        .collect::<BTreeSet<_>>();
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let registered = registered_task_ids(conn, &candidates)?;
+    let active_prefix = active_task_prefix(conn)?;
+    let mut probed: BTreeMap<&str, bool> = BTreeMap::new();
     for relation in relations {
-        if is_valid_orb_task_id(&relation.target)
-            && source_task_id != Some(relation.target.as_str())
-            && task_bundle_by_id(conn, &relation.target)?.is_none()
-        {
-            let Some(prefix) = task_id_prefix(&relation.target) else {
-                continue;
-            };
-            if !known_prefixes.contains(prefix) {
-                continue;
-            }
-            return Err(OrbitError::InvalidInput(format!(
-                "task relation target '{}' from workspace '{}' does not resolve in the coordination registry",
-                relation.target, source_workspace_id
-            )));
+        if !candidates.contains(&relation.target) || registered.contains(&relation.target) {
+            continue;
         }
+        let Some(prefix) = task_id_prefix(&relation.target) else {
+            continue;
+        };
+        // An unresolvable target under a prefix this registry has never issued
+        // is a foreign id, not a dangling edge; only a known prefix means the
+        // task should have been here.
+        let known = if prefix == active_prefix {
+            true
+        } else {
+            match probed.get(prefix) {
+                Some(known) => *known,
+                None => {
+                    let known = task_prefix_is_registered(conn, prefix)?;
+                    probed.insert(prefix, known);
+                    known
+                }
+            }
+        };
+        if !known {
+            continue;
+        }
+        return Err(OrbitError::InvalidInput(format!(
+            "task relation target '{}' from workspace '{}' does not resolve in the coordination registry",
+            relation.target, source_workspace_id
+        )));
     }
     Ok(())
 }
 
+/// Every prefix this registry recognizes, materialized in full.
+///
+/// Only callers that already scan the registry want this — the audit in
+/// [`TaskRegistryStore::dangling_relation_targets`] tests many rows against the
+/// set, and [`TaskRegistryStore::known_task_prefixes`] exposes it. A write-path
+/// caller checking one target's prefix must use
+/// [`task_prefix_is_registered`] instead, which resolves the same predicate
+/// without reading every binding.
 fn known_task_prefixes(conn: &Connection) -> Result<BTreeSet<String>, OrbitError> {
-    let active: String = conn
-        .query_row(
-            "SELECT task_prefix FROM allocator_state WHERE authority = 'local'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
-    let mut prefixes = BTreeSet::from([active]);
+    let mut prefixes = BTreeSet::from([active_task_prefix(conn)?]);
     let mut statement = conn
         .prepare("SELECT task_id FROM task_bundle_bindings")
         .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -1747,6 +1870,67 @@ fn known_task_prefixes(conn: &Connection) -> Result<BTreeSet<String>, OrbitError
     }
     Ok(prefixes)
 }
+
+fn active_task_prefix(conn: &Connection) -> Result<String, OrbitError> {
+    conn.query_row(
+        "SELECT task_prefix FROM allocator_state WHERE authority = 'local'",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))
+}
+
+/// Which of `task_ids` have a registered bundle, resolved by one prepared
+/// statement of primary-key seeks instead of one statement per relation.
+fn registered_task_ids(
+    conn: &Connection,
+    task_ids: &BTreeSet<String>,
+) -> Result<BTreeSet<String>, OrbitError> {
+    let placeholders = (1..=task_ids.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT task_id FROM task_bundle_bindings WHERE task_id IN ({placeholders})"
+        ))
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    let rows = stmt
+        .query_map(params_from_iter(task_ids.iter()), |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    let mut registered = BTreeSet::new();
+    for row in rows {
+        registered.insert(row.map_err(|e| OrbitError::Store(e.to_string()))?);
+    }
+    Ok(registered)
+}
+
+/// Has this registry ever registered a task under `prefix`?
+///
+/// Probes the `task_bundle_bindings` primary key over the half-open range of
+/// ids beginning `<prefix>-`, rather than reading every binding and re-parsing
+/// its prefix. `'.'` is the byte immediately after `'-'`, so the upper bound
+/// excludes exactly the ids the lower bound admits. `prefix` comes from
+/// [`task_id_prefix`], so it is 2-5 uppercase ASCII letters.
+fn task_prefix_is_registered(conn: &Connection, prefix: &str) -> Result<bool, OrbitError> {
+    let exists: i64 = conn
+        .query_row(
+            TASK_PREFIX_PROBE_SQL,
+            params![format!("{prefix}-"), format!("{prefix}.")],
+            |row| row.get(0),
+        )
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    Ok(exists != 0)
+}
+
+/// The range probe behind [`task_prefix_is_registered`], named so
+/// `relation_subgraph_query_stays_indexed` can check its plan.
+pub(super) const TASK_PREFIX_PROBE_SQL: &str = "SELECT EXISTS(
+     SELECT 1 FROM task_bundle_bindings
+     WHERE task_id >= ?1 AND task_id < ?2
+ )";
 
 fn task_relation_edges(envelope: &TaskEnvelopeV2) -> Vec<TaskRelationEdge> {
     envelope
