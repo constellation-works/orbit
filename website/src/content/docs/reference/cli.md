@@ -81,7 +81,7 @@ See [Delivery Workflows](../../getting-started/workflows/).
 |---|---|
 | `orbit run cancel <run_id> --confirm` | Cancel a pending or running job run and release its task reservations. |
 | `orbit run concurrency <run_id> --set N` | Retune how many tasks a live drain keeps in flight. `--reason`, `--if-revision`. |
-| `orbit gc worktrees` | Report job-run worktrees whose task has settled; `--confirm` reaps them. |
+| `orbit gc worktrees` | Report job-run worktrees whose task has settled; `--confirm` reaps them. Dry-run skips the recursive byte estimate unless `--estimate-bytes`. |
 
 ## Observe
 

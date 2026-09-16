@@ -36,6 +36,7 @@ impl OrbitRuntime {
                 delete: true,
                 run_id: Some(run_id.to_string()),
                 older_than: None,
+                estimate_bytes: false,
             },
         )
         .map(Some)
@@ -46,6 +47,7 @@ impl OrbitRuntime {
         delete: bool,
         run_id: Option<String>,
         older_than_hours: Option<u64>,
+        estimate_bytes: bool,
     ) -> Result<WorktreeGcResult, OrbitError> {
         let runs = self.list_job_runs_for_worktree_gc()?;
         let older_than = older_than_hours
@@ -68,6 +70,7 @@ impl OrbitRuntime {
                 delete,
                 run_id,
                 older_than,
+                estimate_bytes,
             },
         )
     }
