@@ -198,28 +198,64 @@ impl CiQueries for FakeQueries {
         job_id: u64,
         scope: LogScope,
         max_bytes: usize,
+        _cached_view: Option<&Value>,
     ) -> Result<RunLog, OrbitError> {
+        // Collection now issues one log read per job, choosing `Failed` or
+        // `All` from the checkout-read budget rather than always starting
+        // with `Failed`. A fixture written against the old two-read design
+        // may have scripted its content, error, or fallback under whichever
+        // scope the old primary read used — usually `Failed` (`false`). Every
+        // lookup below therefore prefers the exact requested scope and falls
+        // back to the other one, and job/run content is concatenated across
+        // both scope keys so a fixture that deliberately split complementary
+        // evidence (e.g. a diagnostic under `Failed` and a checkout marker
+        // under `All`) still reads as one combined log — exactly as it would
+        // if that job only ever got a single real `gh` read.
+        let exact = (run_id.to_string(), scope == LogScope::All);
+        let other = (run_id.to_string(), scope != LogScope::All);
         if let Some(message) = self
             .log_errors
-            .get(&(run_id.to_string(), scope == LogScope::All))
+            .get(&exact)
+            .or_else(|| self.log_errors.get(&other))
         {
             return Err(OrbitError::Execution(message.clone()));
         }
-        let key = (run_id.to_string(), scope == LogScope::All);
-        if let Some((raw, jobs)) = self.job_log_fallbacks.get(&key) {
+        if let Some((raw, jobs)) = self
+            .job_log_fallbacks
+            .get(&exact)
+            .or_else(|| self.job_log_fallbacks.get(&other))
+        {
             let mut log = super::super::query::bounded_run_log(raw, max_bytes);
             log.source = orbit_tools::github_cli::SOURCE_JOB_API_LOG.to_string();
             log.source_jobs = jobs.clone();
             return Ok(log);
         }
-        let raw = self
-            .job_logs
-            .get(&(run_id.to_string(), job_id, scope == LogScope::All))
-            .or_else(|| self.logs.get(&key))
+        let job_content =
+            |all_scope: bool| self.job_logs.get(&(run_id.to_string(), job_id, all_scope));
+        let raw = if job_content(false).is_some() || job_content(true).is_some() {
+            [job_content(false), job_content(true)]
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("")
+        } else {
+            [
+                self.logs.get(&(run_id.to_string(), false)),
+                self.logs.get(&(run_id.to_string(), true)),
+            ]
+            .into_iter()
+            .flatten()
             .cloned()
-            .unwrap_or_default();
+            .collect::<Vec<_>>()
+            .join("")
+        };
         let mut log = super::super::query::bounded_run_log(&raw, max_bytes);
-        log.fallback_error = self.log_fallback_errors.get(&key).cloned();
+        log.fallback_error = self
+            .log_fallback_errors
+            .get(&exact)
+            .or_else(|| self.log_fallback_errors.get(&other))
+            .cloned();
         Ok(log)
     }
 
