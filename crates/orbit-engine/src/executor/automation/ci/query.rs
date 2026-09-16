@@ -11,6 +11,7 @@
 //! `orbit_tools::github_cli`, so the shape of a `gh` call has exactly one
 //! owner in the workspace.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -81,6 +82,72 @@ pub(super) struct RunLog {
     pub(super) checkout_evidence_display_truncated: bool,
 }
 
+/// The heads visible on `origin` for one CI sweep.
+///
+/// Production callers populate `heads` with one repository-wide
+/// `ls-remote --heads` result. The per-branch and whole-query error fields let
+/// scripted tests retain the old distinction between an absent ref and a
+/// transient probe failure while all production lookups remain local.
+#[derive(Debug, Default)]
+pub(super) struct RemoteBranchHeads {
+    heads: BTreeMap<String, String>,
+    branch_errors: BTreeMap<String, String>,
+    query_error: Option<String>,
+}
+
+impl RemoteBranchHeads {
+    fn from_heads(heads: BTreeMap<String, String>) -> Self {
+        Self {
+            heads,
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn from_query_error(message: String) -> Self {
+        Self {
+            query_error: Some(message),
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn from_scripted(
+        heads: BTreeMap<String, String>,
+        branch_errors: BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            heads,
+            branch_errors,
+            query_error: None,
+        }
+    }
+
+    pub(super) fn head(&self, branch: &str) -> Result<Option<String>, OrbitError> {
+        if let Some(message) = self.branch_errors.get(branch) {
+            return Err(OrbitError::Execution(message.clone()));
+        }
+        if let Some(message) = &self.query_error {
+            return Err(OrbitError::Execution(message.clone()));
+        }
+        Ok(self.heads.get(branch).cloned())
+    }
+}
+
+fn parse_remote_branch_heads(output: &str) -> BTreeMap<String, String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (sha, reference) = line.split_once('\t')?;
+            let branch = reference.strip_prefix("refs/heads/")?;
+            let sha = sha.trim();
+            if sha.is_empty() || branch.is_empty() {
+                return None;
+            }
+            Some((branch.to_string(), sha.to_string()))
+        })
+        .collect()
+}
+
 /// The reads the CI stages are allowed to make.
 ///
 /// A trait rather than free functions so the stages can be exercised against
@@ -102,9 +169,8 @@ pub(super) trait CiQueries {
         scope: LogScope,
         max_bytes: usize,
     ) -> Result<RunLog, OrbitError>;
-    /// Current remote head of `branch`, or `None` when the remote has no such
-    /// branch. Reads `origin` without mutating anything locally.
-    fn remote_branch_head(&self, branch: &str) -> Result<Option<String>, OrbitError>;
+    /// Read all current heads from `origin` once for this sweep.
+    fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError>;
 }
 
 /// The production implementation: `gh` and `git`, run on the host.
@@ -253,17 +319,14 @@ impl CiQueries for HostCiQueries {
         })
     }
 
-    fn remote_branch_head(&self, branch: &str) -> Result<Option<String>, OrbitError> {
+    fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError> {
         let output = super::super::vcs::git::git_output(
             &self.repo_root,
-            &["ls-remote", "--heads", "origin", "--", branch],
+            &["ls-remote", "--heads", "origin"],
         )?;
-        Ok(output
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().next())
-            .filter(|sha| !sha.is_empty())
-            .map(ToOwned::to_owned))
+        Ok(RemoteBranchHeads::from_heads(parse_remote_branch_heads(
+            &output,
+        )))
     }
 }
 
@@ -294,5 +357,29 @@ pub(super) fn bounded_run_log(raw: &str, max_bytes: usize) -> RunLog {
         checkout_evidence_scanned_bytes: evidence.scanned_bytes,
         checkout_evidence_source_truncated: evidence.source_truncated,
         checkout_evidence_display_truncated: evidence.display_truncated,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_remote_branch_heads;
+
+    #[test]
+    fn parses_heads_without_remote_ref_prefixes() {
+        let heads = parse_remote_branch_heads(
+            "1111111111111111111111111111111111111111\trefs/heads/main\n\
+             2222222222222222222222222222222222222222\trefs/heads/feature/x\n\
+             malformed\n",
+        );
+
+        assert_eq!(heads.len(), 2);
+        assert_eq!(
+            heads.get("main").map(String::as_str),
+            Some("1111111111111111111111111111111111111111")
+        );
+        assert_eq!(
+            heads.get("feature/x").map(String::as_str),
+            Some("2222222222222222222222222222222222222222")
+        );
     }
 }

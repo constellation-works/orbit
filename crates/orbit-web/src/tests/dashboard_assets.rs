@@ -1,15 +1,17 @@
 use axum::body::to_bytes;
-use axum::http::{HeaderValue, header};
+use axum::http::{HeaderMap, HeaderValue, header};
 use axum::response::Response;
+use flate2::read::GzDecoder;
 use std::fs;
+use std::io::Read;
 use std::process::Command;
 
 use crate::{
     DASHBOARD_CSP, serve_app_js, serve_audit_js, serve_automation_js, serve_common_js,
-    serve_diagnostics_js, serve_field_editor_js, serve_index, serve_inter_font,
-    serve_jetbrains_mono_font, serve_log_tail_js, serve_markdown_js, serve_marked_js,
-    serve_operations_js, serve_purify_js, serve_reliability_js, serve_router_js,
-    serve_run_detail_js, serve_runs_js, serve_scoreboard_js, serve_tasks_js,
+    serve_dashboard_css, serve_diagnostics_js, serve_field_editor_js, serve_index,
+    serve_index_with_headers, serve_inter_font, serve_jetbrains_mono_font, serve_log_tail_js,
+    serve_markdown_js, serve_marked_js, serve_operations_js, serve_purify_js, serve_reliability_js,
+    serve_router_js, serve_run_detail_js, serve_runs_js, serve_scoreboard_js, serve_tasks_js,
 };
 
 // The recent-history, aggregate-request, and route-selection assertions
@@ -55,6 +57,7 @@ fn run_dashboard_javascript_test(script: &str) {
 async fn dashboard_html_and_js_routes_emit_csp() {
     let routes = [
         ("index", serve_index().await),
+        ("dashboard_css", serve_dashboard_css().await),
         ("inter", serve_inter_font().await),
         ("jetbrains_mono", serve_jetbrains_mono_font().await),
         ("marked", serve_marked_js().await),
@@ -83,6 +86,71 @@ async fn dashboard_html_and_js_routes_emit_csp() {
             "{name} route must emit the dashboard CSP"
         );
     }
+}
+
+#[tokio::test]
+async fn dashboard_assets_emit_validators_and_revalidate() {
+    let initial = serve_index().await;
+    let etag = initial
+        .headers()
+        .get(header::ETAG)
+        .cloned()
+        .expect("dashboard assets must emit an ETag");
+
+    assert_eq!(initial.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        initial.headers().get(header::CACHE_CONTROL),
+        Some(&HeaderValue::from_static("no-cache"))
+    );
+
+    let mut request_headers = HeaderMap::new();
+    request_headers.insert(header::IF_NONE_MATCH, etag.clone());
+    let revalidated = serve_index_with_headers(request_headers).await;
+
+    assert_eq!(revalidated.status(), axum::http::StatusCode::NOT_MODIFIED);
+    assert_eq!(revalidated.headers().get(header::ETAG), Some(&etag));
+    assert_eq!(
+        revalidated.headers().get(header::CONTENT_SECURITY_POLICY),
+        Some(&HeaderValue::from_static(DASHBOARD_CSP))
+    );
+    assert!(
+        to_bytes(revalidated.into_body(), usize::MAX)
+            .await
+            .expect("read 304 response body")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn dashboard_assets_serve_precompressed_gzip_bodies() {
+    let plain = to_bytes(serve_index().await.into_body(), usize::MAX)
+        .await
+        .expect("read uncompressed dashboard body");
+    let mut request_headers = HeaderMap::new();
+    request_headers.insert(
+        header::ACCEPT_ENCODING,
+        HeaderValue::from_static("br, gzip;q=1.0"),
+    );
+
+    let compressed = serve_index_with_headers(request_headers).await;
+    assert_eq!(
+        compressed.headers().get(header::CONTENT_ENCODING),
+        Some(&HeaderValue::from_static("gzip"))
+    );
+    assert_eq!(
+        compressed.headers().get(header::VARY),
+        Some(&HeaderValue::from_static("Accept-Encoding"))
+    );
+
+    let compressed_body = to_bytes(compressed.into_body(), usize::MAX)
+        .await
+        .expect("read compressed dashboard body");
+    let mut decoder = GzDecoder::new(compressed_body.as_ref());
+    let mut decoded = Vec::new();
+    decoder
+        .read_to_end(&mut decoded)
+        .expect("decompress dashboard body");
+    assert_eq!(decoded, plain.as_ref());
 }
 
 #[tokio::test]

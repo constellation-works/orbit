@@ -2436,6 +2436,7 @@ dependencies = [
  "blake3",
  "chrono",
  "clap",
+ "flate2",
  "futures-core",
  "libc",
  "orbit-cmd",

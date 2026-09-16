@@ -24,7 +24,7 @@ use orbit_common::security::redaction::redact_all;
 use serde_json::{Value, json};
 
 use super::investigate::investigate;
-use super::query::CiQueries;
+use super::query::{CiQueries, RemoteBranchHeads};
 use super::{
     OUTCOME_CAPABILITY_UNAVAILABLE, OUTCOME_CURRENT_FAILURES, OUTCOME_NO_CURRENT_FAILURE,
     OUTCOME_RETRYABLE_ERROR, bounded_u64, optional_input_string, unsuccessful_conclusion,
@@ -195,8 +195,13 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
         .map(ToOwned::to_owned);
 
     let mut notes: Vec<String> = Vec::new();
+    let branch_heads = match queries.remote_branch_heads() {
+        Ok(heads) => heads,
+        Err(error) => RemoteBranchHeads::from_query_error(error.to_string()),
+    };
     let refs = derive_refs(
         queries,
+        &branch_heads,
         input,
         default_branch.as_deref(),
         &bounds,
@@ -230,7 +235,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
             bounds.max_runs, bounds.max_runs
         ));
     }
-    let probes = probe_branches(queries, &refs, &runs, &bounds, &mut notes);
+    let probes = probe_branches(&branch_heads, &refs, &runs, &bounds, &mut notes);
     let mut partition = RunPartition::default();
     partition_runs(
         &refs,
@@ -439,6 +444,7 @@ pub(super) fn collect<Q: CiQueries + ?Sized>(
 /// convention, and when the two coincide the ref is scanned once.
 fn derive_refs<Q: CiQueries + ?Sized>(
     queries: &Q,
+    branch_heads: &RemoteBranchHeads,
     input: &Value,
     default_branch: Option<&str>,
     bounds: &Bounds,
@@ -464,7 +470,7 @@ fn derive_refs<Q: CiQueries + ?Sized>(
         if refs.iter().any(|scanned| scanned.branch == branch) {
             continue;
         }
-        let head_sha = match queries.remote_branch_head(&branch) {
+        let head_sha = match branch_heads.head(&branch) {
             Ok(head) => head,
             Err(error) => {
                 push_retryable_error(
@@ -562,12 +568,13 @@ struct CandidateProbeResults {
 /// historical pull requests consume every sweep's investigation budget.
 ///
 /// The probe is authoritative (origin, not a naming convention) and bounded:
-/// one query per distinct branch that actually carries a red run, and none at
-/// all for a branch already scanned as a landing head or an open pull request.
-/// A probe that fails or is skipped due to probe budget keeps its branch
-/// deferred rather than assuming it is merged or current.
-fn probe_branches<Q: CiQueries + ?Sized>(
-    queries: &Q,
+/// one repository-wide head query supplies local answers for every branch that
+/// actually carries a red run, and none of those answers are requested for a
+/// branch already scanned as a landing head or an open pull request. A probe
+/// that fails or is skipped due to probe budget keeps its branch deferred rather
+/// than assuming it is merged or current.
+fn probe_branches(
+    branch_heads: &RemoteBranchHeads,
     refs: &[ScannedRef],
     runs: &[Value],
     bounds: &Bounds,
@@ -620,7 +627,7 @@ fn probe_branches<Q: CiQueries + ?Sized>(
             continue;
         }
 
-        match queries.remote_branch_head(branch) {
+        match branch_heads.head(branch) {
             Ok(None) => {
                 retired.insert((*branch).to_string());
             }

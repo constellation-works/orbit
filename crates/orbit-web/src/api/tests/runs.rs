@@ -74,12 +74,20 @@ async fn request_dashboard_run_events_query(
 }
 
 async fn request_dashboard_run_logs(runtime: OrbitRuntime, encoded_run_id: &str) -> Response {
+    request_dashboard_run_logs_query(runtime, encoded_run_id, "").await
+}
+
+async fn request_dashboard_run_logs_query(
+    runtime: OrbitRuntime,
+    encoded_run_id: &str,
+    query: &str,
+) -> Response {
     Router::new()
         .nest("/api", router())
         .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
         .oneshot(
             Request::builder()
-                .uri(format!("/api/runs/{encoded_run_id}/logs"))
+                .uri(format!("/api/runs/{encoded_run_id}/logs{query}"))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -227,6 +235,59 @@ async fn list_run_logs_returns_bounded_redacted_step_records() {
     assert!(preview.contains("[REDACTED_AUTH]"));
     assert!(!preview.contains("sk-test-secret"));
     assert_eq!(rows[0]["stderr_truncated"], true);
+}
+
+#[tokio::test]
+async fn list_run_logs_stops_after_requested_limit() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let run_id = "jrun-log-limit";
+    let audit_root = runtime.data_root().join("state").join("audit");
+    let blob_store = BlobStore::new(audit_root.join("blobs"));
+    let stdout_one = blob_store.write(b"one\n").expect("write stdout one");
+    let stdout_two = blob_store.write(b"two\n").expect("write stdout two");
+    let stdout_three = blob_store.write(b"three\n").expect("write stdout three");
+    seed_v2_audit_events(
+        &runtime,
+        run_id,
+        vec![
+            json!({
+                "schemaVersion": 1,
+                "event_type": "cli.invocation.finished",
+                "event_id": "evt-one",
+                "run_id": run_id,
+                "body_kind": "cli_invocation_finished",
+                "stdout_blob_ref": stdout_one,
+                "exit_code": 1
+            }),
+            json!({
+                "schemaVersion": 1,
+                "event_type": "cli.invocation.finished",
+                "event_id": "evt-two",
+                "run_id": run_id,
+                "body_kind": "cli_invocation_finished",
+                "stdout_blob_ref": stdout_two,
+                "exit_code": 2
+            }),
+            json!({
+                "schemaVersion": 1,
+                "event_type": "cli.invocation.finished",
+                "event_id": "evt-three",
+                "run_id": run_id,
+                "body_kind": "cli_invocation_finished",
+                "stdout_blob_ref": stdout_three,
+                "exit_code": 3
+            }),
+        ],
+    );
+
+    let response = request_dashboard_run_logs_query(runtime, run_id, "?limit=1").await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    let rows = payload.as_array().expect("rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["event_id"], "evt-one");
+    assert_eq!(rows[0]["stdout_preview"], "one\n");
 }
 
 #[tokio::test]
