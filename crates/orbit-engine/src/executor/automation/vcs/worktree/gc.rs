@@ -98,13 +98,32 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
             }));
             continue;
         }
-        reports.push(classify_known(
-            repo_root,
-            path,
-            selected_runs[0],
-            task_host,
-            options,
-        )?);
+        let run = selected_runs[0];
+        // A single candidate's failure — a git timeout the recovery path
+        // could not absorb, a filesystem error, anything else unexpected —
+        // must not abort the sweep before it reaches every other worktree.
+        // Report it and move on; the pass as a whole still succeeds with a
+        // partial summary.
+        let report =
+            classify_known(repo_root, path, run, task_host, options).unwrap_or_else(|error| {
+                tracing::warn!(
+                    path = %path.display(),
+                    run_id = %run.run_id,
+                    %error,
+                    "worktree GC failed to classify or remove a worktree; continuing the sweep"
+                );
+                WorktreeGcReport {
+                    path: path.clone(),
+                    run_id: Some(run.run_id.clone()),
+                    run_state: Some(run.state),
+                    task_id: None,
+                    task_status: None,
+                    pr_status: None,
+                    action: format!("failed:{error}"),
+                    bytes_reclaimed: 0,
+                }
+            });
+        reports.push(report);
     }
 
     if options.run_id.is_none() {
