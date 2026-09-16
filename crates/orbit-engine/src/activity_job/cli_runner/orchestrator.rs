@@ -9,7 +9,9 @@ use orbit_agent::{
     project_cli_response, provider_invocation_diagnostic, response_envelope_protocol_check,
 };
 use orbit_common::process::identity::process_start_identity_token;
-use orbit_common::security::redaction::{PatternRedactor, redact_sensitive_env_text};
+use orbit_common::security::redaction::{
+    PatternRedactor, argv_redactor, redact_sensitive_env_text,
+};
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
 use orbit_types::workflow::ExecutorSandboxKind;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, TrustedHostAdmission, V2AuditEventKind};
@@ -260,7 +262,7 @@ pub fn run_cli_backend(
     // parent is `<trusted sandbox-exec> -f <profile.sb> <program> <args...>`;
     // under bare exec it's `<program> <args...>`. The redactor still scrubs
     // the child's program name + args so secrets in argv stay redacted.
-    let redaction = PatternRedactor::with_argv_secrets();
+    let redaction = argv_redactor();
     let audit_argv = try_audit_argv_for_dispatch(
         &resolved_program,
         &subprocess_args,

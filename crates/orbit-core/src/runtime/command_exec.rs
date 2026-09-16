@@ -24,7 +24,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use orbit_common::OrbitError;
-use orbit_common::security::redaction::{PatternRedactor, is_sensitive_env_name};
+use orbit_common::security::redaction::{argv_redactor, is_sensitive_env_name};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ExecutionResult;
 use serde_json::json;
@@ -97,7 +97,7 @@ impl OrbitRuntime {
         } else {
             AuditEventStatus::Failure
         };
-        let redaction = PatternRedactor::with_argv_secrets();
+        let redaction = argv_redactor();
         let argv_redacted: Vec<String> = full_argv
             .iter()
             .map(|arg| redaction.apply_str(arg))

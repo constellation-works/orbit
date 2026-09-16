@@ -441,10 +441,9 @@ fn validate_bound_recovery_context(input: &Value) -> Result<(), DispatchError> {
 }
 
 fn redacted_recovery_diagnostic(message: &str) -> String {
-    use orbit_common::security::redaction::{PatternRedactor, redact_sensitive_env_text};
+    use orbit_common::security::redaction::{argv_redactor, redact_sensitive_env_text};
 
-    let redacted =
-        PatternRedactor::with_argv_secrets().apply_str(&redact_sensitive_env_text(message));
+    let redacted = argv_redactor().apply_str(&redact_sensitive_env_text(message));
     let mut bounded: String = redacted.chars().take(4096).collect();
     if bounded.len() < redacted.len() {
         bounded.push('…');
