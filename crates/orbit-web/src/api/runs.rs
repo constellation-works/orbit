@@ -541,6 +541,7 @@ pub(super) async fn list_run_logs(
     let limit = bounded_limit(q.limit, HISTORY_DEFAULT_LIMIT);
     let run_id = run_id.to_string();
     match blocking("run logs", move || {
+        runtime.show_job_run(&run_id)?;
         runtime.collect_run_cli_invocations_bounded(
             &run_id,
             Some(limit),
