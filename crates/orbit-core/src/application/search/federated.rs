@@ -204,7 +204,14 @@ fn fan_out(
         return targets
             .iter()
             .map(|target| {
-                query_one_workspace(catalog, target, params, query_model, embedder, embedder_pool)
+                query_one_workspace(
+                    catalog,
+                    target,
+                    params,
+                    query_model,
+                    embedder,
+                    embedder_pool,
+                )
             })
             .collect();
     }
@@ -219,7 +226,14 @@ fn fan_out(
             };
             claimed.push((
                 index,
-                query_one_workspace(catalog, target, params, query_model, embedder, embedder_pool),
+                query_one_workspace(
+                    catalog,
+                    target,
+                    params,
+                    query_model,
+                    embedder,
+                    embedder_pool,
+                ),
             ));
         }
     };

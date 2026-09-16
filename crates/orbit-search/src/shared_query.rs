@@ -17,7 +17,7 @@ use orbit_common::OrbitError;
 
 use crate::commands::resolve_query_model;
 use crate::embedder::Embedder;
-use crate::subprocess::SubprocessEmbedder;
+use crate::subprocess::{CompanionStderr, SubprocessEmbedder};
 
 /// One batch and the vectors it produced.
 #[derive(Debug)]
@@ -58,9 +58,9 @@ impl SharedQueryEmbedder {
     /// that already resolved the model can pass it rather than resolve twice.
     pub fn for_query_model(model: Option<&str>) -> Result<Self, OrbitError> {
         let spec = resolve_query_model(model)?;
-        Ok(Self::new(Box::new(SubprocessEmbedder::with_model(
-            spec.alias,
-        )?)))
+        Ok(Self::new(Box::new(
+            SubprocessEmbedder::with_model_and_stderr(spec.alias, CompanionStderr::Inherit)?,
+        )))
     }
 }
 
