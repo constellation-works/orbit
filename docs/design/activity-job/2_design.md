@@ -226,22 +226,44 @@ sandbox deliberately retains the read-only linked-worktree Git metadata
 boundary: the leaf does not stage, abort, continue, or restart a rebase. After
 a successful terminal invocation, the host-side worktree boundary rechecks the
 live run and task owner, retry-lineage worktree checkpoint, prepared branch,
-original HEAD and merge base, pinned target ref and SHA, stopped-rebase
-metadata, and exact unmerged path set. It rejects incomplete or out-of-scope
-file edits, stages only that authenticated set, and runs one `rebase
---continue`. A later conflict or changed/cancelled owner remains a failed
-recovery; the terminal handoff keeps the original error and preserved
-candidate/PR evidence. The boundary finally requires the target as an ancestor
+original HEAD and merge base, stopped-rebase metadata (whose `onto` is the
+pinned target SHA), and exact unmerged path set. It rejects incomplete or
+out-of-scope file edits, stages only that authenticated set, and runs one
+`rebase --continue`. A later conflict or changed/cancelled owner remains a
+failed recovery; the terminal handoff keeps the original error and preserved
+candidate/PR evidence. The boundary then requires the target as an ancestor
 and a remaining candidate commit. Ordinary providers still cannot move HEAD;
 primary-checkout drift checks apply to recovery too.
+
+After [DANI-10439], the base ref itself is not part of that identity. A linked
+worktree shares remote-tracking refs with every sibling checkout, so on a busy
+integration branch `origin/<base>` has usually advanced past the pin before
+the leaf even starts; requiring the ref to still equal the pin turned the
+common case into a guaranteed failure. The leaf instruction lists only the
+identity checks that remain (cancelled run, task refusing writes, checked-out
+branch or pre-rewrite HEAD mismatch, missing completion authority) and treats
+the repository gates as advisory: `make ci-fast` / `make ci-lint` outcomes are
+reported in the result's `gates` field, and only a failure involving a
+resolved path is the leaf's to fix. After the pinned continuation the host
+reads the base ref again; when its tip descends from the pin it rebases the
+continued candidate onto that tip, so the candidate lands on the newest base
+rather than a stale one. A follow-up that conflicts is aborted and the
+resolved pinned result is kept. The persisted checkpoint records both
+`target_base_sha` (the pin) and `base_sha` (the base the candidate now sits
+on); the deterministic `git_rebase` retry recognizes the checkpoint by the pin
+it still carries and judges freshness against the landed base, so its output
+`base_sha` — which `pr_open`, the review gate, and `pr_complete` consume — is
+the base the candidate was actually integrated with. A base that moves on
+again after the host landed the candidate is still the ordinary stale-pin
+refusal.
 
 The stopped index also contains the candidate's nonconflicting changes. Host
 continuation commits those staged paths normally; their disappearance from the
 dirty-path map is not unrelated editing. After continuation, tracked state must
 be clean and pre-existing untracked contents must be unchanged. Only after all
 boundary checks succeed does the host transactionally persist the exact recovered
-HEAD, original HEAD/base, pinned target, branch, task IDs, workspace, run/step and
-pre-rewrite remote lease in `PipelineState.rebase_recovery_checkpoints`. This is
+HEAD, original HEAD/base, pinned target, landed base, branch, task IDs, workspace,
+run/step and pre-rewrite remote lease in `PipelineState.rebase_recovery_checkpoints`. This is
 recovery provenance, not a successful workflow step. Missing run storage or a
 checkpoint write failure prevents recovery success.
 

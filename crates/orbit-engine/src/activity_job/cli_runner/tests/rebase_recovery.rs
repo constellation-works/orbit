@@ -93,6 +93,140 @@ printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
     }
 }
 
+// A busy integration branch advances past the recorded pin almost every
+// time the leaf runs, whether before the boundary captures the worktree or
+// while the provider is still editing. The pinned stopped rebase is continued
+// as recorded, and the host then carries the candidate onto the newest base.
+#[test]
+fn conflict_recovery_follows_a_base_that_advanced_past_the_pin() {
+    for moved_during_provider in [false, true] {
+        let recovery = stopped_rebase_fixture(false);
+        let primary = recovery.fixture.primary.display().to_string();
+        let advance = format!(
+            "printf 'second advance\\n' > '{primary}/advance.txt'\ngit -C '{primary}' add advance.txt\ngit -C '{primary}' commit -q -m 'advance base again'\n"
+        );
+        if !moved_during_provider {
+            advance_primary_base(&recovery.fixture.primary, "advance.txt", "second advance\n");
+        }
+        let script = recovery.fixture.root().join("codex");
+        write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\nset -eu\ncat > /dev/null\n{}printf 'candidate and target\\n' > README.md\nprintf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+                if moved_during_provider {
+                    advance.as_str()
+                } else {
+                    ""
+                }
+            ),
+        );
+        let mut host = TestHost::with_command(script.display().to_string());
+        host.workspace_root = Some(recovery.fixture.primary.clone());
+
+        let outcome = run_cli_backend(
+            &host,
+            &test_agent_loop_spec(Duration::from_secs(30)),
+            "pr_conflict_recovery",
+            "run-rebase-recovery",
+            test_audit("run-rebase-recovery-advanced", "codex"),
+            &conflict_recovery_input(&recovery),
+            None,
+        )
+        .expect("a base that advanced past the pin is reconciled, not refused");
+        assert!(
+            outcome.success,
+            "moved_during_provider={moved_during_provider}"
+        );
+
+        let newest_base = git_head(&recovery.fixture.primary);
+        assert_ne!(newest_base, recovery.target, "the base advanced twice");
+        let head = git_head(&recovery.fixture.assigned);
+        assert_ne!(head, recovery.original);
+        assert_ne!(head, newest_base);
+        git_ok(
+            &recovery.fixture.assigned,
+            &["merge-base", "--is-ancestor", &newest_base, "HEAD"],
+        );
+        assert!(git_bytes(&recovery.fixture.assigned, &["ls-files", "-u"]).is_empty());
+        assert!(!rebase_in_progress(&recovery.fixture.assigned));
+        assert_eq!(
+            fs::read_to_string(recovery.fixture.assigned.join("README.md")).unwrap(),
+            "candidate and target\n"
+        );
+        assert_eq!(
+            fs::read_to_string(recovery.fixture.assigned.join("advance.txt")).unwrap(),
+            "second advance\n",
+            "the candidate now contains the newest base"
+        );
+        assert_eq!(
+            fs::read_to_string(recovery.fixture.assigned.join("candidate.txt")).unwrap(),
+            "nonconflicting candidate\n"
+        );
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&fs::read(script.with_extension("sync_base.json")).unwrap())
+                .unwrap();
+        assert_eq!(persisted["head_sha"], head);
+        assert_eq!(persisted["head_sha_before"], recovery.original);
+        assert_eq!(persisted["target_base_sha"], recovery.target);
+        assert_eq!(persisted["base_sha"], newest_base);
+        assert_eq!(persisted["rewritten"], true);
+    }
+}
+
+// When the newest base conflicts with the resolved candidate again, the host
+// keeps the resolved pinned result rather than losing it to an abandoned
+// second rebase; the retry then reports the remaining base advance.
+#[test]
+fn conflict_recovery_keeps_the_pinned_result_when_the_advanced_base_conflicts_again() {
+    let recovery = stopped_rebase_fixture(false);
+    advance_primary_base(&recovery.fixture.primary, "README.md", "target two\n");
+    let newest_base = git_head(&recovery.fixture.primary);
+    let script = recovery.fixture.root().join("codex");
+    write_executable(
+        &script,
+        "#!/bin/sh\nset -eu\ncat > /dev/null\nprintf 'candidate and target\\n' > README.md\nprintf '%s\\n' '{\"schemaVersion\":1,\"status\":\"success\",\"result\":{},\"error\":null}'\n",
+    );
+    let mut host = TestHost::with_command(script.display().to_string());
+    host.workspace_root = Some(recovery.fixture.primary.clone());
+
+    let outcome = run_cli_backend(
+        &host,
+        &test_agent_loop_spec(Duration::from_secs(30)),
+        "pr_conflict_recovery",
+        "run-rebase-recovery",
+        test_audit("run-rebase-recovery-advanced-conflict", "codex"),
+        &conflict_recovery_input(&recovery),
+        None,
+    )
+    .expect("the pinned continuation still completes");
+    assert!(outcome.success);
+
+    let head = git_head(&recovery.fixture.assigned);
+    assert_ne!(head, recovery.original);
+    git_ok(
+        &recovery.fixture.assigned,
+        &["merge-base", "--is-ancestor", &recovery.target, "HEAD"],
+    );
+    let rev_list =
+        String::from_utf8(git_bytes(&recovery.fixture.assigned, &["rev-list", "HEAD"])).unwrap();
+    assert!(
+        !rev_list.contains(&newest_base),
+        "the conflicting newest base was not absorbed"
+    );
+    assert!(!rebase_in_progress(&recovery.fixture.assigned));
+    assert!(git_bytes(&recovery.fixture.assigned, &["ls-files", "-u"]).is_empty());
+    assert_eq!(
+        fs::read_to_string(recovery.fixture.assigned.join("README.md")).unwrap(),
+        "candidate and target\n"
+    );
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&fs::read(script.with_extension("sync_base.json")).unwrap())
+            .unwrap();
+    assert_eq!(persisted["head_sha"], head);
+    assert_eq!(persisted["target_base_sha"], recovery.target);
+    assert_eq!(persisted["base_sha"], recovery.target);
+}
+
 #[test]
 fn conflict_recovery_refuses_incomplete_or_out_of_scope_agent_edits() {
     for (name, body, expected) in [
@@ -412,6 +546,23 @@ fn conflict_recovery_input(recovery: &StoppedRebaseFixture) -> serde_json::Value
         "base_sha": recovery.target,
     });
     input
+}
+
+fn advance_primary_base(primary: &Path, file: &str, content: &str) {
+    fs::write(primary.join(file), content).unwrap();
+    git_ok(primary, &["add", file]);
+    git_ok(primary, &["commit", "-m", "advance base again"]);
+}
+
+fn rebase_in_progress(repo: &Path) -> bool {
+    ["rebase-merge", "rebase-apply"].iter().any(|backend| {
+        let path = String::from_utf8(git_bytes(
+            repo,
+            &["rev-parse", "--path-format=absolute", "--git-path", backend],
+        ))
+        .unwrap();
+        Path::new(path.trim()).is_dir()
+    })
 }
 
 fn git_head(repo: &Path) -> String {

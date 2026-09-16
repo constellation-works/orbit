@@ -167,6 +167,25 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
         )?);
     }
 
+    let current_sha = commit_sha(&context.workspace_path, head)?;
+    // A rewritten HEAD is judged by its host-certified recovery checkpoint,
+    // looked up once here. That checkpoint also names the base the host
+    // actually landed the candidate on: conflict recovery continues the
+    // stopped rebase at the prepared pin and then follows a base that
+    // advanced past it, so the retry must judge freshness against that
+    // landed base rather than the stale pin.
+    let recovery = if sync_required && current_sha != head_sha_before {
+        recovered_rewrite(host, input, context, &current_sha)?
+    } else {
+        RecoveryCheckpointLookup::Absent
+    };
+    let base_sha = match &recovery {
+        RecoveryCheckpointLookup::Certified(checkpoint) => {
+            required_input_string(checkpoint, "base_sha")?
+        }
+        RecoveryCheckpointLookup::Uncertified | RecoveryCheckpointLookup::Absent => base_sha,
+    };
+
     let observed_base_sha = commit_sha(&context.workspace_path, base_ref)?;
     if observed_base_sha != base_sha {
         return Err(OrbitError::Execution(format!(
@@ -174,7 +193,6 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
         )));
     }
 
-    let current_sha = commit_sha(&context.workspace_path, head)?;
     let current = branch_freshness_against_ref(&context.workspace_path, head, base_ref, base_sha)?;
     if current.commits_ahead == 0 {
         return Err(OrbitError::Execution(format!(
@@ -191,26 +209,33 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
             }
             ("skipped_current", false, current_sha)
         } else if sync_required {
-            if validate_recovered_rewrite(host, input, context, &current_sha)? {
-                ("reused_recovery", true, current_sha)
-            } else {
-                // No host-certified evidence justifies inheriting this changed
-                // HEAD (a pre-authority-boundary checkpoint, a forged one, or
-                // none at all — the certificate check cannot tell them apart,
-                // and none of them is trusted). Discard it and redo the rebase
-                // from the durable pre-rewrite checkpoint instead: a clean
-                // redo produces a freshly self-verified HEAD, and a redo that
-                // hits conflicts falls into the ordinary supported
-                // conflict-recovery path, which certifies fresh evidence on
-                // completion.
-                discard_unauthenticated_rewrite(&context.workspace_path, head_sha_before)?;
-                perform_rebase_onto_base(
-                    &context.workspace_path,
-                    head,
-                    head_sha_before,
-                    base_ref,
-                    base_sha,
-                )?
+            match recovery {
+                RecoveryCheckpointLookup::Certified(_) => ("reused_recovery", true, current_sha),
+                RecoveryCheckpointLookup::Uncertified => {
+                    // No host-certified evidence justifies inheriting this
+                    // changed HEAD (a pre-authority-boundary checkpoint and a
+                    // forged one look identical, and neither is trusted).
+                    // Discard it and redo the rebase from the durable
+                    // pre-rewrite checkpoint instead: a clean redo produces a
+                    // freshly self-verified HEAD, and a redo that hits
+                    // conflicts falls into the ordinary supported
+                    // conflict-recovery path, which certifies fresh evidence
+                    // on completion.
+                    discard_unauthenticated_rewrite(&context.workspace_path, head_sha_before)?;
+                    perform_rebase_onto_base(
+                        &context.workspace_path,
+                        head,
+                        head_sha_before,
+                        base_ref,
+                        base_sha,
+                    )?
+                }
+                RecoveryCheckpointLookup::Absent => {
+                    return Err(OrbitError::Execution(
+                        "git_rebase: changed HEAD has no exact host-validated recovery checkpoint"
+                            .to_string(),
+                    ));
+                }
             }
         } else {
             return Err(OrbitError::Execution(format!(
@@ -471,42 +496,36 @@ fn read_rebase_state(workspace_path: &Path, name: &str) -> Result<Option<String>
     Ok(None)
 }
 
-/// Whether `current_sha` is backed by an exact, host-certified recovery
-/// checkpoint for the prepared rewrite.
+/// How `current_sha` relates to the host-certified recovery checkpoints of
+/// the prepared rewrite.
 ///
-/// - `Ok(true)`: a certified checkpoint matches and its provenance agrees
-///   with this attempt; the caller may reuse `current_sha`.
-/// - `Ok(false)`: a checkpoint matching this exact HEAD exists but carries no
-///   certificate (a pre-authority-boundary checkpoint and a forged one look
+/// - `Certified`: a certified checkpoint matches and its provenance agrees
+///   with this attempt; the caller may reuse `current_sha` and must judge
+///   freshness against the checkpoint's `base_sha`.
+/// - `Uncertified`: a checkpoint matching this exact HEAD exists but carries
+///   no certificate (a pre-authority-boundary checkpoint and a forged one look
 ///   identical here). The caller must not inherit `current_sha`; discarding
 ///   it and redoing the rebase is safe precisely because a real redo either
 ///   reproduces an equivalent, freshly self-verified result or hits the same
 ///   conflicts a forged shortcut was trying to skip.
-/// - `Err`: either nothing at all backs this changed HEAD (the ordinary
-///   "unexplained rewrite" refusal, unchanged from before this existed), or a
-///   certified checkpoint was found whose recorded provenance does not match
-///   this attempt. Both stay hard refusals with no redo.
-fn validate_recovered_rewrite<H: RuntimeHost + ?Sized>(
+/// - `Absent`: nothing at all backs this changed HEAD (the ordinary
+///   "unexplained rewrite" refusal).
+/// - `Err`: a certified checkpoint was found whose recorded provenance does
+///   not match this attempt. A hard refusal with no redo.
+fn recovered_rewrite<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
     context: &HandoffContext,
     current_sha: &str,
-) -> Result<bool, OrbitError> {
+) -> Result<RecoveryCheckpointLookup, OrbitError> {
     let run_id = input
         .get("run_id")
         .and_then(Value::as_str)
         .unwrap_or(&context.batch_id);
-    let checkpoint =
-        match recovery_checkpoint_lookup(host, run_id, &context.workspace_path, current_sha)? {
-            RecoveryCheckpointLookup::Certified(checkpoint) => checkpoint,
-            RecoveryCheckpointLookup::Uncertified => return Ok(false),
-            RecoveryCheckpointLookup::Absent => {
-                return Err(OrbitError::Execution(
-                    "git_rebase: changed HEAD has no exact host-validated recovery checkpoint"
-                        .to_string(),
-                ));
-            }
-        };
+    let lookup = recovery_checkpoint_lookup(host, run_id, &context.workspace_path, current_sha)?;
+    let RecoveryCheckpointLookup::Certified(checkpoint) = &lookup else {
+        return Ok(lookup);
+    };
     let task_ids = context
         .tasks
         .iter()
@@ -514,7 +533,7 @@ fn validate_recovered_rewrite<H: RuntimeHost + ?Sized>(
         .collect::<Vec<_>>();
     if checkpoint["head"] != input["head"]
         || checkpoint["head_sha_before"] != input["head_sha"]
-        || checkpoint["base_sha"] != input["base_sha"]
+        || !recovery_pinned_base(checkpoint, &input["base_sha"])
         || checkpoint["remote_sha_before"]
             != input.get("remote_sha").cloned().unwrap_or(Value::Null)
         || checkpoint["task_ids"] != json!(task_ids)
@@ -524,7 +543,21 @@ fn validate_recovered_rewrite<H: RuntimeHost + ?Sized>(
                 .to_string(),
         ));
     }
-    Ok(true)
+    Ok(lookup)
+}
+
+/// Whether a recovery checkpoint was produced for the prepared base pin.
+///
+/// The host records `target_base_sha` (the pin the stopped rebase continued
+/// onto) separately from `base_sha` (the base it then landed the candidate
+/// on, which may be a later tip). A `sync_base` retry still carries the pin;
+/// a `complete_pr` retry re-pins to the tip it fetched. Older checkpoints
+/// carry only `base_sha`, which was always the pin.
+pub(super) fn recovery_pinned_base(checkpoint: &Value, prepared_base_sha: &Value) -> bool {
+    checkpoint["base_sha"] == *prepared_base_sha
+        || checkpoint
+            .get("target_base_sha")
+            .is_some_and(|pinned| pinned == prepared_base_sha)
 }
 
 fn unmerged_paths(repo_root: &Path) -> Result<Vec<String>, OrbitError> {
@@ -766,7 +799,7 @@ fn recovery_checkpoint_lookup<H: RuntimeHost + ?Sized>(
 /// none — whether because nothing matches at all or because the only match
 /// carries no host certificate. Both are equally untrusted for a caller that
 /// has no redo fallback of its own (see `resume.rs`'s identity checks); only
-/// [`validate_recovered_rewrite`] needs the finer distinction, via
+/// [`recovered_rewrite`] needs the finer distinction, via
 /// [`recovery_checkpoint_lookup`] directly.
 pub(super) fn recovered_head_checkpoint<H: RuntimeHost + ?Sized>(
     host: &H,
