@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { onWorkspaceChange, panelCanRender, el, statusPill, patchJson, postJson, syncNodes, isAggregateView, withWorkspace, makeToggleRow } from './common.js';
+import { onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, withWorkspace, makeToggleRow } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 
@@ -27,6 +27,17 @@ const MUTATION_UNDO_WINDOW_MS = 8000;
 // A saved text field has no undo (restoring prose would need a second write of
 // its own), so its note only has to stay long enough to be read.
 const FIELD_SAVED_NOTICE_MS = 4000;
+// DANI-10391: a list row is a summary (`projection: "summary"`). It carries what
+// the collapsed row renders and filters on, plus counts, but the bodies, the
+// review gate, and the evidence a governed status transition needs live behind
+// GET /api/tasks/:id. `taskDetails` keeps the last full projection per task so
+// an open detail repaints from it across the 30 s refresh instead of flashing a
+// placeholder; `taskDetailLoads` records one read per list payload, keyed by
+// the summary object itself (every list fetch produces new objects), so a
+// render never issues a second read for the same row and a failed read is not
+// retried until the list refreshes or the row is reopened.
+let taskDetails = new Map();
+let taskDetailLoads = new Map();
 
 onWorkspaceChange(() => {
   pinnedExternalTask = null;
@@ -35,6 +46,8 @@ onWorkspaceChange(() => {
   crewFeedback.clear();
   complexityFeedback.clear();
   fieldFeedback.clear();
+  taskDetails.clear();
+  taskDetailLoads.clear();
 });
 
 // ORB-10444: task ids whose Ship dispatch this page has already issued. Ship is
@@ -253,14 +266,85 @@ function crewOptionTitle(crew) {
   return `model=${crew.model || "-"}`;
 }
 
+function isTaskSummary(task) {
+  return Boolean(task) && task.projection === "summary";
+}
+
+// The aggregate view's rows carry their owning workspace, which the detail and
+// mutation endpoints do not echo back. A full projection replacing a row keeps
+// those fields, or the row would lose its badge and, with it, its mutation
+// target (canMutateTask) after the first edit.
+const LIST_ONLY_TASK_FIELDS = ["workspace_id", "workspace_name", "workspace_root"];
+
+function mergeTaskRecord(previous, updated) {
+  if (!previous || !updated) return updated;
+  const merged = { ...updated };
+  for (const key of LIST_ONLY_TASK_FIELDS) {
+    if (merged[key] == null && previous[key] != null) merged[key] = previous[key];
+  }
+  return merged;
+}
+
 function applyUpdatedTask(updatedTask, context) {
   if (!updatedTask || !updatedTask.id) return;
+  const previous = taskList(context).find((task) => task && task.id === updatedTask.id);
+  const merged = mergeTaskRecord(previous, updatedTask);
+  if (!isTaskSummary(merged)) taskDetails.set(merged.id, merged);
   if (context && typeof context.replaceTask === "function") {
-    context.replaceTask(updatedTask);
+    context.replaceTask(merged);
   }
-  if (pinnedExternalTask && pinnedExternalTask.task && pinnedExternalTask.task.id === updatedTask.id) {
-    pinnedExternalTask.task = updatedTask;
+  if (pinnedExternalTask && pinnedExternalTask.task && pinnedExternalTask.task.id === merged.id) {
+    pinnedExternalTask.task = merged;
   }
+}
+
+// Read the full projection behind a summary row. One read per summary object:
+// a repeat call for the same row returns the same promise, settled or not, so
+// renders and a status change racing on the same row share it.
+function loadTaskDetail(task, context) {
+  const existing = taskDetailLoads.get(task.id);
+  if (existing && existing.source === task) return existing.promise;
+  const load = { source: task, pending: true, error: null, promise: null };
+  load.promise = fetchJson(taskMutationPath(task)).then(
+    (full) => {
+      load.pending = false;
+      if (taskDetailLoads.get(task.id) === load) {
+        applyUpdatedTask(full, context);
+        renderTasks(taskList(context), context);
+      }
+      return full;
+    },
+    (error) => {
+      load.pending = false;
+      load.error = error.message || String(error);
+      if (taskDetailLoads.get(task.id) === load) renderTasks(taskList(context), context);
+      throw error;
+    },
+  );
+  taskDetailLoads.set(task.id, load);
+  return load.promise;
+}
+
+// What an expanded row can render right now: the full projection when the row
+// is one or the last one fetched, plus whether a fresh read is pending or
+// failed. Starts the read for a summary row that has none yet.
+function taskDetailState(task, context) {
+  if (!isTaskSummary(task)) return { task, pending: false, error: null };
+  const load = taskDetailLoads.get(task.id);
+  if (!load || load.source !== task) {
+    loadTaskDetail(task, context).catch(() => {});
+  }
+  const current = taskDetailLoads.get(task.id);
+  return {
+    task: taskDetails.get(task.id) || null,
+    pending: Boolean(current && current.pending),
+    error: current ? current.error : null,
+  };
+}
+
+// Drop the recorded read so the next render issues a fresh one.
+function forgetTaskDetailLoad(taskId) {
+  taskDetailLoads.delete(taskId);
 }
 
 function stopRowInteraction(node) {
@@ -1200,6 +1284,33 @@ function buildTaskDetail(task, context) {
   return detail;
 }
 
+// The expanded row while its first detail read is pending or has failed. A
+// failed read offers a retry in place; the row's own toggle is the other one.
+function buildTaskDetailPlaceholder(task, state, context) {
+  const detail = el("div", { class: "row-detail" });
+  detail.addEventListener("click", (e) => e.stopPropagation());
+  const note = el("div", {
+    class: state.error ? "panel-placeholder action-error" : "panel-placeholder",
+    text: state.error
+      ? `Unable to load ${task.id}: ${state.error}`
+      : `Loading ${task.id}…`,
+  });
+  note.setAttribute("role", "status");
+  note.setAttribute("aria-live", "polite");
+  detail.appendChild(note);
+  if (state.error) {
+    const retry = el("button", { class: "action", text: "Retry" });
+    retry.type = "button";
+    retry.addEventListener("click", (e) => {
+      e.stopPropagation();
+      forgetTaskDetailLoad(task.id);
+      renderTasks(taskList(context), context);
+    });
+    detail.appendChild(el("div", { class: "actions" }, [retry]));
+  }
+  return detail;
+}
+
 const APPROVE_STATUSES = new Set(["proposed", "review"]);
 const REJECT_STATUSES = new Set(["proposed", "review", "backlog"]);
 // Ship dispatches a task through the pipeline, which admits it out of backlog —
@@ -1404,12 +1515,40 @@ function buildCrewUpdateControl(task, context) {
 
 async function applyTaskStatusChange(task, nextStatus, context) {
   if (!nextStatus || nextStatus === task.status || !canMutateTask(task)) return;
-  const transition = statusTransition(task, nextStatus);
+  let transition = statusTransition(task, nextStatus);
   // A target the projection did not offer is an override, not a mistake: the
   // operator gets one confirm naming the move, and the PATCH carries `force`
   // so the server applies it and records the `forced` history event. A target
   // that is not a lifecycle status at all stays a refusal.
   const forced = !transition;
+  // A summary row lists the governed targets but not what each one requires —
+  // the `done` requirement depends on the task's job run, which only the
+  // detail endpoint reads. Ask it before deciding whether to prompt.
+  if (!forced && !("required_field" in transition)) {
+    statusFeedback.set(task.id, { kind: "pending", text: "checking…" });
+    renderTasks(taskList(context), context);
+    let detail;
+    try {
+      detail = await loadTaskDetail(task, context);
+    } catch (error) {
+      statusFeedback.set(task.id, {
+        kind: "error",
+        text: `status update failed: ${error.message || String(error)}`,
+      });
+      renderTasks(taskList(context), context);
+      return;
+    }
+    transition = detail.status === task.status ? statusTransition(detail, nextStatus) : null;
+    if (!transition) {
+      statusFeedback.set(task.id, {
+        kind: "error",
+        text: `status update unavailable: ${task.id} changed underneath this page; refresh`,
+      });
+      renderTasks(taskList(context), context);
+      return;
+    }
+    task = mergeTaskRecord(task, detail);
+  }
   if (forced && !statusOrder(context).includes(nextStatus)) {
     statusFeedback.set(task.id, {
       kind: "error",
@@ -1867,8 +2006,14 @@ export function renderTasks(tasks, context) {
         controls: expandedTaskIds.has(t.id) ? `detail-${t.id}` : null,
         onToggle: () => {
           const toggle = () => {
-            if (expandedTaskIds.has(t.id)) expandedTaskIds.delete(t.id);
-            else expandedTaskIds.add(t.id);
+            if (expandedTaskIds.has(t.id)) {
+              expandedTaskIds.delete(t.id);
+              // Reopening re-reads the detail, which is also the retry for a
+              // read that failed.
+              forgetTaskDetailLoad(t.id);
+            } else {
+              expandedTaskIds.add(t.id);
+            }
             renderTasks(taskList(context), context);
           };
           if (document.startViewTransition) {
@@ -1889,13 +2034,20 @@ export function renderTasks(tasks, context) {
         if (draft) {
           nodes.push(draft);
         } else {
-          const detail = buildTaskDetail(t, context);
+          const state = taskDetailState(t, context);
+          const detail = state.task
+            ? buildTaskDetail(state.task, context)
+            : buildTaskDetailPlaceholder(t, state, context);
           detail.dataset.key = key;
           // The row's `aria-controls` points here, so the detail needs a real id.
           detail.id = key;
           // Diff by full task object stringified, plus the feedback the detail's
-          // own controls render (the row hash only covers status and crew).
-          detail.dataset.hash = `${JSON.stringify(t)}-${detailFeedbackSignature(t.id)}`;
+          // own controls render (the row hash only covers status and crew). A
+          // placeholder diffs on its read state instead; a detail rendered from
+          // the cached projection must not be rebuilt just because a refresh
+          // has a read in flight.
+          const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
+          detail.dataset.hash = `${JSON.stringify(state.task || t)}-${readState}-${detailFeedbackSignature(t.id)}`;
           nodes.push(detail);
         }
       }

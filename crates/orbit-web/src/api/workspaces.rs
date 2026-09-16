@@ -6,6 +6,7 @@
 //! degrade gracefully: `/api/workspaces` reports the one synthetic entry and
 //! `/api/tasks/all` returns that workspace's tasks.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use axum::extract::{RawQuery, State};
@@ -18,7 +19,7 @@ use serde_json::{Value, json};
 
 use super::pagination::TaskPageQuery;
 use super::{HISTORY_DEFAULT_LIMIT, bad_request, blocking, bounded_limit, server_error};
-use crate::projections::task_row_to_json;
+use crate::projections::TaskListProjection;
 use crate::state::{DashboardState, Pinned};
 
 /// `GET /api/workspaces` — list every workspace the dashboard can serve, with
@@ -314,12 +315,18 @@ fn all_tasks_json(
         .map(|(_, runtime, _)| runtime.task_status_index())
         .transpose()?
         .unwrap_or_default();
+    // Each workspace's runtime carries its own crew registry; build each one
+    // once for the page rather than once per row.
+    let mut projections: BTreeMap<&str, TaskListProjection> = BTreeMap::new();
     let mut values = Vec::with_capacity(candidates.len());
     for (task, runtime, entry) in candidates {
         let Some(row) = runtime.get_listed_task_row(&task.id)? else {
             continue;
         };
-        let mut value = task_row_to_json(&runtime, &row, &statuses)?;
+        let projection = projections
+            .entry(entry.id.as_str())
+            .or_insert_with(|| TaskListProjection::new(&runtime));
+        let mut value = projection.row_to_json(&row, &statuses)?;
         if let Value::Object(map) = &mut value {
             map.insert("workspace_id".to_string(), json!(entry.id));
             map.insert("workspace_name".to_string(), json!(entry.name));
