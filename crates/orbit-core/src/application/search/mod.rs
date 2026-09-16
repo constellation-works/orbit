@@ -402,12 +402,24 @@ impl OrbitRuntime {
             .collect())
     }
 
+    /// Lexical task candidates, at most `2 × limit`, from two sources in order.
+    ///
+    /// When the semantic index holds task chunks, FTS5 BM25 over
+    /// `corpus_fts` ranks first: it matches non-adjacent terms and orders by
+    /// relevance. The index carries only title, description, plan,
+    /// execution summary, and acceptance criteria, so the bundle matcher then
+    /// supplements what FTS cannot see — comments, `external_refs`, artifact
+    /// manifest paths, and tasks not yet indexed — appended in index order
+    /// behind the BM25 hits [DANI-10445]. Without task chunks the bundle
+    /// matcher is the only source. Neither source opens artifact payloads.
     fn lexical_task_candidates(
         &self,
         query: &str,
         limit: usize,
     ) -> Result<Vec<(GlobalSearchHit, Option<orbit_types::task::Task>)>, OrbitError> {
         let candidate_limit = limit.saturating_mul(2).max(limit);
+        let mut seen = std::collections::BTreeSet::new();
+        let mut candidates = Vec::with_capacity(candidate_limit);
         if let Ok(index) = self.stores().semantic_index().store()
             && index.has_source_kind(SOURCE_KIND_TASK)?
         {
@@ -415,8 +427,6 @@ impl OrbitRuntime {
             // the number of task fields normally indexed, then keep the first
             // occurrence of each task in BM25 order.
             let chunk_limit = candidate_limit.saturating_mul(5).max(candidate_limit);
-            let mut seen = std::collections::BTreeSet::new();
-            let mut candidates = Vec::with_capacity(candidate_limit);
             for hit in bm25_top_k(index, query, Some(SOURCE_KIND_TASK), None, chunk_limit)? {
                 if !seen.insert(hit.source_id.clone()) {
                     continue;
@@ -426,18 +436,21 @@ impl OrbitRuntime {
                     candidates.push((lexical_task_hit(&task), Some(task)));
                 }
                 if candidates.len() == candidate_limit {
-                    break;
+                    return Ok(candidates);
                 }
             }
-            return Ok(candidates);
         }
 
-        let mut tasks = self.search_tasks_filtered(query, &[])?;
-        tasks.truncate(candidate_limit);
-        Ok(tasks
-            .into_iter()
-            .map(|task| (lexical_task_hit(&task), Some(task)))
-            .collect())
+        for task in self.search_tasks_filtered(query, &[])? {
+            if candidates.len() == candidate_limit {
+                break;
+            }
+            if !seen.insert(task.id.clone()) {
+                continue;
+            }
+            candidates.push((lexical_task_hit(&task), Some(task)));
+        }
+        Ok(candidates)
     }
 
     fn task_semantic_hits(
