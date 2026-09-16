@@ -66,6 +66,6 @@ pub use rpc::{
 pub use shared_query::SharedQueryEmbedder;
 pub use subprocess::SubprocessEmbedder;
 pub use vector::{
-    DocEmbeddingSource, EmbedWorker, SOURCE_KIND_DOC, SOURCE_KIND_TASK, SemanticIndex,
-    SemanticStats, UpsertReport, VectorStore,
+    Bm25Hit, DocEmbeddingSource, EmbedWorker, SOURCE_KIND_DOC, SOURCE_KIND_TASK, SemanticIndex,
+    SemanticStats, UpsertReport, VectorStore, bm25_top_k,
 };

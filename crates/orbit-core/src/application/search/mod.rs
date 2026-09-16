@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 use orbit_common::OrbitError;
 use orbit_search::{
-    DocSemanticHit, DocSemanticSearchParams, Embedder, SemanticRelatedParams, SemanticSearchParams,
+    DocSemanticHit, DocSemanticSearchParams, Embedder, SOURCE_KIND_TASK, SemanticRelatedParams,
+    SemanticSearchParams, bm25_top_k,
 };
 use orbit_store::friction_store::FrictionListFilter;
 
@@ -406,8 +407,33 @@ impl OrbitRuntime {
         query: &str,
         limit: usize,
     ) -> Result<Vec<(GlobalSearchHit, Option<orbit_types::task::Task>)>, OrbitError> {
+        let candidate_limit = limit.saturating_mul(2).max(limit);
+        if let Ok(index) = self.stores().semantic_index().store()
+            && index.has_source_kind(SOURCE_KIND_TASK)?
+        {
+            // BM25 ranks chunks, while this branch returns tasks. Overfetch by
+            // the number of task fields normally indexed, then keep the first
+            // occurrence of each task in BM25 order.
+            let chunk_limit = candidate_limit.saturating_mul(5).max(candidate_limit);
+            let mut seen = std::collections::BTreeSet::new();
+            let mut candidates = Vec::with_capacity(candidate_limit);
+            for hit in bm25_top_k(index, query, Some(SOURCE_KIND_TASK), None, chunk_limit)? {
+                if !seen.insert(hit.source_id.clone()) {
+                    continue;
+                }
+                let task = self.get_task(&hit.source_id).ok();
+                if let Some(task) = task {
+                    candidates.push((lexical_task_hit(&task), Some(task)));
+                }
+                if candidates.len() == candidate_limit {
+                    break;
+                }
+            }
+            return Ok(candidates);
+        }
+
         let mut tasks = self.search_tasks_filtered(query, &[])?;
-        tasks.truncate(limit.saturating_mul(2).max(limit));
+        tasks.truncate(candidate_limit);
         Ok(tasks
             .into_iter()
             .map(|task| (lexical_task_hit(&task), Some(task)))
