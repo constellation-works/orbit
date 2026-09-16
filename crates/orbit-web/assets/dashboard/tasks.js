@@ -1915,6 +1915,14 @@ export function renderTasks(tasks, context) {
   // place.
   const nodes = [];
   const drafts = openDraftNodes(body);
+  // DANI-10396: the row hash is cheap to compute from task fields alone, so it
+  // is checked against the previous render's node *before* building
+  // buildStatusUpdateControl/buildCrewUpdateControl — syncNodes would discard
+  // that DOM anyway on an unchanged hash, but only after paying to construct it.
+  const existingRowNodes = new Map();
+  for (const node of body.children) {
+    if (node.dataset.key) existingRowNodes.set(node.dataset.key, node);
+  }
   const notice = takeTaskActionNotice();
 
   // Render pinned external task detail (for statuses outside active filter) at top.
@@ -1972,61 +1980,67 @@ export function renderTasks(tasks, context) {
     header.dataset.hash = `${status}-${group.length}`;
     nodes.push(header);
     for (const t of group) {
-      const idSpan = el("span", { class: "id mono", text: t.id, title: "Click to copy ID" });
-      idSpan.addEventListener("click", (e) => {
-        e.stopPropagation();
-        navigator.clipboard.writeText(t.id).catch(() => {});
-        const oldText = idSpan.textContent;
-        idSpan.textContent = "copied!";
-        idSpan.style.color = "var(--state-success)";
-        setTimeout(() => {
-          idSpan.textContent = oldText;
-          idSpan.style.color = "";
-        }, 1000);
-      });
-      const titleCell = aggregate && t.workspace_name
-        ? el("span", { class: "title" }, [
-            el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` }),
-            t.title,
-          ])
-        : el("span", { class: "title", text: t.title });
-      const row = el("div", { class: "row", title: t.title }, [
-        idSpan,
-        titleCell,
-        buildStatusUpdateControl(t, context),
-        buildCrewUpdateControl(t, context),
-      ]);
-      row.dataset.key = `task-${t.id}`;
+      const rowKey = `task-${t.id}`;
       // Basic hash based on row presentation parameters + expanded state
-      row.dataset.hash = `${t.id}-${t.title}-${t.status}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${expandedTaskIds.has(t.id)}`;
-      makeToggleRow(row, {
-        expanded: expandedTaskIds.has(t.id),
-        // The detail node only exists while the row is open, so the IDREF is
-        // only published while it actually resolves.
-        controls: expandedTaskIds.has(t.id) ? `detail-${t.id}` : null,
-        onToggle: () => {
-          const toggle = () => {
-            if (expandedTaskIds.has(t.id)) {
-              expandedTaskIds.delete(t.id);
-              // Reopening re-reads the detail, which is also the retry for a
-              // read that failed.
-              forgetTaskDetailLoad(t.id);
+      const rowHash = `${t.id}-${t.title}-${t.status}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(statusFeedback, t.id)}-${feedbackSignature(crewFeedback, t.id)}-${expandedTaskIds.has(t.id)}`;
+      const existingRow = existingRowNodes.get(rowKey);
+      let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
+      if (!row) {
+        const idSpan = el("span", { class: "id mono", text: t.id, title: "Click to copy ID" });
+        idSpan.addEventListener("click", (e) => {
+          e.stopPropagation();
+          navigator.clipboard.writeText(t.id).catch(() => {});
+          const oldText = idSpan.textContent;
+          idSpan.textContent = "copied!";
+          idSpan.style.color = "var(--state-success)";
+          setTimeout(() => {
+            idSpan.textContent = oldText;
+            idSpan.style.color = "";
+          }, 1000);
+        });
+        const titleCell = aggregate && t.workspace_name
+          ? el("span", { class: "title" }, [
+              el("span", { class: "ws-badge mono", text: t.workspace_name, title: `Workspace: ${t.workspace_name}` }),
+              t.title,
+            ])
+          : el("span", { class: "title", text: t.title });
+        row = el("div", { class: "row", title: t.title }, [
+          idSpan,
+          titleCell,
+          buildStatusUpdateControl(t, context),
+          buildCrewUpdateControl(t, context),
+        ]);
+        row.dataset.key = rowKey;
+        row.dataset.hash = rowHash;
+        makeToggleRow(row, {
+          expanded: expandedTaskIds.has(t.id),
+          // The detail node only exists while the row is open, so the IDREF is
+          // only published while it actually resolves.
+          controls: expandedTaskIds.has(t.id) ? `detail-${t.id}` : null,
+          onToggle: () => {
+            const toggle = () => {
+              if (expandedTaskIds.has(t.id)) {
+                expandedTaskIds.delete(t.id);
+                // Reopening re-reads the detail, which is also the retry for a
+                // read that failed.
+                forgetTaskDetailLoad(t.id);
+              } else {
+                expandedTaskIds.add(t.id);
+              }
+              renderTasks(taskList(context), context);
+            };
+            if (document.startViewTransition) {
+              row.style.viewTransitionName = `task-row-${t.id}`;
+              document.startViewTransition(toggle).finished.then(() => {
+                row.style.viewTransitionName = "";
+              });
             } else {
-              expandedTaskIds.add(t.id);
+              toggle();
             }
-            renderTasks(taskList(context), context);
-          };
-          if (document.startViewTransition) {
-            row.style.viewTransitionName = `task-row-${t.id}`;
-            document.startViewTransition(toggle).finished.then(() => {
-              row.style.viewTransitionName = "";
-            });
-          } else {
-            toggle();
-          }
-        },
-      });
-      if (expandedTaskIds.has(t.id)) row.classList.add("expanded");
+          },
+        });
+        if (expandedTaskIds.has(t.id)) row.classList.add("expanded");
+      }
       nodes.push(row);
       if (expandedTaskIds.has(t.id)) {
         const key = `detail-${t.id}`;
