@@ -11,10 +11,11 @@ use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use orbit_common::OrbitError;
 use orbit_types::policy::{ResolvedFsProfile, compile_glob_regex};
+use regex::Regex;
 
 const TRUSTED_BWRAP_PATH: &str = "/usr/bin/bwrap";
 
@@ -45,6 +46,10 @@ pub struct LinuxBwrapPlan {
     /// child exits. Empty for ordinary path-based plans and audit rendering.
     mount_sources: Vec<Arc<File>>,
     mount_evidence: Vec<LinuxBwrapMountEvidence>,
+    /// Post-run snapshot for the write-policy gaps this plan cannot mount,
+    /// taken from the same walk that produced the deny mounts. `None` for a
+    /// direct (unmanaged) invocation, which has no post-run guard.
+    post_run_guard: Option<LinuxBwrapPostRunGuard>,
 }
 
 impl PartialEq for LinuxBwrapPlan {
@@ -61,6 +66,12 @@ impl LinuxBwrapPlan {
     /// Descriptor and object identity used by each effective `--bind-fd` grant.
     pub fn mount_evidence(&self) -> &[LinuxBwrapMountEvidence] {
         &self.mount_evidence
+    }
+
+    /// Hand the compile-time post-run snapshot to the caller that will verify
+    /// it after the child exits. The plan itself only needs to outlive spawn.
+    pub fn take_post_run_guard(&mut self) -> Option<LinuxBwrapPostRunGuard> {
+        self.post_run_guard.take()
     }
 }
 
@@ -97,13 +108,16 @@ pub struct LinuxBwrapSpawnRequest<'a> {
 /// deny whose root does not exist yet. Managed worktrees are disposable and
 /// single-writer, so Orbit records existing matches before spawn and rejects
 /// any new matches after the child.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinuxBwrapPostRunGuard {
     rules: Vec<String>,
     before: BTreeSet<PathBuf>,
 }
 
 impl LinuxBwrapPostRunGuard {
+    /// Snapshot with a walk of its own. A spawn takes the snapshot from
+    /// [`LinuxBwrapPlan::take_post_run_guard`] instead, which reuses the walk
+    /// the argv compile already made.
     pub fn capture(profile: &ResolvedFsProfile) -> Result<Option<Self>, OrbitError> {
         let rules = post_run_deny_rules(profile);
         if rules.is_empty() {
@@ -111,6 +125,24 @@ impl LinuxBwrapPostRunGuard {
         }
         let before = expand_rules(&rules)?;
         Ok(Some(Self { rules, before }))
+    }
+
+    /// The snapshot [`Self::capture`] would take, read off a compile's
+    /// expansion of the profile's glob rules. An absent exact/subtree deny is
+    /// not in that expansion; nothing exists beneath an absent root, so its
+    /// contribution to `before` is empty either way.
+    fn from_expansion(profile: &ResolvedFsProfile, expanded: &GlobMatches<'_>) -> Option<Self> {
+        let rules = post_run_deny_rules(profile);
+        if rules.is_empty() {
+            return None;
+        }
+        let before = rules
+            .iter()
+            .filter_map(|rule| expanded.get(rule.as_str()))
+            .flatten()
+            .cloned()
+            .collect();
+        Some(Self { rules, before })
     }
 
     pub fn verify(&self) -> Result<(), OrbitError> {
@@ -184,6 +216,7 @@ pub struct PreparedWriteGrants {
 pub fn linux_bwrap_write_grants(
     profile: &ResolvedFsProfile,
 ) -> Result<Vec<WriteGrant>, OrbitError> {
+    let compiled = CompiledModifyRules::compile(profile)?;
     let mut grants = Vec::new();
     for (index, rule) in profile.modify.iter().enumerate() {
         if rule.starts_with('!') || !is_narrow_reallow(&profile.modify[..index], rule) {
@@ -196,7 +229,7 @@ pub fn linux_bwrap_write_grants(
         // profile's last-match-wins contract. Do not materialize a path the
         // final policy denies. A narrower deny below a subtree does not match
         // the subtree root, so the remaining writable portion is preserved.
-        if !path_is_effectively_writable(profile, &anchor)? {
+        if !compiled.grants_write(&anchor) {
             continue;
         }
         grants.push(WriteGrant {
@@ -241,28 +274,13 @@ pub fn linux_bwrap_write_grant_diagnostic(
     profile: &ResolvedFsProfile,
     path: &Path,
 ) -> Result<Option<String>, OrbitError> {
-    let rendered = path.to_string_lossy().replace('\\', "/");
-    let mut decision: Option<&str> = None;
-    for rule in &profile.modify {
-        let body = rule.strip_prefix('!').unwrap_or(rule.as_str());
-        if compile_glob_regex(body)
-            .map_err(|error| {
-                OrbitError::InvalidInput(format!(
-                    "invalid linux-bwrap filesystem glob `{body}`: {error}"
-                ))
-            })?
-            .is_match(&rendered)
-        {
-            decision = Some(rule);
-        }
-    }
-    match decision {
+    match CompiledModifyRules::compile(profile)?.deciding_rule(path) {
         Some(rule) if !rule.starts_with('!') => Ok(None),
         Some(denied) => Ok(Some(format!(
             "`{}` is not writable inside the sandbox: denyModify rule `{}` shadows it and no later narrow re-allow grants it; add an exception such as `{}` to the effective policy",
             path.display(),
             denied,
-            rendered
+            render_glob_path(path)
         ))),
         None => Ok(Some(format!(
             "`{}` is not writable inside the sandbox: no modify rule in fsProfile `{}` grants it",
@@ -496,26 +514,51 @@ fn write_anchor_kind(rule: &str) -> WriteAnchorKind {
     }
 }
 
-fn path_is_effectively_writable(
-    profile: &ResolvedFsProfile,
-    path: &Path,
-) -> Result<bool, OrbitError> {
-    let rendered = path.to_string_lossy().replace('\\', "/");
-    let mut writable = false;
-    for rule in &profile.modify {
-        let body = rule.strip_prefix('!').unwrap_or(rule.as_str());
-        if compile_glob_regex(body)
-            .map_err(|error| {
-                OrbitError::InvalidInput(format!(
-                    "invalid linux-bwrap filesystem glob `{body}`: {error}"
-                ))
-            })?
-            .is_match(&rendered)
-        {
-            writable = !rule.starts_with('!');
-        }
+/// The profile's `modify` rules compiled once, in rule order. Every
+/// last-match-wins lookup a compile makes shares these regexes instead of
+/// rebuilding one per rule per lookup.
+struct CompiledModifyRules<'a> {
+    rules: Vec<(&'a str, Regex)>,
+}
+
+impl<'a> CompiledModifyRules<'a> {
+    fn compile(profile: &'a ResolvedFsProfile) -> Result<Self, OrbitError> {
+        let rules = profile
+            .modify
+            .iter()
+            .map(|rule| compile_rule_regex(rule).map(|regex| (rule.as_str(), regex)))
+            .collect::<Result<_, _>>()?;
+        Ok(Self { rules })
     }
-    Ok(writable)
+
+    /// The rule that decides `path` under last-match-wins, if any matches.
+    fn deciding_rule(&self, path: &Path) -> Option<&'a str> {
+        let rendered = render_glob_path(path);
+        self.rules
+            .iter()
+            .rev()
+            .find(|(_, regex)| regex.is_match(&rendered))
+            .map(|(rule, _)| *rule)
+    }
+
+    fn grants_write(&self, path: &Path) -> bool {
+        self.deciding_rule(path)
+            .is_some_and(|rule| !rule.starts_with('!'))
+    }
+}
+
+/// Compile a rule body (or a `!`-prefixed rule) into its glob regex.
+fn compile_rule_regex(rule: &str) -> Result<Regex, OrbitError> {
+    let body = rule.strip_prefix('!').unwrap_or(rule);
+    compile_glob_regex(body).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "invalid linux-bwrap filesystem glob `{body}`: {error}"
+        ))
+    })
+}
+
+fn render_glob_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 pub fn bwrap_program_for_audit() -> &'static str {
@@ -534,26 +577,50 @@ pub fn bwrap_unavailable_message() -> String {
 /// Probe the namespaces and mounts Orbit relies on rather than treating a
 /// present binary as usable. The host network namespace is retained
 /// explicitly with `--share-net`.
+///
+/// Memoised per process: the trusted binary and the kernel's namespace
+/// support do not change while Orbit runs, and re-probing spawned two
+/// processes per dispatch. An outcome the host could not even execute is
+/// returned but not remembered, so a transient spawn failure does not pin the
+/// fallback for the life of a long-running service.
 pub fn probe_bwrap() -> BwrapProbeOutcome {
+    static SETTLED: OnceLock<BwrapProbeOutcome> = OnceLock::new();
+    if let Some(outcome) = SETTLED.get() {
+        return outcome.clone();
+    }
+    match probe_bwrap_now() {
+        Ok(outcome) => SETTLED.get_or_init(|| outcome).clone(),
+        Err(unsettled) => unsettled,
+    }
+}
+
+/// One real probe. `Err` carries the outcome for a probe process the host
+/// refused to execute, which is the only result worth retrying.
+fn probe_bwrap_now() -> Result<BwrapProbeOutcome, BwrapProbeOutcome> {
     let Some(path) = bwrap_path() else {
-        return BwrapProbeOutcome {
+        return Ok(BwrapProbeOutcome {
             available: false,
             trusted_path: TRUSTED_BWRAP_PATH.to_string(),
             detail: bwrap_unavailable_message(),
-        };
+        });
     };
-    let supports_bind_fd = Command::new(&path)
+    let trusted_path = path.display().to_string();
+    let could_not_execute = |error: std::io::Error| BwrapProbeOutcome {
+        available: false,
+        trusted_path: trusted_path.clone(),
+        detail: format!("Bubblewrap capability probe could not execute: {error}"),
+    };
+    let help = Command::new(&path)
         .arg("--help")
         .output()
-        .map(|output| String::from_utf8_lossy(&output.stdout).contains("--bind-fd"))
-        .unwrap_or(false);
-    if !supports_bind_fd {
-        return BwrapProbeOutcome {
+        .map_err(could_not_execute)?;
+    if !String::from_utf8_lossy(&help.stdout).contains("--bind-fd") {
+        return Ok(BwrapProbeOutcome {
             available: false,
-            trusted_path: path.display().to_string(),
+            trusted_path,
             detail: "Bubblewrap does not support the required --bind-fd object-authority mount"
                 .to_string(),
-        };
+        });
     }
     let args = base_namespace_args();
     let output = Command::new(&path)
@@ -563,32 +630,26 @@ pub fn probe_bwrap() -> BwrapProbeOutcome {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .output();
-    match output {
-        Ok(output) if output.status.success() => BwrapProbeOutcome {
+        .output()
+        .map_err(could_not_execute)?;
+    if output.status.success() {
+        return Ok(BwrapProbeOutcome {
             available: true,
-            trusted_path: path.display().to_string(),
+            trusted_path,
             detail: "capability probe succeeded".to_string(),
-        },
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let detail = stderr.trim();
-            BwrapProbeOutcome {
-                available: false,
-                trusted_path: path.display().to_string(),
-                detail: format!(
-                    "Bubblewrap capability probe failed{}{}",
-                    if detail.is_empty() { "" } else { ": " },
-                    detail
-                ),
-            }
-        }
-        Err(error) => BwrapProbeOutcome {
-            available: false,
-            trusted_path: path.display().to_string(),
-            detail: format!("Bubblewrap capability probe could not execute: {error}"),
-        },
+        });
     }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = stderr.trim();
+    Ok(BwrapProbeOutcome {
+        available: false,
+        trusted_path,
+        detail: format!(
+            "Bubblewrap capability probe failed{}{}",
+            if detail.is_empty() { "" } else { ": " },
+            detail
+        ),
+    })
 }
 
 /// Compile a deterministic Bubblewrap argv. Broad writable roots are emitted
@@ -604,6 +665,10 @@ pub fn probe_bwrap() -> BwrapProbeOutcome {
 /// A write-capable profile also binds Cargo's shared download caches writable
 /// before any policy mount — see [`append_cargo_download_cache_mounts`] for why
 /// the read-only bind of `/` cannot stand for them.
+///
+/// The profile's globs are compiled once and every non-subtree rule is
+/// expanded up front from one walk per search root; the mount loops and the
+/// post-run guard read that expansion rather than walking again.
 pub fn compile_linux_bwrap_argv(
     profile: &ResolvedFsProfile,
     program: &str,
@@ -611,6 +676,14 @@ pub fn compile_linux_bwrap_argv(
     cwd: Option<&Path>,
     managed_worktree: bool,
 ) -> Result<LinuxBwrapPlan, OrbitError> {
+    let compiled = CompiledModifyRules::compile(profile)?;
+    let expanded = expand_each_rule(
+        profile
+            .modify
+            .iter()
+            .map(|rule| rule.strip_prefix('!').unwrap_or(rule))
+            .filter(|body| !is_exact_or_subtree(body)),
+    )?;
     let mut out = base_namespace_args();
     let mut dropped_grants = Vec::new();
     // Replace mutable host pseudo-filesystems and scratch before applying
@@ -630,13 +703,13 @@ pub fn compile_linux_bwrap_argv(
     if profile_grants_write(profile) {
         append_cargo_download_cache_mounts(&mut out, cargo_home_dir().as_deref());
     }
-    let writable_roots = positive_mount_roots(profile)?;
+    let writable_roots = positive_mount_roots(profile, &expanded)?;
 
     for (index, rule) in profile.modify.iter().enumerate() {
         if rule.starts_with('!') || is_narrow_reallow(&profile.modify[..index], rule) {
             continue;
         }
-        for path in mount_paths_for_rule(rule, true)? {
+        for path in mount_paths_for_rule(rule, true, &expanded)? {
             push_mount(&mut out, "--bind", &path);
         }
     }
@@ -649,7 +722,7 @@ pub fn compile_linux_bwrap_argv(
         .iter()
         .filter_map(|rule| rule.strip_prefix('!'))
     {
-        for path in mount_paths_for_rule(denied, false)? {
+        for path in mount_paths_for_rule(denied, false, &expanded)? {
             for ancestor in path.ancestors().skip(1) {
                 if writable_roots.iter().any(|root| ancestor.starts_with(root)) {
                     anchors.insert(ancestor.to_path_buf());
@@ -677,17 +750,17 @@ pub fn compile_linux_bwrap_argv(
                     "linux-bwrap cannot enforce non-subtree denyModify `{denied}` for a direct invocation; use a managed worktree"
                 )));
             }
-            for path in mount_paths_for_rule(denied, false)? {
+            for path in mount_paths_for_rule(denied, false, &expanded)? {
                 push_mount(&mut out, "--ro-bind", &path);
             }
         } else if is_narrow_reallow(&profile.modify[..index], rule) {
             let Some(anchor) = exact_or_subtree_root(rule) else {
                 continue;
             };
-            if !path_is_effectively_writable(profile, &anchor)? {
+            if !compiled.grants_write(&anchor) {
                 continue;
             }
-            let paths = mount_paths_for_rule(rule, false)?;
+            let paths = mount_paths_for_rule(rule, false, &expanded)?;
             if paths.is_empty() {
                 dropped_grants.push(UnsatisfiedWriteGrant {
                     rule: rule.clone(),
@@ -717,12 +790,21 @@ pub fn compile_linux_bwrap_argv(
     out.push(program.to_string());
     out.extend(args.iter().cloned());
 
+    // Only a managed worktree carries a post-run guard: a direct invocation
+    // already refused every non-subtree deny that overlaps a writable root.
+    let post_run_guard = if managed_worktree {
+        LinuxBwrapPostRunGuard::from_expansion(profile, &expanded)
+    } else {
+        None
+    };
+
     Ok(LinuxBwrapPlan {
         wrapper: TRUSTED_BWRAP_PATH.to_string(),
         args: out,
         dropped_grants,
         mount_sources: Vec::new(),
         mount_evidence: Vec::new(),
+        post_run_guard,
     })
 }
 
@@ -1030,17 +1112,26 @@ fn push_mount(args: &mut Vec<String>, option: &str, path: &Path) {
     args.push(rendered);
 }
 
-fn positive_mount_roots(profile: &ResolvedFsProfile) -> Result<Vec<PathBuf>, OrbitError> {
+fn positive_mount_roots(
+    profile: &ResolvedFsProfile,
+    expanded: &GlobMatches<'_>,
+) -> Result<Vec<PathBuf>, OrbitError> {
     let mut roots = BTreeSet::new();
     for rule in profile.modify.iter().filter(|rule| !rule.starts_with('!')) {
-        for root in mount_paths_for_rule(rule, false)? {
+        for root in mount_paths_for_rule(rule, false, expanded)? {
             roots.insert(root);
         }
     }
     Ok(roots.into_iter().collect())
 }
 
-fn mount_paths_for_rule(rule: &str, require_match: bool) -> Result<Vec<PathBuf>, OrbitError> {
+/// The mount sources for one rule body. A non-subtree rule reads the
+/// compile's expansion, which must already cover it.
+fn mount_paths_for_rule(
+    rule: &str,
+    require_match: bool,
+    expanded: &GlobMatches<'_>,
+) -> Result<Vec<PathBuf>, OrbitError> {
     if is_exact_or_subtree(rule) {
         let root = rule.strip_suffix("/**").unwrap_or(rule);
         if !Path::new(root).exists() && !require_match {
@@ -1049,13 +1140,17 @@ fn mount_paths_for_rule(rule: &str, require_match: bool) -> Result<Vec<PathBuf>,
         let path = canonical_existing(Path::new(root), "sandbox mount")?;
         return Ok(vec![path]);
     }
-    let matches = expand_rule(rule)?;
+    let matches = expanded.get(rule).ok_or_else(|| {
+        OrbitError::Execution(format!(
+            "linux-bwrap modify rule `{rule}` was not expanded before mounting"
+        ))
+    })?;
     if require_match && matches.is_empty() {
         return Err(OrbitError::InvalidInput(format!(
             "linux-bwrap modify rule `{rule}` has no existing path to mount"
         )));
     }
-    Ok(matches.into_iter().collect())
+    Ok(matches.iter().cloned().collect())
 }
 
 fn is_narrow_reallow(prior_rules: &[String], rule: &str) -> bool {
@@ -1090,10 +1185,10 @@ fn overlaps_writable_root(rule: &str, roots: &[PathBuf]) -> bool {
 ///
 /// An absent exact/subtree deny with a later nested re-allow is omitted.
 /// Grant preparation materializes that re-allow (creating the deny root) so
-/// `--ro-bind` can apply; watching the root would false-positive on that
-/// pre-spawn create. The orchestrator snapshots this guard before spawn
-/// preparation, so the skip is what keeps default `.orbit/**` plus
-/// `.orbit/auto_tasks/**` from failing on a fresh worktree.
+/// `--ro-bind` can apply; a snapshot taken before that create, such as a
+/// standalone [`LinuxBwrapPostRunGuard::capture`], would otherwise
+/// false-positive on it. The spawn path snapshots from the argv compile,
+/// after preparation, where a materialized root is simply an existing deny.
 fn post_run_deny_rules(profile: &ResolvedFsProfile) -> Vec<String> {
     profile
         .modify
@@ -1127,33 +1222,51 @@ fn deny_has_nested_reallow(modify: &[String], deny_index: usize) -> bool {
     })
 }
 
-/// Every existing path matched by any of `rules`.
+/// Every existing path matched by any of `rules`, from one walk per search
+/// root.
+fn expand_rules(rules: &[String]) -> Result<BTreeSet<PathBuf>, OrbitError> {
+    Ok(expand_each_rule(rules.iter().map(String::as_str))?
+        .into_values()
+        .flatten()
+        .collect())
+}
+
+/// The existing paths each glob rule body matches, keyed by that body.
+type GlobMatches<'a> = BTreeMap<&'a str, BTreeSet<PathBuf>>;
+
+/// Every existing path matched by each of `rules`, keyed by rule.
 ///
 /// Rules are grouped by the directory their static prefix resolves to and
-/// each such directory is walked once. The shipped default policy carries
-/// four non-subtree denies (`**/.env` and friends) whose prefix is the
-/// workspace root, and the post-run guard expands them before and after every
-/// sandboxed invocation; one walk per rule per phase made that eight full
-/// workspace traversals (including `target/` and `.git/`) per agent step.
-fn expand_rules(rules: &[String]) -> Result<BTreeSet<PathBuf>, OrbitError> {
-    let mut by_root: BTreeMap<PathBuf, Vec<_>> = BTreeMap::new();
+/// each such directory is walked once, however many rules share it. The
+/// shipped default policy carries four non-subtree denies (`**/.env` and
+/// friends) whose prefix is the workspace root, and an argv compile plus the
+/// post-run guard need them before and after every sandboxed invocation; one
+/// walk per rule per phase made that a dozen full workspace traversals
+/// (including `target/` and `.git/`) per agent step.
+fn expand_each_rule<'a>(
+    rules: impl IntoIterator<Item = &'a str>,
+) -> Result<GlobMatches<'a>, OrbitError> {
+    let mut matches = GlobMatches::new();
+    let mut by_root: BTreeMap<PathBuf, Vec<(&str, Regex, PathBuf)>> = BTreeMap::new();
     for rule in rules {
-        let regex = compile_glob_regex(rule).map_err(|error| {
-            OrbitError::InvalidInput(format!(
-                "invalid linux-bwrap filesystem glob `{rule}`: {error}"
-            ))
-        })?;
+        if matches.contains_key(rule) {
+            continue;
+        }
+        matches.insert(rule, BTreeSet::new());
+        let regex = compile_rule_regex(rule)?;
         let prefix = static_prefix(rule);
         let display_root = existing_ancestor(&prefix)?;
         let root = canonical_existing(&display_root, "glob search root")?;
-        by_root.entry(root).or_default().push((regex, display_root));
+        by_root
+            .entry(root)
+            .or_default()
+            .push((rule, regex, display_root));
     }
-    let mut matches = BTreeSet::new();
     for (root, matchers) in by_root {
         let mut candidates = Vec::new();
         walk_paths(&root, &mut candidates)?;
         for candidate in candidates {
-            let rendered = candidate.to_string_lossy().replace('\\', "/");
+            let rendered = render_glob_path(&candidate);
             let relative = candidate.strip_prefix(&root).map_err(|error| {
                 OrbitError::Execution(format!(
                     "glob candidate `{}` must remain beneath search root `{}`: {error}",
@@ -1161,24 +1274,24 @@ fn expand_rules(rules: &[String]) -> Result<BTreeSet<PathBuf>, OrbitError> {
                     root.display()
                 ))
             })?;
-            if matchers.iter().any(|(regex, display_root)| {
-                regex.is_match(&rendered)
-                    || regex.is_match(
-                        &display_root
-                            .join(relative)
-                            .to_string_lossy()
-                            .replace('\\', "/"),
-                    )
-            }) {
-                matches.insert(canonical_existing(&candidate, "denyModify match")?);
+            // Canonicalize a candidate at most once, however many rules it hits.
+            let mut canonical: Option<PathBuf> = None;
+            for (rule, regex, display_root) in &matchers {
+                if regex.is_match(&rendered)
+                    || regex.is_match(&render_glob_path(&display_root.join(relative)))
+                {
+                    let path = match &canonical {
+                        Some(path) => path,
+                        None => {
+                            canonical.insert(canonical_existing(&candidate, "denyModify match")?)
+                        }
+                    };
+                    matches.entry(rule).or_default().insert(path.clone());
+                }
             }
         }
     }
     Ok(matches)
-}
-
-fn expand_rule(rule: &str) -> Result<BTreeSet<PathBuf>, OrbitError> {
-    expand_rules(std::slice::from_ref(&rule.to_string()))
 }
 
 fn static_prefix(rule: &str) -> PathBuf {
