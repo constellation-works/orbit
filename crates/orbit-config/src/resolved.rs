@@ -147,37 +147,43 @@ impl ResolvedConfig {
         config_path: &Path,
         persistence: PersistenceConfig,
     ) -> Result<Self, OrbitError> {
-        Self::from_raw_str_with_warnings(raw, config_path, persistence, true)
-    }
-
-    /// Parse a merged layered document while leaving compatibility warnings
-    /// to the loader, which still has each source document and its path.
-    pub(crate) fn from_layered_raw_str(
-        raw: &str,
-        config_path: &Path,
-        persistence: PersistenceConfig,
-    ) -> Result<Self, OrbitError> {
-        Self::from_raw_str_with_warnings(raw, config_path, persistence, false)
-    }
-
-    fn from_raw_str_with_warnings(
-        raw: &str,
-        config_path: &Path,
-        persistence: PersistenceConfig,
-        emit_compatibility_warnings: bool,
-    ) -> Result<Self, OrbitError> {
-        let parsed = toml::from_str::<RawRuntimeConfig>(raw).map_err(|err| {
-            OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': {err}",
-                redact_home_dir(&config_path.display().to_string())
-            ))
-        })?;
         let document = toml::from_str::<toml::Value>(raw).map_err(|err| {
             OrbitError::InvalidInput(format!(
                 "invalid runtime config '{}': {err}",
                 redact_home_dir(&config_path.display().to_string())
             ))
         })?;
+        Self::from_document_with_warnings(document, config_path, persistence, true)
+    }
+
+    /// Resolve an already-merged layered document while leaving compatibility
+    /// warnings to the loader, which still has each source document and its
+    /// path. Takes ownership of the merged `toml::Value` directly rather than
+    /// a re-serialized string, so the document is parsed once by the loader
+    /// and never re-parsed here.
+    pub(crate) fn from_layered_value(
+        document: toml::Value,
+        config_path: &Path,
+        persistence: PersistenceConfig,
+    ) -> Result<Self, OrbitError> {
+        Self::from_document_with_warnings(document, config_path, persistence, false)
+    }
+
+    fn from_document_with_warnings(
+        document: toml::Value,
+        config_path: &Path,
+        persistence: PersistenceConfig,
+        emit_compatibility_warnings: bool,
+    ) -> Result<Self, OrbitError> {
+        let parsed = document
+            .clone()
+            .try_into::<RawRuntimeConfig>()
+            .map_err(|err| {
+                OrbitError::InvalidInput(format!(
+                    "invalid runtime config '{}': {err}",
+                    redact_home_dir(&config_path.display().to_string())
+                ))
+            })?;
 
         if parsed.watch.is_some() {
             return Err(OrbitError::InvalidInput(
