@@ -27,12 +27,15 @@
 //! [`Pinned`]) and derives default selection, entry metadata, runtime
 //! resolution, and the open-runtime set from that single generation, so a
 //! concurrent add/remove/rebind is observed as one coherent old-or-new view —
-//! never old metadata spliced onto a newer runtime.
+//! never old metadata spliced onto a newer runtime. `pin` reloads the registry
+//! file only when `workspaces.json` mtime or length has changed; the steady
+//! state is a `stat` plus an `Arc` clone, not a serialized `load`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::SystemTime;
 
 use axum::extract::FromRequestParts;
 use axum::http::StatusCode;
@@ -114,11 +117,23 @@ pub(crate) struct RegistrySource {
     workspace_selector: Option<String>,
     /// Process cwd captured at startup, for default re-selection.
     cwd: Option<PathBuf>,
-    /// Per-checkout failures already reported to operators. A refresh happens at
-    /// every request boundary, so retaining this set avoids emitting the same
-    /// diagnostic for every request while allowing a repaired-and-broken-again
-    /// checkout to be reported anew.
+    /// Per-checkout failures already reported to operators. A refresh may retry
+    /// on later request boundaries when the registry file changes, so retaining
+    /// this set avoids emitting the same diagnostic for every reload while
+    /// allowing a repaired-and-broken-again checkout to be reported anew.
     reported_unavailable: Mutex<HashSet<UnavailableCheckout>>,
+    /// Successful `load` calls since construction. Test-only: production never
+    /// reads this; it exists so tests can prove the mtime/len gate skipped I/O.
+    #[cfg(test)]
+    load_count: AtomicU64,
+}
+
+/// `stat` identity of `workspaces.json`. Equal fingerprints mean the registry
+/// file has not been rewritten, so `load` would observe the same bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RegistryFingerprint {
+    mtime: SystemTime,
+    len: u64,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -150,7 +165,20 @@ impl RegistrySource {
             workspace_selector,
             cwd,
             reported_unavailable: Mutex::new(HashSet::new()),
+            #[cfg(test)]
+            load_count: AtomicU64::new(0),
         }
+    }
+
+    /// `stat` mtime and length of the registry file. `None` if the path cannot
+    /// be observed, which forces a reload so a vanished or unreadable file is
+    /// not sticky behind a stale fingerprint.
+    fn fingerprint(&self) -> Option<RegistryFingerprint> {
+        let meta = std::fs::metadata(&self.registry_path).ok()?;
+        Some(RegistryFingerprint {
+            mtime: meta.modified().ok()?,
+            len: meta.len(),
+        })
     }
 
     /// Reload the authoritative registry into a fresh (generation-less) snapshot
@@ -159,6 +187,8 @@ impl RegistrySource {
     /// are likewise excluded after an operator-visible warning. The caller stamps
     /// the generation at publication.
     fn load(&self) -> Result<SnapshotData, OrbitError> {
+        #[cfg(test)]
+        self.load_count.fetch_add(1, Ordering::Relaxed);
         let mut registry = workspace_registry::load_registry_from(&self.registry_path)?;
         workspace_registry::validate_workspaces(&mut registry);
         let mut unavailable = HashSet::new();
@@ -253,8 +283,12 @@ struct StateInner {
     source: Option<RegistrySource>,
     /// Serializes refreshes so a snapshot swap and its runtime eviction are one
     /// atomic step relative to other refreshes. Never held across runtime
-    /// construction.
+    /// construction. The request-path fast path (`pin` with an unchanged
+    /// registry fingerprint) does not take this lock.
     refresh_lock: Mutex<()>,
+    /// Last successfully loaded `workspaces.json` mtime+len. Compared on `pin`
+    /// without `refresh_lock`; updated only after a successful snapshot swap.
+    last_fingerprint: Mutex<Option<RegistryFingerprint>>,
     /// Allocates strictly-increasing generations for published snapshots.
     generation_counter: AtomicU64,
     /// Test seam: paused just before a freshly-built runtime is published.
@@ -510,13 +544,14 @@ impl DashboardState {
     }
 
     /// Registry-backed global mode: the servable workspace set is (re)loaded
-    /// from `source` on every [`DashboardState::refresh`], so native `orbit
-    /// workspace init/remove` and binding changes become visible without a
-    /// restart. The initial load is eager — a malformed registry at startup is
-    /// fatal (matching the pre-refresh behavior), whereas a later malformed
-    /// refresh retains the last valid snapshot. An individual checkout with an
-    /// unreadable identity is instead listed inactive so it cannot take down
-    /// healthy workspaces.
+    /// from `source` when [`DashboardState::refresh`] runs or when
+    /// [`DashboardState::pin`] observes a `workspaces.json` mtime/len change,
+    /// so native `orbit workspace init/remove` and binding changes become
+    /// visible without a restart. The initial load is eager — a malformed
+    /// registry at startup is fatal (matching the pre-refresh behavior),
+    /// whereas a later malformed refresh retains the last valid snapshot. An
+    /// individual checkout with an unreadable identity is instead listed
+    /// inactive so it cannot take down healthy workspaces.
     pub(crate) fn from_registry(
         global_root: PathBuf,
         source: RegistrySource,
@@ -541,6 +576,7 @@ impl DashboardState {
             entries: snapshot.entries,
             default_workspace: snapshot.default_workspace,
         };
+        let last_fingerprint = source.as_ref().and_then(RegistrySource::fingerprint);
         Self {
             inner: Arc::new(StateInner {
                 global_root,
@@ -548,6 +584,7 @@ impl DashboardState {
                 runtimes: Mutex::new(runtimes),
                 source,
                 refresh_lock: Mutex::new(()),
+                last_fingerprint: Mutex::new(last_fingerprint),
                 // Next successful refresh allocates INITIAL_GENERATION + 1.
                 generation_counter: AtomicU64::new(INITIAL_GENERATION + 1),
                 #[cfg(test)]
@@ -619,13 +656,15 @@ impl DashboardState {
         self.inner.open_runtimes_for(&snapshot)
     }
 
-    /// Refresh from the authoritative registry, then pin the resulting snapshot
-    /// as one immutable [`Pinned`] view. Every derived read — default selection,
-    /// entry metadata, runtime resolution, and the open-runtime set — sees the
-    /// same generation, so a concurrent add/remove/rebind is observed as one
-    /// coherent old-or-new response, never a mix.
+    /// Refresh from the authoritative registry when `workspaces.json` has
+    /// changed, then pin the resulting snapshot as one immutable [`Pinned`]
+    /// view. Every derived read — default selection, entry metadata, runtime
+    /// resolution, and the open-runtime set — sees the same generation, so a
+    /// concurrent add/remove/rebind is observed as one coherent old-or-new
+    /// response, never a mix. Unchanged mtime+len skips `load` and does not
+    /// take [`StateInner::refresh_lock`].
     pub(crate) fn pin(&self) -> Pinned {
-        self.refresh();
+        self.reload_registry(false);
         Pinned {
             inner: self.inner.clone(),
             snapshot: self.inner.snapshot(),
@@ -634,7 +673,10 @@ impl DashboardState {
 
     /// Reload the registered workspace set from the authoritative registry and
     /// reconcile the runtime cache. A no-op unless this state was built via
-    /// [`DashboardState::from_registry`].
+    /// [`DashboardState::from_registry`]. Always re-reads the file; request
+    /// handlers should use [`DashboardState::pin`], which skips `load` when
+    /// the fingerprint is unchanged. Production request paths only call `pin`;
+    /// tests (and any future admin force-reload) use this method.
     ///
     /// Guarantees:
     /// - **Atomic swap.** The new snapshot replaces the old one in a single
@@ -645,18 +687,33 @@ impl DashboardState {
     /// - **No build under lock.** Eviction only drops cache entries; runtimes
     ///   are (re)built lazily in `resolve_runtime`, never here and never while a
     ///   registry/cache lock is held.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn refresh(&self) {
+        self.reload_registry(true);
+    }
+
+    /// `force` bypasses the mtime/len gate so explicit [`DashboardState::refresh`]
+    /// still re-validates checkouts even when `workspaces.json` itself is
+    /// unchanged. The request path (`pin`) passes `false`.
+    fn reload_registry(&self, force: bool) {
         let Some(source) = self.inner.source.as_ref() else {
             return;
         };
-        // Serialize concurrent refreshes so the swap + eviction below is one
+        if !force && self.registry_is_current(source) {
+            return;
+        }
+        // Serialize concurrent reloads so the swap + eviction below is one
         // atomic step. Held across the registry read but never across runtime
         // construction (which only happens in `resolve_runtime`, off this lock).
+        // The unchanged-fingerprint fast path above never reaches this lock.
         let _serialize = self
             .inner
             .refresh_lock
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        if !force && self.registry_is_current(source) {
+            return;
+        }
         let data = match source.load() {
             Ok(data) => data,
             Err(error) => {
@@ -664,7 +721,8 @@ impl DashboardState {
                 // a good in-memory snapshot. The diagnostic names the registry
                 // path and Orbit's own error message; it deliberately never
                 // echoes the file's contents, so a tokenized `git_remote` in
-                // the registry cannot leak into logs.
+                // the registry cannot leak into logs. Leave the fingerprint
+                // untouched so the next pin retries.
                 let diagnostic = RefreshFailure::new(&source.registry_path, &error);
                 diagnostic.warn();
                 return;
@@ -691,12 +749,36 @@ impl DashboardState {
             let mut guard = self.inner.lock_snapshot();
             *guard = Arc::new(snapshot);
         }
-        let mut cache = self.inner.lock_runtimes();
-        cache.retain(|id, cached| {
-            live.iter().any(|(live_id, binding, orbit_dir)| {
-                live_id == id && *binding == cached.binding && *orbit_dir == cached.orbit_dir
-            })
-        });
+        {
+            let mut cache = self.inner.lock_runtimes();
+            cache.retain(|id, cached| {
+                live.iter().any(|(live_id, binding, orbit_dir)| {
+                    live_id == id && *binding == cached.binding && *orbit_dir == cached.orbit_dir
+                })
+            });
+        }
+        // Record the post-load fingerprint so the next pin can skip. Done after
+        // the snapshot swap so a concurrent pin cannot observe a new
+        // fingerprint against the old snapshot.
+        self.store_fingerprint(source.fingerprint());
+    }
+
+    fn registry_is_current(&self, source: &RegistrySource) -> bool {
+        let Some(current) = source.fingerprint() else {
+            return false;
+        };
+        self.lock_fingerprint().as_ref() == Some(&current)
+    }
+
+    fn store_fingerprint(&self, fingerprint: Option<RegistryFingerprint>) {
+        *self.lock_fingerprint() = fingerprint;
+    }
+
+    fn lock_fingerprint(&self) -> std::sync::MutexGuard<'_, Option<RegistryFingerprint>> {
+        self.inner
+            .last_fingerprint
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Install the `#[cfg(test)]` pre-publish hook (see [`PrePublishHook`]).
@@ -719,6 +801,27 @@ impl DashboardState {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = observer;
         self
+    }
+
+    /// Successful registry `load` calls, including the eager `from_registry`
+    /// construction. Single/global modes that have no source report 0.
+    #[cfg(test)]
+    pub(crate) fn registry_load_count(&self) -> u64 {
+        self.inner
+            .source
+            .as_ref()
+            .map(|source| source.load_count.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    /// Acquire `refresh_lock` so a test can prove `pin` does not wait on it
+    /// when the registry fingerprint is unchanged.
+    #[cfg(test)]
+    pub(crate) fn lock_refresh(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.inner
+            .refresh_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -849,9 +952,10 @@ impl FromRequestParts<DashboardState> for Ws {
         parts: &mut Parts,
         state: &DashboardState,
     ) -> Result<Self, Self::Rejection> {
-        // Refresh and pin one snapshot so selection and runtime resolution share
-        // a generation: a native add/remove/rebind since the last request is
-        // honored, and the resolved runtime always matches the pinned binding.
+        // Pin one snapshot so selection and runtime resolution share a
+        // generation: a native add/remove/rebind that rewrote workspaces.json
+        // since the last request is honored, and the resolved runtime always
+        // matches the pinned binding.
         let requested = parts.uri.query().and_then(workspace_from_query);
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
