@@ -211,8 +211,15 @@ fn seed_ten_unknown_lifecycle_rows(runtime: &OrbitRuntime) {
 }
 
 async fn request_audit(runtime: OrbitRuntime, uri: &str) -> axum::response::Response {
+    request_audit_on(crate::state::DashboardState::single(Arc::new(runtime)), uri).await
+}
+
+async fn request_audit_on(
+    state: crate::state::DashboardState,
+    uri: &str,
+) -> axum::response::Response {
     router()
-        .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
+        .with_state(state)
         .oneshot(
             Request::builder()
                 .method(Method::GET)
@@ -729,4 +736,104 @@ async fn summary_failed_runs_counts_past_the_history_page_size() {
 
     let body = body_json(request_audit(runtime, "/audit/summary?since=24h").await).await;
     assert_eq!(body["failed_runs"].as_u64(), Some((total + 1) as u64));
+}
+
+/// Repeated polls on one server instance must not rescan the 24h window.
+#[tokio::test]
+async fn audit_summary_reuses_memo_for_repeated_polls_on_one_state() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    seed_audit_event(
+        &runtime,
+        "exec-ok",
+        "orbit.search",
+        AuditEventStatus::Success,
+        "actor-one",
+        None,
+    );
+    let state = crate::state::DashboardState::single(Arc::new(runtime));
+
+    let first = body_json(request_audit_on(state.clone(), "/audit/summary?since=24h").await).await;
+    let second = body_json(request_audit_on(state.clone(), "/audit/summary?since=24h").await).await;
+
+    assert_eq!(first["events"], second["events"]);
+    assert_eq!(first["failed_events"], second["failed_events"]);
+    assert_eq!(first["failure_incidents"], second["failure_incidents"]);
+    assert_eq!(first["denials"], second["denials"]);
+    assert_eq!(first["window"], "24h");
+    assert_eq!(state.audit_summary_memo().compute_count(), 1);
+}
+
+/// Overlapping dashboard tabs share one compute rather than racing N scans.
+#[tokio::test]
+async fn audit_summary_coalesces_concurrent_polls_on_one_state() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    seed_audit_event(
+        &runtime,
+        "exec-ok",
+        "orbit.search",
+        AuditEventStatus::Success,
+        "actor-one",
+        None,
+    );
+    let state = crate::state::DashboardState::single(Arc::new(runtime));
+
+    let (left, right) = tokio::join!(
+        request_audit_on(state.clone(), "/audit/summary?since=24h"),
+        request_audit_on(state.clone(), "/audit/summary?since=24h"),
+    );
+    let left = body_json(left).await;
+    let right = body_json(right).await;
+
+    assert_eq!(left["events"], right["events"]);
+    assert_eq!(left["failed_events"], right["failed_events"]);
+    assert_eq!(state.audit_summary_memo().compute_count(), 1);
+}
+
+/// Relative windows are distinct keys; `24h` must not serve a `1h` payload.
+#[tokio::test]
+async fn audit_summary_does_not_share_memo_across_windows() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    seed_audit_event(
+        &runtime,
+        "exec-ok",
+        "orbit.search",
+        AuditEventStatus::Success,
+        "actor-one",
+        None,
+    );
+    let state = crate::state::DashboardState::single(Arc::new(runtime));
+
+    let day = body_json(request_audit_on(state.clone(), "/audit/summary?since=24h").await).await;
+    let hour = body_json(request_audit_on(state.clone(), "/audit/summary?since=1h").await).await;
+
+    assert_eq!(day["window"], "24h");
+    assert_eq!(hour["window"], "1h");
+    assert_eq!(state.audit_summary_memo().compute_count(), 2);
+}
+
+/// `denial_threshold` is request echo, not part of the scan, so a memo hit
+/// still reflects the caller's threshold.
+#[tokio::test]
+async fn audit_summary_applies_denial_threshold_after_memo_hit() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    seed_audit_event(
+        &runtime,
+        "exec-ok",
+        "orbit.search",
+        AuditEventStatus::Success,
+        "actor-one",
+        None,
+    );
+    let state = crate::state::DashboardState::single(Arc::new(runtime));
+
+    let first = body_json(request_audit_on(state.clone(), "/audit/summary?since=24h").await).await;
+    let second = body_json(
+        request_audit_on(state.clone(), "/audit/summary?since=24h&denial_threshold=3").await,
+    )
+    .await;
+
+    assert_eq!(first["denial_threshold"].as_i64(), Some(10));
+    assert_eq!(second["denial_threshold"].as_i64(), Some(3));
+    assert_eq!(first["events"], second["events"]);
+    assert_eq!(state.audit_summary_memo().compute_count(), 1);
 }

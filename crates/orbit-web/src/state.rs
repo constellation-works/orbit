@@ -51,6 +51,8 @@ use orbit_registry::workspace_registry;
 use orbit_types::workspace::WorkspaceStatus;
 use serde_json::json;
 
+use crate::audit_summary_memo::AuditSummaryMemo;
+
 /// Synthetic workspace id used by [`DashboardState::single`].
 pub(crate) const SINGLE_WORKSPACE_ID: &str = "default";
 
@@ -291,6 +293,9 @@ struct StateInner {
     last_fingerprint: Mutex<Option<RegistryFingerprint>>,
     /// Allocates strictly-increasing generations for published snapshots.
     generation_counter: AtomicU64,
+    /// Per-server memo for `/api/audit/summary`. Keyed by runtime identity
+    /// and the raw `since` window so relative cutoffs (`24h`) still hit.
+    audit_summary: AuditSummaryMemo,
     /// Test seam: paused just before a freshly-built runtime is published.
     #[cfg(test)]
     on_pre_publish: Mutex<Option<PrePublishHook>>,
@@ -587,6 +592,7 @@ impl DashboardState {
                 last_fingerprint: Mutex::new(last_fingerprint),
                 // Next successful refresh allocates INITIAL_GENERATION + 1.
                 generation_counter: AtomicU64::new(INITIAL_GENERATION + 1),
+                audit_summary: AuditSummaryMemo::new(),
                 #[cfg(test)]
                 on_pre_publish: Mutex::new(None),
                 #[cfg(test)]
@@ -609,6 +615,11 @@ impl DashboardState {
     /// because routine fires live in the global store.
     pub(crate) fn global_root(&self) -> &std::path::Path {
         &self.inner.global_root
+    }
+
+    /// Process-local `/api/audit/summary` memo for this server instance.
+    pub(crate) fn audit_summary_memo(&self) -> &AuditSummaryMemo {
+        &self.inner.audit_summary
     }
 
     /// Observe the native host clock. Production retains the direct native
