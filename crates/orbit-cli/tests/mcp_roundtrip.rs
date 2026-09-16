@@ -1574,9 +1574,20 @@ agent_invoke_workspaces = ["{workspace_id}"]
     let admission = &input["trusted_host_admission"];
     assert_eq!(admission["caller_identity"], "self-asserted");
     assert_eq!(admission["agent_invoke_mode"], "cooperative");
+    let recorded_workspace_path = Path::new(
+        admission["workspace_path"]
+            .as_str()
+            .expect("persisted workspace path"),
+    )
+    .canonicalize()
+    .expect("canonical persisted workspace path");
+    let expected_workspace_path = workspace
+        .work
+        .canonicalize()
+        .expect("canonical workspace path");
     assert_eq!(
-        admission["workspace_path"],
-        workspace.work.display().to_string()
+        recorded_workspace_path, expected_workspace_path,
+        "trusted host admission must record this workspace"
     );
 }
 
