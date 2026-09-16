@@ -1,7 +1,7 @@
 //! Unit tests for `docs` — sibling layout under store/tests/.
 
 use crate::NoopEmbedder;
-use crate::vector::{DocEmbeddingSource, SOURCE_KIND_DOC, VectorStore};
+use crate::vector::{DocEmbeddingSource, IndexedDocFields, SOURCE_KIND_DOC, VectorStore};
 
 fn doc(path: &str, title: &str, body: &str) -> DocEmbeddingSource {
     DocEmbeddingSource {
@@ -93,4 +93,82 @@ fn unchanged_reindex_of_a_large_corpus_stays_index_bound() {
         elapsed < BUDGET,
         "unchanged reindex of {DOCS} docs took {elapsed:?}"
     );
+}
+
+/// [DANI-10369] The gate for serving a doc query from the index: a fresh store
+/// has no doc rows, one `index_doc` later it does, and the task corpus does
+/// not count.
+#[test]
+fn has_sources_reports_doc_rows_only_once_a_doc_is_indexed() {
+    let store = VectorStore::open_in_memory().unwrap();
+    let embedder = NoopEmbedder::small();
+    assert!(!store.has_sources(SOURCE_KIND_DOC).unwrap());
+
+    store
+        .upsert_embeddings(
+            "task",
+            "ORB-00000",
+            &[crate::vector::EmbeddingField::new("title", "a task")],
+            &embedder,
+            false,
+        )
+        .unwrap();
+    assert!(!store.has_sources(SOURCE_KIND_DOC).unwrap());
+
+    store
+        .index_doc(&doc("docs/a.md", "A", "body"), &embedder, false)
+        .unwrap();
+    assert!(store.has_sources(SOURCE_KIND_DOC).unwrap());
+}
+
+/// [DANI-10369] A hit served from the index is completed from the stored
+/// `title`/`tags` fields; a doc without those rows is simply absent.
+#[test]
+fn indexed_doc_fields_reads_back_title_and_tags() {
+    let store = VectorStore::open_in_memory().unwrap();
+    let embedder = NoopEmbedder::small();
+    store
+        .index_doc(
+            &DocEmbeddingSource {
+                path: "docs/tagged.md".to_string(),
+                title: "Tagged summary".to_string(),
+                tags: vec!["alpha".to_string(), "beta".to_string()],
+                body: "body".to_string(),
+            },
+            &embedder,
+            false,
+        )
+        .unwrap();
+    store
+        .index_doc(
+            &DocEmbeddingSource {
+                path: "docs/untagged.md".to_string(),
+                title: "Untagged summary".to_string(),
+                tags: Vec::new(),
+                body: "body".to_string(),
+            },
+            &embedder,
+            false,
+        )
+        .unwrap();
+
+    let fields = store
+        .indexed_doc_fields(&["docs/tagged.md", "docs/untagged.md", "docs/missing.md"])
+        .unwrap();
+
+    assert_eq!(
+        fields.get("docs/tagged.md"),
+        Some(&IndexedDocFields {
+            title: "Tagged summary".to_string(),
+            tags: vec!["alpha".to_string(), "beta".to_string()],
+        })
+    );
+    assert_eq!(
+        fields.get("docs/untagged.md"),
+        Some(&IndexedDocFields {
+            title: "Untagged summary".to_string(),
+            tags: Vec::new(),
+        })
+    );
+    assert!(!fields.contains_key("docs/missing.md"));
 }

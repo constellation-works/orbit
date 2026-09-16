@@ -32,7 +32,7 @@ pub(crate) mod worker;
 pub use doc_fields::DocEmbeddingSource;
 pub use index::SemanticIndex;
 pub use query::{Bm25Hit, bm25_top_k};
-pub use store::{SOURCE_KIND_DOC, SOURCE_KIND_TASK, VectorStore};
+pub use store::{IndexedDocFields, SOURCE_KIND_DOC, SOURCE_KIND_TASK, VectorStore};
 pub use worker::EmbedWorker;
 
 use orbit_common::OrbitError;
