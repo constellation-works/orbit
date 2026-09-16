@@ -18,7 +18,9 @@ use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use tempfile::{TempDir, tempdir};
 
 use crate::OrbitRuntime;
-use crate::application::job::catalog::{reset_v2_job_catalog_loads, v2_job_catalog_loads};
+use crate::application::job::catalog::{
+    DEFAULT_JOB_FILES, reset_v2_job_catalog_loads, v2_job_catalog_loads,
+};
 use crate::application::routines::loader::{
     LoadedRoutine, RoutineCollection, RoutineOrigin, collect_routines,
 };
@@ -387,4 +389,68 @@ fn collect_routines_parses_one_catalog_per_workspace() {
     );
     assert_eq!(collection.routines.len(), 3);
     assert!(collection.errors.is_empty(), "{:?}", collection.errors);
+}
+
+#[test]
+fn default_routine_survives_a_distinct_workspace_job_catalog_error() {
+    let ws = seed_source_workspace();
+    let default_yaml = DEFAULT_JOB_FILES
+        .iter()
+        .find_map(|(name, yaml)| (*name == "task_auto_pipeline").then_some(*yaml))
+        .expect("task auto pipeline default exists");
+    let global_jobs_dir = ws.runtime.global_root().join("resources/jobs");
+    fs::create_dir_all(&global_jobs_dir).expect("create global jobs directory");
+    fs::write(
+        global_jobs_dir.join("task_auto_pipeline.yaml"),
+        default_yaml,
+    )
+    .expect("seed global default job");
+
+    let malformed = ws
+        .runtime
+        .shared_root()
+        .join("resources/jobs/malformed.yaml");
+    fs::write(&malformed, "schemaVersion: 2\nkind: Job\nspec: [")
+        .expect("write malformed workspace job");
+    write_routine(
+        &ws.routines_dir,
+        "default-target.yaml",
+        "schemaVersion: 1\nname: default-target-polaris\n\
+         trigger: { cron: \"* * * * *\" }\ntarget: job:task_auto_pipeline\n",
+    );
+
+    let names = ws
+        .runtime
+        .load_v2_job_execution_names()
+        .expect("execution names remain available");
+    assert!(names.contains("task_auto_pipeline"), "{names:?}");
+    assert!(
+        ws.runtime
+            .load_v2_job_asset_by_name("task_auto_pipeline")
+            .is_ok(),
+        "the default still resolves through named execution"
+    );
+
+    let collection = collect(&ws);
+    assert!(
+        find(&collection, "default-target-polaris").is_some(),
+        "a routine targeting the healthy global default should load"
+    );
+    let messages = collection
+        .errors
+        .iter()
+        .map(|error| error.message.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        messages.iter().any(|message| {
+            message.contains("failed to load job catalog") && message.contains("malformed.yaml")
+        }),
+        "catalog failure should name the bad file: {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.contains("no such job in its catalog")),
+        "a catalog failure must not be reported as missing default job: {messages:?}"
+    );
 }
