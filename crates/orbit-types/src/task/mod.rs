@@ -37,6 +37,7 @@ pub use model::{
     task_matches_tags, task_reference_is_not_verifiable_here, unmet_task_dependencies,
     unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
     unsatisfiable_task_dependencies_with_index, validate_task_dependencies,
+    validate_task_dependencies_with,
 };
 pub use plan::{TaskPlan, TaskPlanCheckpoint, TaskPlanSuccessCriterion};
 pub use show_fields::{
