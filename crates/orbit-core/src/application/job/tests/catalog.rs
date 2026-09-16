@@ -2431,6 +2431,46 @@ fn execution_name_index_matches_named_execution_lookup() {
     );
 }
 
+/// In the single-root layout (`orbit init` and `workspace init` sharing one
+/// `--root`, the default for CLI-driven workspaces) the workspace jobs
+/// directory and the global jobs directory are the very same path. A shipped
+/// default job seeded only there must still resolve for execution, matching
+/// [`Self::load_v2_job_asset_by_name`] — the path-based "did this come from
+/// the workspace copy" check can't fire when there is no separate workspace
+/// copy to distinguish it from.
+#[test]
+fn execution_name_index_matches_named_execution_lookup_with_shared_root() {
+    let root = tempdir().expect("tempdir");
+    let shared_root = root.path().join("shared");
+    std::fs::create_dir_all(&shared_root).expect("create shared root");
+    let runtime = OrbitRuntime::from_roots(&shared_root, &shared_root).expect("build test runtime");
+    let jobs_dir = shared_root.join("resources/jobs");
+    write_job(
+        &jobs_dir.join("task_auto_pipeline.yaml"),
+        "task_auto_pipeline",
+        "shared",
+        1,
+    );
+    write_job(&jobs_dir.join("custom.yaml"), "custom", "shared", 1);
+
+    reset_v2_job_catalog_loads();
+    let names = runtime
+        .load_v2_job_execution_names()
+        .expect("execution names");
+    assert_eq!(v2_job_catalog_loads(), 1);
+
+    assert!(
+        names.contains("task_auto_pipeline"),
+        "a default job seeded in the shared root must resolve for execution: {names:?}"
+    );
+    assert!(names.contains("custom"));
+    assert!(
+        runtime
+            .load_v2_job_asset_by_name("task_auto_pipeline")
+            .is_ok()
+    );
+}
+
 #[test]
 fn duplicate_jobs_within_one_catalog_directory_remain_invalid() {
     let (_root, runtime, _global_root, workspace_root) = test_runtime();

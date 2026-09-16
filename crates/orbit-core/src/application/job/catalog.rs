@@ -276,13 +276,28 @@ impl OrbitRuntime {
     /// Default job names stay bound to env/global layers (L-0060): a workspace
     /// copy of a shipped default does not make the name resolvable for
     /// execution, so it must not pass load-time target checks either.
+    ///
+    /// That distinction only means anything when the workspace jobs
+    /// directory is actually separate from the global one. In the common
+    /// single-root layout (`orbit init` and `workspace init` sharing one
+    /// `--root`, as most CLI-driven workspaces do) `jobs_dir` and
+    /// `global_dir/resources/jobs` are the very same path, so every entry's
+    /// on-disk path trivially starts with `jobs_dir` — the path alone can't
+    /// tell "came from the workspace copy" apart from "came from the shared
+    /// global directory". Skip the exclusion entirely when the two paths
+    /// coincide, rather than filtering out every default job name.
     pub(crate) fn load_v2_job_execution_names(&self) -> Result<BTreeSet<String>, OrbitError> {
         let catalog = self.load_v2_job_catalog(self.v2_job_membership_dirs())?;
         let jobs_dir = &self.paths().jobs_dir;
+        let global_jobs_dir = self.paths().global_dir.join("resources/jobs");
+        let workspace_dir_is_distinct = *jobs_dir != global_jobs_dir;
         Ok(catalog
             .iter()
             .filter_map(|(name, path, _)| {
-                if is_default_job_name(name) && path.starts_with(jobs_dir) {
+                if workspace_dir_is_distinct
+                    && is_default_job_name(name)
+                    && path.starts_with(jobs_dir)
+                {
                     None
                 } else {
                     Some(name.to_string())
