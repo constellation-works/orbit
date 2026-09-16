@@ -20,6 +20,17 @@ members = [
 ]
 resolver = "2"
 
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
 [workspace.package]
 version = "0.22.1"
 edition = "2024"
