@@ -24,29 +24,64 @@ const MAX_RECOVERY_FAILED_STEP_INPUT_BYTES: usize = 64 * 1024;
 /// object shape the recovery activity's input schema requires.
 const MAX_RECOVERY_INPUT_LEAF_BYTES: usize = 8 * 1024;
 
+/// The failure that sends a step into recovery.
+///
+/// [DANI-10438] A CLI agent that finishes and declares `status: "failed"` in
+/// its envelope reaches the executor as `Ok(StepOutcome { success: false })`,
+/// not as an `Err` — and that is the case a recovery leaf exists for (red
+/// gate, transient tooling, flaky test). Recovery is keyed on this enum so both
+/// shapes take the same path; only the returned-unrecovered value differs.
+pub(super) enum StepFailure {
+    Error(DispatchError),
+    Outcome(StepOutcome),
+}
+
+impl StepFailure {
+    /// The diagnostic handed to the recovery activity and kept on the terminal
+    /// error [ORB-10449].
+    fn diagnostic(&self) -> String {
+        match self {
+            Self::Error(error) => error.to_string(),
+            Self::Outcome(outcome) => outcome
+                .message
+                .clone()
+                .unwrap_or_else(|| "step completed with success=false".to_string()),
+        }
+    }
+
+    /// Hand the original failure back unchanged when recovery is absent,
+    /// refused, or fails.
+    fn into_result(self) -> Result<StepOutcome, DispatchError> {
+        match self {
+            Self::Error(error) => Err(error),
+            Self::Outcome(outcome) => Ok(outcome),
+        }
+    }
+}
+
 pub(super) fn recover_or_return_original(
     step: &JobV2Step,
     ctx: &ExecCtx<'_>,
-    original_err: DispatchError,
+    failure: StepFailure,
     attempt: u32,
     max_attempts: u32,
 ) -> Result<StepOutcome, DispatchError> {
     let Some(recovery) = recovery_activity_for_step(step, ctx) else {
-        return Err(original_err);
+        return failure.into_result();
     };
 
-    if attempt_recovery_activity(step, ctx, &recovery, &original_err, attempt, max_attempts) {
-        return post_recovery_attempt(step, ctx, &recovery, original_err);
+    if attempt_recovery_activity(step, ctx, &recovery, &failure, attempt, max_attempts) {
+        return post_recovery_attempt(step, ctx, &recovery, failure);
     }
 
-    Err(original_err)
+    failure.into_result()
 }
 
 fn post_recovery_attempt(
     step: &JobV2Step,
     ctx: &ExecCtx<'_>,
     recovery: &ResolvedRecoveryActivity,
-    original_err: DispatchError,
+    failure: StepFailure,
 ) -> Result<StepOutcome, DispatchError> {
     let reattempt = run_step_body(step, ctx);
     let (outcome, error_message) = match &reattempt {
@@ -77,8 +112,9 @@ fn post_recovery_attempt(
     match reattempt {
         Ok(outcome) if outcome.success => Ok(outcome),
         Ok(_) | Err(_) => Err(DispatchError::JobExecution(format!(
-            "post-recovery attempt {outcome}: {}; original error before recovery: {original_err}",
+            "post-recovery attempt {outcome}: {}; original error before recovery: {}",
             error_message.unwrap_or_else(|| "no diagnostic".to_string()),
+            failure.diagnostic(),
         ))),
     }
 }
@@ -104,12 +140,17 @@ pub(super) fn attempt_recovery_activity(
     step: &JobV2Step,
     ctx: &ExecCtx<'_>,
     recovery: &ResolvedRecoveryActivity,
-    original_err: &DispatchError,
+    failure: &StepFailure,
     attempt: u32,
     max_attempts: u32,
 ) -> bool {
+    // The conflict leaf edits conflict files only; a declared-failed outcome
+    // or any other error is never a rebase conflict for it to resolve.
     if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY
-        && !matches!(original_err, DispatchError::RecoverableVcsConflict { .. })
+        && !matches!(
+            failure,
+            StepFailure::Error(DispatchError::RecoverableVcsConflict { .. })
+        )
     {
         return false;
     }
@@ -117,8 +158,7 @@ pub(super) fn attempt_recovery_activity(
     let recovery_started = std::time::Instant::now();
     let result = match ctx.host.authorize_step_recovery(&ctx.run_id, &step.id) {
         Ok(StepRecoveryAdmission::Allowed | StepRecoveryAdmission::Reserved { .. }) => {
-            let result =
-                dispatch_recovery(step, ctx, recovery, original_err, attempt, max_attempts);
+            let result = dispatch_recovery(step, ctx, recovery, failure, attempt, max_attempts);
             // Preparation failures spend the reserved episode too.
             if let Err(error) = ctx.host.settle_step_recovery(
                 &ctx.run_id,
@@ -165,7 +205,7 @@ fn dispatch_recovery(
     step: &JobV2Step,
     ctx: &ExecCtx<'_>,
     recovery: &ResolvedRecoveryActivity,
-    original_err: &DispatchError,
+    failure: &StepFailure,
     attempt: u32,
     max_attempts: u32,
 ) -> Result<(), (&'static str, String)> {
@@ -175,19 +215,19 @@ fn dispatch_recovery(
         "error_message": bounded_recovery_text(
             "error_message",
             &ctx.run_id,
-            &original_err.to_string(),
+            &failure.diagnostic(),
             MAX_RECOVERY_ERROR_MESSAGE_BYTES,
         ),
         "attempt": attempt,
         "max_attempts": max_attempts,
     });
-    if let DispatchError::RecoverableVcsConflict {
+    if let StepFailure::Error(DispatchError::RecoverableVcsConflict {
         operation,
         original_base_sha,
         target_base_sha,
         conflicting_paths,
         diagnostic,
-    } = original_err
+    }) = failure
         && let Some(object) = input.as_object_mut()
     {
         object.insert(

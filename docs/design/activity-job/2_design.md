@@ -3,7 +3,7 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-09-08
+last_updated: 2026-09-16
 last_validated: 2026-09-08
 status: Draft
 feature: activity-job
@@ -529,12 +529,26 @@ in `task_pr_pipeline`:
 
 - **Not retried.** The step has no `retry:` block, and a repeat invocation of a
   stalled agent has no new information to work with.
-- **No recovery agent.** `recovery_activity` fires on `Err`, not on a failed
-  outcome — which is the behaviour we want here. `step_failure_recovery` exists
-  to repair the *delivery path for completed work*; a stalled implementer is
-  incomplete work, and having it publish the candidate is the opposite of the fix.
-- **Run terminalizes at that step.** No later step runs, the step is audited as
-  `failed`, and the job-level `failure_activity` (`pr_failure_handoff`,
+- **One recovery attempt, then one re-attempt.** After [DANI-10438], a step
+  whose `recovery_activity` resolves dispatches it for a `success: false`
+  outcome exactly as it does for an `Err` — once retries are exhausted, if the
+  step has any — with the outcome's message as the bounded `error_message`,
+  then re-runs the step body once and audits `step.recovery_attempted`
+  followed by `step.post_recovery_attempt`. Before that task, `recovery_activity`
+  fired only on `Err`, so an agent that finished and declared `status: "failed"`
+  (a red gate, transient tooling, a flaky test — the case the leaf exists for)
+  was the one failure that bypassed it: on-call runs went straight from the
+  declared failure to `pr_failure_handoff` and `blocked` with no recovery event.
+  The executor keys recovery on `StepFailure` (`recovery.rs`), which carries
+  either shape; `pr_conflict_recovery` keeps its restriction to
+  `RecoverableVcsConflict`, so a declared failure on `sync_base` never
+  dispatches the conflict leaf. Recovery that fails, or is refused, hands the
+  original outcome back unchanged; a failed re-attempt returns an error whose
+  text carries both the re-attempt's diagnostic and the original one
+  ([ORB-10449]). A step without a resolved recovery activity behaves as before.
+- **Run terminalizes at that step** when nothing recovers it. No later step
+  runs, the step is audited as `failed`, and the job-level `failure_activity`
+  (`pr_failure_handoff`,
   [Terminal PR shipment uses a job-level failure handoff](./4_decisions.md#terminal-pr-shipment-uses-a-job-level-failure-handoff)) still fires to preserve recoverable work.
 - **Task and worktree.** The worktree is retained with whatever the agent wrote
   before it stopped; tasks coupled to the run move to `blocked` under the normal

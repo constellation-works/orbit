@@ -3,7 +3,7 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-09-08
+last_updated: 2026-09-16
 last_validated: 2026-09-08
 status: Draft
 feature: activity-job
@@ -1216,7 +1216,7 @@ Recognition is the entire change: no safety gate moved. Non-terminal run, `--old
 
 ## Step completion is a separate contract from response content
 
-**Recorded:** 2026-07-26 20:47:48.459433Z · [ORB-10449], [ORB-10454]
+**Recorded:** 2026-07-26 20:47:48.459433Z · [ORB-10449], [ORB-10454] · [DANI-10438] routed `success: false` outcomes through `recovery_activity`
 **Paths:** `crates/orbit-types/src/workflow/activity_job/activity_v2.rs`, `crates/orbit-agent/src/types/response/envelope.rs`, `docs/design/activity-job/*`
 
 **Context.** [CLI response envelopes are optional for artifact-backed activities](#cli-response-envelopes-are-optional-for-artifact-backed-activities) made CLI response envelopes best-effort for artifact-backed activities, leaving `require_response_envelope` as the only flag that reads an agent-loop invocation's stdout. That flag answers *"do downstream templates consume the response?"* — but it was silently also the only thing answering *"did the invocation finish at all?"*, and for artifact-backed activities (`require_response_envelope: false`) nobody was asking. Every `backend: cli` invocation is prompted with the response-envelope contract, so a provider that yields mid-turn still exits 0: `implement_one` in `task_pr_pipeline` checkpointed as success on work that stopped halfway, and the failure surfaced several steps later at whatever deterministic gate noticed first, attributed to the wrong step. Two real alternatives were rejected. Flipping `require_response_envelope: true` everywhere conflates the content question with the completion question and forces full content validation — exit alignment, `status: success`, object `result` — onto activities whose responses nothing reads, re-breaking exactly what [CLI response envelopes are optional for artifact-backed activities](#cli-response-envelopes-are-optional-for-artifact-backed-activities) fixed. Classifying the violation as a retryable `DispatchError` so `step_failure_recovery` fires inverts the fix: that hook exists to repair the delivery path for *completed* work, so it would publish a stalled implementer's partial candidate.
@@ -1228,6 +1228,7 @@ Recognition is the entire change: no safety gate moved. Non-terminal run, `--old
 - The default is `true`, so every new `agent_loop` activity inherits the check; opting out is a deliberate, test-pinned edit with a recorded justification in the asset rather than an omission.
 - Cost: the completion check is deliberately *more* permissive about stdout stream shape than the content parser — when the JSON document stream will not parse (a wrapped tool sharing stdout, a stray warning line) it falls back to scanning raw text for an embedded envelope, which the content parser does not do. The two gates can therefore return different verdicts on the same invocation: an activity with both flags set can pass completion and fail content. The asymmetry is intentional — failing a step that genuinely completed, over stdout tidiness, is a worse defect than the one this check exists to catch — but nothing in the decision statement implies it, and a reader debugging a mismatched pair has to know it is by design.
 - Cost: activity authors now classify two independent questions per activity instead of one, and a miscarried classification is silent in the direction that matters least (an over-strict completion flag fails loudly; an over-permissive one restores the original blind spot).
+- Amended by [DANI-10438]: the "does not invoke `recovery_activity`" clause above no longer holds. A `success: false` outcome on a step with a resolved recovery activity now dispatches it once and re-attempts the step, the same as an `Err`; `pr_conflict_recovery` alone stays keyed on `RecoverableVcsConflict`. Current semantics are in [2_design.md §7.6a](./2_design.md).
 
 ## Provider launchers resolve at the shared CLI spawn boundary
 
