@@ -584,12 +584,10 @@ impl TaskRegistryStore {
     /// host's task.
     pub fn local_task_prefix(&self) -> Result<String, OrbitError> {
         let conn = self.read()?;
-        conn.query_row(
-            "SELECT task_prefix FROM allocator_state WHERE authority = 'local'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| OrbitError::Store(e.to_string()))
+        conn.prepare_cached("SELECT task_prefix FROM allocator_state WHERE authority = 'local'")
+            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .query_row([], |row| row.get(0))
+            .map_err(|e| OrbitError::Store(e.to_string()))
     }
 
     /// Prefixes recognized by the local registry: the active minting prefix
@@ -758,7 +756,7 @@ impl TaskRegistryStore {
         let partition_id = validate_partition_id(partition_id)?;
         let conn = self.read()?;
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "SELECT task_id, workspace_id, canonical_path, created_at, updated_at
                  FROM task_bundle_bindings
                  WHERE workspace_id = ?1
@@ -909,7 +907,7 @@ impl TaskRegistryStore {
         let partition_id = validate_partition_id(partition_id)?;
         let conn = self.read()?;
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "SELECT task_id, updated_at FROM task_bundle_index
                  WHERE workspace_id = ?1
                  ORDER BY task_id ASC",
@@ -931,11 +929,9 @@ impl TaskRegistryStore {
         let partition_id = validate_partition_id(partition_id)?;
         let conn = self.read()?;
         let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM task_bundle_index WHERE workspace_id = ?1",
-                [partition_id],
-                |row| row.get(0),
-            )
+            .prepare_cached("SELECT COUNT(*) FROM task_bundle_index WHERE workspace_id = ?1")
+            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .query_row([partition_id], |row| row.get(0))
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         usize::try_from(count).map_err(|e| OrbitError::Store(e.to_string()))
     }
@@ -946,7 +942,7 @@ impl TaskRegistryStore {
     pub fn global_task_status_index(&self) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
         let conn = self.read()?;
         let mut stmt = conn
-            .prepare("SELECT task_id, status FROM task_bundle_index ORDER BY task_id ASC")
+            .prepare_cached("SELECT task_id, status FROM task_bundle_index ORDER BY task_id ASC")
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         let rows = stmt
             .query_map([], |row| {
@@ -975,14 +971,14 @@ impl TaskRegistryStore {
         let partition_id = validate_partition_id(partition_id)?;
         let conn = self.read()?;
         let exists: i64 = conn
-            .query_row(
+            .prepare_cached(
                 "SELECT EXISTS(
                     SELECT 1 FROM task_bundle_index
                     WHERE workspace_id = ?1 AND complexity IS NULL
                  )",
-                [partition_id],
-                |row| row.get(0),
             )
+            .map_err(|e| OrbitError::Store(e.to_string()))?
+            .query_row([partition_id], |row| row.get(0))
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         Ok(exists != 0)
     }
@@ -997,7 +993,7 @@ impl TaskRegistryStore {
         let partition_id = validate_partition_id(partition_id)?;
         let conn = self.read()?;
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "SELECT complexity, status, COUNT(*)
                  FROM task_bundle_index
                  WHERE workspace_id = ?1
@@ -1053,7 +1049,7 @@ impl TaskRegistryStore {
         let partition_id = validate_partition_id(partition_id)?;
         let conn = self.read()?;
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "SELECT task_id, complexity FROM task_bundle_index
                  WHERE workspace_id = ?1
                  ORDER BY task_id ASC",
@@ -1206,7 +1202,7 @@ impl TaskRegistryStore {
         validate_orb_task_id(source_task_id)?;
         let conn = self.read()?;
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "SELECT target_task_id FROM task_bundle_relations
                  WHERE workspace_id = ?1 AND source_task_id = ?2 AND relation_type = ?3
                  ORDER BY target_task_id ASC",
@@ -1236,7 +1232,7 @@ impl TaskRegistryStore {
         validate_orb_task_id(target_task_id)?;
         let conn = self.read()?;
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "SELECT source_task_id FROM task_bundle_relations
                  WHERE workspace_id = ?1 AND target_task_id = ?2 AND relation_type = ?3
                  ORDER BY source_task_id ASC",
@@ -1267,7 +1263,7 @@ impl TaskRegistryStore {
         let orbit_dir = normalize_path(orbit_dir);
         let conn = self.read()?;
         let mut stmt = conn
-            .prepare(
+            .prepare_cached(
                 "SELECT workspace_id, repo_root, workspace_path, orbit_dir, created_at, updated_at
                  FROM workspace_checkout_bindings
                  WHERE repo_root = ?1 OR workspace_path = ?2 OR orbit_dir = ?3
@@ -1305,7 +1301,7 @@ impl TaskRegistryStore {
     pub fn partition_ids(&self) -> Result<BTreeSet<String>, OrbitError> {
         let conn = self.read()?;
         let mut stmt = conn
-            .prepare("SELECT workspace_id FROM workspace_bindings")
+            .prepare_cached("SELECT workspace_id FROM workspace_bindings")
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         let rows = stmt
             .query_map([], |row| row.get::<_, String>(0))
@@ -1433,7 +1429,7 @@ impl TaskRegistryStore {
     pub fn max_registered_task_number(&self) -> Result<Option<u32>, OrbitError> {
         let conn = self.read()?;
         let mut statement = conn
-            .prepare("SELECT task_id FROM task_bundle_bindings")
+            .prepare_cached("SELECT task_id FROM task_bundle_bindings")
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         let ids = statement
             .query_map([], |row| row.get::<_, String>(0))
@@ -1534,11 +1530,9 @@ impl TaskRegistryStore {
 
 fn read_allocator_next_number(conn: &Connection) -> Result<u32, OrbitError> {
     let next: i64 = conn
-        .query_row(
-            "SELECT next_number FROM allocator_state WHERE authority = 'local'",
-            [],
-            |row| row.get(0),
-        )
+        .prepare_cached("SELECT next_number FROM allocator_state WHERE authority = 'local'")
+        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .query_row([], |row| row.get(0))
         .map_err(|e| OrbitError::Store(e.to_string()))?;
     u32::try_from(next).map_err(|e| OrbitError::Store(e.to_string()))
 }
@@ -1559,7 +1553,7 @@ fn upsert_task_binding(
     canonical_path: &Path,
     now: &str,
 ) -> Result<(), OrbitError> {
-    tx.execute(
+    tx.prepare_cached(
         "INSERT INTO task_bundle_bindings (
             task_id, workspace_id, canonical_path, created_at, updated_at
         ) VALUES (?1, ?2, ?3, ?4, ?4)
@@ -1567,8 +1561,14 @@ fn upsert_task_binding(
             workspace_id = excluded.workspace_id,
             canonical_path = excluded.canonical_path,
             updated_at = excluded.updated_at",
-        params![task_id, partition_id, path_to_string(canonical_path), now],
     )
+    .map_err(|e| OrbitError::Store(e.to_string()))?
+    .execute(params![
+        task_id,
+        partition_id,
+        path_to_string(canonical_path),
+        now
+    ])
     .map_err(|e| OrbitError::Store(e.to_string()))?;
     Ok(())
 }
@@ -1881,7 +1881,7 @@ fn validate_relation_targets_exist(
 fn known_task_prefixes(conn: &Connection) -> Result<BTreeSet<String>, OrbitError> {
     let mut prefixes = BTreeSet::from([active_task_prefix(conn)?]);
     let mut statement = conn
-        .prepare("SELECT task_id FROM task_bundle_bindings")
+        .prepare_cached("SELECT task_id FROM task_bundle_bindings")
         .map_err(|e| OrbitError::Store(e.to_string()))?;
     let ids = statement
         .query_map([], |row| row.get::<_, String>(0))
@@ -1896,12 +1896,10 @@ fn known_task_prefixes(conn: &Connection) -> Result<BTreeSet<String>, OrbitError
 }
 
 fn active_task_prefix(conn: &Connection) -> Result<String, OrbitError> {
-    conn.query_row(
-        "SELECT task_prefix FROM allocator_state WHERE authority = 'local'",
-        [],
-        |row| row.get(0),
-    )
-    .map_err(|e| OrbitError::Store(e.to_string()))
+    conn.prepare_cached("SELECT task_prefix FROM allocator_state WHERE authority = 'local'")
+        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .query_row([], |row| row.get(0))
+        .map_err(|e| OrbitError::Store(e.to_string()))
 }
 
 /// Which of `task_ids` have a registered bundle, resolved by one prepared
@@ -1940,11 +1938,11 @@ fn registered_task_ids(
 /// [`task_id_prefix`], so it is 2-5 uppercase ASCII letters.
 fn task_prefix_is_registered(conn: &Connection, prefix: &str) -> Result<bool, OrbitError> {
     let exists: i64 = conn
-        .query_row(
-            TASK_PREFIX_PROBE_SQL,
-            params![format!("{prefix}-"), format!("{prefix}.")],
-            |row| row.get(0),
-        )
+        .prepare_cached(TASK_PREFIX_PROBE_SQL)
+        .map_err(|e| OrbitError::Store(e.to_string()))?
+        .query_row(params![format!("{prefix}-"), format!("{prefix}.")], |row| {
+            row.get(0)
+        })
         .map_err(|e| OrbitError::Store(e.to_string()))?;
     Ok(exists != 0)
 }
