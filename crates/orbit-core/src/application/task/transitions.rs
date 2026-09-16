@@ -3,15 +3,14 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::FrictionStoreBackend;
 use orbit_types::identity::is_valid_friction_id;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{
-    Task, TaskHistoryEntry, TaskRelationType, TaskStatus, unmet_task_dependencies,
-};
+use orbit_types::task::{Task, TaskRelationType, TaskStatus, unmet_task_dependencies};
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use crate::OrbitRuntime;
 
 use super::helpers::{
-    SYSTEM_ACTOR_LABEL, build_task_comments, effective_actor_label, implementation_label,
+    SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution, build_task_comments,
+    effective_actor_label, implementation_label,
 };
 use super::lifecycle::{ensure_task_has_execution_plan, in_progress_transition_requires_plan};
 use super::params::TaskUpdateParams;
@@ -356,7 +355,7 @@ impl OrbitRuntime {
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
         let actor = self.actor().clone();
-        let effective_label = match actor_label_override {
+        let effective_label = match actor_label_override.clone() {
             Some(label) => label,
             None => effective_actor_label(
                 &actor.label,
@@ -431,77 +430,85 @@ impl OrbitRuntime {
                     );
                 }
             };
-            started = Some(match task.status {
-                TaskStatus::Proposed => {
-                warn_unmet_dependencies();
-                let result = self.with_mutation(|| {
-                    let at = chrono::Utc::now();
-                    let task = self.stores().task_records().update(
+            // Attribute a plan written on this start to the agent family that
+            // wrote it, the way the worker path does, unless the task already
+            // names a planner or the caller sets one explicitly.
+            let attribution = assemble_task_attribution(
+                &task,
+                TaskAttributionInput {
+                    default_actor_label: &actor.label,
+                    actor_override: actor_label_override.as_deref(),
+                    agent: canonical_agent.as_deref(),
+                    model: canonical_model.as_deref(),
+                    runtime_model_identity: None,
+                    plan_changed: start_edits.plan.is_some() && task.planned_by.is_none(),
+                    // A start is never implementation evidence, and
+                    // `start_edits` already carries any explicit
+                    // `implemented_by` straight through to the store.
+                    target_status: None,
+                    explicit_planned_by: start_edits.planned_by.as_ref(),
+                    explicit_implemented_by: None,
+                },
+            )?;
+            let approved_from_proposed = task.status == TaskStatus::Proposed;
+            warn_unmet_dependencies();
+            started = Some(self.with_mutation(|| {
+                // A start from `proposed` is two transitions, and history must
+                // read that way: approve into backlog first, then start from
+                // backlog. Writing them as two record updates under the task
+                // lock lets the store derive each event's `from_status` from
+                // the status it actually left, instead of stamping `started`
+                // with `proposed` after a hand-built approval entry.
+                //
+                // Every gate has already run by here, so the approval only
+                // lands for a start that was going to be allowed. If the start
+                // write then fails, the task rests in `backlog` with its
+                // approval recorded — a state history can explain, and one a
+                // retry starts cleanly from.
+                if approved_from_proposed {
+                    self.stores().task_records().update(
                         id,
                         StoreTaskUpdateParams {
                             actor: effective_label.clone(),
-                            status_event: Some("started".to_string()),
-                            append_history: std::iter::once(TaskHistoryEntry {
-                                at,
-                                by: effective_label.clone(),
-                                event: "proposal_approved".to_string(),
-                                note: note.clone(),
-                                from_status: Some(task.status),
-                                to_status: Some(TaskStatus::Backlog),
-                            })
-                            .chain(context_history.clone())
-                            .collect(),
-                            append_comments: append_comments.clone(),
-                            artifact_owner_run_id: artifact_owner.clone(),
-                            expected_status: Some(vec![task.status]),
-                            ..StoreTaskUpdateParams::from(start_edits.clone())
-                        },
-                    )?;
-                    Ok((
-                        task.clone(),
-                        OrbitEvent::TaskStarted {
-                            id: id.to_string(),
-                            started_by: effective_label.clone(),
-                            approved_from_proposed: true,
-                        },
-                    ))
-                })?;
-                    Ok(result)
-                }
-                TaskStatus::Backlog | TaskStatus::Someday | TaskStatus::Blocked => {
-                warn_unmet_dependencies();
-                let task = self.with_mutation(|| {
-                    let task = self.stores().task_records().update(
-                        id,
-                        StoreTaskUpdateParams {
-                            actor: effective_label.clone(),
-                            status_event: Some("started".to_string()),
+                            status_event: Some("proposal_approved".to_string()),
                             status_note: note.clone(),
-                            append_comments: append_comments.clone(),
-                            append_history: context_history.clone().into_iter().collect(),
-                            artifact_owner_run_id: artifact_owner.clone(),
-                            expected_status: Some(vec![task.status]),
-                            ..StoreTaskUpdateParams::from(start_edits.clone())
+                            expected_status: Some(vec![TaskStatus::Proposed]),
+                            ..StoreTaskUpdateParams::from(TaskUpdateParams {
+                                status: Some(TaskStatus::Backlog),
+                                ..Default::default()
+                            })
                         },
                     )?;
-                    Ok((
-                        task.clone(),
-                        OrbitEvent::TaskStarted {
-                            id: id.to_string(),
-                            started_by: effective_label.clone(),
-                            approved_from_proposed: false,
-                        },
-                    ))
-                })?;
-                    Ok(task)
                 }
-                TaskStatus::InProgress => Err(OrbitError::InvalidInput(format!(
-                    "task '{id}' is already in-progress"
-                ))),
-                other => Err(OrbitError::InvalidInput(format!(
-                    "task '{id}' is in status '{other}'; start requires 'proposed', 'backlog', 'someday', or 'blocked'"
-                ))),
-            }?);
+                let started = self.stores().task_records().update(
+                    id,
+                    StoreTaskUpdateParams {
+                        actor: effective_label.clone(),
+                        planned_by: attribution.planned_by.clone(),
+                        status_event: Some("started".to_string()),
+                        status_note: (!approved_from_proposed)
+                            .then(|| note.clone())
+                            .flatten(),
+                        append_comments: append_comments.clone(),
+                        append_history: context_history.clone().into_iter().collect(),
+                        artifact_owner_run_id: artifact_owner.clone(),
+                        expected_status: Some(vec![if approved_from_proposed {
+                            TaskStatus::Backlog
+                        } else {
+                            task.status
+                        }]),
+                        ..StoreTaskUpdateParams::from(start_edits.clone())
+                    },
+                )?;
+                Ok((
+                    started,
+                    OrbitEvent::TaskStarted {
+                        id: id.to_string(),
+                        started_by: effective_label.clone(),
+                        approved_from_proposed,
+                    },
+                ))
+            })?);
             Ok(())
         })?;
         started.ok_or_else(|| {
