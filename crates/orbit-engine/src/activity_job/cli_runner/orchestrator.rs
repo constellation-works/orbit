@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_agent::{
-    Agent, AgentConfig, AgentOperation, AgentRequest, antigravity_terminal_error_diagnostic,
-    normalize_cli_stdout, peek_declared_response_failure, peek_response_status,
-    project_cli_response, provider_invocation_diagnostic, response_envelope_protocol_check,
+    Agent, AgentConfig, AgentOperation, AgentRequest, ParsedStdout,
+    antigravity_terminal_error_diagnostic, normalize_cli_stdout, project_cli_response,
+    provider_invocation_diagnostic,
 };
 use orbit_common::process::identity::process_start_identity_token;
 use orbit_common::security::redaction::{
@@ -29,7 +29,7 @@ use super::argv::{
     apply_trusted_host_provider_sandbox, neutralize_inner_sandbox, try_audit_argv_for_dispatch,
 };
 use super::envelope::{
-    cli_agent_envelope_json, parse_cli_invocation_trace, parse_cli_response_result,
+    cli_agent_envelope_json, parse_cli_invocation_trace_from, parse_cli_response_result_from,
     task_id_from_input, task_ids_from_input,
 };
 use super::inspection::SourceInspection;
@@ -46,6 +46,9 @@ use super::supervisor::{
 use crate::context::RuntimeHost;
 
 const STDOUT_TEXT_PREVIEW_LIMIT_BYTES: usize = 64 * 1024;
+/// Extra bytes kept around the 64 KiB preview so a secret that straddles the
+/// cut is still fully inside the redaction window.
+const STDOUT_TEXT_PREVIEW_REDACTION_MARGIN_BYTES: usize = 1024;
 const RESPONSE_DIAGNOSTIC_LIMIT_CHARS: usize = 1024;
 
 pub fn run_cli_backend(
@@ -572,11 +575,12 @@ pub fn run_cli_backend(
     let answer_stdout = project_cli_response(&provider, stdout.protocol_bytes());
     let answer_text = String::from_utf8_lossy(answer_stdout.as_ref());
     let trace_stdout_text = String::from_utf8_lossy(trace_stdout.as_ref());
-    let declared_failure = peek_declared_response_failure(answer_text.as_ref());
+    let answer_parsed = ParsedStdout::parse(answer_text.as_ref());
+    let declared_failure = answer_parsed.peek_declared_response_failure();
     let envelope_status = declared_failure
         .as_ref()
         .map(|failure| failure.status.clone())
-        .or_else(|| peek_response_status(answer_text.as_ref()));
+        .or_else(|| answer_parsed.peek_response_status());
     // The operator-facing preview stays on the *raw* capture: normalization
     // drops the session control plane, and that is where a provider puts the
     // policy and authentication failures an operator needs to see.
@@ -584,8 +588,8 @@ pub fn run_cli_backend(
     let stdout_preview =
         stdout_text_preview(raw_stdout_text.as_ref(), redaction, stdout.truncated());
     let parsed_result = exit_success.then(|| {
-        parse_cli_response_result(
-            answer_stdout.as_ref(),
+        parse_cli_response_result_from(
+            &answer_parsed,
             stderr.protocol_bytes(),
             exit_code,
             duration.as_millis() as u64,
@@ -607,7 +611,7 @@ pub fn run_cli_backend(
     // Only meaningful on an otherwise-clean exit: a timeout or nonzero exit
     // already fails the step with a more specific message.
     let completion_envelope_error = exit_success
-        .then(|| response_envelope_protocol_check(answer_text.as_ref()))
+        .then(|| answer_parsed.response_envelope_protocol_check())
         .and_then(Result::err)
         .map(|error| completion_diagnostic(&error.to_string(), redaction));
     let completion_protocol_violation =
@@ -641,13 +645,24 @@ pub fn run_cli_backend(
             &task_ids,
         )?;
     }
-    let trace = parse_cli_invocation_trace(
-        trace_stdout.as_ref(),
-        stderr.protocol_bytes(),
-        exit_code,
-        duration.as_millis() as u64,
-        success,
-    );
+    let trace = if trace_stdout.as_ref() == answer_stdout.as_ref() {
+        parse_cli_invocation_trace_from(
+            &answer_parsed,
+            stderr.protocol_bytes(),
+            exit_code,
+            duration.as_millis() as u64,
+            success,
+        )
+    } else {
+        let trace_parsed = ParsedStdout::parse(trace_stdout_text.as_ref());
+        parse_cli_invocation_trace_from(
+            &trace_parsed,
+            stderr.protocol_bytes(),
+            exit_code,
+            duration.as_millis() as u64,
+            success,
+        )
+    };
     let message = if timed_out {
         Some(format!(
             "cli subprocess exceeded {}s wall-clock timeout",
@@ -955,40 +970,28 @@ fn bounded_diagnostic(error: &str, redactor: &PatternRedactor) -> String {
     format!("{bounded}{suffix}")
 }
 
-struct StdoutTextPreview {
-    text: String,
-    truncated: bool,
-    preview_bytes: usize,
+pub(super) struct StdoutTextPreview {
+    pub(super) text: String,
+    pub(super) truncated: bool,
+    pub(super) preview_bytes: usize,
 }
 
-fn stdout_text_preview(
+pub(super) fn stdout_text_preview(
     raw: &str,
     redactor: &PatternRedactor,
     prefer_tail: bool,
 ) -> StdoutTextPreview {
-    let redacted = redactor.apply_str(&redact_sensitive_env_text(raw));
-    let truncated = redacted.len() > STDOUT_TEXT_PREVIEW_LIMIT_BYTES;
-    let text = if truncated {
-        if prefer_tail {
-            let requested_start = redacted.len() - STDOUT_TEXT_PREVIEW_LIMIT_BYTES;
-            let boundary = redacted
-                .char_indices()
-                .map(|(idx, _)| idx)
-                .find(|idx| *idx >= requested_start)
-                .unwrap_or(redacted.len());
-            let line_boundary = redacted[boundary..]
-                .find('\n')
-                .map_or(boundary, |idx| boundary + idx + 1);
-            redacted[line_boundary..].to_string()
-        } else {
-            let boundary = redacted
-                .char_indices()
-                .map(|(idx, _)| idx)
-                .take_while(|idx| *idx <= STDOUT_TEXT_PREVIEW_LIMIT_BYTES)
-                .last()
-                .unwrap_or(0);
-            redacted[..boundary].to_string()
-        }
+    let window = preview_source_window(
+        raw,
+        prefer_tail,
+        STDOUT_TEXT_PREVIEW_LIMIT_BYTES,
+        STDOUT_TEXT_PREVIEW_REDACTION_MARGIN_BYTES,
+    );
+    let redacted = redactor.apply_str(&redact_sensitive_env_text(window));
+    let truncated = raw.len() > STDOUT_TEXT_PREVIEW_LIMIT_BYTES
+        || redacted.len() > STDOUT_TEXT_PREVIEW_LIMIT_BYTES;
+    let text = if redacted.len() > STDOUT_TEXT_PREVIEW_LIMIT_BYTES {
+        truncate_preview_text(&redacted, prefer_tail, STDOUT_TEXT_PREVIEW_LIMIT_BYTES)
     } else {
         redacted
     };
@@ -999,4 +1002,48 @@ fn stdout_text_preview(
         truncated,
         preview_bytes,
     }
+}
+
+fn preview_source_window(raw: &str, prefer_tail: bool, limit: usize, margin: usize) -> &str {
+    let cap = limit.saturating_add(margin);
+    if raw.len() <= cap {
+        return raw;
+    }
+    if prefer_tail {
+        let requested_start = raw.len() - cap;
+        let boundary = char_boundary_at_or_after(raw, requested_start);
+        &raw[boundary..]
+    } else {
+        let boundary = char_boundary_at_or_before(raw, cap);
+        &raw[..boundary]
+    }
+}
+
+fn truncate_preview_text(redacted: &str, prefer_tail: bool, limit: usize) -> String {
+    if prefer_tail {
+        let requested_start = redacted.len() - limit;
+        let boundary = char_boundary_at_or_after(redacted, requested_start);
+        let line_boundary = redacted[boundary..]
+            .find('\n')
+            .map_or(boundary, |idx| boundary + idx + 1);
+        redacted[line_boundary..].to_string()
+    } else {
+        let boundary = char_boundary_at_or_before(redacted, limit);
+        redacted[..boundary].to_string()
+    }
+}
+
+fn char_boundary_at_or_after(text: &str, requested: usize) -> usize {
+    text.char_indices()
+        .map(|(idx, _)| idx)
+        .find(|idx| *idx >= requested)
+        .unwrap_or(text.len())
+}
+
+fn char_boundary_at_or_before(text: &str, requested: usize) -> usize {
+    text.char_indices()
+        .map(|(idx, _)| idx)
+        .take_while(|idx| *idx <= requested)
+        .last()
+        .unwrap_or(0)
 }

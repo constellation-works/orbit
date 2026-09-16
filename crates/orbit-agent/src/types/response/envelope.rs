@@ -14,12 +14,109 @@ pub struct DeclaredResponseFailure {
     pub error: Option<AgentRunError>,
 }
 
-pub fn parse_and_validate_response(exec_result: &ExecutionResult) -> ResponseParseResult {
-    match parse_json_envelope(exec_result) {
-        Ok(parsed) => Ok(parsed),
-        Err(err) if is_discovery_limit_error(&err) => Err(err),
-        Err(err) => synthesize_response(exec_result).ok_or(err),
+/// JSON documents from one stdout capture.
+///
+/// CLI post-run handling peeks status, checks the completion envelope, and
+/// extracts a result/trace from the same capture. Parsing JSONL once avoids
+/// materialising `Vec<Value>` for each helper.
+#[derive(Debug)]
+pub struct ParsedStdout<'a> {
+    raw: &'a str,
+    documents: Result<Vec<Value>, String>,
+}
+
+impl<'a> ParsedStdout<'a> {
+    pub fn parse(stdout: &'a str) -> Self {
+        Self {
+            raw: stdout,
+            documents: parse_json_documents(stdout).map_err(protocol_violation_message),
+        }
     }
+
+    pub fn raw(&self) -> &'a str {
+        self.raw
+    }
+
+    fn json_documents(&self) -> Result<&[Value], OrbitError> {
+        self.documents
+            .as_ref()
+            .map(Vec::as_slice)
+            .map_err(|message| OrbitError::AgentProtocolViolation(message.clone()))
+    }
+
+    pub fn peek_response_status(&self) -> Option<String> {
+        let documents = self.json_documents().ok()?;
+        match discover_in_values(
+            documents.iter().rev(),
+            &mut Budget::production(),
+            deserialize_envelope,
+        ) {
+            Ok(Some(envelope)) => Some(envelope.status),
+            Ok(None) | Err(_) => None,
+        }
+    }
+
+    pub fn peek_declared_response_failure(&self) -> Option<DeclaredResponseFailure> {
+        let documents = self.json_documents().ok()?;
+        discover_in_values(
+            documents.iter().rev(),
+            &mut Budget::production(),
+            declared_response_failure,
+        )
+        .unwrap_or_default()
+    }
+
+    pub fn response_envelope_protocol_check(&self) -> Result<(), OrbitError> {
+        // A provider may interleave non-protocol chatter with its output — a
+        // wrapped tool writing to the same stdout, a warning line — which makes
+        // the stream unparseable as a whole even though the agent did terminate
+        // properly. Fall back to scanning the raw text so this gate tests for
+        // the termination signal, not for the tidiness of the stream around it.
+        let envelope = match self.json_documents() {
+            Ok(documents) => discover_in_values(
+                documents.iter().rev(),
+                &mut Budget::production(),
+                deserialize_envelope,
+            )?,
+            Err(_) => {
+                discover_in_string(self.raw, &mut Budget::production(), deserialize_envelope)?
+            }
+        };
+        let envelope = envelope
+            .ok_or_else(|| OrbitError::AgentProtocolViolation(missing_envelope_message(self)))?;
+        if envelope.schema_version != RESPONSE_ENVELOPE_SCHEMA_VERSION {
+            return Err(OrbitError::AgentProtocolViolation(format!(
+                "unsupported schemaVersion: {}",
+                envelope.schema_version
+            )));
+        }
+        if !RESPONSE_ENVELOPE_STATUSES.contains(&envelope.status.as_str()) {
+            return Err(OrbitError::AgentProtocolViolation(format!(
+                "unknown status: {}",
+                envelope.status
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn parse_and_validate(&self, exec_result: &ExecutionResult) -> ResponseParseResult {
+        match parse_json_envelope(exec_result, self) {
+            Ok(parsed) => Ok(parsed),
+            Err(err) if is_discovery_limit_error(&err) => Err(err),
+            Err(err) => synthesize_from_parsed(exec_result, self).ok_or(err),
+        }
+    }
+}
+
+fn protocol_violation_message(error: OrbitError) -> String {
+    match error {
+        OrbitError::AgentProtocolViolation(message) => message,
+        other => other.to_string(),
+    }
+}
+
+pub fn parse_and_validate_response(exec_result: &ExecutionResult) -> ResponseParseResult {
+    ParsedStdout::parse(&exec_result.stdout).parse_and_validate(exec_result)
 }
 
 pub fn is_timeout(exec_result: &ExecutionResult) -> bool {
@@ -39,15 +136,7 @@ pub fn is_timeout(exec_result: &ExecutionResult) -> bool {
 /// envelope, or discovery exhausts its work bound. Validating APIs fail that
 /// last case closed instead of treating it as absent.
 pub fn peek_response_status(stdout: &str) -> Option<String> {
-    let documents = parse_json_documents(stdout).ok()?;
-    match discover_in_values(
-        documents.iter().rev(),
-        &mut Budget::production(),
-        deserialize_envelope,
-    ) {
-        Ok(Some(envelope)) => Some(envelope.status),
-        Ok(None) | Err(_) => None,
-    }
+    ParsedStdout::parse(stdout).peek_response_status()
 }
 
 /// Best-effort lookup of a terminal failure declaration in provider stdout.
@@ -58,13 +147,7 @@ pub fn peek_response_status(stdout: &str) -> Option<String> {
 /// The returned error is present only when both its code and message are
 /// non-empty strings.
 pub fn peek_declared_response_failure(stdout: &str) -> Option<DeclaredResponseFailure> {
-    let documents = parse_json_documents(stdout).ok()?;
-    discover_in_values(
-        documents.iter().rev(),
-        &mut Budget::production(),
-        declared_response_failure,
-    )
-    .unwrap_or_default()
+    ParsedStdout::parse(stdout).peek_declared_response_failure()
 }
 
 /// Content-blind check that a provider's stdout *terminated with* a well-formed
@@ -85,36 +168,7 @@ pub fn peek_declared_response_failure(stdout: &str) -> Option<DeclaredResponseFa
 /// missing one — which is precisely the distinction this predicate exists to
 /// draw.
 pub fn response_envelope_protocol_check(stdout: &str) -> Result<(), OrbitError> {
-    // A provider may interleave non-protocol chatter with its output — a
-    // wrapped tool writing to the same stdout, a warning line — which makes the
-    // stream unparseable as a whole even though the agent did terminate
-    // properly. Fall back to scanning the raw text so this gate tests for the
-    // termination signal, not for the tidiness of the stream around it. Failing
-    // a completed step over stray stdout would be a worse defect than the one
-    // this check exists to catch.
-    let envelope = match parse_json_documents(stdout) {
-        Ok(documents) => discover_in_values(
-            documents.iter().rev(),
-            &mut Budget::production(),
-            deserialize_envelope,
-        )?,
-        Err(_) => discover_in_string(stdout, &mut Budget::production(), deserialize_envelope)?,
-    };
-    let envelope = envelope
-        .ok_or_else(|| OrbitError::AgentProtocolViolation(missing_envelope_message(stdout)))?;
-    if envelope.schema_version != RESPONSE_ENVELOPE_SCHEMA_VERSION {
-        return Err(OrbitError::AgentProtocolViolation(format!(
-            "unsupported schemaVersion: {}",
-            envelope.schema_version
-        )));
-    }
-    if !RESPONSE_ENVELOPE_STATUSES.contains(&envelope.status.as_str()) {
-        return Err(OrbitError::AgentProtocolViolation(format!(
-            "unknown status: {}",
-            envelope.status
-        )));
-    }
-    Ok(())
+    ParsedStdout::parse(stdout).response_envelope_protocol_check()
 }
 
 /// The invariant the [ORB-10449] completion guard is built on. Kept verbatim
@@ -129,10 +183,11 @@ const MISSING_ENVELOPE_MESSAGE: &str = "stdout does not contain an Orbit respons
 /// like an agent that answered in prose, and used to be indistinguishable from
 /// it. This changes only the message: the decision to fail was already made by
 /// the caller, and no wrapper signal can reverse it.
-fn missing_envelope_message(stdout: &str) -> String {
-    let Some(diagnostic) = parse_json_documents(stdout)
+fn missing_envelope_message(parsed: &ParsedStdout<'_>) -> String {
+    let Some(diagnostic) = parsed
+        .json_documents()
         .ok()
-        .and_then(|documents| wrapper_signals(&documents).terminal_ending_diagnostic())
+        .and_then(|documents| wrapper_signals(documents).terminal_ending_diagnostic())
     else {
         return MISSING_ENVELOPE_MESSAGE.to_string();
     };
@@ -186,17 +241,18 @@ fn validate_exit_alignment(
     Ok(())
 }
 
-fn parse_json_envelope(exec_result: &ExecutionResult) -> ResponseParseResult {
-    let documents = parse_json_documents(&exec_result.stdout)?;
+fn parse_json_envelope(
+    exec_result: &ExecutionResult,
+    parsed: &ParsedStdout<'_>,
+) -> ResponseParseResult {
+    let documents = parsed.json_documents()?;
     let envelope = discover_in_values(
         documents.iter().rev(),
         &mut Budget::production(),
         deserialize_envelope,
     )?
-    .ok_or_else(|| {
-        OrbitError::AgentProtocolViolation(missing_envelope_message(&exec_result.stdout))
-    })?;
-    let trace = extract_invocation_trace(&documents, exec_result.duration_ms);
+    .ok_or_else(|| OrbitError::AgentProtocolViolation(missing_envelope_message(parsed)))?;
+    let trace = extract_invocation_trace(documents, exec_result.duration_ms);
 
     if envelope.schema_version != RESPONSE_ENVELOPE_SCHEMA_VERSION {
         return Err(OrbitError::AgentProtocolViolation(format!(
@@ -234,8 +290,16 @@ fn parse_json_envelope(exec_result: &ExecutionResult) -> ResponseParseResult {
 
 // Visible through `response.rs` to sibling-layout tests; keeping this private
 // would require nesting tests back under `envelope`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::types) fn synthesize_response(
     exec_result: &ExecutionResult,
+) -> Option<(AgentResponseEnvelope, AgentResponseStatus, InvocationTrace)> {
+    synthesize_from_parsed(exec_result, &ParsedStdout::parse(&exec_result.stdout))
+}
+
+fn synthesize_from_parsed(
+    exec_result: &ExecutionResult,
+    parsed: &ParsedStdout<'_>,
 ) -> Option<(AgentResponseEnvelope, AgentResponseStatus, InvocationTrace)> {
     if is_timeout(exec_result) {
         return Some((
@@ -251,7 +315,7 @@ pub(in crate::types) fn synthesize_response(
                 duration_ms: Some(exec_result.duration_ms),
             },
             AgentResponseStatus::Timeout,
-            synthesize_trace(exec_result),
+            synthesize_trace_from_parsed(exec_result, parsed),
         ));
     }
 
@@ -264,9 +328,10 @@ pub(in crate::types) fn synthesize_response(
     // This is the only new synthesis path, and it is failure-only by
     // construction: no combination of `is_error`, `subtype`, `terminal_reason`,
     // exit code, or provider prose can produce a `success` envelope here.
-    if let Some(diagnostic) = exit_zero_terminal_failure(exec_result) {
+    if let Some(diagnostic) = exit_zero_terminal_failure(exec_result, parsed) {
         return Some(synthesized_failure(
             exec_result,
+            parsed,
             "AGENT_TERMINAL_ENDING",
             diagnostic,
         ));
@@ -278,6 +343,7 @@ pub(in crate::types) fn synthesize_response(
 
     Some(synthesized_failure(
         exec_result,
+        parsed,
         "AGENT_INVOCATION_FAILED",
         synthetic_error_message(exec_result),
     ))
@@ -285,6 +351,7 @@ pub(in crate::types) fn synthesize_response(
 
 fn synthesized_failure(
     exec_result: &ExecutionResult,
+    parsed: &ParsedStdout<'_>,
     code: &str,
     message: String,
 ) -> (AgentResponseEnvelope, AgentResponseStatus, InvocationTrace) {
@@ -301,7 +368,7 @@ fn synthesized_failure(
             duration_ms: Some(exec_result.duration_ms),
         },
         AgentResponseStatus::Failed,
-        synthesize_trace(exec_result),
+        synthesize_trace_from_parsed(exec_result, parsed),
     )
 }
 
@@ -311,11 +378,14 @@ fn synthesized_failure(
 /// Requires the absence of an envelope: a real envelope is the authoritative
 /// outcome whatever its status, and must never be displaced by a synthesized
 /// one — that would let wrapper prose overrule the protocol.
-fn exit_zero_terminal_failure(exec_result: &ExecutionResult) -> Option<String> {
+fn exit_zero_terminal_failure(
+    exec_result: &ExecutionResult,
+    parsed: &ParsedStdout<'_>,
+) -> Option<String> {
     if exec_result.exit_code.unwrap_or(1) != 0 {
         return None;
     }
-    let documents = parse_json_documents(&exec_result.stdout).ok()?;
+    let documents = parsed.json_documents().ok()?;
     match discover_in_values(
         documents.iter(),
         &mut Budget::production(),
@@ -324,7 +394,7 @@ fn exit_zero_terminal_failure(exec_result: &ExecutionResult) -> Option<String> {
         Ok(None) => {}
         Ok(Some(_)) | Err(_) => return None,
     }
-    wrapper_signals(&documents).terminal_ending_diagnostic()
+    wrapper_signals(documents).terminal_ending_diagnostic()
 }
 
 // Best-effort trace extraction for the fallback path. Provider CLIs (e.g.
@@ -334,9 +404,17 @@ fn exit_zero_terminal_failure(exec_result: &ExecutionResult) -> Option<String> {
 // is what made claude show as zero tokens on the scoreboard.
 // Visible through `response.rs` to sibling-layout tests; this is a narrow
 // crate-internal seam for fallback trace behavior.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::types) fn synthesize_trace(exec_result: &ExecutionResult) -> InvocationTrace {
-    match parse_json_documents(&exec_result.stdout) {
-        Ok(documents) => extract_invocation_trace(&documents, exec_result.duration_ms),
+    synthesize_trace_from_parsed(exec_result, &ParsedStdout::parse(&exec_result.stdout))
+}
+
+fn synthesize_trace_from_parsed(
+    exec_result: &ExecutionResult,
+    parsed: &ParsedStdout<'_>,
+) -> InvocationTrace {
+    match parsed.json_documents() {
+        Ok(documents) => extract_invocation_trace(documents, exec_result.duration_ms),
         Err(_) => InvocationTrace {
             duration_ms: exec_result.duration_ms,
             ..InvocationTrace::default()
