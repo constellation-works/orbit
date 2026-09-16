@@ -61,7 +61,12 @@ pub fn load_registry_from(path: &Path) -> Result<WorkspaceRegistry, OrbitError> 
 /// directly. A caller that sees `migration_required` must re-read and migrate
 /// while holding [`with_registry_lock`] before it performs maintenance.
 pub fn load_registry_from_read_only(path: &Path) -> Result<ReadOnlyRegistryLoad, OrbitError> {
-    let path = validated_registry_path(path)?;
+    let Some(path) = validated_registry_path_if_root_exists(path)? else {
+        return Ok(ReadOnlyRegistryLoad {
+            registry: WorkspaceRegistry::default(),
+            migration_required: false,
+        });
+    };
     if !path.exists() {
         return Ok(ReadOnlyRegistryLoad {
             registry: WorkspaceRegistry::default(),
@@ -82,7 +87,9 @@ pub(crate) fn load_registry_from_with_writer(
     path: &Path,
     writer: impl FnOnce(&WorkspaceRegistry, &Path) -> Result<(), OrbitError>,
 ) -> Result<WorkspaceRegistry, OrbitError> {
-    let path = validated_registry_path(path)?;
+    let Some(path) = validated_registry_path_if_root_exists(path)? else {
+        return Ok(WorkspaceRegistry::default());
+    };
     let loaded = load_registry_from_read_only(&path)?;
     if loaded.migration_required {
         writer(&loaded.registry, &path)?;
@@ -141,6 +148,24 @@ fn validated_registry_path(path: &Path) -> Result<PathBuf, OrbitError> {
     }
 
     Ok(canonical_path)
+}
+
+/// Read-side variant of [`validated_registry_path`]: a global root that does
+/// not exist yet holds no registry, so loads report an empty registry instead
+/// of failing to canonicalize the missing directory. Nothing under a missing
+/// root can be a symlink, so the strict check is only skipped when there is
+/// nothing to check. Lock and save callers keep the strict path: they must not
+/// create the root as a side effect.
+fn validated_registry_path_if_root_exists(path: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    let parent = registry_parent(path)?;
+    match std::fs::symlink_metadata(parent) {
+        Ok(_) => validated_registry_path(path).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(OrbitError::Io(format!(
+            "inspect {}: {error}",
+            parent.display()
+        ))),
+    }
 }
 
 fn registry_parent(path: &Path) -> Result<&Path, OrbitError> {

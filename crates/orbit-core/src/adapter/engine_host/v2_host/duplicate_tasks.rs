@@ -7,6 +7,9 @@
 //! A fingerprint must match in full; individual keywords never carry a
 //! duplicate decision.
 
+use std::cell::{OnceCell, RefCell};
+use std::collections::BTreeMap;
+
 use orbit_common::security::redaction::redact_all;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{Task, TaskComment, TaskStatus, is_valid_orb_task_id};
@@ -49,6 +52,63 @@ impl DuplicateTaskLookup for crate::OrbitRuntime {
 
     fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
         crate::OrbitRuntime::get_task_comments(self, task_id)
+    }
+}
+
+/// One action's read-through snapshot over another lookup.
+///
+/// `find_covering_task` lists every task and reads every open task's comments
+/// once per candidate. An action that assesses many candidates — one per
+/// cluster and one per legacy key in the CI sweep — would otherwise
+/// re-hydrate the whole workspace for each of them. The snapshot fills
+/// lazily, so the exact-key fast path still never lists broadly, and it is
+/// dropped with the action, so nothing it caches can outlive the reads it
+/// was taken from. Tag queries and direct task reads pass through: they are
+/// indexed or single-bundle reads and happen only on a hit.
+pub(in crate::adapter::engine_host::v2_host) struct SnapshotDuplicateLookup<'a, L: ?Sized> {
+    inner: &'a L,
+    tasks: OnceCell<Vec<Task>>,
+    comments: RefCell<BTreeMap<String, Vec<TaskComment>>>,
+}
+
+impl<'a, L: DuplicateTaskLookup + ?Sized> SnapshotDuplicateLookup<'a, L> {
+    pub(in crate::adapter::engine_host::v2_host) fn new(inner: &'a L) -> Self {
+        Self {
+            inner,
+            tasks: OnceCell::new(),
+            comments: RefCell::new(BTreeMap::new()),
+        }
+    }
+}
+
+impl<L: DuplicateTaskLookup + ?Sized> DuplicateTaskLookup for SnapshotDuplicateLookup<'_, L> {
+    fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
+        self.inner.list_tasks_by_tags(tags)
+    }
+
+    fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
+        if let Some(tasks) = self.tasks.get() {
+            return Ok(tasks.clone());
+        }
+        // A failed hydration is not cached: the caller fails the whole action
+        // on the first error, so there is no retry to serve stale emptiness to.
+        let tasks = self.inner.list_tasks()?;
+        Ok(self.tasks.get_or_init(|| tasks).clone())
+    }
+
+    fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+        self.inner.get_task(task_id)
+    }
+
+    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
+        if let Some(comments) = self.comments.borrow().get(task_id) {
+            return Ok(comments.clone());
+        }
+        let comments = self.inner.get_task_comments(task_id)?;
+        self.comments
+            .borrow_mut()
+            .insert(task_id.to_string(), comments.clone());
+        Ok(comments)
     }
 }
 

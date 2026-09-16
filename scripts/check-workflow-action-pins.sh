@@ -18,28 +18,27 @@ if [[ ! -d "$workflows_dir" ]]; then
 fi
 
 api_base="https://api.github.com"
+# Expanded as ${auth_header[@]+"${auth_header[@]}"}: bash 3.2 (macOS /bin/bash)
+# treats an empty array as unset under `set -u`.
 auth_header=()
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
   auth_header=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
 fi
 
-probe_status="$(curl -s -o /dev/null -m 5 -w '%{http_code}' "${auth_header[@]}" "$api_base" 2>/dev/null || echo "000")"
+probe_status="$(curl -s -o /dev/null -m 5 -w '%{http_code}' ${auth_header[@]+"${auth_header[@]}"} "$api_base" 2>/dev/null || echo "000")"
 if [[ "$probe_status" == "000" ]]; then
   echo "check-workflow-action-pins: no network access to $api_base; skipping pin resolution" >&2
   exit 0
 fi
 
-declare -A checked
 fail=0
 
-while IFS=$'\t' read -r file line_no owner_repo sha; do
-  key="${owner_repo}@${sha}"
-  if [[ -n "${checked[$key]:-}" ]]; then
-    status="${checked[$key]}"
-  else
-    status="$(curl -s -o /dev/null -m 10 -w '%{http_code}' "${auth_header[@]}" "$api_base/repos/$owner_repo/commits/$sha" 2>/dev/null || echo "000")"
-    checked[$key]="$status"
-  fi
+# Each distinct owner/repo@sha is resolved once. Deduplication happens in the
+# producer (sort on the first two fields) rather than an associative array so
+# the script runs under bash 3.2 (macOS /bin/bash), which the guard self-tests
+# use; only the first workflow location of a repeated pin is reported.
+while IFS=$'\t' read -r owner_repo sha file line_no; do
+  status="$(curl -s -o /dev/null -m 10 -w '%{http_code}' ${auth_header[@]+"${auth_header[@]}"} "$api_base/repos/$owner_repo/commits/$sha" 2>/dev/null || echo "000")"
 
   case "$status" in
     200)
@@ -57,7 +56,8 @@ while IFS=$'\t' read -r file line_no owner_repo sha; do
   esac
 done < <(
   grep -rnE 'uses:[[:space:]]*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_./-]+)?@[0-9a-fA-F]{40}' "$workflows_dir" |
-    sed -E 's#^([^:]+):([0-9]+):.*uses:[[:space:]]*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(/[A-Za-z0-9_./-]+)?@([0-9a-fA-F]{40}).*#\1\t\2\t\3\t\5#'
+    sed -E 's#^([^:]+):([0-9]+):.*uses:[[:space:]]*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(/[A-Za-z0-9_./-]+)?@([0-9a-fA-F]{40}).*#\3\t\5\t\1\t\2#' |
+    sort -t "$(printf '\t')" -k1,2 -u
 )
 
 if [[ "$fail" -ne 0 ]]; then

@@ -64,8 +64,11 @@ pub struct Workspace {
     pub updated_at: DateTime<Utc>,
 }
 
+/// The base branch a workspace record carries when none was registered.
+pub const DEFAULT_BASE_BRANCH: &str = "main";
+
 fn default_base_branch() -> String {
-    "main".to_string()
+    DEFAULT_BASE_BRANCH.to_string()
 }
 
 fn default_status() -> WorkspaceStatus {

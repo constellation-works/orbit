@@ -4,7 +4,7 @@ description: Exercise a frozen delivery batch using typed artifact evidence
 enabled: false
 schedule:
   deliveries_landed:
-    branch: agent-main
+    branch: __ORBIT_BASE_BRANCH__
     threshold: 3
     max_wait_minutes: 360
     coverage: integrated_qa_v1

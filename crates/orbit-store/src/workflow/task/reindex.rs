@@ -4,10 +4,11 @@
 //! (only bumped upward).
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::with_exclusive_file_lock;
-use orbit_types::task::is_valid_orb_task_id;
+use orbit_types::task::{TaskEnvelopeV2, is_valid_orb_task_id};
 
 use crate::driver::file::task_bundle::{bundle_lock_target, recover_pending_bundle_at};
 use crate::driver::sqlite::task_registry::{TaskRegistryStore, parse_orb_task_number};
@@ -50,52 +51,49 @@ pub fn reindex_workspace(
     }
     let store = TaskBundleStoreV2::new(registry.clone(), workspace_id.clone());
     let mut removed_stale = 0;
-    let mut indexed = 0;
-    let mut readable = Vec::new();
+    let mut readable: Vec<(String, PathBuf)> = Vec::new();
+    let mut envelopes: Vec<TaskEnvelopeV2> = Vec::new();
     let mut failures = Vec::new();
     for task_id in &candidates {
         let dir = registry.canonical_task_bundle_path(&workspace_id, task_id)?;
+        // Deletion recovery, the existence check and the authoritative read all
+        // stay under the bundle lock: dropping a binding whose directory
+        // vanished must not race a creator publishing the same id, and the
+        // envelope this run indexes must be a settled one. Only the registry
+        // writes for the healthy set are lifted out and batched below.
         let result = with_exclusive_file_lock(&bundle_lock_target(&dir), "task reindex", || {
             if store.recover_deletion(task_id)? {
                 removed_stale += 1;
-                return Ok(());
+                return Ok(None);
             }
             if !dir.try_exists()? {
                 if registry.unregister_task_bundle(task_id, &workspace_id)? {
                     removed_stale += 1;
                 }
-                return Ok(());
+                return Ok(None);
             }
-            recover_pending_bundle_at(&dir)?;
-            registry.register_task_bundle(task_id, &workspace_id, &dir)?;
-            readable.push(task_id);
-            Ok::<(), OrbitError>(())
+            Ok::<Option<TaskEnvelopeV2>, OrbitError>(Some(
+                recover_pending_bundle_at(&dir)?.envelope,
+            ))
         });
-        if let Err(error) = result {
+        match result {
+            Ok(Some(envelope)) => {
+                readable.push((task_id.clone(), dir));
+                envelopes.push(envelope);
+            }
+            Ok(None) => {}
             // Keep unresolved bytes AND any authoritative binding/index. A
             // healthy neighbor still gets repaired, but this run cannot succeed.
-            failures.push(format!("{task_id}: {error}"));
+            Err(error) => failures.push(format!("{task_id}: {error}")),
         }
     }
 
-    // Register the readable set before validating relations: imported tasks
-    // may refer to another bundle later in directory order. Re-read under the
-    // lock so an intervening update/deletion cannot publish a stale index.
-    for task_id in readable {
-        let dir = registry.canonical_task_bundle_path(&workspace_id, task_id)?;
-        let result = with_exclusive_file_lock(&bundle_lock_target(&dir), "task reindex", || {
-            if store.recover_deletion(task_id)? || !dir.try_exists()? {
-                return Ok(());
-            }
-            let bundle = recover_pending_bundle_at(&dir)?;
-            registry.replace_task_index(&workspace_id, &bundle.envelope)?;
-            indexed += 1;
-            Ok::<(), OrbitError>(())
-        });
-        if let Err(error) = result {
-            failures.push(format!("{task_id}: {error}"));
-        }
-    }
+    // One commit for every healthy binding, then one for the whole index batch,
+    // instead of two per task. Registering the readable set before the index
+    // pass is what lets a bundle refer to another that sorts after it; the
+    // index batch then validates those relations as one set.
+    registry.register_task_bundles(&workspace_id, &readable)?;
+    let indexed = index_healthy_set(registry, &workspace_id, &envelopes, &mut failures);
 
     // Include unresolved IDs so allocator recovery cannot collide with data
     // retained for repair. Never replace the entire index with a partial set.
@@ -115,6 +113,33 @@ pub fn reindex_workspace(
         indexed,
         removed_stale,
     })
+}
+
+/// Index the readable set in one commit, returning how many tasks landed.
+///
+/// A batch that the registry refuses as a whole — a relation the set cannot
+/// satisfy together, say — is retried one envelope at a time, because repairing
+/// every task it still can is the entire point of reindex. The set-wide
+/// rejection is recorded either way, so a run that needed the retry reports
+/// itself incomplete rather than quietly downgrading validation.
+fn index_healthy_set(
+    registry: &TaskRegistryStore,
+    workspace_id: &str,
+    envelopes: &[TaskEnvelopeV2],
+    failures: &mut Vec<String>,
+) -> usize {
+    let Err(batch_error) = registry.replace_task_indexes(workspace_id, envelopes) else {
+        return envelopes.len();
+    };
+    failures.push(format!("task index batch: {batch_error}"));
+    let mut indexed = 0;
+    for envelope in envelopes {
+        match registry.replace_task_index(workspace_id, envelope) {
+            Ok(()) => indexed += 1,
+            Err(error) => failures.push(format!("{}: {error}", envelope.id)),
+        }
+    }
+    indexed
 }
 
 /// Candidate IDs include tombstones and malformed non-directory entries, so

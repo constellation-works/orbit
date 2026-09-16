@@ -111,6 +111,9 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
 
     def test_full_invokes_cargo_deny_guard(self):
         self.prepare_ci()
+        # The gate is soft-presence: stub the tool so the test does not depend
+        # on the host having cargo-deny installed.
+        self.write_executable(self.bin / "cargo-deny", "#!/bin/bash\nexit 0\n")
         self.write_executable(
             self.scripts / "cargo-deny.sh",
             '''#!/usr/bin/env python3

@@ -184,11 +184,18 @@ fn restore_publication_inner(
         }
     }
 
-    for task_id in &restored_ids {
-        let path = registry.canonical_task_bundle_path(&task_workspace_id, task_id)?;
-        registry.register_task_bundle(task_id, &task_workspace_id, &path)?;
-        guard.registered_ids.push(task_id.clone());
-    }
+    // The bundles are already in place, so the whole restored set is bound in a
+    // single commit rather than one WAL fsync per task.
+    let bindings = restored_ids
+        .iter()
+        .map(|task_id| {
+            registry
+                .canonical_task_bundle_path(&task_workspace_id, task_id)
+                .map(|path| (task_id.clone(), path))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    registry.register_task_bundles(&task_workspace_id, &bindings)?;
+    guard.registered_ids.extend(restored_ids.iter().cloned());
 
     rebuild_workspace_index(registry, &task_workspace_id)?;
     inject(failure, RestoreFailurePoint::IndexRebuild)?;

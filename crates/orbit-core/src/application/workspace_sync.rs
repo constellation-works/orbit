@@ -14,7 +14,9 @@ use super::{
     ManagedAssetAction, ManagedAssetLayout, ManagedAssetOutcome, ManagedAssetReconcileMode,
     ManagedAssetReconciliation, reconcile_managed_assets_in_mode,
 };
-use crate::application::auto_tasks::{DEFAULT_AUTO_TASK_FILES, auto_tasks_dir};
+use crate::application::auto_tasks::{
+    DEFAULT_AUTO_TASK_FILES, auto_tasks_dir, render_default_auto_task,
+};
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -92,11 +94,14 @@ impl WorkspaceManagedArtifactSyncReport {
 /// Reconcile the host-global and workspace-local managed definitions used by
 /// one already-initialized workspace. This use case deliberately knows
 /// nothing about workspace registration, identity, role, config, or runtime
-/// state, so callers cannot accidentally turn convergence into bootstrap.
+/// state, so callers cannot accidentally turn convergence into bootstrap:
+/// the caller supplies the registered `base_branch` the delivery defaults are
+/// rendered against, exactly as it supplies the routine identity.
 pub fn reconcile_workspace_managed_artifacts(
     global_root: &Path,
     workspace_orbit_root: &Path,
     routine_identity: Option<&RoutineSeedIdentity>,
+    base_branch: &str,
     check: bool,
 ) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
     let mode = if check {
@@ -165,7 +170,10 @@ pub fn reconcile_workspace_managed_artifacts(
         false,
         mode,
         |name, content| {
-            let definition = parse_auto_task_yaml(content).map_err(|error| {
+            // Validate what lands on disk: the delivery defaults only become a
+            // loadable definition once their branch placeholder is rendered.
+            let rendered = render_default_auto_task(content, base_branch);
+            let definition = parse_auto_task_yaml(&rendered).map_err(|error| {
                 OrbitError::InvalidInput(format!(
                     "default auto-task `{name}` failed validation: {error}"
                 ))
@@ -175,7 +183,7 @@ pub fn reconcile_workspace_managed_artifacts(
                     "default auto-task `{name}` must have the matching name and ship disabled"
                 )));
             }
-            Ok(Cow::Borrowed(content))
+            Ok(rendered)
         },
     )?;
     append_actions(
