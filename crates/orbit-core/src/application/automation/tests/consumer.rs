@@ -1204,3 +1204,114 @@ fn recovery_adopts_retuned_settings_and_reissues_an_archived_unevidenced_action(
         "coverage is attributed to the reissued action"
     );
 }
+
+/// Delivery fixtures point at the repository's `agent-main`; this one names a
+/// branch the repository does not have, exactly like a shipped default whose
+/// literal branch never matched the workspace.
+fn set_branch(definition: &mut orbit_types::workflow::AutoTaskDefinition, branch: &str) {
+    let AutoTaskSchedule::Deliveries { deliveries_landed } = &mut definition.schedule else {
+        unreachable!("delivery fixture")
+    };
+    deliveries_landed.branch = branch.into();
+}
+
+const MISSING_BRANCH_REASON: &str = "evidence_unavailable: git rev-parse --verify \
+    --end-of-options refs/heads/no-such-branch^{commit}: fatal: Needed a single revision";
+
+#[test]
+fn an_unresolvable_branch_is_named_by_every_operator_surface() {
+    let runtime = runtime();
+    let mut definition = definition(&runtime, "missing-branch", CoverageClass::IntegratedQaV1);
+    set_branch(&mut definition, "no-such-branch");
+    runtime
+        .auto_task_update(
+            "missing-branch",
+            crate::application::auto_tasks::AutoTaskUpdateParams {
+                schedule: Some(definition.schedule.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    runtime.auto_task_toggle("missing-branch", true).unwrap();
+
+    // The sweep tick: the deferral carries the command and git's own text.
+    let tick = evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap_err();
+    assert_eq!(
+        tick.to_string(),
+        format!("execution failed: automation_deferred: {MISSING_BRANCH_REASON}")
+    );
+
+    // `auto-task show`: inspection reports the same reason instead of an
+    // `awaiting_baseline` that can never end.
+    let inspection = super::super::inspect_auto_task(&runtime, &definition, Utc::now()).unwrap();
+    assert_eq!(inspection.reason, MISSING_BRANCH_REASON);
+    assert!(
+        inspection.state.is_none(),
+        "inspection never pins a baseline"
+    );
+
+    // `auto-task recover`: the repository fact is read from the same branch.
+    let recover = super::super::recover_auto_task(
+        &runtime,
+        &definition,
+        &orbit_types::workflow::automation::recovery::RecoveryRequest::default(),
+        Utc::now(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        recover.to_string(),
+        format!("execution failed: automation_deferred: {MISSING_BRANCH_REASON}")
+    );
+
+    // `orbit doctor`: the definition is a reported error, not a silent deferral.
+    let unresolvable = super::super::unresolvable_delivery_branches(&runtime).unwrap();
+    assert_eq!(
+        unresolvable,
+        vec![super::super::UnresolvableBranch {
+            definition: "missing-branch".into(),
+            branch: "no-such-branch".into(),
+            error: MISSING_BRANCH_REASON.into(),
+        }]
+    );
+
+    // A disabled definition is not this host's problem to baseline.
+    runtime.auto_task_toggle("missing-branch", false).unwrap();
+    assert!(
+        super::super::unresolvable_delivery_branches(&runtime)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_malformed_branch_name_reports_git_validation_text() {
+    let runtime = runtime();
+    let mut definition = definition(&runtime, "bad-branch", CoverageClass::IntegratedQaV1);
+    set_branch(&mut definition, "not..a..branch");
+
+    let inspection = super::super::inspect_auto_task(&runtime, &definition, Utc::now()).unwrap();
+    assert_eq!(
+        inspection.reason,
+        "evidence_unavailable: git check-ref-format --branch not..a..branch: \
+         fatal: 'not..a..branch' is not a valid branch name"
+    );
+}
+
+/// A resolvable branch keeps today's behaviour: inspection says
+/// `awaiting_baseline`, and the first real tick baselines.
+#[test]
+fn a_resolvable_branch_still_awaits_and_pins_a_baseline() {
+    let runtime = runtime();
+    let definition = definition(&runtime, "resolvable", CoverageClass::IntegratedQaV1);
+
+    let inspection = super::super::inspect_auto_task(&runtime, &definition, Utc::now()).unwrap();
+    assert_eq!(inspection.reason, "awaiting_baseline");
+    assert!(
+        super::super::unresolvable_delivery_branches(&runtime)
+            .unwrap()
+            .is_empty()
+    );
+
+    let baselined = evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
+    assert_eq!(baselined.reason, "baselined");
+}

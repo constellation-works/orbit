@@ -4,7 +4,7 @@ description: Review a frozen delivery batch using typed artifact evidence
 enabled: false
 schedule:
   deliveries_landed:
-    branch: agent-main
+    branch: __ORBIT_BASE_BRANCH__
     threshold: 3
     max_wait_minutes: 360
     coverage: landed_code_review_v1

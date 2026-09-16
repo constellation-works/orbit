@@ -16,7 +16,13 @@ approval/admission lifecycle. There is no new daemon or coverage submission tool
 Existing `schemaVersion: 1` cron and `every_minutes` definitions retain their
 behavior. Existing `code-review` and `qa-sweep` defaults are unchanged. New
 `delivery-code-review` and `delivery-qa` defaults ship disabled, and initialization
-does not overwrite existing workspace definitions.
+does not overwrite existing workspace definitions. The shipped defaults carry a
+`__ORBIT_BASE_BRANCH__` placeholder for `branch`; `orbit workspace init` and
+`orbit workspace sync` render it to the workspace's registered base branch, so a
+`main`-based workspace observes `main` rather than another repository's
+integration branch. An unedited seeded definition is refreshed onto a changed
+base branch by the next sync; an edited one is preserved and must be updated by
+hand.
 
 Use one schedule form. A delivery auto-task uses:
 
@@ -26,7 +32,7 @@ name: delivery-qa
 enabled: false
 schedule:
   deliveries_landed:
-    branch: agent-main
+    branch: main  # rendered from the workspace base branch when seeded
     threshold: 3
     max_wait_minutes: 360
     coverage: integrated_qa_v1
@@ -184,6 +190,21 @@ Read-only inspection reports persisted scheduling reasons including
 `batch_pending`, `retry_backoff`, `retry_deadline_expired`, `needs_attention`,
 and `evidence_unavailable`. It does not fetch source or provider evidence: source
 history failures are reported by an evaluation run, not fabricated by inspection.
+The one source fact inspection does read is whether the configured branch
+resolves: a consumer that has no baseline yet and whose branch git cannot
+resolve reports that failure in place of `awaiting_baseline`, because no tick
+will ever end that wait.
+
+A failed source command never defers with a bare token. The reason carries the
+command line and the first line of its stderr, for example
+`evidence_unavailable: git rev-parse --verify --end-of-options
+refs/heads/agent-main^{commit}: fatal: Needed a single revision`, and the same
+text appears in the sweep row, `orbit auto-task show` and
+`orbit auto-task recover`. A branch that does not exist is a definition error,
+not backpressure: `orbit doctor` reports every enabled definition this host owns
+whose branch does not resolve under `automation-consumers`, naming the branch,
+git's text and the fix (point `schedule.deliveries_landed.branch` at the
+workspace base branch, or create the branch).
 Validation failures such as `unauthorized_submitter`, `batch_or_attempt_mismatch`
 and `incomplete_examination` remain attached to the relevant admission or evidence
 operation. State read failures are reported separately; corrupted delivery state is

@@ -60,6 +60,7 @@ impl WorkspaceSyncArgs {
             &global_root,
             &checkout.orbit_dir,
             Some(&routine_identity),
+            &workspace.base_branch,
             self.check,
         )?;
         let exit_code = if self.check && report.has_pending_changes() {

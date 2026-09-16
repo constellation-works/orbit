@@ -61,7 +61,7 @@ use super::{
     MANAGED_ASSET_MANIFEST_FILE, ManagedAssetLayout, load_managed_asset_manifest,
     preserve_modified_retired_asset, sha256_hex,
 };
-use crate::application::auto_tasks::DEFAULT_AUTO_TASK_FILES;
+use crate::application::auto_tasks::{DEFAULT_AUTO_TASK_FILES, render_default_auto_task};
 use crate::application::routine::DEFAULT_ROUTINE_FILES;
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
@@ -296,7 +296,12 @@ fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
         ManagedCatalog::rendered(
             ArtifactKind::AutoTask,
             auto_tasks_dir(&local_dir),
-            owned(DEFAULT_AUTO_TASK_FILES),
+            DEFAULT_AUTO_TASK_FILES.iter().map(|(name, content)| {
+                (
+                    (*name).to_string(),
+                    render_default_auto_task(content, runtime.workspace_base_branch()).into_owned(),
+                )
+            }),
         ),
         ManagedCatalog::names_only(
             ArtifactKind::Routine,
