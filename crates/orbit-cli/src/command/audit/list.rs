@@ -25,9 +25,13 @@ pub struct AuditListArgs {
     /// Filter by role
     #[arg(long)]
     pub role: Option<String>,
-    /// Filter by trusted logical workspace ID
-    #[arg(long)]
-    pub workspace: Option<String>,
+    /// Filter by trusted stored workspace ID
+    ///
+    /// This is deliberately distinct from the global `--workspace` selector:
+    /// the latter accepts a registered name or checkout path and is resolved
+    /// during runtime bootstrap.
+    #[arg(long = "workspace-id")]
+    pub workspace_id: Option<String>,
     /// Filter by trusted caller machine ID
     #[arg(long)]
     pub caller_machine: Option<String>,
@@ -70,13 +74,18 @@ impl Execute for AuditListArgs {
             role: self.role.is_some(),
             tool: self.tool.is_some(),
         };
+        let workspace_id = self.workspace_id.or_else(|| {
+            runtime
+                .workspace_runtime_binding()
+                .map(|binding| binding.task_partition_id.clone())
+        });
         let events = runtime.list_audit_events_filtered(&AuditEventFilter {
             since,
             tool_name: self.tool,
             target_type: self.kind,
             status: self.status,
             role: self.role,
-            workspace_id: self.workspace,
+            workspace_id,
             caller_machine_id: self.caller_machine,
             process_machine_id: self.process_machine,
             transport: self.transport,
@@ -91,5 +100,43 @@ impl Execute for AuditListArgs {
 
         let values: Vec<Value> = events.iter().map(audit_event_to_json).collect();
         Ok(Payload::list(values, audit_event_table(&events, filtered)).into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use crate::command::{Cli, Commands, audit::AuditSubcommand};
+
+    #[test]
+    fn global_workspace_selector_does_not_populate_audit_workspace_id_filter() {
+        for selector in ["qa-10484", "ws_qa-10484"] {
+            let cli = Cli::try_parse_from(["orbit", "--workspace", selector, "audit", "list"])
+                .expect("global workspace selector should parse");
+            assert_eq!(cli.workspace.as_deref(), Some(selector));
+
+            let Commands::Audit(command) = cli.command else {
+                panic!("expected audit command");
+            };
+            let AuditSubcommand::List(args) = command.command else {
+                panic!("expected audit list command");
+            };
+            assert_eq!(args.workspace_id, None);
+        }
+    }
+
+    #[test]
+    fn audit_workspace_id_filter_has_a_distinct_flag() {
+        let cli = Cli::try_parse_from(["orbit", "audit", "list", "--workspace-id", "ws_qa-10484"])
+            .expect("explicit audit workspace ID should parse");
+
+        let Commands::Audit(command) = cli.command else {
+            panic!("expected audit command");
+        };
+        let AuditSubcommand::List(args) = command.command else {
+            panic!("expected audit list command");
+        };
+        assert_eq!(args.workspace_id.as_deref(), Some("ws_qa-10484"));
     }
 }
