@@ -104,8 +104,12 @@ fn rollup_doc_hits(
             .or_insert(hit);
     }
 
-    let mut rolled = Vec::new();
-    for hit in best.into_values() {
+    let mut best_hits: Vec<CosineHit> = best.into_values().collect();
+    best_hits.sort_by(crate::vector::query::cosine::compare_cosine_hits);
+    best_hits.truncate(limit);
+
+    let mut rolled = Vec::with_capacity(best_hits.len());
+    for hit in best_hits {
         let snippet = snippet_for_hit(
             vector_store,
             SOURCE_KIND_DOC,
@@ -122,17 +126,7 @@ fn rollup_doc_hits(
             score: hit.score,
         });
     }
-    rolled.sort_by(compare_doc_semantic_hits);
-    rolled.truncate(limit);
     Ok(rolled)
-}
-
-fn compare_doc_semantic_hits(left: &DocSemanticHit, right: &DocSemanticHit) -> std::cmp::Ordering {
-    right
-        .score
-        .total_cmp(&left.score)
-        .then_with(|| left.source_id.cmp(&right.source_id))
-        .then_with(|| left.best_field.cmp(&right.best_field))
 }
 
 fn truncate_snippet(snippet: &str) -> String {
