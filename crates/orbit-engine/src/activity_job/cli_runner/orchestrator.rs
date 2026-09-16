@@ -552,7 +552,7 @@ pub fn run_cli_backend(
                 subprocess_cwd.as_deref(),
             )
             .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?
-            .map(|diagnostic| bounded_diagnostic(&diagnostic, &redaction))
+            .map(|diagnostic| bounded_diagnostic(&diagnostic, redaction))
         }
         _ => None,
     };
@@ -579,7 +579,7 @@ pub fn run_cli_backend(
     // policy and authentication failures an operator needs to see.
     let raw_stdout_text = String::from_utf8_lossy(stdout.protocol_bytes());
     let stdout_preview =
-        stdout_text_preview(raw_stdout_text.as_ref(), &redaction, stdout.truncated());
+        stdout_text_preview(raw_stdout_text.as_ref(), redaction, stdout.truncated());
     let parsed_result = exit_success.then(|| {
         parse_cli_response_result(
             answer_stdout.as_ref(),
@@ -593,7 +593,7 @@ pub fn run_cli_backend(
     let response_envelope_error = parsed_result
         .as_ref()
         .and_then(|result| result.as_ref().err())
-        .map(|error| response_diagnostic(error, &redaction));
+        .map(|error| response_diagnostic(error, redaction));
     // [ORB-10449]: the step-completion protocol check. Content-blind
     // by construction — `response_envelope_protocol_check` reads the envelope
     // frame and never `result`/`error`, so this asks only "did the invocation
@@ -606,7 +606,7 @@ pub fn run_cli_backend(
     let completion_envelope_error = exit_success
         .then(|| response_envelope_protocol_check(answer_text.as_ref()))
         .and_then(Result::err)
-        .map(|error| completion_diagnostic(&error.to_string(), &redaction));
+        .map(|error| completion_diagnostic(&error.to_string(), redaction));
     let completion_protocol_violation =
         spec.require_completion_envelope && completion_envelope_error.is_some();
     // [ORB-10733] Protocol termination and control-plane outcome are distinct:
@@ -674,7 +674,7 @@ pub fn run_cli_backend(
                             format!(
                                 "{} {}",
                                 exit_message(),
-                                bounded_diagnostic(&diagnostic, &redaction)
+                                bounded_diagnostic(&diagnostic, redaction)
                             )
                         })
                 })
@@ -697,7 +697,7 @@ pub fn run_cli_backend(
                 // configuration faults an operator can act on immediately.
                 .or_else(|| {
                     provider_invocation_diagnostic(trace_stdout_text.as_ref(), stderr_text.as_ref())
-                        .map(|diagnostic| bounded_diagnostic(&diagnostic, &redaction))
+                        .map(|diagnostic| bounded_diagnostic(&diagnostic, redaction))
                 })
                 // Antigravity writes terminal `ERROR` on stdout and often
                 // leaves stderr empty. Read the raw capture: normalization
@@ -709,7 +709,7 @@ pub fn run_cli_backend(
                             format!(
                                 "{} {}",
                                 exit_message(),
-                                bounded_diagnostic(&diagnostic, &redaction)
+                                bounded_diagnostic(&diagnostic, redaction)
                             )
                         },
                     )
@@ -723,7 +723,7 @@ pub fn run_cli_backend(
             declared_failure_diagnostic(
                 envelope_status.as_deref().unwrap_or("unknown"),
                 declared_failure.as_ref(),
-                &redaction,
+                redaction,
             ),
             sandbox_write_diagnostic.as_deref(),
         ))
