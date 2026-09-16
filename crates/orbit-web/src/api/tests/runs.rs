@@ -209,6 +209,7 @@ fn seed_v2_audit_events(
 async fn list_run_logs_returns_bounded_redacted_step_records() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run_id = "jrun-log-api";
+    seed_run(&runtime, run_id, "web_log_api", JobRunState::Success);
     let mut stderr = String::from("first line\n");
     stderr.push_str("Authorization: Bearer sk-test-secret\n");
     for index in 0..200 {
@@ -238,9 +239,34 @@ async fn list_run_logs_returns_bounded_redacted_step_records() {
 }
 
 #[tokio::test]
+async fn list_run_logs_returns_not_found_for_unknown_run_and_empty_for_existing_run_without_invocations()
+ {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let missing_run_id = "jrun-log-missing";
+
+    let response = request_dashboard_run_logs(runtime.clone(), missing_run_id).await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let payload = body_json(response).await;
+    assert_eq!(payload["error"], "run not found: jrun-log-missing");
+
+    let seeded_run = seed_run(
+        &runtime,
+        "jrun-log-empty",
+        "web_log_empty",
+        JobRunState::Success,
+    );
+    let response = request_dashboard_run_logs(runtime, &seeded_run.run_id).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body_json(response).await, json!([]));
+}
+
+#[tokio::test]
 async fn list_run_logs_stops_after_requested_limit() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let run_id = "jrun-log-limit";
+    seed_run(&runtime, run_id, "web_log_limit", JobRunState::Success);
     let audit_root = runtime.data_root().join("state").join("audit");
     let blob_store = BlobStore::new(audit_root.join("blobs"));
     let stdout_one = blob_store.write(b"one\n").expect("write stdout one");
