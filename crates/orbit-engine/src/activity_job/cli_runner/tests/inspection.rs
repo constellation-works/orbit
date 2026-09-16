@@ -94,6 +94,12 @@ fn slots_carry_tracked_symlinks_and_stay_outside_the_git_metadata_tree() {
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
     );
     let snapshot = inspect(repo.path(), &revision);
+    let common_path = Path::new(&common).canonicalize().unwrap();
+    let inspection_pool = repo
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join(".orbit/state/source-inspections-v1");
 
     let linked = snapshot.root().join("linked.txt");
     assert!(
@@ -106,14 +112,12 @@ fn slots_carry_tracked_symlinks_and_stay_outside_the_git_metadata_tree() {
     snapshot.verify().unwrap();
 
     assert!(
-        !snapshot.root().starts_with(&common),
+        !snapshot.root().starts_with(&common_path),
         "{} is inside the common Git directory {common}",
         snapshot.root().display()
     );
     assert!(
-        snapshot
-            .root()
-            .starts_with(repo.path().join(".orbit/state/source-inspections-v1")),
+        snapshot.root().starts_with(&inspection_pool),
         "{}",
         snapshot.root().display()
     );
