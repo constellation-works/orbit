@@ -7,8 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_core::application::job::JobCatalogEntry;
 use orbit_core::application::task::{
-    task_status_transition_allowed, task_status_transition_required_field,
+    TaskRow, task_status_transition_allowed, task_status_transition_required_field,
 };
+use orbit_core::runtime::engine::ConfiguredCrewRegistryProjection;
 use orbit_core::{
     AuditEvent, JobRun, OrbitError, OrbitRuntime, ResolvedCrewProjection, Task, TaskStatus,
     resolve_task_dependencies,
@@ -184,9 +185,13 @@ pub(crate) fn task_to_json_with_sidecars(
     task_row_to_json(runtime, &row, status_by_id)
 }
 
+/// The full task projection: every body, the sidecars, the lifecycle
+/// transitions with their evidence requirements, the run-aware crew
+/// resolution, and the review gate. Served by `GET /api/tasks/:id` and every
+/// mutation response; the list endpoints serve [`TaskListProjection`] instead.
 pub(crate) fn task_row_to_json(
     runtime: &OrbitRuntime,
-    row: &orbit_core::application::task::TaskRow,
+    row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Value, OrbitError> {
     let task = &row.task;
@@ -210,7 +215,8 @@ pub(crate) fn task_row_to_json(
         "status_transitions".to_string(),
         dashboard_status_transitions(runtime, task)?,
     );
-    if let Some(projection) = dashboard_resolved_crew_projection(runtime, task)? {
+    let registry = runtime.configured_crew_registry_projection();
+    if let Some(projection) = dashboard_resolved_crew_projection(runtime, &registry, task)? {
         object.insert("resolved_crew".to_string(), Value::String(projection.name));
         object.insert("crew_model".to_string(), Value::String(projection.model));
     }
@@ -222,24 +228,97 @@ pub(crate) fn task_row_to_json(
     Ok(value)
 }
 
-fn dashboard_status_transitions(runtime: &OrbitRuntime, task: &Task) -> Result<Value, OrbitError> {
-    const STATUS_ORDER: [TaskStatus; 9] = [
-        TaskStatus::InProgress,
-        TaskStatus::Review,
-        TaskStatus::Blocked,
-        TaskStatus::Proposed,
-        TaskStatus::Backlog,
-        TaskStatus::Someday,
-        TaskStatus::Done,
-        TaskStatus::Rejected,
-        TaskStatus::Archived,
-    ];
+/// Marker the list rows carry so a client can tell a summary from the full
+/// projection without probing for absent keys.
+pub(crate) const TASK_SUMMARY_PROJECTION: &str = "summary";
 
-    STATUS_ORDER
-        .into_iter()
-        .filter(|target| {
-            *target != task.status && task_status_transition_allowed(task.status, *target)
-        })
+/// One request's worth of list-row rendering state.
+///
+/// DANI-10391: a list page used to render every row through
+/// [`task_row_to_json`], so fifty rows meant fifty serialised descriptions,
+/// plans, comment and history logs, fifty crew-registry rebuilds, and one to
+/// four store lookups per row (job runs behind the `done` evidence check and
+/// the run-recorded crew, plus the review ledger). The dashboard reads none of
+/// that until a row is expanded, and it fetches `GET /api/tasks/:id` for the
+/// expansion. A summary row therefore carries the identifying and sortable
+/// fields, counts in place of the bodies, the governed status targets without
+/// their evidence requirement, and a crew resolved purely from the registry
+/// built once here — never a store call per row.
+pub(crate) struct TaskListProjection {
+    registry: ConfiguredCrewRegistryProjection,
+}
+
+impl TaskListProjection {
+    pub(crate) fn new(runtime: &OrbitRuntime) -> Self {
+        Self {
+            registry: runtime.configured_crew_registry_projection(),
+        }
+    }
+
+    pub(crate) fn row_to_json(
+        &self,
+        row: &TaskRow,
+        status_by_id: &BTreeMap<String, TaskStatus>,
+    ) -> Result<Value, OrbitError> {
+        let task = &row.task;
+        let mut value = task_to_json(task, status_by_id);
+        let object = value.as_object_mut().ok_or_else(|| {
+            OrbitError::Execution("task JSON projection did not produce an object".to_string())
+        })?;
+        for body in TASK_SUMMARY_OMITTED_BODIES {
+            object.remove(body);
+        }
+        object.insert(
+            "projection".to_string(),
+            Value::String(TASK_SUMMARY_PROJECTION.to_string()),
+        );
+        object.insert("comment_count".to_string(), json!(row.comments.len()));
+        object.insert("history_count".to_string(), json!(row.history.len()));
+        object.insert("artifact_count".to_string(), json!(row.artifacts.len()));
+        object.insert(
+            "status_transitions".to_string(),
+            summary_status_transitions(task),
+        );
+        if let Some(projection) = registry_crew_projection(&self.registry, task) {
+            object.insert("resolved_crew".to_string(), Value::String(projection.name));
+            object.insert("crew_model".to_string(), Value::String(projection.model));
+        }
+        Ok(value)
+    }
+}
+
+/// The prose a summary row leaves to the detail endpoint. Everything else in
+/// [`task_to_json`] is a scalar or a short list a list consumer filters on
+/// (bridge's `orbit_task_list` reads `dependencies`, `resolved_dependencies`,
+/// `context_files`, `parent_id` and `job_run_id` off the list rows).
+const TASK_SUMMARY_OMITTED_BODIES: [&str; 4] = [
+    "description",
+    "plan",
+    "execution_summary",
+    "acceptance_criteria",
+];
+
+const STATUS_ORDER: [TaskStatus; 9] = [
+    TaskStatus::InProgress,
+    TaskStatus::Review,
+    TaskStatus::Blocked,
+    TaskStatus::Proposed,
+    TaskStatus::Backlog,
+    TaskStatus::Someday,
+    TaskStatus::Done,
+    TaskStatus::Rejected,
+    TaskStatus::Archived,
+];
+
+fn governed_status_targets(task: &Task) -> impl Iterator<Item = TaskStatus> {
+    let current = task.status;
+    STATUS_ORDER.into_iter().filter(move |target| {
+        *target != current && task_status_transition_allowed(current, *target)
+    })
+}
+
+fn dashboard_status_transitions(runtime: &OrbitRuntime, task: &Task) -> Result<Value, OrbitError> {
+    governed_status_targets(task)
         .map(|target| {
             Ok(json!({
                 "status": target.to_string(),
@@ -250,11 +329,24 @@ fn dashboard_status_transitions(runtime: &OrbitRuntime, task: &Task) -> Result<V
         .map(Value::Array)
 }
 
+/// The governed targets alone. `required_field` is deliberately absent rather
+/// than `null`: the `done` requirement depends on the task's job run, which the
+/// list path no longer reads, so a client that needs the requirement asks the
+/// detail endpoint instead of treating "unknown" as "none".
+fn summary_status_transitions(task: &Task) -> Value {
+    Value::Array(
+        governed_status_targets(task)
+            .map(|target| json!({ "status": target.to_string() }))
+            .collect(),
+    )
+}
+
 fn dashboard_resolved_crew_projection(
     runtime: &OrbitRuntime,
+    registry: &ConfiguredCrewRegistryProjection,
     task: &Task,
 ) -> Result<Option<ResolvedCrewProjection>, OrbitError> {
-    if task_has_stale_explicit_crew(runtime, task) {
+    if task_has_stale_explicit_crew(registry, task) {
         let crew = runtime.resolve_crew_for_task(None, None)?;
         return Ok(Some(ResolvedCrewProjection {
             name: crew.name,
@@ -264,20 +356,40 @@ fn dashboard_resolved_crew_projection(
     runtime.resolved_crew_projection(task)
 }
 
-fn task_has_stale_explicit_crew(runtime: &OrbitRuntime, task: &Task) -> bool {
-    let Some(stored_crew) = task
-        .crew
+/// Registry-only crew resolution for summary rows: the task's explicit crew
+/// when the registry still configures it, otherwise the configured default,
+/// otherwise nothing. The run-recorded crew a detail row prefers needs a job-run
+/// read, which is exactly the per-row lookup the list path gives up.
+fn registry_crew_projection(
+    registry: &ConfiguredCrewRegistryProjection,
+    task: &Task,
+) -> Option<ResolvedCrewProjection> {
+    let explicit = explicit_task_crew(task);
+    let selected = explicit
+        .filter(|name| registry.crews.iter().any(|crew| crew.name == *name))
+        .or(registry.default_crew.as_deref())?;
+    registry
+        .crews
+        .iter()
+        .find(|crew| crew.name == selected)
+        .map(|crew| ResolvedCrewProjection {
+            name: crew.name.clone(),
+            model: crew.model.clone(),
+        })
+}
+
+fn explicit_task_crew(task: &Task) -> Option<&str> {
+    task.crew
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    else {
+}
+
+fn task_has_stale_explicit_crew(registry: &ConfiguredCrewRegistryProjection, task: &Task) -> bool {
+    let Some(stored_crew) = explicit_task_crew(task) else {
         return false;
     };
-    !runtime
-        .configured_crew_registry_projection()
-        .crews
-        .iter()
-        .any(|crew| crew.name == stored_crew)
+    !registry.crews.iter().any(|crew| crew.name == stored_crew)
 }
 
 pub(crate) fn task_artifact_manifest_to_json(files: &[ArtifactManifestFileV2]) -> Value {

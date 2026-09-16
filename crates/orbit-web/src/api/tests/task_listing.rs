@@ -191,8 +191,12 @@ async fn task_list_detail_and_aggregate_leave_async_requests_runnable_during_blo
     }
 }
 
+/// DANI-10391: a list row is a summary — no prose bodies, counts in place of
+/// the comment/history/artifact logs, governed transitions without their
+/// evidence requirement, and a crew read from the registry alone — while the
+/// detail endpoint keeps the full projection the list used to duplicate per row.
 #[tokio::test]
-async fn list_and_detail_reuse_bundle_sidecars_with_response_parity() {
+async fn list_rows_are_summaries_and_detail_carries_the_bodies() {
     let runtime = Arc::new(OrbitRuntime::in_memory().unwrap());
     let task = seed_task_with_artifact(&runtime);
     runtime
@@ -208,15 +212,18 @@ async fn list_and_detail_reuse_bundle_sidecars_with_response_parity() {
         .unwrap();
     let statuses = runtime.task_status_index().unwrap();
     let task = runtime.get_task(&task.id).unwrap();
-    let mut expected = crate::projections::task_to_json(&task, &statuses);
-    expected["comments"] =
-        serde_json::to_value(runtime.get_task_comments(&task.id).unwrap()).unwrap();
-    expected["history"] =
-        serde_json::to_value(runtime.get_task_history(&task.id).unwrap()).unwrap();
-    expected["artifacts"] = crate::projections::task_artifact_manifest_to_json(
-        &runtime.get_task_artifact_manifest(&task.id).unwrap(),
-    );
-    expected["status_transitions"] = json!([
+    let comments = runtime.get_task_comments(&task.id).unwrap();
+    let history = runtime.get_task_history(&task.id).unwrap();
+    let artifacts = runtime.get_task_artifact_manifest(&task.id).unwrap();
+    assert!(!comments.is_empty());
+    assert!(!history.is_empty());
+    assert!(!artifacts.is_empty());
+
+    let mut detail_expected = crate::projections::task_to_json(&task, &statuses);
+    detail_expected["comments"] = serde_json::to_value(&comments).unwrap();
+    detail_expected["history"] = serde_json::to_value(&history).unwrap();
+    detail_expected["artifacts"] = crate::projections::task_artifact_manifest_to_json(&artifacts);
+    detail_expected["status_transitions"] = json!([
         { "status": "in-progress", "required_field": null },
         { "status": "blocked", "required_field": null },
         { "status": "proposed", "required_field": null },
@@ -225,14 +232,115 @@ async fn list_and_detail_reuse_bundle_sidecars_with_response_parity() {
         { "status": "archived", "required_field": null },
     ]);
     if let Some(crew) = runtime.resolved_crew_projection(&task).unwrap() {
-        expected["resolved_crew"] = json!(crew.name);
-        expected["crew_model"] = json!(crew.model);
+        detail_expected["resolved_crew"] = json!(crew.name);
+        detail_expected["crew_model"] = json!(crew.model);
     }
-    assert!(!expected["comments"].as_array().unwrap().is_empty());
-    assert!(!expected["history"].as_array().unwrap().is_empty());
-    assert!(!expected["artifacts"].as_array().unwrap().is_empty());
+
+    let mut summary_expected = crate::projections::task_to_json(&task, &statuses);
+    let summary_object = summary_expected.as_object_mut().unwrap();
+    for body in [
+        "description",
+        "plan",
+        "execution_summary",
+        "acceptance_criteria",
+    ] {
+        assert!(
+            summary_object.remove(body).is_some(),
+            "{body} is a task field"
+        );
+    }
+    summary_object.insert("projection".into(), json!("summary"));
+    summary_object.insert("comment_count".into(), json!(comments.len()));
+    summary_object.insert("history_count".into(), json!(history.len()));
+    summary_object.insert("artifact_count".into(), json!(artifacts.len()));
+    summary_object.insert(
+        "status_transitions".into(),
+        json!([
+            { "status": "in-progress" },
+            { "status": "blocked" },
+            { "status": "proposed" },
+            { "status": "someday" },
+            { "status": "rejected" },
+            { "status": "archived" },
+        ]),
+    );
+    let registry = runtime.configured_crew_registry_projection();
+    if let Some(default_crew) = registry
+        .default_crew
+        .as_deref()
+        .and_then(|name| registry.crews.iter().find(|crew| crew.name == name))
+    {
+        summary_object.insert("resolved_crew".into(), json!(default_crew.name));
+        summary_object.insert("crew_model".into(), json!(default_crew.model));
+    }
+
     let list = body_json(request_shared(runtime.clone(), "/tasks").await).await;
     let detail = body_json(request_shared(runtime, &format!("/tasks/{}", task.id)).await).await;
-    assert_eq!(list["items"][0], expected);
-    assert_eq!(detail, expected);
+    assert_eq!(list["items"][0], summary_expected);
+    assert_eq!(detail, detail_expected);
+}
+
+/// The list path resolves a task's crew from the registry it built once for the
+/// page, never from the task's job run; the run-recorded crew (which wins on
+/// the detail projection) needs a store read per row.
+#[tokio::test]
+async fn list_rows_resolve_crew_without_reading_the_task_job_run() {
+    use super::test_support::write_seeded_run;
+    use orbit_core::JobRunState;
+
+    let runtime = Arc::new(OrbitRuntime::in_memory().unwrap());
+    let task = super::tasks::seed_backlog_task(&runtime, "Run-attributed task");
+    let mut run = super::test_support::seed_run(&runtime, "jrun-crew", "job", JobRunState::Success);
+    run.resolved_crew = Some("run-recorded-crew".to_string());
+    run.crew_model = Some("run-recorded-model".to_string());
+    write_seeded_run(&runtime, &run);
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                job_run_id: Some(Some(run.run_id.clone())),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+
+    let detail =
+        body_json(request_shared(runtime.clone(), &format!("/tasks/{}", task.id)).await).await;
+    assert_eq!(detail["resolved_crew"], json!("run-recorded-crew"));
+    assert_eq!(detail["crew_model"], json!("run-recorded-model"));
+
+    let list = body_json(request_shared(runtime.clone(), "/tasks").await).await;
+    let row = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == json!(task.id))
+        .unwrap();
+    assert_eq!(row["projection"], json!("summary"));
+    assert_ne!(row["resolved_crew"], json!("run-recorded-crew"));
+    let registry = runtime.configured_crew_registry_projection();
+    let expected = registry
+        .default_crew
+        .as_deref()
+        .and_then(|name| registry.crews.iter().find(|crew| crew.name == name))
+        .map(|crew| json!(crew.name))
+        .unwrap_or(serde_json::Value::Null);
+    assert_eq!(row["resolved_crew"], expected);
+    assert!(row.get("description").is_none());
+    assert!(row.get("comments").is_none());
+    assert!(row.get("history").is_none());
+    assert!(row.get("artifacts").is_none());
+    assert!(row.get("review").is_none());
+    assert_eq!(row["comment_count"], json!(0));
+    assert_eq!(row["artifact_count"], json!(0));
+    assert!(
+        row["status_transitions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|transition| transition.get("required_field").is_none()),
+        "summary transitions leave the requirement to the detail endpoint"
+    );
 }
