@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 
 /// Slots for live child process groups. The signal handler walks this table
 /// and therefore cannot take a mutex; empty is `0` (never a valid pgid here,
-/// because children are spawned as their own group leaders).
+/// because only a verified group leader is ever registered).
 const MAX_LIVE_PROCESS_GROUPS: usize = 256;
 
 static HANDLER_INSTALL: OnceLock<Mutex<HandlerInstall>> = OnceLock::new();
@@ -35,18 +35,43 @@ struct PreviousHandlers {
 /// `ctrl_c` / SIGTERM, or SIG_DFL) still runs. The install mutex is held
 /// only for that refcount/sigaction critical section — never across the
 /// child's lifetime or across `raise` — so concurrent supervisors overlap.
+///
+/// The handler fans the signal out with `killpg`, so a registered id must be
+/// a process group this supervisor created — never a bare pid. A pid that is
+/// not a live group leader (or is our own group) is not registered; the
+/// waiter still learns of the signal through [`Self::take_signal`] and
+/// terminates the child itself. Once the child is reaped the slot is released
+/// eagerly ([`Self::release_process_group`]) so a reused pid cannot be
+/// signalled by a later SIGINT/SIGTERM.
 pub(super) struct SignalHandlerGuard {
     start_gen: u64,
     slot: Option<usize>,
 }
 
 impl SignalHandlerGuard {
-    pub(super) fn install(pgid: u32) -> Result<Self, OrbitError> {
+    /// `child_pid` is the supervised child's pid; it is registered for
+    /// handler-side fan-out only when it currently leads its own process group.
+    pub(super) fn install(child_pid: u32) -> Result<Self, OrbitError> {
         let start_gen = acquire_handlers()?;
-        Ok(Self {
-            start_gen,
-            slot: register_pgid(pgid),
-        })
+        let slot = if is_child_process_group_leader(child_pid) {
+            register_pgid(child_pid)
+        } else {
+            None
+        };
+        Ok(Self { start_gen, slot })
+    }
+
+    /// Whether the handler will `killpg` this child's group on SIGINT/SIGTERM.
+    #[cfg(test)]
+    pub(super) fn registered(&self) -> bool {
+        self.slot.is_some()
+    }
+
+    /// Stop fanning signals out to the child's group. Call as soon as the
+    /// child is reaped: from then on its pid may be reused by an unrelated
+    /// process group that the handler must not signal.
+    pub(super) fn release_process_group(&mut self) {
+        unregister_pgid(self.slot.take());
     }
 
     pub(super) fn take_signal(&self) -> Option<i32> {
@@ -60,7 +85,7 @@ impl SignalHandlerGuard {
 
 impl Drop for SignalHandlerGuard {
     fn drop(&mut self) {
-        unregister_pgid(self.slot);
+        unregister_pgid(self.slot.take());
         release_handlers();
     }
 }
@@ -192,6 +217,22 @@ fn handler_install() -> &'static Mutex<HandlerInstall> {
     })
 }
 
+/// A pid may be registered for `killpg` fan-out only while it is alive and
+/// leads its own group (`getpgid(pid) == pid`) and that group is not ours.
+/// Every Orbit spawn path creates the child with `process_group(0)`, so this
+/// holds for a live child; it fails for a pid that was never a leader, for a
+/// reaped child whose pid may already belong to someone else, and for a
+/// group whose leader exited while members live on.
+fn is_child_process_group_leader(pid: u32) -> bool {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return false;
+    }
+    let pid = pid as libc::pid_t;
+    // Safety: `getpgid` and `getpgrp` only query process-table state.
+    let (pgid, own_pgid) = unsafe { (libc::getpgid(pid), libc::getpgrp()) };
+    pgid == pid && pgid != own_pgid
+}
+
 fn register_pgid(pgid: u32) -> Option<usize> {
     if pgid == 0 {
         return None;
@@ -217,22 +258,37 @@ unsafe extern "C" fn termination_signal_handler(signal: libc::c_int) {
     LAST_SIGNAL.store(signal, Ordering::SeqCst);
     SIGNAL_GEN.fetch_add(1, Ordering::SeqCst);
     PENDING_FORWARD.store(signal, Ordering::SeqCst);
+    // Safety: `getpgrp` is async-signal-safe.
+    let own_pgid = unsafe { libc::getpgrp() };
     for slot in &LIVE_PGIDS {
-        let pgid = slot.load(Ordering::Relaxed);
-        if pgid != 0 {
-            // Safety: `killpg` is async-signal-safe. `pgid` is a live child's
-            // process-group id stored by a supervisor, or a stale id of a
-            // group that already exited (`ESRCH` is ignored).
-            unsafe {
-                libc::killpg(pgid as libc::pid_t, signal);
+        let pgid = slot.load(Ordering::Relaxed) as libc::pid_t;
+        if pgid == 0 || pgid == own_pgid {
+            continue;
+        }
+        // Re-validate at delivery time: the slot was a live child group when
+        // it was registered, but a reap that raced this handler frees the pid
+        // for reuse. Only a pid that still leads its own group is signalled,
+        // and never our own group (that would signal this process and every
+        // sibling sharing its group).
+        //
+        // Safety: `getpgid` is a bare process-table query with no locks or
+        // allocation on Linux and macOS, so it is safe from a handler even
+        // though POSIX only lists `getpgrp`. `killpg` is async-signal-safe;
+        // a group that exits between the check and the call yields `ESRCH`,
+        // which is ignored.
+        unsafe {
+            if libc::getpgid(pgid) != pgid {
+                continue;
             }
+            libc::killpg(pgid, signal);
         }
     }
 }
 
 fn install_signal_handler(signal: libc::c_int) -> Result<libc::sigaction, OrbitError> {
     // Safety: sigaction installs a process signal handler. The handler only
-    // stores atomics and calls `killpg`, both async-signal-safe.
+    // stores atomics and queries/signals process groups (`getpgrp`,
+    // `getpgid`, `killpg`), all safe to call from a handler.
     unsafe {
         let mut new_action: libc::sigaction = std::mem::zeroed();
         new_action.sa_sigaction = termination_signal_handler as *const () as usize;

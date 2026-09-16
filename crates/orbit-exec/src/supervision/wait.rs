@@ -72,7 +72,7 @@ pub(super) fn wait_with_timeout_and_output_limit(
     // Last drop restores the previous SIGINT/SIGTERM disposition and
     // re-raises a captured signal so daemons still shut down.
     #[cfg(unix)]
-    let signal_guard = SignalHandlerGuard::install(child.id())?;
+    let mut signal_guard = SignalHandlerGuard::install(child.id())?;
 
     let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
     let mut stdin_write_error = None;
@@ -108,6 +108,12 @@ pub(super) fn wait_with_timeout_and_output_limit(
             .wait_timeout(wait_slice)
             .map_err(|e| OrbitError::Execution(format!("wait timeout error: {e}")))?
         {
+            // The child is reaped: its pid is free for reuse from here on, so
+            // a SIGINT/SIGTERM arriving before this wait returns must not
+            // `killpg` whatever process group now owns that number.
+            #[cfg(unix)]
+            signal_guard.release_process_group();
+
             #[cfg(unix)]
             if let Some(signal) = signal_guard.take_signal() {
                 terminate_orphaned_process_group(child.id(), signal, WAIT_POLL_INTERVAL);
@@ -132,6 +138,11 @@ pub(super) fn wait_with_timeout_and_output_limit(
             break (true, None, false, None);
         }
     };
+    // Every exit above has reaped the child (directly or through
+    // `terminate_process_group`); stop fanning signals out to its old group
+    // before the reader joins below, which can outlast a pid's reuse.
+    #[cfg(unix)]
+    signal_guard.release_process_group();
 
     // Join reader threads. They complete quickly once the process group is
     // killed (all pipe write ends are closed -> EOF).
