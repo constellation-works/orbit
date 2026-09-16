@@ -88,7 +88,8 @@ pub(crate) fn review_gate_admit(
         ));
     }
 
-    let context = GateContext::load(runtime, input).map_err(|error| failed(error.to_string()))?;
+    let context = GateContext::load(runtime, input, Some(admission.clone()))
+        .map_err(|error| failed(error.to_string()))?;
     let outcome = admit(runtime, &context, &admission);
     let audit_args = json!({
         "phase": "admit",
@@ -145,8 +146,8 @@ pub(crate) fn review_gate_settle(
     ) {
         object.insert("base_sha".to_string(), base_sha);
     }
-    let context =
-        GateContext::load(runtime, &settle_input).map_err(|error| failed(error.to_string()))?;
+    let mut context = GateContext::load(runtime, &settle_input, None)
+        .map_err(|error| failed(error.to_string()))?;
     if context.admission.is_none() {
         return Err(failed(
             "review_gate_stale: the run no longer carries a review admission".to_string(),
@@ -161,7 +162,13 @@ pub(crate) fn review_gate_settle(
     let reviewer = reviewer_identity(runtime, &context, &admission_output)
         .map_err(|error| failed(error.to_string()))?;
 
-    let outcome = settle(runtime, &context, &attempt_id, reviewer, &admission_output);
+    let outcome = settle(
+        runtime,
+        &mut context,
+        &attempt_id,
+        reviewer,
+        &admission_output,
+    );
     let (status, decision, error) = match &outcome {
         Ok(Settled::Passed(value)) => (AuditEventStatus::Success, value.clone(), None),
         Ok(Settled::Blocked { certificate }) => (
@@ -225,10 +232,15 @@ struct GateContext {
     admission: Option<ReviewAdmission>,
     workspace_id: String,
     repository: String,
+    task_digests: (BTreeMap<String, String>, String),
 }
 
 impl GateContext {
-    fn load(runtime: &OrbitRuntime, input: &Value) -> Result<Self, OrbitError> {
+    fn load(
+        runtime: &OrbitRuntime,
+        input: &Value,
+        admission: Option<ReviewAdmission>,
+    ) -> Result<Self, OrbitError> {
         let run_id = admitted_run_id(input)?;
         let task_ids = input
             .get("completed_task_ids")
@@ -282,7 +294,11 @@ impl GateContext {
             }
             tasks.push(task);
         }
-        let admission = run_review_admission(runtime, &run_id)?;
+        let admission = match admission {
+            Some(admission) => Some(admission),
+            None => run_review_admission(runtime, &run_id)?,
+        };
+        let task_digests = compute_task_digests(&tasks)?;
         let repository = Source::new(&runtime.paths().repo_root)
             .repository()
             .map_err(automation_error)?;
@@ -297,6 +313,7 @@ impl GateContext {
             admission,
             workspace_id: runtime.workspace_id()?,
             repository,
+            task_digests,
         })
     }
 
@@ -319,23 +336,28 @@ impl GateContext {
         lineage_key(&self.workspace_id, &self.task_ids, &self.base_branch)
     }
 
-    fn task_digests(&self) -> Result<(BTreeMap<String, String>, String), OrbitError> {
-        let mut digests = BTreeMap::new();
-        for task in &self.tasks {
-            digests.insert(
-                task.id.to_string(),
-                task_meaning_digest(task).map_err(automation_error)?,
-            );
-        }
-        let combined = combined_task_meaning_digest(
-            &digests
-                .iter()
-                .map(|(id, digest)| (id.clone(), digest.clone()))
-                .collect::<Vec<_>>(),
-        )
-        .map_err(automation_error)?;
-        Ok((digests, combined))
+    fn refresh_task_digests(&mut self) -> Result<(), OrbitError> {
+        self.task_digests = compute_task_digests(&self.tasks)?;
+        Ok(())
     }
+}
+
+fn compute_task_digests(tasks: &[Task]) -> Result<(BTreeMap<String, String>, String), OrbitError> {
+    let mut digests = BTreeMap::new();
+    for task in tasks {
+        digests.insert(
+            task.id.to_string(),
+            task_meaning_digest(task).map_err(automation_error)?,
+        );
+    }
+    let combined = combined_task_meaning_digest(
+        &digests
+            .iter()
+            .map(|(id, digest)| (id.clone(), digest.clone()))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(automation_error)?;
+    Ok((digests, combined))
 }
 
 fn required_string(input: &Value, key: &str) -> Result<String, OrbitError> {
@@ -385,7 +407,7 @@ fn admit(
             candidate.head.commit, candidate.base.commit
         )));
     }
-    let (task_digests, task_meaning_digest) = context.task_digests()?;
+    let (task_digests, task_meaning_digest) = &context.task_digests;
 
     let store = runtime.review_store()?;
     let lineage_key = context.lineage_key();
@@ -396,7 +418,7 @@ fn admit(
             lineage_key: &lineage_key,
             task_ids: &context.task_ids,
             run_id: &context.run_id,
-            task_meaning_digest: &task_meaning_digest,
+            task_meaning_digest,
             candidate: &candidate.head,
             budget: admission.budget,
             now,
@@ -425,8 +447,8 @@ fn admit(
         attempt_id: attempt.attempt_id.clone(),
         lineage_key: lineage_key.clone(),
         task_ids: context.task_ids.clone(),
-        task_digests,
-        task_meaning_digest,
+        task_digests: task_digests.clone(),
+        task_meaning_digest: task_meaning_digest.clone(),
         repository: context.repository.clone(),
         base: candidate.base.clone(),
         candidate: candidate.head.clone(),
@@ -456,7 +478,7 @@ fn admit(
             &task.id,
             &context.run_id,
             REVIEW_MANIFEST_ARTIFACT,
-            manifest_bytes.clone(),
+            &manifest_bytes,
         )?;
     }
 
@@ -578,7 +600,7 @@ enum Settled {
 
 fn settle(
     runtime: &OrbitRuntime,
-    context: &GateContext,
+    context: &mut GateContext,
     attempt_id: &str,
     reviewer: ReviewerIdentity,
     admission_output: &Value,
@@ -688,7 +710,7 @@ fn settle(
             &task.id,
             &context.run_id,
             REVIEW_GATE_ARTIFACT,
-            certificate_bytes.clone(),
+            &certificate_bytes,
         )?;
         runtime.update_task(
             &task.id,
@@ -774,7 +796,7 @@ impl Judgement {
         context: &GateContext,
         attempt: &ReviewAttempt,
     ) -> Result<Self, OrbitError> {
-        let (_, task_meaning_digest) = context.task_digests()?;
+        let task_meaning_digest = context.task_digests.1.clone();
         let incomplete = |reason: &str| Self {
             verdict: ReviewVerdict::Incomplete,
             findings: Vec::new(),
@@ -861,7 +883,7 @@ impl Judgement {
     fn commit_repairs(
         &mut self,
         runtime: &OrbitRuntime,
-        context: &GateContext,
+        context: &mut GateContext,
         reviewer: &ReviewerIdentity,
         attempt: &ReviewAttempt,
     ) -> Result<Option<CommitIdentity>, OrbitError> {
@@ -928,15 +950,15 @@ impl Judgement {
     fn widen_declared_selectors(
         &mut self,
         runtime: &OrbitRuntime,
-        context: &GateContext,
+        context: &mut GateContext,
         paths: &[String],
     ) -> Result<(), OrbitError> {
         let mut widened = Vec::new();
+        let mut updated = vec![false; context.tasks.len()];
         for path in paths {
             let selector = format!("file:{}", normalize_git_path(path));
-            for task_id in &context.task_ids {
-                let task = runtime.get_task(task_id)?;
-                if path_in_scope(path, std::slice::from_ref(&task))
+            for (index, task) in context.tasks.iter_mut().enumerate() {
+                if path_in_scope(path, std::slice::from_ref(task))
                     || task
                         .context_files
                         .iter()
@@ -944,15 +966,8 @@ impl Judgement {
                 {
                     continue;
                 }
-                let mut selectors = task.context_files;
-                selectors.push(selector.clone());
-                runtime.update_task(
-                    task_id,
-                    TaskUpdateParams {
-                        context_files: Some(selectors),
-                        ..TaskUpdateParams::default()
-                    },
-                )?;
+                task.context_files.push(selector.clone());
+                updated[index] = true;
                 if !widened.contains(&selector) {
                     widened.push(selector.clone());
                 }
@@ -961,16 +976,19 @@ impl Judgement {
         if widened.is_empty() {
             return Ok(());
         }
-        let mut digests = Vec::with_capacity(context.task_ids.len());
-        for task_id in &context.task_ids {
-            let task = runtime.get_task(task_id)?;
-            digests.push((
-                task.id.to_string(),
-                task_meaning_digest(&task).map_err(automation_error)?,
-            ));
+        for (task, updated) in context.tasks.iter().zip(updated) {
+            if updated {
+                runtime.update_task(
+                    &task.id,
+                    TaskUpdateParams {
+                        context_files: Some(task.context_files.clone()),
+                        ..TaskUpdateParams::default()
+                    },
+                )?;
+            }
         }
-        self.task_meaning_digest =
-            combined_task_meaning_digest(&digests).map_err(automation_error)?;
+        context.refresh_task_digests()?;
+        self.task_meaning_digest = context.task_digests.1.clone();
         self.selectors_widened = widened;
         Ok(())
     }
@@ -1214,14 +1232,14 @@ fn write_artifact(
     task_id: &str,
     run_id: &str,
     path: &str,
-    content: Vec<u8>,
+    content: &[u8],
 ) -> Result<(), OrbitError> {
     runtime.update_task_with_owner(
         task_id,
         TaskUpdateParams {
             upsert_artifacts: vec![TaskArtifact {
                 path: path.to_string(),
-                content,
+                content: content.to_vec(),
                 media_type: "application/json".to_string(),
                 created_by: Some("system".to_string()),
             }],
