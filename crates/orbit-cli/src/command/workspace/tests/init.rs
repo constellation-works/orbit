@@ -1,20 +1,23 @@
 use tempfile::tempdir;
 
 use chrono::Utc;
+use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::protocol::yaml::parse_routine_yaml;
-use orbit_registry::workspace_registry;
+use orbit_registry::{HostIdentityState, inspect_host_identity, workspace_registry};
 use orbit_types::workflow::{OverlapPolicy, RoutineTarget};
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
 };
 
+use crate::InitCommand;
+use crate::command::{CommandOutput, Execute};
 use crate::tests::env_isolation::EnvGuard;
 
 use super::super::init::{
     ONBOARDING_FINALIZE_GUIDANCE, WorkspaceInitArgs, canonical_workspace_id, checked_out_branch,
     onboarding_finalize_guidance, render_task_id_start,
 };
-use super::super::list::{format_workspace_list, workspace_list_json};
+use super::super::list::{WorkspaceListArgs, format_workspace_list, workspace_list_json};
 use super::super::role::CliCheckoutRole;
 use super::super::show::format_workspace_show;
 use super::super::support::orbit_gitignore_block;
@@ -22,6 +25,87 @@ use super::super::support::orbit_gitignore_block;
 #[test]
 fn task_id_start_uses_the_host_task_prefix() {
     assert_eq!(render_task_id_start(Some("DANI"), 20_000), "DANI-20000");
+}
+
+#[test]
+fn workspace_init_before_host_identity_is_repaired_after_orbit_init() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let home = tempdir().expect("home tempdir");
+    let global = home.path().join(".orbit");
+    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
+
+    WorkspaceInitArgs {
+        name: Some("late-identity".to_string()),
+        base_branch: Some("main".to_string()),
+        ship_mode: Some("local".to_string()),
+        role: None,
+        owner: None,
+        task_id_start: None,
+        mcp: false,
+        inject_agent_rules: false,
+        refresh_defaults: false,
+        force: false,
+    }
+    .execute_without_runtime(None)
+    .expect("workspace init without host identity");
+
+    let registry_path = workspace_registry::registry_path_for(&global);
+    let before_identity: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&registry_path).expect("read registry before host init"),
+    )
+    .expect("parse registry before host init");
+    assert!(
+        before_identity["workspaces"][0]["owner_machine_id"].is_null(),
+        "workspace init without identity must leave the owner unset until identity exists"
+    );
+
+    InitCommand {
+        force: false,
+        non_interactive: true,
+        host_name: Some("late-identity-host".to_string()),
+        task_prefix: Some("LATE".to_string()),
+    }
+    .execute_without_runtime(Some(&global))
+    .expect("create host identity after workspace init");
+
+    let identity = match inspect_host_identity(&global).expect("inspect host identity") {
+        HostIdentityState::Present(identity) => identity,
+        other => panic!("expected current host identity, got {other:?}"),
+    };
+    let runtime = RegisteredRuntimeFactory::initialize_with_root_override(Some(&global))
+        .expect("open runtime after host identity creation");
+
+    let output = WorkspaceListArgs { all: false }
+        .execute(&runtime)
+        .expect("workspace list after host identity creation");
+    let CommandOutput::Payload(payload) = output else {
+        panic!("workspace list must return a payload");
+    };
+    assert_eq!(payload.exit_code(), 0, "workspace list reported a failure");
+
+    let registry = workspace_registry::load_registry_from(&registry_path)
+        .expect("load repaired registry after workspace list");
+    assert_eq!(
+        registry.workspaces[0].owner_machine_id.as_deref(),
+        Some(identity.machine_id.as_str())
+    );
+
+    let output = crate::command::doctor::DoctorCommand {
+        json: false,
+        fix_stale_locks: false,
+        fix_stale_task_locks: false,
+        remove_graph: false,
+        fix_stale_artifacts: false,
+        fix_retired_activity_backends: false,
+        fix_orphan_task_stores: false,
+        confirm: false,
+    }
+    .execute(&runtime)
+    .expect("doctor after host identity creation");
+    let CommandOutput::Payload(payload) = output else {
+        panic!("doctor must return a payload");
+    };
+    assert_eq!(payload.exit_code(), 0, "doctor reported a failure");
 }
 
 #[test]

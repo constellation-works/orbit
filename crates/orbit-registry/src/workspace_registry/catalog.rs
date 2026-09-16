@@ -799,15 +799,17 @@ pub fn validate_workspace_registry(
                                 checkout.workspace_id
                             )));
                         }
-                        None if context.machine_id.is_none() => {
-                            workspace.owner_machine_id = Some(machine_id.to_string());
-                            changed = true;
-                        }
+                        // A standalone workspace may have been registered before this
+                        // machine received a host identity. The explicit owner role is
+                        // the local binding, so canonicalize its logical owner now.
                         None => {
-                            return Err(invalid_registry(format!(
-                                "workspace '{}' declares local owner role but has no declared owner_machine_id",
-                                checkout.workspace_id
-                            )));
+                            workspace.owner_machine_id = Some(machine_id.to_string());
+                            if let Some(host_id) = context.host_id.as_deref() {
+                                registry
+                                    .owner_host_ids
+                                    .insert(machine_id.to_string(), host_id.to_string());
+                            }
+                            changed = true;
                         }
                         Some(_) => {}
                     }

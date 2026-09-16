@@ -234,35 +234,38 @@ fn multi_host_legacy_registry_rejects_missing_role_without_rewriting() {
 }
 
 #[test]
-fn multi_host_owner_role_requires_declared_owner_without_rewriting() {
-    for mode in ["hub", "spoke"] {
-        let root = tempdir().expect("tempdir");
-        write_host_identity(root.path(), mode, "hm_local");
-        let path = root.path().join("workspaces.json");
-        let original = write_json(
-            &path,
-            &json!({
-                "schema_version": 1,
-                "workspaces": [logical_workspace("ws_missing_owner", None)],
-                "checkouts": [{
-                    "workspace_id": "ws_missing_owner",
-                    "repo_root": "/repos/missing-owner",
-                    "orbit_dir": "/repos/missing-owner/.orbit",
-                    "role": "owner"
-                }]
-            }),
-        );
+fn owner_role_load_stamps_missing_local_owner_without_manual_repair() {
+    let root = tempdir().expect("tempdir");
+    write_current_host_identity(root.path(), "hm_local");
+    let path = root.path().join("workspaces.json");
+    write_json(
+        &path,
+        &json!({
+            "schema_version": 1,
+            "workspaces": [logical_workspace("ws_missing_owner", None)],
+            "checkouts": [{
+                "workspace_id": "ws_missing_owner",
+                "repo_root": "/repos/missing-owner",
+                "orbit_dir": "/repos/missing-owner/.orbit",
+                "role": "owner"
+            }]
+        }),
+    );
 
-        let error = load_registry_from(&path)
-            .expect_err("multi-host owner must already name its stable owner")
-            .to_string();
-        assert!(error.contains("ws_missing_owner"), "unexpected: {error}");
-        assert!(
-            error.contains("no declared owner_machine_id"),
-            "unexpected: {error}"
-        );
-        assert_eq!(fs::read(&path).expect("read unchanged registry"), original);
-    }
+    let loaded = load_registry_from(&path).expect("local owner should be healed on load");
+    assert_eq!(
+        loaded.workspaces[0].owner_machine_id.as_deref(),
+        Some("hm_local")
+    );
+    assert_eq!(
+        loaded.owner_host_ids.get("hm_local").map(String::as_str),
+        Some("test-host")
+    );
+
+    let persisted: Value = serde_json::from_slice(&fs::read(&path).expect("read healed registry"))
+        .expect("parse healed registry");
+    assert_eq!(persisted["workspaces"][0]["owner_machine_id"], "hm_local");
+    assert_eq!(persisted["owner_host_ids"]["hm_local"], "test-host");
 }
 
 #[test]
