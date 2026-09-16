@@ -47,15 +47,23 @@ pub(super) fn scan_unresolved_work(
         .collect();
     task_ids.sort();
 
-    let mut run_ids: Vec<String> = runtime
-        .stores()
-        .jobs()
-        .list_job_runs_filtered(&JobRunQuery::default())
-        .map_err(|err| action_failed(action, format!("list job runs: {err}")))?
-        .into_iter()
-        .filter(|run| run.job_id != EPIC_PIPELINE_JOB_ID && WAKE_RUN_STATES.contains(&run.state))
-        .map(|run| run.run_id)
-        .collect();
+    let mut run_ids: Vec<String> = Vec::new();
+    for state in WAKE_RUN_STATES {
+        run_ids.extend(
+            runtime
+                .stores()
+                .jobs()
+                .list_job_runs_filtered(&JobRunQuery {
+                    state: Some(state),
+                    include_steps: false,
+                    ..JobRunQuery::default()
+                })
+                .map_err(|err| action_failed(action, format!("list job runs: {err}")))?
+                .into_iter()
+                .filter(|run| run.job_id != EPIC_PIPELINE_JOB_ID)
+                .map(|run| run.run_id),
+        );
+    }
     run_ids.sort();
 
     let mut check_later_ids: Vec<String> =

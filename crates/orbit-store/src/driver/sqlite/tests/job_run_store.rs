@@ -93,6 +93,62 @@ fn listing_hydrates_every_runs_steps_across_id_chunks() {
     }
 }
 
+/// Listing can omit `job_run_steps` entirely, including `agent_response_json`.
+#[test]
+fn listing_skips_step_hydration_when_include_steps_is_false() {
+    let store = Store::open_in_memory().expect("open store");
+    let mut failed = run_with_steps("jrun-failed", JobRunState::Failed, at(1), 3);
+    failed.steps[0].agent_response_json = Some(json!({"blob": "x".repeat(1024)}));
+    let success = run_with_steps("jrun-success", JobRunState::Success, at(2), 2);
+    insert_run_with_steps(&store, "ws", &failed);
+    insert_run_with_steps(&store, "ws", &success);
+
+    let hydrated = store
+        .list_job_runs_for_workspace("ws", &JobRunQuery::default())
+        .expect("hydrated list");
+    assert_eq!(hydrated.iter().map(|run| run.steps.len()).sum::<usize>(), 5);
+    assert!(
+        hydrated
+            .iter()
+            .find(|run| run.run_id == "jrun-failed")
+            .expect("failed run")
+            .steps[0]
+            .agent_response_json
+            .is_some()
+    );
+
+    let skipped = store
+        .list_job_runs_for_workspace(
+            "ws",
+            &JobRunQuery {
+                include_steps: false,
+                ..JobRunQuery::default()
+            },
+        )
+        .expect("skip-steps list");
+    assert_eq!(skipped.len(), 2);
+    assert!(skipped.iter().all(|run| run.steps.is_empty()));
+
+    let failed_only = store
+        .list_job_runs_for_workspace(
+            "ws",
+            &JobRunQuery {
+                state: Some(JobRunState::Failed),
+                include_steps: false,
+                ..JobRunQuery::default()
+            },
+        )
+        .expect("state-filtered skip-steps list");
+    assert_eq!(
+        failed_only
+            .iter()
+            .map(|run| run.run_id.as_str())
+            .collect::<Vec<_>>(),
+        ["jrun-failed"]
+    );
+    assert!(failed_only[0].steps.is_empty());
+}
+
 /// [ORB-11625] A list page loads pipeline state in one query per id chunk.
 /// Missing runs stay absent; unreadable JSON degrades to `None` rather than
 /// failing the page.
