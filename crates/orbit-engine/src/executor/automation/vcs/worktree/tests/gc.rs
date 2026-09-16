@@ -14,11 +14,13 @@ use tempfile::tempdir;
 
 use crate::context::RuntimeHost;
 
-use super::super::cleanup::remove_worktree;
+use super::super::cleanup::{remove_worktree, remove_worktree_without_force};
 use super::super::gc::{WorktreeGcOptions, collect_worktrees};
 use super::super::{
-    WorktreeIdentity, resolve_shared_worktree_path, resolve_worktree_path_from_prefix,
+    WorktreeIdentity, is_registered_worktree, resolve_shared_worktree_path,
+    resolve_worktree_path_from_prefix,
 };
+use crate::executor::automation::vcs::git::{GitTimeoutBudget, GitTimeoutBudgetGuard};
 
 // Environment variables are process-global: mutating ORBIT_WORKTREE_ROOT in
 // this parallel test binary races every test that resolves a worktree path.
@@ -832,6 +834,210 @@ fn removal_without_force_fails_closed_on_a_dirty_worktree() {
         format!("{error}").contains("worktree remove"),
         "unexpected error: {error}"
     );
+}
+
+/// [DANI-10448] A worktree carrying a large synthetic `target/`-shaped tree
+/// timed out `git worktree remove` in production (a multi-GB, millions-of-file
+/// directory cannot be unlinked inside the 30s git budget on APFS), and that
+/// timeout aborted the whole sweep before it reached any other worktree. GC
+/// must instead reclaim it well inside the sweep's budget by relocating the
+/// tree out of the way and pruning Git's metadata immediately, finishing the
+/// bulk delete off the critical path.
+#[test]
+fn large_synthetic_worktree_is_reclaimed_within_the_gc_budget() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    fs::write(repo.join(".gitignore"), "/target\n").unwrap();
+    git(&repo, &["add", ".gitignore"]);
+    git(&repo, &["commit", "-m", "ignore build output"]);
+    let run = pipeline_run("jrun-large", JobRunState::Success, &["ORB-LARGE"]);
+    let worktree = resolved_task_worktree(&repo, &run);
+    add_worktree(&repo, &worktree, "orbit/large");
+    let build_dir = worktree.join("target");
+    fs::create_dir_all(&build_dir).unwrap();
+    for index in 0..4_000 {
+        fs::write(
+            build_dir.join(format!("artifact-{index}.o")),
+            b"fixture build output",
+        )
+        .unwrap();
+    }
+    let host = FakeTaskHost::new(vec![task_fixture("ORB-LARGE", TaskStatus::Done)]);
+
+    let started = std::time::Instant::now();
+    let result = collect_worktrees(
+        &repo,
+        &[run],
+        &host,
+        &WorktreeGcOptions {
+            delete: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "GC took {elapsed:?}, longer than the sweep budget allows"
+    );
+    assert_eq!(result.reports[0].action, "removed");
+    assert!(result.reports[0].bytes_reclaimed > 0);
+    assert!(
+        !worktree.exists(),
+        "the worktree path is relocated out of the way immediately"
+    );
+    assert!(
+        !is_registered_worktree(&repo, &worktree).unwrap(),
+        "Git metadata must be pruned even while the bulk delete is still running"
+    );
+
+    // The background deletion eventually finishes too, so no `.trash-*`
+    // leftover survives indefinitely.
+    let parent = worktree.parent().unwrap().to_path_buf();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let leftover = fs::read_dir(&parent).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".trash-")
+        });
+        if !leftover {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "background trash deletion did not finish in time"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// [DANI-10448] Exercises the recovery branch directly: when `git worktree
+/// remove` is killed by the supervisor's deadline rather than finishing or
+/// refusing, `remove_worktree_without_force` must relocate the tree instead of
+/// surfacing the timeout as an error. A budget of [`GitTimeoutBudget::MIN_MS`]
+/// reliably forces this — spawning `git` alone takes longer than 1ms — without
+/// depending on real bulk-delete wall time, which no fixture size can pin
+/// deterministically.
+#[test]
+fn removal_without_force_relocates_a_worktree_after_a_git_remove_timeout() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-timeout");
+    add_worktree(&repo, &worktree, "orbit/timeout");
+    fs::write(worktree.join("marker.txt"), "still here").unwrap();
+
+    {
+        let _budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget {
+            default_ms: GitTimeoutBudget::MIN_MS,
+            ..GitTimeoutBudget::DEFAULT
+        });
+        remove_worktree_without_force(&repo, &worktree)
+            .expect("a git worktree remove timeout must be recovered, not propagated");
+    }
+
+    assert!(
+        !worktree.exists(),
+        "the worktree is relocated to a trash sibling, not left in place"
+    );
+
+    // `remove_worktree_without_force` only relocates the tree; the caller
+    // (`remove_worktree`) prunes metadata next. Do that here, at the normal
+    // budget, to confirm the admin entry is prunable once the path is gone.
+    git(&repo, &["worktree", "prune"]);
+    assert!(
+        !is_registered_worktree(&repo, &worktree).unwrap(),
+        "Git metadata must be prunable immediately, without waiting on the relocated tree's deletion"
+    );
+
+    let parent = worktree.parent().unwrap().to_path_buf();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let leftover = fs::read_dir(&parent).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".trash-")
+        });
+        if !leftover {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "background trash deletion did not finish in time"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// [DANI-10448] One candidate's hard failure — here, a linked worktree whose
+/// `.git` pointer file is corrupted, so any git command run inside it fails
+/// outright — must not stop the sweep from reaching every other candidate.
+/// `collect_worktrees` reports the failure and keeps going; the pass as a
+/// whole still succeeds with a partial summary.
+#[test]
+fn one_failing_worktree_does_not_abort_the_rest_of_the_sweep() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+
+    let broken_run = pipeline_run("jrun-broken", JobRunState::Success, &["ORB-BROKEN"]);
+    let broken_worktree = resolved_task_worktree(&repo, &broken_run);
+    add_worktree(&repo, &broken_worktree, "orbit/broken");
+    fs::write(
+        broken_worktree.join(".git"),
+        "gitdir: /nonexistent/orbit-test-gitdir",
+    )
+    .unwrap();
+
+    let healthy_run = pipeline_run("jrun-healthy", JobRunState::Success, &["ORB-HEALTHY"]);
+    let healthy_worktree = resolved_task_worktree(&repo, &healthy_run);
+    add_worktree(&repo, &healthy_worktree, "orbit/healthy");
+
+    let host = FakeTaskHost::new(vec![
+        task_fixture("ORB-BROKEN", TaskStatus::Done),
+        task_fixture("ORB-HEALTHY", TaskStatus::Done),
+    ]);
+
+    let result = collect_worktrees(
+        &repo,
+        &[broken_run, healthy_run],
+        &host,
+        &WorktreeGcOptions {
+            delete: true,
+            ..Default::default()
+        },
+    )
+    .expect("one candidate's failure must not fail the whole sweep");
+
+    let broken_report = result
+        .reports
+        .iter()
+        .find(|report| report.path == broken_worktree)
+        .expect("the broken worktree must still be reported");
+    assert!(
+        broken_report.action.starts_with("failed:"),
+        "expected a failed outcome, got {}",
+        broken_report.action
+    );
+    assert!(
+        broken_worktree.exists(),
+        "a failed candidate must be left in place, not partially touched"
+    );
+
+    let healthy_report = result
+        .reports
+        .iter()
+        .find(|report| report.path == healthy_worktree)
+        .expect("the sweep must still reach the healthy candidate");
+    assert_eq!(healthy_report.action, "removed");
+    assert!(!healthy_worktree.exists());
 }
 
 /// A run record shaped exactly like a real `task_pr_pipeline` run: `task_ids`

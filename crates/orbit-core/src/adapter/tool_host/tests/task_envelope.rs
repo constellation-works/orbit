@@ -4,7 +4,13 @@ use super::super::test_support::{create_task, test_runtime};
 use crate::adapter::command::ToolEntryPoint;
 use orbit_types::task::TaskStatus;
 
-const ENVELOPE_EXTRAS: &[&str] = &["warnings", "redactions", "redactions_applied"];
+const ENVELOPE_EXTRAS: &[&str] = &[
+    "comments",
+    "history",
+    "warnings",
+    "redactions",
+    "redactions_applied",
+];
 
 fn execute_as(
     runtime: &crate::OrbitRuntime,

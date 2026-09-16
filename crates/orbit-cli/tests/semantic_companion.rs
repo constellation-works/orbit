@@ -353,7 +353,19 @@ while IFS= read -r line; do
       printf '{{"id":%s,"result":{{"tokens":[%s]}}}}\n' "$id" "$tokens"
       ;;
     *'"method":"embed"'*)
-      printf '{{"id":%s,"result":{{"vectors":[[1.0,0.0]]}}}}\n' "$id"
+      texts_part=$(printf '%s\n' "$line" | sed -n 's/.*"texts":\[\(.*\)\].*/\1/p')
+      count=$(printf '%s' "$texts_part" | grep -oE '"([^"\\]|\\.)*"' | wc -l | tr -d ' ')
+      vectors=""
+      i=0
+      while [ "$i" -lt "$count" ]; do
+        if [ -z "$vectors" ]; then
+          vectors="[1.0,0.0]"
+        else
+          vectors="$vectors,[1.0,0.0]"
+        fi
+        i=$((i + 1))
+      done
+      printf '{{"id":%s,"result":{{"vectors":[%s]}}}}\n' "$id" "$vectors"
       ;;
     *'"method":"exit"'*)
       printf '{{"id":%s,"result":{{"ok":true}}}}\n' "$id"

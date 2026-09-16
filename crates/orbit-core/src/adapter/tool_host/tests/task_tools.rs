@@ -849,7 +849,8 @@ fn task_update_routes_approval_start_and_blocked_restart_through_transition_bodi
             json!({
                 "id": task.id,
                 "status": "backlog",
-                "note": "approved through update"
+                "note": "approved through update",
+                "fields": ["status", "history"],
             }),
             agent.clone(),
             model.clone(),
@@ -1186,6 +1187,7 @@ fn task_update_in_progress_outcome_does_not_depend_on_extra_fields() {
                 "status": "in-progress",
                 "priority": "high",
                 "tags": ["x"],
+                "fields": ["status", "priority", "tags", "history"],
             }),
             agent,
             model,
@@ -1239,6 +1241,7 @@ fn task_update_start_from_proposed_chains_history_edges_and_attributes_plan() {
                 "plan": "Probe gates, then reject.",
                 "model": "claude",
                 "note": "approved on pickup",
+                "fields": ["status", "planned_by", "history"],
             }),
             None,
             None,
@@ -2162,6 +2165,106 @@ fn task_show_tool_includes_empty_tags_array() {
 }
 
 #[test]
+fn task_write_responses_omit_sidecars_unless_projected() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let added = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({
+                "title": "Write response shape",
+                "description": "Sidecars are opt-in on mutation responses.",
+                "complexity": "low",
+                "workspace": ".",
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("task add tool succeeds");
+    assert!(added.get("comments").is_none());
+    assert!(added.get("history").is_none());
+
+    let task_id = added["id"].as_str().expect("task id").to_string();
+    let updated = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({ "id": task_id, "comment": "record a comment" }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("task update tool succeeds");
+    assert!(updated.get("comments").is_none());
+    assert!(updated.get("history").is_none());
+
+    let projected = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": task_id,
+                "fields": ["comments", "history"],
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("projected task update succeeds");
+    assert!(projected["comments"].as_array().is_some_and(|comments| {
+        comments
+            .iter()
+            .any(|comment| comment["message"] == "record a comment")
+    }));
+    assert!(
+        projected["history"]
+            .as_array()
+            .is_some_and(|history| { history.iter().any(|entry| entry["event"] == "created") })
+    );
+
+    let shown = runtime
+        .execute_tool_command(
+            "orbit.task.show",
+            json!({ "id": task_id }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("task show tool succeeds");
+    assert!(shown["comments"].as_array().is_some());
+    assert!(shown["history"].as_array().is_some());
+}
+
+#[test]
+fn task_write_response_projects_relations_with_a_friction_target() {
+    // DANI-10379 regression: `resolves` relations may legitimately target a
+    // friction id (e.g. `F2026-05-001`) rather than a task id. Projecting
+    // `relations` on a write response must skip point-reading non-task
+    // targets instead of sending them through `get_task_row`, which rejects
+    // them with `InvalidInput` rather than reporting `NotFound`.
+    let (_root, runtime, _repo_root) = test_runtime();
+    let friction_target = "F2026-05-001";
+    let added = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({
+                "title": "Resolve a friction via relation",
+                "description": "Write responses must not point-read non-task relation targets.",
+                "complexity": "low",
+                "workspace": ".",
+                "relations": [
+                    {"type": "resolves", "target": friction_target}
+                ],
+                "fields": ["id", "relations"],
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("projecting relations with a friction target does not error");
+
+    let relations = added["relations"].as_array().expect("relations array");
+    let resolves = relations
+        .iter()
+        .find(|relation| relation["type"] == "resolves")
+        .expect("resolves relation");
+    assert_eq!(resolves["target"], json!(friction_target));
+}
+
+#[test]
 fn foreign_task_references_are_marked_and_do_not_block_readiness() {
     let (_root, runtime, _repo_root) = test_runtime();
     let foreign_id = "DK-00042";
@@ -2708,6 +2811,7 @@ fn task_update_tool_persists_source_task_id_and_history() {
                 "id": task_id,
                 "model": "claude",
                 "source_task_id": source.id.clone(),
+                "fields": ["id", "source_task_id", "updated_at", "history"],
             }),
             None,
             None,
@@ -2783,6 +2887,7 @@ fn task_update_tool_clears_source_task_id_with_empty_string() {
             json!({
                 "id": added["id"].as_str().expect("task id"),
                 "source_task_id": source.id.clone(),
+                "fields": ["source_task_id", "status"],
             }),
             Some("codex".to_string()),
             Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
@@ -2799,6 +2904,7 @@ fn task_update_tool_clears_source_task_id_with_empty_string() {
             json!({
                 "id": added["id"].as_str().expect("task id"),
                 "source_task_id": "",
+                "fields": ["source_task_id", "history"],
             }),
             Some("codex".to_string()),
             Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),

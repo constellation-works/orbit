@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_types::task::TASK_SHOW_PROJECTION_FIELDS_CSV;
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
@@ -19,6 +20,20 @@ impl Tool for OrbitTaskRejectTool {
             ToolParam {
                 name: "comment".to_string(),
                 description: "Optional task comment to append".to_string(),
+                param_type: "string".to_string(),
+                required: false,
+            },
+            ToolParam {
+                name: "fields".to_string(),
+                description: format!(
+                    "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}."
+                ),
+                param_type: "string_list".to_string(),
+                required: false,
+            },
+            ToolParam {
+                name: "field".to_string(),
+                description: "Compatibility alias for a single response field projection, such as `field: \"history\"`.".to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },

@@ -660,14 +660,28 @@ while IFS= read -r line; do
       printf '{"id":%s,"result":{"tokens":[%s]}}\n' "$id" "$tokens"
       ;;
     *'"method":"embed"'*)
-      case "$line" in
-        *'"texts":["foo"]'*|*semantic-target*)
-          printf '{"id":%s,"result":{"vectors":[[1.0,0.0]]}}\n' "$id"
-          ;;
-        *)
-          printf '{"id":%s,"result":{"vectors":[[0.0,1.0]]}}\n' "$id"
-          ;;
-      esac
+      texts_part=$(printf '%s\n' "$line" | sed -n 's/.*"texts":\[\(.*\)\].*/\1/p')
+      vectors=""
+      old_ifs=$IFS
+      IFS='
+'
+      for text in $(printf '%s' "$texts_part" | grep -oE '"([^"\\]|\\.)*"'); do
+        case "$text" in
+          '"foo"'|*semantic-target*)
+            vector="[1.0,0.0]"
+            ;;
+          *)
+            vector="[0.0,1.0]"
+            ;;
+        esac
+        if [ -z "$vectors" ]; then
+          vectors="$vector"
+        else
+          vectors="$vectors,$vector"
+        fi
+      done
+      IFS=$old_ifs
+      printf '{"id":%s,"result":{"vectors":[%s]}}\n' "$id" "$vectors"
       ;;
     *'"method":"exit"'*)
       printf '{"id":%s,"result":{"ok":true}}\n' "$id"

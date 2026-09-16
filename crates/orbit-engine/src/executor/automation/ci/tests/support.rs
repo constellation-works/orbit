@@ -3,13 +3,14 @@
 //! Collection is a pure function of what GitHub says, so the tests script that
 //! end and never spawn `gh`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use super::super::query::{AuthStatus, CiQueries, LogScope, RunLog};
+use super::super::query::{AuthStatus, CiQueries, LogScope, RemoteBranchHeads, RunLog};
 
 /// Scripted GitHub answers. Anything not scripted is an empty result, which is
 /// itself a case worth exercising.
@@ -19,6 +20,7 @@ pub(super) struct FakeQueries {
     pub(super) repo: Value,
     pub(super) pull_requests: Vec<Value>,
     pub(super) branch_heads: HashMap<String, String>,
+    pub(super) branch_head_queries: AtomicUsize,
     /// Repository-wide run pages. Each `repository_runs` call pops the next
     /// page, so a test can make CI progress between calls.
     pub(super) runs: Mutex<Vec<Vec<Value>>>,
@@ -93,6 +95,10 @@ impl FakeQueries {
         self.branch_head_errors
             .insert(branch.to_string(), message.to_string());
         self
+    }
+
+    pub(super) fn branch_head_query_count(&self) -> usize {
+        self.branch_head_queries.load(Ordering::SeqCst)
     }
 
     pub(super) fn with_run_view_error(mut self, run_id: &str, message: &str) -> Self {
@@ -217,11 +223,18 @@ impl CiQueries for FakeQueries {
         Ok(log)
     }
 
-    fn remote_branch_head(&self, branch: &str) -> Result<Option<String>, OrbitError> {
-        if let Some(message) = self.branch_head_errors.get(branch) {
-            return Err(OrbitError::Execution(message.clone()));
-        }
-        Ok(self.branch_heads.get(branch).cloned())
+    fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError> {
+        self.branch_head_queries.fetch_add(1, Ordering::SeqCst);
+        Ok(RemoteBranchHeads::from_scripted(
+            self.branch_heads
+                .clone()
+                .into_iter()
+                .collect::<BTreeMap<_, _>>(),
+            self.branch_head_errors
+                .clone()
+                .into_iter()
+                .collect::<BTreeMap<_, _>>(),
+        ))
     }
 }
 

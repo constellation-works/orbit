@@ -38,6 +38,42 @@ fn input() -> Value {
 }
 
 #[test]
+fn loads_remote_branch_heads_once_for_landing_and_retired_refs() {
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_head("live-feature", OLD)
+        .with_runs(vec![vec![
+            run_on_branch(
+                60,
+                "ci",
+                "gone-feature",
+                OLD,
+                "completed",
+                Some("failure"),
+                "2026-08-30T05:00:00Z",
+            ),
+            run_on_branch(
+                61,
+                "ci",
+                "live-feature",
+                OLD,
+                "completed",
+                Some("failure"),
+                "2026-08-30T04:00:00Z",
+            ),
+        ]]);
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    assert_eq!(queries.branch_head_query_count(), 1);
+    assert_eq!(
+        evidence["truncation"]["retired_refs"],
+        json!(["gone-feature"])
+    );
+}
+
+#[test]
 fn unauthenticated_host_stops_before_any_query() {
     let queries = FakeQueries::unauthenticated("gh is present but holds no usable credentials");
     let evidence = collect(&queries, &input()).expect("collect");

@@ -125,6 +125,8 @@ fn schema_exposes_only_trimmed_create_task_fields() {
             "relations",
             "crew",
             "orchestrator",
+            "fields",
+            "field",
             "model",
         ]
     );
