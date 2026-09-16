@@ -709,6 +709,23 @@ pub fn run_cli_backend(
                     )
                     .map(|diagnostic| format!("{} {diagnostic}", exit_message()))
                 })
+                // Darwin's sandbox-exec reports an OS error as exit 71 and can
+                // terminate before Copilot writes its authentication marker.
+                // Keep that provider/sandbox boundary visible instead of
+                // falling through to an opaque exit code. [DANI-10476]
+                .or_else(|| {
+                    (provider == "copilot"
+                        && exit_code == Some(71)
+                        && sandbox.is_some_and(|sandbox| {
+                            sandbox.kind == ExecutorSandboxKind::MacosSandboxExec
+                        }))
+                    .then(|| {
+                        format!(
+                            "{} copilot invocation failed under the macOS sandbox; inspect the sandbox profile and Copilot Keychain access before retrying.",
+                            exit_message()
+                        )
+                    })
+                })
                 // [ORB-10746] A bare exit code cannot distinguish "this CLI
                 // has no --json-schema" from "the provider rejected Orbit's
                 // schema" from any other nonzero exit, and the first two are
