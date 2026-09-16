@@ -147,7 +147,7 @@ pub(crate) fn run_deterministic(
                     message: error.to_string(),
                 }
             })?;
-            let index = TaskLockIndex::load(runtime).map_err(|error| {
+            let index = TaskLockIndex::load(runtime, &task_ids).map_err(|error| {
                 DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
                     message: error.to_string(),
@@ -374,7 +374,12 @@ pub(crate) fn run_deterministic(
                 }));
             }
 
-            let lock_index = TaskLockIndex::load(runtime).map_err(|err| {
+            let task_ids =
+                parse_task_ids(input).map_err(|err| DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: format!("{err}"),
+                })?;
+            let lock_index = TaskLockIndex::load(runtime, &task_ids).map_err(|err| {
                 DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
                     message: format!("{err}"),

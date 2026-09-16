@@ -46,6 +46,14 @@ impl RoutineListArgs {
             "host_id": report.host_id,
             "machine_id": report.machine_id,
             "routines": statuses,
+            "retired": report.retired.iter().map(|routine| json!({
+                "name": routine.name,
+                "source": routine.source_workspace,
+                "origin": routine.origin.as_str(),
+                "path": routine.path.display().to_string(),
+                "target": format!("job:{}", routine.job),
+                "reason": routine.reason,
+            })).collect::<Vec<_>>(),
             "load_errors": report.load_errors.iter().map(|e| json!({
                 "source_workspace": e.source_workspace,
                 "path": e.path.as_ref().map(|p| p.display().to_string()),
@@ -92,8 +100,29 @@ impl RoutineListArgs {
                 Cell::new(last_fire),
             ]);
         }
+        // A definition targeting a retired job is listed so the operator can
+        // see it exists, but it has no schedule state of its own.
+        for routine in &report.retired {
+            table.add_row(vec![
+                Cell::new(&routine.name),
+                Cell::new(&routine.source_workspace),
+                Cell::new(routine.origin.as_str()),
+                Cell::new("—"),
+                Cell::new("—"),
+                Cell::new("retired"),
+                Cell::new("—"),
+            ]);
+        }
         // Context about where the list came from, not a record in it (spec §5).
         eprintln!("host: {}", report.host_id);
+        for routine in &report.retired {
+            eprintln!(
+                "retired [{}] ({}): {}",
+                routine.source_workspace,
+                routine.path.display(),
+                routine.reason
+            );
+        }
         for error in &report.load_errors {
             let path = error
                 .path

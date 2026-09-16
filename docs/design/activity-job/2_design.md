@@ -3,7 +3,7 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-09-08
+last_updated: 2026-09-16
 last_validated: 2026-09-08
 status: Draft
 feature: activity-job
@@ -226,22 +226,44 @@ sandbox deliberately retains the read-only linked-worktree Git metadata
 boundary: the leaf does not stage, abort, continue, or restart a rebase. After
 a successful terminal invocation, the host-side worktree boundary rechecks the
 live run and task owner, retry-lineage worktree checkpoint, prepared branch,
-original HEAD and merge base, pinned target ref and SHA, stopped-rebase
-metadata, and exact unmerged path set. It rejects incomplete or out-of-scope
-file edits, stages only that authenticated set, and runs one `rebase
---continue`. A later conflict or changed/cancelled owner remains a failed
-recovery; the terminal handoff keeps the original error and preserved
-candidate/PR evidence. The boundary finally requires the target as an ancestor
+original HEAD and merge base, stopped-rebase metadata (whose `onto` is the
+pinned target SHA), and exact unmerged path set. It rejects incomplete or
+out-of-scope file edits, stages only that authenticated set, and runs one
+`rebase --continue`. A later conflict or changed/cancelled owner remains a
+failed recovery; the terminal handoff keeps the original error and preserved
+candidate/PR evidence. The boundary then requires the target as an ancestor
 and a remaining candidate commit. Ordinary providers still cannot move HEAD;
 primary-checkout drift checks apply to recovery too.
+
+After [DANI-10439], the base ref itself is not part of that identity. A linked
+worktree shares remote-tracking refs with every sibling checkout, so on a busy
+integration branch `origin/<base>` has usually advanced past the pin before
+the leaf even starts; requiring the ref to still equal the pin turned the
+common case into a guaranteed failure. The leaf instruction lists only the
+identity checks that remain (cancelled run, task refusing writes, checked-out
+branch or pre-rewrite HEAD mismatch, missing completion authority) and treats
+the repository gates as advisory: `make ci-fast` / `make ci-lint` outcomes are
+reported in the result's `gates` field, and only a failure involving a
+resolved path is the leaf's to fix. After the pinned continuation the host
+reads the base ref again; when its tip descends from the pin it rebases the
+continued candidate onto that tip, so the candidate lands on the newest base
+rather than a stale one. A follow-up that conflicts is aborted and the
+resolved pinned result is kept. The persisted checkpoint records both
+`target_base_sha` (the pin) and `base_sha` (the base the candidate now sits
+on); the deterministic `git_rebase` retry recognizes the checkpoint by the pin
+it still carries and judges freshness against the landed base, so its output
+`base_sha` — which `pr_open`, the review gate, and `pr_complete` consume — is
+the base the candidate was actually integrated with. A base that moves on
+again after the host landed the candidate is still the ordinary stale-pin
+refusal.
 
 The stopped index also contains the candidate's nonconflicting changes. Host
 continuation commits those staged paths normally; their disappearance from the
 dirty-path map is not unrelated editing. After continuation, tracked state must
 be clean and pre-existing untracked contents must be unchanged. Only after all
 boundary checks succeed does the host transactionally persist the exact recovered
-HEAD, original HEAD/base, pinned target, branch, task IDs, workspace, run/step and
-pre-rewrite remote lease in `PipelineState.rebase_recovery_checkpoints`. This is
+HEAD, original HEAD/base, pinned target, landed base, branch, task IDs, workspace,
+run/step and pre-rewrite remote lease in `PipelineState.rebase_recovery_checkpoints`. This is
 recovery provenance, not a successful workflow step. Missing run storage or a
 checkpoint write failure prevents recovery success.
 
@@ -529,12 +551,26 @@ in `task_pr_pipeline`:
 
 - **Not retried.** The step has no `retry:` block, and a repeat invocation of a
   stalled agent has no new information to work with.
-- **No recovery agent.** `recovery_activity` fires on `Err`, not on a failed
-  outcome — which is the behaviour we want here. `step_failure_recovery` exists
-  to repair the *delivery path for completed work*; a stalled implementer is
-  incomplete work, and having it publish the candidate is the opposite of the fix.
-- **Run terminalizes at that step.** No later step runs, the step is audited as
-  `failed`, and the job-level `failure_activity` (`pr_failure_handoff`,
+- **One recovery attempt, then one re-attempt.** After [DANI-10438], a step
+  whose `recovery_activity` resolves dispatches it for a `success: false`
+  outcome exactly as it does for an `Err` — once retries are exhausted, if the
+  step has any — with the outcome's message as the bounded `error_message`,
+  then re-runs the step body once and audits `step.recovery_attempted`
+  followed by `step.post_recovery_attempt`. Before that task, `recovery_activity`
+  fired only on `Err`, so an agent that finished and declared `status: "failed"`
+  (a red gate, transient tooling, a flaky test — the case the leaf exists for)
+  was the one failure that bypassed it: on-call runs went straight from the
+  declared failure to `pr_failure_handoff` and `blocked` with no recovery event.
+  The executor keys recovery on `StepFailure` (`recovery.rs`), which carries
+  either shape; `pr_conflict_recovery` keeps its restriction to
+  `RecoverableVcsConflict`, so a declared failure on `sync_base` never
+  dispatches the conflict leaf. Recovery that fails, or is refused, hands the
+  original outcome back unchanged; a failed re-attempt returns an error whose
+  text carries both the re-attempt's diagnostic and the original one
+  ([ORB-10449]). A step without a resolved recovery activity behaves as before.
+- **Run terminalizes at that step** when nothing recovers it. No later step
+  runs, the step is audited as `failed`, and the job-level `failure_activity`
+  (`pr_failure_handoff`,
   [Terminal PR shipment uses a job-level failure handoff](./4_decisions.md#terminal-pr-shipment-uses-a-job-level-failure-handoff)) still fires to preserve recoverable work.
 - **Task and worktree.** The worktree is retained with whatever the agent wrote
   before it stopped; tasks coupled to the run move to `blocked` under the normal

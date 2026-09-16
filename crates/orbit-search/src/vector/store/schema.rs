@@ -2,7 +2,8 @@
 //!
 //! Idempotent — runs on every `VectorStore::open`. Kept separate from the
 //! store module so future schema changes (e.g. swapping `embedding BLOB` for
-//! a `sqlite-vec` virtual table) live in one place.
+//! a `sqlite-vec` virtual table once corpora exceed ~10^5 chunks) live in
+//! one place.
 //!
 //! `chunks` is the addressable home of every indexed chunk of text:
 //! `(source_kind, source_id, field, chunk_idx)` is unique and indexed, so
@@ -33,6 +34,7 @@ const EMBEDDINGS_DDL: &str = r#"
         dim INTEGER NOT NULL,
         embedding BLOB NOT NULL,
         created_at TEXT NOT NULL,
+        normalized INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (source_kind, source_id, field, chunk_idx, model_id)
     );
 
@@ -114,6 +116,7 @@ pub(super) fn vector_schema_present(conn: &Connection) -> Result<bool, OrbitErro
 
 fn is_current_layout(conn: &Connection) -> Result<bool, OrbitError> {
     Ok(table_exists(conn, "embeddings")?
+        && embeddings_has_normalized_column(conn)?
         && table_exists(conn, "chunks")?
         && table_exists(conn, "corpus_fts")?
         && !corpus_fts_has_inline_columns(conn)?
@@ -122,6 +125,7 @@ fn is_current_layout(conn: &Connection) -> Result<bool, OrbitError> {
 
 fn ensure_vector_schema_in_transaction(conn: &Connection) -> Result<(), OrbitError> {
     conn.execute_batch(EMBEDDINGS_DDL).map_err(store_error)?;
+    ensure_embeddings_normalized_column(conn)?;
     conn.execute_batch(CHUNKS_DDL).map_err(store_error)?;
 
     let adopted_rows = adopt_inline_corpus_fts(conn)?;
@@ -336,6 +340,33 @@ fn corpus_fts_has_inline_columns(conn: &Connection) -> Result<bool, OrbitError> 
     )
     .map(|exists| exists != 0)
     .map_err(store_error)
+}
+
+/// True when `embeddings.normalized` exists. Missing on indexes written
+/// before write-time L2 normalisation; those rows score with full cosine.
+pub(crate) fn embeddings_has_normalized_column(conn: &Connection) -> Result<bool, OrbitError> {
+    if !table_exists(conn, "embeddings")? {
+        return Ok(false);
+    }
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('embeddings') WHERE name = 'normalized')",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .map_err(store_error)
+}
+
+fn ensure_embeddings_normalized_column(conn: &Connection) -> Result<(), OrbitError> {
+    if embeddings_has_normalized_column(conn)? {
+        return Ok(());
+    }
+    conn.execute(
+        "ALTER TABLE embeddings ADD COLUMN normalized INTEGER NOT NULL DEFAULT 0",
+        [],
+    )
+    .map_err(store_error)?;
+    Ok(())
 }
 
 // pub(crate) widened for tests/ layout under ORB-00230; test reaches via

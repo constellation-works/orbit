@@ -30,16 +30,16 @@ routine definition. Its durable configuration is `~/.orbit/clock.toml`, defaults
 60-second cadence, and accepts only whole-minute values from 60 through 3600 seconds.
 
 `orbit clock status` reports configured cadence, native-manager enabled state,
-and whether an enabled unit can actually still sweep. An enabled unit without that
-scheduling state is `unhealthy`, has no effective cadence, and reports
-`orbit clock enable`, which rewrites a stale installed unit if needed,
-re-arms it, and verifies the result. On Linux the evidence is a timer that is active with
-a finite next trigger. On macOS, where launchd reports an agent as loaded whether or not
-its program still works, the evidence is the unit's own program (through the inspection
-behind `orbit doctor`'s `clock-unit` row) plus `launchctl print`: a non-zero `last exit
-code` for the most recent run, or a `penalty box` property, means no sweep is firing.
-An installed unit that still invokes `orbit sweep` is stale; `orbit clock enable` rewrites
-it to invoke `orbit clock tick` through the same compare-and-rewrite path.
+and whether an enabled Linux timer is active with a finite next trigger. An enabled timer
+without that scheduling state is `unhealthy`, has no effective cadence, and reports
+`orbit clock enable`, which rewrites a stale installed systemd timer if needed,
+restarts the timer, and verifies the resulting deadline.
+An installed unit that still invokes `orbit sweep`, or one whose program path has moved or
+been deleted, is stale; `orbit clock repair` rewrites it to this binary invoking
+`orbit clock tick` and re-registers it with the native manager. Repair is also the last
+`orbit update` convergence step, so an install at a new path repoints the unit in the same
+command that moved the binary. Repair never changes enabled/paused state: a paused clock is
+corrected on disk and left paused, which is what separates it from `enable`.
 `orbit clock pause` disables only launchd/systemd
 scheduled invocations (surviving logout/reboot through the native per-user manager);
 it preserves routine cursors, fire history, and per-routine pauses, and a deliberate
@@ -162,6 +162,39 @@ unchanged content is a genuine no-op rather than a rewrite. A
 routine an operator has edited is never deleted: it is preserved under
 `.retired-managed/routines/`. `orbit doctor` reports routine artifacts as faulty,
 deprecated, or stale, and `orbit doctor --fix-stale-artifacts` performs the retirement.
+
+The recorded digest alone is too strict across releases [DANI-10392]. A workspace
+seeded by an earlier release and then used as documented — opted in with
+`enabled: true`, or with the retired `hosts:` key deleted as the loader's warning
+instructs — no longer matches that digest, and treating that as a local edit left
+the upgrade unable to converge: the retired default kept failing to load on every
+tick while `workspace sync` demanded a manual move that changed nothing. So
+provenance is byte-exact first and shape-aware second. A file that differs from a
+template *this or a prior release shipped for that stem* only in fields the
+operator owns — `enabled`, the retired `hosts:` key — is still Orbit's. The
+shipped historical shapes are `assets/routines/retired/` (defaults this Orbit no
+longer ships) and `assets/routines/superseded/` (earlier shapes of defaults it
+still ships); retiring a default or changing a template's fields adds an entry to
+one of them in the same change. The consequences:
+
+- A retired default matching such a shape retires without operator action. Orbit
+  deletes outright only bytes it can prove it wrote; a lifecycle variant is copied
+  to `.retired-managed/routines/` first, so nothing the operator wrote is lost.
+- A stale shipped default matching a superseded shape is refreshed onto the
+  current template **with its `enabled` setting carried over**, so convergence
+  never silently switches off a routine an operator opted into.
+- A current-shape default whose only difference is a lifecycle setting is adopted
+  in place — recorded as Orbit's without being rewritten.
+- A default a prior release wrote without recording it in the manifest is adopted
+  the same way when it carries the name this workspace seeds. An operator's own
+  routine wearing a bundled filename declares its own name, so it is still
+  reported as a collision and preserved.
+- Any other difference — cadence, target, policy, description, an added comment —
+  is a local edit: preserved, reported, never rewritten.
+
+`orbit doctor` classifies routine provenance through the same helper, so
+`--fix-stale-artifacts` and `workspace sync` never disagree about whether a
+retired default is safe to remove.
 
 A routines directory carrying no manifest at all predates that provenance, and its routines
 are customized by design — flipping `enabled` is the lifecycle the templates invite. Content alone cannot separate such a routine from a file the operator wrote
@@ -420,7 +453,9 @@ renders and installs the platform unit:
   configured cadence. `orbit clock enable` compares the installed timer and service with the
   embedded template, rewrites a stale definition (for example pre-fix `OnStartupSec`), and
   rewrites a service still invoking `orbit sweep` to invoke `orbit clock tick`, then
-  daemon-reloads before restart [ORB-11082]. `AccuracySec=5s` bounds manager coalescing
+  daemon-reloads before restart [ORB-11082]. `orbit clock repair` writes the same rendered
+  units for a drifted program path and daemon-reloads then restarts an enabled timer,
+  leaving a disabled one on disk only. `AccuracySec=5s` bounds manager coalescing
   after each deadline [ORB-10986]. These monotonic
   triggers deliberately do not replay timer events missed while the manager or host was
   down. The first sweep after restart evaluates each routine's cursor, so `catch_up_once`
@@ -435,11 +470,20 @@ out of v1 scope for this reason.
 ### Existing-host migration
 
 After upgrading, `orbit clock status` reports a native unit that still invokes
-`orbit sweep` as stale; `orbit clock enable` rewrites it to `orbit clock tick` and
-re-arms it. Workspace synchronization refreshes managed routine definitions and retires
+`orbit sweep`, or one naming a program that moved or no longer exists, as stale;
+`orbit update` converges it automatically and `orbit clock repair` does the same on demand
+for a binary another installer placed. Workspace synchronization refreshes managed routine definitions and retires
 the former auto-task scheduler routine. `orbit doctor` reports that retired managed file
 as deprecated, and `orbit doctor --fix-stale-artifacts` moves an unchanged seeded copy to
 `.retired-managed/` while preserving an operator-edited copy there for inspection.
+
+Until that sync runs, a definition targeting the retired `auto_task_scheduler_pipeline`
+job is *skipped*, not failed: the loader recognises the retired target
+(`RETIRED_ROUTINE_JOBS`), so `orbit routine list` shows the routine as retired with the
+command that clears it, the dashboard carries it under `retired`, and a clock tick emits
+one non-noteworthy `retired` row instead of a load error on every pass [DANI-10392]. A
+job the workspace still defines itself resolves through the catalog first, and any other
+unresolvable target remains a fail-closed load error.
 
 Legacy `[routines] role` and routine `hosts:` fields warn during their compatibility
 window but no longer affect eligibility. Every registered owner checkout with an enabled

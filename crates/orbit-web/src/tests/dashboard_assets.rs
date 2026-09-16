@@ -4351,6 +4351,18 @@ fn dashboard_rows_are_keyboard_operable_without_changing_click_behaviour() {
     ));
 }
 
+// DANI-10391: list rows are summaries; the detail behind a row comes from
+// `GET /api/tasks/:id` when it opens. The scenario drives the shipped module
+// against a fetch stub and observes the reads it issues and what it paints.
+#[test]
+fn dashboard_summary_rows_expand_through_the_detail_endpoint() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_keyboard_dom.mjs"),
+        include_str!("dashboard_task_detail.mjs")
+    ));
+}
+
 // The focus ring is the other half of keyboard operability: a row that can be
 // focused but shows nothing is not usable.
 #[test]

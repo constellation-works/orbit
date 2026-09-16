@@ -1,7 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use orbit_core::{WorkspaceCatalog, WorkspaceScope};
+use orbit_core::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
 use orbit_registry::workspace_registry::{registry_path_for, save_registry_to};
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
 
@@ -118,6 +118,60 @@ fn an_unknown_selector_fails_closed_by_name() {
         .expect_err("an unknown selector must not be silently dropped from the scope");
 
     assert!(error.to_string().contains("nowhere"));
+}
+
+/// The registry is read by `resolve_scope`, and by nothing the fan-out does
+/// afterwards: deleting `workspaces.json` between the two must not change what
+/// `open` resolves [DANI-10365].
+#[test]
+fn a_resolved_scope_opens_without_reading_the_registry_again() {
+    let (root, catalog) = seeded_catalog();
+    let registry_path = registry_path_for(&root.path().join("global"));
+
+    let targets = catalog
+        .resolve_scope(&WorkspaceScope::AllRegistered)
+        .expect("resolve");
+    std::fs::remove_file(&registry_path).expect("remove registry");
+
+    for target in &targets {
+        let resolved = catalog
+            .resolve_target(target)
+            .expect("a resolved target opens from the scope snapshot");
+        assert_eq!(resolved.repo_root(), target.repo_root);
+    }
+}
+
+/// The snapshot is a per-query view, not a cache: a target it never covered
+/// still falls back to the registry and still fails closed by name.
+#[test]
+fn a_target_outside_the_snapshot_falls_back_to_the_registry() {
+    let (_root, catalog) = seeded_catalog();
+
+    let targets = catalog
+        .resolve_scope(&WorkspaceScope::Selectors(vec!["alpha".to_string()]))
+        .expect("resolve");
+    assert_eq!(targets.len(), 1);
+
+    let unresolved = FederatedWorkspaceTarget {
+        workspace_id: "ws_beta".to_string(),
+        name: "beta".to_string(),
+        repo_root: PathBuf::from("/nowhere"),
+    };
+    assert!(
+        catalog.resolve_target(&unresolved).is_ok(),
+        "a registered workspace outside the snapshot still resolves"
+    );
+
+    let gone = FederatedWorkspaceTarget {
+        workspace_id: "ws_gone".to_string(),
+        name: "gone".to_string(),
+        repo_root: PathBuf::from("/nowhere"),
+    };
+    let error = catalog
+        .resolve_target(&gone)
+        .expect_err("an unregistered workspace fails closed");
+    assert!(error.to_string().contains("gone"));
+    assert!(error.to_string().contains("no longer registered"));
 }
 
 #[test]

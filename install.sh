@@ -290,6 +290,17 @@ install -m 755 "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
 log "Installed Orbit to ${INSTALL_DIR}/${BINARY_NAME}"
 "${INSTALL_DIR}/${BINARY_NAME}" --version
 
+# The installed sweep clock unit names an orbit binary by absolute path, so an
+# install at a different location than the one the unit was written for leaves
+# launchd/systemd invoking a binary that may no longer exist — and it fails
+# every wake-up silently. Repointing it is best-effort: a host with no unit has
+# nothing to converge, and an install must not fail over the repair.
+if clock_report="$("${INSTALL_DIR}/${BINARY_NAME}" clock repair 2>&1)"; then
+  log "$clock_report"
+else
+  warn "could not converge the sweep clock unit: ${clock_report}"
+fi
+
 case ":$PATH:" in
   *:"$INSTALL_DIR":*)
     ;;

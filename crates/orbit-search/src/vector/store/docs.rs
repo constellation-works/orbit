@@ -38,24 +38,32 @@ impl VectorStore {
         embedder: &dyn Embedder,
         force: bool,
     ) -> Result<DocReindexReport, OrbitError> {
-        let mut upsert = UpsertReport::default();
         let live = docs
             .iter()
             .map(|doc| doc.path.clone())
             .collect::<BTreeSet<_>>();
-        for doc in docs {
-            let report = self.index_doc(doc, embedder, force)?;
-            upsert.embedded_chunks += report.embedded_chunks;
-            upsert.skipped_fields += report.skipped_fields;
-        }
+        let stale_sources = self
+            .source_ids(SOURCE_KIND_DOC)?
+            .difference(&live)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut sources = docs
+            .iter()
+            .map(|doc| (doc.path.clone(), doc_embedding_fields(doc)))
+            .collect::<Vec<_>>();
+        sources.extend(
+            stale_sources
+                .iter()
+                .cloned()
+                .map(|source_id| (source_id, Vec::new())),
+        );
+        let source_refs = sources
+            .iter()
+            .map(|(source_id, fields)| (source_id.as_str(), fields.as_slice()))
+            .collect::<Vec<_>>();
+        let upsert =
+            self.upsert_embedding_sources(SOURCE_KIND_DOC, &source_refs, embedder, force)?;
 
-        let mut stale_sources = Vec::new();
-        for source_id in self.source_ids(SOURCE_KIND_DOC)? {
-            if !live.contains(&source_id) {
-                self.delete_source(SOURCE_KIND_DOC, &source_id)?;
-                stale_sources.push(source_id);
-            }
-        }
         Ok(DocReindexReport {
             upsert,
             indexed_sources: live.len(),

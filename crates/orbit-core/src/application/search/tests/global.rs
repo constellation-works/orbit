@@ -44,6 +44,40 @@ fn global_search_single_kind_limit_keeps_task_behavior() {
 }
 
 #[test]
+fn lexical_task_search_uses_fts_when_task_corpus_is_indexed() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let id = add_task(
+        &runtime,
+        "indexed lexical route proves FTS",
+        "ordinary body",
+        TaskStatus::Backlog,
+    );
+    let task = runtime.get_task(&id).expect("indexed task");
+    runtime
+        .stores()
+        .semantic_index()
+        .store()
+        .expect("semantic index")
+        .index_task(&task, &orbit_search::NoopEmbedder::small(), false)
+        .expect("index task");
+
+    // The bundle fallback treats this as one contiguous substring and cannot
+    // match it. A hit therefore proves the lexical branch consulted FTS5,
+    // whose query syntax requires both terms without requiring adjacency.
+    let response = runtime
+        .global_search(GlobalSearchParams {
+            query: Some("indexed proves".to_string()),
+            kind: GlobalSearchKind::Task,
+            ..Default::default()
+        })
+        .expect("FTS lexical task search");
+
+    assert_eq!(response.results.len(), 1);
+    assert_eq!(response.results[0].source, "lexical");
+    assert_eq!(response.results[0].id.as_deref(), Some(id.as_str()));
+}
+
+#[test]
 fn doc_branch_searches_inlined_adr_body_content() {
     let runtime = OrbitRuntime::in_memory().expect("runtime");
     add_doc_with_body(

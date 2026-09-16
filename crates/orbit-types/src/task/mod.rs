@@ -11,8 +11,8 @@ pub use error::TaskError;
 mod tests;
 
 pub use artifacts::{
-    ArtifactManifestFileV2, ArtifactManifestV2, ORB_TASK_ID_MAX, ORB_TASK_ID_PREFIX,
-    ORB_TASK_ID_WIDTH, TASK_ACCEPTANCE_FILE_NAME, TASK_ARTIFACT_FILES_DIR_NAME,
+    ArtifactManifestFileV2, ArtifactManifestV2, CYCLIC_RELATION_TYPES, ORB_TASK_ID_MAX,
+    ORB_TASK_ID_PREFIX, ORB_TASK_ID_WIDTH, TASK_ACCEPTANCE_FILE_NAME, TASK_ARTIFACT_FILES_DIR_NAME,
     TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACT_SCHEMA_VERSION, TASK_ARTIFACTS_DIR_NAME,
     TASK_COMMENTS_FILE_NAME, TASK_DESCRIPTION_FILE_NAME, TASK_ENVELOPE_FILE_NAME,
     TASK_EVENTS_FILE_NAME, TASK_EXECUTION_SUMMARY_FILE_NAME, TASK_PLAN_FILE_NAME,
@@ -37,6 +37,7 @@ pub use model::{
     task_matches_tags, task_reference_is_not_verifiable_here, unmet_task_dependencies,
     unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
     unsatisfiable_task_dependencies_with_index, validate_task_dependencies,
+    validate_task_dependencies_with,
 };
 pub use plan::{TaskPlan, TaskPlanCheckpoint, TaskPlanSuccessCriterion};
 pub use show_fields::{

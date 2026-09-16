@@ -21,6 +21,21 @@ use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+thread_local! {
+    static HEAD_INVOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_head_invocations() {
+    HEAD_INVOCATIONS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn head_invocations() -> usize {
+    HEAD_INVOCATIONS.with(std::cell::Cell::get)
+}
+
 pub(crate) fn evaluate(
     runtime: &OrbitRuntime,
     definition: &RoutineDefinition,
@@ -115,6 +130,8 @@ impl<'a> Host<'a> {
 
 impl MemberHost for Host<'_> {
     fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
+        #[cfg(test)]
+        HEAD_INVOCATIONS.with(|count| count.set(count.get() + 1));
         Source::new(&self.runtime.paths().repo_root).head(branch)
     }
 
@@ -259,23 +276,28 @@ impl MemberHost for Host<'_> {
         }
 
         // Re-derive the material now: a member whose input moved may not be admitted.
+        // Branch head is invariant for this call; resolve it once rather than
+        // per task_id (each Source::head is several git spawns).
+        if self.trigger.kind == StateTriggerKind::PreparationEligible {
+            let (_, source) = self.head(&self.trigger.branch)?;
+            for id in &member.task_ids {
+                let task = self.runtime.get_task(id)?;
+                if !orbit_automation::members::preparation::eligible(&task) {
+                    return Ok(MemberAdmission::Retire("task_ineligible".into()));
+                }
+                if self.fingerprint(&task, &source.commit)? != member.fingerprint {
+                    return Ok(MemberAdmission::Retire("material_changed".into()));
+                }
+            }
+            return Ok(MemberAdmission::Admit);
+        }
+
         for id in &member.task_ids {
             let task = self.runtime.get_task(id)?;
-            let current = match self.trigger.kind {
-                StateTriggerKind::PreparationEligible => {
-                    if !orbit_automation::members::preparation::eligible(&task) {
-                        return Ok(MemberAdmission::Retire("task_ineligible".into()));
-                    }
-                    let (_, source) = self.head(&self.trigger.branch)?;
-                    self.fingerprint(&task, &source.commit)?
-                }
-                StateTriggerKind::ExecutionFailed => {
-                    match super::incidents::observe(self.runtime, &task) {
-                        Ok((key, _)) => key,
-                        Err(error) => {
-                            return Ok(MemberAdmission::Retire(error.to_string()));
-                        }
-                    }
+            let current = match super::incidents::observe(self.runtime, &task) {
+                Ok((key, _)) => key,
+                Err(error) => {
+                    return Ok(MemberAdmission::Retire(error.to_string()));
                 }
             };
 

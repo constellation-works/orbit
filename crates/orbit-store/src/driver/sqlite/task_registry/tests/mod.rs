@@ -13,11 +13,12 @@ use orbit_types::task::{
     ORB_TASK_ID_MAX, TaskComplexity, TaskEnvelopeV2, TaskPriority, TaskRelation, TaskRelationType,
     TaskStatus, TaskType, UNSET_BUCKET,
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use tempfile::TempDir;
 
 use super::REGISTRY_SCHEMA_VERSION;
 use super::schema::registry_user_version;
+use super::store::{TASK_PREFIX_PROBE_SQL, reachable_cycle_family_sql};
 use super::util::now_string;
 use super::{
     BindWorkspaceParams, RegisterWorkspaceParams, TaskIndexFilter, TaskRegistryStore,
@@ -770,6 +771,256 @@ fn checkoutless_workspaces_coordinate_cross_workspace_relations_without_paths() 
             .is_empty(),
         "allowed foreign references are not locally dangling"
     );
+}
+
+/// Relation validation reads a reachable subgraph rather than the whole
+/// relation table, and the walk has to cross workspace boundaries: a relation
+/// may target a task in another workspace, and a cycle routed through one is
+/// still a cycle. Scoping the query to the writing workspace would pass this
+/// write.
+#[test]
+fn relation_cycle_through_another_workspace_is_rejected() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let first = store
+        .register_workspace(RegisterWorkspaceParams {
+            partition_id: "logical-first-aaaaaa".into(),
+            slug: "Logical First".into(),
+            repo_fingerprint: None,
+        })
+        .expect("register first workspace");
+    let second = store
+        .register_workspace(RegisterWorkspaceParams {
+            partition_id: "logical-second-bbbbbb".into(),
+            slug: "Logical Second".into(),
+            repo_fingerprint: None,
+        })
+        .expect("register second workspace");
+
+    // `head` and `tail` live in the first workspace, `bridge` in the second,
+    // so the only path from `tail` back to `head` leaves and re-enters.
+    let head = register_indexed_task(&store, &first.partition_id, Vec::new());
+    let bridge = register_indexed_task(&store, &second.partition_id, Vec::new());
+    let tail = register_indexed_task(&store, &first.partition_id, Vec::new());
+
+    store
+        .replace_task_index(
+            &second.partition_id,
+            &envelope(
+                &bridge,
+                TaskStatus::Backlog,
+                Vec::new(),
+                vec![blocked_by(&tail)],
+            ),
+        )
+        .expect("index bridge -> tail");
+    store
+        .replace_task_index(
+            &first.partition_id,
+            &envelope(
+                &head,
+                TaskStatus::Backlog,
+                Vec::new(),
+                vec![blocked_by(&bridge)],
+            ),
+        )
+        .expect("index head -> bridge");
+
+    let error = store
+        .replace_task_index(
+            &first.partition_id,
+            &envelope(
+                &tail,
+                TaskStatus::Backlog,
+                Vec::new(),
+                vec![blocked_by(&head)],
+            ),
+        )
+        .expect_err("cycle closing through the second workspace");
+    assert!(
+        error.to_string().contains("cycle"),
+        "expected a cycle rejection, got: {error}"
+    );
+    assert!(
+        store
+            .indexed_relation_targets(&first.partition_id, &tail, TaskRelationType::BlockedBy)
+            .expect("relations after rejected cycle")
+            .is_empty(),
+        "a rejected cycle must not write relation rows"
+    );
+}
+
+/// A replacement batch's own edges are not in the registry yet, so a path that
+/// crosses one resumes at its target — and the stored edges *after* that point
+/// are only fetched if the subgraph walk is seeded on replacement targets too.
+///
+/// The cycle here is `s -> t -> x -> y -> s`, where `t -> x` and `y -> s` are
+/// stored and `x -> y` / `s -> t` arrive in one batch. Reaching the stored
+/// `y -> s` requires crossing the batch's own unwritten `x -> y`, so seeding
+/// only on the new relations' targets admits the cycle.
+#[test]
+fn relation_cycle_resuming_after_a_replacement_edge_is_rejected() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let workspace = bind(&store, temp.path());
+    let partition_id = workspace.partition_id.clone();
+
+    let x = register_indexed_task(&store, &partition_id, Vec::new());
+    let s = register_indexed_task(&store, &partition_id, Vec::new());
+    let t = register_indexed_task(&store, &partition_id, vec![blocked_by(&x)]);
+    let y = register_indexed_task(&store, &partition_id, vec![blocked_by(&s)]);
+
+    let error = store
+        .replace_task_indexes(
+            &partition_id,
+            &[
+                envelope(&x, TaskStatus::Backlog, Vec::new(), vec![blocked_by(&y)]),
+                envelope(&s, TaskStatus::Backlog, Vec::new(), vec![blocked_by(&t)]),
+            ],
+        )
+        .expect_err("cycle resuming after a replacement edge");
+    assert!(
+        error.to_string().contains("cycle"),
+        "expected a cycle rejection, got: {error}"
+    );
+    assert!(
+        store
+            .indexed_relation_targets(&partition_id, &x, TaskRelationType::BlockedBy)
+            .expect("relations after rejected batch")
+            .is_empty(),
+        "a rejected batch must not write relation rows"
+    );
+}
+
+/// Target resolution probes one prefix at a time instead of collecting every
+/// registered prefix. A prefix that is registered but not the active minting
+/// prefix must still make an unresolvable target an error, the way a foreign
+/// prefix does not.
+#[test]
+fn unresolvable_target_under_a_registered_foreign_prefix_is_rejected() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let workspace = bind(&store, temp.path());
+    let partition_id = workspace.partition_id.clone();
+    let source_id = register_indexed_task(&store, &partition_id, Vec::new());
+
+    let mirrored = "DK-00001";
+    let mirrored_path = store
+        .canonical_task_bundle_path(&partition_id, mirrored)
+        .expect("canonical path for mirrored task");
+    fs::create_dir_all(&mirrored_path).expect("create mirrored bundle");
+    store
+        .register_task_bundle(mirrored, &partition_id, &mirrored_path)
+        .expect("register mirrored bundle");
+
+    let missing = "DK-00002";
+    let error = store
+        .replace_task_index(
+            &partition_id,
+            &envelope(
+                &source_id,
+                TaskStatus::Backlog,
+                Vec::new(),
+                vec![TaskRelation {
+                    relation_type: TaskRelationType::RelatedTo,
+                    target: missing.into(),
+                }],
+            ),
+        )
+        .expect_err("unresolvable target under a registered prefix");
+    assert!(error.to_string().contains(missing));
+
+    store
+        .replace_task_index(
+            &partition_id,
+            &envelope(
+                &source_id,
+                TaskStatus::Backlog,
+                Vec::new(),
+                vec![TaskRelation {
+                    relation_type: TaskRelationType::RelatedTo,
+                    target: mirrored.into(),
+                }],
+            ),
+        )
+        .expect("registered target under the same prefix resolves");
+}
+
+/// Both relation-validation queries must resolve through an index. The cost
+/// they replaced grew with every relation row and every binding in the
+/// registry, across all workspaces, on each task write — a plan that falls
+/// back to a scan puts that cost straight back.
+#[test]
+fn relation_subgraph_query_stays_indexed() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let conn = store.conn.lock().expect("lock registry");
+
+    let plan = query_plan(&conn, &reachable_cycle_family_sql(2));
+    assert!(
+        !plan.contains("SCAN edge"),
+        "the relation subgraph walk must not scan task_bundle_relations:\n{plan}"
+    );
+    assert_eq!(
+        plan.matches("SEARCH edge USING").count(),
+        2,
+        "both the recursive step and the collecting select must search by source id:\n{plan}"
+    );
+
+    let plan = query_plan(&conn, TASK_PREFIX_PROBE_SQL);
+    assert!(
+        plan.contains("SEARCH task_bundle_bindings USING"),
+        "the prefix probe must search the bindings index, not scan it:\n{plan}"
+    );
+}
+
+fn query_plan(conn: &Connection, sql: &str) -> String {
+    let mut stmt = conn
+        .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+        .expect("prepare query plan");
+    // SQLite fixes the plan at prepare time, so the bound values are
+    // irrelevant — they only have to be present for the statement to run.
+    let bindings = vec![String::new(); stmt.parameter_count()];
+    let rows = stmt
+        .query_map(params_from_iter(bindings.iter()), |row| {
+            row.get::<_, String>(3)
+        })
+        .expect("query plan rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect query plan");
+    rows.join("\n")
+}
+
+fn blocked_by(target: &str) -> TaskRelation {
+    TaskRelation {
+        relation_type: TaskRelationType::BlockedBy,
+        target: target.to_string(),
+    }
+}
+
+/// Allocate, register, and index one task, returning its id.
+fn register_indexed_task(
+    store: &TaskRegistryStore,
+    partition_id: &str,
+    relations: Vec<TaskRelation>,
+) -> String {
+    let task_id = store
+        .allocate_task_id(partition_id)
+        .expect("allocate task id");
+    let path = store
+        .canonical_task_bundle_path(partition_id, &task_id)
+        .expect("canonical bundle path");
+    fs::create_dir_all(&path).expect("create bundle");
+    store
+        .register_task_bundle(&task_id, partition_id, &path)
+        .expect("register bundle");
+    store
+        .replace_task_index(
+            partition_id,
+            &envelope(&task_id, TaskStatus::Backlog, Vec::new(), relations),
+        )
+        .expect("index task");
+    task_id
 }
 
 #[test]

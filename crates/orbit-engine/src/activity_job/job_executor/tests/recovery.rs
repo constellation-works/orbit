@@ -102,6 +102,307 @@ fn recovery_success_runs_one_post_recovery_attempt_with_exact_input_and_fs_profi
     ));
 }
 
+// ----- [DANI-10438] Declared-failed outcomes reach the recovery leaf --------
+
+/// Fake `claude` that replays the on-call shape: the first `failures`
+/// invocations exit 0 with a `status: "failed"` envelope carrying a red-gate
+/// diagnostic, and every later invocation declares `success`. Invocations are
+/// counted in `<dir>/invocations` so a test can see the re-attempt happen.
+fn declared_failure_provider(dir: &std::path::Path, failures: u32) -> std::path::PathBuf {
+    let script = dir.join("claude");
+    let counter = dir.join("invocations");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ncat > /dev/null\n\
+             n=$(cat '{counter}' 2>/dev/null || echo 0)\n\
+             n=$((n + 1))\nprintf '%s' \"$n\" > '{counter}'\n\
+             if [ \"$n\" -le {failures} ]; then\n\
+             printf '%s\\n' '{DECLARED_FAILED_ENVELOPE}'\n\
+             else\n\
+             printf '%s\\n' '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n\
+             fi\n",
+            counter = counter.display(),
+        ),
+    )
+    .expect("write fake provider");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script).expect("stat").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script, perms).expect("chmod");
+    }
+    script
+}
+
+const DECLARED_FAILED_ENVELOPE: &str = "{\"schemaVersion\":1,\"status\":\"failed\",\"result\":{},\
+    \"error\":{\"code\":\"validation_failed\",\"message\":\"make ci-fast failed on pre-existing issues\"}}";
+const DECLARED_FAILED_DIAGNOSTIC: &str = "make ci-fast failed on pre-existing issues";
+/// More invocations than any test performs, so the provider never succeeds.
+const ALWAYS_FAIL: u32 = 1_000;
+
+fn provider_invocations(dir: &std::path::Path) -> usize {
+    std::fs::read_to_string(dir.join("invocations"))
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// `implement_one` as shipped: a CLI agent loop with a step-level
+/// `recovery_activity`, resolved to the deterministic `recover` action.
+fn implement_step_with_recovery(recovery_name: &str, retry: Option<RetrySpec>) -> JobV2Step {
+    let mut step = super::step::agent_implement_shaped_step("implement_one", retry);
+    step.recovery_activity = Some(recovery_name.to_string());
+    step.resolved_recovery_activity = Some(deterministic_activity(recovery_name, None));
+    step
+}
+
+fn event_index(events: &[V2AuditEvent], pred: impl Fn(&V2AuditEventKind) -> bool) -> Option<usize> {
+    events.iter().position(|event| pred(&event.kind))
+}
+
+/// The no-retry branch: the agent declares `failed` once, the step's recovery
+/// leaf runs once, and the single re-attempt succeeds. The audit log carries
+/// `step.recovery_attempted` before `step.post_recovery_attempt`.
+#[test]
+fn declared_failed_outcome_without_retry_dispatches_recovery_then_reattempts() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = declared_failure_provider(temp.path(), 1);
+    let host = ScriptedHost::new([("recover", vec![Action::Ok(json!({"recovered": true}))])])
+        .with_cli_program(script.display().to_string());
+    let job = job_with_steps(vec![implement_step_with_recovery("recover", None)]);
+    let writer = std::sync::Arc::new(test_writer("run-declared-failed-recovery"));
+
+    let outcome = execute_job(
+        &job,
+        json!({"task_id": "DANI-10438"}),
+        "run-declared-failed-recovery",
+        writer.clone(),
+        &host,
+    )
+    .expect("execute_job ok");
+
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(
+        host.call_count("recover"),
+        1,
+        "recovery must run exactly once"
+    );
+    assert_eq!(
+        provider_invocations(temp.path()),
+        2,
+        "one declared failure, then exactly one post-recovery re-attempt"
+    );
+    let input = host.input_for_action("recover").expect("recovery input");
+    assert_eq!(input["failed_step_id"], "implement_one");
+    assert_eq!(input["attempt"], 1);
+    assert_eq!(input["max_attempts"], 1);
+    let error_message = input["error_message"].as_str().expect("error_message");
+    assert!(error_message.contains("implement_one"), "{error_message}");
+    assert!(
+        error_message.contains(DECLARED_FAILED_DIAGNOSTIC),
+        "{error_message}"
+    );
+
+    let events = writer.events_snapshot().expect("audit snapshot");
+    let recovered = event_index(&events, |kind| {
+        matches!(
+            kind,
+            V2AuditEventKind::StepRecoveryAttempted {
+                step_id,
+                recovery_activity,
+                recovery_succeeded: true,
+                ..
+            } if step_id == "implement_one" && recovery_activity == "recover"
+        )
+    })
+    .expect("step.recovery_attempted must be emitted");
+    let reattempted = event_index(&events, |kind| {
+        matches!(
+            kind,
+            V2AuditEventKind::StepPostRecoveryAttempt { step_id, outcome, .. }
+                if step_id == "implement_one" && outcome == "success"
+        )
+    })
+    .expect("step.post_recovery_attempt must be emitted");
+    assert!(recovered < reattempted, "recovery precedes the re-attempt");
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        V2AuditEventKind::StepFinished { step_id, outcome, .. }
+            if step_id == "implement_one" && outcome == "success"
+    )));
+}
+
+/// The retry branch: recovery runs once, after retries are exhausted, with
+/// the exhausted attempt count. When the re-attempt declares `failed` again,
+/// the terminal error carries the agent's diagnostic [ORB-10449].
+#[test]
+fn declared_failed_outcome_after_retry_exhaustion_recovers_once_and_keeps_diagnostic() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = declared_failure_provider(temp.path(), ALWAYS_FAIL);
+    let host = ScriptedHost::new([("recover", vec![Action::Ok(json!({"recovered": true}))])])
+        .with_cli_program(script.display().to_string());
+    let job = job_with_steps(vec![implement_step_with_recovery(
+        "recover",
+        Some(RetrySpec {
+            max_attempts: 2,
+            initial_backoff_ms: 1,
+            backoff_cap_ms: 1,
+            backoff_strategy: BackoffStrategy::Linear,
+        }),
+    )]);
+    let writer = std::sync::Arc::new(test_writer("run-declared-failed-retry"));
+
+    let err = execute_job(
+        &job,
+        json!({"task_id": "DANI-10438"}),
+        "run-declared-failed-retry",
+        writer.clone(),
+        &host,
+    )
+    .expect_err("a failed re-attempt is terminal");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("post-recovery attempt failed"),
+        "{message}"
+    );
+    assert!(message.contains("implement_one"), "{message}");
+    assert!(message.contains(DECLARED_FAILED_DIAGNOSTIC), "{message}");
+    assert!(
+        !message.contains("completed with success=false"),
+        "the generic fallback hides the real cause: {message}"
+    );
+    assert_eq!(
+        host.call_count("recover"),
+        1,
+        "recovery runs once, after retries"
+    );
+    assert_eq!(
+        provider_invocations(temp.path()),
+        3,
+        "two retried attempts, then one post-recovery re-attempt"
+    );
+    let input = host.input_for_action("recover").expect("recovery input");
+    assert_eq!(input["attempt"], 2);
+    assert_eq!(input["max_attempts"], 2);
+    assert!(
+        input["error_message"]
+            .as_str()
+            .is_some_and(|text| text.contains(DECLARED_FAILED_DIAGNOSTIC)),
+        "{input}"
+    );
+
+    let events = writer.events_snapshot().expect("audit snapshot");
+    let retried = event_index(&events, |kind| {
+        matches!(kind, V2AuditEventKind::StepRetry { attempt: 1, .. })
+    })
+    .expect("retry precedes recovery");
+    let recovered = event_index(&events, |kind| {
+        matches!(
+            kind,
+            V2AuditEventKind::StepRecoveryAttempted {
+                recovery_succeeded: true,
+                ..
+            }
+        )
+    })
+    .expect("step.recovery_attempted must be emitted");
+    let reattempted = event_index(&events, |kind| {
+        matches!(
+            kind,
+            V2AuditEventKind::StepPostRecoveryAttempt { outcome, error_message: Some(error_message), .. }
+                if outcome == "failed" && error_message.contains(DECLARED_FAILED_DIAGNOSTIC)
+        )
+    })
+    .expect("step.post_recovery_attempt must be emitted");
+    assert!(retried < recovered && recovered < reattempted);
+}
+
+/// A recovery leaf that fails leaves the declared-failed outcome exactly as it
+/// was: same `failed` classification, same agent diagnostic, no re-attempt.
+#[test]
+fn failed_recovery_of_declared_failed_outcome_returns_it_unchanged() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = declared_failure_provider(temp.path(), ALWAYS_FAIL);
+    let host = ScriptedHost::new([(
+        "recover",
+        vec![Action::Err(retryable_error("recover", "could not fix"))],
+    )])
+    .with_cli_program(script.display().to_string());
+    let job = job_with_steps(vec![implement_step_with_recovery("recover", None)]);
+    let writer = std::sync::Arc::new(test_writer("run-declared-failed-unrecovered"));
+
+    let outcome = execute_job(
+        &job,
+        json!({"task_id": "DANI-10438"}),
+        "run-declared-failed-unrecovered",
+        writer.clone(),
+        &host,
+    )
+    .expect("an unrecovered declared failure stays a failed outcome, not an error");
+
+    assert!(!outcome.success);
+    let message = outcome.message.expect("terminal message");
+    assert!(message.contains("implement_one"), "{message}");
+    assert!(message.contains(DECLARED_FAILED_DIAGNOSTIC), "{message}");
+    assert_eq!(host.call_count("recover"), 1);
+    assert_eq!(
+        provider_invocations(temp.path()),
+        1,
+        "no re-attempt without recovery"
+    );
+
+    let events = writer.events_snapshot().expect("audit snapshot");
+    assert!(matches!(
+        recovery_events(&events)[0].kind,
+        V2AuditEventKind::StepRecoveryAttempted {
+            recovery_succeeded: false,
+            ..
+        }
+    ));
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event.kind, V2AuditEventKind::StepPostRecoveryAttempt { .. }))
+    );
+    assert!(events.iter().any(|event| matches!(
+        &event.kind,
+        V2AuditEventKind::StepFinished { step_id, outcome, .. }
+            if step_id == "implement_one" && outcome == "failed"
+    )));
+}
+
+/// `pr_conflict_recovery` is still keyed on `RecoverableVcsConflict` alone: a
+/// declared-failed outcome on a step that names it never dispatches the leaf.
+#[test]
+fn pr_conflict_recovery_ignores_declared_failed_outcome() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let script = declared_failure_provider(temp.path(), ALWAYS_FAIL);
+    let host = ScriptedHost::new([]).with_cli_program(script.display().to_string());
+    let job = job_with_steps(vec![implement_step_with_recovery(
+        "pr_conflict_recovery",
+        None,
+    )]);
+    let writer = std::sync::Arc::new(test_writer("run-declared-failed-pr-conflict"));
+
+    let outcome = execute_job(
+        &job,
+        json!({"task_id": "DANI-10438"}),
+        "run-declared-failed-pr-conflict",
+        writer.clone(),
+        &host,
+    )
+    .expect("execute_job ok");
+
+    assert!(!outcome.success);
+    assert_eq!(host.call_count("pr_conflict_recovery"), 0);
+    assert_eq!(provider_invocations(temp.path()), 1);
+    let events = writer.events_snapshot().expect("audit snapshot");
+    assert!(recovery_events(&events).is_empty());
+}
+
 #[test]
 fn recovery_success_with_post_recovery_failure_surfaces_re_run_error() {
     let original_error = retryable_error("flaky", "first failure");

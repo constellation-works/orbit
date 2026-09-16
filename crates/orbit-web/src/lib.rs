@@ -151,11 +151,12 @@ pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(
 /// `~/.orbit/workspaces.json` otherwise — the same resolution every other
 /// root-aware command performs, via
 /// [`orbit_cmd::registry_runtime::global_root_for`]. The servable set is
-/// reloaded from that same path on every request boundary (see
-/// [`state::DashboardState::refresh`]), so a native `orbit workspace
-/// init/remove` or binding change becomes visible without restarting the
-/// server. The dropdown's default selection is, in priority order: the
-/// registered/active workspace matching `workspace_selector` (an explicit
+/// reloaded from that same path when `workspaces.json` mtime or length
+/// changes (see [`state::DashboardState::pin`]), so a native `orbit
+/// workspace init/remove` or binding change becomes visible on the next
+/// request without restarting the server. The dropdown's default selection is,
+/// in priority order: the registered/active workspace matching
+/// `workspace_selector` (an explicit
 /// `--workspace`), else the registered workspace containing the cwd (see
 /// [`default_workspace_for_cwd`]), else "All workspaces". See
 /// [`default_workspace_selection`] for the precedence logic.

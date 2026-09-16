@@ -23,6 +23,8 @@
 //! - [`noop`] — a deterministic test fake that needs no companion subprocess.
 //! - [`subprocess`] — the production [`Embedder`] impl that talks to the
 //!   companion over stdio.
+//! - [`shared_query`] — one query-side embedder shared by a fan-out, so a
+//!   repeated query is embedded once.
 //! - [`vector`] — workspace-local SQLite storage for embeddings + FTS5 rows.
 //! - [`commands`] — install / uninstall / reindex / stats command surface.
 
@@ -32,6 +34,7 @@ mod embedder;
 pub mod lexical;
 mod noop;
 mod rpc;
+mod shared_query;
 mod subprocess;
 mod vector;
 
@@ -44,9 +47,9 @@ pub use commands::{
     SemanticIndexResult, SemanticInstallParams, SemanticInstallResult, SemanticReindexParams,
     SemanticReindexResult, SemanticRelatedParams, SemanticRelatedResult, SemanticSearchParams,
     SemanticSearchResult, SemanticStatsResult, SemanticUninstallParams, SemanticUninstallResult,
-    TaskIndexResult, doc_index, doc_semantic_search, query_model_id, semantic_index,
-    semantic_install, semantic_reindex, semantic_related, semantic_search, semantic_stats,
-    semantic_uninstall,
+    TaskIndexResult, doc_index, doc_semantic_search, doc_semantic_search_with, query_model_id,
+    semantic_index, semantic_install, semantic_reindex, semantic_related, semantic_search,
+    semantic_search_with, semantic_stats, semantic_uninstall,
 };
 pub use companion::{
     CompanionPaths, INSTALL_REMEDIATION, locate_companion, platform_companion_filename, platform_id,
@@ -60,8 +63,9 @@ pub use rpc::{
     RpcError, RpcRequest, RpcResponse, RpcResult, UNCORRELATED_REQUEST_ID, rpc_error_to_orbit,
     unparsed_request_id,
 };
+pub use shared_query::SharedQueryEmbedder;
 pub use subprocess::SubprocessEmbedder;
 pub use vector::{
-    DocEmbeddingSource, EmbedWorker, SOURCE_KIND_DOC, SOURCE_KIND_TASK, SemanticIndex,
-    SemanticStats, UpsertReport, VectorStore,
+    Bm25Hit, DocEmbeddingSource, EmbedWorker, SOURCE_KIND_DOC, SOURCE_KIND_TASK, SemanticIndex,
+    SemanticStats, UpsertReport, VectorStore, bm25_top_k,
 };

@@ -645,7 +645,19 @@ while IFS= read -r line; do
       printf '{"id":%s,"result":{"model_id":"bge-small-en-v1.5","dim":2,"max_input_tokens":512,"version":"0.3.1"}}\n' "$id"
       ;;
     *'"method":"token_count"'*)
-      printf '{"id":%s,"result":{"tokens":1}}\n' "$id"
+      texts_part=$(printf '%s\n' "$line" | sed -n 's/.*"texts":\[\(.*\)\].*/\1/p')
+      count=$(printf '%s' "$texts_part" | grep -oE '"([^"\\]|\\.)*"' | wc -l | tr -d ' ')
+      tokens=""
+      i=0
+      while [ "$i" -lt "$count" ]; do
+        if [ -z "$tokens" ]; then
+          tokens="1"
+        else
+          tokens="$tokens,1"
+        fi
+        i=$((i + 1))
+      done
+      printf '{"id":%s,"result":{"tokens":[%s]}}\n' "$id" "$tokens"
       ;;
     *'"method":"embed"'*)
       case "$line" in

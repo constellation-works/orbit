@@ -17,7 +17,6 @@ test-support = []
 [dependencies]
 chrono.workspace = true
 libc = { workspace = true }
-jsonschema.workspace = true
 orbit-agent = { path = "../orbit-agent" }
 orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }
@@ -31,10 +30,10 @@ serde_yaml.workspace = true
 sha2.workspace = true
 tempfile = "3"
 thiserror.workspace = true
-tiktoken-rs.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 orbit-common = { path = "../orbit-common", features = ["test-util"] }
 tracing-subscriber.workspace = true
 

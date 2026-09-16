@@ -1,0 +1,17 @@
+# Superseded `task_pilot` default (shipped 2026-08-15 to 2026-08-23): the
+# cadence changed on 2026-08-23. Kept as a provenance shape only — see
+# `SUPERSEDED_ROUTINE_TEMPLATES` in `application/routine.rs`.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Preflight unscoped proposed/backlog tasks through the bounded task-pilot
+  pipeline. Disabled by default; set enabled to true in this versioned
+  definition to opt this workspace into scheduled task preflight.
+enabled: false
+trigger:
+  cron: "45 */4 * * *"
+  missed_run: skip
+target: job:task_pilot_pipeline
+policy:
+  timeout_minutes: 90
+  overlap: forbid

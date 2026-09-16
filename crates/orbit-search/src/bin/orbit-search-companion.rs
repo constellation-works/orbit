@@ -87,15 +87,24 @@ impl FastembedServer {
                     Err(error) => error_response(id, "embed_failed", error.to_string()),
                 }
             }
-            RpcRequest::TokenCount { text, .. } => match self.model.tokenizer.encode(text, true) {
-                Ok(encoding) => RpcResponse::Result {
-                    id,
-                    result: RpcResult::TokenCount {
-                        tokens: encoding.len(),
+            RpcRequest::TokenCount { texts, .. } => {
+                let counts = texts
+                    .into_iter()
+                    .map(|text| {
+                        self.model
+                            .tokenizer
+                            .encode(text, true)
+                            .map(|encoding| encoding.len())
+                    })
+                    .collect::<Result<Vec<_>, _>>();
+                match counts {
+                    Ok(tokens) => RpcResponse::Result {
+                        id,
+                        result: RpcResult::TokenCount { tokens },
                     },
-                },
-                Err(error) => error_response(id, "token_count_failed", error.to_string()),
-            },
+                    Err(error) => error_response(id, "token_count_failed", error.to_string()),
+                }
+            }
             RpcRequest::TokenBoundaries { text, .. } => {
                 match self.model.tokenizer.encode(text, true) {
                     Ok(encoding) => RpcResponse::Result {

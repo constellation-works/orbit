@@ -52,10 +52,11 @@ pub trait Embedder: Send + Sync {
     fn max_input_tokens(&self) -> usize; // e.g. 512
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, OrbitError>;
     fn token_count(&self, text: &str) -> Result<usize, OrbitError>;
+    fn token_counts(&self, texts: &[&str]) -> Result<Vec<usize>, OrbitError>;
 }
 ```
 
-Batch input is mandatory — fastembed-rs is meaningfully faster on batches than on single-document calls because of ONNX kernel reuse, and the indexing path naturally batches by task. `token_count` is exposed because the chunker in [§4.2](#42-chunking-long-fields) needs exact token counts to split fields under the model's context limit.
+Batch input is mandatory — fastembed-rs is meaningfully faster on batches than on single-document calls because of ONNX kernel reuse, and the indexing path naturally batches by task. `token_count` is exposed because the chunker in [§4.2](#42-chunking-long-fields) needs exact token counts to split fields under the model's context limit. `token_counts` gives the paragraph pass one backend operation; in-process implementations inherit a scalar fallback, while the subprocess implementation sends one batched RPC.
 
 ### 2.2 Companion-binary architecture
 
@@ -82,20 +83,22 @@ JSON Lines over stdio. Each request and response is a single JSON object on a si
 // Request
 {"id": 1, "method": "info"}
 {"id": 2, "method": "embed", "texts": ["hello", "world"]}
-{"id": 3, "method": "token_count", "text": "..."}
-{"id": 4, "method": "exit"}
+{"id": 3, "method": "token_count", "texts": ["...", "..."]}
+{"id": 4, "method": "token_boundaries", "text": "..."}
+{"id": 5, "method": "exit"}
 
 // Response
 {"id": 1, "result": {"model_id": "bge-small", "dim": 384, "max_input_tokens": 512}}
 {"id": 2, "result": {"vectors": [[...384 floats...], [...384 floats...]]}}
-{"id": 3, "result": {"tokens": 42}}
-{"id": 4, "result": {"ok": true}}
+{"id": 3, "result": {"tokens": [42, 17]}}
+{"id": 4, "result": {"ends": [5, 11]}}
+{"id": 5, "result": {"ok": true}}
 
 // Error
 {"id": 2, "error": {"code": "model_load_failed", "message": "..."}}
 ```
 
-The protocol is intentionally minimal — four methods, no streaming, no auth. The trust boundary is "this is a binary the user installed under their home directory"; there is no network involvement and no multi-tenant concern.
+The protocol is intentionally minimal — five methods, no streaming, no auth. Its wire shape ships with the Orbit/companion package version reported by `info`; managed-install integrity metadata replaces a companion from another package version, so the protocol has no independent version counter. The trust boundary is "this is a binary the user installed under their home directory"; there is no network involvement and no multi-tenant concern.
 
 ### 2.4 Default model and install-time model selection
 
@@ -139,8 +142,9 @@ CREATE TABLE embeddings (
     content_hash TEXT NOT NULL,        -- BLAKE3 of the embedded text; cheap re-index gate
     model_id    TEXT NOT NULL,         -- "bge-small"
     dim         INTEGER NOT NULL,      -- 384
-    embedding   BLOB NOT NULL,         -- dim * 4 bytes, native-endian f32
+    embedding   BLOB NOT NULL,         -- dim * 4 bytes, little-endian f32
     created_at  TEXT NOT NULL,
+    normalized  INTEGER NOT NULL DEFAULT 0, -- 1 when embedding is L2-unit
     PRIMARY KEY (source_kind, source_id, field, chunk_idx, model_id)
 );
 
@@ -154,9 +158,10 @@ The composite primary key includes `model_id` so embeddings under multiple model
 
 ```text
 1. embed query under default model_id  → query vector q (dim 384)
-2. SELECT embedding, source_kind, source_id, field, chunk_idx
+2. SELECT embedding, normalized, source_kind, source_id, field, chunk_idx
      FROM embeddings WHERE model_id = ?
-3. for each row: compute cosine(q, row.embedding); maintain a fixed-size top-k heap
+3. for each row: score the LE f32 blob in place (dot product when `normalized`,
+     else full cosine); maintain a fixed-size top-k heap
 4. return top-k (source_id, field, score)
 ```
 
@@ -367,6 +372,17 @@ Vectors and FTS rows stay workspace-local ([§3](#3-vector-storage)); only the *
 **Partial failure is normal.** A registered checkout can be stale, moved, or owned by another machine. Each such workspace contributes zero hits plus a note and appears in the `workspaces` report with `hits: 0`; the query still succeeds. Per-workspace notes are prefixed `[<name>]` so every note is attributed too.
 
 **No silent caps.** At most `MAX_FEDERATED_WORKSPACES` (16) checkouts are opened per query. Exceeding it adds a note naming both the cap and how many workspaces were dropped.
+
+**The per-workspace cost is paid once, not N times.** A fan-out is N independent reads of the same question, so everything that does not vary per workspace is resolved before it starts:
+
+| Cost | Paid |
+|------|------|
+| `workspaces.json` read, parse, and checkout validation | once per query — `resolve_scope` keeps the records it resolved, and `open` reads that snapshot rather than the file. The snapshot is replaced by the next `resolve_scope`, so it never outlives its query; a target it does not cover falls back to a registry lookup |
+| Query-side model resolution and companion spawn | once per query — one `SharedQueryEmbedder` is handed to every workspace's vector branch |
+| Embedding the query text | once per query — the same text under the same model, memoized behind the shared embedder. A host with no companion installed resolves no embedder and every workspace degrades to lexical exactly as a single-workspace query does |
+| Runtime open, index read, and the query itself | once per workspace, on a pool of at most `MAX_FEDERATED_CONCURRENCY` (8). Workers claim the next unclaimed target, so one slow checkout does not idle the pool behind it |
+
+Concurrency is invisible in the answer: outcomes are re-sorted into target order before fusion, so results, the `workspaces` report, and the `[<name>]` note order do not depend on which workspace finished first. The pool is bounded because each in-flight query holds a full runtime — every SQLite store plus a semantic index — not because the work is CPU-bound.
 
 **Sandbox posture.** A federated scope is refused inside an Orbit-managed run. Rationale in the decision record; the guard lives in `global_search` so CLI, MCP, `orbit tool run`, and the HTTP adapter all reach it through one rule.
 

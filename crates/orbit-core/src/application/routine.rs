@@ -17,6 +17,15 @@
 //! same workspace name write byte-identical definitions. Seeded routines are
 //! disabled when written; they exist so a fresh workspace gets reviewable,
 //! opt-in schedules without silently enabling unattended work.
+//!
+//! Provenance is byte-exact first and shape-aware second. The manifest records
+//! the digest Orbit last wrote; a file that still matches is Orbit's. A file
+//! that differs only in what the operator owns — the `enabled` opt-in (the
+//! documented lifecycle, and what the dashboard toggle edits), the retired
+//! `hosts:` key the loader tells operators to drop, and comments — is still
+//! Orbit's when its template-owned fields match a template this or a prior
+//! release shipped for that stem ([`SUPERSEDED_ROUTINE_TEMPLATES`],
+//! [`RETIRED_ROUTINE_FILES`]). Anything else is a local edit and is preserved.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -25,13 +34,15 @@ use std::path::{Path, PathBuf};
 use orbit_automation::routines::loader::declared_routine_names;
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_routine_yaml;
+use orbit_types::workflow::RoutineDefinition;
 
+use super::routines::rewrite_enabled_line;
 use super::{
     MANAGED_ASSET_MANIFEST_FILE, ManagedAssetAction, ManagedAssetLayout, ManagedAssetManifest,
     ManagedAssetOutcome, ManagedAssetReconcileMode, ManagedAssetReconciliation,
     ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION, RoutineAssetProvenance,
     RoutineMaterializationBinding, encode_managed_asset_manifest, load_managed_asset_manifest,
-    preserve_modified_retired_asset, sha256_hex,
+    preserve_modified_retired_asset, retired_preservation_path, sha256_hex,
 };
 use orbit_common::fs::io::{atomic_write_text, write_text_with_parent};
 
@@ -64,6 +75,42 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
     (
         "worktree_gc",
         include_str!("../../assets/routines/worktree_gc.yaml"),
+    ),
+];
+
+/// Default routines a prior release seeded that this Orbit no longer ships,
+/// each as the last template it shipped. `orbit workspace sync` retires an
+/// on-disk copy whose template-owned fields still match one of these; the
+/// loader skips a routine targeting its job as retired instead of failing it
+/// on every clock tick (`RETIRED_ROUTINE_JOBS`).
+///
+/// Retiring a default: move its template here and add its target job to
+/// `RETIRED_ROUTINE_JOBS` in the same change.
+pub(crate) const RETIRED_ROUTINE_FILES: &[(&str, &str)] = &[(
+    "auto_task_scheduler",
+    include_str!("../../assets/routines/retired/auto_task_scheduler.yaml"),
+)];
+
+/// Earlier shapes of routines this Orbit still ships: every template whose
+/// template-owned fields differed from the current one. A workspace seeded by
+/// that release and since opted in (`enabled: true`) is refreshed onto the
+/// current template with its opt-in kept, instead of being reported as
+/// locally modified forever.
+///
+/// Changing a shipped template's fields (not its comments): copy the previous
+/// version here as `<stem>.<last-shipped-date>.yaml` in the same change.
+pub(crate) const SUPERSEDED_ROUTINE_TEMPLATES: &[(&str, &str)] = &[
+    (
+        "ci_failure_sweep",
+        include_str!("../../assets/routines/superseded/ci_failure_sweep.2026-08-30.yaml"),
+    ),
+    (
+        "task_pilot",
+        include_str!("../../assets/routines/superseded/task_pilot.2026-08-15.yaml"),
+    ),
+    (
+        "worktree_gc",
+        include_str!("../../assets/routines/superseded/worktree_gc.2026-07-12.yaml"),
     ),
 ];
 
@@ -200,6 +247,7 @@ pub(crate) fn reconcile_default_routines(
                 continue;
             }
             let path = routines_dir.join(format!("{name}.yaml"));
+            let mut retired_detail = None;
             if path.exists() {
                 let existing = fs::read_to_string(&path).map_err(|error| {
                     OrbitError::Io(format!(
@@ -207,7 +255,13 @@ pub(crate) fn reconcile_default_routines(
                         path.display()
                     ))
                 })?;
-                if sha256_hex(existing.as_bytes()) == *rendered_digest {
+                let byte_exact = sha256_hex(existing.as_bytes()) == *rendered_digest;
+                // Orbit deletes outright only bytes it can prove it wrote. A
+                // lifecycle variant — the operator's `enabled` opt-in, the
+                // retired `hosts:` key they were told to drop, a comment they
+                // added — still retires without demanding a manual move, but
+                // a copy is kept so nothing they authored is destroyed.
+                if byte_exact {
                     if mode == ManagedAssetReconcileMode::Apply {
                         fs::remove_file(&path).map_err(|error| {
                             OrbitError::Io(format!(
@@ -216,26 +270,55 @@ pub(crate) fn reconcile_default_routines(
                             ))
                         })?;
                     }
-                } else {
-                    let detail = format!(
-                        "retired managed routine '{}' was locally modified; move or rename it before rerunning `orbit workspace sync`",
-                        path.display()
-                    );
-                    if mode == ManagedAssetReconcileMode::Apply {
-                        let preserved = preserve_modified_retired_asset(
+                } else if shipped_shape_of(name, &existing).is_some() {
+                    let preserved = if mode == ManagedAssetReconcileMode::Apply {
+                        preserve_modified_retired_asset(
                             routines_dir,
                             "routine",
                             ManagedAssetLayout::YamlStem,
                             name,
                             &path,
-                        )?;
-                        result.warnings.push(format!(
-                            "{detail}; Orbit preserved it at '{}'",
-                            preserved.display()
-                        ));
+                        )?
                     } else {
-                        result.warnings.push(detail.clone());
-                    }
+                        retired_preservation_path(
+                            routines_dir,
+                            "routine",
+                            ManagedAssetLayout::YamlStem,
+                            name,
+                        )
+                    };
+                    retired_detail = Some(format!(
+                        "retired a prior release's routine whose only differences were operator lifecycle settings; a copy is at '{}'",
+                        preserved.display()
+                    ));
+                } else {
+                    let preserved = if mode == ManagedAssetReconcileMode::Apply {
+                        preserve_modified_retired_asset(
+                            routines_dir,
+                            "routine",
+                            ManagedAssetLayout::YamlStem,
+                            name,
+                            &path,
+                        )?
+                    } else {
+                        retired_preservation_path(
+                            routines_dir,
+                            "routine",
+                            ManagedAssetLayout::YamlStem,
+                            name,
+                        )
+                    };
+                    let detail = format!(
+                        "retired managed routine '{}' was locally modified; Orbit {} it from the active catalog and preserved it at '{}'. Review that file, then migrate it under a new user-authored name or delete it",
+                        path.display(),
+                        if mode == ManagedAssetReconcileMode::Apply {
+                            "removed"
+                        } else {
+                            "would remove"
+                        },
+                        preserved.display()
+                    );
+                    result.warnings.push(detail.clone());
                     result.actions.push(ManagedAssetAction {
                         name: name.clone(),
                         path: path.clone(),
@@ -248,7 +331,7 @@ pub(crate) fn reconcile_default_routines(
                 name: name.clone(),
                 path,
                 outcome: ManagedAssetOutcome::Retired,
-                detail: None,
+                detail: retired_detail,
             });
             result.retired += 1;
         }
@@ -282,6 +365,19 @@ pub(crate) fn reconcile_default_routines(
                 })?;
                 let existing_digest = sha256_hex(existing.as_bytes());
                 if existing_digest != provenance.rendered_digest && !overwrite_bindings {
+                    if let Some(outcome) = reconcile_lifecycle_variant(
+                        name,
+                        template,
+                        &template_digest,
+                        &path,
+                        &existing,
+                        mode,
+                        &mut result,
+                    )? {
+                        next_assets.insert((*name).to_string(), outcome.rendered_digest.clone());
+                        next_provenance.insert((*name).to_string(), outcome);
+                        continue;
+                    }
                     let detail = format!(
                         "locally modified managed routine '{}' was preserved; restore the Orbit-written bytes or move/rename the file, then rerun `orbit workspace sync`",
                         path.display()
@@ -325,6 +421,17 @@ pub(crate) fn reconcile_default_routines(
                     next_provenance.insert((*name).to_string(), provenance.clone());
                     continue;
                 }
+                // The bytes are Orbit's, but `enabled` is the operator's: an
+                // ordinary refresh must not flip an opt-in back to the
+                // template default. An overwriting seed (`--force`) is the
+                // deliberate exception — it restores the template verbatim.
+                let (rendered, rendered_digest) = if overwrite_bindings {
+                    (rendered, rendered_digest)
+                } else {
+                    let refreshed = render_refresh(name, template, &binding, &existing)?;
+                    let digest = sha256_hex(refreshed.as_bytes());
+                    (refreshed, digest)
+                };
                 if mode == ManagedAssetReconcileMode::Apply {
                     write_text_with_parent(&path, &rendered)?;
                 }
@@ -335,6 +442,16 @@ pub(crate) fn reconcile_default_routines(
                     outcome: ManagedAssetOutcome::Refreshed,
                     detail: Some("shipped routine template changed; preserved the recorded materialization binding".to_string()),
                 });
+                next_assets.insert((*name).to_string(), rendered_digest.clone());
+                next_provenance.insert(
+                    (*name).to_string(),
+                    RoutineAssetProvenance {
+                        template_digest,
+                        rendered_digest,
+                        binding,
+                    },
+                );
+                continue;
             } else {
                 if mode == ManagedAssetReconcileMode::Apply {
                     write_text_with_parent(&path, &rendered)?;
@@ -393,6 +510,19 @@ pub(crate) fn reconcile_default_routines(
                 ))
             })?;
             if sha256_hex(existing.as_bytes()) != *legacy_digest {
+                if let Some(outcome) = reconcile_lifecycle_variant(
+                    name,
+                    template,
+                    &template_digest,
+                    &path,
+                    &existing,
+                    mode,
+                    &mut result,
+                )? {
+                    next_assets.insert((*name).to_string(), outcome.rendered_digest.clone());
+                    next_provenance.insert((*name).to_string(), outcome);
+                    continue;
+                }
                 let detail = format!(
                     "legacy managed routine '{}' no longer matches Orbit's recorded digest and was preserved; restore the recorded bytes or move/rename it, then rerun `orbit workspace sync`",
                     path.display()
@@ -416,7 +546,7 @@ pub(crate) fn reconcile_default_routines(
             let binding = RoutineMaterializationBinding {
                 name: definition.name,
             };
-            let rendered = render_routine_template(name, template, &binding)?;
+            let rendered = render_refresh(name, template, &binding, &existing)?;
             let rendered_digest = sha256_hex(rendered.as_bytes());
             let changed = rendered_digest != *legacy_digest;
             if changed && mode == ManagedAssetReconcileMode::Apply {
@@ -476,6 +606,31 @@ pub(crate) fn reconcile_default_routines(
                 // disk as Orbit's own, so a later shipped-template change
                 // refreshes them onto the adopted binding; an edit made after
                 // adoption is detected and preserved as usual.
+                //
+                // A default a prior release wrote to disk without recording
+                // it — a newly shipped default seeded by a binary whose
+                // manifest write did not land — still carries the name this
+                // workspace seeds and a shape that release shipped. Adopt or
+                // refresh it rather than calling Orbit's own file a
+                // user-authored collision forever. The name is the
+                // discriminator: an operator's own routine wearing a bundled
+                // filename declares its own name and is still reported.
+                if parse_routine_yaml(&existing)
+                    .is_ok_and(|definition| definition.name == requested_binding.name)
+                    && let Some(outcome) = reconcile_lifecycle_variant(
+                        name,
+                        template,
+                        &template_digest,
+                        &path,
+                        &existing,
+                        mode,
+                        &mut result,
+                    )?
+                {
+                    next_assets.insert((*name).to_string(), outcome.rendered_digest.clone());
+                    next_provenance.insert((*name).to_string(), outcome);
+                    continue;
+                }
                 if previous.is_none()
                     && let Some(binding) = adoptable_binding(name, template, &existing)
                 {
@@ -558,6 +713,170 @@ pub(crate) fn reconcile_default_routines(
         })?;
     }
     Ok(result)
+}
+
+/// Which template family an on-disk managed routine is a lifecycle-only
+/// variant of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShippedShape {
+    /// Matches the template this Orbit ships for the stem.
+    Current,
+    /// Matches an earlier shape of a template this Orbit still ships.
+    Superseded,
+    /// Matches the last shape of a default this Orbit no longer ships.
+    Retired,
+}
+
+/// The fields a shipped template owns. `enabled` is the operator's opt-in
+/// knob, `hosts:` is a retired key operators were told to drop, and comments
+/// are not fields at all — none of them counts as a local modification.
+fn template_owned_shape(definition: &RoutineDefinition) -> RoutineDefinition {
+    RoutineDefinition {
+        enabled: false,
+        legacy_hosts: None,
+        ..definition.clone()
+    }
+}
+
+/// Which shipped template `existing` — the on-disk document for `file_stem`
+/// — differs from only in operator-owned lifecycle settings, rendered against
+/// the document's own name. `None` means the document does not parse or a
+/// template-owned field changed: a genuine local edit.
+pub(crate) fn shipped_shape_of(file_stem: &str, existing: &str) -> Option<ShippedShape> {
+    let definition = parse_routine_yaml(existing).ok()?;
+    let binding = RoutineMaterializationBinding {
+        name: definition.name.clone(),
+    };
+    let shape = template_owned_shape(&definition);
+    let matches = |templates: &[(&str, &str)]| {
+        templates
+            .iter()
+            .filter(|(stem, _)| *stem == file_stem)
+            .any(|(_, template)| {
+                render_routine_template(file_stem, template, &binding)
+                    .ok()
+                    .and_then(|rendered| parse_routine_yaml(&rendered).ok())
+                    .is_some_and(|rendered| template_owned_shape(&rendered) == shape)
+            })
+    };
+    if matches(DEFAULT_ROUTINE_FILES) {
+        Some(ShippedShape::Current)
+    } else if matches(SUPERSEDED_ROUTINE_TEMPLATES) {
+        Some(ShippedShape::Superseded)
+    } else if matches(RETIRED_ROUTINE_FILES) {
+        Some(ShippedShape::Retired)
+    } else {
+        None
+    }
+}
+
+/// Whether an on-disk managed routine is Orbit's: byte-identical to the
+/// digest the manifest recorded, or a lifecycle-only variant of a template
+/// this or a prior release shipped for `file_stem`.
+pub(crate) fn is_orbit_written_routine(
+    file_stem: &str,
+    recorded_digest: &str,
+    existing: &str,
+) -> bool {
+    sha256_hex(existing.as_bytes()) == recorded_digest
+        || shipped_shape_of(file_stem, existing).is_some()
+}
+
+/// Reconcile a tracked managed routine whose bytes no longer match its
+/// recorded digest. A lifecycle-only variant of the current template is
+/// adopted as-is; one of a superseded (or retired) template is refreshed onto
+/// the current template with the operator's `enabled` kept. Returns the
+/// provenance to record, or `None` for a genuine local edit the caller
+/// preserves.
+fn reconcile_lifecycle_variant(
+    file_stem: &str,
+    template: &str,
+    template_digest: &str,
+    path: &Path,
+    existing: &str,
+    mode: ManagedAssetReconcileMode,
+    result: &mut ManagedAssetReconciliation,
+) -> Result<Option<RoutineAssetProvenance>, OrbitError> {
+    let Some(shape) = shipped_shape_of(file_stem, existing) else {
+        return Ok(None);
+    };
+    // `shipped_shape_of` parsed the document, so this cannot fail.
+    let definition = parse_routine_yaml(existing)?;
+    let binding = RoutineMaterializationBinding {
+        name: definition.name,
+    };
+    match shape {
+        ShippedShape::Current => {
+            result.actions.push(ManagedAssetAction {
+                name: file_stem.to_string(),
+                path: path.to_path_buf(),
+                outcome: ManagedAssetOutcome::Migrated,
+                detail: Some(
+                    "adopted the operator's lifecycle settings (`enabled`, dropped `hosts:`) on an otherwise current managed routine"
+                        .to_string(),
+                ),
+            });
+            Ok(Some(RoutineAssetProvenance {
+                template_digest: template_digest.to_string(),
+                rendered_digest: sha256_hex(existing.as_bytes()),
+                binding,
+            }))
+        }
+        ShippedShape::Superseded | ShippedShape::Retired => {
+            let rendered = render_refresh(file_stem, template, &binding, existing)?;
+            if mode == ManagedAssetReconcileMode::Apply {
+                write_text_with_parent(path, &rendered)?;
+            }
+            result.refreshed += 1;
+            result.actions.push(ManagedAssetAction {
+                name: file_stem.to_string(),
+                path: path.to_path_buf(),
+                outcome: ManagedAssetOutcome::Refreshed,
+                detail: Some(
+                    "shipped routine template changed; refreshed a prior release's routine and kept its `enabled` setting"
+                        .to_string(),
+                ),
+            });
+            Ok(Some(RoutineAssetProvenance {
+                template_digest: template_digest.to_string(),
+                rendered_digest: sha256_hex(rendered.as_bytes()),
+                binding,
+            }))
+        }
+    }
+}
+
+/// Render the current template for `binding`, keeping the `enabled` choice of
+/// the on-disk document being refreshed. A document that does not parse has
+/// no choice to keep and gets the template default.
+fn render_refresh(
+    file_stem: &str,
+    template: &str,
+    binding: &RoutineMaterializationBinding,
+    existing: &str,
+) -> Result<String, OrbitError> {
+    let rendered = render_routine_template(file_stem, template, binding)?;
+    let Ok(existing) = parse_routine_yaml(existing) else {
+        return Ok(rendered);
+    };
+    let template_enabled = parse_routine_yaml(&rendered)?.enabled;
+    if existing.enabled == template_enabled {
+        return Ok(rendered);
+    }
+    let refreshed = rewrite_enabled_line(&rendered, existing.enabled)?;
+    let definition = parse_routine_yaml(&refreshed).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "default routine `{file_stem}` failed validation after keeping enabled={}: {error}",
+            existing.enabled
+        ))
+    })?;
+    if definition.enabled != existing.enabled {
+        return Err(OrbitError::InvalidInput(format!(
+            "default routine `{file_stem}` did not keep the operator's enabled={} setting",
+            existing.enabled
+        )));
+    }
+    Ok(refreshed)
 }
 
 /// Recover the materialization binding of an on-disk routine that predates

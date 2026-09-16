@@ -165,6 +165,18 @@ pub struct TaskRelationEdge {
     pub target: OrbitId,
 }
 
+/// The relation types whose edges form a reachability family, and can
+/// therefore close a cycle.
+///
+/// A caller that pre-filters stored edges before handing them to
+/// [`validate_task_relations_for_source`] — rather than passing the whole
+/// graph — must filter on this list. Anything it omits is metadata the cycle
+/// check never walks, so dropping it cannot change the verdict; anything it
+/// wrongly omitted would silently admit a cycle. `relation_families_agree`
+/// pins it against [`cyclic_relation_family`].
+pub const CYCLIC_RELATION_TYPES: &[TaskRelationType] =
+    &[TaskRelationType::BlockedBy, TaskRelationType::ChildOf];
+
 pub fn validate_task_relations_for_source(
     source_id: &str,
     relations: &[TaskRelation],
@@ -518,12 +530,14 @@ fn validate_schema_version(schema_version: u32, label: &str) -> Result<(), TaskE
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RelationCycleFamily {
+pub(crate) enum RelationCycleFamily {
     Blocking,
     Hierarchy,
 }
 
-fn cyclic_relation_family(relation_type: TaskRelationType) -> Option<RelationCycleFamily> {
+pub(crate) fn cyclic_relation_family(
+    relation_type: TaskRelationType,
+) -> Option<RelationCycleFamily> {
     match relation_type {
         TaskRelationType::BlockedBy => Some(RelationCycleFamily::Blocking),
         TaskRelationType::ChildOf => Some(RelationCycleFamily::Hierarchy),

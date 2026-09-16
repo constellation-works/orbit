@@ -19,12 +19,20 @@ pub trait Embedder: Send + Sync {
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, OrbitError>;
     fn token_count(&self, text: &str) -> Result<usize, OrbitError>;
 
+    /// Count several independent texts in one backend operation.
+    ///
+    /// In-process embedders may use the scalar fallback. Subprocess-backed
+    /// implementations override this method so callers pay for one RPC.
+    fn token_counts(&self, texts: &[&str]) -> Result<Vec<usize>, OrbitError> {
+        texts.iter().map(|text| self.token_count(text)).collect()
+    }
+
     /// Byte positions immediately after each model token in `text`.
     ///
     /// Chunking uses these positions to select likely boundaries without
     /// treating independent token counts as additive. Callers still validate
-    /// every emitted chunk with `token_count` because model tokenization may
-    /// depend on the text surrounding a boundary.
+    /// each preferred emitted chunk once with `token_count` because model
+    /// tokenization may depend on the text surrounding a boundary.
     fn token_boundaries(&self, text: &str) -> Result<Vec<usize>, OrbitError>;
 }
 

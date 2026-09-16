@@ -27,13 +27,16 @@ pub use clock::{
     install_clock, load_clock_settings, save_clock_settings, set_clock_cadence, set_clock_enabled,
 };
 pub use clock_unit::{
-    ClockUnitInspection, ClockUnitVerdict, RunningBinary, inspect_clock_unit, probe_program_version,
+    ClockUnitConvergence, ClockUnitDrift, ClockUnitInspection, ClockUnitRewrite, ClockUnitVerdict,
+    RunningBinary, clock_unit_drift_warning, converge_clock_unit, inspect_clock_unit,
+    probe_program_version,
 };
 pub use due::{DueDecision, due_decision, parse_cron};
 pub use loader::{
     DiscoveredWorkspaces, LoadedRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin,
     RoutineWorkspaceProvider, collect_routines,
 };
+pub(crate) use status::rewrite_enabled_line;
 pub use status::{
     RoutineStatus, RoutineStatusReport, RoutineToggleOutcome, ScheduleDisplayState, pause_routine,
     recent_fires, resume_routine, routine_statuses_with_providers, set_routine_enabled,

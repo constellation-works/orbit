@@ -1214,6 +1214,147 @@ fn task_update_in_progress_outcome_does_not_depend_on_extra_fields() {
     );
 }
 
+/// A start from `proposed` is an approval followed by a start, and the
+/// history must chain that way: `proposal_approved (proposed → backlog)` then
+/// `started (backlog → in_progress)`. The plan supplied on that same write is
+/// attributed to the supplied agent family, as the worker path does.
+#[test]
+fn task_update_start_from_proposed_chains_history_edges_and_attributes_plan() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let proposed = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Proposed start provenance".to_string(),
+            description: "Plan arrives on the start write.".to_string(),
+            ..Default::default()
+        })
+        .expect("add proposed task without a plan");
+    assert_eq!(proposed.planned_by, None);
+
+    let started = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": proposed.id,
+                "status": "in-progress",
+                "plan": "Probe gates, then reject.",
+                "model": "claude",
+                "note": "approved on pickup",
+            }),
+            None,
+            None,
+        )
+        .expect("proposed start with a plan succeeds");
+    assert_eq!(started["status"], "in-progress");
+    assert_eq!(
+        started["planned_by"].as_str(),
+        Some("claude"),
+        "a plan written on the start write is attributed to the supplied model family: {started}"
+    );
+
+    let history = started["history"].as_array().expect("history array");
+    let lifecycle = history
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry["event"].as_str(),
+                Some("proposal_approved" | "started")
+            )
+        })
+        .map(|entry| {
+            (
+                entry["event"].as_str().unwrap_or_default().to_string(),
+                entry["from_status"].as_str().map(str::to_string),
+                entry["to_status"].as_str().map(str::to_string),
+                entry["note"].as_str().map(str::to_string),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lifecycle,
+        vec![
+            (
+                "proposal_approved".to_string(),
+                Some("proposed".to_string()),
+                Some("backlog".to_string()),
+                Some("approved on pickup".to_string()),
+            ),
+            (
+                "started".to_string(),
+                Some("backlog".to_string()),
+                Some("in_progress".to_string()),
+                None,
+            ),
+        ],
+        "history must replay as proposed → backlog → in_progress: {started}"
+    );
+}
+
+/// The start write only infers `planned_by`; an existing planner and an
+/// explicit override both win over the supplied model.
+#[test]
+fn task_update_start_keeps_existing_and_explicit_planned_by() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let planned = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Already planned".to_string(),
+            description: "Planner recorded at creation.".to_string(),
+            plan: "Original plan.".to_string(),
+            ..Default::default()
+        })
+        .expect("add planned task");
+    let original_planner = planned
+        .planned_by
+        .clone()
+        .expect("a plan at creation records its planner");
+
+    let started = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": planned.id,
+                "status": "in-progress",
+                "plan": "Revised on pickup.",
+                "model": "claude",
+            }),
+            None,
+            None,
+        )
+        .expect("start with a revised plan succeeds");
+    assert_eq!(started["plan"], "Revised on pickup.");
+    assert_eq!(
+        started["planned_by"].as_str(),
+        Some(original_planner.as_str()),
+        "an existing planner is not overwritten by the start write: {started}"
+    );
+
+    let unplanned = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Explicit planner".to_string(),
+            description: "Caller names the planner.".to_string(),
+            ..Default::default()
+        })
+        .expect("add unplanned task");
+    let started = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": unplanned.id,
+                "status": "in-progress",
+                "plan": "Plan from a human.",
+                "planned_by": "manual-planner",
+                "model": "claude",
+            }),
+            None,
+            None,
+        )
+        .expect("start with an explicit planner succeeds");
+    assert_eq!(
+        started["planned_by"].as_str(),
+        Some("manual-planner"),
+        "an explicit planned_by wins over inference: {started}"
+    );
+}
+
 /// ORB-12474: the guarded start body must pass field edits through the same
 /// dependency validator as an ordinary update before either reaches storage.
 #[test]

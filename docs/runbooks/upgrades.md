@@ -54,9 +54,23 @@ orbit update --json               # machine-readable report
    an explicit `--root` remains authoritative even when `ORBIT_ROOT` names another workspace.
    Only the new binary carries the migrations and managed asset definitions for the version
    being installed.
+8. Run `orbit clock repair`, again as the newly installed binary. The launchd/systemd sweep
+   unit embeds an absolute program path, so an install that lands somewhere else — Homebrew
+   to `~/.orbit/bin`, say — leaves the unit invoking a binary that may no longer exist. The
+   step rewrites the unit to the installed binary and re-registers it, and the update report
+   carries the line it printed. A unit that already names this binary is left untouched; a
+   paused clock is corrected on disk but not resumed.
 
 Migration runs before managed-asset sync because a layout migration can move the directories
-those assets live in.
+those assets live in. The clock unit is converged last, and only after the workspace steps
+succeed: a clock re-armed against a half-migrated workspace would just fail every minute.
+Unlike the first two, it is host state, so it runs even outside an initialized workspace.
+
+`install.sh` runs the same `orbit clock repair` after it installs the binary, so a host that
+moves between install locations (Homebrew or `cargo install` to `~/.orbit/bin`) does not need
+`orbit update` to notice. A binary installed by a package manager that runs neither — `brew
+upgrade`, `cargo install` — still needs one `orbit clock repair` by hand; `orbit doctor`'s
+`clock-unit` row and a hand-run `orbit sweep` both name it.
 
 Everything before the swap fails with nothing changed. After the swap the command never
 reports success on an incomplete upgrade: it exits `4` with `outcome: needs_recovery` and
@@ -65,9 +79,10 @@ names the step that failed.
 ### Recovery and resumption
 
 Re-running `orbit update` is the resume. At the installed version it skips the replacement and
-re-runs the same idempotent convergence steps, so a run that failed at `migrate --confirm` or
-`workspace sync` is finished by running it again — or by running that one command directly and
-reading its diagnostics. When `--root` or `ORBIT_ROOT` selected the workspace, recovery output
+re-runs the same idempotent convergence steps, so a run that failed at `migrate --confirm`,
+`workspace sync`, or `clock repair` is finished by running it again — or by running that one
+command directly and reading its diagnostics. `clock repair` fails when the unit manager
+refuses to reload the rewritten unit; it names the `launchctl`/`systemctl` command to run. When `--root` or `ORBIT_ROOT` selected the workspace, recovery output
 includes that root explicitly, so retrying from a different checkout does not silently switch the
 workspace being repaired.
 
@@ -355,8 +370,12 @@ a package manager owns the binary, and run steps 2–5 in every other registered
    then `orbit migrate --confirm` to apply them.
 3. Run `orbit workspace sync` to apply the provenance-safe managed-artifact actions. Operator
    edits, user-authored name collisions, and existing routine `name`/`hosts` bindings are
-   preserved and reported with their paths. `orbit workspace sync --check` reviews the same
-   actions read-only and exits nonzero when managed artifacts need convergence.
+   preserved and reported with their paths. A routine that differs from a template a prior
+   release shipped only in the settings Orbit's own surfaces change — `enabled`, the retired
+   `hosts:` key — is not an operator edit: it retires or refreshes (keeping its `enabled`
+   setting) so the upgrade converges without moving files by hand. `orbit workspace sync
+   --check` reviews the same actions read-only and exits nonzero when managed artifacts need
+   convergence.
 4. Run `orbit doctor` and require all relevant checks to pass.
 5. Restart any independently managed dashboard process after swapping the binary.
 

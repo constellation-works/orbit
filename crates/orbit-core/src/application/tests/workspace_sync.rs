@@ -175,10 +175,16 @@ fn legacy_routine_manifest_check_is_read_only_and_apply_migrates_only_exact_inst
         serde_json::to_string_pretty(&manifest).expect("serialize legacy manifest")
     );
     std::fs::write(&manifest_path, &legacy).expect("write legacy manifest");
+    // An edit to a field the shipped template owns. Lifecycle settings
+    // (`enabled`, the retired `hosts:` key) are deliberately *not* local
+    // edits [DANI-10392], so the fixture changes the cadence instead.
     let modified = workspace.join("routines/task_triage.yaml");
-    let edited = format!(
-        "{}# operator edit\n",
-        std::fs::read_to_string(&modified).expect("read routine")
+    let edited = std::fs::read_to_string(&modified)
+        .expect("read routine")
+        .replace(r#"cron: "15 * * * *""#, r#"cron: "*/5 * * * *""#);
+    assert!(
+        edited.contains(r#"cron: "*/5 * * * *""#),
+        "fixture must change a template-owned field"
     );
     std::fs::write(&modified, &edited).expect("edit one legacy routine");
 

@@ -480,6 +480,7 @@ impl Commands {
                     ClockSubcommand::Status => "status",
                     ClockSubcommand::Pause => "pause",
                     ClockSubcommand::Enable => "enable",
+                    ClockSubcommand::Repair => "repair",
                     ClockSubcommand::Set { .. } => "set",
                     ClockSubcommand::Tick(_) => "tick",
                 };

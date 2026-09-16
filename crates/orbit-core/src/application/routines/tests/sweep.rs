@@ -541,3 +541,78 @@ fn one_tick_fires_a_routine_and_auto_task_and_isolates_another_workspace_error()
         "the only jrun belongs to the due routine"
     );
 }
+
+/// Criterion: a clock tick over a workspace still carrying a retired default
+/// prints no load error. Before [DANI-10392] this row was a load error on
+/// every pass, so `orbit sweep` and `orbit routine list` spammed it in every
+/// upgraded workspace. It is a non-noteworthy `retired` report row instead,
+/// and it never dispatches.
+#[test]
+fn tick_reports_a_retired_default_as_skipped_rather_than_a_load_error() {
+    let _tz = orbit_common::test_env::unset(["TZ"]);
+    let root = tempfile::tempdir().expect("root");
+    let global = root.path().join("global");
+    let orbit_dir = root.path().join("upgraded/.orbit");
+    std::fs::create_dir_all(orbit_dir.join("routines")).expect("routines dir");
+    std::fs::create_dir_all(global.join("resources/jobs")).expect("global jobs dir");
+    std::fs::write(global.join("resources/jobs/noop.yaml"), NOOP_JOB).expect("job");
+    // Exactly what an earlier release seeded, opted in and with the retired
+    // `hosts:` key dropped; this Orbit ships no such job.
+    std::fs::write(
+        orbit_dir.join("routines/auto_task_scheduler.yaml"),
+        "schemaVersion: 1\nname: auto-task-scheduler-upgraded\nenabled: true\n\
+         trigger:\n  cron: '* * * * *'\n  missed_run: skip\n\
+         target: job:auto_task_scheduler_pipeline\n\
+         policy:\n  timeout_minutes: 30\n  overlap: forbid\n",
+    )
+    .expect("retired routine");
+    let runtime = crate::OrbitRuntime::from_roots(&global, &orbit_dir).expect("runtime");
+    let provider = FixedWorkspaces {
+        entries: vec![(workspace("ws-upgraded", "upgraded"), runtime.clone())],
+    };
+
+    let outcome = run_sweep_at_with_providers_at(
+        &global,
+        SweepOptions::default(),
+        host(),
+        &provider,
+        Utc.with_ymd_and_hms(2026, 9, 15, 7, 0, 0)
+            .single()
+            .expect("time"),
+    )
+    .expect("tick");
+
+    assert!(
+        outcome.load_errors.is_empty(),
+        "a retired default must not be a load error: {:?}",
+        outcome
+            .load_errors
+            .iter()
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>()
+    );
+    let row = outcome
+        .reports
+        .iter()
+        .find(|report| report.routine == "auto-task-scheduler-upgraded")
+        .expect("the retired definition is reported");
+    assert_eq!(row.action, "retired");
+    assert_eq!(row.source, "upgraded");
+    assert!(
+        row.run_id.is_none(),
+        "a retired definition never dispatches"
+    );
+    assert!(
+        row.reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("orbit workspace sync")),
+        "{:?}",
+        row.reason
+    );
+    assert!(
+        runtime
+            .list_job_runs(JobRunListParams::default())
+            .expect("job runs")
+            .is_empty()
+    );
+}

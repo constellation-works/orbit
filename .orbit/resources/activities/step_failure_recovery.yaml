@@ -204,6 +204,18 @@ spec:
        sync, push, PR open/reuse, and PR promotion steps. The pipeline, not you,
        moves the task to review in this path.
 
+       Unresolved merge or rebase conflicts in the assigned worktree are a
+       repair you make, not a reason to stop: resolve every unmerged path,
+       preserving both the candidate intent and the base changes, against the
+       current tip of the target base. A base that advanced past a recorded
+       checkpoint (`base_sha`, `target_base_sha`) is expected on a busy
+       integration branch and is never by itself a stop condition; a red
+       `make ci-fast`/`make ci-lint` on paths you did not touch is baseline
+       state to report, not evidence against the resolution. The checks that
+       do stop you are the identity ones: the run is cancelled, a claimed
+       task refuses writes, or the checked-out branch / pre-rewrite HEAD does
+       not match the failed step's checkpoint.
+
     5. For an already-terminal source run, prefer repair-and-resume over direct
        delivery when the checkpointed remaining steps can run. Never resume the
        still-live run that is waiting for this activity to return. Repair the
@@ -220,8 +232,9 @@ spec:
        - verify the candidate tree still matches the completed implementation;
        - commit with the implementing crew's author identity and the
          process-scoped Orbit committer identity;
-       - resolve the target base to one exact SHA and keep that SHA pinned while
-         rebasing, then push the task branch;
+       - resolve the target base to its current tip as one exact SHA, keep
+         that SHA pinned while rebasing, and resolve any conflicts the rebase
+         raises rather than abandoning delivery, then push the task branch;
        - open or reuse a PR against the intended base, then confirm by query
          that the PR exists; and
        - only after that confirmation, move every candidate task to review.

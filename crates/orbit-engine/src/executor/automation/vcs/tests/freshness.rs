@@ -51,11 +51,17 @@ fn rebase_input(common: &serde_json::Value, prepared: &serde_json::Value) -> ser
 }
 
 fn advance_base(workspace_repo: &std::path::Path) {
+    advance_base_with(workspace_repo, "BASE_ADVANCE.md");
+}
+
+fn advance_base_with(workspace_repo: &std::path::Path, file: &str) -> String {
     git(workspace_repo, &["checkout", "agent-main"]);
-    fs::write(workspace_repo.join("BASE_ADVANCE.md"), "new base\n").unwrap();
-    git(workspace_repo, &["add", "BASE_ADVANCE.md"]);
+    fs::write(workspace_repo.join(file), "new base\n").unwrap();
+    git(workspace_repo, &["add", file]);
     git(workspace_repo, &["commit", "-m", "advance base"]);
+    let advanced = git(workspace_repo, &["rev-parse", "HEAD"]);
     git(workspace_repo, &["checkout", "orbit/test-batch"]);
+    advanced
 }
 
 #[cfg(unix)]
@@ -575,6 +581,77 @@ fn certified_but_mismatched_recovery_checkpoint_remains_refused() {
             .contains("does not match the prepared rewrite checkpoint"),
         "{error}"
     );
+}
+
+// DANI-10439: conflict recovery continues the stopped rebase at the prepared
+// pin and then lands the candidate on the base tip that advanced past it. The
+// retry carries the stale pin, recognizes the certified checkpoint by that
+// pin, and judges freshness against the base the host actually landed on.
+#[test]
+fn certified_recovery_landed_on_an_advanced_base_is_reused_against_that_base() {
+    let workspace = pr_workspace();
+    advance_base(&workspace.repo);
+    let task_id = "DANI-10439-ADVANCED";
+    let host = PrOpenTestHost::new(
+        vec![batch_task(
+            task_id,
+            "Recovery followed the advanced base",
+            "Outcome: success\nChanges:\n- Candidate is complete.",
+        )],
+        workspace.repo.clone(),
+    );
+    let common = json!({
+        "workspace_path": workspace.repo,
+        "job_run_id": "batch-1",
+        "completed_task_ids": [task_id],
+        "base": "agent-main",
+        "base_sync": "local",
+    });
+    let prepared = prepare_pr_handoff(&host, &common).expect("prepare");
+    assert_eq!(prepared["sync_required"], json!(true));
+    let pinned = prepared["base_sha"].as_str().unwrap().to_string();
+
+    // The host continued the stopped rebase at the pin, then followed the
+    // base that advanced while the leaf ran.
+    git(&workspace.repo, &["rebase", "agent-main"]);
+    let advanced = advance_base_with(&workspace.repo, "BASE_ADVANCE_AGAIN.md");
+    git(&workspace.repo, &["rebase", "agent-main"]);
+    let landed_head = git(&workspace.repo, &["rev-parse", "HEAD"]);
+    let mut checkpoint =
+        uncertified_recovery_checkpoint(task_id, &workspace.repo, &prepared, &landed_head);
+    checkpoint["target_base_sha"] = json!(pinned);
+    checkpoint["base_sha"] = json!(advanced);
+    write_sync_base_checkpoint(&host, checkpoint.clone());
+    host.certify_recovery("batch-1", "sync_base", &checkpoint);
+
+    let synced = rebase_pr_branch(&host, &rebase_input(&common, &prepared))
+        .expect("the retry reuses the recovery landed on the advanced base");
+    assert_eq!(synced["decision"], json!("reused_recovery"));
+    assert_eq!(synced["rewritten"], json!(true));
+    assert_eq!(synced["head_sha"], json!(landed_head));
+    assert_eq!(synced["head_sha_before"], prepared["head_sha"]);
+    assert_eq!(
+        synced["base_sha"],
+        json!(advanced),
+        "downstream steps consume the base the candidate actually sits on"
+    );
+    assert_eq!(git(&workspace.repo, &["rev-parse", "HEAD"]), landed_head);
+
+    // A base that moved on again after the host landed the candidate is still
+    // the ordinary stale-pin refusal; recovery evidence does not chase it.
+    let moved_again = advance_base_with(&workspace.repo, "BASE_ADVANCE_THIRD.md");
+    let error = rebase_pr_branch(&host, &rebase_input(&common, &prepared))
+        .expect_err("a further advance is not covered by the checkpoint");
+    let message = error.to_string();
+    assert!(
+        message.contains("refusing to lose concurrent base changes"),
+        "{message}"
+    );
+    assert!(
+        message.contains(&advanced) && message.contains(&moved_again),
+        "{message}"
+    );
+    assert_eq!(git(&workspace.repo, &["rev-parse", "HEAD"]), landed_head);
 }
 
 #[test]

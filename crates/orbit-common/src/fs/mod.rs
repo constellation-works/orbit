@@ -2,6 +2,7 @@ pub mod cwd;
 pub mod file_lock;
 pub mod git;
 pub mod io;
+pub mod overlap_index;
 pub mod path;
 pub mod selector;
 pub mod task_io;

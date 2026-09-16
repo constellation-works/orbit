@@ -24,7 +24,9 @@ use super::pagination::TaskPageQuery;
 use super::{
     bad_request, blocking, map_runtime_error, non_empty_string, server_error, validate_id,
 };
-use crate::projections::{task_locks_json, task_row_to_json, task_to_json_with_sidecars};
+use crate::projections::{
+    TaskListProjection, task_locks_json, task_row_to_json, task_to_json_with_sidecars,
+};
 
 /// Actor recorded for a dashboard-authored comment when the request supplies no
 /// usable human identity. The dashboard is a human-operated surface, so this is
@@ -333,10 +335,19 @@ where
 /// ## Response contract (ORB-10400, consumed by bridge ORB-10398)
 ///
 /// ```json
-/// { "items": [ /* task objects, newest first */ ],
+/// { "items": [ /* task summary rows, newest first */ ],
 ///   "total": 137, "limit": 50, "truncated": true,
 ///   "offset": 0, "next_cursor": "..." }
 /// ```
+///
+/// Each item is a *summary* row (`"projection": "summary"`): the task's
+/// scalar and short-list fields, `comment_count` / `history_count` /
+/// `artifact_count` in place of the comment, history and artifact bodies, no
+/// `description` / `plan` / `execution_summary` / `acceptance_criteria`, the
+/// governed `status_transitions` without their `required_field`, and a
+/// `resolved_crew` read from the crew registry alone. `GET /api/tasks/:id`
+/// serves the full projection (DANI-10391; see
+/// [`TaskListProjection`]).
 ///
 /// **Every predicate is applied before the limit**, so `items` holds the newest
 /// *matching* tasks — a match older than the newest `limit` unfiltered tasks is
@@ -386,10 +397,11 @@ fn task_list_page_json(
         ..Default::default()
     })?;
     let status_by_id = page.status_by_id;
+    let projection = TaskListProjection::new(runtime);
     let items = page
         .items
         .iter()
-        .map(|row| task_row_to_json(runtime, row, &status_by_id))
+        .map(|row| projection.row_to_json(row, &status_by_id))
         .collect::<Result<Vec<_>, _>>()?;
     let offset = query.offset();
     let next_offset = offset.saturating_add(items.len());

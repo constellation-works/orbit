@@ -5,12 +5,16 @@
 //! update lock, re-read the installed version (resolving a replaced Linux
 //! inode back to the live path), then stage and authenticate the archive,
 //! swap it in atomically, confirm the new executable reports the version
-//! that was asked for, then let *that* executable migrate `.orbit/` state
-//! and reconcile managed assets.
+//! that was asked for, then let *that* executable migrate `.orbit/` state,
+//! reconcile managed assets, and repoint the host clock unit.
 //!
 //! Migration runs before managed-asset sync because a layout migration can
 //! move the directories those assets live in; converging assets first would
-//! write them into the shape the upgrade is about to leave behind.
+//! write them into the shape the upgrade is about to leave behind. The clock
+//! unit is converged last because it is host state rather than workspace
+//! state: it is the one step that still runs outside a workspace, and
+//! re-arming it against a workspace whose migration failed would only produce
+//! a failing sweep every minute.
 //!
 //! Every stage before the swap fails with nothing changed. After the swap the
 //! rule inverts: `.orbit/` may already be partly migrated, so recovery is
@@ -33,7 +37,7 @@ use serde::Serialize;
 
 use crate::registry_runtime::RegisteredRuntimeFactory;
 use channel::InstallChannel;
-use converge::{ConvergenceStep, run_step};
+use converge::{ConvergenceStep, run_reporting_step, run_step};
 use lock::UpdateLock;
 use source::{ReleaseSource, release_source_from_env};
 use stage::{restore_backup, stage_release};
@@ -386,8 +390,20 @@ fn finish(
     report
 }
 
-/// Migrate `.orbit/` state, then reconcile managed assets — in that order.
+/// The host-wide step that keeps the OS clock unit naming the installed
+/// binary. Runs last, and as the replacement executable, so the unit it writes
+/// names the binary this update just installed.
+const CLOCK_STEP: &[&str] = &["clock", "repair"];
+
+/// Migrate `.orbit/` state, reconcile managed assets, then repoint the host
+/// clock unit — in that order.
 fn converge_workspace(environment: &UpdateEnvironment, executable: &Path) -> Vec<ConvergenceStep> {
+    let mut steps = workspace_steps(environment, executable);
+    steps.push(clock_step(environment, executable, &steps));
+    steps
+}
+
+fn workspace_steps(environment: &UpdateEnvironment, executable: &Path) -> Vec<ConvergenceStep> {
     const STEPS: [&[&str]; 2] = [&["migrate", "--confirm"], &["workspace", "sync"]];
     let Some(workspace) = environment.workspace.as_ref() else {
         return STEPS
@@ -419,6 +435,46 @@ fn converge_workspace(environment: &UpdateEnvironment, executable: &Path) -> Vec
         }
     }
     steps
+}
+
+/// Repoint the installed clock unit at the replacement executable.
+///
+/// The unit embeds an absolute program path, so an install at a new location —
+/// Homebrew to `~/.orbit/bin`, say — leaves launchd or systemd invoking a
+/// binary that may no longer exist. Nothing else rewrites it, and a unit whose
+/// program is gone stops sweeping silently, so convergence owns it. The step is
+/// host-wide: it runs whether or not this directory is an Orbit workspace.
+fn clock_step(
+    environment: &UpdateEnvironment,
+    executable: &Path,
+    earlier: &[ConvergenceStep],
+) -> ConvergenceStep {
+    let command = CLOCK_STEP.join(" ");
+    if earlier.iter().any(ConvergenceStep::failed) {
+        return ConvergenceStep::skipped(
+            &command,
+            "an earlier convergence step failed; re-run `orbit update` once it succeeds",
+        );
+    }
+    let workspace = environment.workspace.as_ref();
+    let cwd = match workspace.map(|workspace| workspace.cwd.clone()) {
+        Some(cwd) => cwd,
+        None => match std::env::current_dir() {
+            Ok(cwd) => cwd,
+            Err(error) => {
+                return ConvergenceStep::skipped(
+                    &command,
+                    &format!("could not resolve the current directory: {error}"),
+                );
+            }
+        },
+    };
+    run_reporting_step(
+        executable,
+        &cwd,
+        workspace.and_then(|workspace| workspace.root_argument.as_deref()),
+        CLOCK_STEP,
+    )
 }
 
 fn recovery_text(report: &UpdateReport, failed: &[&str], root_argument: Option<&Path>) -> String {

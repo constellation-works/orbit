@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub enum RpcRequest {
     Info { id: u64 },
     Embed { id: u64, texts: Vec<String> },
-    TokenCount { id: u64, text: String },
+    TokenCount { id: u64, texts: Vec<String> },
     TokenBoundaries { id: u64, text: String },
     Exit { id: u64 },
 }
@@ -78,7 +78,7 @@ pub enum RpcResult {
         vectors: Vec<Vec<f32>>,
     },
     TokenCount {
-        tokens: usize,
+        tokens: Vec<usize>,
     },
     TokenBoundaries {
         ends: Vec<usize>,

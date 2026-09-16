@@ -4,14 +4,14 @@
 //! (only bumped upward).
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use orbit_common::OrbitError;
 use orbit_common::fs::io::with_exclusive_file_lock;
-use orbit_types::task::{TaskEnvelopeV2, is_valid_orb_task_id};
+use orbit_common::OrbitError;
+use orbit_types::task::{is_valid_orb_task_id, TaskEnvelopeV2};
 
 use crate::driver::file::task_bundle::{bundle_lock_target, recover_pending_bundle_at};
-use crate::driver::sqlite::task_registry::{TaskRegistryStore, parse_orb_task_number};
+use crate::driver::sqlite::task_registry::{parse_orb_task_number, TaskRegistryStore};
 use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 
 /// Result of [`reindex_workspace`].
@@ -51,39 +51,56 @@ pub fn reindex_workspace(
     }
     let store = TaskBundleStoreV2::new(registry.clone(), workspace_id.clone());
     let mut removed_stale = 0;
-    let mut readable: Vec<(String, PathBuf)> = Vec::new();
-    let mut envelopes: Vec<TaskEnvelopeV2> = Vec::new();
+    let mut snapshots: Vec<(String, PathBuf)> = Vec::new();
     let mut failures = Vec::new();
     for task_id in &candidates {
         let dir = registry.canonical_task_bundle_path(&workspace_id, task_id)?;
-        // Deletion recovery, the existence check and the authoritative read all
+        // Deletion recovery, the existence check and the first settled read
         // stay under the bundle lock: dropping a binding whose directory
-        // vanished must not race a creator publishing the same id, and the
-        // envelope this run indexes must be a settled one. Only the registry
-        // writes for the healthy set are lifted out and batched below.
-        let result = with_exclusive_file_lock(&bundle_lock_target(&dir), "task reindex", || {
-            if store.recover_deletion(task_id)? {
-                removed_stale += 1;
-                return Ok(None);
-            }
-            if !dir.try_exists()? {
-                if registry.unregister_task_bundle(task_id, &workspace_id)? {
-                    removed_stale += 1;
-                }
-                return Ok(None);
-            }
-            Ok::<Option<TaskEnvelopeV2>, OrbitError>(Some(
-                recover_pending_bundle_at(&dir)?.envelope,
-            ))
-        });
-        match result {
-            Ok(Some(envelope)) => {
-                readable.push((task_id.clone(), dir));
-                envelopes.push(envelope);
-            }
+        // vanished must not race a creator publishing the same id. The
+        // envelope collected here is *not* what gets indexed — a concurrent
+        // update or delete can land after this lock is dropped.
+        match inspect_candidate(
+            &store,
+            registry,
+            &workspace_id,
+            task_id,
+            &dir,
+            &mut removed_stale,
+        ) {
+            Ok(Some(_)) => snapshots.push((task_id.clone(), dir)),
             Ok(None) => {}
             // Keep unresolved bytes AND any authoritative binding/index. A
             // healthy neighbor still gets repaired, but this run cannot succeed.
+            Err(error) => failures.push(format!("{task_id}: {error}")),
+        }
+    }
+
+    // Tests inject an update or delete in this window, matching a concurrent
+    // writer that ran after the first read and before the batch.
+    #[cfg(test)]
+    run_after_snapshot_hook();
+
+    // Re-check under each bundle lock immediately before the batch. Include
+    // only the envelope just read from disk; drop tasks whose directory
+    // vanished or whose deletion published. A changed `updated_at` is the
+    // current envelope, never the first-pass snapshot.
+    let mut readable: Vec<(String, PathBuf)> = Vec::new();
+    let mut envelopes: Vec<TaskEnvelopeV2> = Vec::new();
+    for (task_id, dir) in snapshots {
+        match inspect_candidate(
+            &store,
+            registry,
+            &workspace_id,
+            &task_id,
+            &dir,
+            &mut removed_stale,
+        ) {
+            Ok(Some(envelope)) => {
+                readable.push((task_id, dir));
+                envelopes.push(envelope);
+            }
+            Ok(None) => {}
             Err(error) => failures.push(format!("{task_id}: {error}")),
         }
     }
@@ -142,9 +159,59 @@ fn index_healthy_set(
     indexed
 }
 
+/// Recover a published deletion or vanished directory, then read a settled
+/// envelope. `None` means the task must not join the registry batch.
+fn inspect_candidate(
+    store: &TaskBundleStoreV2,
+    registry: &TaskRegistryStore,
+    workspace_id: &str,
+    task_id: &str,
+    dir: &Path,
+    removed_stale: &mut usize,
+) -> Result<Option<TaskEnvelopeV2>, OrbitError> {
+    with_exclusive_file_lock(&bundle_lock_target(dir), "task reindex", || {
+        if store.recover_deletion(task_id)? {
+            *removed_stale += 1;
+            return Ok(None);
+        }
+        if !dir.try_exists()? {
+            if registry.unregister_task_bundle(task_id, workspace_id)? {
+                *removed_stale += 1;
+            }
+            return Ok(None);
+        }
+        Ok(Some(recover_pending_bundle_at(dir)?.envelope))
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_SNAPSHOT: std::cell::RefCell<Option<Box<dyn FnOnce() + 'static>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Install a one-shot callback that runs after the first envelope pass and
+/// immediately before the freshness re-check that builds the registry batch.
+#[cfg(test)]
+pub(crate) fn set_after_reindex_snapshot_hook(hook: impl FnOnce() + 'static) {
+    AFTER_SNAPSHOT.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+pub(crate) fn clear_after_reindex_snapshot_hook() {
+    AFTER_SNAPSHOT.with(|cell| cell.borrow_mut().take());
+}
+
+#[cfg(test)]
+fn run_after_snapshot_hook() {
+    if let Some(hook) = AFTER_SNAPSHOT.with(|cell| cell.borrow_mut().take()) {
+        hook();
+    }
+}
+
 /// Candidate IDs include tombstones and malformed non-directory entries, so
 /// reindex reports unresolved data rather than treating it as an absent bundle.
-fn on_disk_task_ids(workspace_dir: &std::path::Path) -> Result<BTreeSet<String>, OrbitError> {
+fn on_disk_task_ids(workspace_dir: &Path) -> Result<BTreeSet<String>, OrbitError> {
     let mut ids = BTreeSet::new();
     let entries = match std::fs::read_dir(workspace_dir) {
         Ok(entries) => entries,

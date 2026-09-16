@@ -17,7 +17,7 @@ use orbit_store::contracts::{
 };
 use orbit_store::maintenance::task_registry::read_workspace_config_optional;
 use orbit_tools::ReservationOwnerContext;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{Task, TaskEnvelopeV2, TaskRelationType, TaskStatus};
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 
@@ -35,32 +35,13 @@ pub(crate) fn list(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
         .list_active_task_reservations(&workspace_orbit_dir(runtime), workspace_id.as_deref())?;
     emit_expired_reservation_events(runtime, &reservation_result.expired_reservations)?;
 
-    let index = TaskLockIndex::from_tasks(runtime.list_tasks()?);
-    let mut tasks: Vec<&Task> = index
-        .tasks()
-        .filter(|task| matches!(task.status, TaskStatus::InProgress | TaskStatus::Review))
-        .collect();
-    tasks.sort_by_key(|task| {
-        (
-            task_lock_status_rank(task.status),
-            task.created_at,
-            task.id.clone(),
-        )
-    });
-
     // Expand each task's lock surface once and reuse it for both projections
     // below. The expansion prunes every declared selector against the
     // filesystem and, for an epic root, unions the surface of every
     // descendant — so computing it per projection doubled the syscalls and the
     // descendant walk for a listing that has a single answer.
     let repo_root = runtime.paths().repo_root.as_path();
-    let locked_surfaces: Vec<(Task, Vec<String>)> = tasks
-        .into_iter()
-        .map(|task| {
-            let files = index.lock_context_files(task, repo_root);
-            (task.clone(), files)
-        })
-        .collect();
+    let locked_surfaces = TaskLockIndex::load(runtime, &[])?.into_active_lock_surfaces(repo_root);
 
     let locked_files: BTreeSet<String> = locked_surfaces
         .iter()
@@ -206,7 +187,11 @@ pub(crate) fn reserve(
     model: Option<String>,
     reservation_owner: Option<ReservationOwnerContext>,
 ) -> Result<Value, OrbitError> {
-    let index = TaskLockIndex::load(runtime)?;
+    let requested_task_ids = match parse_task_lock_reservation_scope(&input)? {
+        TaskLockReservationScope::TaskIds(task_ids) => task_ids,
+        TaskLockReservationScope::Files(_) => Vec::new(),
+    };
+    let index = TaskLockIndex::load(runtime, &requested_task_ids)?;
     reserve_with_index(
         runtime,
         input,
@@ -554,29 +539,73 @@ fn task_is_descendant_of(
     false
 }
 
-/// The task store indexed for lock-surface expansion: the id lookup plus,
-/// for each epic root, every task below it. One operation builds it once; a
-/// reserve that inspects forty active tasks then expands forty surfaces
-/// without re-reading the store or re-walking every task's parent chain for
-/// each epic it meets.
+/// Envelope metadata indexed for lock-surface expansion: active tasks,
+/// explicitly requested tasks, their ancestors, and the descendants of any
+/// active or requested epic root. One operation builds it once without
+/// hydrating task bodies or sidecars; repeated surface expansion then reuses
+/// the precomputed epic families.
 pub(crate) struct TaskLockIndex {
-    tasks: BTreeMap<String, Task>,
+    tasks: BTreeMap<String, TaskEnvelopeV2>,
     epic_descendants: BTreeMap<String, Vec<String>>,
 }
 
 impl TaskLockIndex {
-    pub(crate) fn load(runtime: &OrbitRuntime) -> Result<Self, OrbitError> {
-        Ok(Self::from_tasks(runtime.stores().tasks().list_tasks()?))
+    pub(crate) fn load(
+        runtime: &OrbitRuntime,
+        requested_task_ids: &[String],
+    ) -> Result<Self, OrbitError> {
+        let envelopes = runtime
+            .task_candidates(&Default::default(), usize::MAX)?
+            .items;
+        Ok(Self::from_envelopes(envelopes, requested_task_ids))
     }
 
-    pub(crate) fn from_tasks(tasks: Vec<Task>) -> Self {
-        let tasks = tasks
+    fn from_envelopes(envelopes: Vec<TaskEnvelopeV2>, requested_task_ids: &[String]) -> Self {
+        let all_tasks = envelopes
             .into_iter()
             .map(|task| (task.id.clone(), task))
             .collect::<BTreeMap<_, _>>();
+        let requested_task_ids = requested_task_ids.iter().collect::<BTreeSet<_>>();
+        let seed_ids = all_tasks
+            .values()
+            .filter(|task| {
+                matches!(task.status, TaskStatus::InProgress | TaskStatus::Review)
+                    || requested_task_ids.contains(&task.id)
+            })
+            .map(|task| task.id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut retained_ids = seed_ids.clone();
+
+        // Parent envelopes are needed to recognize epic ancestors and preserve
+        // the same guarded family walk as the bundle-backed implementation.
+        for task_id in retained_ids.clone() {
+            retain_task_ancestors(&task_id, &all_tasks, &mut retained_ids);
+        }
+
+        // An active or explicitly requested epic owns all descendant surfaces,
+        // including inactive descendants. Keep only those families rather than
+        // retaining every envelope in the lock index.
+        let epic_roots = seed_ids
+            .iter()
+            .filter_map(|task_id| all_tasks.get(task_id.as_str()))
+            .filter(|task| task.tags.iter().any(|tag| tag == "epic"))
+            .map(|task| task.id.clone())
+            .collect::<Vec<_>>();
+        for epic_id in epic_roots {
+            for task in all_tasks.values() {
+                if task_is_envelope_descendant_of(task, &epic_id, &all_tasks) {
+                    retained_ids.insert(task.id.clone());
+                }
+            }
+        }
+
+        let tasks = all_tasks
+            .into_iter()
+            .filter(|(task_id, _)| retained_ids.contains(task_id))
+            .collect::<BTreeMap<_, _>>();
         let mut epic_descendants: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for task in tasks.values() {
-            for epic_id in epic_ancestor_ids(task, &tasks) {
+            for epic_id in epic_envelope_ancestor_ids(task, &tasks) {
                 epic_descendants
                     .entry(epic_id)
                     .or_default()
@@ -589,17 +618,53 @@ impl TaskLockIndex {
         }
     }
 
-    pub(crate) fn get(&self, task_id: &str) -> Option<&Task> {
+    pub(crate) fn get(&self, task_id: &str) -> Option<&TaskEnvelopeV2> {
         self.tasks.get(task_id)
     }
 
-    pub(crate) fn tasks(&self) -> impl Iterator<Item = &Task> {
+    pub(crate) fn tasks(&self) -> impl Iterator<Item = &TaskEnvelopeV2> {
         self.tasks.values()
     }
 
+    fn into_active_lock_surfaces(
+        mut self,
+        workspace_root: &Path,
+    ) -> Vec<(TaskEnvelopeV2, Vec<String>)> {
+        let mut active_ids = self
+            .tasks
+            .values()
+            .filter(|task| matches!(task.status, TaskStatus::InProgress | TaskStatus::Review))
+            .map(|task| task.id.clone())
+            .collect::<Vec<_>>();
+        active_ids.sort_by_key(|task_id| {
+            self.tasks.get(task_id).map(|task| {
+                (
+                    task_lock_status_rank(task.status),
+                    task.created_at,
+                    task.id.clone(),
+                )
+            })
+        });
+
+        active_ids
+            .into_iter()
+            .filter_map(|task_id| {
+                let files = self
+                    .tasks
+                    .get(&task_id)
+                    .map(|task| self.lock_context_files(task, workspace_root))?;
+                self.tasks.remove(&task_id).map(|task| (task, files))
+            })
+            .collect()
+    }
+
     /// [`lock_context_files_for_task`] over the precomputed epic families.
-    pub(crate) fn lock_context_files(&self, task: &Task, workspace_root: &Path) -> Vec<String> {
-        let mut files = existing_context_files_at_root(task, workspace_root)
+    pub(crate) fn lock_context_files(
+        &self,
+        task: &TaskEnvelopeV2,
+        workspace_root: &Path,
+    ) -> Vec<String> {
+        let mut files = existing_envelope_context_files_at_root(task, workspace_root)
             .into_iter()
             .collect::<BTreeSet<_>>();
         if task.tags.iter().any(|tag| tag == "epic") {
@@ -610,7 +675,10 @@ impl TaskLockIndex {
                 .flatten()
                 .filter_map(|id| self.tasks.get(id))
             {
-                files.extend(existing_context_files_at_root(descendant, workspace_root));
+                files.extend(existing_envelope_context_files_at_root(
+                    descendant,
+                    workspace_root,
+                ));
             }
         }
         files.into_iter().collect()
@@ -646,12 +714,78 @@ impl TaskLockIndex {
     }
 }
 
+fn existing_envelope_context_files_at_root(
+    task: &TaskEnvelopeV2,
+    workspace_root: &Path,
+) -> Vec<String> {
+    let canonical = canonicalize_context_files_for_read(&task.context_files, workspace_root);
+    let (kept, _dropped) = prune_missing_context_files(workspace_root, canonical);
+    kept
+}
+
+fn envelope_parent_id(task: &TaskEnvelopeV2) -> Option<&str> {
+    task.relations
+        .iter()
+        .find(|relation| relation.relation_type == TaskRelationType::ChildOf)
+        .map(|relation| relation.target.as_str())
+}
+
+fn retain_task_ancestors(
+    task_id: &str,
+    task_lookup: &BTreeMap<String, TaskEnvelopeV2>,
+    retained_ids: &mut BTreeSet<String>,
+) {
+    let mut visited = BTreeSet::from([task_id.to_string()]);
+    let mut next_parent_id = task_lookup.get(task_id).and_then(envelope_parent_id);
+    for _ in 0..32 {
+        let Some(parent_id) = next_parent_id else {
+            break;
+        };
+        if !visited.insert(parent_id.to_string()) {
+            break;
+        }
+        let Some(parent) = task_lookup.get(parent_id) else {
+            break;
+        };
+        retained_ids.insert(parent.id.clone());
+        next_parent_id = envelope_parent_id(parent);
+    }
+}
+
+fn task_is_envelope_descendant_of(
+    task: &TaskEnvelopeV2,
+    ancestor_id: &str,
+    task_lookup: &BTreeMap<String, TaskEnvelopeV2>,
+) -> bool {
+    let mut visited = BTreeSet::from([task.id.clone()]);
+    let mut next_parent_id = envelope_parent_id(task);
+    for _ in 0..32 {
+        let Some(parent_id) = next_parent_id else {
+            return false;
+        };
+        if parent_id == ancestor_id {
+            return true;
+        }
+        if !visited.insert(parent_id.to_string()) {
+            return false;
+        }
+        let Some(parent) = task_lookup.get(parent_id) else {
+            return false;
+        };
+        next_parent_id = envelope_parent_id(parent);
+    }
+    false
+}
+
 /// Every epic-tagged ancestor on `task`'s parent chain, under the same hop
 /// and cycle guards as [`task_is_descendant_of`].
-fn epic_ancestor_ids(task: &Task, task_lookup: &BTreeMap<String, Task>) -> Vec<String> {
+fn epic_envelope_ancestor_ids(
+    task: &TaskEnvelopeV2,
+    task_lookup: &BTreeMap<String, TaskEnvelopeV2>,
+) -> Vec<String> {
     let mut epics = Vec::new();
     let mut visited = BTreeSet::from([task.id.clone()]);
-    let mut next_parent_id = task.parent_id();
+    let mut next_parent_id = envelope_parent_id(task);
     for _ in 0..32 {
         let Some(parent_id) = next_parent_id else {
             break;
@@ -665,7 +799,7 @@ fn epic_ancestor_ids(task: &Task, task_lookup: &BTreeMap<String, Task>) -> Vec<S
         if parent.tags.iter().any(|tag| tag == "epic") {
             epics.push(parent.id.clone());
         }
-        next_parent_id = parent.parent_id();
+        next_parent_id = envelope_parent_id(parent);
     }
     epics
 }
@@ -697,7 +831,7 @@ pub(crate) fn task_lock_conflicts_indexed(
         return Vec::new();
     }
 
-    let mut tasks: Vec<&Task> = index
+    let mut tasks: Vec<&TaskEnvelopeV2> = index
         .tasks()
         .filter(|task| {
             matches!(task.status, TaskStatus::InProgress | TaskStatus::Review)
@@ -855,7 +989,7 @@ fn first_task_id(task_ids: &[String]) -> Option<&str> {
     task_ids.first().map(String::as_str)
 }
 
-fn task_lock_to_json(task: &Task, context_files: Vec<String>) -> Value {
+fn task_lock_to_json(task: &TaskEnvelopeV2, context_files: Vec<String>) -> Value {
     json!({
         "id": task.id,
         "title": task.title,

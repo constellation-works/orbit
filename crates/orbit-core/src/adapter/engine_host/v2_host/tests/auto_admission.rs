@@ -44,9 +44,6 @@ fn ordered_candidates(runtime: &OrbitRuntime) -> Vec<String> {
     backlog_snapshot(runtime, "test", None, &CapturedCrewPools::new())
         .expect("backlog snapshot")
         .admissible_leaves
-        .into_iter()
-        .map(|task| task.id)
-        .collect()
 }
 
 fn backlog_task(

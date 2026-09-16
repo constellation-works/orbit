@@ -4,9 +4,34 @@
 use orbit_common::OrbitError;
 
 use crate::rpc::{
-    RpcError, RpcResponse, RpcResult, UNCORRELATED_REQUEST_ID, rpc_error_to_orbit,
+    RpcError, RpcRequest, RpcResponse, RpcResult, UNCORRELATED_REQUEST_ID, rpc_error_to_orbit,
     unparsed_request_id,
 };
+
+#[test]
+fn token_count_request_and_response_are_batched() {
+    let request = RpcRequest::TokenCount {
+        id: 7,
+        texts: vec!["one".to_string(), "two words".to_string()],
+    };
+    assert_eq!(
+        serde_json::to_value(&request).unwrap(),
+        serde_json::json!({
+            "method": "token_count",
+            "id": 7,
+            "texts": ["one", "two words"]
+        })
+    );
+
+    let response = RpcResponse::Result {
+        id: 7,
+        result: RpcResult::TokenCount { tokens: vec![1, 2] },
+    };
+    assert_eq!(
+        serde_json::to_value(&response).unwrap(),
+        serde_json::json!({"id": 7, "result": {"tokens": [1, 2]}})
+    );
+}
 
 #[test]
 fn rpc_error_to_orbit_renders_code_and_message_into_execution() {

@@ -18,10 +18,12 @@ use tokio::net::TcpStream;
 
 struct EchoHost {
     contexts: Mutex<Vec<ToolSessionContext>>,
+    list_calls: Mutex<usize>,
 }
 
 impl McpHost for EchoHost {
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        *self.list_calls.lock().expect("list calls") += 1;
         Ok(vec![definition("demo.echo"), definition("demo.inspect")])
     }
 
@@ -70,6 +72,7 @@ fn definition(name: &str) -> McpToolDefinition {
 async fn generic_kernel_round_trips_initialize_list_call_and_error() {
     let host = Arc::new(EchoHost {
         contexts: Mutex::new(Vec::new()),
+        list_calls: Mutex::new(0),
     });
     let server_host: Arc<dyn McpHost> = host.clone();
     let trusted = ToolSessionContext::trusted_local(None, None, None);
@@ -112,7 +115,13 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
         .list_tools(Default::default())
         .await
         .expect("tools/list");
+    let listed_again = client
+        .peer()
+        .list_tools(Default::default())
+        .await
+        .expect("cached tools/list");
     assert_eq!(listed.tools.len(), 2);
+    assert_eq!(listed_again, listed);
     let tool = listed
         .tools
         .iter()
@@ -166,6 +175,7 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
         Some("/tmp/generic-workspace")
     );
     assert!(contexts[0].trace_id.is_some());
+    assert_eq!(*host.list_calls.lock().expect("list calls"), 1);
 
     server_task.abort();
 }
@@ -178,6 +188,7 @@ async fn generic_kernel_round_trips_initialize_list_call_and_error() {
 async fn loopback_listener_round_trips_a_session_and_records_the_peer_ip() {
     let host = Arc::new(EchoHost {
         contexts: Mutex::new(Vec::new()),
+        list_calls: Mutex::new(0),
     });
     let listener = McpListener::bind(
         "127.0.0.1:0"

@@ -4,7 +4,8 @@ use rusqlite::Connection;
 
 use super::super::schema::{
     CorpusFtsLayout, LEGACY_INLINE_BM25_SQL, SEMANTIC_INDEX_LAYOUT_INCOMPATIBLE, corpus_fts_layout,
-    ensure_vector_schema, evaluate_legacy_inline_reader, legacy_task_fts_table, table_exists,
+    embeddings_has_normalized_column, ensure_vector_schema, evaluate_legacy_inline_reader,
+    legacy_task_fts_table, table_exists,
 };
 
 /// The pre-[ORB-11695] layout: chunk text and its metadata lived in the FTS5
@@ -35,6 +36,11 @@ fn count(conn: &Connection, sql: &str) -> i64 {
 fn fresh_database_indexes_chunks_through_external_content_fts() {
     let conn = open_migrated("");
 
+    assert!(
+        embeddings_has_normalized_column(&conn).expect("normalized column"),
+        "fresh embeddings table must include the write-time unit-length flag"
+    );
+
     conn.execute_batch(
         r#"
             INSERT INTO chunks(source_kind, source_id, field, chunk_idx, content)
@@ -61,6 +67,48 @@ fn fresh_database_indexes_chunks_through_external_content_fts() {
         0,
         "delete trigger must retract the chunk's tokens"
     );
+}
+
+#[test]
+fn existing_embeddings_table_gains_normalized_column_defaulting_to_unnormalised() {
+    let conn = Connection::open_in_memory().expect("open db");
+    conn.execute_batch(
+        r#"
+            CREATE TABLE embeddings (
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                field TEXT NOT NULL,
+                chunk_idx INTEGER NOT NULL,
+                content_hash TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                dim INTEGER NOT NULL,
+                embedding BLOB NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (source_kind, source_id, field, chunk_idx, model_id)
+            );
+            INSERT INTO embeddings(
+                source_kind, source_id, field, chunk_idx, content_hash,
+                model_id, dim, embedding, created_at
+            ) VALUES (
+                'task', 'T1', 'purpose', 0, 'h', 'm', 1, x'00000000', '2026-01-01T00:00:00Z'
+            );
+        "#,
+    )
+    .expect("seed pre-normalized embeddings");
+    assert!(!embeddings_has_normalized_column(&conn).expect("column probe"));
+
+    ensure_vector_schema(&conn).expect("migrate schema");
+    ensure_vector_schema(&conn).expect("migrate schema idempotently");
+
+    assert!(embeddings_has_normalized_column(&conn).expect("column after migrate"));
+    let flag: i64 = conn
+        .query_row(
+            "SELECT normalized FROM embeddings WHERE source_id = 'T1'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read flag");
+    assert_eq!(flag, 0, "legacy rows stay unnormalised until rewritten");
 }
 
 #[test]

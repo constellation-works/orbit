@@ -279,7 +279,7 @@ use orbit_types::workflow::activity_job::{AgentLoopSpec, OnDenial, Provider};
 /// Build the shipped `implement_one` shape: a `backend: cli` agent loop that is
 /// artifact-backed, so the *content* contract stays off and only the
 /// step-completion contract can catch a stalled agent.
-fn agent_implement_shaped_step(id: &str, retry: Option<RetrySpec>) -> JobV2Step {
+pub(super) fn agent_implement_shaped_step(id: &str, retry: Option<RetrySpec>) -> JobV2Step {
     let spec = AgentLoopSpec {
         instruction: "implement the task".to_string(),
         tools: Vec::new(),

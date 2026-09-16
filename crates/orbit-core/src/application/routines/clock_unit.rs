@@ -1,8 +1,12 @@
-//! Inspect the installed OS sweep-clock unit and compare it to this binary.
+//! Inspect the installed OS sweep-clock unit, compare it to this binary, and
+//! repair it when the two have drifted apart.
 //!
-//! `orbit doctor` and `orbit clock status` share this helper so a
+//! `orbit doctor` and `orbit clock status` share the inspection helper so a
 //! launchd/systemd unit that still points at an older package-manager install
-//! is visible without talking to the unit manager.
+//! is visible without talking to the unit manager. [`converge_clock_unit`] is
+//! the repair half: an installed unit whose program has moved or been deleted
+//! stops firing silently, so `orbit update` and `orbit clock repair` rewrite it
+//! to the running binary instead of waiting for an operator to notice.
 
 use std::fs;
 use std::io::Read;
@@ -12,7 +16,12 @@ use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 
-use super::clock::{ClockPlatform, launchd_plist_path, systemd_service_path};
+use super::clock::{
+    ClockCommandRunner, ClockPlatform, NativeClockCommandRunner, launchd_manual_steps,
+    launchd_plist_path, load_clock_settings, manager_status_command, reload_launchd_unit,
+    restart_systemd_unit, systemd_manual_steps, systemd_service_path, write_launchd_unit,
+    write_systemd_units,
+};
 
 /// How long to wait for `<program> --version` before treating it as unrunnable.
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -102,7 +111,7 @@ impl ClockUnitInspection {
                 )
             }
             ClockUnitVerdict::InvocationMismatch => format!(
-                " | program: {program} (stale: invokes `orbit sweep`; run `orbit clock enable` to rewrite)"
+                " | program: {program} (stale: invokes `orbit sweep`; run `orbit clock repair` to rewrite)"
             ),
             ClockUnitVerdict::Unrunnable { reason } => {
                 format!(" | program: {program} (version unavailable: {reason})")
@@ -156,15 +165,15 @@ impl ClockUnitInspection {
     pub fn doctor_remediation(&self) -> Option<String> {
         match self.verdict {
             ClockUnitVerdict::VersionMismatch | ClockUnitVerdict::PathMismatch => Some(
-                "Run `orbit clock enable` so the clock unit invokes this binary, or repoint the package-manager install the unit names so it is this version."
+                "Run `orbit clock repair` so the clock unit invokes this binary, or repoint the package-manager install the unit names so it is this version."
                     .to_string(),
             ),
             ClockUnitVerdict::InvocationMismatch => Some(
-                "Run `orbit clock enable` to rewrite the stale unit to `orbit clock tick`."
+                "Run `orbit clock repair` to rewrite the stale unit to `orbit clock tick`."
                     .to_string(),
             ),
             ClockUnitVerdict::Unrunnable { .. } => Some(
-                "Restore the orbit binary the clock unit names, or run `orbit clock enable` to rewrite the unit to this binary."
+                "Restore the orbit binary the clock unit names, or run `orbit clock repair` to rewrite the unit to this binary."
                     .to_string(),
             ),
             ClockUnitVerdict::NoUnitInstalled | ClockUnitVerdict::Matching => None,
@@ -307,6 +316,286 @@ pub fn probe_program_version(program: &Path) -> Result<String, String> {
             }
         }
     }
+}
+
+/// Where the installed clock unit lives and what program it names.
+///
+/// Cheap by construction: reading the unit file answers both questions, and
+/// callers on the per-minute tick path must not pay for a `--version` spawn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct InstalledClockUnit {
+    /// The launchd plist or systemd service that was found.
+    pub(super) unit_path: PathBuf,
+    /// Program path the unit names, when the unit file parses.
+    pub(super) program: Option<PathBuf>,
+    /// Whether the unit still invokes the compatibility alias `orbit sweep`.
+    pub(super) legacy_invocation: bool,
+}
+
+/// How an installed unit's program disagreed with the running binary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClockUnitDrift {
+    /// The unit file names no program path at all.
+    ProgramUnreadable,
+    /// The unit names a program that no longer exists — the launchd
+    /// `EX_CONFIG` / penalty-box failure, where ticks stop without a signal.
+    ProgramMissing {
+        /// Path the unit named.
+        previous: PathBuf,
+    },
+    /// The unit names a different binary that still exists.
+    ProgramMoved {
+        /// Path the unit named.
+        previous: PathBuf,
+    },
+    /// The unit runs this binary through the compatibility alias
+    /// `orbit sweep` instead of the canonical `orbit clock tick`.
+    InvocationStale,
+}
+
+impl ClockUnitDrift {
+    /// The program path the unit named, when it named one.
+    pub fn previous_program(&self) -> Option<&Path> {
+        match self {
+            Self::ProgramUnreadable | Self::InvocationStale => None,
+            Self::ProgramMissing { previous } | Self::ProgramMoved { previous } => {
+                Some(previous.as_path())
+            }
+        }
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            Self::ProgramUnreadable => "named no program path".to_string(),
+            Self::ProgramMissing { previous } => {
+                format!("ran {}, which no longer exists", previous.display())
+            }
+            Self::ProgramMoved { previous } => format!("ran {}", previous.display()),
+            Self::InvocationStale => "invoked the legacy `orbit sweep`".to_string(),
+        }
+    }
+}
+
+/// What a clock-unit convergence pass found, and what it did about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClockUnitConvergence {
+    /// No unit is installed on this host; there is nothing to converge.
+    NoUnitInstalled,
+    /// The installed unit already runs this binary.
+    AlreadyCurrent {
+        /// Unit file that was checked.
+        unit_path: PathBuf,
+        /// Program it names, which is this binary.
+        program: PathBuf,
+    },
+    /// The unit named a stale program and was rewritten to this binary.
+    Rewritten(ClockUnitRewrite),
+}
+
+/// The repair a convergence pass applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClockUnitRewrite {
+    /// Unit file that was rewritten.
+    pub unit_path: PathBuf,
+    /// Why the installed unit was stale.
+    pub drift: ClockUnitDrift,
+    /// Program the unit now names.
+    pub program: PathBuf,
+    /// Every unit file written by the repair.
+    pub files_written: Vec<PathBuf>,
+    /// Whether the unit manager re-registered the rewritten unit. A paused
+    /// clock is rewritten but deliberately left inactive.
+    pub reactivated: bool,
+    /// Commands the operator must run when re-registration failed.
+    pub manual_steps: Vec<String>,
+}
+
+impl ClockUnitConvergence {
+    /// One operator-facing line describing the pass.
+    pub fn summary(&self) -> String {
+        match self {
+            Self::NoUnitInstalled => {
+                "no sweep clock unit is installed on this host; nothing to converge".to_string()
+            }
+            Self::AlreadyCurrent { unit_path, program } => format!(
+                "clock unit {} already runs this binary ({})",
+                unit_path.display(),
+                program.display()
+            ),
+            Self::Rewritten(rewrite) => {
+                let activation = if rewrite.reactivated {
+                    "reloaded"
+                } else if rewrite.manual_steps.is_empty() {
+                    "left paused"
+                } else {
+                    "NOT reloaded"
+                };
+                format!(
+                    "rewrote clock unit {}: it {} and now runs {} ({activation})",
+                    rewrite.unit_path.display(),
+                    rewrite.drift.describe(),
+                    rewrite.program.display()
+                )
+            }
+        }
+    }
+
+    /// Commands the operator still has to run, if any.
+    pub fn manual_steps(&self) -> &[String] {
+        match self {
+            Self::NoUnitInstalled | Self::AlreadyCurrent { .. } => &[],
+            Self::Rewritten(rewrite) => &rewrite.manual_steps,
+        }
+    }
+
+    /// Whether the pass left the clock needing operator follow-up.
+    pub fn needs_follow_up(&self) -> bool {
+        !self.manual_steps().is_empty()
+    }
+}
+
+/// Point the installed clock unit at the running binary when it has drifted.
+///
+/// A unit that names a moved or deleted binary keeps its schedule but fails
+/// every wake-up, so this runs as part of `orbit update` convergence rather
+/// than only when an operator reaches for `orbit clock repair`.
+pub fn converge_clock_unit(global_root: &Path) -> Result<ClockUnitConvergence, OrbitError> {
+    let running = RunningBinary::current()?;
+    converge_clock_unit_with(
+        global_root,
+        &running.path,
+        ClockPlatform::current(),
+        &NativeClockCommandRunner,
+        &orbit_common::fs::path::home_dir()?,
+    )
+}
+
+/// [`converge_clock_unit`] against an explicit binary, platform, and home.
+pub(super) fn converge_clock_unit_with(
+    global_root: &Path,
+    program: &Path,
+    platform: ClockPlatform,
+    runner: &dyn ClockCommandRunner,
+    home: &Path,
+) -> Result<ClockUnitConvergence, OrbitError> {
+    let Some(installed) = installed_clock_unit_at(home, platform) else {
+        return Ok(ClockUnitConvergence::NoUnitInstalled);
+    };
+    let Some(drift) = clock_unit_drift(&installed, program) else {
+        return Ok(ClockUnitConvergence::AlreadyCurrent {
+            unit_path: installed.unit_path,
+            program: program.to_path_buf(),
+        });
+    };
+
+    // Ask the manager whether the unit is registered *before* rewriting it: a
+    // clock the operator paused must come back paused, not running.
+    let was_registered = runner
+        .run(&manager_status_command(platform))
+        .unwrap_or(false);
+    let settings = load_clock_settings(global_root)?;
+    let orbit_bin = program.to_string_lossy().to_string();
+    let (files_written, reactivated, manual_steps) = match platform {
+        ClockPlatform::Launchd => {
+            let plist_path = write_launchd_unit(global_root, &orbit_bin, settings, home)?;
+            let reactivated = was_registered && reload_launchd_unit(runner, home);
+            let manual_steps = if was_registered {
+                launchd_manual_steps(reactivated, &plist_path)
+            } else {
+                Vec::new()
+            };
+            (vec![plist_path], reactivated, manual_steps)
+        }
+        ClockPlatform::Systemd => {
+            let files_written = write_systemd_units(&orbit_bin, settings, home)?;
+            let reactivated = was_registered && restart_systemd_unit(runner);
+            let manual_steps = if was_registered {
+                systemd_manual_steps(reactivated)
+            } else {
+                Vec::new()
+            };
+            (files_written, reactivated, manual_steps)
+        }
+    };
+
+    Ok(ClockUnitConvergence::Rewritten(ClockUnitRewrite {
+        unit_path: installed.unit_path,
+        drift,
+        program: program.to_path_buf(),
+        files_written,
+        reactivated,
+        manual_steps,
+    }))
+}
+
+/// The installed unit and the program it names, without probing that program.
+pub(super) fn installed_clock_unit_at(
+    home: &Path,
+    platform: ClockPlatform,
+) -> Option<InstalledClockUnit> {
+    match discover_clock_unit_program(home, platform)? {
+        Ok((unit_path, program, legacy_invocation)) => Some(InstalledClockUnit {
+            unit_path,
+            program: Some(program),
+            legacy_invocation,
+        }),
+        Err((unit_path, _reason)) => Some(InstalledClockUnit {
+            unit_path,
+            program: None,
+            legacy_invocation: false,
+        }),
+    }
+}
+
+/// One warning line for a pass running from a binary the installed unit does
+/// not name, or `None` when the two agree.
+///
+/// Diagnostic only: a host without a home directory, a readable unit, or a
+/// resolvable executable gets no warning rather than a failed sweep.
+pub fn clock_unit_drift_warning() -> Option<String> {
+    let running = RunningBinary::current().ok()?;
+    let home = orbit_common::fs::path::home_dir().ok()?;
+    clock_unit_drift_warning_at(&home, ClockPlatform::current(), &running.path)
+}
+
+pub(super) fn clock_unit_drift_warning_at(
+    home: &Path,
+    platform: ClockPlatform,
+    running: &Path,
+) -> Option<String> {
+    let installed = installed_clock_unit_at(home, platform)?;
+    // A unit that runs this binary through the legacy alias is reported by
+    // `orbit doctor` and `orbit clock status`; it is not a wrong-binary tick.
+    let drift = match clock_unit_drift(&installed, running)? {
+        ClockUnitDrift::InvocationStale => return None,
+        drift => drift,
+    };
+    Some(format!(
+        "warning: the installed clock unit {} {}, not this binary {}; scheduled ticks do not run this build. Run `orbit clock repair` to point the unit at it.",
+        installed.unit_path.display(),
+        drift.describe(),
+        running.display()
+    ))
+}
+
+/// Compare an installed unit to the running binary.
+fn clock_unit_drift(installed: &InstalledClockUnit, running: &Path) -> Option<ClockUnitDrift> {
+    let Some(program) = installed.program.as_deref() else {
+        return Some(ClockUnitDrift::ProgramUnreadable);
+    };
+    if !program.exists() {
+        return Some(ClockUnitDrift::ProgramMissing {
+            previous: program.to_path_buf(),
+        });
+    }
+    if !same_program(program, running) {
+        return Some(ClockUnitDrift::ProgramMoved {
+            previous: program.to_path_buf(),
+        });
+    }
+    installed
+        .legacy_invocation
+        .then_some(ClockUnitDrift::InvocationStale)
 }
 
 type ClockUnitProgram = (PathBuf, PathBuf, bool);

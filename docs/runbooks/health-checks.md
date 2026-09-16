@@ -262,9 +262,26 @@ the same comparison in check form:
   clock can drift), or the named program is missing/unrunnable
 - **ERROR** — the unit's program reports a different version than this binary. The row names
   the unit file, both program paths, and both versions. Rewrite the unit with
-  `orbit clock enable`, or repoint the package-manager install the unit
+  `orbit clock repair`, or repoint the package-manager install the unit
   names so it is this version
 - **skipped** — no launchd plist or systemd user service is installed
+
+`orbit clock repair` is the repair for every one of those rows. It rewrites the installed unit
+to this binary and re-registers it with launchd/systemd, prints what it changed, and exits
+non-zero when the manager would not reload the rewritten unit. A unit that already names this
+binary is left alone, and a paused clock is corrected on disk without being resumed — use
+`orbit clock enable` to resume it.
+
+Operators do not have to reach for it after an ordinary upgrade: `orbit update` runs
+`orbit clock repair` as its last convergence step, so a unit orphaned by an install at a new
+path is repaired in the same command that moved the binary. The path that still needs a
+manual run is a binary installed by something other than `orbit update` (`brew`, `cargo
+install`, a checkout build) while the unit names the old one.
+
+A hand-run `orbit sweep` / `orbit clock tick` from a binary the unit does not name prints one
+warning line to stderr naming the unit, the program it runs, and this binary. The scheduled
+pass never prints it — it *is* the program the unit names — so seeing it means unattended
+sweeps are running a different build than the one you just invoked.
 
 `orbit update --check` reports the binary on `PATH` / the cargo install; it does not inspect
 what the clock unit invokes. After an upgrade, run `orbit doctor` or `orbit clock
@@ -280,7 +297,8 @@ and an effective cadence. `clock: unhealthy` with an inactive effective cadence 
 timer is enabled but elapsed, unscheduled, inactive, or could not be probed. Inspect the
 printed diagnostic, then run `orbit clock enable`: it rewrites stale installed service and
 timer files if needed, restarts the timer even when it is already enabled, and returns success
-only after verifying a finite next trigger. If that verification fails, inspect the
+only after verifying a finite next trigger. (`orbit clock enable` resumes a paused clock;
+`orbit clock repair` only repoints a unit whose program moved, and never resumes one.) If that verification fails, inspect the
 `systemctl --user status` and `journalctl --user` commands in the error rather than repeating
 enable. The generated timer schedules its first sweep from every timer activation and then
 recurs from service activation; installation and cadence changes perform the same

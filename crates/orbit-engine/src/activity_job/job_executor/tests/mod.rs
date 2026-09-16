@@ -202,6 +202,9 @@ pub(super) enum Action {
 pub(super) struct ScriptedHost {
     responses: StdMutex<HashMap<String, VecDeque<Action>>>,
     call_log: StdMutex<Vec<String>>,
+    /// Every deterministic call's `(action, input)`, so a test can read back
+    /// what a recovery activity was handed.
+    input_log: StdMutex<Vec<(String, Value)>>,
     in_flight: AtomicUsize,
     peak_in_flight: AtomicUsize,
     /// [ORB-10385] Action names this host reports as absent from its registry,
@@ -223,6 +226,7 @@ impl ScriptedHost {
                     .collect(),
             ),
             call_log: StdMutex::new(Vec::new()),
+            input_log: StdMutex::new(Vec::new()),
             in_flight: AtomicUsize::new(0),
             peak_in_flight: AtomicUsize::new(0),
             unregistered: Vec::new(),
@@ -260,6 +264,16 @@ impl ScriptedHost {
     pub(super) fn peak_in_flight(&self) -> usize {
         self.peak_in_flight.load(Ordering::SeqCst)
     }
+
+    /// Input of the first deterministic call to `action`, if it ran.
+    pub(super) fn input_for_action(&self, action: &str) -> Option<Value> {
+        self.input_log
+            .lock()
+            .expect("input log")
+            .iter()
+            .find(|(name, _)| name == action)
+            .map(|(_, input)| input.clone())
+    }
 }
 
 impl RuntimeHost for ScriptedHost {
@@ -287,6 +301,10 @@ impl RuntimeHost for ScriptedHost {
             .lock()
             .expect("call log")
             .push(action.to_string());
+        self.input_log
+            .lock()
+            .expect("input log")
+            .push((action.to_string(), input.clone()));
         let next = {
             let mut responses = self.responses.lock().expect("responses");
             match responses.get_mut(action) {

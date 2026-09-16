@@ -13,7 +13,9 @@ use orbit_store::contracts::RoutineFireRecord;
 
 use super::RoutineHostIdentity;
 use super::due::{next_occurrence, parse_cron};
-use super::loader::{LoadedRoutine, RoutineLoadError, RoutineWorkspaceProvider, collect_routines};
+use super::loader::{
+    LoadedRoutine, RetiredRoutine, RoutineLoadError, RoutineWorkspaceProvider, collect_routines,
+};
 
 /// Operator-facing schedule readiness. Theoretical next-slot math may still be
 /// present; this state says whether that time is armed.
@@ -118,6 +120,8 @@ pub struct RoutineStatusReport {
     pub machine_id: String,
     /// Per-routine status rows, in discovery order.
     pub statuses: Vec<RoutineStatus>,
+    /// Definitions targeting a retired job: listed, never scheduled.
+    pub retired: Vec<RetiredRoutine>,
     /// Fail-closed load failures (these routines are absent).
     pub load_errors: Vec<RoutineLoadError>,
 }
@@ -166,6 +170,7 @@ pub fn routine_statuses_with_providers(
         host_id: local_host.host_id,
         machine_id: local_host.machine_id,
         statuses,
+        retired: collection.retired,
         load_errors,
     })
 }
@@ -241,7 +246,11 @@ pub fn set_routine_enabled(
     Ok(RoutineToggleOutcome::Changed)
 }
 
-fn rewrite_enabled_line(raw: &str, enabled: bool) -> Result<String, OrbitError> {
+/// Rewrite only the top-level `enabled:` line of a routine document, keeping
+/// every other byte — comments, ordering, trailing comment on that line —
+/// intact. Managed-routine refresh uses it too, so a shipped-template change
+/// never silently flips an operator's opt-in back to the template default.
+pub(crate) fn rewrite_enabled_line(raw: &str, enabled: bool) -> Result<String, OrbitError> {
     let newline = if raw.contains("\r\n") { "\r\n" } else { "\n" };
     let has_enabled = raw
         .lines()
