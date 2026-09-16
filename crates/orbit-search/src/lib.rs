@@ -21,6 +21,8 @@
 //! - [`rpc`] — the JSON-Lines protocol shared with `orbit-search-companion`.
 //! - [`companion`] — discovery of the installed companion binary.
 //! - [`noop`] — a deterministic test fake that needs no companion subprocess.
+//! - [`pool`] — [`EmbedderPool`], the runtime's one owner of live companions:
+//!   one per model for the life of the host process.
 //! - [`subprocess`] — the production [`Embedder`] impl that talks to the
 //!   companion over stdio.
 //! - [`shared_query`] — one query-side embedder shared by a fan-out, so a
@@ -33,6 +35,7 @@ mod companion;
 mod embedder;
 pub mod lexical;
 mod noop;
+mod pool;
 mod rpc;
 mod shared_query;
 mod subprocess;
@@ -42,14 +45,14 @@ mod vector;
 mod tests;
 
 pub use commands::{
-    CompanionStatus, DocIndexParams, DocIndexResult, DocSemanticHit, DocSemanticSearchParams,
-    DocSemanticSearchResult, IndexKind, ScoreBreakdown, SemanticHit, SemanticIndexParams,
-    SemanticIndexResult, SemanticInstallParams, SemanticInstallResult, SemanticReindexParams,
-    SemanticReindexResult, SemanticRelatedParams, SemanticRelatedResult, SemanticSearchParams,
-    SemanticSearchResult, SemanticStatsResult, SemanticUninstallParams, SemanticUninstallResult,
-    TaskIndexResult, doc_index, doc_semantic_search, doc_semantic_search_with, query_model_id,
-    semantic_index, semantic_install, semantic_reindex, semantic_related, semantic_search,
-    semantic_search_with, semantic_stats, semantic_uninstall,
+    CompanionStatus, DocIndexParams, DocIndexResult, DocLexicalHit, DocSemanticHit,
+    DocSemanticSearchParams, DocSemanticSearchResult, IndexKind, ScoreBreakdown, SemanticHit,
+    SemanticIndexParams, SemanticIndexResult, SemanticInstallParams, SemanticInstallResult,
+    SemanticReindexParams, SemanticReindexResult, SemanticRelatedParams, SemanticRelatedResult,
+    SemanticSearchParams, SemanticSearchResult, SemanticStatsResult, SemanticUninstallParams,
+    SemanticUninstallResult, TaskIndexResult, doc_index, doc_lexical_search, doc_semantic_search,
+    doc_semantic_search_with, query_model_id, semantic_index, semantic_install, semantic_reindex,
+    semantic_related, semantic_search, semantic_search_with, semantic_stats, semantic_uninstall,
 };
 pub use companion::{
     CompanionPaths, INSTALL_REMEDIATION, locate_companion, platform_companion_filename, platform_id,
@@ -59,6 +62,7 @@ pub use lexical::docs::{
     DocSearchResult, DocSearchSource, SearchResult, score_doc_record, sort_search_results,
 };
 pub use noop::NoopEmbedder;
+pub use pool::EmbedderPool;
 pub use rpc::{
     RpcError, RpcRequest, RpcResponse, RpcResult, UNCORRELATED_REQUEST_ID, rpc_error_to_orbit,
     unparsed_request_id,
@@ -66,6 +70,6 @@ pub use rpc::{
 pub use shared_query::SharedQueryEmbedder;
 pub use subprocess::SubprocessEmbedder;
 pub use vector::{
-    Bm25Hit, DocEmbeddingSource, EmbedWorker, SOURCE_KIND_DOC, SOURCE_KIND_TASK, SemanticIndex,
-    SemanticStats, UpsertReport, VectorStore, bm25_top_k,
+    Bm25Hit, DocEmbeddingSource, EmbedWorker, IndexedDocFields, SOURCE_KIND_DOC, SOURCE_KIND_TASK,
+    SemanticIndex, SemanticStats, UpsertReport, VectorStore, bm25_top_k,
 };

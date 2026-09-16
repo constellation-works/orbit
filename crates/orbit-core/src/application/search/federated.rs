@@ -19,10 +19,11 @@
 //!   a follow-up write to the wrong record (F2026-08-046).
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use orbit_common::OrbitError;
-use orbit_search::{Embedder, SharedQueryEmbedder};
+use orbit_search::{Embedder, EmbedderPool, SharedQueryEmbedder};
 
 use crate::OrbitRuntime;
 use crate::runtime::workspace_catalog::{
@@ -130,6 +131,10 @@ impl OrbitRuntime {
             .flatten()
             .and_then(|model| SharedQueryEmbedder::for_query_model(Some(model)).ok());
 
+        // Federated targets are opened short-lived (one per fan-out call), so
+        // without an explicit handoff each would spawn its own companions
+        // instead of borrowing this host's already-warm pool [DANI-10364].
+        let embedder_pool = self.stores().semantic_embedder_pool();
         let outcomes = fan_out(
             catalog.as_ref(),
             &targets,
@@ -138,6 +143,7 @@ impl OrbitRuntime {
             query_embedder
                 .as_ref()
                 .map(|embedder| embedder as &dyn Embedder),
+            &embedder_pool,
         );
 
         let mut branches = Vec::with_capacity(outcomes.len());
@@ -191,12 +197,22 @@ fn fan_out(
     params: &GlobalSearchParams,
     query_model: Option<&str>,
     embedder: Option<&dyn Embedder>,
+    embedder_pool: &Arc<EmbedderPool>,
 ) -> Vec<WorkspaceOutcome> {
     let workers = federated_worker_count(targets.len());
     if workers <= 1 {
         return targets
             .iter()
-            .map(|target| query_one_workspace(catalog, target, params, query_model, embedder))
+            .map(|target| {
+                query_one_workspace(
+                    catalog,
+                    target,
+                    params,
+                    query_model,
+                    embedder,
+                    embedder_pool,
+                )
+            })
             .collect();
     }
 
@@ -210,7 +226,14 @@ fn fan_out(
             };
             claimed.push((
                 index,
-                query_one_workspace(catalog, target, params, query_model, embedder),
+                query_one_workspace(
+                    catalog,
+                    target,
+                    params,
+                    query_model,
+                    embedder,
+                    embedder_pool,
+                ),
             ));
         }
     };
@@ -253,6 +276,7 @@ fn query_one_workspace(
     params: &GlobalSearchParams,
     query_model: Option<&str>,
     embedder: Option<&dyn Embedder>,
+    embedder_pool: &Arc<EmbedderPool>,
 ) -> WorkspaceOutcome {
     let mut report = WorkspaceSearchReport {
         workspace_id: target.workspace_id.clone(),
@@ -270,7 +294,7 @@ fn query_one_workspace(
             });
         };
 
-    let runtime = match catalog.open(target) {
+    let mut runtime = match catalog.open(target) {
         Ok(runtime) => runtime,
         Err(error) => {
             record_note(&mut report, &mut notes, format!("skipped: {error}"));
@@ -282,6 +306,11 @@ fn query_one_workspace(
             };
         }
     };
+    // Federated targets are opened short-lived, so without this handoff each
+    // one would spawn its own companions instead of borrowing this host's
+    // already-warm pool [DANI-10364]. The query text itself is still shared
+    // once via `embedder` rather than re-embedded per workspace [DANI-10365].
+    runtime.share_semantic_embedders(Arc::clone(embedder_pool));
     if let Some(note) = query_model.and_then(|model| model_mismatch_note(&runtime, model)) {
         record_note(&mut report, &mut notes, note);
     }

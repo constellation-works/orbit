@@ -1,12 +1,13 @@
 //! Unit tests for the long-lived `EmbedWorker` path.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 
-use crate::NoopEmbedder;
 use crate::vector::{EmbedWorker, SOURCE_KIND_TASK, VectorStore};
+use crate::{EmbedderPool, NoopEmbedder};
 
 fn task(id: &str, title: &str, description: &str) -> Task {
     Task {
@@ -51,7 +52,10 @@ fn wait_until(timeout: Duration, mut ready: impl FnMut() -> bool) {
 #[test]
 fn long_lived_worker_indexes_enqueued_task_into_vector_store() {
     let store = VectorStore::open_in_memory().expect("open in-memory vector store");
-    let worker = EmbedWorker::start_with_embedder(store.clone(), Box::new(NoopEmbedder::small()));
+    let embedders = Arc::new(EmbedderPool::for_test(|_| {
+        Ok(Arc::new(NoopEmbedder::small()))
+    }));
+    let worker = EmbedWorker::start(store.clone(), embedders);
     let task = task(
         "T-worker-1",
         "Index this mutation",

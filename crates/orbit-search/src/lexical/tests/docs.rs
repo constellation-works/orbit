@@ -58,3 +58,34 @@ fn sort_search_results_breaks_ties_by_path() {
         .collect::<Vec<_>>();
     assert_eq!(paths, vec!["docs/a.md", "docs/b.md"]);
 }
+
+/// [DANI-10369] The body match no longer lowercases the whole body first, so
+/// the in-place scan must still be case-insensitive and must still hand back
+/// an offset that slices `record.body` safely past multi-byte characters.
+#[test]
+fn score_doc_record_body_match_is_case_insensitive_in_place() {
+    let mut record = doc("docs/a.md", "Decision log");
+    record.body = "Ünïcode prelude — then the HELIOTROPE-Dispatch choice was made.".to_string();
+
+    let result = score_doc_record(record, "heliotrope-dispatch").expect("body match");
+
+    assert_eq!(result.matched_by, vec!["body"]);
+    assert_eq!(
+        result.snippet.as_deref(),
+        Some("Ünïcode prelude — then the HELIOTROPE-Dispatch choice was made.")
+    );
+}
+
+#[test]
+fn find_ignore_ascii_case_matches_the_lowercased_find() {
+    let haystack = "Ünïcode prelude — then the HELIOTROPE-Dispatch choice";
+    assert_eq!(
+        find_ignore_ascii_case(haystack, "heliotrope-dispatch"),
+        haystack.to_ascii_lowercase().find("heliotrope-dispatch")
+    );
+    // Only ASCII folds, exactly as before: a non-ASCII letter must match as written.
+    assert_eq!(find_ignore_ascii_case(haystack, "Ünïcode"), Some(0));
+    assert_eq!(find_ignore_ascii_case(haystack, "ünïcode"), None);
+    assert_eq!(find_ignore_ascii_case(haystack, "absent"), None);
+    assert_eq!(find_ignore_ascii_case("", "x"), None);
+}

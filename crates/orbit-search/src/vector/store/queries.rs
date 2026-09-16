@@ -1,6 +1,7 @@
 //! Read/cascade operations over the index.
 //!
 //! `model_ids` reports the distinct embedding models present in the index.
+//! `has_sources` answers whether a `source_kind` has any chunk rows at all.
 //! `delete_source` cascades both the vector rows and the chunk rows (and with
 //! them, through the `corpus_fts` triggers, the FTS5 index) for a given
 //! `(source_kind, source_id)`. `stats` aggregates row counts by
@@ -30,6 +31,26 @@ impl VectorStore {
             |row| row.get(0),
         )
         .map_err(|error| OrbitError::Store(error.to_string()))
+    }
+
+    /// Whether any source of `source_kind` has chunk rows — and with them
+    /// `corpus_fts` entries — in this index.
+    ///
+    /// One indexed lookup on `chunks_by_address`, so a caller can decide
+    /// whether the index can answer a lexical query before it walks a corpus
+    /// on disk instead [DANI-10369].
+    pub fn has_sources(&self, source_kind: &str) -> Result<bool, OrbitError> {
+        let conn = self.connection();
+        let conn = conn
+            .lock()
+            .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))?;
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM chunks WHERE source_kind = ?1)",
+            params![source_kind],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|exists| exists != 0)
+        .map_err(|error| super::schema::translate_corpus_fts_sql_error(&conn, error))
     }
 
     pub fn source_ids(&self, source_kind: &str) -> Result<BTreeSet<String>, OrbitError> {

@@ -214,7 +214,12 @@ JSON shape: `{ "path", "frontmatter", "body" }`.
 
 ### 6.3 `orbit search --kind doc <query>`
 
-See §5. Returns the ranked list with `score` and `matched_by` (list of which fields hit). Without `--hybrid`, the output is lexical-only. With `--hybrid`, Orbit embeds the query, retrieves `source_kind = "doc"` rows, min-max normalizes lexical and cosine scores, and blends them with `[docs.search].semantic_weight` (default `0.5`, clamped to `[0.0, 1.0]`). If the companion is missing or no doc embeddings exist, the command warns and falls back to lexical results.
+See §5. Returns the ranked list with `score` and `matched_by` (list of which fields hit). Without `--hybrid`, the output is lexical-only: one walk of the configured roots scores every doc's frontmatter and body in place. With `--hybrid`, Orbit embeds the query, retrieves `source_kind = "doc"` rows, min-max normalizes lexical and cosine scores, and blends them with `[docs.search].semantic_weight` (default `0.5`, clamped to `[0.0, 1.0]`). If the companion is missing or no doc embeddings exist, the command warns and falls back to lexical results.
+
+A hybrid query reads the docs corpus once, from one of two places [DANI-10369]:
+
+- **Doc rows in the index.** The lexical half is BM25 over the same `corpus_fts` chunks the cosine half reads (`orbit_search::doc_lexical_search`, one hit per doc at its best-ranked chunk, `matched_by` naming the index field — `title`, `tags`, `body`, or `path`), and every hit is completed from the stored `title`/`tags` fields. Nothing is read from disk, so hits reflect the corpus as of the last `orbit docs index`, and they carry no `status` (doc type), which the index does not store.
+- **No doc rows.** A single walk of the docs roots scores the lexical half and supplies the records the semantic half's hits are completed from; the previous second walk (and second `git check-ignore` spawn) per query is gone.
 
 ### 6.4 `orbit docs add <path>`
 
@@ -279,7 +284,7 @@ When the section is absent or the file is empty, the default root is `["docs/"]`
 
 ## 9. Concerns & Honest Limitations
 
-- **Lexical search is still frontmatter-only.** Plain `orbit search --kind doc` scores summary + tags + type only. Body-level concept recall requires `orbit docs index` plus `orbit search --kind doc --hybrid`.
+- **Lexical search is substring matching.** Plain `orbit search --kind doc` scores summary, tags, type, and body by case-insensitive substring, one walk per query. Concept recall — vocabulary that does not appear in the doc — requires `orbit docs index` plus `orbit search --kind doc --hybrid`, whose lexical half is then BM25 over the index rather than the walk (§6.3).
 - **Migration uses a generated line diff.** The migrator now compares the complete before/after documents, while YAML frontmatter updates are round-tripped through `serde_yaml`.
 - **Hook-time injection is not wired yet.** Task-time related-doc injection is available through `task show --with-context`; PreToolUse hook integration remains [ORB-00167].
 - **Doc semantic freshness is explicit.** Task writes enqueue background embeddings, but docs require `orbit docs index` until a future watcher/background indexer exists.

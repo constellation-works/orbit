@@ -2284,6 +2284,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-subscriber",
+ "wait-timeout",
 ]
 
 [[package]]
@@ -2294,6 +2295,7 @@ dependencies = [
  "orbit-common",
  "orbit-types",
  "regex",
+ "sha2 0.10.9",
  "tempfile",
  "wait-timeout",
 ]

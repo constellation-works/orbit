@@ -17,11 +17,11 @@ mod walk;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 pub use orbit_search::{DocIndexParams, DocIndexResult, SearchResult};
-use orbit_search::{score_doc_record, sort_search_results};
+use orbit_search::{DocSearchResult, score_doc_record};
 use orbit_types::task::Task;
 
 use crate::OrbitRuntime;
@@ -32,6 +32,8 @@ pub use types::{
     TaskRelatedDoc,
 };
 pub use walk::walk_docs_roots;
+#[cfg(test)]
+pub(crate) use walk::{git_check_ignore_invocations, reset_git_check_ignore_invocations};
 
 // Bring helper fns into scope so the pasted impl block (lines 291-408 of original)
 // continues to compile with bare calls.
@@ -90,28 +92,50 @@ impl OrbitRuntime {
         limit: Option<usize>,
         _include_superseded: bool,
     ) -> Result<Vec<SearchResult>, OrbitError> {
+        let walked = self.search_docs_walk(query, limit.unwrap_or(20))?;
+        Ok(walked.results.into_iter().map(SearchResult::Doc).collect())
+    }
+
+    /// Lexical doc search by one walk of the configured roots, keeping the
+    /// record of every doc the walk saw.
+    ///
+    /// Hybrid doc search without a doc index uses this so the semantic half's
+    /// hits are completed from the same walk that scored the lexical half,
+    /// instead of walking — and `git check-ignore`-ing — the corpus a second
+    /// time [DANI-10369].
+    pub(crate) fn search_docs_walk(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<WalkedDocSearch, OrbitError> {
         let query = query.trim();
         if query.is_empty() {
             return Err(OrbitError::InvalidInput(
                 "docs search query must not be empty".to_string(),
             ));
         }
-        let limit = limit.unwrap_or(20);
         let query_lower = query.to_ascii_lowercase();
 
         // One roots resolution and one walk for the whole search: every doc is
         // scored from the body that its single read already produced.
         let roots = self.docs_roots()?;
-        let mut scored = Vec::new();
+        let mut results = Vec::new();
+        let mut records = BTreeMap::new();
         for doc in walk_docs_with_bodies(&self.paths().repo_root, &roots)? {
+            records.insert(doc.record.path.clone(), doc.record.clone());
             let source = doc_search_source(doc.record, doc.body);
             if let Some(result) = score_doc_record(source, &query_lower) {
-                scored.push(SearchResult::Doc(result));
+                results.push(result);
             }
         }
-        sort_search_results(&mut scored);
-        scored.truncate(limit);
-        Ok(scored)
+        results.sort_by(|left, right| {
+            right
+                .score
+                .cmp(&left.score)
+                .then_with(|| left.record.path.cmp(&right.record.path))
+        });
+        results.truncate(limit);
+        Ok(WalkedDocSearch { results, records })
     }
 
     pub fn related_docs_for_task(
@@ -147,7 +171,12 @@ impl OrbitRuntime {
     pub fn index_docs(&self, params: DocIndexParams) -> Result<DocIndexResult, OrbitError> {
         let roots = self.docs_roots()?;
         let sources = doc_embedding_sources(&self.paths().repo_root, &roots)?;
-        orbit_search::doc_index(self.stores().semantic_index().store()?, &sources, params)
+        orbit_search::doc_index(
+            self.stores().semantic_index().store()?,
+            &sources,
+            self.stores().semantic_embedders(),
+            params,
+        )
     }
 
     /// How much of the live docs corpus has a doc embedding row.
@@ -182,5 +211,11 @@ impl OrbitRuntime {
     }
 }
 
+/// One walk's answer to a lexical doc query: the ranked hits, plus the
+/// record of every doc the walk saw keyed by path.
+pub(crate) struct WalkedDocSearch {
+    pub(crate) results: Vec<DocSearchResult>,
+    pub(crate) records: BTreeMap<String, DocRecord>,
+}
+
 // The three parse_*_from_config_toml live in config.rs and are re-exported above.
-// No other top-level items remain in this file.

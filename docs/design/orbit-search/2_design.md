@@ -71,8 +71,9 @@ orbit (main binary)                          orbit-search-companion (installed b
 
 Lifecycle:
 
-- `SubprocessEmbedder::new()` resolves the companion path under `~/.orbit/embed/bin/orbit-search-companion-<platform>` and starts the subprocess. ~100–300ms cold-start latency for ORT init.
-- The subprocess stays alive for the duration of the parent process or until explicitly dropped. Callers that retain the embedder, including the background indexing worker, reuse the same subprocess.
+- Nothing constructs a `SubprocessEmbedder` directly. The runtime holds one `EmbedderPool`, which resolves the companion path under `~/.orbit/embed/bin/orbit-search-companion-<platform>` and starts one subprocess per model alias, on first use. ~100–300ms cold-start latency for ORT init, plus the model load.
+- The pool hands that companion to every semantic caller in the process — search, neighbor lookup, doc search, indexing, and the background worker — so a model is loaded once per host, not once per query. A long-lived host (MCP serve, dashboard) takes a **process-wide** pool: it opens a runtime per call (the MCP server resolves the addressed workspace every time), so a per-runtime pool would reload the model on each call. A command process takes a private pool and drops it, with its companions, at exit. `orbit semantic install` / `uninstall` clear the pool so a replaced binary is not still answering from a cached child.
+- One companion serializes its RPCs, so concurrent queries against one model queue rather than fanning out across processes. That is the intended trade: a queued RPC against a warm companion costs far less than a parallel model load.
 - On process exit, the parent sends an `exit` RPC, closes stdin, and waits a short bounded interval for the companion to leave; a still-running child is killed (its Unix process group) and reaped. Each RPC read waits only up to a payload-scaled deadline; a timeout is a transient transport failure and respawns the companion.
 
 ### 2.3 RPC protocol
@@ -367,6 +368,8 @@ Vectors and FTS rows stay workspace-local ([§3](#3-vector-storage)); only the *
           lexical hits only
 ```
 
+**One embedder for the whole fan-out.** Each target is answered by its own sub-runtime, but the query text they embed is identical and vectors are workspace-independent, so the fan-out hands each sub-runtime the calling host's `EmbedderPool` instead of letting every workspace load the model again. The indexes stay workspace-local; only the companion is shared.
+
 **Attribution is mandatory.** Every federated hit carries `workspace: {workspace_id, name, repo_root}`. Task IDs are globally unique and resolve through the host registry, but friction and job-run IDs are allocated per workspace, so the same ID names a different record in each. F2026-08-046 records a near-miss write to the wrong record from exactly that ambiguity in a merged result set.
 
 **Partial failure is normal.** A registered checkout can be stale, moved, or owned by another machine. Each such workspace contributes zero hits plus a note and appears in the `workspaces` report with `hits: 0`; the query still succeeds. Per-workspace notes are prefixed `[<name>]` so every note is attributed too.
@@ -409,7 +412,7 @@ Concurrency is invisible in the answer: outcomes are re-sorted into target order
 
 ### 7.1 On-mutation indexing
 
-`task.add` and mutating `task.update` paths emit an `EmbedJob` to a bounded in-process channel after the durable write commits. A worker drains the channel, batches up to 16 jobs at a time, and runs `upsert_embeddings`. Failures log and continue — embedding is not in the critical path of task mutation. Background indexing spawns the companion with stderr suppressed so a best-effort indexing failure cannot make a successful task mutation look failed; direct semantic commands still inherit companion stderr so users see actionable failures. Users without the companion installed (`orbit semantic install` not yet run) see `OrbitError::CompanionNotInstalled` from the worker, which it logs at debug level and skips; core task operations are entirely unaffected.
+`task.add` and mutating `task.update` paths emit an `EmbedJob` to a bounded in-process channel after the durable write commits. A worker drains the channel, batches up to 16 jobs at a time, and runs `upsert_embeddings`. Failures log and continue — embedding is not in the critical path of task mutation. The worker draws its companion from the host's `EmbedderPool`, the same one the query path uses, so a mutation and a query share one warm child. Stderr is the pool's choice rather than the worker's: a long-lived host — the only lifetime that runs this worker — suppresses it so a best-effort indexing failure cannot surface as host output, while a command process inherits it so a direct semantic command shows actionable failures. Users without the companion installed (`orbit semantic install` not yet run) see `OrbitError::CompanionNotInstalled` from the worker, which it logs at debug level and skips; core task operations are entirely unaffected.
 
 ### 7.2 Backfill and migration
 
@@ -431,7 +434,7 @@ Users who want semantic search must run two commands instead of one: install `or
 
 ### 8.2 Subprocess overhead
 
-The companion lives in a separate process and inference happens via stdio JSON-RPC. Cold-start latency is ~100–300ms (ORT init + model load). The background task-indexing worker reuses the subprocess across its batches, so the cost is amortized for indexing; a fresh `orbit` invocation pays the startup cost again. RPC serialization itself is sub-millisecond at phase-1 batch sizes (≤16 texts × ~512 tokens each); not a measurable contributor.
+The companion lives in a separate process and inference happens via stdio JSON-RPC. Cold-start latency is ~100–300ms (ORT init + model load). The `EmbedderPool` charges that cost once per model per host process, so a long-lived host pays it on its first semantic request and nothing afterward; a fresh `orbit` invocation pays it again. The cost of keeping it warm is residency: a long-lived host holds the companion, and its loaded model, until the host exits, and concurrent queries against one model serialize on that companion. A host that dies without the cooperative `exit` leaves no orphan — the companion reads EOF on the closed stdin pipe and returns. RPC serialization itself is sub-millisecond at phase-1 batch sizes (≤16 texts × ~512 tokens each); not a measurable contributor.
 
 ### 8.3 Default model quality is unmeasured for Orbit specifically
 

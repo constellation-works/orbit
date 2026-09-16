@@ -4,7 +4,7 @@ use std::sync::Arc;
 use orbit_common::OrbitError;
 use orbit_engine::PrConfig;
 use orbit_policy::PolicyEngine;
-use orbit_search::{EmbedWorker, SemanticIndex};
+use orbit_search::{EmbedWorker, EmbedderPool, SemanticIndex};
 use orbit_store::Store;
 use orbit_store::contracts::{
     AuditEventStoreBackend, AutomationStoreBackend, ExecutorDefStoreBackend,
@@ -219,6 +219,7 @@ pub(crate) struct OrbitStores {
     pub(crate) task_artifact: Arc<dyn TaskArtifactStoreBackend>,
     pub(crate) semantic_index: SemanticIndex,
     pub(crate) semantic_worker: Arc<EmbedWorker>,
+    pub(crate) semantic_embedders: Arc<EmbedderPool>,
     pub(crate) task_reservation: Arc<dyn TaskReservationStoreBackend>,
     pub(crate) job_run: Arc<dyn JobRunStoreBackend>,
     pub(crate) tool: Arc<dyn ToolStoreBackend>,
@@ -237,6 +238,7 @@ impl OrbitStores {
         task_artifact: Arc<dyn TaskArtifactStoreBackend>,
         semantic_index: SemanticIndex,
         semantic_worker: Arc<EmbedWorker>,
+        semantic_embedders: Arc<EmbedderPool>,
         task_reservation: Arc<dyn TaskReservationStoreBackend>,
         job_run: Arc<dyn JobRunStoreBackend>,
         tool: Arc<dyn ToolStoreBackend>,
@@ -252,6 +254,7 @@ impl OrbitStores {
             task_artifact,
             semantic_index,
             semantic_worker,
+            semantic_embedders,
             task_reservation,
             job_run,
             tool,
@@ -286,6 +289,18 @@ impl OrbitStores {
 
     pub(crate) fn semantic_worker(&self) -> &EmbedWorker {
         self.semantic_worker.as_ref()
+    }
+
+    /// Live companions this host shares across every semantic caller —
+    /// queries, indexing, and the background worker alike.
+    pub(crate) fn semantic_embedders(&self) -> &EmbedderPool {
+        self.semantic_embedders.as_ref()
+    }
+
+    /// A handle to that pool, for a sub-runtime that should embed through this
+    /// host's companions rather than start its own.
+    pub(crate) fn semantic_embedder_pool(&self) -> Arc<EmbedderPool> {
+        Arc::clone(&self.semantic_embedders)
     }
 
     pub(crate) fn task_reservations(&self) -> &dyn TaskReservationStoreBackend {
@@ -484,6 +499,14 @@ impl OrbitContext {
 
     pub(crate) fn stores(&self) -> &OrbitStores {
         &self.stores
+    }
+
+    /// Answer semantic reads through `embedders` instead of the pool this
+    /// context opened with. Only a federated fan-out uses this: the per-
+    /// workspace runtimes it opens embed the same query text, so each one
+    /// loading its own copy of the model buys nothing.
+    pub(crate) fn share_semantic_embedders(&mut self, embedders: Arc<EmbedderPool>) {
+        self.stores.semantic_embedders = embedders;
     }
 
     pub(crate) fn policy(&self) -> &PolicyEngine {

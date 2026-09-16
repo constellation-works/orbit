@@ -49,6 +49,7 @@ use std::os::unix::net::UnixStream;
 use super::super::dispatcher::ResolvedSandbox;
 use super::spawn::{SpawnError, SpawnedChild, spawn_child_with_optional_sandbox};
 use orbit_common::process::output_capture::capture_limit_from_env;
+use wait_timeout::ChildExt;
 
 /// Default wall-clock timeout when `AgentLoopSpec::wall_clock_timeout_seconds`
 /// is zero. Matches §7.6 guidance: CLI subprocesses must have a mandatory
@@ -201,7 +202,8 @@ pub(super) struct SpawnWithTimeoutRequest<'a> {
     /// child has no observable identity while it runs.
     pub(super) on_spawn: Option<&'a dyn Fn(u32)>,
     /// Test seam for exercising wait failures without depending on another
-    /// thread reaping the child between `try_wait` calls.
+    /// thread reaping the child between wait calls. Injected hooks are
+    /// try_wait-style (non-blocking); production blocks in `wait_timeout`.
     pub(super) wait: Option<WaitHook<'a>>,
     /// Test seam: each live output reader increments this counter for the
     /// lifetime of its thread so tests can observe finalization without
@@ -360,35 +362,14 @@ pub(super) fn spawn_with_timeout(
         )
     });
 
-    let mut timed_out = false;
     let deadline = started + timeout;
-    let wait_result = loop {
-        let result = match wait {
-            Some(wait) => wait(&mut child),
-            None => child.try_wait(),
-        };
-        match result {
-            Ok(Some(status)) => {
-                break Ok(Some(status));
-            }
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    timed_out = true;
-                    break Ok(None);
-                }
-                thread::sleep(Duration::from_millis(25));
-            }
-            Err(err) => {
-                break Err(err);
-            }
-        }
-    };
-
-    let (exit_status, wait_error) = match wait_result {
-        Ok(exit_status) => (exit_status, None),
-        // `wait` failures are host-side and not clearly deterministic — leave
-        // them retryable after the common cleanup below.
-        Err(err) => (None, Some(err)),
+    let wait_result = wait_until_exit_or_deadline(&mut child, deadline, wait);
+    // `wait` failures are host-side and not clearly deterministic — leave
+    // them retryable after the common cleanup below.
+    let (exit_status, wait_error, timed_out) = match wait_result {
+        Ok(None) => (None, None, true),
+        Ok(exit_status) => (exit_status, None, false),
+        Err(err) => (None, Some(err), false),
     };
 
     kill_child_process_tree(&mut child);
@@ -418,6 +399,35 @@ pub(super) fn spawn_with_timeout(
     let exit_code = exit_status.as_ref().and_then(|s| s.code());
     let duration = started.elapsed();
     Ok((stdout, stderr, exit_code, duration, timed_out))
+}
+
+/// Block until the child exits or `deadline` elapses.
+///
+/// Production uses `wait_timeout` for the remaining wall-clock budget so a
+/// long-running agent does not wake 40 times per second. The test `wait` hook
+/// is try_wait-style and may still poll.
+fn wait_until_exit_or_deadline(
+    child: &mut Child,
+    deadline: Instant,
+    wait: Option<WaitHook<'_>>,
+) -> io::Result<Option<ExitStatus>> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let result = match wait {
+            Some(wait) => wait(child),
+            None => child.wait_timeout(remaining),
+        };
+        match result {
+            Ok(Some(status)) => return Ok(Some(status)),
+            Ok(None) => {
+                if wait.is_none() || Instant::now() >= deadline {
+                    return Ok(None);
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 fn finish_captured_output(buf: &SharedOutputCapture, output_limit: usize) -> CapturedOutput {
