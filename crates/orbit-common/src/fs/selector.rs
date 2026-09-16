@@ -358,22 +358,73 @@ pub fn exists_in_workspace(selector: &str, workspace: &Path) -> bool {
 /// Anchor-less selectors (`module:` / `command:`) overlap only on exact
 /// textual equality.
 pub fn overlaps(a: &str, b: &str) -> bool {
-    let Ok(left) = ParsedScope::parse(a) else {
-        return false;
-    };
-    let Ok(right) = ParsedScope::parse(b) else {
-        return false;
-    };
+    match (OverlapScope::parse(a), OverlapScope::parse(b)) {
+        (Some(left), Some(right)) => left.overlaps(&right),
+        _ => false,
+    }
+}
 
-    let (Some(left_anchor), Some(right_anchor)) = (left.anchor_path(), right.anchor_path()) else {
-        return a.trim() == b.trim();
-    };
-    if left_anchor == right_anchor {
-        return true;
+/// One side of an [`overlaps`] comparison, parsed once.
+///
+/// [`overlaps`] parses both selectors on every call, which is fine for a
+/// single comparison and quadratic for a scheduler comparing every requested
+/// selector against every held one. Parsing each side once — and keying an
+/// index on the anchor ([`super::overlap_index::OverlapIndex`]) — turns that
+/// scan into a prefix lookup with the same answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OverlapScope {
+    /// Anchored at a normalized filesystem path. `contains_descendants` is
+    /// true for `dir:` and legacy raw paths, which overlap everything beneath
+    /// their anchor; `file:` and `symbol:` overlap only their own anchor.
+    Anchored {
+        /// Normalized anchor path, as [`anchor_path`] would return it.
+        path: String,
+        /// Whether selectors anchored strictly beneath `path` overlap it.
+        contains_descendants: bool,
+    },
+    /// `module:` / `command:` — overlaps only on exact textual equality.
+    Exact(String),
+}
+
+impl OverlapScope {
+    /// Parse a selector or legacy path-like input. `None` when it does not
+    /// parse, which [`overlaps`] treats as overlapping nothing.
+    pub fn parse(selector: &str) -> Option<Self> {
+        let parsed = ParsedScope::parse(selector).ok()?;
+        Some(match parsed.anchor_path() {
+            Some(path) => Self::Anchored {
+                path: path.to_string(),
+                contains_descendants: parsed.can_contain_descendants(),
+            },
+            None => Self::Exact(selector.trim().to_string()),
+        })
     }
 
-    (is_path_ancestor(left_anchor, right_anchor) && left.can_contain_descendants())
-        || (is_path_ancestor(right_anchor, left_anchor) && right.can_contain_descendants())
+    /// The same answer as [`overlaps`] on the two selectors these were parsed
+    /// from.
+    pub fn overlaps(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Anchored {
+                    path: left,
+                    contains_descendants: left_contains,
+                },
+                Self::Anchored {
+                    path: right,
+                    contains_descendants: right_contains,
+                },
+            ) => {
+                left == right
+                    || (*left_contains && is_path_ancestor(left, right))
+                    || (*right_contains && is_path_ancestor(right, left))
+            }
+            (Self::Exact(left), Self::Exact(right)) => left == right,
+            // An anchored selector never reads as the same text as an
+            // anchor-less one, so the mixed case is the textual-equality
+            // branch with a known-false answer.
+            _ => false,
+        }
+    }
 }
 
 /// Return the number of shared path segments between two selector anchors.

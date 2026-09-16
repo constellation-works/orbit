@@ -14,16 +14,18 @@
 //! blocked candidate does not skip the ones behind it, so the wave reaches
 //! independent work instead of stopping at the cluster.
 //!
-//! Footprints come from `lock_context_files_for_task` and are compared with
-//! `workspace_relative_paths_overlap`, so canonical file/directory/symbol
-//! normalization and an epic root's descendant coverage are the same semantics
-//! the gate will enforce later. Nothing here reserves anything: the wave is a
-//! prediction, and `reserve_locks` stays authoritative for the race.
+//! Footprints come from `lock_context_files_for_task` and are compared under
+//! `workspace_relative_paths_overlap`'s semantics through an `OverlapIndex`,
+//! so canonical file/directory/symbol normalization and an epic root's
+//! descendant coverage are the same semantics the gate will enforce later —
+//! answered as a prefix lookup per requested selector rather than a pass over
+//! every held one. Nothing here reserves anything: the wave is a prediction,
+//! and `reserve_locks` stays authoritative for the race.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use orbit_common::fs::path::workspace_relative_paths_overlap;
+use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
@@ -138,8 +140,8 @@ impl AdmissionSelection {
 /// live claim clears when a wrapper's child finishes.
 #[derive(Clone, Debug, Default)]
 pub(super) struct AdmissionHolders {
-    held: BTreeMap<String, Vec<String>>,
-    claimed: BTreeMap<String, Vec<String>>,
+    held: OverlapIndex<Vec<String>>,
+    claimed: OverlapIndex<Vec<String>>,
 }
 
 impl AdmissionHolders {
@@ -173,37 +175,44 @@ impl AdmissionHolders {
         }
 
         Self {
-            held: lock_holders.clone(),
-            claimed,
+            held: index_holders(lock_holders),
+            claimed: index_holders(&claimed),
         }
     }
 
     fn conflicts_for(&self, requested_selector: &str) -> Vec<AdmissionConflict> {
         let held = self
             .held
-            .iter()
+            .overlapping(requested_selector)
+            .into_iter()
             .map(|entry| (entry, ConflictProvenance::HeldLock));
         let claimed = self
             .claimed
-            .iter()
+            .overlapping(requested_selector)
+            .into_iter()
             .map(|entry| (entry, ConflictProvenance::LiveClaim));
 
         held.chain(claimed)
-            .filter(|((blocking_selector, _), _)| {
-                workspace_relative_paths_overlap(requested_selector, blocking_selector)
-            })
             .flat_map(|((blocking_selector, blocking_task_ids), provenance)| {
                 blocking_task_ids
                     .iter()
                     .map(move |blocking_task_id| AdmissionConflict {
                         requested_selector: requested_selector.to_string(),
-                        blocking_selector: blocking_selector.clone(),
+                        blocking_selector: blocking_selector.to_string(),
                         blocking_task_id: blocking_task_id.clone(),
                         provenance,
                     })
             })
             .collect()
     }
+}
+
+fn index_holders(holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<Vec<String>> {
+    let mut index = OverlapIndex::new();
+    for (selector, task_ids) in holders {
+        index.insert(selector, task_ids.clone());
+    }
+    index
 }
 
 /// Fill the free slots with a pairwise non-conflicting set, preserving the
@@ -224,7 +233,7 @@ pub(super) fn select_admissions(
     // Selectors this wave has already promised, and the task each was promised
     // to. Grown as tasks are selected, which is what makes the wave internally
     // consistent rather than merely consistent with the stores.
-    let mut wave: BTreeMap<String, String> = BTreeMap::new();
+    let mut wave: OverlapIndex<String> = OverlapIndex::new();
 
     for candidate_id in ordered_candidates {
         if selection.selected.len() >= free_slots {
@@ -249,7 +258,7 @@ pub(super) fn select_admissions(
 
         if conflicts.is_empty() {
             for selector in footprint {
-                wave.entry(selector).or_insert_with(|| candidate_id.clone());
+                wave.insert(&selector, candidate_id.clone());
             }
             selection.selected.push(candidate_id.clone());
         } else {
@@ -263,17 +272,12 @@ pub(super) fn select_admissions(
     selection
 }
 
-fn wave_conflicts(
-    requested_selector: &str,
-    wave: &BTreeMap<String, String>,
-) -> Vec<AdmissionConflict> {
-    wave.iter()
-        .filter(|(blocking_selector, _)| {
-            workspace_relative_paths_overlap(requested_selector, blocking_selector)
-        })
+fn wave_conflicts(requested_selector: &str, wave: &OverlapIndex<String>) -> Vec<AdmissionConflict> {
+    wave.overlapping(requested_selector)
+        .into_iter()
         .map(|(blocking_selector, blocking_task_id)| AdmissionConflict {
             requested_selector: requested_selector.to_string(),
-            blocking_selector: blocking_selector.clone(),
+            blocking_selector: blocking_selector.to_string(),
             blocking_task_id: blocking_task_id.clone(),
             provenance: ConflictProvenance::SameWave,
         })
