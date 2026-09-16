@@ -16,7 +16,7 @@ use rusqlite::{Connection, TransactionBehavior, params};
 use super::VectorStore;
 use crate::Embedder;
 use crate::vector::chunker::chunk_text;
-use crate::vector::{EmbeddingField, UpsertReport, encode_f32_blob};
+use crate::vector::{EmbeddingField, UpsertReport, encode_f32_blob, normalize_f32};
 
 const TARGET_CHUNK_TOKENS: usize = 400;
 const OVERLAP_TOKENS: usize = 50;
@@ -196,15 +196,16 @@ fn insert_field_chunks(
             r#"
                 INSERT INTO embeddings(
                     source_kind, source_id, field, chunk_idx, content_hash,
-                    model_id, dim, embedding, created_at
+                    model_id, dim, embedding, created_at, normalized
                 )
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                 ON CONFLICT(source_kind, source_id, field, chunk_idx, model_id)
                 DO UPDATE SET
                     content_hash = excluded.content_hash,
                     dim = excluded.dim,
                     embedding = excluded.embedding,
-                    created_at = excluded.created_at
+                    created_at = excluded.created_at,
+                    normalized = excluded.normalized
             "#,
         )
         .map_err(|error| OrbitError::Store(error.to_string()))?
@@ -216,8 +217,9 @@ fn insert_field_chunks(
             field.hash,
             embedder.model_id(),
             embedder.dim() as i64,
-            encode_f32_blob(vector),
+            encode_f32_blob(&normalize_f32(vector)),
             now_string(),
+            1_i64,
         ])
         .map_err(|error| OrbitError::Store(error.to_string()))?;
         conn.prepare_cached(
