@@ -61,16 +61,21 @@ pub(super) fn run_step_with_retry(
     let Some(retry) = &step.retry else {
         // No retry wrapper — single attempt.
         return match run_step_body(step, ctx) {
-            Ok(outcome) => Ok(outcome),
+            Ok(outcome) if outcome.success => Ok(outcome),
+            // [DANI-10438] A declared-failed outcome is the recovery leaf's
+            // case, not a bypass of it.
+            Ok(outcome) => {
+                recover_or_return_original(step, ctx, StepFailure::Outcome(outcome), 1, 1)
+            }
             Err(err) if err.is_non_retryable() => {
                 emit_denied_if_applicable(&err, &step.id, &ctx.audit, ctx.task_id());
                 if err.allows_recovery() {
-                    recover_or_return_original(step, ctx, err, 1, 1)
+                    recover_or_return_original(step, ctx, StepFailure::Error(err), 1, 1)
                 } else {
                     Err(err)
                 }
             }
-            Err(err) => recover_or_return_original(step, ctx, err, 1, 1),
+            Err(err) => recover_or_return_original(step, ctx, StepFailure::Error(err), 1, 1),
         };
     };
 
@@ -103,7 +108,13 @@ pub(super) fn run_step_with_retry(
             Err(err) if err.is_non_retryable() => {
                 emit_denied_if_applicable(&err, &step.id, &ctx.audit, ctx.task_id());
                 return if err.allows_recovery() {
-                    recover_or_return_original(step, ctx, err, attempt + 1, max_attempts)
+                    recover_or_return_original(
+                        step,
+                        ctx,
+                        StepFailure::Error(err),
+                        attempt + 1,
+                        max_attempts,
+                    )
                 } else {
                     Err(err)
                 };
@@ -130,14 +141,18 @@ pub(super) fn run_step_with_retry(
         thread::sleep(Duration::from_millis(backoff_ms));
     }
 
-    match last_err {
-        Some(err) => recover_or_return_original(step, ctx, err, max_attempts, max_attempts),
-        None => Ok(last_failed_outcome.unwrap_or(StepOutcome {
+    // Retries exhausted. [DANI-10438] Whether the last attempt errored or
+    // completed with `success: false`, the step's recovery activity gets one
+    // shot before the failure is returned.
+    let failure = match last_err {
+        Some(err) => StepFailure::Error(err),
+        None => StepFailure::Outcome(last_failed_outcome.unwrap_or(StepOutcome {
             success: false,
             output: Value::Null,
             message: None,
         })),
-    }
+    };
+    recover_or_return_original(step, ctx, failure, max_attempts, max_attempts)
 }
 
 pub(super) fn step_fs_profile(step: &JobV2Step) -> Option<&str> {
