@@ -4,8 +4,7 @@ use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    Task, TaskReferenceIndex, TaskStatus, task_dependencies_ready_with_index,
-    unmet_task_dependencies_with_index,
+    Task, TaskStatus, task_dependencies_ready_with_index, unmet_task_dependencies_with_index,
 };
 use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit, OperationAdmission};
 use serde_json::{Value, json};
@@ -18,8 +17,8 @@ use crate::runtime::engine::crew::CrewAllowlist;
 
 use super::auto_admission::{AdmissionHolders, select_admissions};
 use super::backlog_exclusion::{
-    BacklogTaskExclusionReason, EpicFamilyMembership, allowlist_from_input, backlog_snapshot,
-    epic_family_membership, sort_tasks_for_automatic_dispatch,
+    BacklogSnapshot, BacklogTaskExclusionReason, EpicFamilyMembership, allowlist_from_input,
+    backlog_snapshot, epic_family_membership, sort_tasks_for_automatic_dispatch,
 };
 use super::leaf_occupancy::{occupancy_json, read_leaf_occupancy};
 
@@ -167,13 +166,13 @@ pub(super) fn classify_workspace_auto_tasks(
     let pending: Vec<String> = snapshot
         .admissible_leaves
         .iter()
-        .map(|task| task.id.clone())
-        .filter(|task_id| !claimed.contains(task_id))
+        .filter(|task_id| !claimed.contains(*task_id))
         .filter(|task_id| {
             operation
                 .as_ref()
-                .is_none_or(|operation| operation.scope.contains(task_id))
+                .is_none_or(|operation| operation.scope.contains(*task_id))
         })
+        .cloned()
         .collect();
 
     // [ORB-11973] The wave used to be `pending[..free_slots]`, which could hand
@@ -219,7 +218,7 @@ pub(super) fn classify_workspace_auto_tasks(
     let epic_task_id = if admissions_stopped || !operation_open || active_epic.is_some() {
         None
     } else {
-        next_admissible_epic_root(runtime, action, allowlist.as_ref(), &pools)?.filter(|root| {
+        next_admissible_epic_root(runtime, &snapshot, allowlist.as_ref(), &pools).filter(|root| {
             operation
                 .as_ref()
                 .is_none_or(|operation| operation.scope.contains(root))
@@ -418,13 +417,13 @@ pub fn explain_workspace_auto_readiness(
     let pending = snapshot
         .admissible_leaves
         .iter()
-        .filter(|task| !claimed_by_task.contains_key(&task.id))
-        .filter(|task| {
+        .filter(|task_id| !claimed_by_task.contains_key(*task_id))
+        .filter(|task_id| {
             operation
                 .as_ref()
-                .is_none_or(|operation| operation.grant.covers(&task.id))
+                .is_none_or(|operation| operation.grant.covers(task_id))
         })
-        .map(|task| task.id.clone())
+        .cloned()
         .collect::<Vec<_>>();
     // [ORB-11973] Use the classifier's identical ordered prefix and admission
     // routine, so readiness explains the wave the drain would actually admit
@@ -467,26 +466,23 @@ pub fn explain_workspace_auto_readiness(
         .map(|excluded| (excluded.id.as_str(), excluded))
         .collect::<BTreeMap<_, _>>();
     let next_epic = if active_epic.is_none() && !admissions_stopped {
-        next_admissible_epic_root(
-            runtime,
-            "explain_workspace_auto_readiness",
-            allowlist.as_ref(),
-            &pools,
-        )
-        .map_err(|error| OrbitError::Execution(format!("read epic readiness: {error}")))?
+        next_admissible_epic_root(runtime, &snapshot, allowlist.as_ref(), &pools)
     } else {
         None
     };
 
     let selected_ids = if task_ids.is_empty() {
-        let mut ids = snapshot
+        let mut backlog = snapshot
             .task_lookup
             .values()
             .filter(|task| task.status == TaskStatus::Backlog)
-            .cloned()
             .collect::<Vec<_>>();
-        sort_tasks_for_automatic_dispatch(&mut ids);
-        ids.into_iter().take(limit).map(|task| task.id).collect()
+        sort_tasks_for_automatic_dispatch(&mut backlog);
+        backlog
+            .into_iter()
+            .take(limit)
+            .map(|task| task.id.clone())
+            .collect()
     } else {
         let mut ids = task_ids.to_vec();
         ids.sort();
@@ -508,7 +504,6 @@ pub fn explain_workspace_auto_readiness(
         ids
     };
 
-    let reference_index = TaskReferenceIndex::from_status_index(&snapshot.status_by_id);
     let tasks = selected_ids
         .iter()
         .filter_map(|id| snapshot.task_lookup.get(id))
@@ -528,7 +523,7 @@ pub fn explain_workspace_auto_readiness(
             let unmet = unmet_task_dependencies_with_index(
                 task,
                 &snapshot.status_by_id,
-                &reference_index,
+                &snapshot.reference_index,
             );
             if !unmet.is_empty() {
                 object.insert("reason".to_string(), Value::String("unmet_dependency".to_string()));
@@ -942,38 +937,28 @@ fn read_active_epic_run(runtime: &OrbitRuntime) -> Result<Option<ActiveEpicRun>,
 
 /// The highest-priority `backlog` epic root whose dependencies are satisfied
 /// and whose effective crew this run's window permits [ORB-11242].
+///
+/// Reads the snapshot the caller already holds: the epic decision and the
+/// leaf wave then describe the same population, and the tick does not list
+/// the store or project statuses a second time.
 fn next_admissible_epic_root(
     runtime: &OrbitRuntime,
-    action: &str,
+    snapshot: &BacklogSnapshot,
     allowlist: Option<&CrewAllowlist>,
     pools: &CapturedCrewPools,
-) -> Result<Option<String>, DispatchError> {
-    let all_tasks = runtime.stores().tasks().list_tasks().map_err(|err| {
-        DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("list tasks: {err}"),
-        }
-    })?;
-    let task_lookup: BTreeMap<String, Task> = all_tasks
-        .iter()
-        .cloned()
-        .map(|task| (task.id.clone(), task))
-        .collect();
-    let status_by_id =
-        runtime
-            .task_status_index()
-            .map_err(|err| DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("load global task status projection: {err}"),
-            })?;
-    let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
-
-    let mut backlog_epics = all_tasks
-        .into_iter()
+) -> Option<String> {
+    let mut backlog_epics = snapshot
+        .task_lookup
+        .values()
         .filter(|task| {
             task.status == TaskStatus::Backlog
-                && epic_family_membership(task, &task_lookup) == Some(EpicFamilyMembership::Root)
-                && task_dependencies_ready_with_index(task, &status_by_id, &reference_index)
+                && epic_family_membership(task, &snapshot.task_lookup)
+                    == Some(EpicFamilyMembership::Root)
+                && task_dependencies_ready_with_index(
+                    task,
+                    &snapshot.status_by_id,
+                    &snapshot.reference_index,
+                )
                 && allowlist.is_none_or(|allowlist| {
                     runtime
                         .auto_task_crew_eligibility(task, pools, allowlist)
@@ -982,7 +967,7 @@ fn next_admissible_epic_root(
         })
         .collect::<Vec<_>>();
     sort_tasks_for_automatic_dispatch(&mut backlog_epics);
-    Ok(backlog_epics.into_iter().next().map(|epic| epic.id))
+    backlog_epics.first().map(|epic| epic.id.clone())
 }
 
 /// Open or re-read a drain window [ORB-10819].
@@ -1136,15 +1121,15 @@ pub(super) fn list_epic_descendants(
             action: action.to_string(),
             message: "missing `epic_task_id`".to_string(),
         })?;
-    let all_tasks = runtime.stores().tasks().list_tasks().map_err(|error| {
-        DispatchError::DeterministicActionFailed {
+    let task_lookup = runtime
+        .stores()
+        .tasks()
+        .list_tasks()
+        .map_err(|error| DispatchError::DeterministicActionFailed {
             action: action.to_string(),
             message: format!("list tasks: {error}"),
-        }
-    })?;
-    let task_lookup = all_tasks
-        .iter()
-        .cloned()
+        })?
+        .into_iter()
         .map(|task| (task.id.clone(), task))
         .collect::<BTreeMap<_, _>>();
     let epic =
@@ -1161,8 +1146,8 @@ pub(super) fn list_epic_descendants(
         });
     }
 
-    let mut remaining = all_tasks
-        .into_iter()
+    let mut remaining = task_lookup
+        .values()
         .filter(|task| {
             is_descendant_of(task, epic_task_id, &task_lookup)
                 && !matches!(
@@ -1170,20 +1155,20 @@ pub(super) fn list_epic_descendants(
                     TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
                 )
         })
-        .map(|task| (task.id.clone(), task))
+        .map(|task| (task.id.as_str(), task))
         .collect::<BTreeMap<_, _>>();
     let mut ordered = Vec::with_capacity(remaining.len());
 
     while !remaining.is_empty() {
-        let remaining_ids = remaining.keys().cloned().collect::<BTreeSet<_>>();
+        let remaining_ids = remaining.keys().copied().collect::<BTreeSet<_>>();
         let mut ready = remaining
             .values()
             .filter(|task| {
                 task.dependencies()
                     .iter()
-                    .all(|dependency_id| !remaining_ids.contains(dependency_id))
+                    .all(|dependency_id| !remaining_ids.contains(dependency_id.as_str()))
             })
-            .cloned()
+            .copied()
             .collect::<Vec<_>>();
         if ready.is_empty() {
             return Err(DispatchError::DeterministicActionFailed {
@@ -1196,8 +1181,8 @@ pub(super) fn list_epic_descendants(
         }
         sort_tasks_for_automatic_dispatch(&mut ready);
         for task in ready {
-            remaining.remove(&task.id);
-            ordered.push(task.id);
+            remaining.remove(task.id.as_str());
+            ordered.push(task.id.clone());
         }
     }
 

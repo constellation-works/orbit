@@ -1,7 +1,8 @@
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use orbit_common::fs::path::workspace_relative_paths_overlap;
+use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
     NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskPriority, TaskReferenceIndex, TaskStatus,
@@ -65,9 +66,20 @@ pub(super) struct BacklogTaskConflict {
 /// dispatch and its read-only diagnostic.  Keeping the lock/epic filter here
 /// prevents the diagnostic from becoming a second scheduler.
 pub(super) struct BacklogSnapshot {
+    /// Every task in the workspace, whole: an epic's lock set is the union
+    /// over its descendants, a downward walk a status-filtered map would
+    /// silently shorten. This is the one materialized copy; the other fields
+    /// refer into it by ID rather than holding clones.
     pub(super) task_lookup: BTreeMap<String, Task>,
+    /// The registry-global status projection. Deliberately not derived from
+    /// `task_lookup`: task lists are workspace-scoped, dependency readiness
+    /// is not, and a dependency on a task in another workspace resolves only
+    /// here.
     pub(super) status_by_id: BTreeMap<String, TaskStatus>,
-    pub(super) admissible_leaves: Vec<Task>,
+    pub(super) reference_index: TaskReferenceIndex,
+    /// Admissible leaf task IDs in dispatch order; the tasks are in
+    /// `task_lookup`.
+    pub(super) admissible_leaves: Vec<String>,
     pub(super) excluded: Vec<BacklogTaskExclusion>,
     /// Selector -> the `in-progress` / `review` tasks holding it. Carried on
     /// the snapshot rather than recomputed by each consumer so admission
@@ -76,6 +88,10 @@ pub(super) struct BacklogSnapshot {
     pub(super) lock_holders: BTreeMap<String, Vec<String>>,
 }
 
+/// Expand each `in-progress` / `review` surface exactly once. Expansion is
+/// the expensive half — every selector is checked against the filesystem —
+/// so the map is built here and every consumer (exclusion, admission, the
+/// lock-wait diagnostic) reads it rather than expanding again.
 fn active_task_lock_holders(
     tasks: &BTreeMap<String, Task>,
     workspace_root: &Path,
@@ -95,22 +111,31 @@ fn active_task_lock_holders(
     holders
 }
 
+/// The holders keyed by anchor, so one backlog task's overlap check is a
+/// prefix lookup per requested selector rather than a pass over every held
+/// one.
+fn lock_holder_index(lock_holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<&[String]> {
+    let mut index = OverlapIndex::new();
+    for (selector, locking_task_ids) in lock_holders {
+        index.insert(selector, locking_task_ids.as_slice());
+    }
+    index
+}
+
 fn task_overlap_conflicts(
     task: &Task,
     task_lookup: &BTreeMap<String, Task>,
-    holders: &BTreeMap<String, Vec<String>>,
+    holders: &OverlapIndex<&[String]>,
     workspace_root: &Path,
 ) -> Vec<BacklogTaskConflict> {
     let mut conflicts = Vec::new();
     for requested_file in lock_context_files_for_task(task, task_lookup, workspace_root) {
-        for (held_file, locking_task_ids) in holders {
-            if workspace_relative_paths_overlap(&requested_file, held_file) {
-                for locking_task_id in locking_task_ids {
-                    conflicts.push(BacklogTaskConflict {
-                        requested_file: requested_file.clone(),
-                        locking_task_id: locking_task_id.clone(),
-                    });
-                }
+        for (_, locking_task_ids) in holders.overlapping(&requested_file) {
+            for locking_task_id in locking_task_ids.iter() {
+                conflicts.push(BacklogTaskConflict {
+                    requested_file: requested_file.clone(),
+                    locking_task_id: locking_task_id.clone(),
+                });
             }
         }
     }
@@ -139,17 +164,6 @@ pub(super) fn list_backlog_tasks(
         })
         .unwrap_or_default();
     let (mut tasks, excluded_entries) = if explicit_task_ids.is_empty() {
-        // The lookup must stay whole: an epic's lock set is the union over its
-        // descendants (`lock_context_files_for_task`), which is a downward walk
-        // that a status-filtered map would silently shorten — narrowing it
-        // would shrink lock coverage, not just the scan. Reducing the scan
-        // itself needs a persisted parent -> children index; until then the
-        // population is loaded once and the whole set is walked.
-        //
-        // What it must not do is materialize that population twice. Consume the
-        // list into the lookup, then clone only the backlog tasks that survive
-        // the filter — tens of clones on a large workspace instead of one per
-        // task, and one copy held rather than two.
         let pools = if input.get("auto_crew_pools").is_some()
             || action == "classify_workspace_auto_tasks"
         {
@@ -162,13 +176,21 @@ pub(super) fn list_backlog_tasks(
         } else {
             CapturedCrewPools::new()
         };
-        let snapshot = backlog_snapshot(
+        let mut snapshot = backlog_snapshot(
             runtime,
             action,
             allowlist_from_input(runtime, action, input)?.as_ref(),
             &pools,
         )?;
-        (snapshot.admissible_leaves, Some(snapshot.excluded))
+        // Nothing reads the lookup after this, so the admissible tasks move
+        // out of it rather than being cloned; the rest is dropped with it.
+        let tasks = snapshot
+            .admissible_leaves
+            .iter()
+            .take(max_tasks)
+            .filter_map(|task_id| snapshot.task_lookup.remove(task_id))
+            .collect();
+        (tasks, snapshot.excluded)
     } else {
         let mut tasks = Vec::new();
         let mut excluded = Vec::new();
@@ -190,7 +212,7 @@ pub(super) fn list_backlog_tasks(
                 });
             }
         }
-        (tasks, Some(excluded))
+        (tasks, excluded)
     };
     tasks.truncate(max_tasks);
     let ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
@@ -215,17 +237,15 @@ pub(super) fn list_backlog_tasks(
     payload.insert("bundles".to_string(), serde_json::json!(bundles));
     // Keep this Rust serialization contract in sync with
     // crates/orbit-core/assets/activities/list_backlog_tasks.yaml.
-    if let Some(excluded) = excluded_entries {
-        payload.insert(
-            "excluded".to_string(),
-            serde_json::to_value(excluded).map_err(|err| {
-                DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: format!("serialize excluded backlog tasks: {err}"),
-                }
-            })?,
-        );
-    }
+    payload.insert(
+        "excluded".to_string(),
+        serde_json::to_value(excluded_entries).map_err(|err| {
+            DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: format!("serialize excluded backlog tasks: {err}"),
+            }
+        })?,
+    );
     Ok(Value::Object(payload))
 }
 
@@ -250,6 +270,9 @@ pub(super) fn backlog_snapshot(
     allowlist: Option<&CrewAllowlist>,
     pools: &CapturedCrewPools,
 ) -> Result<BacklogSnapshot, DispatchError> {
+    // The population is materialized once, by moving the listing into the
+    // lookup. Everything below borrows from it: the backlog is a vector of
+    // references and the snapshot hands back IDs.
     let task_lookup: BTreeMap<String, Task> = runtime
         .stores()
         .tasks()
@@ -261,6 +284,8 @@ pub(super) fn backlog_snapshot(
         .into_iter()
         .map(|task| (task.id.clone(), task))
         .collect();
+    // One status projection per snapshot. It is the registry-global index,
+    // not a re-read of `task_lookup`'s statuses (see `BacklogSnapshot`).
     let status_by_id =
         runtime
             .task_status_index()
@@ -274,13 +299,12 @@ pub(super) fn backlog_snapshot(
     // `task_lookup` iterates in task-ID order rather than the store's
     // created-at order; `sort_tasks_for_automatic_dispatch` is a total order
     // ending in the task ID, so the dispatch sequence is unchanged.
-    let mut backlog: Vec<Task> = task_lookup
+    let mut backlog: Vec<&Task> = task_lookup
         .values()
         .filter(|task| {
             task.status == TaskStatus::Backlog
                 && task_dependencies_ready_with_index(task, &status_by_id, &reference_index)
         })
-        .cloned()
         .collect();
     sort_tasks_for_automatic_dispatch(&mut backlog);
     let mut excluded = Vec::new();
@@ -343,11 +367,12 @@ pub(super) fn backlog_snapshot(
         false
     });
     if !lock_holders.is_empty() {
+        let holder_index = lock_holder_index(&lock_holders);
         let direct_conflicts: BTreeMap<String, Vec<BacklogTaskConflict>> = backlog
             .iter()
             .filter_map(|task| {
                 let conflicts =
-                    task_overlap_conflicts(task, &task_lookup, &lock_holders, workspace_root);
+                    task_overlap_conflicts(task, &task_lookup, &holder_index, workspace_root);
                 (!conflicts.is_empty()).then(|| (task.id.clone(), conflicts))
             })
             .collect();
@@ -363,7 +388,7 @@ pub(super) fn backlog_snapshot(
         if !root_trigger.is_empty() {
             let mut kept = Vec::new();
             for task in backlog {
-                let root_id = task_root_id(&task, &task_lookup);
+                let root_id = task_root_id(task, &task_lookup);
                 if let Some(trigger_conflicts) = root_trigger.get(&root_id) {
                     excluded.push(BacklogTaskExclusion {
                         id: task.id.clone(),
@@ -386,10 +411,12 @@ pub(super) fn backlog_snapshot(
         }
     }
     excluded.sort_by(|a, b| a.id.cmp(&b.id));
+    let admissible_leaves = backlog.into_iter().map(|task| task.id.clone()).collect();
     Ok(BacklogSnapshot {
         task_lookup,
         status_by_id,
-        admissible_leaves: backlog,
+        reference_index,
+        admissible_leaves,
         excluded,
         lock_holders,
     })
@@ -412,7 +439,10 @@ fn clears_complexity_gate(task: &Task) -> bool {
         || task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
 }
 
-pub(super) fn sort_tasks_for_automatic_dispatch(tasks: &mut [Task]) {
+/// Sort owned or borrowed tasks into automatic dispatch order: critical
+/// first, then corrective work, then priority, age, and the task ID as the
+/// total tie-breaker.
+pub(super) fn sort_tasks_for_automatic_dispatch<T: Borrow<Task>>(tasks: &mut [T]) {
     let dispatch_band = |task: &Task| {
         if task.priority == TaskPriority::Critical {
             0
@@ -434,6 +464,7 @@ pub(super) fn sort_tasks_for_automatic_dispatch(tasks: &mut [Task]) {
         TaskPriority::Low => 3,
     };
     tasks.sort_by(|left, right| {
+        let (left, right) = (left.borrow(), right.borrow());
         dispatch_band(left)
             .cmp(&dispatch_band(right))
             .then(priority_rank(left.priority).cmp(&priority_rank(right.priority)))

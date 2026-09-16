@@ -40,6 +40,39 @@ mod matching {
     }
 
     #[test]
+    fn overlap_scope_parses_each_side_once_with_the_same_answers() {
+        assert_eq!(
+            OverlapScope::parse("dir:src/"),
+            Some(OverlapScope::Anchored {
+                path: "src".to_string(),
+                contains_descendants: true,
+            })
+        );
+        assert_eq!(
+            OverlapScope::parse("symbol:src/lib.rs#run:function"),
+            Some(OverlapScope::Anchored {
+                path: "src/lib.rs".to_string(),
+                contains_descendants: false,
+            })
+        );
+        assert_eq!(
+            OverlapScope::parse(" module:orbit::core "),
+            Some(OverlapScope::Exact("module:orbit::core".to_string()))
+        );
+        assert_eq!(OverlapScope::parse("symbol:broken"), None);
+
+        let module = OverlapScope::parse("module:orbit::core").unwrap();
+        let dir = OverlapScope::parse("dir:src").unwrap();
+        let file = OverlapScope::parse("file:src/lib.rs").unwrap();
+        let sibling = OverlapScope::parse("file:src-old/lib.rs").unwrap();
+        assert!(module.overlaps(&module));
+        assert!(!module.overlaps(&dir));
+        assert!(dir.overlaps(&file) && file.overlaps(&dir));
+        assert!(!file.overlaps(&sibling) && !dir.overlaps(&sibling));
+        assert!(!file.overlaps(&OverlapScope::parse("dir:src/lib.rs/odd").unwrap()));
+    }
+
+    #[test]
     fn shared_anchor_prefix_depth_ignores_selector_metadata() {
         assert_eq!(
             shared_anchor_prefix_depth(
