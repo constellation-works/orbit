@@ -24,6 +24,7 @@ mod inspect;
 mod owner_wins;
 mod publication;
 mod publish;
+mod reindex;
 mod restore;
 
 /// Run `git` with a deterministic, non-interactive identity. Publication tests
