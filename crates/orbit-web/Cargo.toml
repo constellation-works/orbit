@@ -17,6 +17,7 @@ base64.workspace = true
 blake3.workspace = true
 chrono.workspace = true
 clap.workspace = true
+flate2.workspace = true
 futures-core.workspace = true
 orbit-cmd = { path = "../orbit-cmd" }
 orbit-common = { path = "../orbit-common" }
