@@ -7,7 +7,7 @@ use orbit_common::model::pricing::normalize_token_usage;
 use orbit_store::contracts::{
     ActivityInvocationMetrics, AgentInvocationMetrics, InvocationAccountingFact,
     InvocationAccountingQuery, InvocationInsertParams, InvocationQuery, InvocationRecord,
-    InvocationStoreBackend, TaskInvocationMetrics, ToolInvocationMetrics,
+    InvocationStoreBackend, TaskInvocationMetrics, TaskListFilter, ToolInvocationMetrics,
 };
 use orbit_store::scoreboard_summary::{NormalizedTokenSummary, OrchestrationModelSummary};
 use orbit_types::telemetry::TokenUsage;
@@ -307,9 +307,10 @@ impl OrbitRuntime {
             },
         )?;
         let task_orchestrators = self
-            .list_tasks()?
+            .task_candidates(&TaskListFilter::default(), usize::MAX)?
+            .items
             .into_iter()
-            .map(|task| (task.id.to_string(), task.orchestrator))
+            .map(|task| (task.id, task.orchestrator))
             .collect::<HashMap<_, _>>();
 
         let mut grouped = BTreeMap::<BucketKey, BucketAccumulator>::new();

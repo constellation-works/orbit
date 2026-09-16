@@ -63,11 +63,7 @@ pub(crate) fn promote_within_grant(
     let promotion_allowed =
         grant.rights.promote && policy.promotion.value == PromotionPreference::Automatic;
 
-    let status_by_id = runtime
-        .list_tasks()?
-        .into_iter()
-        .map(|task| (task.id, task.status))
-        .collect();
+    let status_by_id = runtime.task_status_index()?;
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let branch = runtime.workflow_base_branch().to_string();
     let mut source: Option<(String, InstructionSnapshot)> = None;

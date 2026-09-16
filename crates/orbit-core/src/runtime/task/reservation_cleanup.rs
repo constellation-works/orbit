@@ -131,7 +131,7 @@ impl OrbitRuntime {
 
     /// The workspace-wide facts stale classification consults, read once per
     /// pass instead of once per reservation: the orphan classifier scans
-    /// every job run and the task sweep reads every task.
+    /// every job run and the task sweep uses the status projection.
     fn stale_reservation_context(&self) -> Result<StaleReservationContext, OrbitError> {
         let mut orphaned_run_ids = self
             .list_orphaned_running_job_runs()?
@@ -143,11 +143,7 @@ impl OrbitRuntime {
                 .into_iter()
                 .map(|orphan| orphan.run_id),
         );
-        let task_statuses = self
-            .list_tasks()?
-            .into_iter()
-            .map(|task| (task.id, task.status))
-            .collect::<BTreeMap<_, _>>();
+        let task_statuses = self.task_status_index()?;
         Ok(StaleReservationContext {
             orphaned_run_ids,
             task_statuses,
