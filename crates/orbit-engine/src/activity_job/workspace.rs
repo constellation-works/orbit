@@ -15,8 +15,8 @@ pub(crate) mod fingerprint;
 mod rebase_recovery;
 
 use fingerprint::{
-    GitPathState, GitWorktreeFingerprint, changed_paths, git_fingerprint, git_output_raw,
-    git_stdout_bytes,
+    GitPathState, GitWorktreeFingerprint, cached_primary_before_fingerprint, changed_paths,
+    git_fingerprint, git_output_raw, git_stdout_bytes,
 };
 use rebase_recovery::RebaseRecoveryCheckpoint;
 
@@ -566,7 +566,7 @@ impl WorktreeBoundaryGuard {
             requested_workspace_path,
             requested_repo_root,
             assigned_before: git_fingerprint(&assigned_root)?,
-            primary_before: git_fingerprint(&primary_root)?,
+            primary_before: cached_primary_before_fingerprint(run_id, &primary_root)?,
             assigned_root,
             primary_root,
             rebase_recovery: None,
