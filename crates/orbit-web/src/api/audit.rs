@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use crate::state::Ws;
-use axum::extract::Query;
+use crate::state::{DashboardState, Ws};
+use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::job::JobRunListParams;
@@ -242,73 +242,38 @@ fn arguments_json_matches_profile(raw: Option<&str>, expected: &str) -> bool {
     false
 }
 
-pub(super) async fn audit_summary(Ws(runtime): Ws, Query(q): Query<AuditSummaryQuery>) -> Response {
+pub(super) async fn audit_summary(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Query(q): Query<AuditSummaryQuery>,
+) -> Response {
     let raw_since = q.since.as_deref().unwrap_or(DEFAULT_SUMMARY_WINDOW);
     let since = match parse_since(raw_since) {
         Ok(ts) => ts,
         Err(e) => return map_runtime_error(e),
     };
     let denial_threshold = q.denial_threshold.unwrap_or(DEFAULT_DENIAL_THRESHOLD);
-    let raw_since_owned = raw_since.to_string();
+    let window_key = raw_since.to_string();
+    let window_json = window_key.clone();
+    let runtime_for_compute = runtime.clone();
 
-    let runtime_clone = runtime.clone();
-    let bundle = match tokio::task::spawn_blocking(move || {
-        compute_audit_summary_bundle(&runtime_clone, since)
-    })
-    .await
+    let cached = match state
+        .audit_summary_memo()
+        .get_or_compute(&runtime, &window_key, move || {
+            let bundle = compute_audit_summary_bundle(&runtime_for_compute, since)?;
+            Ok(summary_payload(&bundle, since, &window_json))
+        })
+        .await
     {
-        Ok(Ok(b)) => b,
-        Ok(Err(e)) => return server_error(e),
-        Err(join_err) => {
-            return server_error(OrbitError::Execution(format!(
-                "audit summary aggregation panicked: {join_err}"
-            )));
-        }
+        Ok(body) => body,
+        Err(e) => return server_error(e),
     };
 
-    let sparkline = build_sparkline(since, &bundle.buckets);
-    let denials = bundle.sql_denied + bundle.v2_denials;
-
-    Json(json!({
-        "events": bundle.total,
-        "denials": denials,
-        "denials_sql": bundle.sql_denied,
-        "denials_v2": bundle.v2_denials,
-        // ORB-10871: raw failed rows and grouped incidents are reported as two
-        // separate numbers over the same window, so neither is mistaken for
-        // the other. `failed_events` is the forensic count; `failure_incidents`
-        // is how many distinct problems those rows represent.
-        "failed_events": bundle.failed_events,
-        "failure_incidents": bundle.failure_incidents,
-        "failure_incidents_by_class": bundle.failure_incidents_by_class,
-        "failed_events_by_class": bundle.failed_events_by_class,
-        "affected_runs_by_class": bundle.affected_runs_by_class,
-        "failure_categories": bundle.failure_categories,
-        "affected_run_count": bundle.affected_run_count,
-        "job_run_lifecycle_failures": bundle.job_run_lifecycle_failures,
-        "job_run_lifecycle_incidents": bundle.job_run_lifecycle_incidents,
-        "job_run_lifecycle_label": JOB_RUN_LIFECYCLE_LABEL,
-        "lifecycle_diagnostic_events": bundle.lifecycle_diagnostic_events,
-        "lifecycle_diagnostic_incidents": bundle.lifecycle_diagnostic_incidents,
-        "lifecycle_diagnostic_affected_run_count": bundle.lifecycle_diagnostic_affected_run_count,
-        "lifecycle_diagnostic_label": LIFECYCLE_DIAGNOSTIC_LABEL,
-        "failed_runs": bundle.failed_runs,
-        "active_long_runs": bundle.active_long_runs,
-        "sparkline": sparkline,
-        "denial_threshold": denial_threshold,
-        "since": since.to_rfc3339(),
-        "window": raw_since_owned,
-        "failures_by_tool": bundle.failures_by_tool,
-        "duration_by_tool": bundle.duration_by_tool,
-        "failure_rate_by_tool": bundle.failure_rate_by_tool,
-        "role_split": bundle.role_split,
-        "actor_split": bundle.actor_split,
-        "attribution_split": bundle.attribution_split,
-        "mcp_vs_cli_split": bundle.mcp_vs_cli_split,
-        "denials_by_tool": bundle.denials_by_tool,
-        "denials_by_reason": bundle.denials_by_reason,
-    }))
-    .into_response()
+    let mut body = (*cached).clone();
+    if let Some(obj) = body.as_object_mut() {
+        obj.insert("denial_threshold".to_string(), json!(denial_threshold));
+    }
+    Json(body).into_response()
 }
 
 struct AuditSummaryBundle {
@@ -346,6 +311,51 @@ struct AuditSummaryBundle {
     mcp_vs_cli_split: Value,
     denials_by_tool: Value,
     denials_by_reason: Value,
+}
+
+/// Stable JSON fields for a computed bundle. `denial_threshold` is request
+/// echo, not part of the scan, so the handler stamps it after the memo hit.
+fn summary_payload(bundle: &AuditSummaryBundle, since: DateTime<Utc>, window: &str) -> Value {
+    let sparkline = build_sparkline(since, &bundle.buckets);
+    let denials = bundle.sql_denied + bundle.v2_denials;
+    json!({
+        "events": bundle.total,
+        "denials": denials,
+        "denials_sql": bundle.sql_denied,
+        "denials_v2": bundle.v2_denials,
+        // ORB-10871: raw failed rows and grouped incidents are reported as two
+        // separate numbers over the same window, so neither is mistaken for
+        // the other. `failed_events` is the forensic count; `failure_incidents`
+        // is how many distinct problems those rows represent.
+        "failed_events": bundle.failed_events,
+        "failure_incidents": bundle.failure_incidents,
+        "failure_incidents_by_class": bundle.failure_incidents_by_class,
+        "failed_events_by_class": bundle.failed_events_by_class,
+        "affected_runs_by_class": bundle.affected_runs_by_class,
+        "failure_categories": bundle.failure_categories,
+        "affected_run_count": bundle.affected_run_count,
+        "job_run_lifecycle_failures": bundle.job_run_lifecycle_failures,
+        "job_run_lifecycle_incidents": bundle.job_run_lifecycle_incidents,
+        "job_run_lifecycle_label": JOB_RUN_LIFECYCLE_LABEL,
+        "lifecycle_diagnostic_events": bundle.lifecycle_diagnostic_events,
+        "lifecycle_diagnostic_incidents": bundle.lifecycle_diagnostic_incidents,
+        "lifecycle_diagnostic_affected_run_count": bundle.lifecycle_diagnostic_affected_run_count,
+        "lifecycle_diagnostic_label": LIFECYCLE_DIAGNOSTIC_LABEL,
+        "failed_runs": bundle.failed_runs,
+        "active_long_runs": bundle.active_long_runs,
+        "sparkline": sparkline,
+        "since": since.to_rfc3339(),
+        "window": window,
+        "failures_by_tool": bundle.failures_by_tool,
+        "duration_by_tool": bundle.duration_by_tool,
+        "failure_rate_by_tool": bundle.failure_rate_by_tool,
+        "role_split": bundle.role_split,
+        "actor_split": bundle.actor_split,
+        "attribution_split": bundle.attribution_split,
+        "mcp_vs_cli_split": bundle.mcp_vs_cli_split,
+        "denials_by_tool": bundle.denials_by_tool,
+        "denials_by_reason": bundle.denials_by_reason,
+    })
 }
 
 /// Heavy synchronous portion of `audit_summary`. Bundled into a single
