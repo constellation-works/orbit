@@ -370,8 +370,12 @@ a package manager owns the binary, and run steps 2–5 in every other registered
    then `orbit migrate --confirm` to apply them.
 3. Run `orbit workspace sync` to apply the provenance-safe managed-artifact actions. Operator
    edits, user-authored name collisions, and existing routine `name`/`hosts` bindings are
-   preserved and reported with their paths. `orbit workspace sync --check` reviews the same
-   actions read-only and exits nonzero when managed artifacts need convergence.
+   preserved and reported with their paths. A routine that differs from a template a prior
+   release shipped only in the settings Orbit's own surfaces change — `enabled`, the retired
+   `hosts:` key — is not an operator edit: it retires or refreshes (keeping its `enabled`
+   setting) so the upgrade converges without moving files by hand. `orbit workspace sync
+   --check` reviews the same actions read-only and exits nonzero when managed artifacts need
+   convergence.
 4. Run `orbit doctor` and require all relevant checks to pass.
 5. Restart any independently managed dashboard process after swapping the binary.
 

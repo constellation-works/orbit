@@ -366,6 +366,14 @@ pub(super) fn report_json(
         },
         "clock": clock_json(clock),
         "routines": report.statuses.iter().map(status_json).collect::<Vec<_>>(),
+        "retired": report.retired.iter().map(|routine| json!({
+            "name": routine.name,
+            "source": routine.source_workspace,
+            "origin": routine.origin.as_str(),
+            "path": routine.path.display().to_string(),
+            "target": format!("job:{}", routine.job),
+            "reason": routine.reason,
+        })).collect::<Vec<_>>(),
         "load_errors": report.load_errors.iter().map(|e| json!({
             "source_workspace": e.source_workspace,
             "path": e.path.as_ref().map(|p| p.display().to_string()),

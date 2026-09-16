@@ -242,3 +242,105 @@ fn duplicate_name_across_committed_and_local_fails_deterministically() {
         );
     }
 }
+
+// ---- retired targets ------------------------------------------------------
+
+/// A routine targeting a job a prior release shipped and this one dropped is
+/// dead weight until `orbit workspace sync` retires it — not a broken
+/// definition. It loads as retired so the clock tick stops logging the same
+/// load error on every pass [DANI-10392].
+#[test]
+fn routine_targeting_a_retired_job_is_skipped_not_failed() {
+    let ws = seed_source_workspace();
+    write_routine(
+        &ws.routines_dir,
+        "auto_task_scheduler.yaml",
+        "schemaVersion: 1\nname: auto-task-scheduler-polaris\n\
+         trigger: { cron: \"* * * * *\" }\ntarget: job:auto_task_scheduler_pipeline\n",
+    );
+
+    let collection = collect(&ws);
+    assert!(
+        collection.errors.is_empty(),
+        "a retired target must not be a load error: {:?}",
+        collection
+            .errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(find(&collection, "auto-task-scheduler-polaris").is_none());
+    let retired = collection
+        .retired
+        .iter()
+        .find(|routine| routine.name == "auto-task-scheduler-polaris")
+        .expect("the definition is reported as retired");
+    assert_eq!(retired.job, "auto_task_scheduler_pipeline");
+    assert_eq!(retired.origin, RoutineOrigin::Committed);
+    assert_eq!(retired.source_workspace, "polaris");
+    assert_eq!(
+        retired.path,
+        ws.routines_dir.join("auto_task_scheduler.yaml")
+    );
+    assert!(
+        retired.reason.contains("orbit workspace sync"),
+        "the reason names the command that retires the file: {}",
+        retired.reason
+    );
+}
+
+/// The catalog still wins: a workspace that defines a job of the retired
+/// name itself keeps an ordinary, evaluable routine.
+#[test]
+fn workspace_defined_job_of_a_retired_name_still_loads_normally() {
+    let ws = seed_source_workspace();
+    fs::write(
+        ws.routines_dir
+            .parent()
+            .expect("routines dir has a parent")
+            .join("resources/jobs/auto_task_scheduler_pipeline.yaml"),
+        NOOP_JOB.replace("name: noop", "name: auto_task_scheduler_pipeline"),
+    )
+    .unwrap();
+    write_routine(
+        &ws.routines_dir,
+        "auto_task_scheduler.yaml",
+        "schemaVersion: 1\nname: auto-task-scheduler-polaris\n\
+         trigger: { cron: \"* * * * *\" }\ntarget: job:auto_task_scheduler_pipeline\n",
+    );
+
+    let collection = collect(&ws);
+    assert!(collection.errors.is_empty());
+    assert!(
+        collection.retired.is_empty(),
+        "a job the workspace still defines is not retired"
+    );
+    assert!(find(&collection, "auto-task-scheduler-polaris").is_some());
+}
+
+/// An unresolvable target that is *not* a known retired job is still a
+/// fail-closed load error (ADR-0206).
+#[test]
+fn unknown_target_is_still_a_load_error() {
+    let ws = seed_source_workspace();
+    write_routine(
+        &ws.routines_dir,
+        "typo.yaml",
+        "schemaVersion: 1\nname: typo-polaris\n\
+         trigger: { cron: \"* * * * *\" }\ntarget: job:no_such_pipeline\n",
+    );
+
+    let collection = collect(&ws);
+    assert!(collection.retired.is_empty());
+    assert!(
+        collection.errors.iter().any(|error| error
+            .message
+            .contains("does not resolve in workspace 'polaris'")),
+        "{:?}",
+        collection
+            .errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+    );
+}

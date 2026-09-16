@@ -2,7 +2,8 @@
 
 use crate::OrbitRuntime;
 pub use orbit_automation::routines::loader::{
-    LoadedRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin, RoutineSource,
+    LoadedRoutine, RetiredRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin,
+    RoutineSource,
 };
 use orbit_common::OrbitError;
 use orbit_types::workspace::Workspace;

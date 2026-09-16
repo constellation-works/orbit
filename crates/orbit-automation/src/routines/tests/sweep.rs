@@ -59,7 +59,7 @@ fn loaded(definition: RoutineDefinition) -> LoadedRoutine {
 fn collection(routines: Vec<LoadedRoutine>) -> RoutineCollection {
     RoutineCollection {
         routines,
-        errors: Vec::new(),
+        ..RoutineCollection::default()
     }
 }
 

@@ -355,9 +355,25 @@ fn read_artifact(path: &Path) -> Option<String> {
 }
 
 /// Classify a file's provenance against the manifest digest recorded for it.
-fn provenance(tracked: Option<&String>, on_disk: &str) -> ArtifactProvenance {
+///
+/// Routines get the same shape-aware answer `orbit workspace sync` gives: an
+/// operator's `enabled` opt-in or a dropped `hosts:` key on a template Orbit
+/// shipped is still Orbit-written, so the two surfaces never disagree about
+/// whether a retired default is safe to delete.
+fn provenance(
+    kind: ArtifactKind,
+    name: &str,
+    tracked: Option<&String>,
+    on_disk: &str,
+) -> ArtifactProvenance {
     match tracked {
         Some(digest) if *digest == sha256_hex(on_disk.as_bytes()) => {
+            ArtifactProvenance::OrbitWritten
+        }
+        Some(digest)
+            if kind == ArtifactKind::Routine
+                && super::routine::is_orbit_written_routine(name, digest, on_disk) =>
+        {
             ArtifactProvenance::OrbitWritten
         }
         Some(_) => ArtifactProvenance::LocallyModified,
@@ -427,7 +443,7 @@ fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> Artifac
         let Some(on_disk) = read_artifact(&path) else {
             continue;
         };
-        let provenance = provenance(Some(digest), &on_disk);
+        let provenance = provenance(kind, name, Some(digest), &on_disk);
         let detail = if provenance.is_removable() {
             format!(
                 "`{name}` is a managed default this Orbit no longer ships; its content is \
@@ -562,7 +578,7 @@ fn finish_catalog_health(
     let (scanned, faults) = collect_faults(runtime, catalog);
     for fault in faults {
         let provenance = read_artifact(&fault.path)
-            .map(|on_disk| provenance(tracked.get(&fault.name), &on_disk))
+            .map(|on_disk| provenance(kind, &fault.name, tracked.get(&fault.name), &on_disk))
             .unwrap_or(ArtifactProvenance::UserAuthored);
         let stale_shipped_default = findings.iter().any(|finding| {
             finding.name == fault.name
@@ -789,7 +805,7 @@ fn retire_catalog(catalog: &ManagedCatalog) -> Result<usize, OrbitError> {
             // removing it here would act on a target outside this catalog.
             None => continue,
         };
-        if provenance(Some(digest), &on_disk).is_removable() {
+        if provenance(kind, name, Some(digest), &on_disk).is_removable() {
             std::fs::remove_file(&path).map_err(|error| {
                 OrbitError::Io(format!(
                     "retire deprecated {} '{}': {error}",
