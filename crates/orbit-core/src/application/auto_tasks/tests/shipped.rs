@@ -156,7 +156,7 @@ fn repository_definitions_all_parse() {
 }
 
 #[test]
-fn repository_qa_full_sweep_is_manual_opus_release_signoff() {
+fn repository_qa_full_sweep_is_manual_grok_release_signoff() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join(".orbit/auto_tasks/qa-full-sweep.yaml");
@@ -167,7 +167,7 @@ fn repository_qa_full_sweep_is_manual_opus_release_signoff() {
     assert_eq!(definition.name, "qa-full-sweep");
     assert!(!definition.enabled, "periodic scheduling must be opt-in");
     assert!(matches!(definition.dedupe, DedupePolicy::SkipIfOpen));
-    assert_eq!(definition.template.crew.as_deref(), Some("opus"));
+    assert_eq!(definition.template.crew.as_deref(), Some("grok"));
     assert_eq!(
         definition.template.status,
         orbit_types::task::TaskStatus::Backlog
