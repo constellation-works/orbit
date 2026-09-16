@@ -23,8 +23,9 @@ use crate::command::{CommandOut, Payload};
         --version to install one exact release instead. The download is checked against the\n\
         signed release checksum manifest before anything is replaced.\n\n\
         After the executable is replaced, the new binary applies pending .orbit layout and store\n\
-        migrations and then reconciles managed workspace assets, in that order. Re-running\n\
-        `orbit update` is idempotent and is the supported way to finish a run that did not.\n\n\
+        migrations, reconciles managed workspace assets, then repoints the host scheduler clock\n\
+        unit at the installed binary, in that order. Re-running `orbit update` is idempotent and\n\
+        is the supported way to finish a run that did not.\n\n\
         Only installations made by Orbit's own installer can be replaced in place. Where a\n\
         package manager owns the binary, orbit reports the command that upgrades it instead."
 )]

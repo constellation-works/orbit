@@ -30,6 +30,8 @@ pub enum ClockSubcommand {
     Pause,
     /// Enable scheduled ticks using the configured cadence
     Enable,
+    /// Rewrite the installed clock unit when it names a missing, moved, or stale program
+    Repair,
     /// Persist a whole-minute cadence and reload the installed clock unit
     Set {
         #[arg(long)]
@@ -92,6 +94,9 @@ impl ClockCommand {
                     status.configured_cadence_seconds, status.platform
                 );
                 Ok(CommandOutput::Silent)
+            }
+            ClockSubcommand::Repair => {
+                super::repair::execute(&selected_global_root(root_override)?)
             }
             ClockSubcommand::Set { cadence_seconds } => {
                 let global_root = selected_global_root(root_override)?;

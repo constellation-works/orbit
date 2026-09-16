@@ -115,6 +115,7 @@ See [Delivery Workflows](../../getting-started/workflows/).
 | `orbit sweep` | Compatibility alias for `orbit clock tick`, with identical arguments and output. |
 | `orbit routine list` \| `show` \| `pause` \| `resume` | Inspect routines and pause them host-locally. |
 | `orbit clock status` \| `pause` \| `enable` \| `set` | Control the host OS scheduler clock. |
+| `orbit clock repair` | Rewrite the installed clock unit when it names a missing, moved, or stale program, then re-register it. Run automatically as the last `orbit update` convergence step. |
 | `orbit routine init [--install-clock]` | Read host identity and optionally install the OS clock unit. |
 | `orbit auto-task add` \| `list` \| `show` \| `update` \| `toggle` \| `mint` | Define recurring auto-task templates and mint from them. |
 

@@ -30,16 +30,16 @@ routine definition. Its durable configuration is `~/.orbit/clock.toml`, defaults
 60-second cadence, and accepts only whole-minute values from 60 through 3600 seconds.
 
 `orbit clock status` reports configured cadence, native-manager enabled state,
-and whether an enabled unit can actually still sweep. An enabled unit without that
-scheduling state is `unhealthy`, has no effective cadence, and reports
-`orbit clock enable`, which rewrites a stale installed unit if needed,
-re-arms it, and verifies the result. On Linux the evidence is a timer that is active with
-a finite next trigger. On macOS, where launchd reports an agent as loaded whether or not
-its program still works, the evidence is the unit's own program (through the inspection
-behind `orbit doctor`'s `clock-unit` row) plus `launchctl print`: a non-zero `last exit
-code` for the most recent run, or a `penalty box` property, means no sweep is firing.
-An installed unit that still invokes `orbit sweep` is stale; `orbit clock enable` rewrites
-it to invoke `orbit clock tick` through the same compare-and-rewrite path.
+and whether an enabled Linux timer is active with a finite next trigger. An enabled timer
+without that scheduling state is `unhealthy`, has no effective cadence, and reports
+`orbit clock enable`, which rewrites a stale installed systemd timer if needed,
+restarts the timer, and verifies the resulting deadline.
+An installed unit that still invokes `orbit sweep`, or one whose program path has moved or
+been deleted, is stale; `orbit clock repair` rewrites it to this binary invoking
+`orbit clock tick` and re-registers it with the native manager. Repair is also the last
+`orbit update` convergence step, so an install at a new path repoints the unit in the same
+command that moved the binary. Repair never changes enabled/paused state: a paused clock is
+corrected on disk and left paused, which is what separates it from `enable`.
 `orbit clock pause` disables only launchd/systemd
 scheduled invocations (surviving logout/reboot through the native per-user manager);
 it preserves routine cursors, fire history, and per-routine pauses, and a deliberate
@@ -420,7 +420,9 @@ renders and installs the platform unit:
   configured cadence. `orbit clock enable` compares the installed timer and service with the
   embedded template, rewrites a stale definition (for example pre-fix `OnStartupSec`), and
   rewrites a service still invoking `orbit sweep` to invoke `orbit clock tick`, then
-  daemon-reloads before restart [ORB-11082]. `AccuracySec=5s` bounds manager coalescing
+  daemon-reloads before restart [ORB-11082]. `orbit clock repair` writes the same rendered
+  units for a drifted program path and daemon-reloads then restarts an enabled timer,
+  leaving a disabled one on disk only. `AccuracySec=5s` bounds manager coalescing
   after each deadline [ORB-10986]. These monotonic
   triggers deliberately do not replay timer events missed while the manager or host was
   down. The first sweep after restart evaluates each routine's cursor, so `catch_up_once`
@@ -435,8 +437,9 @@ out of v1 scope for this reason.
 ### Existing-host migration
 
 After upgrading, `orbit clock status` reports a native unit that still invokes
-`orbit sweep` as stale; `orbit clock enable` rewrites it to `orbit clock tick` and
-re-arms it. Workspace synchronization refreshes managed routine definitions and retires
+`orbit sweep`, or one naming a program that moved or no longer exists, as stale;
+`orbit update` converges it automatically and `orbit clock repair` does the same on demand
+for a binary another installer placed. Workspace synchronization refreshes managed routine definitions and retires
 the former auto-task scheduler routine. `orbit doctor` reports that retired managed file
 as deprecated, and `orbit doctor --fix-stale-artifacts` moves an unchanged seeded copy to
 `.retired-managed/` while preserving an operator-edited copy there for inspection.

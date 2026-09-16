@@ -291,7 +291,7 @@ pub(super) struct ManagerCommandOutput {
     pub(super) stderr: String,
 }
 
-struct NativeClockCommandRunner;
+pub(super) struct NativeClockCommandRunner;
 
 impl ClockCommandRunner for NativeClockCommandRunner {
     fn run(&self, command: &ManagerCommand) -> Result<bool, OrbitError> {
@@ -446,6 +446,25 @@ fn install_launchd(
     runner: &dyn ClockCommandRunner,
     home: &Path,
 ) -> Result<ClockInstallReport, OrbitError> {
+    let plist_path = write_launchd_unit(global_root, orbit_bin, settings, home)?;
+    let activated = reload_launchd_unit(runner, home);
+    Ok(ClockInstallReport {
+        manual_steps: launchd_manual_steps(activated, &plist_path),
+        files_written: vec![plist_path],
+        activated,
+    })
+}
+
+/// Render the launchd agent and write it, without touching the unit manager.
+///
+/// Split from activation so unit convergence can repair a plist that names a
+/// moved or deleted binary without resuming a clock the operator paused.
+pub(super) fn write_launchd_unit(
+    global_root: &Path,
+    orbit_bin: &str,
+    settings: ClockSettings,
+    home: &Path,
+) -> Result<PathBuf, OrbitError> {
     let log_path = validated_sweep_log_path(global_root)?;
     let log_parent = log_path.parent().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
@@ -468,10 +487,17 @@ fn install_launchd(
             plist_path.display()
         ))
     })?;
+    Ok(plist_path)
+}
 
-    // `launchctl load` is deprecated but still the most portable activation;
-    // a stale agent is unloaded first so re-installs pick up the new binary
-    // path.
+/// Re-bootstrap the installed agent so a rewritten plist takes effect.
+///
+/// `launchctl load` is deprecated but still the most portable activation; a
+/// stale agent is unloaded first so re-installs pick up the new binary path.
+/// launchd keeps running the program the loaded job was registered with, so
+/// rewriting the file alone never repairs a job in the penalty box.
+pub(super) fn reload_launchd_unit(runner: &dyn ClockCommandRunner, home: &Path) -> bool {
+    let plist_path = launchd_plist_path(home);
     let unload = ManagerCommand {
         program: "launchctl",
         args: vec!["unload".into(), plist_path.display().to_string()],
@@ -481,18 +507,15 @@ fn install_launchd(
         program: "launchctl",
         args: vec!["load".into(), plist_path.display().to_string()],
     };
-    let activated = runner.run(&load).unwrap_or(false);
+    runner.run(&load).unwrap_or(false)
+}
 
-    let manual_steps = if activated {
+pub(super) fn launchd_manual_steps(activated: bool, plist_path: &Path) -> Vec<String> {
+    if activated {
         Vec::new()
     } else {
         vec![format!("launchctl load {}", plist_path.display())]
-    };
-    Ok(ClockInstallReport {
-        files_written: vec![plist_path],
-        activated,
-        manual_steps,
-    })
+    }
 }
 
 fn install_systemd(
@@ -501,24 +524,7 @@ fn install_systemd(
     runner: &dyn ClockCommandRunner,
     home: &Path,
 ) -> Result<ClockInstallReport, OrbitError> {
-    let unit_dir = systemd_user_unit_dir(home);
-    fs::create_dir_all(&unit_dir).map_err(|error| OrbitError::Io(error.to_string()))?;
-
-    let service_path = systemd_service_path(home);
-    let timer_path = systemd_timer_path(home);
-    atomic_write_text(&service_path, &render_systemd_service(orbit_bin)).map_err(|error| {
-        OrbitError::Io(format!(
-            "failed to write '{}': {error}",
-            service_path.display()
-        ))
-    })?;
-    let timer = render_systemd_timer(settings);
-    atomic_write_text(&timer_path, &timer).map_err(|error| {
-        OrbitError::Io(format!(
-            "failed to write '{}': {error}",
-            timer_path.display()
-        ))
-    })?;
+    let files_written = write_systemd_units(orbit_bin, settings, home)?;
 
     let reload = systemd_daemon_reload_command();
     let enable = systemd_enable_command();
@@ -539,7 +545,50 @@ fn install_systemd(
         false
     };
 
-    let manual_steps = if activated {
+    Ok(ClockInstallReport {
+        manual_steps: systemd_manual_steps(activated),
+        files_written,
+        activated,
+    })
+}
+
+/// Render both systemd units and write them, without touching the manager.
+pub(super) fn write_systemd_units(
+    orbit_bin: &str,
+    settings: ClockSettings,
+    home: &Path,
+) -> Result<Vec<PathBuf>, OrbitError> {
+    let unit_dir = systemd_user_unit_dir(home);
+    fs::create_dir_all(&unit_dir).map_err(|error| OrbitError::Io(error.to_string()))?;
+
+    let service_path = systemd_service_path(home);
+    let timer_path = systemd_timer_path(home);
+    atomic_write_text(&service_path, &render_systemd_service(orbit_bin)).map_err(|error| {
+        OrbitError::Io(format!(
+            "failed to write '{}': {error}",
+            service_path.display()
+        ))
+    })?;
+    atomic_write_text(&timer_path, &render_systemd_timer(settings)).map_err(|error| {
+        OrbitError::Io(format!(
+            "failed to write '{}': {error}",
+            timer_path.display()
+        ))
+    })?;
+    Ok(vec![service_path, timer_path])
+}
+
+/// Reload the manager and re-arm the installed timer, leaving its
+/// enabled/disabled state alone.
+pub(super) fn restart_systemd_unit(runner: &dyn ClockCommandRunner) -> bool {
+    runner
+        .run(&systemd_daemon_reload_command())
+        .unwrap_or(false)
+        && runner.run(&systemd_restart_command()).unwrap_or(false)
+}
+
+pub(super) fn systemd_manual_steps(activated: bool) -> Vec<String> {
+    if activated {
         Vec::new()
     } else {
         vec![
@@ -547,12 +596,7 @@ fn install_systemd(
             format!("systemctl --user enable {SYSTEMD_UNIT}.timer"),
             format!("systemctl --user restart {SYSTEMD_UNIT}.timer"),
         ]
-    };
-    Ok(ClockInstallReport {
-        files_written: vec![service_path, timer_path],
-        activated,
-        manual_steps,
-    })
+    }
 }
 
 /// Render the systemd service independently of the user manager environment.
@@ -684,7 +728,7 @@ fn migrate_stale_systemd_service(home: &Path) -> Result<(), OrbitError> {
     Ok(())
 }
 
-fn manager_status_command(platform: ClockPlatform) -> ManagerCommand {
+pub(super) fn manager_status_command(platform: ClockPlatform) -> ManagerCommand {
     match platform {
         ClockPlatform::Launchd => ManagerCommand {
             program: "launchctl",
