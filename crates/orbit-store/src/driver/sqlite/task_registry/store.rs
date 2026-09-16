@@ -27,11 +27,23 @@ use crate::contracts::{
     TaskBundleBinding, TaskCompletionByComplexity, TaskIndexFilter, WorkspaceBinding,
     WorkspaceCheckoutBinding,
 };
+use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
 use crate::fs::path_safety::normalize_path;
 
+/// Task registry handle: one writer connection behind a mutex plus a
+/// read-only connection pool, the same shape as [`crate::Store`]. Under WAL
+/// readers on their own connections never queue behind the writer, so a
+/// long `replace_task_index` transaction no longer stalls every list/show
+/// that shares the registry file (orbit-web, the MCP server).
 #[derive(Clone)]
 pub struct TaskRegistryStore {
+    /// The single writer connection. Every mutating statement and every
+    /// transaction serializes here; reads go through [`Self::read`].
     pub(super) conn: Arc<Mutex<Connection>>,
+    /// Read pool for writable registries. `None` when the registry was
+    /// opened read-only, where reads fall back to the writer connection
+    /// (see [`crate::driver::sqlite::read_pool`]).
+    readers: Option<Arc<ReadPool>>,
     workspaces_dir: PathBuf,
 }
 
@@ -85,8 +97,34 @@ impl TaskRegistryStore {
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            readers: (!read_only).then(|| Arc::new(ReadPool::new(path.to_path_buf()))),
             workspaces_dir,
         })
+    }
+
+    /// Check out a read connection: a pooled query-only reader for writable
+    /// registries, or the writer mutex for read-only opens. Never takes the
+    /// writer mutex on the pooled path, so reads complete while a write
+    /// transaction is open.
+    pub(super) fn read(&self) -> Result<ReadGuard<'_>, OrbitError> {
+        match &self.readers {
+            Some(pool) => {
+                let (generation, connection) = pool.checkout()?;
+                Ok(ReadGuard::pooled(generation, connection, pool))
+            }
+            None => {
+                let guard = self
+                    .conn
+                    .lock()
+                    .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+                Ok(ReadGuard::Writer(guard))
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn reader_pool_for_test(&self) -> Option<&ReadPool> {
+        self.readers.as_deref()
     }
 
     /// Bind one checkout to its task-store partition, minting the partition id
@@ -120,10 +158,7 @@ impl TaskRegistryStore {
         // transaction; a read-only mount must only fail when a real rebind is
         // required.
         {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+            let conn = self.read()?;
             if let Some(existing) = workspace_by_orbit_dir(&conn, &orbit_dir)? {
                 if let Some(requested) = &requested_partition_id
                     && requested != &existing.partition_id
@@ -468,10 +503,7 @@ impl TaskRegistryStore {
         // registry. Reading outside the lock is safe because a bound prefix is
         // immutable — only a pristine `ORB` row can still adopt one.
         {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+            let conn = self.read()?;
             let current: String = conn
                 .query_row(
                     "SELECT task_prefix FROM allocator_state WHERE authority = 'local'",
@@ -524,10 +556,7 @@ impl TaskRegistryStore {
     /// this is what separates a locally-owned task from a mirror of another
     /// host's task.
     pub fn local_task_prefix(&self) -> Result<String, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         conn.query_row(
             "SELECT task_prefix FROM allocator_state WHERE authority = 'local'",
             [],
@@ -539,10 +568,7 @@ impl TaskRegistryStore {
     /// Prefixes recognized by the local registry: the active minting prefix
     /// plus every prefix already present in registered task bundles.
     pub fn known_task_prefixes(&self) -> Result<BTreeSet<String>, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         known_task_prefixes(&conn)
     }
 
@@ -658,10 +684,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<Vec<TaskBundleBinding>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT task_id, workspace_id, canonical_path, created_at, updated_at
@@ -802,10 +825,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<BTreeMap<String, String>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT task_id, updated_at FROM task_bundle_index
@@ -827,10 +847,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<usize, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM task_bundle_index WHERE workspace_id = ?1",
@@ -845,10 +862,7 @@ impl TaskRegistryStore {
     /// lists remain workspace-scoped; dependency readiness is global because
     /// ORB task IDs are globally unique.
     pub fn global_task_status_index(&self) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare("SELECT task_id, status FROM task_bundle_index ORDER BY task_id ASC")
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -877,10 +891,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<bool, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let exists: i64 = conn
             .query_row(
                 "SELECT EXISTS(
@@ -902,10 +913,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<Vec<TaskCompletionByComplexity>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT complexity, status, COUNT(*)
@@ -961,10 +969,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<BTreeMap<String, String>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT task_id, complexity FROM task_bundle_index
@@ -995,10 +1000,7 @@ impl TaskRegistryStore {
     ) -> Result<(), OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
         validate_orb_task_id(source_task_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         validate_relations_in_registry(
             &conn,
             &partition_id,
@@ -1018,10 +1020,7 @@ impl TaskRegistryStore {
         relations: &[TaskRelation],
     ) -> Result<(), OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         validate_relation_targets_exist(&conn, &partition_id, None, relations)
     }
 
@@ -1041,10 +1040,7 @@ impl TaskRegistryStore {
         partition_id: Option<&str>,
     ) -> Result<Vec<DanglingRelationTarget>, OrbitError> {
         let partition_id = partition_id.map(validate_partition_id).transpose()?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
 
         let mut sql = String::from(
             "SELECT r.workspace_id, r.source_task_id, r.relation_type, r.target_task_id
@@ -1125,10 +1121,7 @@ impl TaskRegistryStore {
         }
         sql.push_str(" ORDER BY created_at DESC, task_id ASC");
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(&sql)
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -1175,10 +1168,7 @@ impl TaskRegistryStore {
     ) -> Result<Vec<String>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
         validate_orb_task_id(source_task_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT target_task_id FROM task_bundle_relations
@@ -1208,10 +1198,7 @@ impl TaskRegistryStore {
     ) -> Result<Vec<String>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
         validate_orb_task_id(target_task_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT source_task_id FROM task_bundle_relations
@@ -1242,10 +1229,7 @@ impl TaskRegistryStore {
         let repo_root = normalize_path(repo_root);
         let workspace_path = normalize_path(workspace_path);
         let orbit_dir = normalize_path(orbit_dir);
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT workspace_id, repo_root, workspace_path, orbit_dir, created_at, updated_at
@@ -1283,10 +1267,7 @@ impl TaskRegistryStore {
     /// inferring an owner from the workspace catalog, whose `ws_*` ids are a
     /// different namespace [ORB-12119].
     pub fn partition_ids(&self) -> Result<BTreeSet<String>, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare("SELECT workspace_id FROM workspace_bindings")
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -1352,10 +1333,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<Option<WorkspaceBinding>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         workspace_by_id(&conn, &partition_id)
     }
 
@@ -1366,10 +1344,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<Option<WorkspaceCheckoutBinding>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         workspace_checkout_by_id(&conn, &partition_id)
     }
 
@@ -1383,10 +1358,7 @@ impl TaskRegistryStore {
         orbit_dir: &Path,
     ) -> Result<Option<WorkspaceCheckoutBinding>, OrbitError> {
         let orbit_dir = normalize_path(orbit_dir);
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         workspace_by_orbit_dir(&conn, &orbit_dir)
     }
 
@@ -1410,29 +1382,20 @@ impl TaskRegistryStore {
         task_id: &str,
     ) -> Result<Option<TaskBundleBinding>, OrbitError> {
         validate_orb_task_id(task_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         task_bundle_by_id(&conn, task_id)
     }
 
     /// Current value of the local allocator counter (`next_number`) — the id the
     /// next [`allocate_task_id`](Self::allocate_task_id) call would hand out.
     pub fn allocator_next_number(&self) -> Result<u32, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         read_allocator_next_number(&conn)
     }
 
     /// Highest numeric task id registered in the whole registry, if any.
     pub fn max_registered_task_number(&self) -> Result<Option<u32>, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut statement = conn
             .prepare("SELECT task_id FROM task_bundle_bindings")
             .map_err(|e| OrbitError::Store(e.to_string()))?;
