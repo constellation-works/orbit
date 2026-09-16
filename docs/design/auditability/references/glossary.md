@@ -2,7 +2,7 @@
 type: design
 summary: "Glossary: Auditability"
 tags: ["auditability"]
-last_validated: 2026-08-29
+last_validated: 2026-09-16
 ---
 
 # Glossary: Auditability

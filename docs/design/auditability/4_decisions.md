@@ -4,7 +4,7 @@ type: design
 title: "Auditability — Decisions"
 owner: codex
 last_updated: 2026-08-11
-last_validated: 2026-08-29
+last_validated: 2026-09-16
 status: Draft
 feature: auditability
 doc_role: decisions
