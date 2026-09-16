@@ -55,46 +55,96 @@ pub fn load_registry_from(path: &Path) -> Result<WorkspaceRegistry, OrbitError> 
     load_registry_from_with_writer(path, write_registry)
 }
 
+/// [`load_registry_from`] for a caller that already classified the `host.toml`
+/// beside the registry. A runtime open needs that classification for itself,
+/// so threading it here reads `host.toml` once per invocation instead of once
+/// more per registry load [DANI-10371].
+pub fn load_registry_from_with_host(
+    path: &Path,
+    identity: &HostIdentityState,
+) -> Result<WorkspaceRegistry, OrbitError> {
+    let snapshot = read_registry_snapshot(path, |_| Ok(identity.into()))?;
+    persist_migration(snapshot, write_registry)
+}
+
 /// Load and validate a registry without creating a lock or persisting migrations.
 ///
 /// Callers that only inspect current registry data can use the returned snapshot
 /// directly. A caller that sees `migration_required` must re-read and migrate
 /// while holding [`with_registry_lock`] before it performs maintenance.
 pub fn load_registry_from_read_only(path: &Path) -> Result<ReadOnlyRegistryLoad, OrbitError> {
-    let Some(path) = validated_registry_path_if_root_exists(path)? else {
-        return Ok(ReadOnlyRegistryLoad {
-            registry: WorkspaceRegistry::default(),
-            migration_required: false,
-        });
-    };
-    if !path.exists() {
-        return Ok(ReadOnlyRegistryLoad {
-            registry: WorkspaceRegistry::default(),
-            migration_required: false,
-        });
-    }
-    let content =
-        std::fs::read_to_string(&path).map_err(|error| OrbitError::Io(error.to_string()))?;
-    let context = registry_host_context(&path)?;
-    let (registry, migration_required) = parse_workspace_registry(&content, &context)?;
-    Ok(ReadOnlyRegistryLoad {
-        registry,
-        migration_required,
-    })
+    Ok(read_registry_snapshot(path, registry_host_context)?.load)
+}
+
+/// [`load_registry_from_read_only`] with an already-classified `host.toml`;
+/// see [`load_registry_from_with_host`].
+pub fn load_registry_from_read_only_with_host(
+    path: &Path,
+    identity: &HostIdentityState,
+) -> Result<ReadOnlyRegistryLoad, OrbitError> {
+    Ok(read_registry_snapshot(path, |_| Ok(identity.into()))?.load)
 }
 
 pub(crate) fn load_registry_from_with_writer(
     path: &Path,
     writer: impl FnOnce(&WorkspaceRegistry, &Path) -> Result<(), OrbitError>,
 ) -> Result<WorkspaceRegistry, OrbitError> {
-    let Some(path) = validated_registry_path_if_root_exists(path)? else {
-        return Ok(WorkspaceRegistry::default());
+    let snapshot = read_registry_snapshot(path, registry_host_context)?;
+    persist_migration(snapshot, writer)
+}
+
+/// A parsed registry together with the validated path it was read from, so a
+/// migrating caller writes back to exactly the file it read. The path is
+/// `None` only when the global root does not exist yet, which also means no
+/// migration can be pending.
+struct RegistrySnapshot {
+    load: ReadOnlyRegistryLoad,
+    path: Option<PathBuf>,
+}
+
+/// Validate `path` once, then read and parse the registry under it with the
+/// host facts `context_for` supplies. The context is resolved after the file
+/// is read, so a missing or empty registry never inspects `host.toml`.
+fn read_registry_snapshot(
+    path: &Path,
+    context_for: impl FnOnce(&Path) -> Result<WorkspaceRegistryHostContext, OrbitError>,
+) -> Result<RegistrySnapshot, OrbitError> {
+    let empty = |path| RegistrySnapshot {
+        load: ReadOnlyRegistryLoad {
+            registry: WorkspaceRegistry::default(),
+            migration_required: false,
+        },
+        path,
     };
-    let loaded = load_registry_from_read_only(&path)?;
-    if loaded.migration_required {
-        writer(&loaded.registry, &path)?;
+    let Some(path) = validated_registry_path_if_root_exists(path)? else {
+        return Ok(empty(None));
+    };
+    if !path.exists() {
+        return Ok(empty(Some(path)));
     }
-    Ok(loaded.registry)
+    let content =
+        std::fs::read_to_string(&path).map_err(|error| OrbitError::Io(error.to_string()))?;
+    let context = context_for(&path)?;
+    let (registry, migration_required) = parse_workspace_registry(&content, &context)?;
+    Ok(RegistrySnapshot {
+        load: ReadOnlyRegistryLoad {
+            registry,
+            migration_required,
+        },
+        path: Some(path),
+    })
+}
+
+fn persist_migration(
+    snapshot: RegistrySnapshot,
+    writer: impl FnOnce(&WorkspaceRegistry, &Path) -> Result<(), OrbitError>,
+) -> Result<WorkspaceRegistry, OrbitError> {
+    if snapshot.load.migration_required
+        && let Some(path) = &snapshot.path
+    {
+        writer(&snapshot.load.registry, path)?;
+    }
+    Ok(snapshot.load.registry)
 }
 
 /// Save the machine-global workspace registry atomically.
@@ -193,13 +243,19 @@ fn registry_host_context(path: &Path) -> Result<WorkspaceRegistryHostContext, Or
             path.display()
         ))
     })?;
-    match inspect_host_identity(global_root)? {
-        HostIdentityState::Present(identity) => Ok(WorkspaceRegistryHostContext {
-            machine_id: Some(identity.machine_id),
-            host_id: Some(identity.host_id),
-        }),
-        HostIdentityState::Legacy { .. } | HostIdentityState::Absent => {
-            Ok(WorkspaceRegistryHostContext::default())
+    Ok((&inspect_host_identity(global_root)?).into())
+}
+
+impl From<&HostIdentityState> for WorkspaceRegistryHostContext {
+    /// Only a complete, current-schema identity contributes validation facts;
+    /// a legacy or absent file validates as a standalone installation.
+    fn from(identity: &HostIdentityState) -> Self {
+        match identity {
+            HostIdentityState::Present(identity) => Self {
+                machine_id: Some(identity.machine_id.clone()),
+                host_id: Some(identity.host_id.clone()),
+            },
+            HostIdentityState::Legacy { .. } | HostIdentityState::Absent => Self::default(),
         }
     }
 }

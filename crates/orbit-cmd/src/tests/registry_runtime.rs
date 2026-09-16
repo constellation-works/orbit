@@ -17,9 +17,20 @@ use orbit_registry::workspace_registry::{
 };
 
 use crate::registry_runtime::{
-    RegisteredRuntimeFactory, resolved_workspace_binding, retry_pipeline_worker_bootstrap,
-    select_workspace_for_cwd_and_roots, sync_task_prefix, workspace_runtime_binding,
+    RegisteredRuntimeFactory, ResolvedWorkspaceSelection, resolved_workspace_binding,
+    retry_pipeline_worker_bootstrap, select_workspace_for_cwd_and_roots, sync_task_prefix,
+    workspace_runtime_binding,
 };
+
+/// Select against the registry under `roots.global_root`, as the runtime open
+/// does with the registry it loaded once up front.
+fn select_for_cwd_and_roots(
+    cwd: &Path,
+    roots: &OrbitRuntimeRoots,
+) -> Result<Option<ResolvedWorkspaceSelection>, OrbitError> {
+    let registry = load_registry_from(&registry_path_for(&roots.global_root))?;
+    select_workspace_for_cwd_and_roots(cwd, roots, &registry)
+}
 
 #[test]
 fn pipeline_worker_bootstrap_retries_only_typed_sqlite_contention() {
@@ -248,7 +259,7 @@ fn explicit_shared_root_selects_checkout_by_cwd_and_does_not_fall_back() {
         local_root: shared,
     };
 
-    let selected = select_workspace_for_cwd_and_roots(&beta_repo, &roots)
+    let selected = select_for_cwd_and_roots(&beta_repo, &roots)
         .expect("select beta")
         .expect("registered beta");
     assert_eq!(selected.workspace.id, "ws_beta");
@@ -261,7 +272,7 @@ fn explicit_shared_root_selects_checkout_by_cwd_and_does_not_fall_back() {
     );
 
     assert!(
-        select_workspace_for_cwd_and_roots(&unregistered_repo, &roots)
+        select_for_cwd_and_roots(&unregistered_repo, &roots)
             .expect("unregistered selection")
             .is_none(),
         "a shared orbit_dir must not select the first registered checkout"
@@ -1207,12 +1218,9 @@ fn explicit_operator_root_still_pins_data_root_and_invalid_selector_fails_closed
     let fixture = managed_worktree_fixture();
 
     assert!(
-        select_workspace_for_cwd_and_roots(
-            &fixture.worktree_root,
-            &fixture.pinned_registry_roots()
-        )
-        .expect("selection")
-        .is_none(),
+        select_for_cwd_and_roots(&fixture.worktree_root, &fixture.pinned_registry_roots())
+            .expect("selection")
+            .is_none(),
         "an unregistered worktree cwd must not silently bind a workspace under a pinned root"
     );
 
@@ -1454,12 +1462,12 @@ fn unpinned_root_resolution_still_binds_the_registered_checkout() {
     let fixture = managed_worktree_fixture();
     let roots = fixture.unpinned_roots();
 
-    let from_checkout = select_workspace_for_cwd_and_roots(&fixture.repo_root, &roots)
+    let from_checkout = select_for_cwd_and_roots(&fixture.repo_root, &roots)
         .expect("selection from the registered checkout")
         .expect("registered checkout must bind");
     assert_eq!(from_checkout.workspace.id, "ws_managed");
 
-    let from_worktree = select_workspace_for_cwd_and_roots(&fixture.worktree_root, &roots)
+    let from_worktree = select_for_cwd_and_roots(&fixture.worktree_root, &roots)
         .expect("selection from the linked worktree")
         .expect("shared-root fallback must bind the registered checkout");
     assert_eq!(from_worktree.workspace.id, "ws_managed");
@@ -1514,7 +1522,7 @@ fn cwd_and_absolute_path_select_a_workspace_whose_id_collides_with_another_name(
         local_root: fixture.alpha_orbit_dir.clone(),
     };
 
-    let from_cwd = select_workspace_for_cwd_and_roots(&fixture.alpha_repo, &roots)
+    let from_cwd = select_for_cwd_and_roots(&fixture.alpha_repo, &roots)
         .expect("cwd selection must not treat the checkout id as an ambiguous selector")
         .expect("alpha checkout must bind");
     assert_eq!(from_cwd.workspace.id, "ws_alpha");

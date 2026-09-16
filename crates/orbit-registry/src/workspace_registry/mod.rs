@@ -14,7 +14,8 @@ pub use catalog::{
 };
 pub use io::{
     ReadOnlyRegistryLoad, global_orbit_dir, load_registry, load_registry_from,
-    load_registry_from_read_only, registry_path, registry_path_for, save_registry,
+    load_registry_from_read_only, load_registry_from_read_only_with_host,
+    load_registry_from_with_host, registry_path, registry_path_for, save_registry,
     save_registry_to, with_registry_lock,
 };
 pub use publication::{
