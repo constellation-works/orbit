@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use super::{
     LinuxBwrapPostRunGuard, append_cargo_download_cache_mounts, cargo_home_dir,
-    compile_linux_bwrap_argv, expand_rule, expand_rules, walk_paths,
+    compile_linux_bwrap_argv, expand_each_rule, expand_rules, probe_bwrap, walk_paths,
 };
 use orbit_common::OrbitError;
 use orbit_types::policy::ResolvedFsProfile;
@@ -39,8 +39,8 @@ fn canonical(root: &std::path::Path, rel: &str) -> PathBuf {
     root.join(rel).canonicalize().expect("canonical")
 }
 
-/// Every rule sharing a search root is matched from one walk, and the union
-/// equals what the rules would have matched one at a time.
+/// Every rule sharing a search root is matched from one walk: each rule's
+/// own set, and their union, equal what the rules match one at a time.
 #[test]
 fn rules_sharing_a_root_expand_from_one_walk_to_the_same_set() {
     let temp = tree();
@@ -51,10 +51,17 @@ fn rules_sharing_a_root_expand_from_one_walk_to_the_same_set() {
         .map(|glob| format!("{prefix}/{glob}"))
         .collect();
 
+    let each = expand_each_rule(rules.iter().map(String::as_str)).expect("expand each");
     let together = expand_rules(&rules).expect("expand together");
     let mut one_at_a_time = BTreeSet::new();
     for rule in &rules {
-        one_at_a_time.extend(expand_rule(rule).expect("expand one"));
+        let alone = expand_rules(std::slice::from_ref(rule)).expect("expand one");
+        assert_eq!(
+            each.get(rule.as_str()),
+            Some(&alone),
+            "per-rule set for {rule}"
+        );
+        one_at_a_time.extend(alone);
     }
     assert_eq!(together, one_at_a_time);
 
@@ -159,6 +166,60 @@ fn capture_watches_absent_denies_through_a_symlinked_workspace_path() {
         matches!(error, OrbitError::PolicyDenied(_)),
         "expected PolicyDenied, got {error}"
     );
+}
+
+/// The compile hands out the same snapshot `capture` would walk for, from the
+/// walk it already made for the deny mounts; a direct invocation carries none.
+#[test]
+fn compile_reuses_its_walk_for_the_post_run_guard() {
+    let temp = tree();
+    let root = temp.path().canonicalize().expect("canonical root");
+    let prefix = root.to_string_lossy().replace('\\', "/");
+    let resolved = profile(vec![
+        format!("{prefix}/**"),
+        format!("!{prefix}/**/.env"),
+        format!("!{prefix}/**/*.env"),
+        format!("!{prefix}/secrets/**"),
+    ]);
+
+    let captured = LinuxBwrapPostRunGuard::capture(&resolved)
+        .expect("capture")
+        .expect("guarded");
+    let mut managed = compile_linux_bwrap_argv(&resolved, "/bin/true", &[], Some(&root), true)
+        .expect("compile managed");
+    assert_eq!(managed.take_post_run_guard(), Some(captured));
+    assert_eq!(
+        managed.take_post_run_guard(),
+        None,
+        "the guard is handed out once"
+    );
+
+    // A profile whose non-subtree denies stay outside the writable root is a
+    // legal direct invocation, and it still carries no post-run guard.
+    let outside = tempfile::tempdir().expect("outside");
+    let outside_prefix = outside
+        .path()
+        .canonicalize()
+        .expect("canonical outside")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let direct = profile(vec![
+        format!("{prefix}/**"),
+        format!("!{outside_prefix}/**/.env"),
+    ]);
+    let mut direct = compile_linux_bwrap_argv(&direct, "/bin/true", &[], Some(&root), false)
+        .expect("compile direct");
+    assert_eq!(direct.take_post_run_guard(), None);
+}
+
+/// The probe is memoised: a second call returns the first outcome. On a host
+/// without the trusted binary the outcome is the deterministic unavailable
+/// message, which is exactly the case a per-dispatch re-probe kept paying for.
+#[test]
+fn probe_bwrap_returns_the_same_outcome_on_repeat() {
+    let first = probe_bwrap();
+    let second = probe_bwrap();
+    assert_eq!(first, second);
 }
 
 #[test]

@@ -253,6 +253,25 @@ impl Drop for LiveReaderGuard {
     }
 }
 
+/// Spawn the child [`spawn_with_timeout`] will supervise. A caller that needs
+/// the child before supervision starts (the orchestrator takes the Linux
+/// post-run guard off it) spawns here and passes it as `spawned_child`.
+pub(super) fn spawn_for_supervision(
+    program: &str,
+    args: &[String],
+    env: &[(String, String)],
+    cwd: Option<&Path>,
+    sandbox: Option<&ResolvedSandbox>,
+    provider: &str,
+) -> Result<SpawnedChild, SpawnError> {
+    spawn_child_with_optional_sandbox(program, args, env, cwd, sandbox, provider).map_err(|err| {
+        SpawnError {
+            permanent: err.permanent,
+            message: format!("spawn {program}: {}", err.message),
+        }
+    })
+}
+
 pub(super) fn spawn_with_timeout(
     request: SpawnWithTimeoutRequest<'_>,
 ) -> Result<SpawnOutput, SpawnError> {
@@ -277,11 +296,7 @@ pub(super) fn spawn_with_timeout(
     let started = Instant::now();
     let spawned = match spawned_child {
         Some(spawned) => spawned,
-        None => spawn_child_with_optional_sandbox(program, args, env, cwd, sandbox, trace.provider)
-            .map_err(|err| SpawnError {
-                permanent: err.permanent,
-                message: format!("spawn {program}: {}", err.message),
-            })?,
+        None => spawn_for_supervision(program, args, env, cwd, sandbox, trace.provider)?,
     };
     let SpawnedChild {
         mut child,

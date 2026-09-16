@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_exec::{
-    BwrapProbeOutcome, LinuxBwrapMountAuthority, LinuxBwrapPlan, LinuxBwrapSpawnRequest,
-    MacosLoginKeychainAccess, MacosSandboxSpawnRequest, UnsatisfiedWriteGrant,
-    compile_linux_bwrap_argv_with_authority, compile_macos_sandbox_profile,
+    BwrapProbeOutcome, LinuxBwrapMountAuthority, LinuxBwrapPlan, LinuxBwrapPostRunGuard,
+    LinuxBwrapSpawnRequest, MacosLoginKeychainAccess, MacosSandboxSpawnRequest,
+    UnsatisfiedWriteGrant, compile_linux_bwrap_argv_with_authority, compile_macos_sandbox_profile,
     linux_bwrap_write_grant_diagnostic, macos_login_keychain_access,
     prepare_linux_bwrap_write_grants, probe_bwrap, sandbox_exec_available,
     sandbox_exec_unavailable_message, spawn_under_linux_bwrap, spawn_under_macos_sandbox,
@@ -455,6 +455,17 @@ pub(crate) struct SpawnedChild {
     /// process's POSIX locks even while the host lease connection remains
     /// open, so the complete plan shares the sandboxed child's lifetime.
     pub(crate) _linux_mount_plan: Option<LinuxBwrapPlan>,
+}
+
+impl SpawnedChild {
+    /// The post-run write-policy snapshot the Linux plan took while compiling
+    /// its deny mounts — after grant preparation, before the child ran. Only
+    /// a managed Bubblewrap launch carries one.
+    pub(crate) fn take_linux_post_run_guard(&mut self) -> Option<LinuxBwrapPostRunGuard> {
+        self._linux_mount_plan
+            .as_mut()
+            .and_then(LinuxBwrapPlan::take_post_run_guard)
+    }
 }
 
 pub(crate) fn spawn_child_with_optional_sandbox(

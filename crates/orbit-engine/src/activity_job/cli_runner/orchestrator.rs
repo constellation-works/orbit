@@ -41,10 +41,9 @@ use super::spawn::{
 };
 use super::supervisor::{
     DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS, SpawnTraceContext, SpawnWithTimeoutRequest,
-    spawn_with_timeout,
+    spawn_for_supervision, spawn_with_timeout,
 };
 use crate::context::RuntimeHost;
-use orbit_exec::LinuxBwrapPostRunGuard;
 
 const STDOUT_TEXT_PREVIEW_LIMIT_BYTES: usize = 64 * 1024;
 const RESPONSE_DIAGNOSTIC_LIMIT_CHARS: usize = 1024;
@@ -439,38 +438,42 @@ pub fn run_cli_backend(
         });
     };
 
-    let linux_post_run_guard = match sandbox {
-        Some(sandbox)
-            if sandbox.kind == orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap
-                && sandbox.managed_worktree =>
-        {
-            LinuxBwrapPostRunGuard::capture(&sandbox.fs_profile)
-                .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?
-        }
-        _ => None,
-    };
-
-    let spawn_result = spawn_with_timeout(SpawnWithTimeoutRequest {
-        program: &resolved_program,
-        args: &subprocess_args,
-        stdin_bytes: &invocation.stdin,
-        env: &child_env,
-        cwd: subprocess_cwd.as_deref(),
-        timeout: wall_clock_timeout,
+    // A managed Linux Bubblewrap launch snapshots the write-policy gaps its
+    // mounts cannot cover while compiling those mounts; take that snapshot off
+    // the spawned child rather than walking the worktree a second time.
+    let mut linux_post_run_guard = None;
+    let spawn_result = spawn_for_supervision(
+        &resolved_program,
+        &subprocess_args,
+        &child_env,
+        subprocess_cwd.as_deref(),
         sandbox,
-        trace: SpawnTraceContext {
-            provider: &provider,
-            job_run_id: run_id,
-            task_id: task_id_from_input(input),
-            cwd: subprocess_cwd_string.as_deref(),
-        },
-        output_capture_limit: None,
-        on_spawn: Some(&on_spawn),
-        wait: None,
-        live_readers: None,
-        spawned_child: None,
-        #[cfg(unix)]
-        cancel_pair: None,
+        &provider,
+    )
+    .and_then(|mut spawned| {
+        linux_post_run_guard = spawned.take_linux_post_run_guard();
+        spawn_with_timeout(SpawnWithTimeoutRequest {
+            program: &resolved_program,
+            args: &subprocess_args,
+            stdin_bytes: &invocation.stdin,
+            env: &child_env,
+            cwd: subprocess_cwd.as_deref(),
+            timeout: wall_clock_timeout,
+            sandbox,
+            trace: SpawnTraceContext {
+                provider: &provider,
+                job_run_id: run_id,
+                task_id: task_id_from_input(input),
+                cwd: subprocess_cwd_string.as_deref(),
+            },
+            output_capture_limit: None,
+            on_spawn: Some(&on_spawn),
+            wait: None,
+            live_readers: None,
+            spawned_child: Some(spawned),
+            #[cfg(unix)]
+            cancel_pair: None,
+        })
     });
 
     let (stdout, stderr, exit_code, duration, timed_out) = match spawn_result {
