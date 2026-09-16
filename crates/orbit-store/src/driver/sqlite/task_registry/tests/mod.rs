@@ -4,6 +4,7 @@ mod listing;
 mod read_pool;
 mod schema;
 
+use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +32,18 @@ use crate::{
     read_workspace_config, read_workspace_config_optional, workspace_config_path,
     workspace_id_for_orbit_dir, write_workspace_config,
 };
+
+thread_local! {
+    static TRACED_SQL: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+fn record_traced_sql(sql: &str) {
+    TRACED_SQL.with(|traced| traced.borrow_mut().push(sql.to_string()));
+}
+
+fn take_traced_sql() -> Vec<String> {
+    TRACED_SQL.with(|traced| std::mem::take(&mut *traced.borrow_mut()))
+}
 
 fn registry_path(temp: &TempDir) -> PathBuf {
     task_registry_path(temp.path())
@@ -1358,6 +1371,96 @@ fn batch_registration_and_batch_index_replacement_land_as_one_unit() {
             .expect("indexed rows")
             .len(),
         2
+    );
+}
+
+#[test]
+fn workspace_rebuild_uses_constant_relation_validation_queries() {
+    const TASK_COUNT: usize = 128;
+
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let workspace = bind(&store, temp.path());
+    let task_ids = (0..TASK_COUNT)
+        .map(|number| format!("ORB-{number:05}"))
+        .collect::<Vec<_>>();
+    let bundles = task_ids
+        .iter()
+        .map(|task_id| {
+            (
+                task_id.clone(),
+                create_canonical_bundle(&store, &workspace, task_id),
+            )
+        })
+        .collect::<Vec<_>>();
+    store
+        .register_task_bundles(&workspace.partition_id, &bundles)
+        .expect("register task bundles");
+
+    let envelopes = task_ids
+        .iter()
+        .enumerate()
+        .map(|(index, task_id)| {
+            let relations = task_ids
+                .get(index + 1)
+                .map(|target| vec![blocked_by(target)])
+                .unwrap_or_default();
+            envelope(
+                task_id,
+                TaskStatus::Backlog,
+                vec!["rebuilt".into()],
+                relations,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    take_traced_sql();
+    {
+        let mut conn = store.conn.lock().expect("lock registry");
+        conn.trace(Some(record_traced_sql));
+    }
+    store
+        .replace_workspace_task_indexes(&workspace.partition_id, &envelopes)
+        .expect("rebuild workspace index");
+    {
+        let mut conn = store.conn.lock().expect("lock registry");
+        conn.trace(None);
+    }
+
+    let traced = take_traced_sql();
+    let relation_and_binding_reads = traced
+        .iter()
+        .filter(|sql| {
+            let sql = sql.trim_start();
+            (sql.starts_with("SELECT") || sql.starts_with("WITH"))
+                && (sql.contains("task_bundle_relations") || sql.contains("task_bundle_bindings"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        relation_and_binding_reads.len(),
+        3,
+        "a 128-envelope rebuild must issue one registered-id read, one batched target read, and one relation-subgraph read:\n{}",
+        relation_and_binding_reads
+            .iter()
+            .map(|sql| sql.as_str())
+            .collect::<Vec<_>>()
+            .join("\n---\n")
+    );
+    assert_eq!(
+        store
+            .indexed_task_count_for_workspace(&workspace.partition_id)
+            .expect("indexed task count"),
+        TASK_COUNT
+    );
+    assert_eq!(
+        store
+            .indexed_relation_targets(
+                &workspace.partition_id,
+                &task_ids[0],
+                TaskRelationType::BlockedBy,
+            )
+            .expect("first task relation"),
+        vec![task_ids[1].clone()]
     );
 }
 

@@ -13,9 +13,9 @@ use rusqlite::{Connection, TransactionBehavior, params, params_from_iter};
 
 use super::partition_id::{next_partition_id_candidate, sanitize_slug, validate_partition_id};
 use super::queries::{
-    decode_task_bundle_binding, decode_workspace_checkout_binding, task_bundle_by_id,
-    task_ids_for_workspace, workspace_by_id, workspace_by_orbit_dir, workspace_checkout_by_id,
-    workspace_checkout_by_paths, write_task_index_rows,
+    TaskIndexWriter, decode_task_bundle_binding, decode_workspace_checkout_binding,
+    task_bundle_by_id, task_ids_for_workspace, workspace_by_id, workspace_by_orbit_dir,
+    workspace_checkout_by_id, workspace_checkout_by_paths,
 };
 use super::schema::{
     apply_schema, assert_readable_schema, assert_registry_user_version, ensure_compatible_schema,
@@ -836,8 +836,11 @@ impl TaskRegistryStore {
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         }
 
-        for envelope in envelopes {
-            write_task_index_rows(&tx, &partition_id, envelope)?;
+        {
+            let mut writer = TaskIndexWriter::prepare(&tx)?;
+            for envelope in envelopes {
+                writer.write(&partition_id, envelope)?;
+            }
         }
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
     }
@@ -890,8 +893,11 @@ impl TaskRegistryStore {
         )
         .map_err(|e| OrbitError::Store(e.to_string()))?;
 
-        for envelope in envelopes {
-            write_task_index_rows(&tx, &partition_id, envelope)?;
+        {
+            let mut writer = TaskIndexWriter::prepare(&tx)?;
+            for envelope in envelopes {
+                writer.write(&partition_id, envelope)?;
+            }
         }
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
     }
@@ -1575,6 +1581,16 @@ fn validate_replacement_relations(
     partition_id: &str,
     envelopes: &[TaskEnvelopeV2],
 ) -> Result<(), OrbitError> {
+    if envelopes.is_empty() {
+        return Ok(());
+    }
+    if workspace_by_id(conn, partition_id)?.is_none() {
+        return Err(OrbitError::not_found(
+            NotFoundKind::Workspace,
+            partition_id.to_string(),
+        ));
+    }
+
     let replacement_edges = envelopes
         .iter()
         .flat_map(task_relation_edges)
@@ -1582,16 +1598,70 @@ fn validate_replacement_relations(
     let replacement_sources = envelopes
         .iter()
         .map(|envelope| envelope.id.clone())
+        .collect::<BTreeSet<_>>();
+
+    validate_replacement_relation_targets(conn, partition_id, envelopes)?;
+
+    let seeds = cycle_walk_seeds(&[], &replacement_edges);
+    let mut validation_edges = reachable_cycle_family_edges(conn, &seeds)?
+        .into_iter()
+        .filter(|edge| {
+            !replacement_sources.contains(&edge.source) && is_valid_orb_task_id(&edge.target)
+        })
         .collect::<Vec<_>>();
+    validation_edges.extend(replacement_edges);
+
     for envelope in envelopes {
-        validate_relations_in_registry(
-            conn,
-            partition_id,
-            &envelope.id,
-            &envelope.relations,
-            &replacement_sources,
-            &replacement_edges,
-        )?;
+        validate_task_relations_for_source(&envelope.id, &envelope.relations, &validation_edges)
+            .map_err(OrbitError::from)?;
+    }
+    Ok(())
+}
+
+/// Resolve every replacement relation target with one primary-key query, then
+/// use one materialized prefix set for any target that query did not find.
+fn validate_replacement_relation_targets(
+    conn: &Connection,
+    source_workspace_id: &str,
+    envelopes: &[TaskEnvelopeV2],
+) -> Result<(), OrbitError> {
+    let candidates = envelopes
+        .iter()
+        .flat_map(|envelope| {
+            envelope
+                .relations
+                .iter()
+                .filter(|relation| {
+                    is_valid_orb_task_id(&relation.target) && relation.target != envelope.id
+                })
+                .map(|relation| relation.target.clone())
+        })
+        .collect::<BTreeSet<_>>();
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let registered = registered_task_ids(conn, &candidates)?;
+    if registered.len() == candidates.len() {
+        return Ok(());
+    }
+    let known_prefixes = known_task_prefixes(conn)?;
+    for envelope in envelopes {
+        for relation in &envelope.relations {
+            if !candidates.contains(&relation.target) || registered.contains(&relation.target) {
+                continue;
+            }
+            let Some(prefix) = task_id_prefix(&relation.target) else {
+                continue;
+            };
+            if !known_prefixes.contains(prefix) {
+                continue;
+            }
+            return Err(OrbitError::InvalidInput(format!(
+                "task relation target '{}' from workspace '{}' does not resolve in the coordination registry",
+                relation.target, source_workspace_id
+            )));
+        }
     }
     Ok(())
 }
