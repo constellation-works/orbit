@@ -151,7 +151,7 @@ pub(crate) fn admission_refusal(
     }
 
     let mut statement = conn
-        .prepare("SELECT state, input_json FROM job_runs WHERE workspace_id=?1 AND job_id=?2")
+        .prepare("SELECT state, input_json FROM job_runs WHERE workspace_id=?1 AND job_id=?2 AND state IN ('pending','running')")
         .map_err(|error| OrbitError::Store(error.to_string()))?;
     let rows = statement
         .query_map(params![workspace_id, job_id], |row| {
