@@ -6,12 +6,12 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_common::OrbitError;
-use orbit_types::task::{is_valid_orb_task_id, TaskEnvelopeV2};
+use orbit_common::fs::io::with_exclusive_file_lock;
+use orbit_types::task::{TaskEnvelopeV2, is_valid_orb_task_id};
 
 use crate::driver::file::task_bundle::{bundle_lock_target, recover_pending_bundle_at};
-use crate::driver::sqlite::task_registry::{parse_orb_task_number, TaskRegistryStore};
+use crate::driver::sqlite::task_registry::{TaskRegistryStore, parse_orb_task_number};
 use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 
 /// Result of [`reindex_workspace`].

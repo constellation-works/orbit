@@ -14,6 +14,7 @@ use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskListFilter;
 
 /// Job whose own failed/timeout rows must not re-admit the drain loop.
 pub(super) const EPIC_PIPELINE_JOB_ID: &str = "epic_pipeline";
@@ -37,12 +38,16 @@ pub(super) fn scan_unresolved_work(
         .unwrap_or(false);
 
     let mut task_ids: Vec<String> = runtime
-        .stores()
-        .tasks()
-        .list_tasks()
-        .map_err(|err| action_failed(action, format!("list tasks: {err}")))?
+        .task_candidates(
+            &TaskListFilter {
+                statuses: Some(WAKE_TASK_STATUSES.to_vec()),
+                ..TaskListFilter::default()
+            },
+            usize::MAX,
+        )
+        .map_err(|err| action_failed(action, format!("list workspace task envelopes: {err}")))?
+        .items
         .into_iter()
-        .filter(|task| WAKE_TASK_STATUSES.contains(&task.status))
         .map(|task| task.id)
         .collect();
     task_ids.sort();
