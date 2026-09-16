@@ -52,6 +52,11 @@ pub struct WorktreeGcArgs {
     #[arg(long, value_name = "HOURS")]
     pub older_than_hours: Option<u64>,
 
+    /// Walk eligible worktrees to estimate reclaimable bytes. Dry-run skips
+    /// this walk by default; `--confirm` always measures before removal.
+    #[arg(long)]
+    pub estimate_bytes: bool,
+
     /// Emit the complete report as JSON
     #[arg(long)]
     pub json: bool,
@@ -59,7 +64,12 @@ pub struct WorktreeGcArgs {
 
 impl Execute for WorktreeGcArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let result = runtime.gc_worktrees(self.confirm, self.run, self.older_than_hours)?;
+        let result = runtime.gc_worktrees(
+            self.confirm,
+            self.run,
+            self.older_than_hours,
+            self.estimate_bytes,
+        )?;
         let doc = serde_json::to_value(&result).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize worktree GC report: {error}"))
         })?;

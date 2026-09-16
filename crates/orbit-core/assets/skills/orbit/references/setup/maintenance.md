@@ -12,6 +12,7 @@ until the disk fills. **Enable this before, not after, scheduling ship traffic.*
 
 ```bash
 orbit gc worktrees                          # report only — the default is non-destructive
+orbit gc worktrees --estimate-bytes         # dry-run plus a recursive byte estimate
 orbit gc worktrees --confirm                # actually remove
 orbit gc worktrees --older-than-hours 24    # leave recent runs alone
 orbit gc worktrees --run <run_id>           # restrict to one run

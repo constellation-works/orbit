@@ -182,6 +182,10 @@ fn dry_run_and_yes_share_eligibility_but_only_yes_removes() {
     assert!(worktree.exists());
     assert_eq!(dry.reports[0].action, "would_remove");
     assert_eq!(dry.reports[0].task_id.as_deref(), Some("ORB-CLEAN"));
+    assert_eq!(
+        dry.reports[0].bytes_reclaimed, 0,
+        "dry-run skips the directory walk unless estimate_bytes is set"
+    );
 
     let applied = collect_worktrees(
         &repo,
@@ -429,11 +433,44 @@ fn pipeline_shaped_run_is_recognized_and_reported_in_full() {
     assert_eq!(report.run_state, Some(JobRunState::Success));
     assert_eq!(report.task_id.as_deref(), Some("ORB-10419"));
     assert_eq!(report.task_status, Some(TaskStatus::Done));
-    assert!(
-        report.bytes_reclaimed > 0,
-        "a dry run still estimates what --yes would reclaim"
+    assert_eq!(
+        report.bytes_reclaimed, 0,
+        "dry-run skips the directory walk unless estimate_bytes is set"
     );
     assert!(result.dry_run);
+    assert!(worktree.exists(), "a dry run never removes anything");
+}
+
+#[test]
+fn dry_run_estimates_bytes_only_when_requested() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo);
+    let run = pipeline_run("jrun-estimate", JobRunState::Success, &["ORB-ESTIMATE"]);
+    let worktree = resolved_task_worktree(&repo, &run);
+    add_worktree(&repo, &worktree, "orbit/estimate");
+    fs::write(worktree.join("bytes.bin"), [1_u8; 32]).unwrap();
+    git(&worktree, &["add", "bytes.bin"]);
+    git(&worktree, &["commit", "-m", "worktree content"]);
+    let host = FakeTaskHost::new(vec![task_fixture("ORB-ESTIMATE", TaskStatus::Done)]);
+
+    let estimated = collect_worktrees(
+        &repo,
+        &[run],
+        &host,
+        &WorktreeGcOptions {
+            estimate_bytes: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(estimated.reports[0].action, "would_remove");
+    assert!(
+        estimated.reports[0].bytes_reclaimed > 0,
+        "estimate_bytes restores the dry-run directory walk"
+    );
+    assert!(estimated.dry_run);
     assert!(worktree.exists(), "a dry run never removes anything");
 }
 

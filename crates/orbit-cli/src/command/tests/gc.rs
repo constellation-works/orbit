@@ -19,8 +19,20 @@ fn gc_worktrees_defaults_to_dry_run_and_accepts_scopes() {
     };
     let GcTarget::Worktrees(args) = command.target;
     assert!(!args.confirm);
+    assert!(!args.estimate_bytes);
     assert_eq!(args.run.as_deref(), Some("jrun-1"));
     assert_eq!(args.older_than_hours, Some(24));
+}
+
+#[test]
+fn gc_worktrees_accepts_estimate_bytes() {
+    let cli = Cli::parse_from(["orbit", "gc", "worktrees", "--estimate-bytes"]);
+    let Commands::Gc(command) = cli.command else {
+        panic!("expected gc");
+    };
+    let GcTarget::Worktrees(args) = command.target;
+    assert!(args.estimate_bytes);
+    assert!(!args.confirm);
 }
 
 #[test]
