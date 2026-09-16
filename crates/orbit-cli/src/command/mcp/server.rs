@@ -4,12 +4,15 @@
 //! same trusted session envelope, so a call's dispatch and audit path does not
 //! depend on how its bytes arrived.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, ResolvedWorkspaceSelection};
+use orbit_cmd::registry_runtime::{
+    RegisteredRuntimeFactory, RegisteredRuntimeStamp, ResolvedWorkspaceSelection,
+};
 use orbit_cmd::task_owner::{self, WorkspaceIdentity};
 use orbit_common::protocol::tool_input::required_string;
 use orbit_common::{NotFoundKind, OrbitError};
@@ -22,6 +25,7 @@ use orbit_mcp::{
     SshAcceptance,
 };
 use orbit_types::tool::{McpToolDefinition, McpToolScope, ToolSessionContext};
+use orbit_types::workspace::{Workspace, WorkspaceCheckout};
 use serde_json::Value;
 
 /// Tools whose target is a machine-global primary key, and therefore whose
@@ -229,6 +233,122 @@ where
     runtime.block_on(server)
 }
 
+/// Tracing target and message emitted once per workspace runtime this process
+/// opens.
+///
+/// Together they are the observable seam for "this server reuses what it
+/// opens": the MCP integration test enables this target and counts the lines
+/// across calls, so both strings are matched there literally.
+const RUNTIME_OPEN_LOG_TARGET: &str = "orbit.mcp.runtime";
+const OPENED_WORKSPACE_RUNTIME_LOG: &str = "opened a workspace runtime";
+
+/// The runtimes this process has built, keyed by logical workspace ID.
+///
+/// [`HostLifetime::LongLived`] promises the host keeps what it opens, but the
+/// server used to drop each runtime at the end of the call that built it — so
+/// every workspace-scoped call re-parsed the host identity, reopened the task
+/// registry and all workspace stores, and started a fresh embed worker. An
+/// entry is reused only while everything it was composed from still holds: the
+/// registry records this call resolved, plus a [`RegisteredRuntimeStamp`] over
+/// the files behind them.
+///
+/// Generic over the cached value so the unit tests can exercise reuse and
+/// invalidation without opening real stores.
+struct WorkspaceRuntimeCache<T = OrbitRuntime> {
+    entries: Mutex<HashMap<String, CachedRuntime<T>>>,
+}
+
+/// One built runtime together with the facts it was composed from.
+struct CachedRuntime<T> {
+    workspace: Workspace,
+    checkout: WorkspaceCheckout,
+    stamp: RegisteredRuntimeStamp,
+    value: Arc<T>,
+}
+
+impl<T> CachedRuntime<T> {
+    /// `ResolvedWorkspaceSelection::local_root` is deliberately not compared:
+    /// [`RegisteredRuntimeFactory::open_registered_checkout_for`] composes
+    /// against the registered checkout's own `.orbit` for both roots, so a
+    /// selection that differs only there yields the same runtime.
+    fn matches(
+        &self,
+        selected: &ResolvedWorkspaceSelection,
+        stamp: &RegisteredRuntimeStamp,
+    ) -> bool {
+        self.workspace == selected.workspace
+            && self.checkout == selected.checkout
+            && self.stamp == *stamp
+    }
+}
+
+impl<T> Default for WorkspaceRuntimeCache<T> {
+    fn default() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl<T> WorkspaceRuntimeCache<T> {
+    /// Reuse the runtime already built for `selected`, or build one and keep it.
+    ///
+    /// `build` runs outside the cache lock: opening stores blocks on I/O, and
+    /// two concurrent builds for the same facts are interchangeable.
+    fn resolve(
+        &self,
+        global_root: &Path,
+        selected: &ResolvedWorkspaceSelection,
+        build: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<Arc<T>, OrbitError> {
+        let stamp = RegisteredRuntimeStamp::read(global_root, &selected.checkout);
+        if let Some(value) = self.reusable(selected, &stamp) {
+            return Ok(value);
+        }
+        let value = Arc::new(build()?);
+        let mut entries = self.lock();
+        // A racing call may have published an equivalent entry while this one
+        // built; prefer the published runtime so the session converges on one.
+        if let Some(published) = entries
+            .get(&selected.workspace.id)
+            .filter(|cached| cached.matches(selected, &stamp))
+        {
+            return Ok(Arc::clone(&published.value));
+        }
+        // Otherwise this build becomes the entry, replacing whatever stale one
+        // a rebind or an edited registry left behind for this workspace.
+        entries.insert(
+            selected.workspace.id.clone(),
+            CachedRuntime {
+                workspace: selected.workspace.clone(),
+                checkout: selected.checkout.clone(),
+                stamp,
+                value: Arc::clone(&value),
+            },
+        );
+        Ok(value)
+    }
+
+    /// The cached runtime for this selection iff every fact it was built from
+    /// is unchanged. A mismatch reports absent, so the caller rebuilds.
+    fn reusable(
+        &self,
+        selected: &ResolvedWorkspaceSelection,
+        stamp: &RegisteredRuntimeStamp,
+    ) -> Option<Arc<T>> {
+        self.lock()
+            .get(&selected.workspace.id)
+            .filter(|cached| cached.matches(selected, stamp))
+            .map(|cached| Arc::clone(&cached.value))
+    }
+
+    /// Poisoning is recoverable here: the map is an idempotent build cache, so
+    /// a panic in another call cannot leave it logically inconsistent.
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, CachedRuntime<T>>> {
+        self.entries.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 /// One MCP server bound to the executing machine.
 struct ServerMcpHost {
     global_root: PathBuf,
@@ -237,6 +357,8 @@ struct ServerMcpHost {
     /// What this session may do here, kept for the per-call re-evaluation a
     /// `workspaces` narrowing needs [ORB-11052].
     session_policy: SessionCapabilityPolicy,
+    /// Runtimes this long-lived host has already opened.
+    workspace_runtimes: WorkspaceRuntimeCache,
 }
 
 impl ServerMcpHost {
@@ -251,6 +373,7 @@ impl ServerMcpHost {
             process_machine_id,
             process_host_id,
             session_policy,
+            workspace_runtimes: WorkspaceRuntimeCache::default(),
         }
     }
 
@@ -331,14 +454,24 @@ impl ServerMcpHost {
         name: &str,
         input: &Value,
         context: &ToolSessionContext,
-    ) -> Result<(OrbitRuntime, ResolvedWorkspaceSelection), OrbitError> {
+    ) -> Result<(Arc<OrbitRuntime>, ResolvedWorkspaceSelection), OrbitError> {
         let selected = self.workspace_selection(name, input, context)?;
-        let runtime = RegisteredRuntimeFactory::open_registered_checkout_for(
-            &self.global_root,
-            &selected.workspace,
-            &selected.checkout,
-            HostLifetime::LongLived,
-        )?;
+        let runtime = self
+            .workspace_runtimes
+            .resolve(&self.global_root, &selected, || {
+                let runtime = RegisteredRuntimeFactory::open_registered_checkout_for(
+                    &self.global_root,
+                    &selected.workspace,
+                    &selected.checkout,
+                    HostLifetime::LongLived,
+                )?;
+                tracing::debug!(
+                    target: RUNTIME_OPEN_LOG_TARGET,
+                    workspace_id = %selected.workspace.id,
+                    "{OPENED_WORKSPACE_RUNTIME_LOG}"
+                );
+                Ok(runtime)
+            })?;
         Ok((runtime, selected))
     }
 
@@ -517,3 +650,7 @@ fn execute_core_tool(
         .value;
     crate::command::task::show::attach_bound_workspace_identity(name, &input, owner, output)
 }
+
+#[cfg(test)]
+#[path = "tests/server.rs"]
+mod tests;
