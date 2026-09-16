@@ -24,6 +24,5 @@ sha2 = { workspace = true }
 tracing.workspace = true
 
 [dev-dependencies]
-orbit-common = { path = "../orbit-common", features = ["test-util"] }
 serde_yaml.workspace = true
 tiktoken-rs.workspace = true

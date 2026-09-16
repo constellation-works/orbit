@@ -23,10 +23,19 @@
 //! attribution. [`INHERITED_AUTHORITY_ENV`] is the canonical list for that
 //! case and [`clear_inherited_authority`] applies it.
 //!
-//! Exposed behind the `test-util` feature so integration tests and sibling
-//! crates share one implementation rather than re-deriving the guard.
+//! Always available so integration tests and sibling crates share one
+//! implementation without changing `orbit-common`'s feature set.
 
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{
+    Mutex, MutexGuard, OnceLock,
+    atomic::{AtomicUsize, Ordering},
+};
+
+static ACTIVE_SCOPED_ENVS: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) fn scoped_env_active() -> bool {
+    ACTIVE_SCOPED_ENVS.load(Ordering::SeqCst) != 0
+}
 
 /// The identity pair consulted when a command carries no explicit
 /// `--agent`/`--model` and no input attribution.
@@ -170,6 +179,7 @@ pub fn scoped<'a>(vars: impl IntoIterator<Item = (&'a str, Option<&'a str>)>) ->
             }
         }
     }
+    ACTIVE_SCOPED_ENVS.fetch_add(1, Ordering::SeqCst);
     ScopedEnv { _lock: lock, saved }
 }
 
@@ -184,6 +194,7 @@ impl Drop for ScopedEnv {
                 }
             }
         }
+        ACTIVE_SCOPED_ENVS.fetch_sub(1, Ordering::SeqCst);
     }
 }
 

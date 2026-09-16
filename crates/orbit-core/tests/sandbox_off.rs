@@ -12,6 +12,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::application::workspace_sync::reconcile_workspace_managed_artifacts;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_engine::{RuntimeHost, V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
+use orbit_store::V2AuditEventFilter;
 use orbit_types::resource::ExecutorResource;
 use orbit_types::workflow::activity_job::{
     ActivityV2Spec, AgentLoopSpec, OnDenial, Provider, V2AuditEventKind,
@@ -85,7 +86,7 @@ fn explicit_off_survives_opens_and_sync_then_spawns_bare_without_inner_sandbox()
     assert!(resolved.fs_profile.modify.is_empty());
     assert!(!resolved.allow_fallback);
 
-    let audit = dispatch_codex(&runtime, dir.path());
+    let events = dispatch_codex(&runtime, dir.path());
     assert_eq!(
         std::fs::read_to_string(parent_path)
             .expect("actual parent")
@@ -101,7 +102,7 @@ fn explicit_off_survives_opens_and_sync_then_spawns_bare_without_inner_sandbox()
     );
     assert!(!args.contains(&"workspace-write"));
 
-    assert_effective_off(&audit, &program);
+    assert_effective_off(&events, &program);
 
     // The file store's normal serializer preserves the explicit choice too.
     let def = runtime
@@ -142,10 +143,14 @@ printf '%s\n' '{{"schemaVersion":1,"status":"success","result":{{"bare":true}},"
     program
 }
 
-fn dispatch_codex(runtime: &OrbitRuntime, dir: &Path) -> Arc<V2AuditWriter> {
+fn dispatch_codex(
+    runtime: &OrbitRuntime,
+    dir: &Path,
+) -> Vec<orbit_types::workflow::activity_job::V2AuditEvent> {
+    let store = Arc::new(orbit_store::Store::open_in_memory().expect("audit store"));
     let audit = V2AuditWriter::with_disk_sinks(
         &dir.join("audit"),
-        Arc::new(orbit_store::Store::open_in_memory().expect("audit store")),
+        store.clone(),
         "ws_test",
         "sandbox-off",
         "codex:test".to_string(),
@@ -179,13 +184,23 @@ fn dispatch_codex(runtime: &OrbitRuntime, dir: &Path) -> Arc<V2AuditWriter> {
     .expect("dispatch explicit off without a wrapper probe");
     assert!(outcome.success, "{:?}", outcome.message);
     assert_eq!(outcome.output["bare"], true);
-    audit
+    store
+        .list_v2_audit_events(&V2AuditEventFilter {
+            workspace_id: "ws_test".to_string(),
+            run_id: Some("sandbox-off".to_string()),
+            source: Some("v2_envelope".to_string()),
+            ..Default::default()
+        })
+        .expect("persisted invocation events")
+        .into_iter()
+        .map(|row| serde_json::from_str(&row.payload_json).expect("typed invocation event"))
+        .collect()
 }
 
-fn assert_effective_off(audit: &V2AuditWriter, program: &Path) {
-    let events = audit
-        .events_snapshot()
-        .expect("effective invocation introspection");
+fn assert_effective_off(
+    events: &[orbit_types::workflow::activity_job::V2AuditEvent],
+    program: &Path,
+) {
     let started = events
         .iter()
         .find(|event| matches!(event.kind, V2AuditEventKind::CliInvocationStarted { .. }))

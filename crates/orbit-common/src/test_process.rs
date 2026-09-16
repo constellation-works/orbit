@@ -8,9 +8,8 @@
 //! [`retry_executable_busy`] absorbs that bounded, load-dependent transient so
 //! the fixture fails only on a real spawn error.
 //!
-//! Exposed behind the `test-util` feature so integration tests in sibling
-//! crates, which cannot see this crate's `#[cfg(test)]` items, share one
-//! implementation rather than each re-deriving the retry.
+//! Always available so integration tests in sibling crates share one
+//! implementation without changing `orbit-common`'s feature set.
 
 #[cfg(target_os = "linux")]
 use std::io;

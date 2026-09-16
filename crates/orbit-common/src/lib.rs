@@ -24,13 +24,10 @@ pub mod protocol;
 pub mod security;
 pub mod storage;
 
-#[cfg(any(test, feature = "test-util"))]
 pub mod test_env;
 
-#[cfg(any(test, feature = "test-util"))]
 pub mod test_fixtures;
 
-#[cfg(any(test, feature = "test-util"))]
 pub mod test_process;
 
 pub use error::{

@@ -10,4 +10,4 @@ Mechanisms every layer needs: `OrbitError` plus responsibility-named modules (`e
   - `fs::selector` — owns `SelectorParseError` and its `OrbitError` translator; no caller crate may translate it.
   - `migration` — forward-only, read-time YAML migration; no rollback, no write-back. One-shot importers belong in `orbit-store::workflow`.
 - `governance::operation` is the operations-as-data kernel; specs live here, handlers live in `orbit-core` joined by the verb enum. Keep it transport/runtime-agnostic: no clap, axum, or `OrbitRuntime` types. Every registry string is shipped contract.
-- Features: `sqlite` gates `storage::sqlite`; `test-util` exposes `test_env`/`test_fixtures` — dev-dependencies only; `clap` forwards to `orbit-types/clap`. Gate code behind the flag, don't `#[allow]` it.
+- Features: `sqlite` gates `storage::sqlite`; `clap` forwards to `orbit-types/clap`. Test helpers are always compiled so build and test dependency graphs stay identical. Gate optional production code behind the flag, don't `#[allow]` it.

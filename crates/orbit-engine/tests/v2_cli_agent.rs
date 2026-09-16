@@ -32,10 +32,11 @@ use orbit_engine::{
     DispatchError, ResolvedCliExecutor, RuntimeHost, V2AuditWriter, V2DispatchInput,
     dispatch_v2_activity,
 };
+use orbit_store::{Store, V2AuditEventFilter};
 use orbit_types::workflow::JobScheduleState;
 use orbit_types::workflow::activity_job::{
     ActivityV2Spec, AgentLoopSpec, JobKind, JobV2, JobV2Step, JobV2StepBody, LoopBlock, OnDenial,
-    Provider, RetiredFeatureError, TargetStep, validate_job_retired_sessions,
+    Provider, RetiredFeatureError, TargetStep, V2AuditEvent, validate_job_retired_sessions,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -60,7 +61,7 @@ fn cli_agent_dispatch_regressions() -> Result<(), Box<dyn std::error::Error>> {
 fn scenario_a_cli_dispatch_emits_envelope_events() -> Result<(), Box<dyn std::error::Error>> {
     println!("  A) cli dispatch emits §6 + §7.6 envelope events");
     let tmp_audit = tempfile::tempdir()?;
-    let (writer, _sink) = build_writer(tmp_audit.path(), "smoke-cli-a")?;
+    let (writer, store) = build_writer(tmp_audit.path(), "smoke-cli-a")?;
 
     // `claude` that ignores stdin and prints a canned reply. [ORB-10449] The
     // reply is a real Orbit response envelope: exiting 0 without one is now a
@@ -85,7 +86,7 @@ fn scenario_a_cli_dispatch_emits_envelope_events() -> Result<(), Box<dyn std::er
 
     assert!(outcome.success, "fake claude should exit 0");
 
-    let events = writer.events_snapshot()?;
+    let events = events_snapshot(&store, "smoke-cli-a")?;
     let types: Vec<&str> = events
         .iter()
         .map(|e| e.envelope.event_type.as_str())
@@ -102,7 +103,7 @@ fn scenario_a_cli_dispatch_emits_envelope_events() -> Result<(), Box<dyn std::er
 fn scenario_b_argv_redaction() -> Result<(), Box<dyn std::error::Error>> {
     println!("  B) argv redaction scrubs sk-... from --model arg");
     let tmp_audit = tempfile::tempdir()?;
-    let (writer, _sink) = build_writer(tmp_audit.path(), "smoke-cli-b")?;
+    let (writer, store) = build_writer(tmp_audit.path(), "smoke-cli-b")?;
 
     let fake = fake_cli("claude", "#!/bin/sh\ncat > /dev/null\necho ok\n")?;
 
@@ -122,7 +123,7 @@ fn scenario_b_argv_redaction() -> Result<(), Box<dyn std::error::Error>> {
         host: Some(&host),
     })?;
 
-    let events = writer.events_snapshot()?;
+    let events = events_snapshot(&store, "smoke-cli-b")?;
     let started = events
         .iter()
         .find(|e| e.envelope.event_type == "cli.invocation.started")
@@ -147,7 +148,7 @@ fn scenario_b_argv_redaction() -> Result<(), Box<dyn std::error::Error>> {
 fn scenario_c_wall_clock_timeout() -> Result<(), Box<dyn std::error::Error>> {
     println!("  C) wall_clock_timeout kills long-running subprocess");
     let tmp_audit = tempfile::tempdir()?;
-    let (writer, _sink) = build_writer(tmp_audit.path(), "smoke-cli-c")?;
+    let (writer, store) = build_writer(tmp_audit.path(), "smoke-cli-c")?;
 
     let fake = fake_cli("claude", "#!/bin/sh\ncat > /dev/null\nexec sleep 10\n")?;
 
@@ -175,7 +176,7 @@ fn scenario_c_wall_clock_timeout() -> Result<(), Box<dyn std::error::Error>> {
         elapsed
     );
 
-    let events = writer.events_snapshot()?;
+    let events = events_snapshot(&store, "smoke-cli-c")?;
     let finished = events
         .iter()
         .find(|e| e.envelope.event_type == "cli.invocation.finished")
@@ -254,7 +255,7 @@ fn scenario_h_cli_reference_asset_round_trip() -> Result<(), Box<dyn std::error:
     }
 
     let tmp_audit = tempfile::tempdir()?;
-    let (writer, _sink) = build_writer(tmp_audit.path(), "smoke-cli-h")?;
+    let (writer, store) = build_writer(tmp_audit.path(), "smoke-cli-h")?;
     // [ORB-10449] A round-tripped asset gets the default completion contract,
     // so the fake must terminate with a real envelope like a live provider.
     let fake = fake_cli(
@@ -274,7 +275,7 @@ fn scenario_h_cli_reference_asset_round_trip() -> Result<(), Box<dyn std::error:
     assert!(outcome.success);
     println!(
         "    asset dispatched, events={}",
-        writer.events_snapshot()?.len()
+        events_snapshot(&store, "smoke-cli-h")?.len()
     );
     Ok(())
 }
@@ -305,7 +306,7 @@ fn scenario_i_existing_agent_loop_assets_still_deserialize()
 fn scenario_j_cli_executor_static_args_are_audited() -> Result<(), Box<dyn std::error::Error>> {
     println!("  J) cli executor static args are included in audited argv");
     let tmp_audit = tempfile::tempdir()?;
-    let (writer, _sink) = build_writer(tmp_audit.path(), "smoke-cli-j")?;
+    let (writer, store) = build_writer(tmp_audit.path(), "smoke-cli-j")?;
 
     // [ORB-10449] Terminate with a real envelope; this scenario is about argv,
     // not about the step-completion protocol.
@@ -330,7 +331,7 @@ fn scenario_j_cli_executor_static_args_are_audited() -> Result<(), Box<dyn std::
 
     assert!(outcome.success, "fake codex should exit 0");
 
-    let events = writer.events_snapshot()?;
+    let events = events_snapshot(&store, "smoke-cli-j")?;
     let argv = events
         .iter()
         .find_map(|event| match &event.kind {
@@ -398,18 +399,35 @@ fn must_contain(types: &[&str], needle: &str) {
 fn build_writer(
     root: &Path,
     run_id: &str,
-) -> Result<(Arc<V2AuditWriter>, ()), Box<dyn std::error::Error>> {
+) -> Result<(Arc<V2AuditWriter>, Arc<Store>), Box<dyn std::error::Error>> {
     let audit_root = root.join("audit");
     fs::create_dir_all(&audit_root)?;
+    let store = Arc::new(Store::open_in_memory()?);
     let writer = V2AuditWriter::with_disk_sinks(
         &audit_root,
-        Arc::new(orbit_store::Store::open_in_memory()?),
+        store.clone(),
         "ws_smoke",
         run_id,
         "smoke".to_string(),
         None,
     )?;
-    Ok((writer, ()))
+    Ok((writer, store))
+}
+
+fn events_snapshot(
+    store: &Store,
+    run_id: &str,
+) -> Result<Vec<V2AuditEvent>, Box<dyn std::error::Error>> {
+    store
+        .list_v2_audit_events(&V2AuditEventFilter {
+            workspace_id: "ws_smoke".to_string(),
+            run_id: Some(run_id.to_string()),
+            source: Some("v2_envelope".to_string()),
+            ..Default::default()
+        })?
+        .into_iter()
+        .map(|row| serde_json::from_str(&row.payload_json).map_err(Into::into))
+        .collect()
 }
 
 /// Write a shell-script "fake CLI" into a tempdir using the chosen basename

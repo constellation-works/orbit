@@ -14,9 +14,8 @@
 //!   task/comment, an arbitrary `--model` pass-through) should use one of these
 //!   frozen constants so the fixture value never changes.
 //!
-//! Exposed behind the `test-util` feature so integration tests in sibling
-//! crates — which cannot see another crate's `#[cfg(test)]` items — can share
-//! the same constants.
+//! Always available so integration tests in sibling crates can share the same
+//! constants without changing `orbit-common`'s feature set.
 
 /// Frozen Claude model literal for attribution/input test fixtures.
 pub const TEST_CLAUDE_MODEL: &str = "claude-opus-4-7";

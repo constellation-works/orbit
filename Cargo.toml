@@ -66,12 +66,12 @@ flate2 = "1"
 fastembed = { version = "5.13.4", default-features = false, features = ["hf-hub-native-tls", "ort-download-binaries-native-tls"] }
 fs2 = "0.4"
 futures-core = "0.3"
-getrandom = "0.3"
+getrandom = { version = "0.3", features = ["std"] }
 hostname = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net", "sync"] }
 jsonschema = { version = "0.18", default-features = false }
 libc = "0.2"
-rusqlite = { version = "0.31", features = ["bundled", "chrono"] }
+rusqlite = { version = "0.31", features = ["bundled", "chrono", "trace"] }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 rsa = { version = "0.10.0-rc.18", features = ["sha2"] }
 serde = { version = "1", features = ["derive"] }

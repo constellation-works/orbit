@@ -40,7 +40,7 @@ const REDACTED_ENV_VALUE: &str = "[REDACTED_ENV]";
 static DEFAULT_PATTERN_REDACTOR: OnceLock<PatternRedactor> = OnceLock::new();
 static ARGV_PATTERN_REDACTOR: OnceLock<PatternRedactor> = OnceLock::new();
 static HIGH_CONFIDENCE_SINGLE_TOKEN_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
-#[cfg_attr(any(test, feature = "test-util"), allow(dead_code))]
+#[cfg_attr(test, allow(dead_code))]
 static SENSITIVE_ENV_VALUES: OnceLock<Vec<String>> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
@@ -580,7 +580,7 @@ fn collect_sensitive_env_values() -> Vec<String> {
     values
 }
 
-#[cfg_attr(any(test, feature = "test-util"), allow(dead_code))]
+#[cfg_attr(test, allow(dead_code))]
 fn cached_sensitive_env_values() -> &'static [String] {
     SENSITIVE_ENV_VALUES
         .get_or_init(collect_sensitive_env_values)
@@ -589,14 +589,12 @@ fn cached_sensitive_env_values() -> &'static [String] {
 
 fn sensitive_env_values() -> Cow<'static, [String]> {
     // Tests mutate process env after startup (`EnvVarGuard`). A process-wide
-    // snapshot would miss those values, so re-collect. Production binaries
-    // do not enable `test-util`.
-    #[cfg(any(test, feature = "test-util"))]
-    {
+    // snapshot would miss those values, so re-collect in this crate's tests
+    // and while the shared scoped environment guard is active. Normal
+    // production calls retain the cached snapshot.
+    if cfg!(test) || crate::test_env::scoped_env_active() {
         Cow::Owned(collect_sensitive_env_values())
-    }
-    #[cfg(not(any(test, feature = "test-util")))]
-    {
+    } else {
         Cow::Borrowed(cached_sensitive_env_values())
     }
 }
