@@ -280,8 +280,8 @@ fn all_tasks_json(
         let Ok(runtime) = pinned.runtime_for(&entry.id) else {
             continue;
         };
-        total += runtime.task_candidates(&query.count_filter(), 0)?.total;
         let page = runtime.task_candidates(&query.filter(), query.limit())?;
+        total += page.total_without_cursor;
         remaining += page.total;
         for task in page.items {
             candidates.push((task, runtime.clone(), entry));

@@ -48,12 +48,32 @@ impl TaskV2Store {
             return Ok(TaskCandidates::default());
         }
         let bounded = filter.is_fully_indexed();
+        // Non-indexed predicates need the pre-cursor match set so
+        // `total_without_cursor` is the untruncated count. Fully indexed
+        // pages keep SQL `LIMIT` and COUNT the unbounded total separately
+        // when a cursor is present.
+        let unbounded = filter.without_cursor();
+        let index_source = if bounded { filter } else { &unbounded };
         let selection = self.registry.indexed_task_selection(
             &self.workspace_id,
-            &filter.index_filter(unsettled),
+            &index_source.index_filter(unsettled.clone()),
             filter.terminal_last,
             (bounded && limit < usize::MAX).then_some(limit),
         )?;
+        let total_without_cursor = if !bounded {
+            0
+        } else if filter.scan_before.is_none() {
+            selection.total
+        } else {
+            self.registry
+                .indexed_task_selection(
+                    &self.workspace_id,
+                    &unbounded.index_filter(unsettled),
+                    filter.terminal_last,
+                    Some(0),
+                )?
+                .total
+        };
         // A row that no longer matches was rewritten after the scan; leaving
         // it out here keeps every returned candidate true to the filter, and
         // hydration re-checks the selected page against the bundle anyway.
@@ -61,12 +81,13 @@ impl TaskV2Store {
             .ids
             .iter()
             .filter_map(|id| self.envelope_cache.cached(id))
-            .filter(|envelope| filter.matches(envelope))
+            .filter(|envelope| index_source.matches(envelope))
             .collect::<Vec<_>>();
         if bounded {
             return Ok(TaskCandidates {
                 items: envelopes,
                 total: selection.total,
+                total_without_cursor,
             });
         }
         Ok(select_candidates(envelopes, filter, limit))
@@ -108,10 +129,16 @@ impl TaskV2Store {
         } else {
             candidates.total
         };
+        let total_without_cursor = if residual.is_some() {
+            total
+        } else {
+            candidates.total_without_cursor
+        };
         items.truncate(limit);
         Ok(TaskPage {
             items,
             total,
+            total_without_cursor,
             status_by_id,
         })
     }
@@ -122,8 +149,9 @@ impl TaskV2Store {
         limit: usize,
         residual: TaskResidualFilter<'_>,
     ) -> Result<TaskPage, OrbitError> {
+        let unbounded = filter.without_cursor();
         let mut bundles = self.bundle_store.list_bundles()?;
-        bundles.retain(|bundle| filter.matches(&bundle.envelope));
+        bundles.retain(|bundle| unbounded.matches(&bundle.envelope));
         let status_by_id =
             self.listing_status_index(bundles.iter().map(|bundle| &bundle.envelope))?;
         let mut items = Vec::with_capacity(bundles.len());
@@ -140,11 +168,18 @@ impl TaskV2Store {
             |row| &row.task.id,
             |row| row.task.status,
         );
+        let total_without_cursor = items.len();
+        if let Some((at, id)) = &filter.scan_before {
+            items.retain(|row| {
+                row.task.created_at < *at || (row.task.created_at == *at && row.task.id > *id)
+            });
+        }
         let total = items.len();
         items.truncate(limit);
         Ok(TaskPage {
             items,
             total,
+            total_without_cursor,
             status_by_id,
         })
     }
@@ -231,9 +266,10 @@ fn select_candidates(
     filter: &TaskListFilter,
     limit: usize,
 ) -> TaskCandidates {
+    let unbounded = filter.without_cursor();
     let mut items = envelopes
         .into_iter()
-        .filter(|task| filter.matches(task))
+        .filter(|task| unbounded.matches(task))
         .collect::<Vec<_>>();
     sort_listing(
         &mut items,
@@ -242,9 +278,17 @@ fn select_candidates(
         |task| &task.id,
         |task| task.status,
     );
+    let total_without_cursor = items.len();
+    if filter.scan_before.is_some() {
+        items.retain(|task| filter.matches_cursor(task));
+    }
     let total = items.len();
     items.truncate(limit);
-    TaskCandidates { items, total }
+    TaskCandidates {
+        items,
+        total,
+        total_without_cursor,
+    }
 }
 
 /// Canonical listing order — newest first, task ID ascending for ties — and,

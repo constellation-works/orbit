@@ -105,12 +105,6 @@ impl TaskPageQuery {
         }
     }
 
-    pub(super) fn count_filter(&self) -> TaskListFilter {
-        let mut filter = self.filter();
-        filter.scan_before = None;
-        filter
-    }
-
     pub(super) fn limit(&self) -> usize {
         self.limit
     }
