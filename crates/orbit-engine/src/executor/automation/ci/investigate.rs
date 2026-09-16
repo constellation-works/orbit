@@ -115,6 +115,7 @@ pub(super) fn investigate<Q: CiQueries + ?Sized>(
                 &mut finding,
                 job_id,
                 bounds,
+                &view,
                 checkout_log_reads,
                 &mut errors,
             );
@@ -159,62 +160,38 @@ fn investigate_job<Q: CiQueries + ?Sized>(
     failure: &mut Value,
     job_id: u64,
     bounds: &Bounds,
+    view: &Value,
     checkout_log_reads: &mut usize,
     retryable_errors: &mut Vec<Value>,
 ) {
     let run_id = failure["run_id"].to_string();
-    let mut job_api_log_recovered = false;
-    match queries.run_logs(&run_id, job_id, LogScope::Failed, bounds.log_max_bytes) {
-        Ok(log) => {
-            if !log_belongs_to_job(&log, job_id) {
-                push_retryable_error(
-                    retryable_errors,
-                    "registration",
-                    "log_job_identity",
-                    failure.get("run_id"),
-                    "log source does not belong to the requested failed job",
-                );
-                return;
-            }
-            job_api_log_recovered = log.source == orbit_tools::github_cli::SOURCE_JOB_API_LOG;
-            failure["log_job_id"] = json!(job_id);
-            let diagnostic = bound_diagnostic(&log, failure, job_id);
-            if !log.source_complete || (log.truncated && diagnostic.is_none()) {
-                push_retryable_error(
-                    retryable_errors,
-                    "investigation",
-                    "job_log_truncated",
-                    failure.get("run_id"),
-                    "job log source or display is incomplete and no actionable bound diagnostic evidence is available",
-                );
-            }
-            failure["log_source_complete"] = json!(log.source_complete);
-            failure["diagnostic_unit"] = diagnostic.unwrap_or(Value::Null);
-            failure["log_excerpt"] = json!(log.text);
-            failure["log_truncated"] = json!(log.truncated);
-            failure["log_total_bytes"] = json!(log.total_bytes);
-            failure["log_returned_bytes"] = json!(log.returned_bytes);
-            failure["log_scope"] = json!("failed");
-            failure["log_source"] = json!(log.source);
-            failure["log_source_jobs"] = json!(log.source_jobs);
-            failure["actual_checkout_shas"] = json!(log.checkout_commits);
-            failure["checkout_evidence"] = json!(log.checkout_evidence);
-            failure["checkout_evidence_scope"] = json!("failed");
-            set_checkout_identity(failure, "failed", &log);
-            // A read that ends with no text at all is not a captured excerpt,
-            // and the per-job fallback has already had its turn. Record why,
-            // so the filed task can say what is missing and the sweep never
-            // reads silence as a clean run.
-            if log.text.trim().is_empty() {
-                push_retryable_error(
-                    retryable_errors,
-                    "investigation",
-                    "run_logs",
-                    failure.get("run_id"),
-                    &with_fallback_cause("query returned no failed-step log text", &log),
-                );
-            }
-        }
+    // The checkout step normally succeeds, so it is absent from a
+    // failed-step-only log; only an all-scope read can evidence the commit
+    // under test. Reading `All` up front — instead of `Failed` first and a
+    // separate `All` read only when checkout turns out to be missing — costs
+    // one log read per job instead of two: the same `StreamedLogCollector`
+    // pass that finds the failing command also finds the checkout step, so
+    // nothing about the failed-step excerpt is lost by asking for more.
+    // `checkout_log_reads` still bounds how many of those (larger) all-scope
+    // reads a sweep may spend; a job past that budget falls back to the
+    // cheaper failed-step-only scope and skips the checkout attempt.
+    let attempt_all_scope = *checkout_log_reads < bounds.max_checkout_log_reads;
+    let scope = if attempt_all_scope {
+        LogScope::All
+    } else {
+        LogScope::Failed
+    };
+    let result = queries.run_logs(&run_id, job_id, scope, bounds.log_max_bytes, Some(view));
+    // A read recovered via the per-job log API fetches the whole job log
+    // regardless of the scope it was asked for, so it never needed the
+    // (larger, budgeted) all-scope download to also carry checkout evidence.
+    if attempt_all_scope
+        && !matches!(&result, Ok(log) if log.source == orbit_tools::github_cli::SOURCE_JOB_API_LOG)
+    {
+        *checkout_log_reads += 1;
+    }
+    let log = match result {
+        Ok(log) => log,
         Err(error) => {
             push_retryable_error(
                 retryable_errors,
@@ -223,31 +200,61 @@ fn investigate_job<Q: CiQueries + ?Sized>(
                 failure.get("run_id"),
                 &error.to_string(),
             );
+            return;
         }
-    }
-
-    // The checkout step normally succeeds, so it is absent from the
-    // failed-step log. One full-log read per job, within a global hard budget,
-    // recovers the commit under test; past the budget we say so rather than
-    // leaving the field silently empty.
-    let needs_checkout = failure
-        .get("actual_checkout_shas")
-        .and_then(Value::as_array)
-        .is_none_or(Vec::is_empty)
-        || failure
-            .get("checkout_evidence_complete")
-            .and_then(Value::as_bool)
-            != Some(true);
-    if !needs_checkout {
+    };
+    if !log_belongs_to_job(&log, job_id) {
+        push_retryable_error(
+            retryable_errors,
+            "registration",
+            "log_job_identity",
+            failure.get("run_id"),
+            "log source does not belong to the requested failed job",
+        );
         return;
     }
-    // A fallback job endpoint always serves the whole job log, regardless of
-    // whether the rejected parent query asked for failed or all scope. A
-    // second all-scope call would repeat the same readiness query and job API
-    // read without adding evidence. Preserve the gap for a later sweep.
+    let job_api_log_recovered = log.source == orbit_tools::github_cli::SOURCE_JOB_API_LOG;
+    failure["log_job_id"] = json!(job_id);
+    let diagnostic = bound_diagnostic(&log, failure, job_id);
+    if !log.source_complete || (log.truncated && diagnostic.is_none()) {
+        push_retryable_error(
+            retryable_errors,
+            "investigation",
+            "job_log_truncated",
+            failure.get("run_id"),
+            "job log source or display is incomplete and no actionable bound diagnostic evidence is available",
+        );
+    }
+    failure["log_source_complete"] = json!(log.source_complete);
+    failure["diagnostic_unit"] = diagnostic.unwrap_or(Value::Null);
+    failure["log_excerpt"] = json!(log.text);
+    failure["log_truncated"] = json!(log.truncated);
+    failure["log_total_bytes"] = json!(log.total_bytes);
+    failure["log_returned_bytes"] = json!(log.returned_bytes);
+    failure["log_scope"] = json!(scope.as_str());
+    failure["log_source"] = json!(log.source);
+    failure["log_source_jobs"] = json!(log.source_jobs);
+    failure["actual_checkout_shas"] = json!(log.checkout_commits);
+    failure["checkout_evidence"] = json!(log.checkout_evidence);
+    // A read that ends with no text at all is not a captured excerpt, and the
+    // per-job fallback has already had its turn. Record why, so the filed
+    // task can say what is missing and the sweep never reads silence as a
+    // clean run.
+    if log.text.trim().is_empty() {
+        push_retryable_error(
+            retryable_errors,
+            "investigation",
+            "run_logs",
+            failure.get("run_id"),
+            &with_fallback_cause("query returned no failed-step log text", &log),
+        );
+    }
+
+    let checkout_missing = log.checkout_commits.is_empty() || !log.checkout_evidence_complete;
     if job_api_log_recovered {
         failure["checkout_evidence_scope"] = json!("job_api_log");
-        if retryable_errors.is_empty() {
+        set_checkout_identity(failure, "job_api_log", &log);
+        if checkout_missing && retryable_errors.is_empty() {
             push_retryable_error(
                 retryable_errors,
                 "registration",
@@ -256,70 +263,49 @@ fn investigate_job<Q: CiQueries + ?Sized>(
                 "the complete recovered job log contained no actual checkout SHA; the same job remains eligible for a later sweep",
             );
         }
-        return;
-    }
-    if *checkout_log_reads >= bounds.max_checkout_log_reads {
-        failure["checkout_evidence_scope"] = json!("skipped_budget_exhausted");
-        push_retryable_error(
-            retryable_errors,
-            "investigation",
-            "checkout_evidence_budget",
-            failure.get("run_id"),
-            "actual checkout SHA was not collected because max_checkout_log_reads was exhausted",
-        );
-        return;
-    }
-    *checkout_log_reads += 1;
-    match queries.run_logs(&run_id, job_id, LogScope::All, bounds.log_max_bytes) {
-        Ok(log) => {
-            if !log_belongs_to_job(&log, job_id) {
-                push_retryable_error(
-                    retryable_errors,
-                    "registration",
-                    "checkout_job_identity",
-                    failure.get("run_id"),
-                    "checkout log source does not belong to the requested failed job",
-                );
-                return;
-            }
-            failure["actual_checkout_shas"] = json!(log.checkout_commits);
-            failure["checkout_evidence"] = json!(log.checkout_evidence);
-            failure["checkout_evidence_scope"] = json!("all");
-            set_checkout_identity(failure, "all", &log);
-            // A genuinely incomplete scan (the source-byte cap, or a dropped
-            // overlong line that could have carried checkout identity) stays
-            // fail-closed even when one SHA was already found: it cannot rule
-            // out a later, conflicting identity past whatever it didn't
-            // manage to read. Only a *display* cap (evidence line/commit
-            // count, or an overlong line unrelated to checkout) is exempt —
-            // that never touches `checkout_evidence_complete`.
-            if !log.checkout_evidence_complete {
-                push_retryable_error(
-                    retryable_errors,
-                    "registration",
-                    "checkout_evidence",
-                    failure.get("run_id"),
-                    "checkout evidence scan reached its hard limit; actual checkout identity is incomplete",
-                );
-            } else if log.checkout_commits.is_empty() {
-                push_retryable_error(
-                    retryable_errors,
-                    "registration",
-                    "checkout_evidence",
-                    failure.get("run_id"),
-                    &with_fallback_cause("run logs contained no actual checkout SHA", &log),
-                );
-            }
+    } else if attempt_all_scope {
+        failure["checkout_evidence_scope"] = json!("all");
+        set_checkout_identity(failure, "all", &log);
+        // A genuinely incomplete scan (the source-byte cap, or a dropped
+        // overlong line that could have carried checkout identity) stays
+        // fail-closed even when one SHA was already found: it cannot rule
+        // out a later, conflicting identity past whatever it didn't manage to
+        // read. Only a *display* cap (evidence line/commit count, or an
+        // overlong line unrelated to checkout) is exempt — that never
+        // touches `checkout_evidence_complete`.
+        if !log.checkout_evidence_complete {
+            push_retryable_error(
+                retryable_errors,
+                "registration",
+                "checkout_evidence",
+                failure.get("run_id"),
+                "checkout evidence scan reached its hard limit; actual checkout identity is incomplete",
+            );
+        } else if log.checkout_commits.is_empty() {
+            push_retryable_error(
+                retryable_errors,
+                "registration",
+                "checkout_evidence",
+                failure.get("run_id"),
+                &with_fallback_cause("run logs contained no actual checkout SHA", &log),
+            );
         }
-        Err(error) => {
-            failure["checkout_evidence_scope"] = json!("unavailable");
+    } else {
+        // Past the checkout budget: this was a failed-step-only read, so
+        // report real (if any) checkout findings from it, and only flag the
+        // skipped attempt when checkout is still missing.
+        set_checkout_identity(failure, "failed", &log);
+        if checkout_missing {
+            failure["checkout_evidence_scope"] = json!("skipped_budget_exhausted");
             push_retryable_error(
                 retryable_errors,
                 "investigation",
-                "run_logs_all",
+                "checkout_evidence_budget",
                 failure.get("run_id"),
-                &error.to_string(),
+                "actual checkout SHA was not collected because max_checkout_log_reads was exhausted",
             );
+        } else {
+            failure["checkout_evidence_scope"] = json!("failed");
         }
     }
 }

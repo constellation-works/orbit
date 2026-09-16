@@ -10,18 +10,6 @@ use crate::OrbitRuntime;
 
 pub use orbit_store::contracts::{TaskCandidates, TaskListFilter, TaskPage, TaskRow};
 
-const NON_TERMINAL_STATUSES: [TaskStatus; 6] = [
-    TaskStatus::Proposed,
-    TaskStatus::Backlog,
-    TaskStatus::InProgress,
-    TaskStatus::Review,
-    TaskStatus::Blocked,
-    TaskStatus::Someday,
-];
-
-const TERMINAL_STATUSES: [TaskStatus; 3] =
-    [TaskStatus::Done, TaskStatus::Archived, TaskStatus::Rejected];
-
 #[derive(Debug)]
 pub struct TaskListQuery {
     pub filter: TaskListFilter,
@@ -70,7 +58,9 @@ impl OrbitRuntime {
     }
 
     /// Query every lifecycle status with active work first, preserving newest
-    /// first ordering within each status bucket.
+    /// first ordering within each status bucket. One candidate scan serves
+    /// both buckets: the store partitions the ordered candidates so the page
+    /// fills with non-terminal tasks before any terminal one.
     pub fn query_task_rows_status_aware(
         &self,
         query: &TaskListQuery,
@@ -78,37 +68,14 @@ impl OrbitRuntime {
         if query.filter.statuses.is_some() {
             return self.query_task_rows(query);
         }
-
-        let non_terminal_page = self.query_task_rows(&TaskListQuery {
+        self.query_task_rows(&TaskListQuery {
             filter: TaskListFilter {
-                statuses: Some(NON_TERMINAL_STATUSES.to_vec()),
+                terminal_last: true,
                 ..query.filter.clone()
             },
             ready: query.ready,
             path: query.path.clone(),
             limit: query.limit,
-        })?;
-        let non_terminal_count = non_terminal_page.items.len();
-
-        let terminal_page = self.query_task_rows(&TaskListQuery {
-            filter: TaskListFilter {
-                statuses: Some(TERMINAL_STATUSES.to_vec()),
-                ..query.filter.clone()
-            },
-            ready: query.ready,
-            path: query.path.clone(),
-            limit: query.limit.saturating_sub(non_terminal_count),
-        })?;
-
-        let mut status_by_id = non_terminal_page.status_by_id;
-        status_by_id.extend(terminal_page.status_by_id);
-
-        let mut items = non_terminal_page.items;
-        items.extend(terminal_page.items);
-        Ok(TaskPage {
-            items,
-            total: non_terminal_page.total + terminal_page.total,
-            status_by_id,
         })
     }
 

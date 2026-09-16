@@ -15,7 +15,9 @@ use crate::executor::automation::vcs::git::git_command;
 
 use super::super::git::git_success;
 use super::cleanup::remove_worktree;
-use super::{WorktreeIdentity, is_registered_worktree, resolve_shared_worktree_path};
+use super::{
+    WorktreeIdentity, path_is_registered, registered_worktree_paths, resolve_shared_worktree_path,
+};
 
 /// Task statuses that settle the work as done — the only statuses that
 /// license discarding a run's worktree and branch. Every other status
@@ -33,6 +35,9 @@ pub struct WorktreeGcOptions {
     pub delete: bool,
     pub run_id: Option<String>,
     pub older_than: Option<DateTime<Utc>>,
+    /// Walk eligible worktrees to estimate reclaimable bytes. Dry-run skips
+    /// the walk unless this is set; deletion always measures before removal.
+    pub estimate_bytes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -66,6 +71,8 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
             known_paths.entry(path).or_default().push(run);
         }
     }
+
+    let registered = registered_worktree_paths(repo_root)?;
 
     let mut reports = Vec::new();
     for (path, matching_runs) in &known_paths {
@@ -104,8 +111,8 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
         // must not abort the sweep before it reaches every other worktree.
         // Report it and move on; the pass as a whole still succeeds with a
         // partial summary.
-        let report =
-            classify_known(repo_root, path, run, task_host, options).unwrap_or_else(|error| {
+        let report = classify_known(repo_root, path, run, task_host, options, &registered)
+            .unwrap_or_else(|error| {
                 tracing::warn!(
                     path = %path.display(),
                     run_id = %run.run_id,
@@ -163,6 +170,7 @@ fn classify_known<H: RuntimeHost + ?Sized>(
     run: &JobRun,
     task_host: &H,
     options: &WorktreeGcOptions,
+    registered: &BTreeSet<PathBuf>,
 ) -> Result<WorktreeGcReport, OrbitError> {
     let task_ids = attributed_task_ids(run);
     let resolved = task_ids
@@ -207,7 +215,7 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         report.action = "skipped:not_a_real_directory".to_string();
         return Ok(report);
     }
-    if !is_registered_worktree(repo_root, path)? {
+    if !path_is_registered(registered, path) {
         report.action = "skipped:not_registered_worktree".to_string();
         return Ok(report);
     }
@@ -261,10 +269,14 @@ fn classify_known<H: RuntimeHost + ?Sized>(
         }
     };
 
-    let estimated_bytes = directory_bytes(path)?;
+    let estimated_bytes = if options.delete || options.estimate_bytes {
+        directory_bytes(path)?
+    } else {
+        0
+    };
     if !options.delete {
         report.action = "would_remove".to_string();
-        // In dry-run mode this is the estimate of what `--yes` would reclaim;
+        // Dry-run skips the recursive walk unless `estimate_bytes` is set;
         // the result's `dry_run` flag says nothing was actually freed.
         report.bytes_reclaimed = estimated_bytes;
         return Ok(report);
@@ -363,16 +375,6 @@ fn branch_name(worktree: &Path) -> Result<String, OrbitError> {
     Ok(branch.to_string())
 }
 
-/// Match on canonical paths, not raw strings. `git worktree list` reports the
-/// resolved path, while the caller holds whatever path it was handed. Where the
-/// two differ only by a symlink on the way down — on macOS `/var` and `/tmp`
-/// are symlinks into `/private`, so any worktree under them reports one path
-/// and is asked about under another — a literal comparison reads a registered
-/// worktree as unregistered and GC retains it forever.
-///
-/// The literal comparison is kept as the fast path, and a registered entry
-/// whose directory has already been removed simply fails to canonicalize and
-/// does not match, which is the same answer the literal comparison gave.
 fn branch_exists(repo_root: &Path, branch: &str) -> bool {
     git_command(
         repo_root,

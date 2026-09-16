@@ -34,10 +34,8 @@ fn baseline_list(store: &TaskV2Store, tags: &[String]) -> Vec<Task> {
         .indexed_task_ids_filtered(
             &store.workspace_id,
             &TaskIndexFilter {
-                status: None,
-                priority: None,
-                job_run_id: None,
                 tags: tags.to_vec(),
+                ..Default::default()
             },
         )
         .unwrap();

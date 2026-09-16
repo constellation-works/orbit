@@ -25,7 +25,7 @@ fn test_neq_numeric_string_zero() {
 #[test]
 fn test_rendered_bundle_count_skip_guard() {
     let mut ctx = TemplateContext::default();
-    ctx.steps.insert(
+    std::sync::Arc::make_mut(&mut ctx.steps).insert(
         "validate_bundles".to_string(),
         serde_json::json!({
             "output": {

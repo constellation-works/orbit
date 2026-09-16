@@ -4,7 +4,7 @@ mod response;
 pub use request::{AgentOperation, AgentRequest};
 pub use response::{AgentInvocationSpec, AgentResponseStatus};
 pub use response::{
-    DeclaredResponseFailure, is_timeout, parse_and_validate_response,
+    DeclaredResponseFailure, ParsedStdout, is_timeout, parse_and_validate_response,
     peek_declared_response_failure, peek_response_status, response_envelope_protocol_check,
 };
 pub use response::{

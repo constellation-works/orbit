@@ -15,7 +15,7 @@ fn render_input_supports_legacy_batch_id_from_worktree_output() {
         }),
     );
     let tctx = TemplateContext {
-        steps,
+        steps: std::sync::Arc::new(steps),
         ..TemplateContext::default()
     };
     let default_input = json!({

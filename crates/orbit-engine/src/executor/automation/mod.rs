@@ -120,6 +120,7 @@ pub(crate) fn execute_engine_action<
                         .and_then(Value::as_str)
                         .map(ToOwned::to_owned),
                     older_than,
+                    estimate_bytes: false,
                 },
             )?;
             serde_json::to_value(result).map_err(|error| {

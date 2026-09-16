@@ -1,4 +1,4 @@
-use orbit_agent::{AgentResponseStatus, parse_and_validate_response};
+use orbit_agent::{AgentResponseStatus, ParsedStdout};
 use orbit_types::telemetry::InvocationTrace;
 use orbit_types::tool::ExecutionResult;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
@@ -51,24 +51,21 @@ pub(in crate::activity_job) fn cli_agent_envelope_json(
         .map_err(|err| DispatchError::CliInvocationFailed(format!("serialize envelope: {err}")))
 }
 
-pub(super) fn parse_cli_invocation_trace(
-    stdout: &[u8],
+pub(super) fn parse_cli_invocation_trace_from(
+    parsed: &ParsedStdout<'_>,
     stderr: &[u8],
     exit_code: Option<i32>,
     duration_ms: u64,
     success: bool,
 ) -> Option<InvocationTrace> {
-    let exec_result = ExecutionResult {
-        success,
-        timed_out: false,
-        stdout: String::from_utf8_lossy(stdout).into_owned(),
-        stderr: String::from_utf8_lossy(stderr).into_owned(),
-        exit_code,
-        duration_ms,
-        output: None,
-    };
-
-    parse_and_validate_response(&exec_result)
+    parsed
+        .parse_and_validate(&cli_exec_result(
+            parsed,
+            stderr,
+            exit_code,
+            duration_ms,
+            success,
+        ))
         .map(|(_, _, trace)| trace)
         .ok()
 }
@@ -78,27 +75,25 @@ pub(super) fn parse_cli_invocation_trace(
 ///
 /// Provider CLIs commonly wrap the response in a JSON object and, in
 /// Claude's case, may prefix the embedded response with explanatory prose.
-/// `parse_and_validate_response` owns that wrapper traversal and envelope
+/// `ParsedStdout::parse_and_validate` owns that wrapper traversal and envelope
 /// validation, so the CLI backend must use the same boundary before exposing
 /// output to later workflow steps.
-pub(super) fn parse_cli_response_result(
-    stdout: &[u8],
+pub(super) fn parse_cli_response_result_from(
+    parsed: &ParsedStdout<'_>,
     stderr: &[u8],
     exit_code: Option<i32>,
     duration_ms: u64,
     success: bool,
 ) -> Result<serde_json::Map<String, Value>, String> {
-    let exec_result = ExecutionResult {
-        success,
-        timed_out: false,
-        stdout: String::from_utf8_lossy(stdout).into_owned(),
-        stderr: String::from_utf8_lossy(stderr).into_owned(),
-        exit_code,
-        duration_ms,
-        output: None,
-    };
-    let (envelope, status, _) =
-        parse_and_validate_response(&exec_result).map_err(|error| error.to_string())?;
+    let (envelope, status, _) = parsed
+        .parse_and_validate(&cli_exec_result(
+            parsed,
+            stderr,
+            exit_code,
+            duration_ms,
+            success,
+        ))
+        .map_err(|error| error.to_string())?;
 
     match status {
         AgentResponseStatus::Success => {
@@ -113,6 +108,24 @@ pub(super) fn parse_cli_response_result(
         }
         AgentResponseStatus::Failed => Err("Orbit response envelope status=failed".to_string()),
         AgentResponseStatus::Timeout => Err("Orbit response envelope status=timeout".to_string()),
+    }
+}
+
+fn cli_exec_result(
+    parsed: &ParsedStdout<'_>,
+    stderr: &[u8],
+    exit_code: Option<i32>,
+    duration_ms: u64,
+    success: bool,
+) -> ExecutionResult {
+    ExecutionResult {
+        success,
+        timed_out: false,
+        stdout: parsed.raw().to_owned(),
+        stderr: String::from_utf8_lossy(stderr).into_owned(),
+        exit_code,
+        duration_ms,
+        output: None,
     }
 }
 

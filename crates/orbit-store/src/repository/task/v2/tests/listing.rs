@@ -1,6 +1,8 @@
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+use orbit_types::task::task_dependencies_ready;
+
 use super::*;
 use crate::contracts::TaskListFilter;
 use crate::driver::file::task_bundle::take_artifact_payload_reads;
@@ -515,4 +517,177 @@ fn lightweight_listing_skips_artifact_payload_io() {
             "strict_get_all_payload_opens": strict_payload_opens,
         })
     );
+}
+
+/// A second store on the same registry, bound as its own workspace.
+fn sibling_store(temp: &TempDir, store: &TaskV2Store, partition_id: &str) -> TaskV2Store {
+    let repo_dir = temp.path().join(partition_id);
+    let orbit_dir = repo_dir.join(".orbit");
+    fs::create_dir_all(&orbit_dir).expect("create orbit dir");
+    let binding = store
+        .registry
+        .bind_workspace(BindWorkspaceParams {
+            partition_id: Some(partition_id.to_string()),
+            slug: partition_id.to_string(),
+            repo_root: repo_dir.clone(),
+            workspace_path: repo_dir,
+            orbit_dir,
+            repo_fingerprint: None,
+        })
+        .expect("bind sibling workspace");
+    TaskV2Store::new(store.registry.clone(), binding.partition_id)
+}
+
+#[test]
+fn status_aware_listing_partitions_one_bounded_scan() {
+    let temp = TempDir::new().unwrap();
+    let store = store(&temp);
+    let mut ids = Vec::new();
+    for (index, status) in [
+        TaskStatus::Done,
+        TaskStatus::Backlog,
+        TaskStatus::Archived,
+        TaskStatus::Review,
+        TaskStatus::Rejected,
+        TaskStatus::Backlog,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let task = store
+            .create_task(create_params(&format!("Task {index}"), status))
+            .unwrap();
+        ids.push(task.id);
+    }
+    reads(&store);
+
+    let terminal_last = TaskListFilter {
+        terminal_last: true,
+        ..Default::default()
+    };
+    let page = store.query_task_rows(&terminal_last, 4, None).unwrap();
+    assert_eq!(page.total, 6, "the total spans both partitions");
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|row| row.task.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            ids[5].as_str(),
+            ids[3].as_str(),
+            ids[1].as_str(),
+            ids[4].as_str()
+        ],
+        "non-terminal newest first, then terminal newest first, within one limit"
+    );
+    assert_eq!(reads(&store).0, 4, "only the page is hydrated");
+
+    // The residual path hydrates every candidate but keeps the partition.
+    let page = store
+        .query_task_rows(&terminal_last, 2, Some(&|task, _| task.title != "Task 3"))
+        .unwrap();
+    assert_eq!(page.total, 5);
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|row| row.task.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![ids[5].as_str(), ids[1].as_str()]
+    );
+}
+
+#[test]
+fn status_projection_is_scoped_to_the_workspace_and_the_targets_the_page_names() {
+    let temp = TempDir::new().unwrap();
+    let alpha = store(&temp);
+    let beta = sibling_store(&temp, &alpha, "beta-bbbbbb");
+    let target = beta
+        .create_task(create_params("Cross-workspace target", TaskStatus::Done))
+        .unwrap();
+    let unrelated = beta
+        .create_task(create_params("Unrelated in beta", TaskStatus::Backlog))
+        .unwrap();
+    let mut dependent = create_params("Depends across workspaces", TaskStatus::Backlog);
+    dependent.dependencies = vec![target.id.clone()];
+    let dependent = alpha.create_task(dependent).unwrap();
+    let local = alpha
+        .create_task(create_params("Local only", TaskStatus::Review))
+        .unwrap();
+
+    let page = alpha
+        .query_task_rows(&TaskListFilter::default(), 50, None)
+        .unwrap();
+    assert_eq!(page.items.len(), 2);
+    assert_eq!(page.status_by_id.get(&target.id), Some(&TaskStatus::Done));
+    assert_eq!(
+        page.status_by_id.get(&dependent.id),
+        Some(&TaskStatus::Backlog)
+    );
+    assert_eq!(page.status_by_id.get(&local.id), Some(&TaskStatus::Review));
+    assert!(
+        !page.status_by_id.contains_key(&unrelated.id),
+        "other workspaces contribute only the targets the page references"
+    );
+    assert!(
+        task_dependencies_ready(&page.items[0].task, &page.status_by_id)
+            && task_dependencies_ready(&page.items[1].task, &page.status_by_id)
+    );
+
+    // Readiness over the residual path resolves the same cross-workspace target.
+    let ready = alpha
+        .query_task_rows(
+            &TaskListFilter::default(),
+            50,
+            Some(&|task, statuses| task_dependencies_ready(task, statuses)),
+        )
+        .unwrap();
+    assert_eq!(ready.total, 2);
+
+    // The whole workspace is projected even when the page is narrower than it.
+    let page = alpha
+        .query_task_rows(&TaskListFilter::default(), 1, None)
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert!(page.status_by_id.contains_key(&dependent.id));
+    assert!(page.status_by_id.contains_key(&local.id));
+}
+
+/// A hand edit that keeps `updated_at` but changes a filter field is seen by
+/// a process that never parsed the old envelope: the index row disagrees
+/// with the envelope on that field, so the scan rebuilds before selecting.
+#[test]
+fn a_cold_scan_rebuilds_the_index_for_a_filter_field_edited_in_place() {
+    let temp = TempDir::new().unwrap();
+    let warm = corpus(&temp, 4);
+    let mut envelope = warm
+        .task_candidates(&TaskListFilter::default(), 1)
+        .unwrap()
+        .items
+        .remove(0);
+    let path = warm.bundle_store.envelope_path(&envelope.id).unwrap();
+    envelope.tags = vec!["hand-edited".to_string()];
+    envelope.priority = TaskPriority::Low;
+    fs::write(&path, serde_yaml::to_string(&envelope).unwrap()).unwrap();
+
+    let cold = TaskV2Store::new(warm.registry.clone(), warm.workspace_id.clone());
+    let hand_edited = TaskListFilter {
+        tags: vec!["hand-edited".to_string()],
+        priority: Some(TaskPriority::Low),
+        ..Default::default()
+    };
+    let candidates = cold.task_candidates(&hand_edited, 4).unwrap();
+    assert_eq!(candidates.total, 1);
+    assert_eq!(candidates.items[0].id, envelope.id);
+    assert_eq!(
+        cold.registry
+            .indexed_task_ids_filtered(&cold.workspace_id, &hand_edited.index_filter(Vec::new()))
+            .unwrap(),
+        vec![envelope.id.clone()],
+        "the rebuilt index projects the edited fields"
+    );
+    reads(&cold);
+    probes(&cold);
+    let candidates = cold.task_candidates(&hand_edited, 4).unwrap();
+    assert_eq!(candidates.items[0].id, envelope.id);
+    assert_eq!((probes(&cold), reads(&cold)), (4, (0, 0)));
 }

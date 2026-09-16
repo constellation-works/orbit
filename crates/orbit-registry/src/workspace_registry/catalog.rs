@@ -582,7 +582,7 @@ pub struct WorkspaceRegistryHostContext {
 /// The happy path is one typed deserialize straight from the text: the
 /// document is not materialised as a [`Value`] first, so every `orbit`
 /// invocation parses `workspaces.json` once [DANI-10371]. Only a document the
-/// typed pass rejects is re-read through [`RegistryProbe`], which keeps the
+/// typed pass rejects is re-read through `RegistryProbe`, which keeps the
 /// registry-worded diagnostics for versions and role tokens and the legacy
 /// migration branch.
 pub fn parse_workspace_registry(

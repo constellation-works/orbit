@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::contracts::TaskCompletionByComplexity;
+use crate::contracts::{IndexedTaskRow, TaskCompletionByComplexity};
 
 impl TaskV2Store {
     pub(crate) fn task_status_index(
@@ -75,60 +75,73 @@ impl TaskV2Store {
     /// validating the index for task B must not fail because task A is being
     /// created or deleted at that instant.
     fn index_is_usable(&self) -> Result<bool, OrbitError> {
-        if self.validated_envelopes()?.is_some() {
+        if self.validate_index()?.is_some() {
             Ok(true)
         } else {
             self.rebuild_index_best_effort("missing or stale index")
         }
     }
 
-    /// Reuse the freshness scan for bounded selection, without reading bodies.
+    /// The freshness scan: compare every registered task's index row with its
+    /// envelope on disk, leaving the [`EnvelopeCache`] warm for each settled
+    /// task so a selection can serve its rows without reading them again.
+    ///
+    /// `Some(unsettled)` means the index is usable; `unsettled` names the
+    /// registered tasks whose bundle a concurrent writer holds, which a
+    /// selection must leave out. `None` means a row is missing or disagrees
+    /// with its envelope — on `updated_at` or on any field listing filters or
+    /// orders by — and the caller must rebuild or scan bundles instead.
     ///
     /// Each registered task costs one metadata probe; its envelope is parsed
-    /// again only when the [`EnvelopeCache`] stamp policy cannot prove the file
-    /// is the one already parsed. Reuse never replaces the index comparison
-    /// below — a cached envelope whose `updated_at` disagrees with its index
-    /// row still sends the caller to a rebuild.
-    pub(super) fn validated_envelopes(&self) -> Result<Option<Vec<TaskEnvelopeV2>>, OrbitError> {
+    /// again only when the cache's stamp policy cannot prove the file is the
+    /// one already parsed. Reuse never replaces the index comparison — a
+    /// cached envelope that disagrees with its index row still sends the
+    /// caller to a rebuild.
+    pub(super) fn validate_index(&self) -> Result<Option<Vec<String>>, OrbitError> {
         let registered = self.registry.tasks_for_workspace(&self.workspace_id)?;
         let indexed = self
             .registry
-            .indexed_task_versions_for_workspace(&self.workspace_id)?;
+            .indexed_task_rows_for_workspace(&self.workspace_id)?;
         if registered.len() != indexed.len() {
             return Ok(None);
         }
         self.envelope_cache.retain_registered(&registered);
 
-        let mut envelopes = Vec::with_capacity(registered.len());
+        let mut unsettled = Vec::new();
         for binding in &registered {
-            let Some(version) = indexed.get(&binding.task_id) else {
+            let Some(row) = indexed.get(&binding.task_id) else {
                 return Ok(None);
             };
-            let Some(envelope) = self.settled_envelope(&binding.task_id)? else {
-                continue;
-            };
-            if envelope.updated_at.to_rfc3339() != *version {
-                return Ok(None);
+            match self.settled_envelope_matches(&binding.task_id, row)? {
+                Some(true) => {}
+                Some(false) => return Ok(None),
+                None => unsettled.push(binding.task_id.clone()),
             }
-            envelopes.push(envelope);
         }
-        Ok(Some(envelopes))
+        Ok(Some(unsettled))
     }
 
-    /// One registered task's envelope, reusing the previous parse while the
-    /// envelope file is unchanged. `None` carries the same meaning as
-    /// [`TaskBundleStoreV2::read_envelope_if_settled`]: a concurrent writer
-    /// holds this bundle, so the scan skips it rather than failing.
-    fn settled_envelope(&self, task_id: &str) -> Result<Option<TaskEnvelopeV2>, OrbitError> {
+    /// Whether one registered task's envelope matches its index row, reusing
+    /// the previous parse while the envelope file is unchanged. `None` carries
+    /// the same meaning as [`TaskBundleStoreV2::read_envelope_if_settled`]: a
+    /// concurrent writer holds this bundle, so the scan skips it rather than
+    /// failing.
+    fn settled_envelope_matches(
+        &self,
+        task_id: &str,
+        row: &IndexedTaskRow,
+    ) -> Result<Option<bool>, OrbitError> {
         // Stamped before the parse it labels, so a write that races this read
         // costs one extra parse next scan instead of pinning stale content.
         let stamp = self
             .envelope_cache
             .stamp(&self.bundle_store.envelope_path(task_id)?);
         if let Some(stamp) = stamp
-            && let Some(envelope) = self.envelope_cache.reuse(task_id, &stamp)
+            && let Some(matches) = self
+                .envelope_cache
+                .inspect_fresh(task_id, &stamp, |envelope| row.matches(envelope))
         {
-            return Ok(Some(envelope));
+            return Ok(Some(matches));
         }
 
         let Some(envelope) = self.bundle_store.read_envelope_if_settled(task_id)? else {
@@ -138,7 +151,7 @@ impl TaskV2Store {
         if let Some(stamp) = stamp {
             self.envelope_cache.remember(task_id, stamp, &envelope);
         }
-        Ok(Some(envelope))
+        Ok(Some(row.matches(&envelope)))
     }
 
     /// Rebuild the generated index from the bundles, degrading to `false` (use

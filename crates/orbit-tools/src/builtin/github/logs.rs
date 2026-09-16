@@ -205,9 +205,15 @@ pub struct RunLogRead {
 /// Other failures stay errors: auth, network, source-limit, and retired-run
 /// failures must remain visible to the caller rather than being mistaken for
 /// the one GitHub readiness gap this fallback can safely answer.
+///
+/// `cached_run_view` lets a caller that already holds a verified, freshly
+/// fetched `gh run view` payload for this exact run (projected the same way
+/// [`fallback_jobs`] would project its own) hand it in so the fallback never
+/// re-queries GitHub for metadata the caller already has.
 pub fn read_run_log(
     requests: &RunLogRequests,
     bounds: LogReadBounds,
+    cached_run_view: Option<&Value>,
 ) -> Result<RunLogRead, OrbitError> {
     let log = match stream_bounded_log(
         &requests.run_log,
@@ -224,6 +230,7 @@ pub fn read_run_log(
                 bounds,
                 empty,
                 Some(&error.to_string()),
+                cached_run_view,
             ));
         }
         Err(error) => return Err(error),
@@ -236,7 +243,13 @@ pub fn read_run_log(
             fallback_error: None,
         });
     }
-    Ok(recover_from_job_logs(requests, bounds, log, None))
+    Ok(recover_from_job_logs(
+        requests,
+        bounds,
+        log,
+        None,
+        cached_run_view,
+    ))
 }
 
 /// GitHub CLI's exact readiness response for a parent workflow that has not
@@ -330,6 +343,7 @@ fn recover_from_job_logs(
     bounds: LogReadBounds,
     empty: StreamedLog,
     primary_error: Option<&str>,
+    cached_run_view: Option<&Value>,
 ) -> RunLogRead {
     let unrecovered = |reason: String| RunLogRead {
         log: empty,
@@ -342,7 +356,7 @@ fn recover_from_job_logs(
         Some(primary) => format!("{primary}; job log recovery failed: {reason}"),
         None => reason,
     };
-    let jobs = match fallback_jobs(requests) {
+    let jobs = match fallback_jobs(requests, cached_run_view) {
         Ok(jobs) => jobs,
         Err(reason) => return unrecovered(qualify(reason)),
     };
@@ -390,13 +404,27 @@ fn recover_from_job_logs(
 /// fallback rather than widen it. The failure is returned as prose because it
 /// is evidence about *this run's* collection, not a fault the caller can
 /// retry differently.
-fn fallback_jobs(requests: &RunLogRequests) -> Result<Vec<FallbackJob>, String> {
-    let result = run_process(&requests.run_view, &NoSandbox)
-        .map_err(|error| format!("gh run view could not run: {error}"))?;
-    check_exec_result(&result, "gh run view").map_err(|error| error.to_string())?;
-    let view = super::parse_gh_json(&result.stdout, "gh run view")
-        .map(|parsed| super::run_view::project_run_view(&parsed))
-        .map_err(|error| error.to_string())?;
+///
+/// `cached_run_view` skips the self-query below entirely when the caller
+/// already holds an equivalent, freshly projected payload — identity is still
+/// verified against it exactly as it would be against a freshly fetched one.
+fn fallback_jobs(
+    requests: &RunLogRequests,
+    cached_run_view: Option<&Value>,
+) -> Result<Vec<FallbackJob>, String> {
+    let owned;
+    let view = match cached_run_view {
+        Some(view) => view,
+        None => {
+            let result = run_process(&requests.run_view, &NoSandbox)
+                .map_err(|error| format!("gh run view could not run: {error}"))?;
+            check_exec_result(&result, "gh run view").map_err(|error| error.to_string())?;
+            owned = super::parse_gh_json(&result.stdout, "gh run view")
+                .map(|parsed| super::run_view::project_run_view(&parsed))
+                .map_err(|error| error.to_string())?;
+            &owned
+        }
+    };
 
     // Identity first. A payload that does not name the run under investigation
     // cannot license reading anything, however well-formed its job list looks.
@@ -419,13 +447,13 @@ fn fallback_jobs(requests: &RunLogRequests) -> Result<Vec<FallbackJob>, String> 
     let jobs = match requests.scope {
         // Failed-step evidence may only come from a job the run itself
         // reported unsuccessful.
-        LogScope::Failed => collect_jobs(&view, "failed_jobs", requests, true),
+        LogScope::Failed => collect_jobs(view, "failed_jobs", requests, true),
         // Whole-run scope exists to evidence the checked-out commit, which
         // every job records for itself. Failed jobs come first: the commit
         // that matters is the one the failing job tested.
         LogScope::All => {
-            let mut jobs = collect_jobs(&view, "jobs", requests, true);
-            jobs.extend(collect_jobs(&view, "jobs", requests, false));
+            let mut jobs = collect_jobs(view, "jobs", requests, true);
+            jobs.extend(collect_jobs(view, "jobs", requests, false));
             jobs
         }
     };

@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
-use orbit_types::task::{TaskPriority, TaskStatus};
+use orbit_types::task::{TaskEnvelopeV2, TaskPriority, TaskStatus, normalize_task_tags};
 
 #[derive(Debug, Clone)]
 pub struct BindWorkspaceParams {
@@ -59,12 +59,58 @@ pub struct TaskBundleBinding {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Envelope predicates the generated task index answers in SQL.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskIndexFilter {
-    pub status: Option<TaskStatus>,
+    /// Empty means every status.
+    pub statuses: Vec<TaskStatus>,
     pub priority: Option<TaskPriority>,
     pub job_run_id: Option<String>,
     pub tags: Vec<String>,
+    /// Continue the canonical created-descending, ID-ascending scan.
+    pub scan_before: Option<(DateTime<Utc>, String)>,
+    /// Registered tasks to leave out: the freshness scan skips a bundle a
+    /// concurrent writer holds, and a selection must not count what it cannot
+    /// return.
+    pub excluded_ids: Vec<String>,
+}
+
+/// Ids the generated index selected for one listing, in listing order, with
+/// the exact number of index rows the filter matched.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TaskIndexSelection {
+    pub ids: Vec<String>,
+    pub total: usize,
+}
+
+/// One task's generated index row, in the form the freshness scan compares
+/// with the envelope on disk. Status, priority, and timestamps stay as the
+/// strings the index stores so a row written by an older format simply fails
+/// to match and triggers a rebuild.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexedTaskRow {
+    pub status: String,
+    pub priority: String,
+    pub job_run_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub tags: BTreeSet<String>,
+}
+
+impl IndexedTaskRow {
+    /// Whether the index row projects exactly the fields listing filters and
+    /// orders by, so a selection answered from the index agrees with the
+    /// envelope — including an edit that kept `updated_at` but changed a tag.
+    pub fn matches(&self, envelope: &TaskEnvelopeV2) -> bool {
+        let tags = normalize_task_tags(envelope.tags.clone());
+        self.updated_at == envelope.updated_at.to_rfc3339()
+            && self.created_at == envelope.created_at.to_rfc3339()
+            && self.status == envelope.status.to_string()
+            && self.priority == envelope.priority.to_string()
+            && self.job_run_id == envelope.job_run_id
+            && tags.len() == self.tags.len()
+            && tags.iter().all(|tag| self.tags.contains(tag))
+    }
 }
 
 /// A relation edge whose target uses a locally known task prefix but does not
