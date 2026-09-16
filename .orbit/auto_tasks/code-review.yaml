@@ -1,9 +1,9 @@
 schemaVersion: 1
 name: code-review
 description: Post-merge code review of changes merged since the last completed sweep
-enabled: false
+enabled: true
 schedule:
-  every_minutes: 60
+  every_minutes: 30
 template:
   title: Review recently merged changes
   description: |-
@@ -82,20 +82,20 @@ template:
     Always record the reviewed range and the new last-reviewed commit in the
     persisted execution summary — the next sweep's window starts there.
   acceptance_criteria:
-  - The review window was derived from the previous sweep's recorded cursor, or the current HEAD was seeded as the baseline on the first run.
-  - Every filed finding was verified against live code, is non-duplicate, and carries file:line evidence with a severity-appropriate priority and the `code-review` tag.
-  - Every filed finding carries a `regression_from` relation targeting the task whose landed commit introduced the defect, or its description states why no task in the window can be held responsible.
-  - The reviewed range and the new last-reviewed commit are recorded in the persisted execution summary.
-  - A window with no confirmed findings succeeds as a no-op.
+    - The review window was derived from the previous sweep's recorded cursor, or the current HEAD was seeded as the baseline on the first run.
+    - Every filed finding was verified against live code, is non-duplicate, and carries file:line evidence with a severity-appropriate priority and the `code-review` tag.
+    - Every filed finding carries a `regression_from` relation targeting the task whose landed commit introduced the defect, or its description states why no task in the window can be held responsible.
+    - The reviewed range and the new last-reviewed commit are recorded in the persisted execution summary.
+    - A window with no confirmed findings succeeds as a no-op.
   task_type: chore
   tags:
-  - code-review
-  - no-diff-expected
+    - code-review
+    - no-diff-expected
   priority: medium
   complexity: medium
   # The portable system lane is seeded per machine and compatibility-aliased
   # for configs written before that crew existed.
-  crew: opus
+  crew: grok
   status: backlog
 dedupe: skip_if_open
 created_by: system
