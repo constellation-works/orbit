@@ -515,6 +515,25 @@ impl OrbitRuntime {
         &self,
         run_id: &str,
     ) -> Result<Vec<RunCliInvocationRecord>, OrbitError> {
+        self.collect_run_cli_invocations_bounded(run_id, None, None)
+    }
+
+    /// Collect CLI invocation records for a run, optionally stopping after
+    /// `limit` invocations and reading only a preview window of each blob.
+    ///
+    /// The unbounded wrapper [`Self::collect_run_cli_invocations`] still loads
+    /// every invocation's full stdout/stderr. Callers that only render a
+    /// truncated preview should pass both bounds so a long run is not charged
+    /// a full multi-MB blob read per invocation.
+    pub fn collect_run_cli_invocations_bounded(
+        &self,
+        run_id: &str,
+        limit: Option<usize>,
+        blob_preview_max_bytes: Option<usize>,
+    ) -> Result<Vec<RunCliInvocationRecord>, OrbitError> {
+        if limit == Some(0) {
+            return Ok(Vec::new());
+        }
         let events = self.collect_run_audit_events(run_id)?;
         let blob_store = BlobStore::new(self.v2_audit_blob_root());
         let step_index_by_id = audit_steps_from_events(&events)
@@ -537,14 +556,16 @@ impl OrbitRuntime {
                 .get("stderr_blob_ref")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            let stdout = match stdout_blob_ref.as_deref() {
-                Some(blob_ref) => read_blob_text_best_effort(&blob_store, blob_ref),
-                None => String::new(),
-            };
-            let stderr = match stderr_blob_ref.as_deref() {
-                Some(blob_ref) => read_blob_text_best_effort(&blob_store, blob_ref),
-                None => String::new(),
-            };
+            let stdout = read_invocation_blob(
+                &blob_store,
+                stdout_blob_ref.as_deref(),
+                blob_preview_max_bytes,
+            );
+            let stderr = read_invocation_blob(
+                &blob_store,
+                stderr_blob_ref.as_deref(),
+                blob_preview_max_bytes,
+            );
             let step_index = event
                 .step_id
                 .as_ref()
@@ -577,6 +598,9 @@ impl OrbitRuntime {
                     .unwrap_or(false),
                 duration_ms: event.raw.get("duration_ms").and_then(Value::as_u64),
             });
+            if limit.is_some_and(|limit| records.len() >= limit) {
+                break;
+            }
         }
 
         Ok(records)
@@ -1021,4 +1045,47 @@ fn read_blob_text(blob_store: &BlobStore, blob_ref: &str) -> Result<String, Orbi
 
 fn read_blob_text_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String {
     read_blob_text(blob_store, blob_ref).unwrap_or_default()
+}
+
+fn read_invocation_blob(
+    blob_store: &BlobStore,
+    blob_ref: Option<&str>,
+    preview_max_bytes: Option<usize>,
+) -> String {
+    let Some(blob_ref) = blob_ref else {
+        return String::new();
+    };
+    match preview_max_bytes {
+        Some(max_bytes) => read_blob_text_preview_best_effort(blob_store, blob_ref, max_bytes),
+        None => read_blob_text_best_effort(blob_store, blob_ref),
+    }
+}
+
+/// Read the preview window plus the remainder of the current line so
+/// line-oriented truncation matches a full-blob read, without loading a
+/// multi-MB agent transcript. The extra line is itself capped at
+/// `max_bytes` so a newline-free blob is still not fully loaded.
+fn read_blob_text_preview_best_effort(
+    blob_store: &BlobStore,
+    blob_ref: &str,
+    max_bytes: usize,
+) -> String {
+    if blob_ref.len() < 2 || blob_ref.starts_with("error:") {
+        return String::new();
+    }
+    let cap = max_bytes.saturating_add(max_bytes);
+    let bytes = match blob_store.read_prefix(blob_ref, cap) {
+        Ok(bytes) => bytes,
+        Err(_) => return String::new(),
+    };
+    let end = if bytes.len() <= max_bytes {
+        bytes.len()
+    } else {
+        bytes[max_bytes..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map(|index| max_bytes + index + 1)
+            .unwrap_or(bytes.len())
+    };
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
