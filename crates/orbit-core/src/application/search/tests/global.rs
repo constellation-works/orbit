@@ -77,6 +77,118 @@ fn lexical_task_search_uses_fts_when_task_corpus_is_indexed() {
     assert_eq!(response.results[0].id.as_deref(), Some(id.as_str()));
 }
 
+/// [DANI-10445] The index carries only title, description, plan, execution
+/// summary, and acceptance criteria. Once one task chunk exists, a query that
+/// matches only a comment, an `external_refs` id, or an artifact manifest
+/// path must still find the task through the bundle matcher, exactly as it
+/// does in a workspace that has never indexed tasks — and still without
+/// opening the artifact payload.
+#[test]
+fn indexed_lexical_task_search_still_matches_comments_refs_and_artifact_paths() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let id = runtime
+        .stores()
+        .task_records()
+        .create(TaskCreateParams {
+            actor: "test".to_string(),
+            parent_id: None,
+            title: "sidecar surfaces stay searchable".to_string(),
+            description: "ordinary body".to_string(),
+            acceptance_criteria: Vec::new(),
+            dependencies: Vec::new(),
+            relations: Vec::new(),
+            tags: Vec::new(),
+            required_tools: Vec::new(),
+            plan: String::new(),
+            execution_summary: String::new(),
+            context_files: Vec::new(),
+            repo_root: None,
+            created_by: Some("test".to_string()),
+            planned_by: None,
+            implemented_by: None,
+            status: TaskStatus::Backlog,
+            priority: TaskPriority::Medium,
+            complexity: None,
+            task_type: TaskType::Chore,
+            external_refs: vec![orbit_types::task::ExternalRef {
+                system: orbit_types::task::GITHUB_PR_EXTERNAL_REF_SYSTEM.to_string(),
+                id: "constellation-works/orbit#424242".to_string(),
+                url: None,
+            }],
+            source_task_id: None,
+            crew: None,
+            orchestrator: None,
+            comments: vec![orbit_types::task::TaskComment {
+                at: chrono::Utc::now(),
+                by: "test".to_string(),
+                message: "reviewer asked about the quartzwren regression".to_string(),
+            }],
+        })
+        .expect("create task")
+        .id;
+    runtime
+        .stores()
+        .task_artifacts()
+        .upsert_task_artifacts(
+            &id,
+            orbit_store::TaskArtifactUpdateParams {
+                actor: "test".to_string(),
+                owner_run_id: None,
+                upsert_artifacts: vec![orbit_types::task::TaskArtifact::from_text(
+                    "reports/lapisfinch-audit.md",
+                    "body-only marmoset token\n",
+                )],
+            },
+        )
+        .expect("upsert artifact");
+    let task = runtime.get_task(&id).expect("task with sidecars");
+    let index = runtime
+        .stores()
+        .semantic_index()
+        .store()
+        .expect("semantic index");
+    index
+        .index_task(&task, &orbit_search::NoopEmbedder::small(), false)
+        .expect("index task");
+    assert!(
+        index
+            .has_source_kind(orbit_search::SOURCE_KIND_TASK)
+            .expect("probe index"),
+        "fixture must put the lexical branch on the FTS route"
+    );
+
+    let search = |query: &str| {
+        runtime
+            .global_search(GlobalSearchParams {
+                query: Some(query.to_string()),
+                kind: GlobalSearchKind::Task,
+                ..Default::default()
+            })
+            .expect("lexical task search")
+    };
+
+    for (surface, needle) in [
+        ("comment", "quartzwren"),
+        ("external ref id", "orbit#424242"),
+        ("artifact manifest path", "reports/lapisfinch-audit.md"),
+        ("indexed title", "sidecar surfaces"),
+    ] {
+        let response = search(needle);
+        assert_eq!(response.results.len(), 1, "{surface} needle {needle:?}");
+        assert_eq!(response.results[0].source, "lexical", "{surface}");
+        assert_eq!(
+            response.results[0].id.as_deref(),
+            Some(id.as_str()),
+            "{surface}"
+        );
+    }
+
+    assert!(
+        search("marmoset").results.is_empty(),
+        "artifact payloads stay outside interactive search"
+    );
+}
+
 #[test]
 fn doc_branch_searches_inlined_adr_body_content() {
     let runtime = OrbitRuntime::in_memory().expect("runtime");
