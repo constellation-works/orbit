@@ -8,6 +8,7 @@ mod cancellation_race;
 mod conflict;
 mod owner;
 mod projection;
+mod query;
 mod reconcile;
 mod reconcile_provider;
 mod worker_limit;
