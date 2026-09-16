@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_store::compose::{global_executor_def_store, global_policy_def_store};
 use orbit_store::friction_store;
-use orbit_types::workspace::WorkspacePaths;
+use orbit_types::workspace::{DEFAULT_BASE_BRANCH, WorkspacePaths};
 
 use crate::OrbitRuntime;
 use crate::application::MANAGED_ASSET_MANIFEST_FILE;
@@ -63,6 +63,11 @@ pub struct InitOptions {
     /// of that identity and supplies them explicitly; `None` skips routine
     /// seeding entirely.
     pub routine_seed_identity: Option<RoutineSeedIdentity>,
+    /// The registered base branch the seeded delivery auto-tasks observe.
+    /// Higher-level composition reads it from the workspace registry; `None`
+    /// renders the registry default, which is also what an unregistered
+    /// workspace record would carry.
+    pub workspace_base_branch: Option<String>,
     /// When true, create/update user-level skill symlinks for global skills.
     pub link_global_skills: bool,
     /// Explicit inputs for seeding a fresh `config.toml`: which provider
@@ -294,6 +299,10 @@ pub fn init_workspace_at_root(
                     &global_root,
                     &orbit_root,
                     options.routine_seed_identity.as_ref(),
+                    options
+                        .workspace_base_branch
+                        .as_deref()
+                        .unwrap_or(DEFAULT_BASE_BRANCH),
                     false,
                 )?;
                 refreshed_default_routines = reconciliation

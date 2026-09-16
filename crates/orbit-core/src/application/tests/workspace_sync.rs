@@ -89,6 +89,7 @@ fn a_workspace_seeded_with_host_pins_refreshes_onto_the_host_free_bytes() {
         &global,
         &workspace,
         Some(&seed_identity("alpha")),
+        "main",
         false,
     )
     .expect("sync the upgraded workspace");
@@ -115,6 +116,7 @@ fn a_workspace_seeded_with_host_pins_refreshes_onto_the_host_free_bytes() {
         &global,
         &workspace,
         Some(&seed_identity("alpha")),
+        "main",
         false,
     )
     .expect("second sync");
@@ -137,6 +139,7 @@ fn binding_drift_does_not_claim_template_drift_or_rewrite_routines() {
         &global,
         &workspace,
         Some(&seed_identity("different-workspace")),
+        "main",
         false,
     )
     .expect("sync with drifted current binding");
@@ -183,6 +186,7 @@ fn legacy_routine_manifest_check_is_read_only_and_apply_migrates_only_exact_inst
         &global,
         &workspace,
         Some(&seed_identity("new-suffix")),
+        "main",
         true,
     )
     .expect("check legacy migration");
@@ -204,6 +208,7 @@ fn legacy_routine_manifest_check_is_read_only_and_apply_migrates_only_exact_inst
         &global,
         &workspace,
         Some(&seed_identity("new-suffix")),
+        "main",
         false,
     )
     .expect("apply legacy migration");
@@ -251,6 +256,7 @@ fn real_template_refresh_uses_recorded_binding_and_second_run_is_a_no_op() {
         &global,
         &workspace,
         Some(&seed_identity("different-current-suffix")),
+        "main",
         false,
     )
     .expect("refresh true template drift");
@@ -269,6 +275,7 @@ fn real_template_refresh_uses_recorded_binding_and_second_run_is_a_no_op() {
         &global,
         &workspace,
         Some(&seed_identity("different-current-suffix")),
+        "main",
         false,
     )
     .expect("second sync");
@@ -299,6 +306,7 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
         &global,
         &workspace,
         Some(&seed_identity("alpha")),
+        "main",
         true,
     )
     .expect("check a pre-provenance workspace");
@@ -318,6 +326,7 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
         &global,
         &workspace,
         Some(&seed_identity("alpha")),
+        "main",
         false,
     )
     .expect("adopt a pre-provenance workspace");
@@ -355,6 +364,7 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
         &global,
         &workspace,
         Some(&seed_identity("alpha")),
+        "main",
         false,
     )
     .expect("refresh the adopted routine");
@@ -396,6 +406,7 @@ fn sync_refreshes_only_provenance_clean_non_routine_assets_and_retires_safely() 
         &global,
         &workspace,
         Some(&seed_identity("alpha")),
+        "main",
         true,
     )
     .expect("check non-routine convergence");
@@ -415,6 +426,7 @@ fn sync_refreshes_only_provenance_clean_non_routine_assets_and_retires_safely() 
         &global,
         &workspace,
         Some(&seed_identity("alpha")),
+        "main",
         false,
     )
     .expect("apply non-routine convergence");
@@ -429,6 +441,7 @@ fn sync_refreshes_only_provenance_clean_non_routine_assets_and_retires_safely() 
         &global,
         &workspace,
         Some(&seed_identity("alpha")),
+        "main",
         false,
     )
     .expect("second convergence");
@@ -437,4 +450,71 @@ fn sync_refreshes_only_provenance_clean_non_routine_assets_and_retires_safely() 
         std::fs::read(&manifest_path).expect("manifest after no-op"),
         before_manifest
     );
+}
+
+/// The shipped delivery definitions observe the workspace's registered base
+/// branch. A `main`-based workspace must never receive a literal `agent-main`
+/// it can never baseline against, and a later sync against a changed base
+/// branch refreshes an unedited definition onto the new value.
+#[test]
+fn seeded_delivery_definitions_target_the_registered_base_branch() {
+    let root = tempdir().expect("create tempdir");
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    init_workspace_at_root(
+        &global,
+        InitOptions {
+            global_only: true,
+            refresh_defaults: true,
+            ..Default::default()
+        },
+    )
+    .expect("initialize global root");
+    init_workspace_at_root(
+        &workspace,
+        InitOptions {
+            global_root_override: Some(global.clone()),
+            routine_seed_identity: Some(seed_identity("alpha")),
+            workspace_base_branch: Some("main".into()),
+            refresh_defaults: true,
+            ..Default::default()
+        },
+    )
+    .expect("initialize workspace root");
+
+    for name in ["delivery-qa", "delivery-code-review"] {
+        let path = workspace.join("auto_tasks").join(format!("{name}.yaml"));
+        let seeded = std::fs::read_to_string(&path).expect("read seeded delivery definition");
+        assert!(
+            seeded.contains("\n    branch: main\n"),
+            "{name} must observe the registered base branch: {seeded}"
+        );
+        assert!(
+            !seeded.contains("agent-main") && !seeded.contains("__ORBIT_BASE_BRANCH__"),
+            "{name} must not leak the placeholder or another repository's branch: {seeded}"
+        );
+        let definition = orbit_common::protocol::yaml::parse_auto_task_yaml(&seeded)
+            .expect("seeded delivery definition parses");
+        let orbit_types::workflow::AutoTaskSchedule::Deliveries { deliveries_landed } =
+            definition.schedule
+        else {
+            panic!("{name} is a delivery definition");
+        };
+        assert_eq!(deliveries_landed.branch, "main");
+    }
+
+    let rebased = reconcile_workspace_managed_artifacts(
+        &global,
+        &workspace,
+        Some(&seed_identity("alpha")),
+        "develop",
+        false,
+    )
+    .expect("sync against a changed base branch");
+    assert!(rebased.actions.iter().any(|action| {
+        action.name == "delivery-qa" && action.outcome == ManagedArtifactOutcome::Refreshed
+    }));
+    let refreshed = std::fs::read_to_string(workspace.join("auto_tasks/delivery-qa.yaml"))
+        .expect("read refreshed delivery definition");
+    assert!(refreshed.contains("\n    branch: develop\n"), "{refreshed}");
 }

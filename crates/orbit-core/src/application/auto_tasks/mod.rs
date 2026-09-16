@@ -16,6 +16,8 @@
 //! - [`scheduler`] — the evaluator called by the host tick.
 //! - [`crud`] — the shared add/list/show/update/toggle/mint domain surface.
 
+use std::borrow::Cow;
+
 pub mod crud;
 pub use orbit_automation::auto_tasks::loader;
 pub use orbit_automation::auto_tasks::schedule;
@@ -63,6 +65,22 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/security-review.yaml"),
     ),
 ];
+
+/// Placeholder the shipped delivery definitions carry for the workspace's
+/// integration branch. Seeding renders it to the registered base branch, so a
+/// `main`-based workspace never inherits a literal `agent-main` that no tick
+/// can baseline against.
+pub(crate) const BASE_BRANCH_PLACEHOLDER: &str = "__ORBIT_BASE_BRANCH__";
+
+/// Render one embedded default against the workspace's base branch. Defaults
+/// without the placeholder are returned as shipped.
+pub(crate) fn render_default_auto_task<'a>(content: &'a str, base_branch: &str) -> Cow<'a, str> {
+    if content.contains(BASE_BRANCH_PLACEHOLDER) {
+        Cow::Owned(content.replace(BASE_BRANCH_PLACEHOLDER, base_branch))
+    } else {
+        Cow::Borrowed(content)
+    }
+}
 
 #[cfg(test)]
 mod tests;

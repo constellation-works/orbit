@@ -1619,6 +1619,118 @@ fn unreachable_checkout_partition_is_reported_without_the_deletion_repair() {
     );
 }
 
+/// An enabled delivery definition owned here whose branch does not exist can
+/// never baseline, so no stall marker will ever say so. Doctor names the
+/// definition, the branch, git's failure text and the corrective action.
+#[test]
+fn automation_consumer_check_warns_about_an_unresolvable_branch() {
+    use orbit_core::application::auto_tasks::AutoTaskAddParams;
+    use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
+    use orbit_types::workflow::automation::{CoverageClass, DeliveryTrigger};
+    use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
+
+    let temp = tempfile::tempdir().expect("temp dir");
+    let runtime =
+        workspace_runtime(&temp).with_automation_machine_identity(Some("fixture-machine".into()));
+    let repo = temp.path().join("repo");
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "--initial-branch=main"]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "base",
+    ]);
+
+    let delivery = |branch: &str| AutoTaskSchedule::Deliveries {
+        deliveries_landed: DeliveryTrigger {
+            owner_machine: Some("fixture-machine".into()),
+            branch: branch.into(),
+            threshold: 1,
+            max_wait_minutes: 60,
+            coverage: CoverageClass::IntegratedQaV1,
+            max_items: 20,
+            retries: 0,
+        },
+    };
+    let template = AutoTaskTemplate {
+        title: "Exercise batch".into(),
+        description: "Inspect captured input".into(),
+        acceptance_criteria: vec!["All obligations examined".into()],
+        task_type: TaskType::Chore,
+        tags: vec![],
+        required_tools: vec![],
+        priority: TaskPriority::Medium,
+        complexity: None,
+        crew: None,
+        status: TaskStatus::Backlog,
+    };
+    for (name, branch) in [("delivery-qa", "agent-main"), ("delivery-ok", "main")] {
+        runtime
+            .auto_task_add(AutoTaskAddParams {
+                name: name.into(),
+                description: "fixture".into(),
+                schedule: delivery(branch),
+                template: template.clone(),
+                dedupe: DedupePolicy::SkipIfOpen,
+            })
+            .expect("add delivery definition");
+        runtime.auto_task_toggle(name, true).expect("enable");
+    }
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "automation-consumers");
+
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning);
+    assert!(
+        row.message.contains(
+            "1 enabled delivery definition(s) name a branch that does not exist in this \
+             repository and can never baseline: delivery-qa targets `agent-main`: \
+             evidence_unavailable: git rev-parse --verify --end-of-options \
+             refs/heads/agent-main^{commit}: fatal: Needed a single revision"
+        ),
+        "{}",
+        row.message
+    );
+    assert!(!row.message.contains("delivery-ok"), "{}", row.message);
+    let remediation = row.remediation.as_deref().expect("warning carries the fix");
+    assert!(
+        remediation.contains(
+            "set `schedule.deliveries_landed.branch` to the workspace base branch `main`"
+        ),
+        "{remediation}"
+    );
+    assert!(
+        remediation.contains("orbit auto-task update <name>"),
+        "{remediation}"
+    );
+
+    // Disabling the definition takes it out of this host's obligations.
+    runtime
+        .auto_task_toggle("delivery-qa", false)
+        .expect("disable");
+    let results = runtime.doctor_workspace().expect("doctor");
+    assert_eq!(
+        status_of(&results, "automation-consumers").status,
+        WorkspaceDoctorStatus::Ok
+    );
+}
+
 /// A workspace with no delivery automation state is healthy, not skipped: the
 /// check reads persisted stall markers, and having none is the answer.
 #[test]

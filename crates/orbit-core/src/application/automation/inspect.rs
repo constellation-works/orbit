@@ -2,7 +2,7 @@
 
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
-use orbit_automation::delivery;
+use orbit_automation::{AutomationError, delivery};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
     AutoTaskDefinition, AutoTaskSchedule, DedupePolicy, RoutineDefinition,
@@ -11,7 +11,60 @@ use orbit_types::workflow::{
     },
 };
 
-use super::ownership;
+use super::{ownership, source::Source};
+
+/// An enabled delivery definition this host owns whose configured branch does
+/// not resolve in the repository. No tick can baseline it, so `orbit doctor`
+/// reports it as a definition error rather than letting every sweep defer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvableBranch {
+    pub definition: String,
+    pub branch: String,
+    /// The deferral reason evaluation surfaces: the git command and its
+    /// failure text.
+    pub error: String,
+}
+
+/// Every enabled delivery auto-task owned here whose branch git cannot
+/// resolve, in definition order. A definition with persisted state is checked
+/// too: a branch deleted after baseline stops it just as surely.
+pub fn unresolvable_delivery_branches(
+    runtime: &OrbitRuntime,
+) -> Result<Vec<UnresolvableBranch>, OrbitError> {
+    let source = Source::new(&runtime.paths().repo_root);
+    let mut unresolvable = Vec::new();
+    for definition in runtime.auto_task_list()? {
+        let AutoTaskSchedule::Deliveries {
+            deliveries_landed: declared,
+        } = &definition.schedule
+        else {
+            continue;
+        };
+        if !definition.enabled
+            || !ownership::resolve(runtime, declared.owner_machine.as_deref()).owned_here
+        {
+            continue;
+        }
+        if let Some(error) = branch_unavailable(&source, &declared.branch) {
+            unresolvable.push(UnresolvableBranch {
+                definition: definition.name.clone(),
+                branch: declared.branch.clone(),
+                error,
+            });
+        }
+    }
+
+    Ok(unresolvable)
+}
+
+/// The reason evaluation would defer with when `branch` does not resolve,
+/// or `None` when it does. Only a local ref lookup: no history, no provider.
+fn branch_unavailable(source: &Source<'_>, branch: &str) -> Option<String> {
+    source.verify_branch(branch).err().map(|error| match error {
+        AutomationError::Deferred(reason) => reason,
+        other => other.to_string(),
+    })
+}
 
 pub fn inspect_auto_task(
     runtime: &OrbitRuntime,
@@ -122,20 +175,25 @@ fn inspect(
     // edited definition comes first: it has to be restored before any owner
     // question matters.
     let reason = if definition_changed {
-        delivery::DEFINITION_CHANGED
+        delivery::DEFINITION_CHANGED.into()
     } else if !enabled {
-        "disabled"
+        "disabled".into()
     } else if let Some(refusal) = ownership.refusal() {
-        refusal
+        refusal.into()
     } else {
         match &state {
-            None => "awaiting_baseline",
-            Some(state) => scheduling_reason(state, trigger, admission_deferred, now),
+            // A baseline needs the configured branch to resolve. Reporting the
+            // same failure the tick defers with here is what tells an operator
+            // why `awaiting_baseline` never ends; it reads one local ref and
+            // still fetches no history or provider evidence.
+            None => branch_unavailable(&Source::new(&runtime.paths().repo_root), &trigger.branch)
+                .unwrap_or_else(|| "awaiting_baseline".into()),
+            Some(state) => scheduling_reason(state, trigger, admission_deferred, now).into(),
         }
     };
 
     Ok(AutomationDiagnostic {
-        reason: reason.into(),
+        reason,
         state,
         ownership: Some(ownership),
         waivers: store.automation_waivers(&consumer, 20)?,

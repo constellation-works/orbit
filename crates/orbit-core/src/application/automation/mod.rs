@@ -24,7 +24,9 @@ mod task;
 mod tests;
 
 pub(crate) use direct::record_direct_landing_intent;
-pub use inspect::{inspect_auto_task, inspect_routine};
+pub use inspect::{
+    UnresolvableBranch, inspect_auto_task, inspect_routine, unresolvable_delivery_branches,
+};
 pub use recovery::recover_auto_task;
 pub use reset::reset_auto_task;
 pub use stall::{StalledConsumer, stalled_consumers, stalled_minutes};
