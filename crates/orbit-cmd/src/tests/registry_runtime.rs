@@ -17,9 +17,9 @@ use orbit_registry::workspace_registry::{
 };
 
 use crate::registry_runtime::{
-    RegisteredRuntimeFactory, ResolvedWorkspaceSelection, resolved_workspace_binding,
-    retry_pipeline_worker_bootstrap, select_workspace_for_cwd_and_roots, sync_task_prefix,
-    workspace_runtime_binding,
+    GitProcessProbes, RegisteredRuntimeFactory, ResolvedWorkspaceSelection,
+    resolved_workspace_binding, retry_pipeline_worker_bootstrap,
+    select_workspace_for_cwd_and_roots, sync_task_prefix, workspace_runtime_binding,
 };
 
 /// Select against the registry under `roots.global_root`, as the runtime open
@@ -1773,4 +1773,236 @@ fn non_active_workspace_with_readable_orbit_root_fails_to_bind_for_read_verbs() 
             "tool error for {label} must report invalid status: {tool_msg}"
         );
     }
+}
+
+struct PathSelectorFixture {
+    _root: tempfile::TempDir,
+    global: PathBuf,
+    primary_repo: PathBuf,
+    primary_orbit: PathBuf,
+    linked: PathBuf,
+    primary_subdir: PathBuf,
+    linked_subdir: PathBuf,
+}
+
+fn path_selector_fixture() -> PathSelectorFixture {
+    let root = tempfile::tempdir().expect("root");
+    let global = root.path().join("global");
+    std::fs::create_dir_all(&global).expect("global");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_path_sel\"\nhost_id = \"path-sel\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("host identity");
+
+    let (ws_primary, checkout_primary) =
+        registered_workspace(root.path(), "ws_primary", "primary", "hm_path_sel");
+    init_git_repo(&checkout_primary.repo_root);
+    let primary_repo = checkout_primary.repo_root.clone();
+    let primary_orbit = checkout_primary.orbit_dir.clone();
+
+    let mut workspaces = vec![ws_primary];
+    let mut checkouts = vec![checkout_primary];
+    for (id, name) in [
+        ("ws_decoy_a", "decoy-a"),
+        ("ws_decoy_b", "decoy-b"),
+        ("ws_decoy_c", "decoy-c"),
+    ] {
+        let (workspace, checkout) = registered_workspace(root.path(), id, name, "hm_path_sel");
+        init_git_repo(&checkout.repo_root);
+        workspaces.push(workspace);
+        checkouts.push(checkout);
+    }
+    save_registry_to(
+        &WorkspaceRegistry {
+            workspaces,
+            checkouts,
+            ..Default::default()
+        },
+        &registry_path_for(&global),
+    )
+    .expect("workspace registry");
+
+    let linked = root.path().join("linked");
+    add_linked_worktree(&primary_repo, &linked);
+    let primary_subdir = primary_repo.join("packages/demo");
+    std::fs::create_dir_all(&primary_subdir).expect("primary subdirectory");
+    let linked_subdir = linked.join("src");
+    std::fs::create_dir_all(&linked_subdir).expect("linked subdirectory");
+
+    PathSelectorFixture {
+        _root: root,
+        global,
+        primary_repo,
+        primary_orbit,
+        linked,
+        primary_subdir,
+        linked_subdir,
+    }
+}
+
+fn resolve_path_selector(global: &Path, path: &Path) -> ResolvedWorkspaceSelection {
+    let selector = path
+        .to_str()
+        .unwrap_or_else(|| panic!("utf8 path {}", path.display()));
+    RegisteredRuntimeFactory::resolve_workspace_selector(global, selector)
+        .unwrap_or_else(|error| panic!("resolve {}: {error}", path.display()))
+}
+
+fn assert_primary_selection(
+    selected: &ResolvedWorkspaceSelection,
+    fixture: &PathSelectorFixture,
+    expected_local_root: &Path,
+) {
+    assert_eq!(selected.workspace.id, "ws_primary");
+    assert_eq!(
+        canonical_test_path(&selected.checkout.repo_root),
+        canonical_test_path(&fixture.primary_repo)
+    );
+    assert_eq!(
+        canonical_test_path(&selected.local_root),
+        canonical_test_path(expected_local_root)
+    );
+}
+
+fn canonical_test_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[test]
+fn workspace_selector_path_spawns_at_most_one_git_process_for_linked_worktree() {
+    let fixture = path_selector_fixture();
+    let probes = GitProcessProbes::capture();
+    let selected = resolve_path_selector(&fixture.global, &fixture.linked);
+    assert_primary_selection(
+        &selected,
+        &fixture,
+        &canonical_test_path(&fixture.linked).join(".orbit"),
+    );
+    assert!(
+        probes.git_process_spawns() <= 1,
+        "linked worktree path must not spawn git per registered checkout, got {}",
+        probes.git_process_spawns()
+    );
+}
+
+#[test]
+fn workspace_selector_path_spawns_at_most_one_git_process_for_subdirectory() {
+    let fixture = path_selector_fixture();
+    let probes = GitProcessProbes::capture();
+    let selected = resolve_path_selector(&fixture.global, &fixture.primary_subdir);
+    assert_primary_selection(&selected, &fixture, &fixture.primary_orbit);
+    assert!(
+        probes.git_process_spawns() <= 1,
+        "subdirectory path must not spawn git per registered checkout, got {}",
+        probes.git_process_spawns()
+    );
+}
+
+#[test]
+fn workspace_selector_path_resolves_linked_worktree_subdirectory_with_one_git_process() {
+    let fixture = path_selector_fixture();
+    let probes = GitProcessProbes::capture();
+    let selected = resolve_path_selector(&fixture.global, &fixture.linked_subdir);
+    assert_primary_selection(
+        &selected,
+        &fixture,
+        &canonical_test_path(&fixture.linked).join(".orbit"),
+    );
+    assert!(
+        probes.git_process_spawns() <= 1,
+        "linked-worktree subdirectory must not spawn git per registered checkout, got {}",
+        probes.git_process_spawns()
+    );
+}
+
+#[test]
+fn exact_checkout_path_selector_does_not_spawn_git() {
+    let fixture = path_selector_fixture();
+    let probes = GitProcessProbes::capture();
+    let selected = resolve_path_selector(&fixture.global, &fixture.primary_repo);
+    assert_primary_selection(&selected, &fixture, &fixture.primary_orbit);
+    assert_eq!(
+        probes.git_process_spawns(),
+        0,
+        "an exact registered repo_root match must not spawn git"
+    );
+}
+
+#[test]
+fn path_selector_falls_back_to_git_spawn_when_recorded_git_dir_is_missing() {
+    let root = tempfile::tempdir().expect("root");
+    let global = root.path().join("global");
+    std::fs::create_dir_all(&global).expect("global");
+    std::fs::write(
+        global.join("host.toml"),
+        "schema_version = 2\nmachine_id = \"hm_path_fallback\"\nhost_id = \"path-fallback\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("host identity");
+
+    let (workspace, mut checkout) =
+        registered_workspace(root.path(), "ws_fallback", "fallback", "hm_path_fallback");
+    init_git_repo(&checkout.repo_root);
+    checkout.orbit_dir = global.join("external-orbit");
+    std::fs::create_dir_all(&checkout.orbit_dir).expect("external orbit dir");
+    save_registry_to(
+        &WorkspaceRegistry {
+            workspaces: vec![workspace],
+            checkouts: vec![checkout.clone()],
+            ..Default::default()
+        },
+        &registry_path_for(&global),
+    )
+    .expect("workspace registry");
+
+    let subdir = checkout.repo_root.join("src");
+    std::fs::create_dir_all(&subdir).expect("subdirectory");
+    let probes = GitProcessProbes::capture();
+    let selected = resolve_path_selector(&global, &subdir);
+    assert_eq!(selected.workspace.id, "ws_fallback");
+    assert!(
+        probes.git_process_spawns() >= 2,
+        "zero recorded .git hits must fall back to spawning git for the selected path and checkout, got {}",
+        probes.git_process_spawns()
+    );
+}
+
+fn init_git_repo(repo: &Path) {
+    std::fs::create_dir_all(repo).expect("repo dir");
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.name", "Orbit Test"]);
+    run_git(repo, &["config", "user.email", "orbit-test@example.com"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    std::fs::write(repo.join("README.md"), "# repo\n").expect("write readme");
+    run_git(repo, &["add", "README.md"]);
+    run_git(repo, &["commit", "-m", "initial"]);
+}
+
+fn add_linked_worktree(primary: &Path, linked: &Path) {
+    run_git(
+        primary,
+        &[
+            "worktree",
+            "add",
+            linked.to_str().expect("utf8 linked worktree path"),
+            "HEAD",
+        ],
+    );
+}
+
+fn run_git(cwd: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .unwrap_or_else(|error| panic!("spawn git {}: {error}", args.join(" ")));
+    assert!(
+        output.status.success(),
+        "git -C {} {} failed\nstdout:\n{}\nstderr:\n{}",
+        cwd.display(),
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
