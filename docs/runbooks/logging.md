@@ -91,7 +91,9 @@ On Linux, the sweep unit logs to the journal, which rotates independently.
 
 Confirm that the effective active path exists and receives a new expected event. For retention,
 compare the active file and archives against the configured per-file, total-size, and age caps;
-remember that the global JSONL rotation check occurs at process start, while sweep rotation runs
-opportunistically on each pass.
+remember that global JSONL rotation walks archives from long-lived processes (`mcp serve`,
+`sweep` / `clock tick`, `web serve`) and when the active file exceeds its budget on first write,
+while sweep-log rotation runs opportunistically on each pass. Short-lived commands, including
+`orbit --help`, do not open the JSONL file.
 
 Related: [Inspect the audit trail](./audit-trail.md) for durable invocation and pipeline events.

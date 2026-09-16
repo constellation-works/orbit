@@ -4,7 +4,10 @@
 //! On an always-on host the JSONL feed would otherwise grow unbounded until the
 //! disk fills — which then cascades into SQLite write failures across every
 //! store. This module bounds it with an opportunistic, rename-based roll plus a
-//! retention sweep, both run once at subscriber init (cheap, no daemon).
+//! retention sweep. Full `rotate_and_prune` (directory walk) runs from
+//! long-lived entry points (`orbit mcp serve`, `orbit sweep`, `orbit web
+//! serve`). Short-lived processes only stat the active file and walk archives
+//! when that one size check exceeds the per-file budget.
 //!
 //! The active file stays at the fixed path `orbit.jsonl` — readers
 //! (`orbit log tail`, the dashboard) open that exact path, so we do NOT adopt
@@ -136,7 +139,9 @@ fn load_global() -> Option<LogRotationConfig> {
 
 /// Opportunistically roll the active log if oversized, then prune archives by
 /// age and total-size budget. Best-effort: logs a warning on failure but never
-/// panics or fails the caller. Intended to run once at subscriber init.
+/// panics or fails the caller. Intended for long-lived processes and for the
+/// oversized-file path that [`rotate_if_active_exceeds_budget`] takes after a
+/// single `metadata()` check.
 pub fn rotate_and_prune(active_path: &Path, config: &LogRotationConfig) {
     if let Err(error) = maybe_roll(active_path, config) {
         tracing::warn!(
@@ -152,6 +157,20 @@ pub fn rotate_and_prune(active_path: &Path, config: &LogRotationConfig) {
             error = %error,
             "failed to prune JSONL log archives",
         );
+    }
+}
+
+/// Stat the active file once and run [`rotate_and_prune`] only when it exceeds
+/// the per-file budget. A missing or unreadable file is a no-op (no directory
+/// walk, no config-dependent prune). Short-lived CLI processes use this on
+/// first JSONL write instead of walking archives on every start.
+pub(crate) fn rotate_if_active_exceeds_budget(active_path: &Path, config: &LogRotationConfig) {
+    let size = match std::fs::metadata(active_path) {
+        Ok(meta) => meta.len(),
+        Err(_) => return,
+    };
+    if size > config.max_file_bytes {
+        rotate_and_prune(active_path, config);
     }
 }
 

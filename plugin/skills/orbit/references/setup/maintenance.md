@@ -107,8 +107,11 @@ whether it was denied. It grows without bound until pruned. Prune requires
 
 ## Logs
 
-The global JSONL trace at `~/.orbit/state/logs/orbit.jsonl` rotates
-opportunistically at process start. Defaults: seven days of archives, a 500 MiB
+The global JSONL trace at `~/.orbit/state/logs/orbit.jsonl` rotates from
+long-lived processes (`orbit mcp serve`, `orbit sweep`, `orbit web serve`)
+and when the active file exceeds its budget (one `metadata()` check on first
+write). Short-lived commands, including `orbit --help`, do not open the file
+or walk the log directory. Defaults: seven days of archives, a 500 MiB
 total budget, a 100 MiB active-file threshold. Tune in `config.toml`:
 
 ```toml
