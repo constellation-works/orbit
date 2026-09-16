@@ -1197,6 +1197,30 @@ pub fn validate_task_dependencies(
     current_task_id: Option<&str>,
     dependencies: &[OrbitId],
 ) -> Result<(), TaskError> {
+    validate_task_dependencies_with(current_task_id, dependencies, |id| {
+        Ok(tasks
+            .iter()
+            .find(|task| task.id == id)
+            .map(Task::dependencies))
+    })
+}
+
+/// Cycle-check new dependency edges using an on-demand adjacency lookup.
+///
+/// `lookup(id)` returns that task's current dependency IDs, or `None` when the
+/// id is unknown. Unknown targets are treated as leaves (no further edges),
+/// matching an adjacency-map miss. Lookups are cached so each id is resolved
+/// at most once. The task being updated is not looked up; its outgoing edges
+/// are the `dependencies` argument.
+pub fn validate_task_dependencies_with<F, E>(
+    current_task_id: Option<&str>,
+    dependencies: &[OrbitId],
+    mut lookup: F,
+) -> Result<(), E>
+where
+    F: FnMut(&str) -> Result<Option<Vec<OrbitId>>, E>,
+    E: From<TaskError>,
+{
     let Some(current_task_id) = current_task_id else {
         return Ok(());
     };
@@ -1207,14 +1231,12 @@ pub fn validate_task_dependencies(
     {
         return Err(TaskError::Invalid(format!(
             "task '{current_task_id}' cannot declare a self-dependency (self-reference)"
-        )));
+        ))
+        .into());
     }
 
-    let mut adjacency = tasks
-        .iter()
-        .map(|task| (task.id.clone(), task.dependencies()))
-        .collect::<BTreeMap<_, _>>();
-    adjacency.insert(current_task_id.to_string(), dependencies.to_vec());
+    let mut resolved = BTreeMap::new();
+    resolved.insert(current_task_id.to_string(), dependencies.to_vec());
 
     for dependency in dependencies {
         let mut visiting = BTreeSet::new();
@@ -1222,48 +1244,56 @@ pub fn validate_task_dependencies(
         if let Some(path) = find_dependency_path(
             dependency,
             current_task_id,
-            &adjacency,
+            &mut resolved,
+            &mut lookup,
             &mut visiting,
             &mut trail,
-        ) {
+        )? {
             let mut cycle = Vec::with_capacity(path.len() + 1);
             cycle.push(current_task_id.to_string());
             cycle.extend(path);
             return Err(TaskError::Invalid(format!(
                 "task dependency cycle detected: {}",
                 cycle.join(" -> ")
-            )));
+            ))
+            .into());
         }
     }
 
     Ok(())
 }
 
-fn find_dependency_path(
+fn find_dependency_path<F, E>(
     current: &str,
     target: &str,
-    adjacency: &BTreeMap<OrbitId, Vec<OrbitId>>,
+    resolved: &mut BTreeMap<OrbitId, Vec<OrbitId>>,
+    lookup: &mut F,
     visiting: &mut BTreeSet<OrbitId>,
     trail: &mut Vec<OrbitId>,
-) -> Option<Vec<OrbitId>> {
+) -> Result<Option<Vec<OrbitId>>, E>
+where
+    F: FnMut(&str) -> Result<Option<Vec<OrbitId>>, E>,
+{
     if !visiting.insert(current.to_string()) {
-        return None;
+        return Ok(None);
     }
 
     trail.push(current.to_string());
     if current == target {
-        return Some(trail.clone());
+        return Ok(Some(trail.clone()));
     }
 
-    if let Some(next_dependencies) = adjacency.get(current) {
-        for next in next_dependencies {
-            if let Some(path) = find_dependency_path(next, target, adjacency, visiting, trail) {
-                return Some(path);
-            }
+    if !resolved.contains_key(current) {
+        resolved.insert(current.to_string(), lookup(current)?.unwrap_or_default());
+    }
+    let next_dependencies = resolved.get(current).cloned().unwrap_or_default();
+    for next in &next_dependencies {
+        if let Some(path) = find_dependency_path(next, target, resolved, lookup, visiting, trail)? {
+            return Ok(Some(path));
         }
     }
 
     trail.pop();
     visiting.remove(current);
-    None
+    Ok(None)
 }
