@@ -150,10 +150,16 @@ impl ClockTickArgs {
             }
         }
         if lines.is_empty() && outcome.load_errors.is_empty() {
+            // Retired rows are definitions the tick skips, not schedules.
+            let evaluated = outcome
+                .reports
+                .iter()
+                .filter(|report| report.action != "retired")
+                .count();
             lines.push(format!(
                 "clock tick[{}]: {} routine(s), {} auto-task(s), nothing due",
                 outcome.host_id,
-                outcome.reports.len(),
+                evaluated,
                 outcome.auto_task_reports.len()
             ));
         }

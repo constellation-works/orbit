@@ -36,6 +36,7 @@ pub use loader::{
     DiscoveredWorkspaces, LoadedRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin,
     RoutineWorkspaceProvider, collect_routines,
 };
+pub(crate) use status::rewrite_enabled_line;
 pub use status::{
     RoutineStatus, RoutineStatusReport, RoutineToggleOutcome, ScheduleDisplayState, pause_routine,
     recent_fires, resume_routine, routine_statuses_with_providers, set_routine_enabled,

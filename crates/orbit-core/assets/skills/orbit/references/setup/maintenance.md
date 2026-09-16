@@ -45,6 +45,16 @@ inexplicably. It has targeted repairs, each narrow on purpose:
 drops a shipped definition. It works by content provenance — if you edited a
 seeded file, Orbit assumes you meant it and leaves it in place.
 
+For routines, the two settings Orbit's own surfaces change are not edits:
+flipping `enabled` (the documented opt-in, and what the dashboard toggle
+writes) and deleting the retired `hosts:` key. A routine that differs from a
+shipped template only in those still counts as Orbit-written, so an upgraded
+workspace converges without you moving files by hand. Orbit deletes outright
+only bytes it can prove it wrote; anything else it copies to
+`.retired-managed/routines/` before removing it from the active catalog.
+Changing a routine's cadence, target, policy, or description — or adding a
+comment — is a real edit and is preserved and reported.
+
 ## Task locks
 
 ```bash

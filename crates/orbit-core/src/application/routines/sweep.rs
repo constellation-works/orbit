@@ -197,7 +197,18 @@ pub(crate) fn run_sweep_at_with_providers_at(
             .collect(),
     };
 
-    let reports = run_sweep_core(store.as_ref(), &collection, &dispatch, options, now_utc)?;
+    let mut reports = run_sweep_core(store.as_ref(), &collection, &dispatch, options, now_utc)?;
+    // A definition targeting a retired job is skipped, not broken: one
+    // non-noteworthy row per pass, never a load error on every tick.
+    reports.extend(collection.retired.iter().map(|routine| RoutineSweepReport {
+        routine: routine.name.clone(),
+        source: routine.source_workspace.clone(),
+        origin: routine.origin.as_str(),
+        action: "retired",
+        reason: Some(routine.reason.clone()),
+        slot: None,
+        run_id: None,
+    }));
     // Auto-tasks run second so their task-store writes cannot delay routine
     // dispatch. The phase is bounded by this pass's discovered workspaces and
     // each scheduler's finite definition collection. A workspace-level error

@@ -163,6 +163,39 @@ routine an operator has edited is never deleted: it is preserved under
 `.retired-managed/routines/`. `orbit doctor` reports routine artifacts as faulty,
 deprecated, or stale, and `orbit doctor --fix-stale-artifacts` performs the retirement.
 
+The recorded digest alone is too strict across releases [DANI-10392]. A workspace
+seeded by an earlier release and then used as documented — opted in with
+`enabled: true`, or with the retired `hosts:` key deleted as the loader's warning
+instructs — no longer matches that digest, and treating that as a local edit left
+the upgrade unable to converge: the retired default kept failing to load on every
+tick while `workspace sync` demanded a manual move that changed nothing. So
+provenance is byte-exact first and shape-aware second. A file that differs from a
+template *this or a prior release shipped for that stem* only in fields the
+operator owns — `enabled`, the retired `hosts:` key — is still Orbit's. The
+shipped historical shapes are `assets/routines/retired/` (defaults this Orbit no
+longer ships) and `assets/routines/superseded/` (earlier shapes of defaults it
+still ships); retiring a default or changing a template's fields adds an entry to
+one of them in the same change. The consequences:
+
+- A retired default matching such a shape retires without operator action. Orbit
+  deletes outright only bytes it can prove it wrote; a lifecycle variant is copied
+  to `.retired-managed/routines/` first, so nothing the operator wrote is lost.
+- A stale shipped default matching a superseded shape is refreshed onto the
+  current template **with its `enabled` setting carried over**, so convergence
+  never silently switches off a routine an operator opted into.
+- A current-shape default whose only difference is a lifecycle setting is adopted
+  in place — recorded as Orbit's without being rewritten.
+- A default a prior release wrote without recording it in the manifest is adopted
+  the same way when it carries the name this workspace seeds. An operator's own
+  routine wearing a bundled filename declares its own name, so it is still
+  reported as a collision and preserved.
+- Any other difference — cadence, target, policy, description, an added comment —
+  is a local edit: preserved, reported, never rewritten.
+
+`orbit doctor` classifies routine provenance through the same helper, so
+`--fix-stale-artifacts` and `workspace sync` never disagree about whether a
+retired default is safe to remove.
+
 A routines directory carrying no manifest at all predates that provenance, and its routines
 are customized by design — flipping `enabled` is the lifecycle the templates invite. Content alone cannot separate such a routine from a file the operator wrote
 from scratch, so reconciliation adopts it [ORB-11154]: the binding is parsed from that exact
@@ -443,6 +476,14 @@ for a binary another installer placed. Workspace synchronization refreshes manag
 the former auto-task scheduler routine. `orbit doctor` reports that retired managed file
 as deprecated, and `orbit doctor --fix-stale-artifacts` moves an unchanged seeded copy to
 `.retired-managed/` while preserving an operator-edited copy there for inspection.
+
+Until that sync runs, a definition targeting the retired `auto_task_scheduler_pipeline`
+job is *skipped*, not failed: the loader recognises the retired target
+(`RETIRED_ROUTINE_JOBS`), so `orbit routine list` shows the routine as retired with the
+command that clears it, the dashboard carries it under `retired`, and a clock tick emits
+one non-noteworthy `retired` row instead of a load error on every pass [DANI-10392]. A
+job the workspace still defines itself resolves through the catalog first, and any other
+unresolvable target remains a fail-closed load error.
 
 Legacy `[routines] role` and routine `hosts:` fields warn during their compatibility
 window but no longer affect eligibility. Every registered owner checkout with an enabled

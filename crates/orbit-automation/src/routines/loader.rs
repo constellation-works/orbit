@@ -1,7 +1,8 @@
 //! Routine discovery [ORB-10021]: visit every registered, active owner
 //! checkout on this host and load `.orbit/routines/*.yaml` from each —
 //! fail-closed per file. An invalid definition becomes a load error and that
-//! routine is treated as absent; it never fires with defaults.
+//! routine is treated as absent; it never fires with defaults. A definition
+//! targeting a job in [`RETIRED_ROUTINE_JOBS`] is skipped as retired instead.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,6 +19,28 @@ pub const ROUTINES_DIR: &str = "routines";
 /// (gitignored by convention). The directory is the origin contract — the
 /// sweep never shells out to `git check-ignore`.
 pub const LOCAL_ROUTINES_SUBDIR: &str = "local";
+
+/// Job names a prior release shipped as routine targets that this release no
+/// longer provides, each with why the work needs no routine any more.
+///
+/// A definition targeting one of these is loaded as *retired* rather than
+/// failing to load: the file is dead weight until `orbit workspace sync`
+/// retires it, not a broken definition worth an error on every clock tick.
+/// A job of the same name that the source workspace still defines itself
+/// resolves through the catalog first and is never treated as retired.
+pub const RETIRED_ROUTINE_JOBS: &[(&str, &str)] = &[(
+    "auto_task_scheduler_pipeline",
+    "auto-task definitions are evaluated directly by every clock tick",
+)];
+
+/// Why a routine targeting `job` is retired, when that job is one a prior
+/// release shipped and this one dropped.
+pub fn retired_routine_job_reason(job: &str) -> Option<&'static str> {
+    RETIRED_ROUTINE_JOBS
+        .iter()
+        .find(|(name, _)| *name == job)
+        .map(|(_, reason)| *reason)
+}
 
 /// Where a routine definition came from — the directory decides, not git
 /// status. Both origins are evaluated identically on the checkout's host;
@@ -58,6 +81,26 @@ pub struct LoadedRoutine {
     pub path: PathBuf,
 }
 
+/// A definition that parsed but targets a job in [`RETIRED_ROUTINE_JOBS`]:
+/// skipped this pass, reported so `routine list` and the dashboard can show
+/// it as retired rather than as a load error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetiredRoutine {
+    /// The routine name the definition declares.
+    pub name: String,
+    /// Whether the definition is committed or machine-local.
+    pub origin: RoutineOrigin,
+    /// Registry name of the source workspace.
+    pub source_workspace: String,
+    /// Path of the YAML file the definition came from.
+    pub path: PathBuf,
+    /// The retired job the definition targets.
+    pub job: String,
+    /// Human-readable explanation, including the `orbit workspace sync`
+    /// step that retires the file.
+    pub reason: String,
+}
+
 /// One fail-closed load failure, kept for reporting: the routine (or source)
 /// it names is treated as absent this pass.
 #[derive(Debug, Clone)]
@@ -75,6 +118,8 @@ pub struct RoutineLoadError {
 pub struct RoutineCollection {
     /// Valid routines, in stable (workspace, filename) order.
     pub routines: Vec<LoadedRoutine>,
+    /// Definitions targeting a retired job, skipped without an error.
+    pub retired: Vec<RetiredRoutine>,
     /// Everything that failed fail-closed.
     pub errors: Vec<RoutineLoadError>,
 }
@@ -162,7 +207,8 @@ fn load_origin_dir(
 
     for path in paths {
         match load_routine_file(&path, origin, source, catalog) {
-            Ok(routine) => collection.routines.push(routine),
+            Ok(RoutineLoad::Active(routine)) => collection.routines.push(*routine),
+            Ok(RoutineLoad::Retired(routine)) => collection.retired.push(routine),
             Err(message) => collection.errors.push(RoutineLoadError {
                 source_workspace: source.workspace.clone(),
                 path: Some(path),
@@ -222,14 +268,42 @@ fn collect_declared_names(dir: &Path, declared: &mut BTreeMap<String, PathBuf>) 
     }
 }
 
+/// A definition that parsed: either evaluable this pass, or retired.
+enum RoutineLoad {
+    Active(Box<LoadedRoutine>),
+    Retired(RetiredRoutine),
+}
+
 fn load_routine_file(
     path: &Path,
     origin: RoutineOrigin,
     source: &RoutineSource,
     catalog: &dyn Fn(&Path, &str) -> bool,
-) -> Result<LoadedRoutine, String> {
+) -> Result<RoutineLoad, String> {
     let raw = std::fs::read_to_string(path).map_err(|error| format!("read failed: {error}"))?;
     let definition = parse_routine_yaml(&raw).map_err(|error| error.to_string())?;
+
+    // A routine whose target is a job a prior release shipped and this one
+    // dropped is retired, not broken: it is skipped and reported as such so
+    // the clock tick does not log the same load error forever. The catalog
+    // wins when the workspace defines a job of that name itself.
+    let job_name = definition.target.job_name();
+    if !catalog(&source.orbit_dir, job_name)
+        && let Some(reason) = retired_routine_job_reason(job_name)
+    {
+        return Ok(RoutineLoad::Retired(RetiredRoutine {
+            name: definition.name,
+            origin,
+            source_workspace: source.workspace.clone(),
+            path: path.to_path_buf(),
+            job: job_name.to_string(),
+            reason: format!(
+                "target 'job:{job_name}' is retired in this Orbit ({reason}); run `orbit workspace sync` in workspace '{}' to retire the definition",
+                source.workspace
+            ),
+        }));
+    }
+
     // [ORB-12236] Definitions carry no host pin. A file that still has one
     // loads and is evaluated here; the warning names it so the key can be
     // dropped before the next release rejects it.
@@ -252,7 +326,6 @@ fn load_routine_file(
     // Load-time target resolution through the source workspace's catalog,
     // like `target:` steps in JobV2: an unresolvable target is a load error,
     // not a fire-time surprise (ADR-0206).
-    let job_name = definition.target.job_name();
     if !catalog(&source.orbit_dir, job_name) {
         return Err(format!(
             "target 'job:{job_name}' does not resolve in workspace '{}': no such job in its catalog",
@@ -260,13 +333,13 @@ fn load_routine_file(
         ));
     }
 
-    Ok(LoadedRoutine {
+    Ok(RoutineLoad::Active(Box::new(LoadedRoutine {
         definition,
         origin,
         source_workspace: source.workspace.clone(),
         source_orbit_dir: source.orbit_dir.clone(),
         path: path.to_path_buf(),
-    })
+    })))
 }
 
 /// Names must be unique across every routine source *and origin* on a host; a

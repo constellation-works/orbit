@@ -410,7 +410,7 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
     Ok(result)
 }
 
-fn retired_preservation_path(
+pub(crate) fn retired_preservation_path(
     active_dir: &Path,
     asset_kind: &str,
     layout: ManagedAssetLayout,
