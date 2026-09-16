@@ -102,5 +102,6 @@ fn job_run_query(params: JobRunListParams) -> JobRunQuery {
         created_since: params.since,
         limit: params.limit,
         order_by: params.order_by,
+        include_steps: true,
     }
 }

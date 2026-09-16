@@ -1,10 +1,21 @@
 use chrono::{Duration, Utc};
 use orbit_engine::{WorktreeGcOptions, WorktreeGcResult, collect_worktrees};
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::workflow::JobRun;
 
 use crate::{OrbitError, OrbitRuntime};
 
 impl OrbitRuntime {
+    /// Every recorded run, without step rows. Worktree GC classifies live
+    /// worktrees from non-terminal runs and never reads `agent_response_json`.
+    pub(crate) fn list_job_runs_for_worktree_gc(&self) -> Result<Vec<JobRun>, OrbitError> {
+        self.reconcile_stale_job_runs(None)?;
+        self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+            include_steps: false,
+            ..JobRunQuery::default()
+        })
+    }
+
     /// Delivery jobs own their run worktree until the run is terminal. Reuse
     /// the collector here so delivery and the scheduled GC have identical
     /// task, run, registration, and clean-tree gates.
@@ -36,7 +47,7 @@ impl OrbitRuntime {
         run_id: Option<String>,
         older_than_hours: Option<u64>,
     ) -> Result<WorktreeGcResult, OrbitError> {
-        let runs = self.list_job_runs(super::job::JobRunListParams::default())?;
+        let runs = self.list_job_runs_for_worktree_gc()?;
         let older_than = older_than_hours
             .map(|hours| {
                 let hours = i64::try_from(hours).map_err(|_| {

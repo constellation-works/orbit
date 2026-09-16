@@ -118,13 +118,15 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| OrbitError::Store(e.to_string()))?;
         drop(stmt);
-        let run_ids = runs
-            .iter()
-            .map(|run| run.run_id.clone())
-            .collect::<Vec<_>>();
-        let mut steps_by_run = read_steps_for_runs(&conn, workspace_id, &run_ids)?;
-        for run in &mut runs {
-            run.steps = steps_by_run.remove(&run.run_id).unwrap_or_default();
+        if query.include_steps {
+            let run_ids = runs
+                .iter()
+                .map(|run| run.run_id.clone())
+                .collect::<Vec<_>>();
+            let mut steps_by_run = read_steps_for_runs(&conn, workspace_id, &run_ids)?;
+            for run in &mut runs {
+                run.steps = steps_by_run.remove(&run.run_id).unwrap_or_default();
+            }
         }
         Ok(runs)
     }

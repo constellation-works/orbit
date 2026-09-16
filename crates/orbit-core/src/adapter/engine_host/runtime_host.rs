@@ -295,7 +295,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {
-        self.list_job_runs(crate::application::job::JobRunListParams::default())
+        self.list_job_runs_for_worktree_gc()
     }
 
     fn data_root(&self) -> &std::path::Path {

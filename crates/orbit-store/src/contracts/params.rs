@@ -405,7 +405,7 @@ pub struct WorkspaceClaimCheckResult {
     pub expired_claims: Vec<ExpiredTaskReservation>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct JobRunQuery {
     pub job_id: Option<String>,
     pub state: Option<JobRunState>,
@@ -422,6 +422,25 @@ pub struct JobRunQuery {
     /// Which timestamp `limit` truncates against. Defaults to `CreatedAt` so
     /// existing CLI/history callers keep their current ordering.
     pub order_by: JobRunOrder,
+    /// When false, listing returns run rows with empty `steps` and never
+    /// selects `job_run_steps` (including `agent_response_json`). Defaults
+    /// to true so CLI/history callers keep hydrated pages.
+    pub include_steps: bool,
+}
+
+impl Default for JobRunQuery {
+    fn default() -> Self {
+        Self {
+            job_id: None,
+            state: None,
+            terminal_only: false,
+            active_only: false,
+            created_since: None,
+            limit: None,
+            order_by: JobRunOrder::default(),
+            include_steps: true,
+        }
+    }
 }
 
 /// Which timestamp a bounded [`JobRunQuery`] orders and truncates by.
