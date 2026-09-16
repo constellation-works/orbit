@@ -1,7 +1,10 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use orbit_common::OrbitError;
+use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
 const TRUSTED_SANDBOX_EXEC_PATHS: &[&str] = &["/usr/bin/sandbox-exec"];
@@ -19,7 +22,7 @@ pub struct MacosSandboxSpawnRequest<'a> {
 
 pub fn spawn_under_macos_sandbox(
     request: MacosSandboxSpawnRequest<'_>,
-) -> Result<(Child, NamedTempFile), OrbitError> {
+) -> Result<(Child, Arc<NamedTempFile>), OrbitError> {
     let MacosSandboxSpawnRequest {
         profile_text,
         program,
@@ -31,23 +34,7 @@ pub fn spawn_under_macos_sandbox(
         stderr,
     } = request;
 
-    let mut profile_file = tempfile::Builder::new()
-        .prefix("orbit-sandbox-")
-        .suffix(".sb")
-        .tempfile()
-        .map_err(|err| {
-            OrbitError::Execution(format!("failed to create sandbox profile tempfile: {err}"))
-        })?;
-    use std::io::Write;
-    profile_file
-        .write_all(profile_text.as_bytes())
-        .map_err(|err| {
-            OrbitError::Execution(format!("failed to write sandbox profile tempfile: {err}"))
-        })?;
-    profile_file
-        .flush()
-        .map_err(|err| OrbitError::Execution(format!("failed to flush sandbox profile: {err}")))?;
-
+    let profile_file = cached_profile_tempfile(profile_text)?;
     let profile_path = profile_file.path().to_path_buf();
 
     let sandbox_exec_path = sandbox_exec_path_or_error()?;
@@ -83,6 +70,61 @@ pub fn spawn_under_macos_sandbox(
         ))
     })?;
     Ok((child, profile_file))
+}
+
+/// SHA-256 digest of a compiled SBPL profile, used as the process-wide cache
+/// key in [`cached_profile_tempfile`].
+type ProfileCacheKey = [u8; 32];
+
+/// Process-wide reuse of one profile tempfile per distinct compiled profile.
+///
+/// `(fs_profile, provider, env)` are constant within a run and across step
+/// retries, so [`compile_macos_sandbox_profile`](super::compile::compile_macos_sandbox_profile)
+/// emits the same SBPL text on every retry of the same activity. Without this
+/// cache, each retry created, wrote, flushed, and later unlinked a fresh
+/// `NamedTempFile` for text that never changed. The compiled text already
+/// fully determines the enforced policy — provider-specific clauses are baked
+/// into it — so hashing the text alone is a correct and sufficient key.
+fn profile_cache() -> &'static Mutex<HashMap<ProfileCacheKey, Arc<NamedTempFile>>> {
+    static CACHE: OnceLock<Mutex<HashMap<ProfileCacheKey, Arc<NamedTempFile>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn profile_cache_key(profile_text: &str) -> ProfileCacheKey {
+    Sha256::digest(profile_text.as_bytes()).into()
+}
+
+/// Return the cached tempfile for `profile_text`, creating and writing one
+/// only on the first request for that exact profile.
+fn cached_profile_tempfile(profile_text: &str) -> Result<Arc<NamedTempFile>, OrbitError> {
+    let key = profile_cache_key(profile_text);
+    let mut cache = profile_cache()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some(existing) = cache.get(&key) {
+        return Ok(Arc::clone(existing));
+    }
+
+    let mut profile_file = tempfile::Builder::new()
+        .prefix("orbit-sandbox-")
+        .suffix(".sb")
+        .tempfile()
+        .map_err(|err| {
+            OrbitError::Execution(format!("failed to create sandbox profile tempfile: {err}"))
+        })?;
+    use std::io::Write;
+    profile_file
+        .write_all(profile_text.as_bytes())
+        .map_err(|err| {
+            OrbitError::Execution(format!("failed to write sandbox profile tempfile: {err}"))
+        })?;
+    profile_file
+        .flush()
+        .map_err(|err| OrbitError::Execution(format!("failed to flush sandbox profile: {err}")))?;
+
+    let profile_file = Arc::new(profile_file);
+    cache.insert(key, Arc::clone(&profile_file));
+    Ok(profile_file)
 }
 
 /// Returns the stable program path used in audit logs for sandboxed CLI
