@@ -368,6 +368,17 @@ Vectors and FTS rows stay workspace-local ([§3](#3-vector-storage)); only the *
 
 **No silent caps.** At most `MAX_FEDERATED_WORKSPACES` (16) checkouts are opened per query. Exceeding it adds a note naming both the cap and how many workspaces were dropped.
 
+**The per-workspace cost is paid once, not N times.** A fan-out is N independent reads of the same question, so everything that does not vary per workspace is resolved before it starts:
+
+| Cost | Paid |
+|------|------|
+| `workspaces.json` read, parse, and checkout validation | once per query — `resolve_scope` keeps the records it resolved, and `open` reads that snapshot rather than the file. The snapshot is replaced by the next `resolve_scope`, so it never outlives its query; a target it does not cover falls back to a registry lookup |
+| Query-side model resolution and companion spawn | once per query — one `SharedQueryEmbedder` is handed to every workspace's vector branch |
+| Embedding the query text | once per query — the same text under the same model, memoized behind the shared embedder. A host with no companion installed resolves no embedder and every workspace degrades to lexical exactly as a single-workspace query does |
+| Runtime open, index read, and the query itself | once per workspace, on a pool of at most `MAX_FEDERATED_CONCURRENCY` (8). Workers claim the next unclaimed target, so one slow checkout does not idle the pool behind it |
+
+Concurrency is invisible in the answer: outcomes are re-sorted into target order before fusion, so results, the `workspaces` report, and the `[<name>]` note order do not depend on which workspace finished first. The pool is bounded because each in-flight query holds a full runtime — every SQLite store plus a semantic index — not because the work is CPU-bound.
+
 **Sandbox posture.** A federated scope is refused inside an Orbit-managed run. Rationale in the decision record; the guard lives in `global_search` so CLI, MCP, `orbit tool run`, and the HTTP adapter all reach it through one rule.
 
 ```jsonc

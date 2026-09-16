@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use orbit_common::OrbitError;
 use orbit_search::{
-    DocSemanticHit, DocSemanticSearchParams, SemanticRelatedParams, SemanticSearchParams,
+    DocSemanticHit, DocSemanticSearchParams, Embedder, SemanticRelatedParams, SemanticSearchParams,
 };
 use orbit_store::friction_store::FrictionListFilter;
 
@@ -54,22 +54,30 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 struct HybridSearchScope<'a> {
     tag_filter: &'a [String],
     limit: usize,
+    /// See [`BranchContext::embedder`].
+    embedder: Option<&'a dyn Embedder>,
 }
 
 /// The read-only inputs shared by every kind branch, grouped so `task_branch`
 /// and `doc_branch` stay under the arg-count lint even with the `notes` /
 /// `vector_ran` out-params each also carries [ORB-12259].
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 struct BranchContext<'a> {
     params: &'a GlobalSearchParams,
     status_filters: &'a SearchStatusFilters,
     query: Option<&'a str>,
     tag_filter: &'a [String],
     limit: usize,
+    /// A query-side embedder the caller already built, or `None` to let each
+    /// vector branch build its own.
+    ///
+    /// A federated read supplies one for the whole fan-out so the companion is
+    /// spawned once and the query text is embedded once [DANI-10365].
+    embedder: Option<&'a dyn Embedder>,
 }
 
 impl OrbitRuntime {
@@ -92,6 +100,21 @@ impl OrbitRuntime {
     pub(super) fn workspace_search(
         &self,
         params: GlobalSearchParams,
+    ) -> Result<GlobalSearchResponse, OrbitError> {
+        self.workspace_search_with(params, None)
+    }
+
+    /// [`Self::workspace_search`] reading vectors through a caller-owned
+    /// embedder.
+    ///
+    /// Only the federated fan-out passes one: every workspace in a fan-out
+    /// embeds the same query text under the same host model, so a shared
+    /// embedder turns N companion spawns and N identical embeddings into one
+    /// of each [DANI-10365].
+    pub(super) fn workspace_search_with(
+        &self,
+        params: GlobalSearchParams,
+        embedder: Option<&dyn Embedder>,
     ) -> Result<GlobalSearchResponse, OrbitError> {
         let limit = params.normalized_limit();
         let status_filters = SearchStatusFilters::parse(&params.status)?;
@@ -175,6 +198,7 @@ impl OrbitRuntime {
             query: query_owned.as_deref(),
             tag_filter: &tag_filter,
             limit,
+            embedder,
         };
 
         if params.kind.includes_tasks() {
@@ -247,13 +271,15 @@ impl OrbitRuntime {
             query,
             tag_filter,
             limit,
+            embedder,
         } = ctx;
         let statuses = resolve_task_statuses(params, status_filters);
 
         let candidates = if params.hybrid
             && let Some(query) = query
         {
-            let semantic = self.task_semantic_hits(query, limit.saturating_mul(2).max(limit));
+            let semantic =
+                self.task_semantic_hits(query, limit.saturating_mul(2).max(limit), embedder);
             match semantic {
                 Ok(hits) if !hits.is_empty() => {
                     *vector_ran = true;
@@ -392,21 +418,26 @@ impl OrbitRuntime {
         &self,
         query: &str,
         limit: usize,
+        embedder: Option<&dyn Embedder>,
     ) -> Result<Vec<orbit_search::SemanticHit>, OrbitError> {
         #[cfg(test)]
         if let Some(result) = TASK_SEMANTIC_SEARCH_OVERRIDE.with(|cell| cell.borrow_mut().take()) {
             return result;
         }
 
-        Ok(self
-            .semantic_search(SemanticSearchParams {
-                query: query.to_string(),
-                limit,
-                field: None,
-                kind: Some("task".to_string()),
-                model: None,
-            })?
-            .results)
+        let params = SemanticSearchParams {
+            query: query.to_string(),
+            limit,
+            field: None,
+            kind: Some("task".to_string()),
+            model: None,
+        };
+        let store = self.stores().semantic_index().store()?;
+        let result = match embedder {
+            Some(embedder) => orbit_search::semantic_search_with(store, embedder, params)?,
+            None => orbit_search::semantic_search(store, params)?,
+        };
+        Ok(result.results)
     }
 
     fn doc_branch(
@@ -421,6 +452,7 @@ impl OrbitRuntime {
             query,
             tag_filter,
             limit,
+            embedder,
         } = ctx;
         let _doc_status_active = status_filters.doc_active.unwrap_or(true);
         let Some(query) = query else {
@@ -461,7 +493,11 @@ impl OrbitRuntime {
             return self.hybrid_doc_hits(
                 query,
                 docs,
-                HybridSearchScope { tag_filter, limit },
+                HybridSearchScope {
+                    tag_filter,
+                    limit,
+                    embedder,
+                },
                 notes,
                 vector_ran,
             );
@@ -522,7 +558,7 @@ impl OrbitRuntime {
             .map(|result| (result.record.path.clone(), result))
             .collect::<BTreeMap<_, _>>();
 
-        let semantic = match self.doc_semantic_hits(query, docs_limit) {
+        let semantic = match self.doc_semantic_hits(query, docs_limit, scope.embedder) {
             Ok(result) if result.is_empty() => {
                 warn_doc_hybrid_fallback(notes, "no doc embeddings found");
                 return Ok(lexical_doc_hits(lexical_docs, scope.limit));
@@ -601,21 +637,24 @@ impl OrbitRuntime {
         &self,
         query: &str,
         limit: usize,
+        embedder: Option<&dyn Embedder>,
     ) -> Result<Vec<DocSemanticHit>, OrbitError> {
         #[cfg(test)]
         if let Some(result) = DOC_SEMANTIC_SEARCH_OVERRIDE.with(|cell| cell.borrow_mut().take()) {
             return result;
         }
 
-        Ok(orbit_search::doc_semantic_search(
-            self.stores().semantic_index().store()?,
-            DocSemanticSearchParams {
-                query: query.to_string(),
-                limit,
-                model: None,
-            },
-        )?
-        .results)
+        let params = DocSemanticSearchParams {
+            query: query.to_string(),
+            limit,
+            model: None,
+        };
+        let store = self.stores().semantic_index().store()?;
+        let result = match embedder {
+            Some(embedder) => orbit_search::doc_semantic_search_with(store, embedder, params)?,
+            None => orbit_search::doc_semantic_search(store, params)?,
+        };
+        Ok(result.results)
     }
 }
 
