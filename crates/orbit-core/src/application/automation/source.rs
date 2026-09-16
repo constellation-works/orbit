@@ -41,6 +41,10 @@ impl<'a> Source<'a> {
     }
 
     /// Run one bounded child process, capturing stdout under a size and time budget.
+    ///
+    /// A failing command defers with its command line and the first line of
+    /// its stderr, so an operator reading a sweep row or `auto-task show`
+    /// learns which ref git could not resolve instead of a bare token.
     fn command(&self, program: &str, args: &[&str]) -> Result<String, AutomationError> {
         #[cfg(test)]
         if program == "git" && args.first() == Some(&"ls-tree") {
@@ -56,6 +60,11 @@ impl<'a> Source<'a> {
         let output = file
             .try_clone()
             .map_err(|e| AutomationError::Deferred(e.to_string()))?;
+        let mut diagnostics =
+            tempfile::tempfile().map_err(|e| AutomationError::Deferred(e.to_string()))?;
+        let errors = diagnostics
+            .try_clone()
+            .map_err(|e| AutomationError::Deferred(e.to_string()))?;
         // Keep each value as a separate OS argument. This avoids treating the
         // collected values as a command-line string while retaining Git's
         // normal argument semantics.
@@ -68,9 +77,14 @@ impl<'a> Source<'a> {
             .current_dir(self.root)
             .stdin(Stdio::null())
             .stdout(output)
-            .stderr(Stdio::null())
+            .stderr(errors)
             .spawn()
-            .map_err(|e| AutomationError::Deferred(format!("evidence_unavailable: {e}")))?;
+            .map_err(|e| {
+                AutomationError::Deferred(format!(
+                    "evidence_unavailable: {}: {e}",
+                    command_line(program, args)
+                ))
+            })?;
 
         let start = Instant::now();
 
@@ -80,7 +94,11 @@ impl<'a> Source<'a> {
                 .map_err(|e| AutomationError::Deferred(e.to_string()))?
             {
                 if !status.success() {
-                    return Err(AutomationError::Deferred("evidence_unavailable".into()));
+                    return Err(AutomationError::Deferred(format!(
+                        "evidence_unavailable: {}: {}",
+                        command_line(program, args),
+                        failure_text(&mut diagnostics, status)
+                    )));
                 }
                 break;
             }
@@ -138,12 +156,18 @@ impl<'a> Source<'a> {
         Ok(SourceRevision { commit, tree })
     }
 
-    pub(crate) fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
+    /// Resolve the configured integration branch to a commit, never the
+    /// executor worktree HEAD. The failure names the ref and git's own text:
+    /// a branch that does not exist is a definition error an operator has to
+    /// fix, and the reason has to say so wherever it is surfaced.
+    pub(crate) fn verify_branch(&self, branch: &str) -> Result<SourceRevision, AutomationError> {
         self.git(&["check-ref-format", "--branch", branch])?;
-        let repository = self.repository()?;
+        self.revision(&format!("refs/heads/{branch}"))
+    }
 
-        // Observe the configured integration ref, never the executor worktree HEAD.
-        let head = self.revision(&format!("refs/heads/{branch}"))?;
+    pub(crate) fn head(&self, branch: &str) -> Result<(String, SourceRevision), AutomationError> {
+        let head = self.verify_branch(branch)?;
+        let repository = self.repository()?;
 
         Ok((repository, head))
     }
@@ -682,6 +706,32 @@ impl<'a> Source<'a> {
         }
 
         Ok(())
+    }
+}
+
+/// Bytes of a child's stderr kept for a deferral reason.
+const FAILURE_TEXT_LIMIT: u64 = 4096;
+
+fn command_line(program: &str, args: &[&str]) -> String {
+    std::iter::once(program)
+        .chain(args.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The first stderr line of a failed child, or its exit status when it said
+/// nothing. Bounded so a chatty tool cannot turn a reason into a log.
+fn failure_text(diagnostics: &mut std::fs::File, status: std::process::ExitStatus) -> String {
+    let mut text = String::new();
+    if diagnostics.seek(SeekFrom::Start(0)).is_ok() {
+        let _ = diagnostics
+            .take(FAILURE_TEXT_LIMIT)
+            .read_to_string(&mut text);
+    }
+
+    match text.lines().map(str::trim).find(|line| !line.is_empty()) {
+        Some(line) => line.to_string(),
+        None => status.to_string(),
     }
 }
 

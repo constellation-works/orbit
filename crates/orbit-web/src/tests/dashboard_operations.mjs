@@ -10,6 +10,7 @@ const allowed = { authorized: true, reason: null };
 const denied = { authorized: false, reason: 'Test session cannot perform this action. Ask the server operator.' };
 const capabilities = { routine_toggle: allowed, clock_service: allowed, clock_cadence: allowed, auto_task_toggle: allowed, auto_task_mint: allowed };
 const enabled = { one: true, two: true };
+let clock = { enabled: true, configured_cadence_seconds: 60, provider: 'fixture', health: 'healthy', loaded: true, running: true, schedulable: true, last_tick_at: '2026-09-07T21:00:00Z', next_tick_at: '2026-09-07T21:01:00Z' };
 let responseError = null;
 let readbackError = false;
 let releasePost = null;
@@ -54,7 +55,7 @@ globalThis.fetch = async (path, options = {}) => {
   if (url.pathname === '/api/routines') return response({
     host_id: 'fixture-host', controls_authorized: capabilities.routine_toggle.authorized, capabilities: { ...capabilities }, session_explanation: 'Session access: restart the dashboard server with explicit operator authority.',
     routines: ['one', 'two'].map(source => ({ name: `Routine ${source}`, source, target: 'job:fixture', enabled: enabled[source], cron: '30 14 * * *', description: 'Sweep landed deliveries.', next_evaluation: { state: enabled[source] ? 'scheduled' : 'disabled', at: '2026-09-07T21:30:00Z', hypothetical: !enabled[source] } })),
-    clock: { enabled: true, configured_cadence_seconds: 60, provider: 'fixture', health: 'healthy', loaded: true, running: true, schedulable: true, last_tick_at: '2026-09-07T21:00:00Z', next_tick_at: '2026-09-07T21:01:00Z' },
+    clock: { ...clock },
   });
   if (url.pathname === '/api/workflows/auto/readiness') return response({
     controls_authorized: true,
@@ -105,6 +106,20 @@ assert(!button('auto-tasks-body', 'Disable').disabled, 'authorized toggle availa
 assert(!button('auto-tasks-body', 'Mint now').disabled, 'authorized mint available');
 assert(!button('clock-body', 'Pause clock').disabled, 'authorized clock available');
 assert(!get('routines-body').textContent.includes('auto_task_scheduler'), 'scheduler is absent from routine fixture');
+
+// A launchd agent that is still loaded but can no longer run must not read as
+// HEALTHY on this card; the server reports it as missed [DANI-10386].
+const healthyClock = clock;
+clock = { ...clock, health: 'missed', schedulable: false, effective_cadence_seconds: null, next_tick_at: null, health_issue: 'launchd agent com.orbit.sweep is loaded but its program cannot run (/opt/homebrew/bin/orbit: program does not exist); recovery: `orbit clock enable` rewrites the unit to this binary and reloads it' };
+await fetchAndRenderOperations();
+const clockBadge = descendants(get('clock-body')).find(node => String(node.className || '').includes('operation-state'));
+assert(clockBadge.textContent === 'missed', 'a stalled clock is not badged healthy');
+assert(get('clock-body').textContent.includes('its program cannot run'), 'the stalled clock names its health issue');
+assert(get('clock-body').textContent.includes('orbit clock enable'), 'the stalled clock card carries the recovery hint');
+assert(get('clock-body').textContent.includes('Not scheduled'), 'a stalled clock is not reported as armed');
+clock = healthyClock;
+await fetchAndRenderOperations();
+assert(descendants(get('clock-body')).find(node => String(node.className || '').includes('operation-state')).textContent === 'healthy', 'a healthy clock still renders healthy');
 
 // The old aggregate authorization bit must not suppress an independently allowed action.
 capabilities.auto_task_toggle = denied;

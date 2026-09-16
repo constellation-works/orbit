@@ -10,7 +10,9 @@ use orbit_tools::ToolRegistry;
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{AutoTaskSchedule, DedupePolicy};
 
-use crate::application::auto_tasks::DEFAULT_AUTO_TASK_FILES;
+use crate::application::auto_tasks::{
+    BASE_BRANCH_PLACEHOLDER, DEFAULT_AUTO_TASK_FILES, render_default_auto_task,
+};
 
 /// Every embedded default parses, uses its filename identity, and remains
 /// disabled. An enabled default would turn workspace initialization into an
@@ -37,8 +39,9 @@ fn shipped_defaults_all_parse_and_are_disabled() {
         );
     }
     for (stem, yaml) in DEFAULT_AUTO_TASK_FILES {
+        let yaml = render_default_auto_task(yaml, "main");
         let definition =
-            parse_auto_task_yaml(yaml).unwrap_or_else(|error| panic!("parse {stem}: {error}"));
+            parse_auto_task_yaml(&yaml).unwrap_or_else(|error| panic!("parse {stem}: {error}"));
         assert_eq!(
             definition.name, *stem,
             "name must match file stem for {stem}"
@@ -54,6 +57,54 @@ fn shipped_defaults_all_parse_and_are_disabled() {
         };
         assert_eq!(definition.template.complexity, Some(expected), "{stem}");
     }
+}
+
+/// The delivery defaults ship to every workspace, so they carry the base
+/// branch placeholder rather than this repository's `agent-main`; seeding
+/// renders it to the registered base branch and nothing else changes.
+#[test]
+fn shipped_delivery_defaults_render_the_workspace_base_branch() {
+    for name in ["delivery-qa", "delivery-code-review"] {
+        let (_, yaml) = DEFAULT_AUTO_TASK_FILES
+            .iter()
+            .find(|(stem, _)| *stem == name)
+            .unwrap_or_else(|| panic!("missing shipped default {name}"));
+        assert!(
+            yaml.contains(&format!("\n    branch: {BASE_BRANCH_PLACEHOLDER}\n")),
+            "{name} must carry the base branch placeholder"
+        );
+        assert!(
+            !yaml.contains("agent-main"),
+            "{name} must not hardcode this repository's integration branch"
+        );
+
+        let rendered = render_default_auto_task(yaml, "main");
+        assert!(!rendered.contains(BASE_BRANCH_PLACEHOLDER));
+        assert_eq!(
+            rendered.matches("\n    branch: main\n").count(),
+            1,
+            "{name} renders exactly the branch line"
+        );
+        let definition = parse_auto_task_yaml(&rendered)
+            .unwrap_or_else(|error| panic!("parse rendered {name}: {error}"));
+        let AutoTaskSchedule::Deliveries { deliveries_landed } = definition.schedule else {
+            panic!("{name} is a delivery definition");
+        };
+        assert_eq!(deliveries_landed.branch, "main");
+        assert!(!definition.enabled);
+    }
+
+    let (_, cron) = DEFAULT_AUTO_TASK_FILES
+        .iter()
+        .find(|(stem, _)| *stem == "qa-sweep")
+        .expect("qa-sweep default");
+    assert!(
+        matches!(
+            render_default_auto_task(cron, "main"),
+            std::borrow::Cow::Borrowed(_)
+        ),
+        "defaults without the placeholder are returned as shipped"
+    );
 }
 
 /// Every repository-local definition remains covered in addition to the

@@ -27,7 +27,7 @@ use orbit_core::scoreboard_summary::ScoreboardWindow;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::server_error;
+use super::blocking;
 use crate::state::DashboardState;
 
 /// Window used when `?window=` is omitted. Long enough that the rates carry a
@@ -53,8 +53,22 @@ pub(super) async fn pipeline_reliability(
         }
     };
 
-    // Pin one snapshot so every workspace's reliability and its name/id tag
-    // come from the same registry generation.
+    match blocking("pipeline reliability", move || {
+        pipeline_reliability_json(&state, window)
+    })
+    .await
+    {
+        Ok(payload) => Json(payload).into_response(),
+        Err(response) => *response,
+    }
+}
+
+/// Pin one snapshot and read each workspace's reliability on the blocking pool
+/// so SQLite scans cannot park a tokio worker.
+fn pipeline_reliability_json(
+    state: &DashboardState,
+    window: ReliabilityWindow,
+) -> Result<Value, orbit_core::OrbitError> {
     let pinned = state.pin();
     let mut workspaces = Vec::new();
     let mut totals = OutcomeCounts::default();
@@ -72,10 +86,7 @@ pub(super) async fn pipeline_reliability(
             unreadable.push(entry.id.clone());
             continue;
         };
-        let reliability = match runtime.pipeline_reliability(&window) {
-            Ok(reliability) => reliability,
-            Err(error) => return server_error(error),
-        };
+        let reliability = runtime.pipeline_reliability(&window)?;
 
         accumulate(&mut totals, &reliability.job_runs.overall);
         recovery_numerator += reliability.recovery.per_step_invocation.numerator;
@@ -87,7 +98,7 @@ pub(super) async fn pipeline_reliability(
         workspaces.push(workspace_value(&entry.id, &entry.name, &reliability));
     }
 
-    let payload = json!({
+    Ok(json!({
         "window": window,
         // ORB-10872: this endpoint is intentionally fleet-wide (ORB-10588).
         // The dashboard must label that exception rather than inherit the
@@ -114,8 +125,7 @@ pub(super) async fn pipeline_reliability(
             },
         },
         "unreadable_workspaces": unreadable,
-    });
-    Json(payload).into_response()
+    }))
 }
 
 /// Maps the shared dashboard window vocabulary onto a [`ReliabilityWindow`].

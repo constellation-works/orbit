@@ -3,8 +3,8 @@ use orbit_common::fs::task_io::prune_missing_context_files;
 use orbit_engine::TaskActivityUpdate;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    Task, TaskHistoryEntry, TaskStatus, normalize_task_dependencies, normalize_task_tags,
-    validate_task_dependencies,
+    Task, TaskHistoryEntry, TaskStatus, is_valid_orb_task_id, normalize_task_dependencies,
+    normalize_task_tags, validate_task_dependencies_with,
 };
 
 use super::TaskRecordUpdateParams;
@@ -400,7 +400,16 @@ impl OrbitRuntime {
         };
         if let Some(dependencies) = params.dependencies.take() {
             let normalized_dependencies = normalize_task_dependencies(dependencies)?;
-            validate_task_dependencies(&self.list_tasks()?, Some(id), &normalized_dependencies)?;
+            validate_task_dependencies_with(Some(id), &normalized_dependencies, |dep_id| {
+                if !is_valid_orb_task_id(dep_id) {
+                    return Ok::<_, OrbitError>(None);
+                }
+                Ok(self
+                    .stores()
+                    .tasks()
+                    .get_task(dep_id)?
+                    .map(|task| task.dependencies()))
+            })?;
             params.dependencies = Some(normalized_dependencies);
         }
         if let Some(tags) = params.tags.take() {

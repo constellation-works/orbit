@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
@@ -10,14 +10,17 @@ use orbit_core::runtime::{
     HostLifetime, OrbitRuntimeRoots, ResolvedOrbitRoots, WorkspaceRootHint,
     WorkspaceRuntimeBinding, managed_workspace_selector_from_env,
 };
-use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_store::maintenance::task_registry::{
+    TaskRegistryStore, task_registry_path, workspace_config_path,
+};
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
 };
 use serde_json::Value;
 
 use orbit_registry::{
-    HostIdentityState, inspect_host_identity, load_host_identity, workspace_registry,
+    HOST_TOML_FILE, HostIdentityState, inspect_host_identity, load_host_identity,
+    workspace_registry,
 };
 
 use crate::workspace_catalog::attach as attach_workspace_catalog;
@@ -45,6 +48,49 @@ pub struct ResolvedWorkspaceSelection {
     /// checkout while using the linked checkout's `.orbit` for Git-versioned
     /// local definitions.
     pub local_root: PathBuf,
+}
+
+/// Freshness stamp for the files [`RegisteredRuntimeFactory`] reads while it
+/// composes a runtime for one registered checkout.
+///
+/// Size and modification time, not content: the point is for a long-lived host
+/// that keeps a built runtime to notice an edit without re-opening anything. A
+/// caller that also compares the registry records it resolved (as the MCP
+/// server does) covers same-size edits to those records; the stamp covers the
+/// remaining composition inputs — the rest of the registry file, the host
+/// identity behind the task-prefix projection and machine identity, and the
+/// checkout's own `config.yaml` task binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredRuntimeStamp {
+    registry: FileStamp,
+    host_identity: FileStamp,
+    workspace_config: FileStamp,
+}
+
+impl RegisteredRuntimeStamp {
+    /// Stamp the composition inputs for `checkout`. An absent or unreadable
+    /// file stamps as nothing, so a file that later appears or disappears is
+    /// itself a change.
+    pub fn read(global_root: &Path, checkout: &WorkspaceCheckout) -> Self {
+        Self {
+            registry: FileStamp::read(&workspace_registry::registry_path_for(global_root)),
+            host_identity: FileStamp::read(&global_root.join(HOST_TOML_FILE)),
+            workspace_config: FileStamp::read(&workspace_config_path(&checkout.orbit_dir)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileStamp(Option<(SystemTime, u64)>);
+
+impl FileStamp {
+    fn read(path: &Path) -> Self {
+        Self(
+            std::fs::metadata(path)
+                .and_then(|metadata| Ok((metadata.modified()?, metadata.len())))
+                .ok(),
+        )
+    }
 }
 
 /// Build Core's authoritative runtime binding for a registered checkout.
@@ -173,7 +219,8 @@ impl RegisteredRuntimeFactory {
         let Some(selector) = selector else {
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let roots = Self::resolve_roots_for_cwd(&cwd, root_override)?;
-            sync_task_prefix(&roots.global_root)?;
+            let identity = inspect_host_identity(&roots.global_root)?;
+            sync_task_prefix_for_identity(&roots.global_root, &identity)?;
             let selection = select_workspace_for_cwd_and_roots(&cwd, &roots)?;
             let binding = selection
                 .as_ref()
@@ -194,6 +241,7 @@ impl RegisteredRuntimeFactory {
                 attach_registry_context(
                     runtime.with_coordination_write_owner(replica_owner),
                     &global_root,
+                    &identity,
                 )
             });
         };
@@ -241,7 +289,8 @@ impl RegisteredRuntimeFactory {
     }
 
     pub fn open_resolved_roots(roots: OrbitRuntimeRoots) -> Result<OrbitRuntime, OrbitError> {
-        sync_task_prefix(&roots.global_root)?;
+        let identity = inspect_host_identity(&roots.global_root)?;
+        sync_task_prefix_for_identity(&roots.global_root, &identity)?;
         let binding = binding_for_roots(&roots)?;
         let replica_owner = replica_owner_for_roots(&roots)?;
         let runtime = match binding {
@@ -260,6 +309,7 @@ impl RegisteredRuntimeFactory {
         Ok(attach_registry_context(
             runtime.with_coordination_write_owner(replica_owner),
             &roots.global_root,
+            &identity,
         ))
     }
 
@@ -282,7 +332,11 @@ impl RegisteredRuntimeFactory {
         checkout: &WorkspaceCheckout,
         host_lifetime: HostLifetime,
     ) -> Result<OrbitRuntime, OrbitError> {
-        sync_task_prefix(global_root)?;
+        // One host-identity read serves both the task-prefix projection and the
+        // automation machine identity; a long-lived host opens enough runtimes
+        // for a second parse of the same `host.toml` to be pure overhead.
+        let identity = inspect_host_identity(global_root)?;
+        sync_task_prefix_for_identity(global_root, &identity)?;
         let binding = workspace_runtime_binding(workspace, checkout)?;
         OrbitRuntime::from_roots_with_binding_for(
             global_root,
@@ -294,6 +348,7 @@ impl RegisteredRuntimeFactory {
             attach_registry_context(
                 runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
                 global_root,
+                &identity,
             )
         })
     }
@@ -304,7 +359,8 @@ impl RegisteredRuntimeFactory {
         checkout: &WorkspaceCheckout,
         local_root: &Path,
     ) -> Result<OrbitRuntime, OrbitError> {
-        sync_task_prefix(global_root)?;
+        let identity = inspect_host_identity(global_root)?;
+        sync_task_prefix_for_identity(global_root, &identity)?;
         let binding = workspace_runtime_binding(workspace, checkout)?;
         OrbitRuntime::from_resolved_roots_read_only_with_binding(
             global_root,
@@ -316,6 +372,7 @@ impl RegisteredRuntimeFactory {
             attach_registry_context(
                 runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
                 global_root,
+                &identity,
             )
         })
     }
@@ -342,7 +399,8 @@ impl RegisteredRuntimeFactory {
         binding: WorkspaceRuntimeBinding,
         host_lifetime: HostLifetime,
     ) -> Result<OrbitRuntime, OrbitError> {
-        sync_task_prefix(global_root)?;
+        let identity = inspect_host_identity(global_root)?;
+        sync_task_prefix_for_identity(global_root, &identity)?;
         OrbitRuntime::from_resolved_roots_with_binding_for(
             global_root,
             shared_root,
@@ -350,7 +408,7 @@ impl RegisteredRuntimeFactory {
             binding,
             host_lifetime,
         )
-        .map(|runtime| attach_registry_context(runtime, global_root))
+        .map(|runtime| attach_registry_context(runtime, global_root, &identity))
     }
 
     /// Bind a CLI `orbit tool run` invocation to the workspace named in `input`.
@@ -737,16 +795,24 @@ fn inactive_cli_workspace(workspace: &Workspace, checkout: &WorkspaceCheckout) -
 /// Custom/legacy roots without host.toml retain the historical ORB default;
 /// once an identity exists, malformed or conflicting state fails closed.
 pub(crate) fn sync_task_prefix(global_root: &Path) -> Result<(), OrbitError> {
-    let identity = match inspect_host_identity(global_root)? {
-        HostIdentityState::Present(identity) => identity,
+    sync_task_prefix_for_identity(global_root, &inspect_host_identity(global_root)?)
+}
+
+/// The same projection for a caller that already classified `host.toml`.
+fn sync_task_prefix_for_identity(
+    global_root: &Path,
+    identity: &HostIdentityState,
+) -> Result<(), OrbitError> {
+    let task_prefix = match identity {
+        HostIdentityState::Present(identity) => identity.task_prefix.clone(),
         HostIdentityState::Absent => return Ok(()),
         // Keep legacy files on the established migration-required path while
         // using Registry's validated classifier for every host.toml access.
-        HostIdentityState::Legacy { .. } => load_host_identity(global_root)?,
+        HostIdentityState::Legacy { .. } => load_host_identity(global_root)?.task_prefix,
     };
 
     let registry = TaskRegistryStore::open(&task_registry_path(global_root))?;
-    registry.set_task_prefix(&identity.task_prefix)
+    registry.set_task_prefix(&task_prefix)
 }
 
 fn replica_owner_for_checkout(checkout: &WorkspaceCheckout) -> Option<String> {
@@ -883,11 +949,20 @@ fn binding_for_registry_roots(
     Ok(None)
 }
 
-/// Assemble registry-derived facts at the existing runtime composition boundary.
-fn attach_registry_context(runtime: OrbitRuntime, global_root: &Path) -> OrbitRuntime {
-    let machine_id = load_host_identity(global_root)
-        .ok()
-        .map(|identity| identity.machine_id);
+/// Assemble registry-derived facts at the existing runtime composition
+/// boundary, from the `host.toml` classification the caller already read.
+///
+/// Only a complete, current-schema identity names a machine: a legacy or
+/// absent file leaves automation unattributed rather than failing the open.
+fn attach_registry_context(
+    runtime: OrbitRuntime,
+    global_root: &Path,
+    identity: &HostIdentityState,
+) -> OrbitRuntime {
+    let machine_id = match identity {
+        HostIdentityState::Present(identity) => Some(identity.machine_id.clone()),
+        HostIdentityState::Legacy { .. } | HostIdentityState::Absent => None,
+    };
     attach_workspace_catalog(
         runtime.with_automation_machine_identity(machine_id),
         global_root,

@@ -253,7 +253,10 @@ pub(super) async fn auto_drain_readiness(
     Ws(runtime): Ws,
     Query(query): Query<AutoDrainReadinessQuery>,
 ) -> Response {
-    match runtime.workspace_auto_readiness(&[], query.concurrency, AUTO_DRAIN_READINESS_LIMIT, &[])
+    match blocking("auto-drain readiness", move || {
+        runtime.workspace_auto_readiness(&[], query.concurrency, AUTO_DRAIN_READINESS_LIMIT, &[])
+    })
+    .await
     {
         Ok(mut payload) => {
             // So the form can hide/disable the `complete` opt-in before the
@@ -266,7 +269,7 @@ pub(super) async fn auto_drain_readiness(
             }
             Json(payload).into_response()
         }
-        Err(e) => map_runtime_error(e),
+        Err(response) => *response,
     }
 }
 

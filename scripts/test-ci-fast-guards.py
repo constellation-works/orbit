@@ -72,6 +72,21 @@ jobs:
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(calls, [["fmt", "--all", "--", "--check"]])
 
+    def test_fast_invokes_web_blocking_handler_check(self):
+        self.prepare_ci()
+        self.write_executable(
+            self.scripts / "check-web-blocking-handlers.py",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(["check-web-blocking-handlers.py"] + sys.argv[1:]) + "\\n")
+''',
+        )
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(["check-web-blocking-handlers.py"], calls)
+
     def test_fast_invokes_codeql_extension_schema_check(self):
         self.prepare_ci()
         self.write_executable(
@@ -96,6 +111,9 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
 
     def test_full_invokes_cargo_deny_guard(self):
         self.prepare_ci()
+        # The gate is soft-presence: stub the tool so the test does not depend
+        # on the host having cargo-deny installed.
+        self.write_executable(self.bin / "cargo-deny", "#!/bin/bash\nexit 0\n")
         self.write_executable(
             self.scripts / "cargo-deny.sh",
             '''#!/usr/bin/env python3

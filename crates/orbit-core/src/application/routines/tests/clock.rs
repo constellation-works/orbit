@@ -7,11 +7,12 @@ use tempfile::tempdir;
 use orbit_common::OrbitError;
 
 use super::super::clock::{
-    ClockCommandRunner, ClockPlatform, ClockSettings, ManagerCommand, ManagerCommandOutput,
-    clock_status_with, install_clock_with, load_clock_settings, render_systemd_service,
-    render_systemd_timer, save_clock_settings, set_clock_cadence_with, set_clock_enabled_with,
-    validated_sweep_log_path,
+    ClockCommandRunner, ClockPlatform, ClockSettings, LaunchdHealthProbe, ManagerCommand,
+    ManagerCommandOutput, clock_status_with, install_clock_with, load_clock_settings,
+    render_systemd_service, render_systemd_timer, save_clock_settings, set_clock_cadence_with,
+    set_clock_enabled_with, validated_sweep_log_path,
 };
+use super::super::clock_unit::{RunningBinary, probe_program_version};
 
 pub(super) struct MockRunner {
     results: Mutex<Vec<Result<bool, OrbitError>>>,
@@ -106,6 +107,88 @@ impl ClockCommandRunner for MockRunner {
             stderr: String::new(),
         })
     }
+}
+
+/// Program the test launchd unit names. It is deliberately absent from disk so
+/// the real `probe_program_version` reports the observed missing-program case.
+const INSTALLED_PROGRAM: &str = "/opt/homebrew/bin/orbit";
+/// launchd domain owner the fake transcripts belong to.
+const TEST_UID: u32 = 501;
+
+/// Install a launchd plist naming `program`, as `orbit routine init` would.
+fn write_launchd_unit(home: &Path, program: &str) -> PathBuf {
+    let agents = home.join("Library/LaunchAgents");
+    fs::create_dir_all(&agents).expect("launchd agents dir");
+    let path = agents.join("com.orbit.sweep.plist");
+    fs::write(
+        &path,
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.orbit.sweep</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{program}</string>
+        <string>clock</string>
+        <string>tick</string>
+    </array>
+</dict>
+</plist>
+"#
+        ),
+    )
+    .expect("write launchd plist");
+    path
+}
+
+/// A unit program that answers `--version` with this binary's version, so the
+/// unit inspection is satisfied and only the transcript decides health.
+fn installed_version(_: &Path) -> Result<String, String> {
+    Ok(env!("CARGO_PKG_VERSION").to_string())
+}
+
+fn launchd_probe(
+    home: &Path,
+    version_probe: fn(&Path) -> Result<String, String>,
+) -> LaunchdHealthProbe {
+    LaunchdHealthProbe {
+        home: home.to_path_buf(),
+        uid: TEST_UID,
+        running: RunningBinary {
+            path: PathBuf::from("/Users/tester/.orbit/bin/orbit"),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
+        version_probe,
+    }
+}
+
+/// An abridged `launchctl print gui/<uid>/com.orbit.sweep` dump. The nested
+/// blocks are kept because they repeat key names the parser must not read.
+fn launchctl_print(last_exit_line: &str, properties: &str) -> String {
+    format!(
+        "gui/{TEST_UID}/com.orbit.sweep = {{
+\tactive count = 0
+\tpath = /Users/tester/Library/LaunchAgents/com.orbit.sweep.plist
+\tstate = spawn scheduled
+
+\tprogram = {INSTALLED_PROGRAM}
+\tdomain = gui/{TEST_UID} [100002]
+\truns = 1
+\t{last_exit_line}
+
+\tevent channels = {{
+\t\t\"com.apple.launchd.helper\" = {{
+\t\t\tstate = active
+\t\t}}
+\t}}
+
+\tjetsamproperties category = daemon
+\tproperties = {properties}
+}}
+"
+    )
 }
 
 fn manager_output(success: bool, stdout: &str, stderr: &str) -> ManagerCommandOutput {
@@ -638,14 +721,40 @@ fn sweep_log_path_rejects_symlinked_file() {
 #[test]
 fn status_is_deterministic_for_each_manager_and_reports_configured_cadence() {
     let root = tempdir().expect("create global root");
-    let launchd = MockRunner::new(vec![Ok(true)]);
-    let status = clock_status_with(root.path(), ClockPlatform::Launchd, &launchd)
-        .expect("read launchd status");
+    let home = tempdir().expect("create home");
+    write_launchd_unit(home.path(), INSTALLED_PROGRAM);
+    let launchd = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![
+            Ok(manager_output(true, "", "")),
+            Ok(manager_output(
+                true,
+                &launchctl_print("last exit code = 0", "runatload | inferred program"),
+                "",
+            )),
+        ],
+    );
+    let status = clock_status_with(
+        root.path(),
+        ClockPlatform::Launchd,
+        &launchd,
+        Some(&launchd_probe(home.path(), installed_version)),
+    )
+    .expect("read launchd status");
     assert!(status.enabled);
     assert!(status.schedulable);
+    assert!(status.health_issue.is_none());
     assert_eq!(status.configured_cadence_seconds, 60);
     assert_eq!(status.effective_cadence_seconds, Some(60));
     assert_eq!(status.platform, "launchd");
+    assert_eq!(
+        launchd.commands(),
+        vec![
+            "launchctl list com.orbit.sweep",
+            "launchctl print gui/501/com.orbit.sweep",
+        ]
+    );
 
     let systemd = MockRunner::with_outputs(
         vec![Ok(true)],
@@ -653,7 +762,7 @@ fn status_is_deterministic_for_each_manager_and_reports_configured_cadence() {
             "LoadState=loaded\nActiveState=active\nNextElapseUSecRealtime=Sun 2026-08-16 04:30:00 UTC\nNextElapseUSecMonotonic=5min\nLastTriggerUSec=Sun 2026-08-16 04:29:00 UTC".to_string(),
         ))],
     );
-    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &systemd)
+    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &systemd, None)
         .expect("read systemd status");
     assert!(status.enabled);
     assert!(status.schedulable);
@@ -683,7 +792,7 @@ fn enabled_systemd_timer_without_a_future_trigger_is_unhealthy() {
         ))],
     );
 
-    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &runner)
+    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &runner, None)
         .expect("read elapsed timer status");
 
     assert!(status.enabled);
@@ -712,7 +821,7 @@ fn systemd_monotonic_duration_is_not_a_wall_clock_next_tick() {
         ))],
     );
 
-    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &runner)
+    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &runner, None)
         .expect("read monotonic-only timer status");
 
     assert!(status.enabled);
@@ -739,7 +848,7 @@ fn disabled_systemd_timer_reports_loaded_state_without_becoming_schedulable() {
         ))],
     );
 
-    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &runner)
+    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &runner, None)
         .expect("read disabled timer status");
 
     assert!(!status.enabled);
@@ -766,7 +875,7 @@ fn unavailable_systemd_manager_fails_status_with_bounded_diagnostics() {
         ))],
     );
 
-    let error = clock_status_with(root.path(), ClockPlatform::Systemd, &runner)
+    let error = clock_status_with(root.path(), ClockPlatform::Systemd, &runner, None)
         .expect_err("unavailable user manager must fail status");
     let message = error.to_string();
 
@@ -799,7 +908,7 @@ fn missing_systemd_unit_is_disabled_but_manager_transport_failure_is_unavailable
         ))],
     );
 
-    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &missing)
+    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &missing, None)
         .expect("a missing unit is a recognized disabled clock");
     assert!(!status.enabled);
     assert!(!status.loaded);
@@ -812,7 +921,7 @@ fn missing_systemd_unit_is_disabled_but_manager_transport_failure_is_unavailable
         ))],
         vec![Ok(manager_output(false, "", "Access denied"))],
     );
-    let error = clock_status_with(root.path(), ClockPlatform::Systemd, &unavailable)
+    let error = clock_status_with(root.path(), ClockPlatform::Systemd, &unavailable, None)
         .expect_err("permission failure is not a disabled clock");
     assert!(error.to_string().contains("manager is unavailable"));
 }
@@ -832,7 +941,7 @@ fn systemd_bus_missing_socket_is_unavailable_not_disabled() {
         ))],
     );
 
-    let error = clock_status_with(root.path(), ClockPlatform::Systemd, &runner)
+    let error = clock_status_with(root.path(), ClockPlatform::Systemd, &runner, None)
         .expect_err("a missing user bus socket must fail status, not report a paused clock");
     let message = error.to_string();
 
@@ -851,7 +960,7 @@ fn enabled_systemd_with_unavailable_details_remains_enabled_but_unverifiable() {
         ))],
     );
 
-    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &runner)
+    let status = clock_status_with(root.path(), ClockPlatform::Systemd, &runner, None)
         .expect("enabled state remains authoritative when only details fail");
 
     assert!(status.enabled);
@@ -875,7 +984,7 @@ fn launchd_not_loaded_is_disabled_but_transport_failure_is_unavailable() {
         ))],
     );
 
-    let status = clock_status_with(root.path(), ClockPlatform::Launchd, &not_loaded)
+    let status = clock_status_with(root.path(), ClockPlatform::Launchd, &not_loaded, None)
         .expect("a recognized not-loaded agent is disabled");
     assert!(!status.enabled);
     assert!(!status.loaded);
@@ -893,7 +1002,7 @@ fn launchd_not_loaded_is_disabled_but_transport_failure_is_unavailable() {
             Ok(manager_output(false, "", "Operation not permitted")),
         ],
     );
-    let error = clock_status_with(root.path(), ClockPlatform::Launchd, &unavailable)
+    let error = clock_status_with(root.path(), ClockPlatform::Launchd, &unavailable, None)
         .expect_err("failure at the label and manager probes is unavailable");
     let message = error.to_string();
     assert!(message.contains("launchd clock manager is unavailable"));
@@ -904,6 +1013,227 @@ fn launchd_not_loaded_is_disabled_but_transport_failure_is_unavailable() {
         unavailable.commands(),
         vec!["launchctl list com.orbit.sweep", "launchctl list"]
     );
+}
+
+/// The observed Mac mini failure: the plist still names a package-manager
+/// install that no longer exists, so no sweep can fire even though launchd
+/// keeps reporting the agent as loaded [DANI-10386].
+#[test]
+fn launchd_agent_naming_a_missing_program_is_unhealthy() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    write_launchd_unit(home.path(), INSTALLED_PROGRAM);
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![Ok(manager_output(true, "", ""))],
+    );
+
+    let status = clock_status_with(
+        root.path(),
+        ClockPlatform::Launchd,
+        &runner,
+        // The real probe `orbit doctor clock-unit` uses, so both surfaces
+        // reach the same verdict for the same unit.
+        Some(&launchd_probe(home.path(), probe_program_version)),
+    )
+    .expect("read launchd status");
+
+    assert!(status.enabled);
+    assert!(!status.schedulable);
+    assert_eq!(status.effective_cadence_seconds, None);
+    let issue = status
+        .health_issue
+        .expect("a missing program is a health issue");
+    assert!(issue.contains("program cannot run"));
+    assert!(issue.contains(INSTALLED_PROGRAM));
+    assert!(issue.contains("program does not exist"));
+    assert!(issue.contains("orbit clock enable"));
+    // The transcript is never fetched: the unit file already settled it.
+    assert_eq!(runner.commands(), vec!["launchctl list com.orbit.sweep"]);
+}
+
+#[test]
+fn launchd_agent_with_a_failing_last_exit_code_is_unhealthy() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    write_launchd_unit(home.path(), INSTALLED_PROGRAM);
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![
+            Ok(manager_output(true, "", "")),
+            Ok(manager_output(
+                true,
+                &launchctl_print(
+                    "last exit code = 78: EX_CONFIG",
+                    "runatload | inferred program",
+                ),
+                "",
+            )),
+        ],
+    );
+
+    let status = clock_status_with(
+        root.path(),
+        ClockPlatform::Launchd,
+        &runner,
+        Some(&launchd_probe(home.path(), installed_version)),
+    )
+    .expect("read launchd status");
+
+    assert!(status.enabled);
+    assert!(!status.schedulable);
+    assert_eq!(status.effective_cadence_seconds, None);
+    let issue = status.health_issue.expect("a failed run is a health issue");
+    assert!(issue.contains("exited 78"));
+    assert!(!issue.contains("penalty box"));
+    assert!(issue.contains("orbit clock enable"));
+    assert_eq!(
+        runner.commands(),
+        vec![
+            "launchctl list com.orbit.sweep",
+            "launchctl print gui/501/com.orbit.sweep",
+        ]
+    );
+}
+
+#[test]
+fn launchd_agent_in_the_penalty_box_is_unhealthy() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    write_launchd_unit(home.path(), INSTALLED_PROGRAM);
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![
+            Ok(manager_output(true, "", "")),
+            Ok(manager_output(
+                true,
+                &launchctl_print(
+                    "last exit code = 0",
+                    "runatload | penalty box | inferred program | managed LWCR",
+                ),
+                "",
+            )),
+        ],
+    );
+
+    let status = clock_status_with(
+        root.path(),
+        ClockPlatform::Launchd,
+        &runner,
+        Some(&launchd_probe(home.path(), installed_version)),
+    )
+    .expect("read launchd status");
+
+    assert!(status.enabled);
+    assert!(!status.schedulable);
+    let issue = status
+        .health_issue
+        .expect("a throttled agent is a health issue");
+    assert!(issue.contains("penalty box"));
+    assert!(!issue.contains("exited"));
+    assert!(issue.contains("orbit clock enable"));
+}
+
+/// A never-run agent reports `(never exited)`, and `jetsamproperties` must not
+/// be mistaken for the `properties` line that carries the penalty box.
+#[test]
+fn launchd_agent_that_has_not_run_yet_is_healthy() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    write_launchd_unit(home.path(), INSTALLED_PROGRAM);
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![
+            Ok(manager_output(true, "", "")),
+            Ok(manager_output(
+                true,
+                &launchctl_print("last exit code = (never exited)", "runatload | keepalive"),
+                "",
+            )),
+        ],
+    );
+
+    let status = clock_status_with(
+        root.path(),
+        ClockPlatform::Launchd,
+        &runner,
+        Some(&launchd_probe(home.path(), installed_version)),
+    )
+    .expect("read launchd status");
+
+    assert!(status.enabled);
+    assert!(status.schedulable);
+    assert_eq!(status.effective_cadence_seconds, Some(60));
+    assert!(status.health_issue.is_none());
+}
+
+/// An enabled agent whose transcript cannot be read is reported as degraded
+/// rather than healthy, mirroring the systemd arm.
+#[test]
+fn launchd_agent_with_an_unreadable_transcript_is_unhealthy() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    write_launchd_unit(home.path(), INSTALLED_PROGRAM);
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![
+            Ok(manager_output(true, "", "")),
+            Ok(manager_output(false, "", "Could not find service")),
+        ],
+    );
+
+    let status = clock_status_with(
+        root.path(),
+        ClockPlatform::Launchd,
+        &runner,
+        Some(&launchd_probe(home.path(), installed_version)),
+    )
+    .expect("read launchd status");
+
+    assert!(status.enabled);
+    assert!(!status.schedulable);
+    let issue = status
+        .health_issue
+        .expect("an unverifiable agent is a health issue");
+    assert!(issue.contains("could not be verified"));
+    assert!(issue.contains("launchctl print gui/501/com.orbit.sweep"));
+    assert!(issue.contains("orbit clock enable"));
+}
+
+/// A paused clock is intentionally not schedulable and is not unhealthy, and
+/// a paused host is never probed for a transcript.
+#[test]
+fn paused_launchd_clock_reports_no_health_issue() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    write_launchd_unit(home.path(), INSTALLED_PROGRAM);
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![Ok(manager_output(
+            false,
+            "",
+            "Could not find service com.orbit.sweep in domain for user",
+        ))],
+    );
+
+    let status = clock_status_with(
+        root.path(),
+        ClockPlatform::Launchd,
+        &runner,
+        Some(&launchd_probe(home.path(), probe_program_version)),
+    )
+    .expect("read launchd status");
+
+    assert!(!status.enabled);
+    assert!(!status.schedulable);
+    assert!(status.health_issue.is_none());
+    assert_eq!(runner.commands(), vec!["launchctl list com.orbit.sweep"]);
 }
 
 #[test]

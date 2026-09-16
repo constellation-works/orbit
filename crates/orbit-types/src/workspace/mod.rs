@@ -15,6 +15,6 @@ pub use publication::{
     validate_publication_remote, validate_source_repository_fingerprint,
 };
 pub use registry::{
-    WORKSPACE_REGISTRY_SCHEMA_VERSION, Workspace, WorkspaceCheckout, WorkspaceCheckoutRole,
-    WorkspacePaths, WorkspaceRegistry, WorkspaceStatus,
+    DEFAULT_BASE_BRANCH, WORKSPACE_REGISTRY_SCHEMA_VERSION, Workspace, WorkspaceCheckout,
+    WorkspaceCheckoutRole, WorkspacePaths, WorkspaceRegistry, WorkspaceStatus,
 };

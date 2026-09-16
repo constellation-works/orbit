@@ -27,11 +27,23 @@ use crate::contracts::{
     TaskBundleBinding, TaskCompletionByComplexity, TaskIndexFilter, WorkspaceBinding,
     WorkspaceCheckoutBinding,
 };
+use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
 use crate::fs::path_safety::normalize_path;
 
+/// Task registry handle: one writer connection behind a mutex plus a
+/// read-only connection pool, the same shape as [`crate::Store`]. Under WAL
+/// readers on their own connections never queue behind the writer, so a
+/// long `replace_task_index` transaction no longer stalls every list/show
+/// that shares the registry file (orbit-web, the MCP server).
 #[derive(Clone)]
 pub struct TaskRegistryStore {
+    /// The single writer connection. Every mutating statement and every
+    /// transaction serializes here; reads go through [`Self::read`].
     pub(super) conn: Arc<Mutex<Connection>>,
+    /// Read pool for writable registries. `None` when the registry was
+    /// opened read-only, where reads fall back to the writer connection
+    /// (see [`crate::driver::sqlite::read_pool`]).
+    readers: Option<Arc<ReadPool>>,
     workspaces_dir: PathBuf,
 }
 
@@ -85,8 +97,34 @@ impl TaskRegistryStore {
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            readers: (!read_only).then(|| Arc::new(ReadPool::new(path.to_path_buf()))),
             workspaces_dir,
         })
+    }
+
+    /// Check out a read connection: a pooled query-only reader for writable
+    /// registries, or the writer mutex for read-only opens. Never takes the
+    /// writer mutex on the pooled path, so reads complete while a write
+    /// transaction is open.
+    pub(super) fn read(&self) -> Result<ReadGuard<'_>, OrbitError> {
+        match &self.readers {
+            Some(pool) => {
+                let (generation, connection) = pool.checkout()?;
+                Ok(ReadGuard::pooled(generation, connection, pool))
+            }
+            None => {
+                let guard = self
+                    .conn
+                    .lock()
+                    .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+                Ok(ReadGuard::Writer(guard))
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn reader_pool_for_test(&self) -> Option<&ReadPool> {
+        self.readers.as_deref()
     }
 
     /// Bind one checkout to its task-store partition, minting the partition id
@@ -120,10 +158,7 @@ impl TaskRegistryStore {
         // transaction; a read-only mount must only fail when a real rebind is
         // required.
         {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+            let conn = self.read()?;
             if let Some(existing) = workspace_by_orbit_dir(&conn, &orbit_dir)? {
                 if let Some(requested) = &requested_partition_id
                     && requested != &existing.partition_id
@@ -419,7 +454,28 @@ impl TaskRegistryStore {
     /// allocation and registration can leave numeric holes; those holes are expected
     /// and are not reused.
     pub fn allocate_task_id(&self, partition_id: &str) -> Result<String, OrbitError> {
+        self.allocate_task_ids(partition_id, 1)?
+            .pop()
+            .ok_or_else(|| OrbitError::Store("task id allocation returned no id".into()))
+    }
+
+    /// Allocate `count` consecutive task IDs with a single counter bump.
+    ///
+    /// Same contract as [`allocate_task_id`](Self::allocate_task_id) — the
+    /// reservation commits before anything is registered against it, and ids a
+    /// crash leaves unused become holes rather than being reused. Reserving the
+    /// whole run at once is what keeps a bulk renumber at one commit (and one
+    /// WAL fsync under `synchronous=FULL`) instead of one per task.
+    pub fn allocate_task_ids(
+        &self,
+        partition_id: &str,
+        count: usize,
+    ) -> Result<Vec<String>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let count = i64::try_from(count).map_err(|e| OrbitError::Store(e.to_string()))?;
         let mut conn = self
             .conn
             .lock()
@@ -439,18 +495,24 @@ impl TaskRegistryStore {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;
-        if next > i64::from(ORB_TASK_ID_MAX) {
+        // `next + count - 1` is the last id this reservation hands out, so a run
+        // that would cross the ceiling is refused whole rather than part-served.
+        if next.saturating_add(count - 1) > i64::from(ORB_TASK_ID_MAX) {
             return Err(OrbitError::Store("ORB task id allocator exhausted".into()));
         }
         tx.execute(
             "UPDATE allocator_state SET next_number = ?1, updated_at = ?2 WHERE authority = 'local'",
-            params![next + 1, now_string()],
+            params![next.saturating_add(count), now_string()],
         )
         .map_err(|e| OrbitError::Store(e.to_string()))?;
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
 
-        let next = u32::try_from(next).map_err(|e| OrbitError::Store(e.to_string()))?;
-        format_task_id(&task_prefix, next).map_err(Into::into)
+        (next..next.saturating_add(count))
+            .map(|number| {
+                let number = u32::try_from(number).map_err(|e| OrbitError::Store(e.to_string()))?;
+                format_task_id(&task_prefix, number).map_err(Into::into)
+            })
+            .collect()
     }
 
     /// Bind the allocator to the immutable prefix from this machine's host
@@ -468,10 +530,7 @@ impl TaskRegistryStore {
         // registry. Reading outside the lock is safe because a bound prefix is
         // immutable — only a pristine `ORB` row can still adopt one.
         {
-            let conn = self
-                .conn
-                .lock()
-                .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+            let conn = self.read()?;
             let current: String = conn
                 .query_row(
                     "SELECT task_prefix FROM allocator_state WHERE authority = 'local'",
@@ -524,10 +583,7 @@ impl TaskRegistryStore {
     /// this is what separates a locally-owned task from a mirror of another
     /// host's task.
     pub fn local_task_prefix(&self) -> Result<String, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         conn.query_row(
             "SELECT task_prefix FROM allocator_state WHERE authority = 'local'",
             [],
@@ -539,10 +595,7 @@ impl TaskRegistryStore {
     /// Prefixes recognized by the local registry: the active minting prefix
     /// plus every prefix already present in registered task bundles.
     pub fn known_task_prefixes(&self) -> Result<BTreeSet<String>, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         known_task_prefixes(&conn)
     }
 
@@ -562,17 +615,53 @@ impl TaskRegistryStore {
         partition_id: &str,
         canonical_path: &Path,
     ) -> Result<TaskBundleBinding, OrbitError> {
-        validate_orb_task_id(task_id)?;
         let partition_id = validate_partition_id(partition_id)?;
-        let canonical_path = normalize_path(canonical_path);
-        let expected_path =
-            normalize_path(&self.canonical_task_bundle_path(&partition_id, task_id)?);
-        if canonical_path != expected_path {
-            return Err(OrbitError::InvalidInput(format!(
-                "canonical path for task '{task_id}' in workspace '{partition_id}' must be '{}', got '{}'",
-                expected_path.display(),
-                canonical_path.display()
-            )));
+        let canonical_path = self.validated_binding_path(&partition_id, task_id, canonical_path)?;
+
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+
+        if workspace_by_id(&tx, &partition_id)?.is_none() {
+            return Err(OrbitError::not_found(NotFoundKind::Workspace, partition_id));
+        }
+
+        upsert_task_binding(&tx, task_id, &partition_id, &canonical_path, &now_string())?;
+
+        let binding = task_bundle_by_id(&tx, task_id)?.ok_or_else(|| {
+            OrbitError::Store("failed to read inserted task bundle binding".into())
+        })?;
+        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
+        Ok(binding)
+    }
+
+    /// Register every `(task_id, canonical_path)` binding in one transaction.
+    ///
+    /// Bulk publishers — reindex, migration import, publication restore — land
+    /// a whole set at once, so they pay one `BEGIN IMMEDIATE` commit and one
+    /// WAL fsync for the set instead of one per task. Each entry is validated
+    /// exactly as [`register_task_bundle`](Self::register_task_bundle)
+    /// validates its single binding, and the set is all-or-nothing: a rejected
+    /// entry leaves every binding in the batch untouched.
+    pub fn register_task_bundles(
+        &self,
+        partition_id: &str,
+        bundles: &[(String, PathBuf)],
+    ) -> Result<(), OrbitError> {
+        let partition_id = validate_partition_id(partition_id)?;
+        if bundles.is_empty() {
+            return Ok(());
+        }
+        let mut rows = Vec::with_capacity(bundles.len());
+        for (task_id, canonical_path) in bundles {
+            rows.push((
+                task_id,
+                self.validated_binding_path(&partition_id, task_id, canonical_path)?,
+            ));
         }
 
         let mut conn = self
@@ -588,23 +677,32 @@ impl TaskRegistryStore {
         }
 
         let now = now_string();
-        tx.execute(
-            "INSERT INTO task_bundle_bindings (
-                task_id, workspace_id, canonical_path, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?4)
-            ON CONFLICT(task_id) DO UPDATE SET
-                workspace_id = excluded.workspace_id,
-                canonical_path = excluded.canonical_path,
-                updated_at = excluded.updated_at",
-            params![task_id, partition_id, path_to_string(&canonical_path), now],
-        )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        for (task_id, canonical_path) in &rows {
+            upsert_task_binding(&tx, task_id, &partition_id, canonical_path, &now)?;
+        }
+        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
+    }
 
-        let binding = task_bundle_by_id(&tx, task_id)?.ok_or_else(|| {
-            OrbitError::Store("failed to read inserted task bundle binding".into())
-        })?;
-        tx.commit().map_err(|e| OrbitError::Store(e.to_string()))?;
-        Ok(binding)
+    /// A binding may only ever name the path this registry derives for its id,
+    /// so both registration paths resolve and check it the same way.
+    fn validated_binding_path(
+        &self,
+        partition_id: &str,
+        task_id: &str,
+        canonical_path: &Path,
+    ) -> Result<PathBuf, OrbitError> {
+        validate_orb_task_id(task_id)?;
+        let canonical_path = normalize_path(canonical_path);
+        let expected_path =
+            normalize_path(&self.canonical_task_bundle_path(partition_id, task_id)?);
+        if canonical_path != expected_path {
+            return Err(OrbitError::InvalidInput(format!(
+                "canonical path for task '{task_id}' in workspace '{partition_id}' must be '{}', got '{}'",
+                expected_path.display(),
+                canonical_path.display()
+            )));
+        }
+        Ok(canonical_path)
     }
 
     pub fn unregister_task_bundle(
@@ -658,10 +756,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<Vec<TaskBundleBinding>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT task_id, workspace_id, canonical_path, created_at, updated_at
@@ -682,8 +777,30 @@ impl TaskRegistryStore {
         partition_id: &str,
         envelope: &TaskEnvelopeV2,
     ) -> Result<(), OrbitError> {
+        self.replace_task_indexes(partition_id, std::slice::from_ref(envelope))
+    }
+
+    /// Replace the index rows for exactly `envelopes` in one transaction,
+    /// leaving every other task's rows in the workspace untouched.
+    ///
+    /// The partial counterpart of
+    /// [`replace_workspace_task_indexes`](Self::replace_workspace_task_indexes):
+    /// a repair pass that could only read some of a workspace's bundles has to
+    /// reindex the healthy ones without dropping rows it cannot rebuild.
+    /// Relations are validated against the batch as a unit, so members may
+    /// reference each other in any order.
+    pub fn replace_task_indexes(
+        &self,
+        partition_id: &str,
+        envelopes: &[TaskEnvelopeV2],
+    ) -> Result<(), OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        envelope.validate()?;
+        if envelopes.is_empty() {
+            return Ok(());
+        }
+        for envelope in envelopes {
+            envelope.validate()?;
+        }
 
         let mut conn = self
             .conn
@@ -693,36 +810,35 @@ impl TaskRegistryStore {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| OrbitError::Store(e.to_string()))?;
 
-        let binding = task_bundle_by_id(&tx, &envelope.id)?
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, envelope.id.clone()))?;
-        if binding.partition_id != partition_id {
-            return Err(OrbitError::InvalidInput(format!(
-                "task '{}' is registered to workspace '{}', not '{}'",
-                envelope.id, binding.partition_id, partition_id
-            )));
+        for envelope in envelopes {
+            let binding = task_bundle_by_id(&tx, &envelope.id)?
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, envelope.id.clone()))?;
+            if binding.partition_id != partition_id {
+                return Err(OrbitError::InvalidInput(format!(
+                    "task '{}' is registered to workspace '{}', not '{}'",
+                    envelope.id, binding.partition_id, partition_id
+                )));
+            }
         }
 
-        validate_relations_in_registry(
-            &tx,
-            &partition_id,
-            &envelope.id,
-            &envelope.relations,
-            std::slice::from_ref(&envelope.id),
-            &[],
-        )?;
+        validate_replacement_relations(&tx, &partition_id, envelopes)?;
 
-        tx.execute(
-            "DELETE FROM task_bundle_tags WHERE task_id = ?1",
-            [&envelope.id],
-        )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
-        tx.execute(
-            "DELETE FROM task_bundle_relations WHERE source_task_id = ?1",
-            [&envelope.id],
-        )
-        .map_err(|e| OrbitError::Store(e.to_string()))?;
+        for envelope in envelopes {
+            tx.execute(
+                "DELETE FROM task_bundle_tags WHERE task_id = ?1",
+                [&envelope.id],
+            )
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+            tx.execute(
+                "DELETE FROM task_bundle_relations WHERE source_task_id = ?1",
+                [&envelope.id],
+            )
+            .map_err(|e| OrbitError::Store(e.to_string()))?;
+        }
 
-        write_task_index_rows(&tx, &partition_id, envelope)?;
+        for envelope in envelopes {
+            write_task_index_rows(&tx, &partition_id, envelope)?;
+        }
         tx.commit().map_err(|e| OrbitError::Store(e.to_string()))
     }
 
@@ -756,24 +872,7 @@ impl TaskRegistryStore {
             )));
         }
 
-        let replacement_edges = envelopes
-            .iter()
-            .flat_map(task_relation_edges)
-            .collect::<Vec<_>>();
-        let replacement_sources = envelopes
-            .iter()
-            .map(|envelope| envelope.id.clone())
-            .collect::<Vec<_>>();
-        for envelope in envelopes {
-            validate_relations_in_registry(
-                &tx,
-                &partition_id,
-                &envelope.id,
-                &envelope.relations,
-                &replacement_sources,
-                &replacement_edges,
-            )?;
-        }
+        validate_replacement_relations(&tx, &partition_id, envelopes)?;
 
         tx.execute(
             "DELETE FROM task_bundle_tags WHERE workspace_id = ?1",
@@ -802,10 +901,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<BTreeMap<String, String>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT task_id, updated_at FROM task_bundle_index
@@ -827,10 +923,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<usize, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM task_bundle_index WHERE workspace_id = ?1",
@@ -845,10 +938,7 @@ impl TaskRegistryStore {
     /// lists remain workspace-scoped; dependency readiness is global because
     /// ORB task IDs are globally unique.
     pub fn global_task_status_index(&self) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare("SELECT task_id, status FROM task_bundle_index ORDER BY task_id ASC")
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -877,10 +967,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<bool, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let exists: i64 = conn
             .query_row(
                 "SELECT EXISTS(
@@ -902,10 +989,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<Vec<TaskCompletionByComplexity>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT complexity, status, COUNT(*)
@@ -961,10 +1045,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<BTreeMap<String, String>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT task_id, complexity FROM task_bundle_index
@@ -995,10 +1076,7 @@ impl TaskRegistryStore {
     ) -> Result<(), OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
         validate_orb_task_id(source_task_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         validate_relations_in_registry(
             &conn,
             &partition_id,
@@ -1018,10 +1096,7 @@ impl TaskRegistryStore {
         relations: &[TaskRelation],
     ) -> Result<(), OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         validate_relation_targets_exist(&conn, &partition_id, None, relations)
     }
 
@@ -1041,10 +1116,7 @@ impl TaskRegistryStore {
         partition_id: Option<&str>,
     ) -> Result<Vec<DanglingRelationTarget>, OrbitError> {
         let partition_id = partition_id.map(validate_partition_id).transpose()?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
 
         let mut sql = String::from(
             "SELECT r.workspace_id, r.source_task_id, r.relation_type, r.target_task_id
@@ -1125,10 +1197,7 @@ impl TaskRegistryStore {
         }
         sql.push_str(" ORDER BY created_at DESC, task_id ASC");
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(&sql)
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -1175,10 +1244,7 @@ impl TaskRegistryStore {
     ) -> Result<Vec<String>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
         validate_orb_task_id(source_task_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT target_task_id FROM task_bundle_relations
@@ -1208,10 +1274,7 @@ impl TaskRegistryStore {
     ) -> Result<Vec<String>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
         validate_orb_task_id(target_task_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT source_task_id FROM task_bundle_relations
@@ -1242,10 +1305,7 @@ impl TaskRegistryStore {
         let repo_root = normalize_path(repo_root);
         let workspace_path = normalize_path(workspace_path);
         let orbit_dir = normalize_path(orbit_dir);
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare(
                 "SELECT workspace_id, repo_root, workspace_path, orbit_dir, created_at, updated_at
@@ -1283,10 +1343,7 @@ impl TaskRegistryStore {
     /// inferring an owner from the workspace catalog, whose `ws_*` ids are a
     /// different namespace [ORB-12119].
     pub fn partition_ids(&self) -> Result<BTreeSet<String>, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut stmt = conn
             .prepare("SELECT workspace_id FROM workspace_bindings")
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -1352,10 +1409,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<Option<WorkspaceBinding>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         workspace_by_id(&conn, &partition_id)
     }
 
@@ -1366,10 +1420,7 @@ impl TaskRegistryStore {
         partition_id: &str,
     ) -> Result<Option<WorkspaceCheckoutBinding>, OrbitError> {
         let partition_id = validate_partition_id(partition_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         workspace_checkout_by_id(&conn, &partition_id)
     }
 
@@ -1383,10 +1434,7 @@ impl TaskRegistryStore {
         orbit_dir: &Path,
     ) -> Result<Option<WorkspaceCheckoutBinding>, OrbitError> {
         let orbit_dir = normalize_path(orbit_dir);
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         workspace_by_orbit_dir(&conn, &orbit_dir)
     }
 
@@ -1410,29 +1458,20 @@ impl TaskRegistryStore {
         task_id: &str,
     ) -> Result<Option<TaskBundleBinding>, OrbitError> {
         validate_orb_task_id(task_id)?;
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         task_bundle_by_id(&conn, task_id)
     }
 
     /// Current value of the local allocator counter (`next_number`) — the id the
     /// next [`allocate_task_id`](Self::allocate_task_id) call would hand out.
     pub fn allocator_next_number(&self) -> Result<u32, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         read_allocator_next_number(&conn)
     }
 
     /// Highest numeric task id registered in the whole registry, if any.
     pub fn max_registered_task_number(&self) -> Result<Option<u32>, OrbitError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+        let conn = self.read()?;
         let mut statement = conn
             .prepare("SELECT task_id FROM task_bundle_bindings")
             .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -1550,6 +1589,56 @@ fn set_allocator_next_number(conn: &Connection, value: u32) -> Result<(), OrbitE
         params![i64::from(value), now_string()],
     )
     .map_err(|e| OrbitError::Store(e.to_string()))?;
+    Ok(())
+}
+
+fn upsert_task_binding(
+    tx: &Connection,
+    task_id: &str,
+    partition_id: &str,
+    canonical_path: &Path,
+    now: &str,
+) -> Result<(), OrbitError> {
+    tx.execute(
+        "INSERT INTO task_bundle_bindings (
+            task_id, workspace_id, canonical_path, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?4)
+        ON CONFLICT(task_id) DO UPDATE SET
+            workspace_id = excluded.workspace_id,
+            canonical_path = excluded.canonical_path,
+            updated_at = excluded.updated_at",
+        params![task_id, partition_id, path_to_string(canonical_path), now],
+    )
+    .map_err(|e| OrbitError::Store(e.to_string()))?;
+    Ok(())
+}
+
+/// Validate a replacement set as a unit: its members' currently indexed edges
+/// are ignored in favour of the edges it is about to write, so the set's own
+/// cross-references resolve regardless of the order rows land in.
+fn validate_replacement_relations(
+    conn: &Connection,
+    partition_id: &str,
+    envelopes: &[TaskEnvelopeV2],
+) -> Result<(), OrbitError> {
+    let replacement_edges = envelopes
+        .iter()
+        .flat_map(task_relation_edges)
+        .collect::<Vec<_>>();
+    let replacement_sources = envelopes
+        .iter()
+        .map(|envelope| envelope.id.clone())
+        .collect::<Vec<_>>();
+    for envelope in envelopes {
+        validate_relations_in_registry(
+            conn,
+            partition_id,
+            &envelope.id,
+            &envelope.relations,
+            &replacement_sources,
+            &replacement_edges,
+        )?;
+    }
     Ok(())
 }
 

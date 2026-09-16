@@ -794,12 +794,17 @@ fn doctor_check_job_runs(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     )
 }
 
-/// Delivery automation consumers whose evaluation is suspended by a stall.
+/// Delivery automation consumers that cannot make progress: evaluation
+/// suspended by a stall, or an enabled definition whose branch does not exist.
 ///
 /// A stalled consumer is silent by design — it stops reporting a per-tick
 /// error precisely so the debt is visible here instead of scrolling past in a
 /// sweep log. Nothing resumes it without an operator, so it is reported until
 /// one recovers or resets it.
+///
+/// A definition whose configured branch git cannot resolve never baselines,
+/// so no stall marker ever exists for it; every sweep would defer with the
+/// same reason forever. Doctor names the branch, git's text and the fix.
 fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let stalled = match orbit_core::application::automation::stalled_consumers(runtime) {
         Ok(stalled) => stalled,
@@ -811,8 +816,19 @@ fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> WorkspaceDoctorRes
             );
         }
     };
+    let unresolvable =
+        match orbit_core::application::automation::unresolvable_delivery_branches(runtime) {
+            Ok(unresolvable) => unresolvable,
+            Err(error) => {
+                return check(
+                    "automation-consumers",
+                    WorkspaceDoctorStatus::Warning,
+                    format!("cannot read delivery automation definitions: {error}"),
+                );
+            }
+        };
 
-    if stalled.is_empty() {
+    if stalled.is_empty() && unresolvable.is_empty() {
         return check(
             "automation-consumers",
             WorkspaceDoctorStatus::Ok,
@@ -821,35 +837,65 @@ fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> WorkspaceDoctorRes
     }
 
     let now = chrono::Utc::now();
-    let detail = stalled
-        .iter()
-        .map(|consumer| {
-            format!(
-                "{} ({}, stalled {} min)",
-                consumer.definition(),
-                consumer.stall.reason,
-                orbit_core::application::automation::stalled_minutes(&consumer.stall, now)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let first = stalled
-        .first()
-        .map(|consumer| consumer.definition().to_string())
-        .unwrap_or_default();
+    let mut segments = Vec::new();
+    let mut remediation = Vec::new();
+    if !stalled.is_empty() {
+        let detail = stalled
+            .iter()
+            .map(|consumer| {
+                format!(
+                    "{} ({}, stalled {} min)",
+                    consumer.definition(),
+                    consumer.stall.reason,
+                    orbit_core::application::automation::stalled_minutes(&consumer.stall, now)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let first = stalled
+            .first()
+            .map(|consumer| consumer.definition().to_string())
+            .unwrap_or_default();
+        segments.push(format!(
+            "{} delivery automation consumer(s) stalled and accumulating debt: {detail}",
+            stalled.len()
+        ));
+        remediation.push(format!(
+            "Inspect with `orbit auto-task recover {first}`, then either \
+             `orbit auto-task recover {first} --replay-history --reason <why>` to retain \
+             the debt, or `orbit auto-task reset {first} --reason <why>` to forget it."
+        ));
+    }
+    if !unresolvable.is_empty() {
+        let detail = unresolvable
+            .iter()
+            .map(|consumer| {
+                format!(
+                    "{} targets `{}`: {}",
+                    consumer.definition, consumer.branch, consumer.error
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let base_branch = runtime.workspace_base_branch();
+        segments.push(format!(
+            "{} enabled delivery definition(s) name a branch that does not exist in this \
+             repository and can never baseline: {detail}",
+            unresolvable.len()
+        ));
+        remediation.push(format!(
+            "For each named definition set `schedule.deliveries_landed.branch` to the \
+             workspace base branch `{base_branch}` (edit the file under `.orbit/auto_tasks/` \
+             or pass `--deliveries-landed` to `orbit auto-task update <name>`), or create \
+             the branch it names; then rerun `orbit doctor`."
+        ));
+    }
 
     actionable_check(
         "automation-consumers",
         WorkspaceDoctorStatus::Warning,
-        format!(
-            "{} delivery automation consumer(s) stalled and accumulating debt: {detail}",
-            stalled.len()
-        ),
-        format!(
-            "Inspect with `orbit auto-task recover {first}`, then either \
-             `orbit auto-task recover {first} --replay-history --reason <why>` to retain \
-             the debt, or `orbit auto-task reset {first} --reason <why>` to forget it."
-        ),
+        segments.join("; "),
+        remediation.join(" "),
     )
 }
 

@@ -303,6 +303,17 @@ only after verifying a finite next trigger. (`orbit clock enable` resumes a paus
 enable. The generated timer schedules its first sweep from every timer activation and then
 recurs from service activation; installation and cadence changes perform the same
 post-activation verification.
+
+On macOS, launchd keeps reporting a loaded agent as loaded long after its program stops
+working, so `clock: enabled` is not on its own evidence that sweeps are firing. An enabled
+launchd clock is `unhealthy` with an inactive effective cadence when the plist names a
+program that cannot report a version (the same detection behind `orbit doctor`'s
+`clock-unit` row), when `launchctl print gui/<uid>/com.orbit.sweep` reports a non-zero
+`last exit code` for the most recent run, when that dump lists `penalty box` under
+`properties`, or when the dump cannot be read at all. Each case prints the reason and the
+same recovery: `orbit clock enable` rewrites the unit to this binary and reloads it. The
+dashboard's Host Sweep Clock card shows the same states — a degraded clock is badged
+`missed`, not `healthy`, even though the launchd service itself is still enabled.
 It does not replay every tick missed during host or manager downtime: on the next sweep,
 routine `missed_run: catch_up_once` fires once for a gap while `skip` waits for the next natural
 cron slot.

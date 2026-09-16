@@ -38,7 +38,7 @@ pub(super) struct GrantControlBody {
 /// `GET /operation/explain?workspace=<id>` — the effective policy, authority,
 /// caps, and limiting reasons, plus whether this caller may stop or revoke.
 pub(super) async fn explain_operation(Ws(runtime): Ws) -> Response {
-    match runtime.explain_operation(None) {
+    match blocking("operation explain", move || runtime.explain_operation(None)).await {
         Ok(mut payload) => {
             if let Some(object) = payload.as_object_mut() {
                 object.insert(
@@ -48,7 +48,7 @@ pub(super) async fn explain_operation(Ws(runtime): Ws) -> Response {
             }
             Json(payload).into_response()
         }
-        Err(error) => map_runtime_error(error),
+        Err(response) => *response,
     }
 }
 

@@ -12,6 +12,10 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use serde::{Deserialize, Serialize};
 
+use super::clock_unit::{
+    ClockUnitVerdict, RunningBinary, inspect_clock_unit_at, probe_program_version,
+};
+
 const LAUNCHD_PLIST_TEMPLATE: &str = include_str!("../../../assets/clock/com.orbit.sweep.plist");
 const SYSTEMD_SERVICE_TEMPLATE: &str = include_str!("../../../assets/clock/orbit-sweep.service");
 const SYSTEMD_TIMER_TEMPLATE: &str = include_str!("../../../assets/clock/orbit-sweep.timer");
@@ -748,6 +752,15 @@ fn launchd_manager_probe_command() -> ManagerCommand {
     }
 }
 
+/// `launchctl list <label>` only says the agent is loaded. The per-service
+/// dump is what reveals a loaded agent that can no longer run.
+fn launchd_print_command(uid: u32) -> ManagerCommand {
+    ManagerCommand {
+        program: "launchctl",
+        args: vec!["print".into(), format!("gui/{uid}/{LAUNCHD_LABEL}")],
+    }
+}
+
 fn systemd_next_trigger_command() -> ManagerCommand {
     ManagerCommand {
         program: "systemctl",
@@ -918,10 +931,18 @@ fn observe_clock_enabled_for_pause(
 }
 
 pub fn clock_status(global_root: &Path) -> Result<ClockStatus, OrbitError> {
+    let platform = ClockPlatform::current();
+    // Resolved only on macOS: a systemd host has no launchd agent to inspect,
+    // and must not start failing `clock status` because HOME is unset.
+    let launchd = match platform {
+        ClockPlatform::Launchd => Some(LaunchdHealthProbe::current()?),
+        ClockPlatform::Systemd => None,
+    };
     clock_status_with(
         global_root,
-        ClockPlatform::current(),
+        platform,
         &NativeClockCommandRunner,
+        launchd.as_ref(),
     )
 }
 
@@ -929,6 +950,7 @@ pub(super) fn clock_status_with(
     global_root: &Path,
     platform: ClockPlatform,
     runner: &dyn ClockCommandRunner,
+    launchd: Option<&LaunchdHealthProbe>,
 ) -> Result<ClockStatus, OrbitError> {
     let settings = load_clock_settings(global_root)?;
     let status_command = manager_status_command(platform);
@@ -994,8 +1016,13 @@ pub(super) fn clock_status_with(
                 ));
             }
         }
+    } else if enabled {
+        match launchd.and_then(|probe| launchd_health_issue(probe, runner)) {
+            Some(issue) => (false, Some(issue)),
+            None => (true, None),
+        }
     } else {
-        (enabled, None)
+        (false, None)
     };
     Ok(clock_status_from(
         settings,
@@ -1131,6 +1158,169 @@ fn bounded_manager_text(value: &str) -> String {
     } else {
         bounded
     }
+}
+
+/// Host facts the launchd health checks need, injected so tests can drive a
+/// missing program or a penalty-boxed agent without a real macOS host.
+#[derive(Debug, Clone)]
+pub(super) struct LaunchdHealthProbe {
+    /// Home directory holding `Library/LaunchAgents`.
+    pub(super) home: PathBuf,
+    /// launchd GUI domain owner, as in `gui/<uid>/<label>`.
+    pub(super) uid: u32,
+    /// Binary the unit is compared against.
+    pub(super) running: RunningBinary,
+    /// How to ask the unit's program for its version. Production passes
+    /// [`probe_program_version`], the same probe `orbit doctor` uses.
+    pub(super) version_probe: fn(&Path) -> Result<String, String>,
+}
+
+impl LaunchdHealthProbe {
+    fn current() -> Result<Self, OrbitError> {
+        Ok(Self {
+            home: home_dir()?,
+            uid: current_uid(),
+            running: RunningBinary::current()?,
+            version_probe: probe_program_version,
+        })
+    }
+}
+
+#[cfg(unix)]
+fn current_uid() -> u32 {
+    // SAFETY: getuid takes no arguments, touches no caller memory, and is
+    // documented as always succeeding.
+    unsafe { libc::getuid() }
+}
+
+#[cfg(not(unix))]
+fn current_uid() -> u32 {
+    0
+}
+
+/// Why an enabled launchd agent still cannot sweep, or `None` when nothing
+/// contradicts a healthy clock.
+///
+/// launchd keeps reporting a loaded agent as loaded after its program starts
+/// failing, so `launchctl list` alone always looked healthy [DANI-10386]. Two
+/// independent signals are consulted:
+///
+/// 1. The unit's own program, through the inspection `orbit doctor
+///    clock-unit` renders, so both surfaces agree on a program-path failure.
+///    Only [`ClockUnitVerdict::Unrunnable`] is a health issue: a version or
+///    path mismatch names a binary that still runs, so the clock still ticks.
+/// 2. `launchctl print`, for the outcome of the runs that already happened.
+fn launchd_health_issue(
+    probe: &LaunchdHealthProbe,
+    runner: &dyn ClockCommandRunner,
+) -> Option<String> {
+    let inspection = inspect_clock_unit_at(
+        &probe.home,
+        ClockPlatform::Launchd,
+        &probe.running,
+        probe.version_probe,
+    );
+    if let ClockUnitVerdict::Unrunnable { reason } = &inspection.verdict {
+        let program = inspection.program_path.as_ref().map_or_else(
+            || LAUNCHD_LABEL.to_string(),
+            |path| path.display().to_string(),
+        );
+        return Some(launchd_recovery(&format!(
+            "launchd agent {LAUNCHD_LABEL} is loaded but its program cannot run ({program}: {reason}), so no sweep will fire"
+        )));
+    }
+
+    let command = launchd_print_command(probe.uid);
+    let output = match runner.probe(&command) {
+        Ok(output) if output.success => output.stdout,
+        Ok(output) => {
+            return Some(launchd_recovery(&format!(
+                "launchd agent {LAUNCHD_LABEL} is loaded but its state could not be verified ({})",
+                manager_probe_diagnostic(&command, &output)
+            )));
+        }
+        Err(error) => {
+            return Some(launchd_recovery(&format!(
+                "launchd agent {LAUNCHD_LABEL} is loaded but its state could not be verified (`{}` could not run: {})",
+                command.display(),
+                bounded_manager_text(&error.to_string())
+            )));
+        }
+    };
+    LaunchdClockDetails::parse(&output)
+        .failure_summary()
+        .map(|summary| launchd_recovery(&summary))
+}
+
+fn launchd_recovery(issue: &str) -> String {
+    format!(
+        "{issue}; recovery: `orbit clock enable` rewrites the unit to this binary and reloads it"
+    )
+}
+
+/// The `launchctl print` fields that expose a stalled agent.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LaunchdClockDetails {
+    /// Exit status of the most recent run, when one has exited.
+    last_exit_code: Option<i32>,
+    /// launchd is throttling the agent after repeated launch failures.
+    penalty_box: bool,
+}
+
+impl LaunchdClockDetails {
+    /// Read the top-level `last exit code` and `properties` lines. Nested
+    /// blocks repeat some key names, so only the first match of each is used,
+    /// and `properties` is matched on the whole trimmed key so the unrelated
+    /// `jetsamproperties category` line cannot stand in for it.
+    fn parse(output: &str) -> Self {
+        let field = |name: &str| {
+            output.lines().find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                (key.trim() == name).then(|| value.trim())
+            })
+        };
+        Self {
+            last_exit_code: field("last exit code").and_then(launchd_exit_code),
+            penalty_box: field("properties").is_some_and(|properties| {
+                properties
+                    .split('|')
+                    .any(|property| property.trim() == "penalty box")
+            }),
+        }
+    }
+
+    /// One sentence naming every reason this agent is not sweeping.
+    fn failure_summary(&self) -> Option<String> {
+        let mut reasons = Vec::new();
+        if let Some(code) = self.last_exit_code.filter(|code| *code != 0) {
+            reasons.push(format!(
+                "its most recent run exited {code} without sweeping"
+            ));
+        }
+        if self.penalty_box {
+            reasons.push(
+                "launchd is holding it in the penalty box after repeated launch failures"
+                    .to_string(),
+            );
+        }
+        (!reasons.is_empty()).then(|| {
+            format!(
+                "launchd agent {LAUNCHD_LABEL} is loaded but {}",
+                reasons.join(", and ")
+            )
+        })
+    }
+}
+
+/// `last exit code = 78: EX_CONFIG` and `last exit code = 0` both appear;
+/// `(never exited)` means the agent has not run yet and is not a failure.
+fn launchd_exit_code(value: &str) -> Option<i32> {
+    value
+        .split(':')
+        .next()
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+        .and_then(|code| code.parse::<i32>().ok())
 }
 
 #[derive(Debug, Default)]

@@ -1,5 +1,6 @@
 // Content moved from tests.rs per ORB-00231
 
+mod read_pool;
 mod schema;
 
 use std::fs;
@@ -938,6 +939,197 @@ fn dangling_relation_targets_reports_only_grandfathered_orb_targets() {
             .expect("scoped to first")
             .len(),
         1
+    );
+}
+
+#[test]
+fn batch_allocation_hands_out_consecutive_ids_with_one_counter_bump() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let workspace = bind(&store, temp.path());
+
+    assert!(
+        store
+            .allocate_task_ids(&workspace.partition_id, 0)
+            .expect("empty reservation")
+            .is_empty()
+    );
+    assert_eq!(
+        store.allocator_next_number().expect("next number"),
+        0,
+        "an empty reservation must not move the counter"
+    );
+
+    let ids = store
+        .allocate_task_ids(&workspace.partition_id, 4)
+        .expect("reserve four ids");
+    assert_eq!(ids, ["ORB-00000", "ORB-00001", "ORB-00002", "ORB-00003"]);
+    assert_eq!(
+        store.allocator_next_number().expect("next number"),
+        4,
+        "one bump covers the whole reservation"
+    );
+    // The batch and single-id paths share one counter, so the next single
+    // allocation continues where the reservation stopped.
+    assert_eq!(
+        store
+            .allocate_task_id(&workspace.partition_id)
+            .expect("single id"),
+        "ORB-00004"
+    );
+}
+
+#[test]
+fn batch_allocation_refuses_a_reservation_that_would_cross_the_ceiling() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let workspace = bind(&store, temp.path());
+
+    {
+        let conn = store.conn.lock().expect("lock registry");
+        conn.execute(
+            "UPDATE allocator_state SET next_number = ?1, updated_at = ?2
+             WHERE authority = 'local'",
+            params![i64::from(ORB_TASK_ID_MAX) - 1, now_string()],
+        )
+        .expect("park the allocator below the ceiling");
+    }
+
+    // Two ids fit exactly; asking for three must be refused whole rather than
+    // part-served, and a refusal must leave the counter where it was.
+    assert!(matches!(
+        store.allocate_task_ids(&workspace.partition_id, 3),
+        Err(OrbitError::Store(message)) if message.contains("exhausted")
+    ));
+    assert_eq!(
+        store.allocator_next_number().expect("next number"),
+        ORB_TASK_ID_MAX - 1
+    );
+    assert_eq!(
+        store
+            .allocate_task_ids(&workspace.partition_id, 2)
+            .expect("the last two ids")
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn batch_registration_and_batch_index_replacement_land_as_one_unit() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let workspace = bind(&store, temp.path());
+
+    let bundles = ["ORB-00000", "ORB-00001", "ORB-00002"]
+        .into_iter()
+        .map(|task_id| {
+            (
+                task_id.to_string(),
+                create_canonical_bundle(&store, &workspace, task_id),
+            )
+        })
+        .collect::<Vec<_>>();
+    store
+        .register_task_bundles(&workspace.partition_id, &bundles)
+        .expect("register the set");
+    assert_eq!(
+        store
+            .tasks_for_workspace(&workspace.partition_id)
+            .expect("bindings")
+            .len(),
+        3
+    );
+
+    // A member may point at another member the batch has not written yet.
+    let envelopes = vec![
+        envelope(
+            "ORB-00000",
+            TaskStatus::Backlog,
+            Vec::new(),
+            vec![TaskRelation {
+                relation_type: TaskRelationType::ChildOf,
+                target: "ORB-00002".into(),
+            }],
+        ),
+        envelope(
+            "ORB-00002",
+            TaskStatus::Done,
+            vec!["alpha".into()],
+            Vec::new(),
+        ),
+    ];
+    store
+        .replace_task_indexes(&workspace.partition_id, &envelopes)
+        .expect("index the subset");
+
+    // Exactly the requested subset is indexed: the untouched third binding
+    // keeps no row, which is what lets a partial repair pass use this.
+    assert_eq!(
+        store
+            .indexed_task_versions_for_workspace(&workspace.partition_id)
+            .expect("indexed versions")
+            .into_keys()
+            .collect::<Vec<_>>(),
+        vec!["ORB-00000".to_string(), "ORB-00002".to_string()]
+    );
+
+    // A rejected member rolls the whole batch back rather than half-applying it.
+    let rejected = vec![
+        envelope("ORB-00001", TaskStatus::Backlog, Vec::new(), Vec::new()),
+        envelope(
+            "ORB-00002",
+            TaskStatus::Backlog,
+            Vec::new(),
+            vec![TaskRelation {
+                relation_type: TaskRelationType::ChildOf,
+                target: "ORB-09999".into(),
+            }],
+        ),
+    ];
+    assert!(
+        store
+            .replace_task_indexes(&workspace.partition_id, &rejected)
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .indexed_task_versions_for_workspace(&workspace.partition_id)
+            .expect("indexed versions")
+            .into_keys()
+            .collect::<Vec<_>>(),
+        vec!["ORB-00000".to_string(), "ORB-00002".to_string()],
+        "a refused batch leaves the previous index untouched"
+    );
+    assert_eq!(
+        store
+            .complexity_by_task_id(&workspace.partition_id)
+            .expect("indexed rows")
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn batch_registration_refuses_a_non_canonical_path_without_registering_the_set() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let workspace = bind(&store, temp.path());
+
+    let good = create_canonical_bundle(&store, &workspace, "ORB-00000");
+    let bundles = vec![
+        ("ORB-00000".to_string(), good),
+        ("ORB-00001".to_string(), temp.path().join("elsewhere")),
+    ];
+    assert!(matches!(
+        store.register_task_bundles(&workspace.partition_id, &bundles),
+        Err(OrbitError::InvalidInput(message)) if message.contains("ORB-00001")
+    ));
+    assert!(
+        store
+            .tasks_for_workspace(&workspace.partition_id)
+            .expect("bindings")
+            .is_empty(),
+        "a rejected entry must not leave its neighbours registered"
     );
 }
 

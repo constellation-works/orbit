@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 

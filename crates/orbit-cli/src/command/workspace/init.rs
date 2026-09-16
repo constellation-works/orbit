@@ -198,6 +198,14 @@ impl WorkspaceInitArgs {
                     .find(|checkout| checkout.repo_root == cwd);
                 let reconciling_existing =
                     existing_workspace.is_some() || existing_checkout.is_some();
+                // The delivery defaults are rendered against the base branch
+                // this registration will record, so the seeded file and the
+                // registry never disagree about which branch is observed.
+                let seeded_base_branch = self
+                    .base_branch
+                    .clone()
+                    .or_else(|| existing_workspace.map(|workspace| workspace.base_branch.clone()))
+                    .unwrap_or_else(|| default_base_branch.clone());
                 let registered_shared_root = global_root == orbit_dir
                     && registry
                         .checkouts
@@ -264,6 +272,7 @@ impl WorkspaceInitArgs {
                         refresh_defaults: true,
                         global_root_override: Some(global_root.to_path_buf()),
                         routine_seed_identity: routine_identity.clone(),
+                        workspace_base_branch: Some(seeded_base_branch),
                         // Host detection is a CLI concern: Core seeds config from the
                         // families this adapter reports, never by probing PATH itself.
                         config_seed: Some(config_seed_from_detection(&detect(&RealAgentEnvProbe))),

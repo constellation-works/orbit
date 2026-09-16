@@ -522,6 +522,15 @@ impl OrbitRuntime {
         self.context.settings().workflow_base_branch()
     }
 
+    /// The branch this workspace integrates into: the registered workspace
+    /// base branch when a registry binding exists, else `[workflow]
+    /// base_branch`. Delivery automation defaults are seeded against it.
+    pub fn workspace_base_branch(&self) -> &str {
+        self.workspace_runtime_binding()
+            .and_then(|binding| binding.base_branch.as_deref())
+            .unwrap_or_else(|| self.workflow_base_branch())
+    }
+
     /// Whether this workspace opted into unattended ship dispatch
     /// (`[workflow] auto_ship` in the active `config.toml`; defaults to
     /// `false`). Consulted by `orbit run ship-sweep` and other schedulers

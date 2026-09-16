@@ -254,6 +254,104 @@ fn orchestrator_is_explicit_mutable_before_start_and_never_routes_execution() {
 }
 
 #[test]
+fn update_dependencies_rejects_self_cycle() {
+    let (_root, runtime) = test_runtime();
+    let task = add_proposed_task(&runtime, "Self cycle");
+    let error = runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                dependencies: Some(vec![task.id.clone()]),
+                ..Default::default()
+            },
+        )
+        .expect_err("self-dependency");
+    assert!(
+        error
+            .to_string()
+            .contains("cannot declare a self-dependency"),
+        "{error}"
+    );
+}
+
+#[test]
+fn update_dependencies_rejects_multi_hop_cycle() {
+    let (_root, runtime) = test_runtime();
+    let task_a = add_proposed_task(&runtime, "Cycle A");
+    let task_b = add_proposed_task(&runtime, "Cycle B");
+    let task_c = add_proposed_task(&runtime, "Cycle C");
+
+    runtime
+        .update_task(
+            &task_b.id,
+            TaskUpdateParams {
+                dependencies: Some(vec![task_c.id.clone()]),
+                ..Default::default()
+            },
+        )
+        .expect("B blocked by C");
+    runtime
+        .update_task(
+            &task_c.id,
+            TaskUpdateParams {
+                dependencies: Some(vec![task_a.id.clone()]),
+                ..Default::default()
+            },
+        )
+        .expect("C blocked by A");
+
+    let error = runtime
+        .update_task(
+            &task_a.id,
+            TaskUpdateParams {
+                dependencies: Some(vec![task_b.id.clone()]),
+                ..Default::default()
+            },
+        )
+        .expect_err("A -> B -> C -> A");
+    assert!(
+        error.to_string().contains("task dependency cycle detected"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains(&format!(
+            "{} -> {} -> {} -> {}",
+            task_a.id, task_b.id, task_c.id, task_a.id
+        )),
+        "{error}"
+    );
+}
+
+#[test]
+fn update_dependencies_allows_acyclic_chain_among_unrelated_peers() {
+    let (_root, runtime) = test_runtime();
+    let task_a = add_proposed_task(&runtime, "Chain A");
+    let task_b = add_proposed_task(&runtime, "Chain B");
+    let task_c = add_proposed_task(&runtime, "Chain C");
+    let _unrelated = add_proposed_task(&runtime, "Unrelated peer");
+
+    runtime
+        .update_task(
+            &task_b.id,
+            TaskUpdateParams {
+                dependencies: Some(vec![task_c.id.clone()]),
+                ..Default::default()
+            },
+        )
+        .expect("B blocked by C");
+    let updated = runtime
+        .update_task(
+            &task_a.id,
+            TaskUpdateParams {
+                dependencies: Some(vec![task_b.id.clone()]),
+                ..Default::default()
+            },
+        )
+        .expect("A blocked by B");
+    assert_eq!(updated.dependencies(), vec![task_b.id]);
+}
+
+#[test]
 fn orchestrator_is_rejected_on_non_draft_initial_statuses_including_someday() {
     let (_root, runtime) = test_runtime();
 

@@ -49,7 +49,7 @@ Invocation metrics:
 Global process tracing:
 
 - Uses `~/.orbit/state/logs/orbit.jsonl` as the active file.
-- Is append-only within the active file; oversized files are renamed to dated archives and old archives are pruned at subscriber initialization.
+- Is append-only within the active file; oversized files are renamed to dated archives and old archives are pruned from long-lived processes and when the active file exceeds its size budget.
 - Is an operational log stream, not the canonical workflow envelope.
 - Carries policy-denial path/resource strings and friction summaries after [T20260427-0023], so default tracing redaction is part of its durability boundary.
 
