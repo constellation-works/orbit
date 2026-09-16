@@ -139,8 +139,9 @@ CREATE TABLE embeddings (
     content_hash TEXT NOT NULL,        -- BLAKE3 of the embedded text; cheap re-index gate
     model_id    TEXT NOT NULL,         -- "bge-small"
     dim         INTEGER NOT NULL,      -- 384
-    embedding   BLOB NOT NULL,         -- dim * 4 bytes, native-endian f32
+    embedding   BLOB NOT NULL,         -- dim * 4 bytes, little-endian f32
     created_at  TEXT NOT NULL,
+    normalized  INTEGER NOT NULL DEFAULT 0, -- 1 when embedding is L2-unit
     PRIMARY KEY (source_kind, source_id, field, chunk_idx, model_id)
 );
 
@@ -154,9 +155,10 @@ The composite primary key includes `model_id` so embeddings under multiple model
 
 ```text
 1. embed query under default model_id  → query vector q (dim 384)
-2. SELECT embedding, source_kind, source_id, field, chunk_idx
+2. SELECT embedding, normalized, source_kind, source_id, field, chunk_idx
      FROM embeddings WHERE model_id = ?
-3. for each row: compute cosine(q, row.embedding); maintain a fixed-size top-k heap
+3. for each row: score the LE f32 blob in place (dot product when `normalized`,
+     else full cosine); maintain a fixed-size top-k heap
 4. return top-k (source_id, field, score)
 ```
 

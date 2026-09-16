@@ -1,8 +1,12 @@
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+
 use orbit_common::OrbitError;
 use rusqlite::params;
 
 use crate::vector::store::VectorStore;
-use crate::vector::{cosine_similarity, decode_f32_blob};
+use crate::vector::store::schema::embeddings_has_normalized_column;
+use crate::vector::{cosine_similarity_blob, dot_product_blob, l2_norm};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CosineHit {
@@ -13,6 +17,46 @@ pub struct CosineHit {
     pub score: f32,
     pub rank: usize,
 }
+
+/// Max-heap ordered so the current worst top-k hit sits at the root.
+/// `Ord` matches [`compare_cosine_hits`]: best is `Less`, worst is `Greater`.
+struct HeapHit(CosineHit);
+
+impl PartialEq for HeapHit {
+    fn eq(&self, other: &Self) -> bool {
+        compare_cosine_hits(&self.0, &other.0) == Ordering::Equal
+    }
+}
+
+impl Eq for HeapHit {}
+
+impl PartialOrd for HeapHit {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapHit {
+    fn cmp(&self, other: &Self) -> Ordering {
+        compare_cosine_hits(&self.0, &other.0)
+    }
+}
+
+const COSINE_SQL: &str = r#"
+    SELECT source_kind, source_id, field, chunk_idx, embedding, normalized
+    FROM embeddings
+    WHERE model_id = ?1
+        AND (?2 IS NULL OR source_kind = ?2)
+        AND (?3 IS NULL OR field = ?3)
+"#;
+
+const COSINE_SQL_LEGACY: &str = r#"
+    SELECT source_kind, source_id, field, chunk_idx, embedding
+    FROM embeddings
+    WHERE model_id = ?1
+        AND (?2 IS NULL OR source_kind = ?2)
+        AND (?3 IS NULL OR field = ?3)
+"#;
 
 pub fn cosine_top_k(
     store: &VectorStore,
@@ -31,17 +75,15 @@ pub fn cosine_top_k(
         .lock()
         .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))?;
 
-    let mut candidates: Vec<CosineHit> = Vec::with_capacity(limit);
+    let has_normalized = embeddings_has_normalized_column(&conn)?;
+    let query_norm = l2_norm(query);
+    let mut candidates: BinaryHeap<HeapHit> = BinaryHeap::with_capacity(limit);
     let mut stmt = conn
-        .prepare(
-            r#"
-                SELECT source_kind, source_id, field, chunk_idx, embedding
-                FROM embeddings
-                WHERE model_id = ?1
-                    AND (?2 IS NULL OR source_kind = ?2)
-                    AND (?3 IS NULL OR field = ?3)
-            "#,
-        )
+        .prepare(if has_normalized {
+            COSINE_SQL
+        } else {
+            COSINE_SQL_LEGACY
+        })
         .map_err(|error| OrbitError::Store(error.to_string()))?;
     let mut rows = stmt
         .query(params![model_id, kind, field])
@@ -50,47 +92,60 @@ pub fn cosine_top_k(
         .next()
         .map_err(|error| OrbitError::Store(error.to_string()))?
     {
-        let score = row_score(row, query)?;
+        let score = row_score(row, query, query_norm, has_normalized)?;
         let should_retain = if candidates.len() < limit {
             true
-        } else {
-            let worst = match candidates.last() {
-                Some(worst) => worst,
-                None => unreachable!("a candidate list at the limit is non-empty"),
-            };
-            match score.total_cmp(&worst.score) {
-                std::cmp::Ordering::Greater => true,
-                std::cmp::Ordering::Less => false,
-                std::cmp::Ordering::Equal => {
-                    compare_row_to_hit(row, worst)? == std::cmp::Ordering::Less
-                }
+        } else if let Some(worst) = candidates.peek() {
+            match score.total_cmp(&worst.0.score) {
+                Ordering::Greater => true,
+                Ordering::Less => false,
+                Ordering::Equal => compare_row_to_hit(row, &worst.0)? == Ordering::Less,
             }
+        } else {
+            true
         };
         if !should_retain {
             continue;
         }
 
-        candidates.push(row_to_hit(row, score)?);
-        candidates.sort_by(compare_cosine_hits);
-        if candidates.len() > limit {
+        if candidates.len() == limit {
             candidates.pop();
         }
+        candidates.push(HeapHit(row_to_hit(row, score)?));
     }
 
-    for (idx, hit) in candidates.iter_mut().enumerate() {
+    let mut hits = Vec::with_capacity(candidates.len());
+    hits.extend(candidates.into_iter().map(|hit| hit.0));
+    hits.sort_by(compare_cosine_hits);
+    for (idx, hit) in hits.iter_mut().enumerate() {
         hit.rank = idx + 1;
     }
-    Ok(candidates)
+    Ok(hits)
 }
 
-fn row_score(row: &rusqlite::Row<'_>, query: &[f32]) -> Result<f32, OrbitError> {
+fn row_score(
+    row: &rusqlite::Row<'_>,
+    query: &[f32],
+    query_norm: f32,
+    has_normalized: bool,
+) -> Result<f32, OrbitError> {
     let embedding_blob = row
         .get_ref(4)
         .map_err(|error| OrbitError::Store(error.to_string()))?
         .as_blob()
         .map_err(|error| OrbitError::Store(error.to_string()))?;
-    let embedding = decode_f32_blob(embedding_blob)?;
-    cosine_similarity(query, &embedding)
+    let stored_normalized = has_normalized
+        && row
+            .get::<_, i64>(5)
+            .map_err(|error| OrbitError::Store(error.to_string()))?
+            != 0;
+    if stored_normalized {
+        if query_norm == 0.0 {
+            return Ok(0.0);
+        }
+        return Ok(dot_product_blob(query, embedding_blob)? / query_norm);
+    }
+    cosine_similarity_blob(query, embedding_blob)
 }
 
 fn row_to_hit(row: &rusqlite::Row<'_>, score: f32) -> Result<CosineHit, OrbitError> {
