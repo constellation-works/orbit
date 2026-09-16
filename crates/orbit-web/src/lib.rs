@@ -26,21 +26,27 @@ mod tests;
 pub use connect::{ConnectArgs, connect};
 
 use std::future::{Future, IntoFuture};
+use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use axum::http::{HeaderValue, header};
+use axum::extract::Extension;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use clap::Args;
+use flate2::{Compression, write::GzEncoder};
 use orbit_cmd::registry_runtime;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{WorkspaceRegistry, WorkspaceStatus};
 use tokio::sync::Notify;
+
+#[cfg(test)]
+use std::sync::LazyLock;
 
 const INDEX_HTML: &str = include_str!("../assets/dashboard/index.html");
 const DASHBOARD_CSS: &str = include_str!("../assets/dashboard/dashboard.css");
@@ -76,6 +82,142 @@ const DASHBOARD_CSP: &str = concat!(
     "base-uri 'none'; ",
     "frame-ancestors 'none'"
 );
+const DASHBOARD_CACHE_CONTROL: &str = "no-cache";
+
+struct DashboardAsset {
+    content_type: &'static str,
+    body: &'static [u8],
+    gzip_body: Vec<u8>,
+    etag: HeaderValue,
+}
+
+impl DashboardAsset {
+    fn new(content_type: &'static str, body: &'static [u8]) -> Result<Self, OrbitError> {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder
+            .write_all(body)
+            .map_err(|error| OrbitError::Execution(format!("gzip dashboard asset: {error}")))?;
+        let gzip_body = encoder.finish().map_err(|error| {
+            OrbitError::Execution(format!("finish gzip dashboard asset: {error}"))
+        })?;
+        let digest = blake3::hash(body);
+        let etag = HeaderValue::from_str(&format!(r#""{}""#, digest.to_hex()))
+            .map_err(|error| OrbitError::Execution(format!("dashboard asset ETag: {error}")))?;
+
+        Ok(Self {
+            content_type,
+            body,
+            gzip_body,
+            etag,
+        })
+    }
+}
+
+struct DashboardAssets {
+    index: DashboardAsset,
+    dashboard_css: DashboardAsset,
+    inter_font: DashboardAsset,
+    jetbrains_mono_font: DashboardAsset,
+    marked_js: DashboardAsset,
+    purify_js: DashboardAsset,
+    app_js: DashboardAsset,
+    common_js: DashboardAsset,
+    markdown_js: DashboardAsset,
+    tasks_js: DashboardAsset,
+    field_editor_js: DashboardAsset,
+    audit_js: DashboardAsset,
+    scoreboard_js: DashboardAsset,
+    reliability_js: DashboardAsset,
+    log_tail_js: DashboardAsset,
+    diagnostics_js: DashboardAsset,
+    router_js: DashboardAsset,
+    runs_js: DashboardAsset,
+    run_detail_js: DashboardAsset,
+    operations_js: DashboardAsset,
+    automation_js: DashboardAsset,
+}
+
+impl DashboardAssets {
+    fn new() -> Result<Self, OrbitError> {
+        Ok(Self {
+            index: DashboardAsset::new("text/html; charset=utf-8", INDEX_HTML.as_bytes())?,
+            dashboard_css: DashboardAsset::new(
+                "text/css; charset=utf-8",
+                DASHBOARD_CSS.as_bytes(),
+            )?,
+            inter_font: DashboardAsset::new("font/woff2", INTER_FONT)?,
+            jetbrains_mono_font: DashboardAsset::new("font/woff2", JETBRAINS_MONO_FONT)?,
+            marked_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                MARKED_JS.as_bytes(),
+            )?,
+            purify_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                PURIFY_JS.as_bytes(),
+            )?,
+            app_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                APP_JS.as_bytes(),
+            )?,
+            common_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                COMMON_JS.as_bytes(),
+            )?,
+            markdown_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                MARKDOWN_JS.as_bytes(),
+            )?,
+            tasks_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                TASKS_JS.as_bytes(),
+            )?,
+            field_editor_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                FIELD_EDITOR_JS.as_bytes(),
+            )?,
+            audit_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                AUDIT_JS.as_bytes(),
+            )?,
+            scoreboard_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                SCOREBOARD_JS.as_bytes(),
+            )?,
+            reliability_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                RELIABILITY_JS.as_bytes(),
+            )?,
+            log_tail_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                LOG_TAIL_JS.as_bytes(),
+            )?,
+            diagnostics_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                DIAGNOSTICS_JS.as_bytes(),
+            )?,
+            router_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                ROUTER_JS.as_bytes(),
+            )?,
+            runs_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                RUNS_JS.as_bytes(),
+            )?,
+            run_detail_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                RUN_DETAIL_JS.as_bytes(),
+            )?,
+            operations_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                OPERATIONS_JS.as_bytes(),
+            )?,
+            automation_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                AUTOMATION_JS.as_bytes(),
+            )?,
+        })
+    }
+}
 
 /// Conventional loopback port for the dashboard. Shared by `web serve`'s
 /// `--port` default and `web connect`'s local/remote port preference so the
@@ -273,34 +415,39 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
     let addr = SocketAddr::new(args.host, args.port);
     let url = format!("http://{addr}");
     let no_open = args.no_open;
+    let dashboard_assets = Arc::new(DashboardAssets::new()?);
 
     let app = Router::new()
-        .route("/", get(serve_index))
-        .route("/static/dashboard.css", get(serve_dashboard_css))
-        .route("/static/fonts/inter-latin.woff2", get(serve_inter_font))
+        .route("/", get(serve_index_route))
+        .route("/static/dashboard.css", get(serve_dashboard_css_route))
+        .route(
+            "/static/fonts/inter-latin.woff2",
+            get(serve_inter_font_route),
+        )
         .route(
             "/static/fonts/jetbrains-mono-latin.woff2",
-            get(serve_jetbrains_mono_font),
+            get(serve_jetbrains_mono_font_route),
         )
-        .route("/static/marked.umd.js", get(serve_marked_js))
-        .route("/static/purify.min.js", get(serve_purify_js))
-        .route("/static/app.js", get(serve_app_js))
-        .route("/static/common.js", get(serve_common_js))
-        .route("/static/markdown.js", get(serve_markdown_js))
-        .route("/static/tasks.js", get(serve_tasks_js))
-        .route("/static/field-editor.js", get(serve_field_editor_js))
-        .route("/static/audit.js", get(serve_audit_js))
-        .route("/static/scoreboard.js", get(serve_scoreboard_js))
-        .route("/static/reliability.js", get(serve_reliability_js))
-        .route("/static/log-tail.js", get(serve_log_tail_js))
-        .route("/static/diagnostics.js", get(serve_diagnostics_js))
-        .route("/static/router.js", get(serve_router_js))
-        .route("/static/runs.js", get(serve_runs_js))
-        .route("/static/run-detail.js", get(serve_run_detail_js))
-        .route("/static/operations.js", get(serve_operations_js))
-        .route("/static/automation.js", get(serve_automation_js))
+        .route("/static/marked.umd.js", get(serve_marked_js_route))
+        .route("/static/purify.min.js", get(serve_purify_js_route))
+        .route("/static/app.js", get(serve_app_js_route))
+        .route("/static/common.js", get(serve_common_js_route))
+        .route("/static/markdown.js", get(serve_markdown_js_route))
+        .route("/static/tasks.js", get(serve_tasks_js_route))
+        .route("/static/field-editor.js", get(serve_field_editor_js_route))
+        .route("/static/audit.js", get(serve_audit_js_route))
+        .route("/static/scoreboard.js", get(serve_scoreboard_js_route))
+        .route("/static/reliability.js", get(serve_reliability_js_route))
+        .route("/static/log-tail.js", get(serve_log_tail_js_route))
+        .route("/static/diagnostics.js", get(serve_diagnostics_js_route))
+        .route("/static/router.js", get(serve_router_js_route))
+        .route("/static/runs.js", get(serve_runs_js_route))
+        .route("/static/run-detail.js", get(serve_run_detail_js_route))
+        .route("/static/operations.js", get(serve_operations_js_route))
+        .route("/static/automation.js", get(serve_automation_js_route))
         .route("/healthz", get(health::healthz))
         .nest("/api", api::router())
+        .layer(Extension(dashboard_assets))
         .with_state(state);
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -419,118 +566,231 @@ fn check_bindable_host(host: IpAddr, port: u16) -> Result<(), OrbitError> {
     )))
 }
 
-async fn serve_index() -> Response {
-    dashboard_response("text/html; charset=utf-8", INDEX_HTML)
+macro_rules! dashboard_route_handler {
+    ($name:ident, $asset:ident) => {
+        async fn $name(
+            Extension(assets): Extension<Arc<DashboardAssets>>,
+            headers: HeaderMap,
+        ) -> Response {
+            dashboard_asset_response(&assets.$asset, &headers)
+        }
+    };
 }
 
-async fn serve_dashboard_css() -> Response {
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/css; charset=utf-8"),
-        )],
-        DASHBOARD_CSS,
-    )
-        .into_response()
-}
+dashboard_route_handler!(serve_index_route, index);
+dashboard_route_handler!(serve_dashboard_css_route, dashboard_css);
+dashboard_route_handler!(serve_inter_font_route, inter_font);
+dashboard_route_handler!(serve_jetbrains_mono_font_route, jetbrains_mono_font);
+dashboard_route_handler!(serve_marked_js_route, marked_js);
+dashboard_route_handler!(serve_purify_js_route, purify_js);
+dashboard_route_handler!(serve_app_js_route, app_js);
+dashboard_route_handler!(serve_common_js_route, common_js);
+dashboard_route_handler!(serve_markdown_js_route, markdown_js);
+dashboard_route_handler!(serve_tasks_js_route, tasks_js);
+dashboard_route_handler!(serve_field_editor_js_route, field_editor_js);
+dashboard_route_handler!(serve_audit_js_route, audit_js);
+dashboard_route_handler!(serve_scoreboard_js_route, scoreboard_js);
+dashboard_route_handler!(serve_reliability_js_route, reliability_js);
+dashboard_route_handler!(serve_log_tail_js_route, log_tail_js);
+dashboard_route_handler!(serve_diagnostics_js_route, diagnostics_js);
+dashboard_route_handler!(serve_router_js_route, router_js);
+dashboard_route_handler!(serve_runs_js_route, runs_js);
+dashboard_route_handler!(serve_run_detail_js_route, run_detail_js);
+dashboard_route_handler!(serve_operations_js_route, operations_js);
+dashboard_route_handler!(serve_automation_js_route, automation_js);
 
-async fn serve_inter_font() -> Response {
-    dashboard_bytes_response("font/woff2", INTER_FONT)
-}
-
-async fn serve_jetbrains_mono_font() -> Response {
-    dashboard_bytes_response("font/woff2", JETBRAINS_MONO_FONT)
-}
-
-async fn serve_marked_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", MARKED_JS)
-}
-
-async fn serve_purify_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", PURIFY_JS)
-}
-
-async fn serve_app_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", APP_JS)
-}
-
-async fn serve_common_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", COMMON_JS)
-}
-
-async fn serve_markdown_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", MARKDOWN_JS)
-}
-
-async fn serve_tasks_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", TASKS_JS)
-}
-
-async fn serve_field_editor_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", FIELD_EDITOR_JS)
-}
-
-async fn serve_audit_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", AUDIT_JS)
-}
-
-async fn serve_scoreboard_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", SCOREBOARD_JS)
-}
-
-async fn serve_reliability_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", RELIABILITY_JS)
-}
-
-async fn serve_log_tail_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", LOG_TAIL_JS)
-}
-
-async fn serve_diagnostics_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", DIAGNOSTICS_JS)
-}
-
-async fn serve_router_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", ROUTER_JS)
-}
-
-async fn serve_runs_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", RUNS_JS)
-}
-
-async fn serve_run_detail_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", RUN_DETAIL_JS)
-}
-
-async fn serve_operations_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", OPERATIONS_JS)
-}
-async fn serve_automation_js() -> Response {
-    dashboard_response("application/javascript; charset=utf-8", AUTOMATION_JS)
-}
-
-fn dashboard_response(content_type: &'static str, body: &'static str) -> Response {
-    dashboard_content_response(content_type, body)
-}
-
-fn dashboard_bytes_response(content_type: &'static str, body: &'static [u8]) -> Response {
-    dashboard_content_response(content_type, body)
-}
-
-fn dashboard_content_response<T>(content_type: &'static str, body: T) -> Response
-where
-    T: IntoResponse,
-{
-    let mut response = (
-        [(header::CONTENT_TYPE, HeaderValue::from_static(content_type))],
-        body,
-    )
-        .into_response();
-    response.headers_mut().insert(
+fn dashboard_asset_response(asset: &DashboardAsset, request_headers: &HeaderMap) -> Response {
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(asset.content_type),
+    );
+    response_headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(DASHBOARD_CACHE_CONTROL),
+    );
+    response_headers.insert(header::ETAG, asset.etag.clone());
+    response_headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(DASHBOARD_CSP),
     );
-    response
+    response_headers.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+
+    if if_none_match_matches(request_headers.get(header::IF_NONE_MATCH), &asset.etag) {
+        return (StatusCode::NOT_MODIFIED, response_headers).into_response();
+    }
+
+    if accepts_gzip(request_headers.get(header::ACCEPT_ENCODING)) {
+        response_headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        return (response_headers, asset.gzip_body.clone()).into_response();
+    }
+
+    (response_headers, asset.body).into_response()
+}
+
+fn if_none_match_matches(value: Option<&HeaderValue>, etag: &HeaderValue) -> bool {
+    let Some(value) = value.and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let Some(etag) = etag.to_str().ok() else {
+        return false;
+    };
+
+    value.split(',').any(|candidate| {
+        let candidate = candidate.trim();
+        candidate == "*"
+            || candidate == etag
+            || candidate
+                .strip_prefix("W/")
+                .is_some_and(|weak_etag| weak_etag.trim() == etag)
+    })
+}
+
+fn accepts_gzip(value: Option<&HeaderValue>) -> bool {
+    let Some(value) = value.and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+
+    let mut gzip_quality = None;
+    let mut wildcard_quality = None;
+    for encoding in value.split(',') {
+        let mut parts = encoding.split(';');
+        let coding = parts.next().unwrap_or("").trim();
+        let quality = parts
+            .filter_map(|parameter| parameter.trim().split_once('='))
+            .find_map(|(name, value)| {
+                name.trim()
+                    .eq_ignore_ascii_case("q")
+                    .then(|| value.trim().parse::<f32>().unwrap_or(0.0))
+            })
+            .unwrap_or(1.0);
+
+        if coding.eq_ignore_ascii_case("gzip") {
+            gzip_quality = Some(quality);
+        } else if coding == "*" {
+            wildcard_quality = Some(quality);
+        }
+    }
+
+    gzip_quality.or(wildcard_quality).unwrap_or(0.0) > 0.0
+}
+
+#[cfg(test)]
+static TEST_DASHBOARD_ASSETS: LazyLock<DashboardAssets> = LazyLock::new(|| {
+    DashboardAssets::new().unwrap_or_else(|error| panic!("build dashboard test assets: {error}"))
+});
+
+#[cfg(test)]
+async fn serve_index() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.index, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_index_with_headers(headers: HeaderMap) -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.index, &headers)
+}
+
+#[cfg(test)]
+async fn serve_dashboard_css() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.dashboard_css, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_inter_font() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.inter_font, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_jetbrains_mono_font() -> Response {
+    dashboard_asset_response(
+        &TEST_DASHBOARD_ASSETS.jetbrains_mono_font,
+        &HeaderMap::new(),
+    )
+}
+
+#[cfg(test)]
+async fn serve_marked_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.marked_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_purify_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.purify_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_app_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.app_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_common_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.common_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_markdown_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.markdown_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_tasks_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.tasks_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_field_editor_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.field_editor_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_audit_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.audit_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_scoreboard_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.scoreboard_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_reliability_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.reliability_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_log_tail_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.log_tail_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_diagnostics_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.diagnostics_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_router_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.router_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_runs_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.runs_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_run_detail_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.run_detail_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_operations_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.operations_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_automation_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.automation_js, &HeaderMap::new())
 }
 
 async fn shutdown_signal() {
