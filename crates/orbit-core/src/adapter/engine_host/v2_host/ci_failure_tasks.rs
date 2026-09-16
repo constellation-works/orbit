@@ -40,7 +40,7 @@ use sha2::{Digest, Sha256};
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::duplicate_tasks::{
     CoverageAnchor, CoverageFingerprint, DuplicateCandidate, DuplicateTaskLookup,
-    DuplicateTaskMatch, find_covering_task,
+    DuplicateTaskMatch, SnapshotDuplicateLookup, find_covering_task,
 };
 use crate::application::task::TaskAddParams;
 
@@ -362,12 +362,16 @@ where
 
     // Complete every external lookup before the first task write. A transient
     // duplicate-check failure must leave no partial filing or dedupe state.
+    // Every cluster and legacy key is assessed against one snapshot: the
+    // task list is hydrated at most once per filing and each open task's
+    // comments are read at most once, however many clusters the run has.
+    let lookup = SnapshotDuplicateLookup::new(lookup);
     let mut assessor = repair_assessment::Assessor::new(runtime);
     let mut repair_assessments = Vec::new();
     let duplicate_matches = clusters
         .iter()
         .map(|cluster| {
-            let existing = cluster.find_covering_task(lookup).map_err(|error| {
+            let existing = cluster.find_covering_task(&lookup).map_err(|error| {
                 retryable_pipeline_error(
                     "dedupe_lookup",
                     &audit,

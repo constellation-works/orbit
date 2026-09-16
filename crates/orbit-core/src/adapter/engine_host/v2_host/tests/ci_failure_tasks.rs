@@ -4,17 +4,23 @@
 //! Every test drives the action through `run_deterministic`, which is the only
 //! way a job step reaches it.
 
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
+
 use orbit_common::OrbitError;
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::task::TaskStatus;
+use orbit_types::task::{Task, TaskComment, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::v2_host::ci_failure_tasks::file_ci_failure_tasks_with_add;
+use crate::adapter::engine_host::v2_host::ci_failure_tasks::{
+    file_ci_failure_tasks_with_add, file_ci_failure_tasks_with_lookup,
+};
+use crate::adapter::engine_host::v2_host::duplicate_tasks::DuplicateTaskLookup;
 use crate::adapter::engine_host::v2_host::test_support::runtime_with_workspace_layout;
-use crate::application::task::TaskUpdateParams;
+use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 const HEAD: &str = "1111111111111111111111111111111111111111";
 pub(super) const CHECKOUT: &str = "3333333333333333333333333333333333333333";
@@ -884,6 +890,130 @@ fn the_filing_cap_reports_what_it_left_unfiled() {
             .len(),
         2,
         "a cap must be reported, never a silent truncation"
+    );
+}
+
+/// The store as the filer sees it: every read it makes is tallied.
+struct CountingLookup<'a> {
+    runtime: &'a OrbitRuntime,
+    list_calls: Cell<usize>,
+    tag_calls: Cell<usize>,
+    comment_reads: RefCell<BTreeMap<String, usize>>,
+}
+
+impl DuplicateTaskLookup for CountingLookup<'_> {
+    fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
+        self.tag_calls.set(self.tag_calls.get() + 1);
+        self.runtime.list_tasks_by_tags(tags)
+    }
+
+    fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
+        self.list_calls.set(self.list_calls.get() + 1);
+        self.runtime.list_tasks()
+    }
+
+    fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+        self.runtime.get_task(task_id)
+    }
+
+    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
+        *self
+            .comment_reads
+            .borrow_mut()
+            .entry(task_id.to_string())
+            .or_default() += 1;
+        self.runtime.get_task_comments(task_id)
+    }
+}
+
+/// A red run with several clusters used to re-hydrate the whole task list and
+/// re-read every open task's comments once per cluster — and again once per
+/// legacy key on a compiler-cause cluster. One filing is one snapshot.
+#[test]
+fn a_multi_cluster_sweep_hydrates_tasks_once_and_reads_each_open_tasks_comments_once() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let mut open_ids: Vec<String> = (0..3)
+        .map(|index| {
+            let task = runtime
+                .add_task(TaskAddParams {
+                    title: format!("Unrelated backlog item {index}"),
+                    description: "Nothing here resembles a CI failure.".to_string(),
+                    acceptance_criteria: vec!["Done.".to_string()],
+                    priority: TaskPriority::Low,
+                    task_type: Some(TaskType::Chore),
+                    status: Some(TaskStatus::Backlog),
+                    ..TaskAddParams::default()
+                })
+                .expect("seed open task");
+            runtime
+                .update_task(
+                    &task.id,
+                    TaskUpdateParams {
+                        comment: Some(format!("Discussion on item {index}.")),
+                        ..TaskUpdateParams::default()
+                    },
+                )
+                .expect("comment on open task");
+            task.id
+        })
+        .collect();
+    open_ids.sort();
+    // Two plain clusters plus one compiler-cause cluster consolidated from
+    // three jobs, which also carries three legacy keys to assess.
+    let mut failures = vec![
+        failure(
+            10,
+            "ci",
+            "build",
+            "cargo build",
+            "ci\tbuild\t2026-08-30T01:00:00Z error: expected 3 arguments, found 2\n",
+            CHECKOUT,
+        ),
+        failure(
+            11,
+            "ci",
+            "test",
+            "cargo test",
+            "ci\ttest\t2026-08-30T01:00:00Z thread 'main' panicked at 'boom'\n",
+            CHECKOUT,
+        ),
+    ];
+    failures.extend(compiler_findings());
+    let lookup = CountingLookup {
+        runtime: &runtime,
+        list_calls: Cell::new(0),
+        tag_calls: Cell::new(0),
+        comment_reads: RefCell::new(BTreeMap::new()),
+    };
+
+    let output = file_ci_failure_tasks_with_lookup(
+        &runtime,
+        &json!({"ci_evidence": snapshot(failures)}),
+        &lookup,
+    )
+    .expect("file ci failure tasks");
+
+    assert_eq!(output["clusters"], json!(3), "{output}");
+    assert_eq!(output["filed_count"], json!(3), "{output}");
+    assert_eq!(
+        lookup.list_calls.get(),
+        1,
+        "the task list must be hydrated once per filing, not once per cluster"
+    );
+    assert!(
+        lookup.tag_calls.get() >= 3,
+        "each cluster still runs its own exact-key query: {}",
+        lookup.tag_calls.get()
+    );
+    let comment_reads = lookup.comment_reads.borrow();
+    assert_eq!(
+        comment_reads.keys().cloned().collect::<Vec<_>>(),
+        open_ids,
+        "only the open set has its comments read"
+    );
+    assert!(
+        comment_reads.values().all(|reads| *reads == 1),
+        "each open task's comments are read once per filing: {comment_reads:?}"
     );
 }
 
