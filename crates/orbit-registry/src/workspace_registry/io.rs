@@ -172,6 +172,13 @@ fn validated_registry_path(path: &Path) -> Result<PathBuf, OrbitError> {
     let canonical_parent = parent
         .canonicalize()
         .map_err(|error| OrbitError::Io(format!("canonicalize {}: {error}", parent.display())))?;
+    validated_registry_path_from_canonical_parent(path, canonical_parent)
+}
+
+fn validated_registry_path_from_canonical_parent(
+    path: &Path,
+    canonical_parent: PathBuf,
+) -> Result<PathBuf, OrbitError> {
     let canonical_path = canonical_parent.join(REGISTRY_FILE_NAME);
     if !canonical_path.starts_with(&canonical_parent) {
         return Err(OrbitError::WorkspaceError(format!(
@@ -208,14 +215,17 @@ fn validated_registry_path(path: &Path) -> Result<PathBuf, OrbitError> {
 /// create the root as a side effect.
 fn validated_registry_path_if_root_exists(path: &Path) -> Result<Option<PathBuf>, OrbitError> {
     let parent = registry_parent(path)?;
-    match std::fs::symlink_metadata(parent) {
-        Ok(_) => validated_registry_path(path).map(Some),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(OrbitError::Io(format!(
-            "inspect {}: {error}",
-            parent.display()
-        ))),
-    }
+    let canonical_parent = match parent.canonicalize() {
+        Ok(canonical_parent) => canonical_parent,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "canonicalize {}: {error}",
+                parent.display()
+            )));
+        }
+    };
+    validated_registry_path_from_canonical_parent(path, canonical_parent).map(Some)
 }
 
 fn registry_parent(path: &Path) -> Result<&Path, OrbitError> {
