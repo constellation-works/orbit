@@ -51,7 +51,7 @@ template:
   - no-diff-expected
   priority: high
   complexity: hard
-  crew: opus
+  crew: grok
   status: backlog
 dedupe: skip_if_open
 created_by: codex

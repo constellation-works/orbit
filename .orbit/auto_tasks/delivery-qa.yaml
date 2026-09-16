@@ -4,7 +4,7 @@ description: Exercise a frozen delivery batch using typed artifact evidence
 enabled: true
 schedule:
   deliveries_landed:
-    owner_machine: hm_9ca6004473492f06
+    owner_machine: hm_ba054a1a8fbfb914
     branch: agent-main
     threshold: 10
     max_wait_minutes: 360
@@ -23,13 +23,13 @@ template:
     observation); set examination_complete only after all obligations are examined.
     Task status, summary prose and successful process exit do not certify coverage.
   acceptance_criteria:
-  - Every captured obligation is examined at the exact supplied revisions.
-  - Concrete checks and findings are attached as valid automation-coverage.json evidence.
-  - Missing or skipped examination remains explicitly incomplete.
+    - Every captured obligation is examined at the exact supplied revisions.
+    - Concrete checks and findings are attached as valid automation-coverage.json evidence.
+    - Missing or skipped examination remains explicitly incomplete.
   task_type: chore
   tags:
-  - delivery-qa
-  - no-diff-expected
+    - delivery-qa
+    - no-diff-expected
   priority: medium
   complexity: hard
   crew: grok

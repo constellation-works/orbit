@@ -4,7 +4,7 @@ description: Review a frozen delivery batch using typed artifact evidence
 enabled: true
 schedule:
   deliveries_landed:
-    owner_machine: hm_9ca6004473492f06
+    owner_machine: hm_ba054a1a8fbfb914
     branch: agent-main
     threshold: 3
     max_wait_minutes: 360
@@ -33,17 +33,17 @@ template:
     observation); set examination_complete only after all obligations are examined.
     Task status, summary prose and successful process exit do not certify coverage.
   acceptance_criteria:
-  - Every captured obligation is examined at the exact supplied revisions.
-  - Concrete checks and findings are attached as valid automation-coverage.json evidence.
-  - Every filed finding carries a `regression_from` relation targeting the delivery task whose commit introduced the defect, or states why no captured delivery can be held responsible.
-  - Missing or skipped examination remains explicitly incomplete.
+    - Every captured obligation is examined at the exact supplied revisions.
+    - Concrete checks and findings are attached as valid automation-coverage.json evidence.
+    - Every filed finding carries a `regression_from` relation targeting the delivery task whose commit introduced the defect, or states why no captured delivery can be held responsible.
+    - Missing or skipped examination remains explicitly incomplete.
   task_type: chore
   tags:
-  - delivery-code-review
-  - no-diff-expected
+    - delivery-code-review
+    - no-diff-expected
   priority: medium
   complexity: hard
-  crew: opus
+  crew: luna
   status: backlog
 dedupe: skip_if_open
 created_by: system

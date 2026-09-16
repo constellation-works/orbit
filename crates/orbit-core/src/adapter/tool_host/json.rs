@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use orbit_common::OrbitError;
+use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     ArtifactPresentation, MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, TaskComment,
     TaskHistoryEntry, TaskStatus, artifact_presentation, resolve_task_dependencies,
@@ -52,21 +52,84 @@ pub(super) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStat
 }
 
 pub(super) fn serialize_task(runtime: &OrbitRuntime, task: &Task) -> Result<Value, OrbitError> {
-    let status_by_id = runtime.task_status_index()?;
+    serialize_task_record(runtime, task, true)
+}
+
+/// Serialize a task returned by a mutating tool.
+///
+/// Write responses carry the task record by default. Append-heavy sidecars are
+/// included only when the caller explicitly projects them with `fields` or
+/// `field`, keeping a write from hydrating comments and history it does not
+/// need. The full `orbit.task.show` path remains available through
+/// [`serialize_task`].
+pub(super) fn serialize_task_write_response(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    fields: Option<&[String]>,
+) -> Result<Value, OrbitError> {
+    match fields {
+        Some(fields) => task_fields_to_json(runtime, task, fields),
+        None => serialize_task_record(runtime, task, false),
+    }
+}
+
+fn serialize_task_record(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    include_sidecars: bool,
+) -> Result<Value, OrbitError> {
+    let status_by_id = task_reference_status_index(runtime, task)?;
     let mut value = task_to_json(task, &status_by_id);
     let object = value.as_object_mut().ok_or_else(|| {
         OrbitError::Execution("task JSON projection did not produce an object".to_string())
     })?;
-    object.insert(
-        "comments".to_string(),
-        serialize_comments(&runtime.get_task_comments(&task.id)?)?,
-    );
-    object.insert(
-        "history".to_string(),
-        serialize_history(&runtime.get_task_history(&task.id)?)?,
-    );
+    if include_sidecars {
+        object.insert(
+            "comments".to_string(),
+            serialize_comments(&runtime.get_task_comments(&task.id)?)?,
+        );
+        object.insert(
+            "history".to_string(),
+            serialize_history(&runtime.get_task_history(&task.id)?)?,
+        );
+    }
     insert_resolved_crew(runtime, task, object);
     Ok(value)
+}
+
+/// Resolve only the referenced task IDs needed by one task projection.
+///
+/// The list surface already owns a bounded status page and passes its index to
+/// [`task_to_json`]. Individual task reads must not replace that bounded page
+/// with a registry-wide scan, so they point-read the handful of dependency and
+/// relation targets instead.
+fn task_reference_status_index(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
+    let referenced_ids = task
+        .dependencies()
+        .into_iter()
+        .chain(
+            task.relations
+                .iter()
+                .map(|relation| relation.target.clone()),
+        )
+        .collect::<BTreeSet<_>>();
+    let mut status_by_id = BTreeMap::new();
+    for id in referenced_ids {
+        match runtime.get_task_row(&id) {
+            Ok(row) => {
+                status_by_id.insert(id, row.task.status);
+            }
+            Err(OrbitError::NotFound {
+                kind: NotFoundKind::Task,
+                ..
+            }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(status_by_id)
 }
 
 /// Enrich a task projection with its resolved crew, when this host can resolve
@@ -104,7 +167,7 @@ pub(super) fn task_fields_to_json(
         .iter()
         .any(|field| matches!(field.as_str(), "resolved_dependencies" | "relations"))
     {
-        Some(runtime.task_status_index()?)
+        Some(task_reference_status_index(runtime, task)?)
     } else {
         None
     };
