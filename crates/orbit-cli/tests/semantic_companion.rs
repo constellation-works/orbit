@@ -335,7 +335,7 @@ while IFS= read -r line; do
   fi
   case "$line" in
     *'"method":"info"'*)
-      printf '{{"id":%s,"result":{{"model_id":"bge-small-en-v1.5","dim":2,"max_input_tokens":512,"version":"0.3.1"}}}}\n' "$id"
+      printf '{{"id":%s,"result":{{"model_id":"bge-small-en-v1.5","dim":2,"max_input_tokens":512,"version":"__ORBIT_VERSION__"}}}}\n' "$id"
       ;;
     *'"method":"token_count"'*)
       texts_part=$(printf '%s\n' "$line" | sed -n 's/.*"texts":\[\(.*\)\].*/\1/p')
@@ -379,6 +379,7 @@ done
 "#,
             self.invocations.display()
         );
+        let script = script.replace("__ORBIT_VERSION__", env!("CARGO_PKG_VERSION"));
         write_executable(&self.companion, &script);
     }
 

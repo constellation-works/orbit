@@ -632,9 +632,7 @@ impl TestWorkspace {
 
     #[cfg(unix)]
     fn write_mock_companion(&self) {
-        write_executable(
-            &self.companion,
-            r#"#!/bin/sh
+        let script = r#"#!/bin/sh
 while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
   if [ -z "$id" ]; then
@@ -642,7 +640,7 @@ while IFS= read -r line; do
   fi
   case "$line" in
     *'"method":"info"'*)
-      printf '{"id":%s,"result":{"model_id":"bge-small-en-v1.5","dim":2,"max_input_tokens":512,"version":"0.3.1"}}\n' "$id"
+      printf '{"id":%s,"result":{"model_id":"bge-small-en-v1.5","dim":2,"max_input_tokens":512,"version":"__ORBIT_VERSION__"}}\n' "$id"
       ;;
     *'"method":"token_count"'*)
       texts_part=$(printf '%s\n' "$line" | sed -n 's/.*"texts":\[\(.*\)\].*/\1/p')
@@ -692,8 +690,9 @@ while IFS= read -r line; do
       ;;
   esac
 done
-"#,
-        );
+"#;
+        let script = script.replace("__ORBIT_VERSION__", env!("CARGO_PKG_VERSION"));
+        write_executable(&self.companion, &script);
     }
 }
 
