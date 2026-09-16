@@ -213,13 +213,7 @@ pub(crate) fn load_layered_resolved(
         .or(global.as_ref())
         .map(|document| document.path.as_path())
         .unwrap_or_else(|| Path::new("<built-in defaults>"));
-    let merged_raw = toml::to_string(&merged).map_err(|err| {
-        OrbitError::InvalidInput(format!(
-            "failed to render layered runtime config '{}': {err}",
-            redact_home_dir(&config_path.display().to_string())
-        ))
-    })?;
-    let mut resolved = ResolvedConfig::from_layered_raw_str(&merged_raw, config_path, persistence)?;
+    let mut resolved = ResolvedConfig::from_layered_value(merged, config_path, persistence)?;
     for document in [global.as_ref(), workspace.as_ref()].into_iter().flatten() {
         warn_compatibility_keys(&document.value, &document.path);
     }
