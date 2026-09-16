@@ -52,8 +52,9 @@ static SENSITIVE_ENV_VALUES: OnceLock<Vec<String>> = OnceLock::new();
 ///
 /// "Sensitive" is matched against the var *name* — anything containing
 /// SECRET / TOKEN / PASSWORD / API_KEY / etc. See [`is_sensitive_env_name`].
-/// Only values that pass `is_redactable_value` are substituted, so an
-/// ordinary word held by a sensitive-named variable is left untouched.
+/// Only values that pass `is_redactable_value` are substituted, so the small
+/// compatibility set of ordinary words held by a sensitive-named variable is
+/// left untouched.
 pub fn redact_sensitive_env_text(raw: &str) -> String {
     let secrets = sensitive_env_values();
     let mut redacted = raw.to_string();
@@ -602,25 +603,29 @@ fn sensitive_env_values() -> Cow<'static, [String]> {
 /// Decide whether a sensitive-named env value is eligible for substitution
 /// by [`redact_sensitive_env_text`].
 ///
-/// A value is eligible only when, after trim, it is at least 4 characters
-/// **and** it contains at least one non-letter (digit or punctuation).
-/// All-letter values are treated as ordinary words (`user`, `true`, `none`,
-/// `root`, `main`, `test`, `prod`, `local`, `auto`) and are never
-/// substituted, even when a sensitive-looking variable name happens to
-/// hold them. This is a shape gate, not a raised length floor: a short
-/// secret such as `a1b2` remains eligible.
+/// A value is eligible when, after trim, it is at least 4 characters and is
+/// not one of the small compatibility set of ordinary words (`user`, `true`,
+/// `none`, `root`, `main`, `test`, `prod`, `local`, `auto`). This keeps those
+/// known prose values readable while allowing all-letter secrets and
+/// passphrases from sensitive credential variables to be scrubbed.
 ///
 /// Eligible values are still matched with a bare substring replace so
 /// embedded tokens in URLs and concatenated log fragments stay scrubbed.
 ///
-/// False-negative accepted: an all-letter secret or passphrase with no
-/// digits or punctuation (a dictionary word, or concatenated words with
-/// no separators) is not env-substituted. Pattern-based redaction still
-/// independently catches provider-shaped tokens (`ghp_…`, `sk-…`).
+/// Pattern-based redaction still independently catches provider-shaped tokens
+/// (`ghp_…`, `sk-…`).
 // pub(crate) for sibling-layout tests in utility/tests/redaction.rs.
 pub(crate) fn is_redactable_value(value: &str) -> bool {
     let trimmed = value.trim();
-    trimmed.len() >= 4 && trimmed.chars().any(|c| !c.is_alphabetic())
+    trimmed.len() >= 4 && !is_compatibility_ordinary_word(trimmed)
+}
+
+fn is_compatibility_ordinary_word(value: &str) -> bool {
+    [
+        "user", "true", "none", "root", "main", "test", "prod", "local", "auto",
+    ]
+    .into_iter()
+    .any(|word| value.eq_ignore_ascii_case(word))
 }
 
 pub fn is_sensitive_env_name(name: &str) -> bool {

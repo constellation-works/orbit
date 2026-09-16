@@ -363,16 +363,17 @@ fn ordinary_words_are_not_redactable_env_values() {
 }
 
 #[test]
-fn secret_shaped_env_values_remain_redactable() {
+fn secret_like_env_values_remain_redactable() {
     for secret in [
         "a1b2",
         "orbit-redaction-secret-value",
         "orbit-friction-secret-value",
         "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcd123456",
+        "correcthorse",
     ] {
         assert!(
             is_redactable_value(secret),
-            "{secret} is secret-shaped and must stay eligible"
+            "{secret} is secret-like and must stay eligible"
         );
     }
 }
@@ -389,6 +390,18 @@ fn common_word_env_value_is_not_substituted_even_as_a_token_or_substring() {
         redact_sensitive_env_text("superuser username users"),
         "superuser username users"
     );
+}
+
+#[test]
+fn all_letter_secret_env_value_is_redacted_by_both_entry_points() {
+    let _env = EnvVarGuard::set("GITHUB_TOKEN", "correcthorse");
+    let raw = "provider diagnostic: correcthorse";
+
+    assert_eq!(
+        redact_sensitive_env_text(raw),
+        "provider diagnostic: [REDACTED_ENV]"
+    );
+    assert_eq!(redact_all(raw), "provider diagnostic: [REDACTED_ENV]");
 }
 
 #[test]
