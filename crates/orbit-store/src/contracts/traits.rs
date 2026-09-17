@@ -13,7 +13,7 @@ use orbit_types::workflow::{
     RunStateUpdate,
 };
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::friction::{
     FrictionAddParams, FrictionListFilter, FrictionReportedCount, FrictionUpdateParams,
@@ -73,6 +73,17 @@ pub trait TaskStoreBackend: Send + Sync {
             .into_iter()
             .map(|task| (task.id, task.status))
             .collect())
+    }
+    /// Return the bounded status projection needed to label one task's
+    /// dependency and relation targets. Backends with a workspace-aware
+    /// registry override this; the default preserves compatibility for small
+    /// test and legacy backends by falling back to their global projection.
+    fn task_status_index_for(
+        &self,
+        _workspace_id: &str,
+        _targets: &BTreeSet<String>,
+    ) -> Result<BTreeMap<OrbitId, TaskStatus>, OrbitError> {
+        self.task_status_index()
     }
     fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
         let required_tags = normalize_task_tags(tags.to_vec());

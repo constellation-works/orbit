@@ -1,6 +1,6 @@
 //! Shared bounded task queries for the runtime task-list surface.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::TaskStoreBackend;
@@ -88,6 +88,22 @@ impl OrbitRuntime {
             return Ok(TaskCandidates::default());
         }
         self.stores().tasks().task_candidates(filter, limit)
+    }
+
+    /// Return the bounded registry status projection needed to label one
+    /// task's dependency and relation targets. The registry resolves target
+    /// ids across workspace partitions without hydrating their bundles.
+    pub fn task_status_index_for(
+        &self,
+        targets: &BTreeSet<String>,
+    ) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
+        if !self.coordination_task_reads_visible() {
+            return Ok(BTreeMap::new());
+        }
+        let workspace_id = self.workspace_id()?;
+        self.stores()
+            .tasks()
+            .task_status_index_for(&workspace_id, targets)
     }
 
     pub fn get_task_row(&self, id: &str) -> Result<TaskRow, OrbitError> {
