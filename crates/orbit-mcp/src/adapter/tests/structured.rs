@@ -8,7 +8,7 @@ fn mcp_structured_content_preserves_existing_objects() {
 }
 
 mod artifact_image_content {
-    use rmcp::model::RawContent;
+    use rmcp::model::ContentBlock;
     use serde_json::json;
 
     use super::super::super::structured::mcp_tool_call_result;
@@ -37,8 +37,8 @@ mod artifact_image_content {
         // The image block is what actually reaches a multimodal client's vision
         // input; base64 in a JSON string would only ever be read as text.
         assert_eq!(result.content.len(), 2);
-        match &result.content[1].raw {
-            RawContent::Image(image) => {
+        match &result.content[1] {
+            ContentBlock::Image(image) => {
                 assert_eq!(image.mime_type, "image/png");
                 assert_eq!(image.data, "iVBORw0KGgo=");
             }
@@ -46,8 +46,8 @@ mod artifact_image_content {
         }
 
         // The accompanying text is a summary, not a second copy of the payload.
-        match &result.content[0].raw {
-            RawContent::Text(text) => {
+        match &result.content[0] {
+            ContentBlock::Text(text) => {
                 assert!(text.text.contains("diagrams/flow.png"), "{}", text.text);
                 assert!(
                     !text.text.contains("iVBORw0KGgo="),
@@ -68,7 +68,7 @@ mod artifact_image_content {
             !result
                 .content
                 .iter()
-                .any(|content| matches!(content.raw, RawContent::Image(_))),
+                .any(|content| matches!(content, ContentBlock::Image(_))),
             "opaque payloads must not reach a renderer"
         );
         assert!(result.structured_content.is_some());
@@ -79,7 +79,7 @@ mod artifact_image_content {
         let result = mcp_tool_call_result(json!({ "id": "ORB-00042", "status": "done" }));
         // Unchanged from the default: one text mirror of the JSON payload.
         assert_eq!(result.content.len(), 1);
-        assert!(matches!(result.content[0].raw, RawContent::Text(_)));
+        assert!(matches!(result.content[0], ContentBlock::Text(_)));
         assert_eq!(
             result.structured_content.expect("structured payload")["status"],
             "done"
