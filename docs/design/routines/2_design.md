@@ -189,6 +189,16 @@ one of them in the same change. The consequences:
   the same way when it carries the name this workspace seeds. An operator's own
   routine wearing a bundled filename declares its own name, so it is still
   reported as a collision and preserved.
+- A *retired* default the manifest never recorded is judged by content too
+  [DANI-10502]. It wears no shipped name, so the adoption rule above cannot
+  reach it and the manifest-driven retirement cannot see it; before, it stayed
+  in the active catalog forever while every surface advised a sync that
+  reported `unchanged`. Reconciliation now scans the directory for definitions
+  targeting a retired job: one matching a retired shape leaves the active
+  catalog, always with a copy under `.retired-managed/routines/` since no
+  recorded digest proves Orbit wrote those exact bytes; anything else is the
+  operator's own file, preserved in place and reported with the step that
+  clears it.
 - Any other difference — cadence, target, policy, description, an added comment —
   is a local edit: preserved, reported, never rewritten.
 
@@ -475,15 +485,24 @@ After upgrading, `orbit clock status` reports a native unit that still invokes
 for a binary another installer placed. Workspace synchronization refreshes managed routine definitions and retires
 the former auto-task scheduler routine. `orbit doctor` reports that retired managed file
 as deprecated, and `orbit doctor --fix-stale-artifacts` moves an unchanged seeded copy to
-`.retired-managed/` while preserving an operator-edited copy there for inspection.
+`.retired-managed/` while preserving an operator-edited copy there for inspection. A
+copy the manifest never recorded is deprecated too, but its remediation is
+`orbit workspace sync`: the repair flag deletes only bytes a recorded digest proves
+Orbit wrote, and retiring an untracked file keeps a copy instead [DANI-10502].
 
 Until that sync runs, a definition targeting the retired `auto_task_scheduler_pipeline`
 job is *skipped*, not failed: the loader recognises the retired target
 (`RETIRED_ROUTINE_JOBS`), so `orbit routine list` shows the routine as retired with the
-command that clears it, the dashboard carries it under `retired`, and a clock tick emits
+step that clears it, the dashboard carries it under `retired`, and a clock tick emits
 one non-noteworthy `retired` row instead of a load error on every pass [DANI-10392]. A
 job the workspace still defines itself resolves through the catalog first, and any other
 unresolvable target remains a fail-closed load error.
+
+Discovery cannot tell a definition Orbit seeded from one the operator wrote, so it
+states the synchronization step and Core — the layer owning the templates and the
+manifest — narrows it: a definition the sync would leave exactly where it is carries
+*delete or retarget* instead [DANI-10502]. The advice named on any surface is
+therefore always one that changes something.
 
 Legacy `[routines] role` and routine `hosts:` fields warn during their compatibility
 window but no longer affect eligibility. Every registered owner checkout with an enabled

@@ -405,6 +405,8 @@ mod artifacts {
     use crate::application::artifact_health::{
         ArtifactCondition, ArtifactHealth, ArtifactKind, ArtifactProvenance,
     };
+    use crate::application::routine::RETIRED_ROUTINE_FILES;
+    use crate::application::workspace_sync::reconcile_workspace_managed_artifacts;
 
     fn init_workspace(root: &Path) -> (PathBuf, PathBuf) {
         let global_root = root.join("global");
@@ -797,6 +799,89 @@ policy:\n  timeout_minutes: 30\n  overlap: forbid\n";
             1
         );
         assert!(!path.exists());
+    }
+
+    /// The same retired default with no manifest entry at all [DANI-10502].
+    /// `orbit routine list` shows it as retired on every pass, so doctor
+    /// reporting the routine catalog healthy left the operator with two
+    /// surfaces contradicting each other and no command that changed
+    /// anything. Retirement keeps a copy here rather than deleting, so the
+    /// remediation is synchronization, not the repair flag.
+    #[test]
+    fn untracked_retired_routine_is_deprecated_rather_than_a_healthy_catalog() {
+        let root = tempdir().expect("create tempdir");
+        let (global_root, workspace_root) = init_workspace(root.path());
+        let routines_dir = workspace_root.join("routines");
+        let seeded = RETIRED_ROUTINE_FILES
+            .iter()
+            .find(|(stem, _)| *stem == "auto_task_scheduler")
+            .map(|(_, template)| {
+                template.replace("__ORBIT_ROUTINE_NAME__", "auto-task-scheduler-repo")
+            })
+            .expect("the retired scheduler ships as a provenance shape");
+        let path = routines_dir.join("auto_task_scheduler.yaml");
+        std::fs::write(&path, &seeded).expect("seed previous release routine");
+
+        let runtime =
+            OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build runtime");
+        let report = runtime
+            .inspect_definition_artifacts()
+            .expect("inspect artifacts");
+        let finding = health_of(&report, ArtifactKind::Routine)
+            .findings
+            .iter()
+            .find(|finding| finding.name == "auto_task_scheduler")
+            .unwrap_or_else(|| {
+                panic!(
+                    "an untracked retired default must not read as a healthy catalog: {:?}",
+                    health_of(&report, ArtifactKind::Routine).findings
+                )
+            });
+        assert_eq!(finding.condition, ArtifactCondition::Deprecated);
+        assert_eq!(finding.provenance, ArtifactProvenance::UserAuthored);
+        assert!(
+            !finding.is_unloadable_shipped_default(),
+            "a deprecated definition must not escalate the doctor exit code"
+        );
+        assert!(
+            finding.remediation.contains("orbit workspace sync"),
+            "{}",
+            finding.remediation
+        );
+
+        // The repair flag never deletes bytes nothing recorded as Orbit's.
+        assert_eq!(
+            runtime
+                .remove_stale_definition_artifacts()
+                .expect("retire pass"),
+            0
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the file is still on disk"),
+            seeded
+        );
+
+        // The remediation converges: synchronization retires it and doctor
+        // then agrees the catalog is healthy.
+        reconcile_workspace_managed_artifacts(
+            &global_root,
+            &workspace_root,
+            Some(&RoutineSeedIdentity::new("repo").expect("routine seed identity")),
+            "main",
+            false,
+        )
+        .expect("workspace sync");
+        assert!(!path.exists(), "the sync the remediation names clears it");
+        assert!(
+            health_of(
+                &runtime
+                    .inspect_definition_artifacts()
+                    .expect("inspect after sync"),
+                ArtifactKind::Routine,
+            )
+            .findings
+            .is_empty()
+        );
     }
 
     /// Criteria: a faulty *user-authored* artifact is reported but never

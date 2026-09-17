@@ -70,6 +70,17 @@ fn record_as_orbit_written(routines_dir: &std::path::Path, stem: &str, body: &st
     .expect("write manifest");
 }
 
+/// Whether the routines manifest claims `stem` at all.
+fn manifest_tracks(routines_dir: &std::path::Path, stem: &str) -> bool {
+    load_managed_asset_manifest(
+        &routines_dir.join(MANAGED_ASSET_MANIFEST_FILE),
+        "routine",
+        ManagedAssetLayout::YamlStem,
+    )
+    .expect("load manifest")
+    .is_some_and(|manifest| manifest.assets.contains_key(stem))
+}
+
 fn outcome_of(reconciled: &ManagedAssetReconciliation, stem: &str) -> Vec<ManagedAssetOutcome> {
     reconciled
         .actions
@@ -529,5 +540,117 @@ fn overwriting_seed_restores_the_template_default_enabled() {
     assert_eq!(
         restored,
         render(current_template("task_triage"), "task_triage", "workspace")
+    );
+}
+
+/// The gap this closes [DANI-10502]: the same retired default, on disk with
+/// no manifest entry at all — a release that wrote the file without recording
+/// the write, or a manifest since reset. The tracked loop cannot see it and it
+/// wears no shipped name, so before this it stayed in the active catalog
+/// forever while every surface advised a sync that reported `unchanged`.
+#[test]
+fn untracked_retired_default_is_retired_with_a_preserved_copy() {
+    let root = tempdir().expect("create tempdir");
+    let routines_dir = root.path().join("routines");
+    seed_default_routines(&routines_dir, "workspace", false).expect("seed current defaults");
+
+    let seeded = render(
+        retired_template("auto_task_scheduler"),
+        "auto_task_scheduler",
+        "workspace",
+    );
+    let path = routines_dir.join("auto_task_scheduler.yaml");
+    std::fs::write(&path, &seeded).expect("write the previous release's routine");
+    assert!(
+        !manifest_tracks(&routines_dir, "auto_task_scheduler"),
+        "the fixture is the untracked case"
+    );
+
+    // `--check` classifies it without touching the workspace.
+    let identity = crate::application::routine::RoutineSeedIdentity::new("workspace")
+        .expect("build seed identity");
+    let checked = crate::application::routine::reconcile_default_routines(
+        &routines_dir,
+        &identity,
+        false,
+        crate::application::ManagedAssetReconcileMode::Check,
+    )
+    .expect("check");
+    assert_eq!(
+        outcome_of(&checked, "auto_task_scheduler"),
+        vec![ManagedAssetOutcome::Retired]
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("check mode leaves the file in place"),
+        seeded
+    );
+
+    let reconciled = seed_default_routines(&routines_dir, "workspace", false).expect("sync");
+    assert_eq!(reconciled.retired, 1);
+    assert_eq!(
+        outcome_of(&reconciled, "auto_task_scheduler"),
+        vec![ManagedAssetOutcome::Retired]
+    );
+    assert!(reconciled.warnings.is_empty(), "{:?}", reconciled.warnings);
+    assert!(
+        !path.exists(),
+        "the retired default leaves the active catalog"
+    );
+    // Nothing recorded these bytes as Orbit's, so they are moved aside rather
+    // than deleted outright.
+    assert_eq!(
+        std::fs::read_to_string(
+            root.path()
+                .join(".retired-managed/routines/auto_task_scheduler.yaml")
+        )
+        .expect("an untracked retired default is copied aside, not destroyed"),
+        seeded
+    );
+
+    // Converged: the next sync has nothing left to retire.
+    let second = seed_default_routines(&routines_dir, "workspace", false).expect("second sync");
+    assert_eq!(second.retired, 0);
+    assert!(outcome_of(&second, "auto_task_scheduler").is_empty());
+}
+
+/// The distinguishing condition for an untracked file: an operator's own
+/// routine wearing a retired default's filename is never Orbit's to retire, so
+/// it is preserved in place and reported with the step that actually clears
+/// it — not with a sync that would leave it exactly where it is.
+#[test]
+fn user_authored_routine_at_a_retired_stem_is_preserved_with_actionable_advice() {
+    let root = tempdir().expect("create tempdir");
+    let routines_dir = root.path().join("routines");
+    seed_default_routines(&routines_dir, "workspace", false).expect("seed current defaults");
+
+    let user_authored = render(
+        retired_template("auto_task_scheduler"),
+        "auto_task_scheduler",
+        "workspace",
+    )
+    .replace("auto-task-scheduler-workspace", "my-own-scheduler")
+    .replace(r#"cron: "* * * * *""#, r#"cron: "*/7 * * * *""#);
+    let path = routines_dir.join("auto_task_scheduler.yaml");
+    std::fs::write(&path, &user_authored).expect("write the operator's own routine");
+
+    let reconciled = seed_default_routines(&routines_dir, "workspace", false).expect("sync");
+    assert_eq!(reconciled.retired, 0);
+    assert_eq!(
+        outcome_of(&reconciled, "auto_task_scheduler"),
+        vec![ManagedAssetOutcome::Preserved]
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("reread routine"),
+        user_authored,
+        "a routine Orbit did not write is never moved or rewritten"
+    );
+    let warning = reconciled
+        .warnings
+        .iter()
+        .find(|warning| warning.contains("auto_task_scheduler.yaml"))
+        .unwrap_or_else(|| panic!("the operator must be told: {:?}", reconciled.warnings));
+    assert!(
+        warning.contains("delete the file or retarget it"),
+        "the warning names a step that changes something: {warning}"
     );
 }

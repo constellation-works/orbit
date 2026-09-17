@@ -1,6 +1,7 @@
 use crate::application::auto_tasks::AutoTaskAddParams;
 use crate::application::job::JobRunListParams;
 use crate::application::job::pipeline::worker_command_override;
+use crate::application::routine::RETIRED_ROUTINE_FILES;
 use crate::application::routines::RoutineHostIdentity;
 use crate::application::routines::clock::{ClockSettings, save_clock_settings};
 use crate::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
@@ -598,15 +599,20 @@ fn tick_reports_a_retired_default_as_skipped_rather_than_a_load_error() {
     std::fs::create_dir_all(global.join("resources/jobs")).expect("global jobs dir");
     std::fs::write(global.join("resources/jobs/noop.yaml"), NOOP_JOB).expect("job");
     // Exactly what an earlier release seeded, opted in and with the retired
-    // `hosts:` key dropped; this Orbit ships no such job.
-    std::fs::write(
-        orbit_dir.join("routines/auto_task_scheduler.yaml"),
-        "schemaVersion: 1\nname: auto-task-scheduler-upgraded\nenabled: true\n\
-         trigger:\n  cron: '* * * * *'\n  missed_run: skip\n\
-         target: job:auto_task_scheduler_pipeline\n\
-         policy:\n  timeout_minutes: 30\n  overlap: forbid\n",
-    )
-    .expect("retired routine");
+    // `hosts:` key dropped; this Orbit ships no such job. The bytes come from
+    // the shipped retired template so the file really is one `orbit workspace
+    // sync` retires — which is what the advice below promises [DANI-10502].
+    let seeded = RETIRED_ROUTINE_FILES
+        .iter()
+        .find(|(stem, _)| *stem == "auto_task_scheduler")
+        .map(|(_, template)| {
+            template
+                .replace("__ORBIT_ROUTINE_NAME__", "auto-task-scheduler-upgraded")
+                .replace("enabled: false", "enabled: true")
+        })
+        .expect("the retired scheduler ships as a provenance shape");
+    std::fs::write(orbit_dir.join("routines/auto_task_scheduler.yaml"), seeded)
+        .expect("retired routine");
     let runtime = crate::OrbitRuntime::from_roots(&global, &orbit_dir).expect("runtime");
     let provider = FixedWorkspaces {
         entries: vec![(workspace("ws-upgraded", "upgraded"), runtime.clone())],

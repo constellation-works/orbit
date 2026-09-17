@@ -42,6 +42,30 @@ pub fn retired_routine_job_reason(job: &str) -> Option<&'static str> {
         .map(|(_, reason)| *reason)
 }
 
+/// Compose a retired definition's reason: why the target is gone, then the
+/// single step that clears the file. The advice is a parameter because only
+/// the layer that owns the managed-routine templates can tell which step
+/// applies — see [`sync_retirement_advice`] and [`manual_retirement_advice`].
+pub fn retired_routine_reason(job: &str, retirement: &str, advice: &str) -> String {
+    format!("target 'job:{job}' is retired in this Orbit ({retirement}); {advice}")
+}
+
+/// The step that clears a definition Orbit seeded: synchronization retires a
+/// managed routine by content provenance.
+pub fn sync_retirement_advice(workspace: &str) -> String {
+    format!("run `orbit workspace sync` in workspace '{workspace}' to retire the definition")
+}
+
+/// The step that clears a definition Orbit did not write. Synchronization
+/// never deletes an operator's own routine, so advertising it would leave the
+/// operator running a command that reports `unchanged` forever [DANI-10502].
+pub fn manual_retirement_advice(path: &Path) -> String {
+    format!(
+        "delete '{}' or retarget it at a job this Orbit ships",
+        path.display()
+    )
+}
+
 /// Where a routine definition came from — the directory decides, not git
 /// status. Both origins are evaluated identically on the checkout's host;
 /// the distinction is provenance, reported so an operator can tell a shared
@@ -96,8 +120,11 @@ pub struct RetiredRoutine {
     pub path: PathBuf,
     /// The retired job the definition targets.
     pub job: String,
-    /// Human-readable explanation, including the `orbit workspace sync`
-    /// step that retires the file.
+    /// Human-readable explanation, including the one step that clears the
+    /// file. Discovery cannot tell a definition Orbit seeded from one the
+    /// operator wrote, so it states the synchronization step and the layer
+    /// owning managed-routine provenance narrows it — see
+    /// [`retired_routine_reason`].
     pub reason: String,
 }
 
@@ -337,9 +364,10 @@ fn load_routine_file(
                 source_workspace: source.workspace.clone(),
                 path: path.to_path_buf(),
                 job: job_name.to_string(),
-                reason: format!(
-                    "target 'job:{job_name}' is retired in this Orbit ({reason}); run `orbit workspace sync` in workspace '{}' to retire the definition",
-                    source.workspace
+                reason: retired_routine_reason(
+                    job_name,
+                    reason,
+                    &sync_retirement_advice(&source.workspace),
                 ),
             }),
             catalog_error: None,
