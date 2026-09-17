@@ -41,10 +41,11 @@ impl VectorStore {
     /// The first complete same-source write (another `upsert_embeddings` or
     /// `delete_source`) that commits after this call's snapshot wins. Commit
     /// reloads the source's field names and active-model content hashes and
-    /// aborts with [`OrbitError::Store`] unless that fingerprint is unchanged.
-    /// The abort does not write, so it cannot mix field revisions, overwrite a
-    /// later accepted source, or resurrect a deleted source. A hash recheck of
-    /// only the fields this call prepared is not the commit gate.
+    /// skips the source if that fingerprint changed. The skipped source is
+    /// named in [`UpsertReport::skipped_sources`], so it cannot mix field
+    /// revisions, overwrite a later accepted source, or resurrect a deleted
+    /// source. A hash recheck of only the fields this call prepared is not the
+    /// commit gate.
     pub fn upsert_embeddings(
         &self,
         source_kind: &str,
@@ -60,8 +61,9 @@ impl VectorStore {
     /// and write batches.
     ///
     /// Every source is fingerprinted before inference and rechecked in the
-    /// transaction that writes it. A conflict rolls back that whole write
-    /// batch; earlier bounded batches may already have committed.
+    /// transaction that writes it. A conflicting source is skipped and
+    /// recorded in the report; other sources in the batch and later bounded
+    /// batches continue.
     pub(super) fn upsert_embedding_sources(
         &self,
         source_kind: &str,
@@ -120,12 +122,6 @@ impl VectorStore {
         }
 
         embed_prepared_sources(&mut prepared_sources, embedder)?;
-        report.embedded_chunks = prepared_sources
-            .iter()
-            .flat_map(|source| &source.fields)
-            .map(|field| field.chunks.len())
-            .sum();
-
         if prepared_sources.is_empty() {
             return Ok(report);
         }
@@ -136,11 +132,13 @@ impl VectorStore {
             let tx = conn
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(|error| OrbitError::Store(error.to_string()))?;
+            let mut embedded_chunks = 0;
             for source in source_batch {
                 let current =
                     StoredSource::load(&tx, source_kind, &source.source_id, embedder.model_id())?;
                 if current != source.snapshot {
-                    return Err(source_changed_during_embed(source_kind, &source.source_id));
+                    report.skipped_sources.push(source.source_id.clone());
+                    continue;
                 }
 
                 for field in &source.stale_fields {
@@ -164,11 +162,13 @@ impl VectorStore {
                         Some(embedder.model_id()),
                     )?;
                     insert_field_chunks(&tx, source_kind, &source.source_id, field, embedder)?;
+                    embedded_chunks += field.chunks.len();
                 }
             }
 
             tx.commit()
                 .map_err(|error| OrbitError::Store(error.to_string()))?;
+            report.embedded_chunks += embedded_chunks;
         }
 
         Ok(report)
@@ -180,12 +180,6 @@ fn lock_connection(
 ) -> Result<MutexGuard<'_, Connection>, OrbitError> {
     conn.lock()
         .map_err(|error| OrbitError::Store(format!("mutex poisoned: {error}")))
-}
-
-fn source_changed_during_embed(source_kind: &str, source_id: &str) -> OrbitError {
-    OrbitError::Store(format!(
-        "source {source_kind}:{source_id} changed during embedding; upsert aborted"
-    ))
 }
 
 /// Chunk one field's text with no store access. Inference is deferred until

@@ -53,10 +53,12 @@ impl EmbeddingField {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpsertReport {
     pub embedded_chunks: usize,
     pub skipped_fields: usize,
+    #[serde(default)]
+    pub skipped_sources: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

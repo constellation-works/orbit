@@ -173,10 +173,11 @@ fn semantic_index_text(result: SemanticIndexResult) -> String {
             stale_sources,
         } => {
             format!(
-                "Indexed semantic search: model={} embedded_chunks={} skipped_fields={} stale_sources={}",
+                "Indexed semantic search: model={} embedded_chunks={} skipped_fields={} skipped_sources={} stale_sources={}",
                 model_id,
                 report.embedded_chunks,
                 report.skipped_fields,
+                source_list(&report.skipped_sources),
                 stale_sources.len()
             )
         }
@@ -187,28 +188,39 @@ fn semantic_index_text(result: SemanticIndexResult) -> String {
             stale_sources,
         } => {
             format!(
-                "Indexed docs: model={} indexed_sources={} embedded_chunks={} skipped_fields={} stale_sources={}",
+                "Indexed docs: model={} indexed_sources={} embedded_chunks={} skipped_fields={} skipped_sources={} stale_sources={}",
                 model_id,
                 indexed_sources,
                 report.embedded_chunks,
                 report.skipped_fields,
+                source_list(&report.skipped_sources),
                 stale_sources.len()
             )
         }
         SemanticIndexResult::All { tasks, docs } => {
             format!(
-                "Indexed semantic search: tasks_model={} tasks_embedded_chunks={} tasks_skipped_fields={} tasks_stale_sources={} docs_model={} docs_indexed_sources={} docs_embedded_chunks={} docs_skipped_fields={} docs_stale_sources={}",
+                "Indexed semantic search: tasks_model={} tasks_embedded_chunks={} tasks_skipped_fields={} tasks_skipped_sources={} tasks_stale_sources={} docs_model={} docs_indexed_sources={} docs_embedded_chunks={} docs_skipped_fields={} docs_skipped_sources={} docs_stale_sources={}",
                 tasks.model_id,
                 tasks.report.embedded_chunks,
                 tasks.report.skipped_fields,
+                source_list(&tasks.report.skipped_sources),
                 tasks.stale_sources.len(),
                 docs.model_id,
                 docs.indexed_sources,
                 docs.report.embedded_chunks,
                 docs.report.skipped_fields,
+                source_list(&docs.report.skipped_sources),
                 docs.stale_sources.len()
             )
         }
+    }
+}
+
+fn source_list(sources: &[String]) -> String {
+    if sources.is_empty() {
+        "-".to_string()
+    } else {
+        sources.join(",")
     }
 }
 
