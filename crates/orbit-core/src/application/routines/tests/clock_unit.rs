@@ -1,6 +1,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use tempfile::tempdir;
 
@@ -8,7 +9,7 @@ use super::super::clock::ClockPlatform;
 use super::super::clock_unit::{
     ClockUnitConvergence, ClockUnitDrift, ClockUnitVerdict, RunningBinary,
     clock_reload_pending_path, clock_unit_drift_warning_at, converge_clock_unit_with,
-    inspect_clock_unit_at, probe_program_version,
+    inspect_clock_unit_at, probe_program_version, probe_program_version_within,
 };
 use super::clock::MockRunner;
 
@@ -320,11 +321,14 @@ fn live_version_script_is_normalized() {
     fs::set_permissions(&program, permissions).expect("chmod");
     write_systemd_unit(home.path(), &program.to_string_lossy());
 
+    // The probe spawns a real shell, which under a loaded runner can take
+    // longer than the production 3s budget just to start. Only a genuinely
+    // hung script exceeds a minute, so the budget stops deciding this test.
     let inspection = inspect_clock_unit_at(
         home.path(),
         ClockPlatform::Systemd,
         &running("/opt/orbit/bin/orbit", "0.21.0"),
-        probe_program_version,
+        |program| probe_program_version_within(program, Duration::from_secs(60)),
     );
     assert_eq!(inspection.verdict, ClockUnitVerdict::VersionMismatch);
     assert_eq!(inspection.program_version.as_deref(), Some("0.20.0"));
