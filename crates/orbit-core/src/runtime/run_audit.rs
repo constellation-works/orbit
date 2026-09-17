@@ -123,6 +123,11 @@ pub struct RunCliInvocationRecord {
     pub stderr_blob_ref: Option<String>,
     pub stdout: String,
     pub stderr: String,
+    /// True when [`read_blob_text_preview_best_effort`] cut the blob before
+    /// its end. Independent of the caller's own line-budget truncation
+    /// check, which cannot see past whatever window was read here.
+    pub stdout_blob_truncated: bool,
+    pub stderr_blob_truncated: bool,
     pub exit_code: Option<i64>,
     pub timed_out: bool,
     pub duration_ms: Option<u64>,
@@ -556,12 +561,12 @@ impl OrbitRuntime {
                 .get("stderr_blob_ref")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            let stdout = read_invocation_blob(
+            let (stdout, stdout_blob_truncated) = read_invocation_blob(
                 &blob_store,
                 stdout_blob_ref.as_deref(),
                 blob_preview_max_bytes,
             );
-            let stderr = read_invocation_blob(
+            let (stderr, stderr_blob_truncated) = read_invocation_blob(
                 &blob_store,
                 stderr_blob_ref.as_deref(),
                 blob_preview_max_bytes,
@@ -590,6 +595,8 @@ impl OrbitRuntime {
                 stderr_blob_ref,
                 stdout,
                 stderr,
+                stdout_blob_truncated,
+                stderr_blob_truncated,
                 exit_code: event.raw.get("exit_code").and_then(Value::as_i64),
                 timed_out: event
                     .raw
@@ -1047,17 +1054,20 @@ fn read_blob_text_best_effort(blob_store: &BlobStore, blob_ref: &str) -> String 
     read_blob_text(blob_store, blob_ref).unwrap_or_default()
 }
 
+/// Returns the blob text and whether the blob has bytes beyond what was
+/// returned (only meaningful in preview mode; a full read is never
+/// truncated here — the caller's own line-budget check covers it).
 fn read_invocation_blob(
     blob_store: &BlobStore,
     blob_ref: Option<&str>,
     preview_max_bytes: Option<usize>,
-) -> String {
+) -> (String, bool) {
     let Some(blob_ref) = blob_ref else {
-        return String::new();
+        return (String::new(), false);
     };
     match preview_max_bytes {
         Some(max_bytes) => read_blob_text_preview_best_effort(blob_store, blob_ref, max_bytes),
-        None => read_blob_text_best_effort(blob_store, blob_ref),
+        None => (read_blob_text_best_effort(blob_store, blob_ref), false),
     }
 }
 
@@ -1065,18 +1075,23 @@ fn read_invocation_blob(
 /// line-oriented truncation matches a full-blob read, without loading a
 /// multi-MB agent transcript. The extra line is itself capped at
 /// `max_bytes` so a newline-free blob is still not fully loaded.
+///
+/// The returned bool reports whether the blob extends past the returned
+/// window. Without it, a blob whose byte at `max_bytes` is `\n` returns
+/// exactly the first line and looks complete to a caller that only sees the
+/// text — even though gigabytes may follow (DANI-10505).
 fn read_blob_text_preview_best_effort(
     blob_store: &BlobStore,
     blob_ref: &str,
     max_bytes: usize,
-) -> String {
+) -> (String, bool) {
     if blob_ref.len() < 2 || blob_ref.starts_with("error:") {
-        return String::new();
+        return (String::new(), false);
     }
     let cap = max_bytes.saturating_add(max_bytes);
     let bytes = match blob_store.read_prefix(blob_ref, cap) {
         Ok(bytes) => bytes,
-        Err(_) => return String::new(),
+        Err(_) => return (String::new(), false),
     };
     let end = if bytes.len() <= max_bytes {
         bytes.len()
@@ -1087,5 +1102,6 @@ fn read_blob_text_preview_best_effort(
             .map(|index| max_bytes + index + 1)
             .unwrap_or(bytes.len())
     };
-    String::from_utf8_lossy(&bytes[..end]).into_owned()
+    let more = bytes.len() > end;
+    (String::from_utf8_lossy(&bytes[..end]).into_owned(), more)
 }

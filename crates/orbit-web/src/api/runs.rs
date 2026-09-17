@@ -565,6 +565,8 @@ pub(super) async fn list_run_logs(
 fn run_cli_invocation_to_json(record: RunCliInvocationRecord) -> Value {
     let stdout_preview = bounded_preview(&record.stdout);
     let stderr_preview = bounded_preview(&record.stderr);
+    let stdout_truncated = stdout_preview.truncated || record.stdout_blob_truncated;
+    let stderr_truncated = stderr_preview.truncated || record.stderr_blob_truncated;
     json!({
         "run_id": record.run_id,
         "event_id": record.event_id,
@@ -576,8 +578,8 @@ fn run_cli_invocation_to_json(record: RunCliInvocationRecord) -> Value {
         "stderr_blob_ref": record.stderr_blob_ref,
         "stdout_preview": stdout_preview.text,
         "stderr_preview": stderr_preview.text,
-        "stdout_truncated": stdout_preview.truncated,
-        "stderr_truncated": stderr_preview.truncated,
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
         "exit_code": record.exit_code,
         "timed_out": record.timed_out,
         "duration_ms": record.duration_ms,

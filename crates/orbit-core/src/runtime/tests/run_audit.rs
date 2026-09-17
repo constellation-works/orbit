@@ -366,6 +366,40 @@ fn collect_run_cli_invocations_bounded_reads_preview_window_plus_current_line() 
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].stdout, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
     assert!(records[0].stdout.len() < stdout.len());
+    // DANI-10505: the cut lands exactly on a line boundary (byte 32 is the
+    // `\n`), which is exactly the shape that used to lose the truncation
+    // signal — the preview reader must still report more content follows.
+    assert!(records[0].stdout_blob_truncated);
+}
+
+/// DANI-10505: a blob that fits entirely within the preview budget must not
+/// be flagged as truncated — the reader read the whole thing.
+#[test]
+fn collect_run_cli_invocations_bounded_blob_within_budget_is_not_truncated() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let audit_root = runtime.data_root().join("state").join("audit");
+    let blob_store = BlobStore::new(audit_root.join("blobs"));
+    let stdout_ref = blob_store
+        .write(b"short output\n")
+        .expect("write short stdout");
+    let run_id = "jrun-bounded-within-budget";
+    seed_v2_audit_events(
+        &runtime,
+        run_id,
+        [json!({
+            "event_id": "evt-cli",
+            "body_kind": "cli_invocation_finished",
+            "stdout_blob_ref": stdout_ref,
+            "exit_code": 0
+        })],
+    );
+
+    let records = runtime
+        .collect_run_cli_invocations_bounded(run_id, Some(1), Some(32))
+        .expect("collect preview records");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].stdout, "short output\n");
+    assert!(!records[0].stdout_blob_truncated);
 }
 
 #[test]
