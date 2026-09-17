@@ -33,7 +33,7 @@ result ([ORB-10227]). A tool that already failed keeps its implementation error 
 orbit audit list --since 1h --status failure     # recent failures
 orbit audit list --transport local --capability agent
 orbit audit list --origin-session <id> --mcp-call <id>
-orbit audit list --workspace <id> --caller-machine <id> --process-machine <id>
+orbit audit list --workspace-id <id> --caller-machine <id> --process-machine <id>
 orbit audit list --run <jrun-id> --lease <lease-id>
 orbit audit list --json --limit 100              # full event objects
 orbit audit show <id>
@@ -41,6 +41,13 @@ orbit audit stats --since 7d
 orbit audit export --output audit.json           # JSON or --format csv
 orbit audit prune --older-than 90d --confirm
 ```
+
+The store is host-global and listing is unscoped by default: the global seam records
+unknown or unadvertised MCP tool names and workspace setup failures before a workspace
+resolves, so those rows carry a NULL `workspace_id`. `--workspace-id <id>` is an equality
+filter that excludes them; it is a subcommand filter on the stored ID, distinct from the
+global `--workspace` selector, which takes a registered name, logical ID, or checkout path
+and only routes runtime bootstrap.
 
 Per-invocation fields include `id`, `execution_id`, `timestamp`, `command`, `subcommand`,
 `tool_name`, `target_type`, `target_id`, `role`, `status` (`success|failure|denied`),

@@ -3384,6 +3384,31 @@ fn mcp_calls_are_audited_once_including_unknown_raw_names() {
     assert!(row["process_host_id"].as_str().is_some());
     assert!(row["trace_id"].as_str().is_some());
     assert!(row["origin_session_id"].as_str().is_some());
+
+    // The audit log is one host-global table, so a bare `audit list` must stay
+    // unscoped. A workspace-scoped default is a `workspace_id = ?` predicate,
+    // which cannot match the NULL the global seam writes before any workspace
+    // resolves — the unknown-name denial above would vanish from the log while
+    // the attributed rows stayed visible.
+    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["audit", "list", "--json", "--limit", "500"])
+        .output()
+        .expect("query unscoped audit rows");
+    assert!(output.status.success());
+    let rows: Value = serde_json::from_slice(&output.stdout).expect("parse unscoped audit rows");
+    let rows = rows.as_array().expect("unscoped audit row array");
+    assert!(
+        rows.iter().any(|row| {
+            row["tool_name"] == "orbit_removed_tool" && row["workspace_id"].is_null()
+        }),
+        "unscoped audit list keeps the unattributed global-seam row: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|row| {
+            row["tool_name"] == "orbit.search" && row["workspace_id"].as_str().is_some()
+        }),
+        "unscoped audit list keeps workspace-attributed rows: {rows:?}"
+    );
 }
 
 /// ORB-10448 / F2026-07-099: the managed-executor shape.

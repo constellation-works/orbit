@@ -29,7 +29,8 @@ pub struct AuditListArgs {
     ///
     /// This is deliberately distinct from the global `--workspace` selector:
     /// the latter accepts a registered name or checkout path and is resolved
-    /// during runtime bootstrap.
+    /// during runtime bootstrap. The audit log is host-global, so listing is
+    /// unscoped unless this filter is passed.
     #[arg(long = "workspace-id")]
     pub workspace_id: Option<String>,
     /// Filter by trusted caller machine ID
@@ -74,18 +75,20 @@ impl Execute for AuditListArgs {
             role: self.role.is_some(),
             tool: self.tool.is_some(),
         };
-        let workspace_id = self.workspace_id.or_else(|| {
-            runtime
-                .workspace_runtime_binding()
-                .map(|binding| binding.task_partition_id.clone())
-        });
         let events = runtime.list_audit_events_filtered(&AuditEventFilter {
             since,
             tool_name: self.tool,
             target_type: self.kind,
             status: self.status,
             role: self.role,
-            workspace_id,
+            // Only the explicit flag scopes this. The audit log is one
+            // host-global table, and a row written before (or without)
+            // workspace resolution stores a NULL `workspace_id` — the
+            // global-seam denial for an unknown or unadvertised MCP tool name,
+            // and workspace setup failures. `workspace_id = ?` cannot match
+            // NULL, so defaulting the filter to the bound workspace silently
+            // drops exactly the rows an operator audits for.
+            workspace_id: self.workspace_id,
             caller_machine_id: self.caller_machine,
             process_machine_id: self.process_machine,
             transport: self.transport,
