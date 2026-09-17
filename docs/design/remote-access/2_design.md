@@ -44,7 +44,7 @@ Startup:
 
 DashboardState stores an immutable workspace snapshot with a monotonically increasing generation and a lazy runtime cache.
 
-At each relevant request boundary, Web pins one complete snapshot. It `stat`s `workspaces.json` and reloads/validates the registry only when mtime or length has changed; otherwise the pin is an `Arc` clone and does not take the refresh lock. Workspace metadata, default selection, runtime resolution, and aggregate results for that request all use the same generation.
+At each relevant request boundary, Web pins one complete snapshot. It `stat`s `workspaces.json` and the registered checkout paths (`repo_root`, `.orbit`, and `.orbit/config.yaml`). It reloads and validates the registry when the registry mtime or length changes, or when any checkout fingerprint changes; otherwise the pin is an `Arc` clone and does not take the refresh lock. This keeps the steady-state registry file untouched while making a vanished checkout inactive and allowing a repaired checkout to become active on the next request. Workspace metadata, default selection, runtime resolution, and aggregate results for that request all use the same generation.
 
 A successful refresh atomically swaps the snapshot and evicts cached runtimes whose workspace was removed, became inactive, or changed binding. A malformed refresh logs a content-safe error and retains the last valid snapshot. Initial-load failure remains fatal.
 
