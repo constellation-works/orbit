@@ -254,8 +254,11 @@ orbit doctor
 `orbit clock status` prints the unit's program path and the version that program
 reports next to `platform:`. A version that does not match this binary is flagged on the
 same line as `mismatch: running <version> at <path>`. A unit that still invokes the
-compatibility alias `orbit sweep` is reported as stale. `orbit doctor`'s `clock-unit` row is
-the same comparison in check form:
+compatibility alias `orbit sweep` is reported as stale. `orbit clock status --format json`
+emits the same report as one JSON object: the clock's `state` (`enabled`, `paused`, or
+`unhealthy`), cadence, platform, and health fields, plus a `program` object with the unit's
+program path, version, and comparison `verdict`. `orbit doctor`'s `clock-unit` row is the
+same comparison in check form:
 
 - **ok** — the unit invokes this binary (canonical path and version match)
 - **warning** — the unit's program path differs but `--version` matches (two installs; the
