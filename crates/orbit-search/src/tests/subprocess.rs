@@ -360,16 +360,22 @@ done
         );
     }
 
+    /// Handshake budget for a `/bin/sh` + `sed` fake. Distinct from the
+    /// 300ms embed RPC budget: process startup is not the property these
+    /// tests assert.
+    const FAKE_COMPANION_CONSTRUCTION_TIMEOUT: Duration = Duration::from_secs(5);
+
     #[test]
     fn hung_embed_times_out_and_reaps_the_child() {
         let temp = tempfile::tempdir().expect("tempdir");
         let script = write_companion_script(temp.path(), "sleep 3600");
         let rpc_timeout = Duration::from_millis(300);
         let drop_timeout = Duration::from_millis(200);
-        let embedder = SubprocessEmbedder::with_path_model_stderr_and_timeouts(
+        let embedder = SubprocessEmbedder::with_path_model_stderr_construction_and_timeouts(
             script.clone(),
             "fake",
             CompanionStderr::Suppress,
+            FAKE_COMPANION_CONSTRUCTION_TIMEOUT,
             rpc_timeout,
             drop_timeout,
         )
@@ -401,10 +407,11 @@ done
         let script = write_ignore_exit_companion(temp.path());
         let rpc_timeout = Duration::from_millis(300);
         let drop_timeout = Duration::from_millis(200);
-        let embedder = SubprocessEmbedder::with_path_model_stderr_and_timeouts(
+        let embedder = SubprocessEmbedder::with_path_model_stderr_construction_and_timeouts(
             script.clone(),
             "fake",
             CompanionStderr::Suppress,
+            FAKE_COMPANION_CONSTRUCTION_TIMEOUT,
             rpc_timeout,
             drop_timeout,
         )

@@ -248,6 +248,32 @@ impl SubprocessEmbedder {
         self.io.lock().ok().map(|io| io.child.id())
     }
 
+    /// Construct with a handshake budget independent of later RPCs.
+    ///
+    /// The `info` call inside [`Self::with_path_model_stderr_and_timeouts`]
+    /// uses `construction_timeout`. After a successful handshake this installs
+    /// `rpc_timeout` so tests can assert a tight embed/drop deadline without
+    /// folding `/bin/sh` fake-companion startup into that budget.
+    #[cfg(all(test, unix))]
+    pub(crate) fn with_path_model_stderr_construction_and_timeouts(
+        path: PathBuf,
+        model: &str,
+        stderr: CompanionStderr,
+        construction_timeout: Duration,
+        rpc_timeout: Duration,
+        drop_timeout: Duration,
+    ) -> Result<Self, OrbitError> {
+        let mut embedder = Self::with_path_model_stderr_and_timeouts(
+            path,
+            model,
+            stderr,
+            construction_timeout,
+            drop_timeout,
+        )?;
+        embedder.rpc_timeout = rpc_timeout;
+        Ok(embedder)
+    }
+
     fn request(&self, request: RpcRequest) -> Result<RpcResult, OrbitError> {
         // Every request gets its own id: an id reused across requests would
         // let a stale queued response pass the correlation check below.
