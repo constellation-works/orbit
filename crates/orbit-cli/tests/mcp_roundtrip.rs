@@ -5736,6 +5736,89 @@ fn workspace_tool_calls_reuse_one_runtime_until_the_registry_changes() {
     assert_eq!(runtime_opens(&log), 2);
 }
 
+/// A cached runtime carries the crews, default crew, and execution policy it
+/// resolved from the layered `config.toml` at open. Before runtimes were kept
+/// for the session, every call re-read that configuration; keeping them must
+/// not turn an edit to either layer into a setting the session serves stale
+/// until restart.
+#[test]
+fn workspace_tool_calls_observe_a_config_toml_edit_made_during_the_session() {
+    let workspace = McpWorkspace::init();
+    let log = workspace._temp.path().join("serve-runtime-opens.log");
+    let mut client = workspace.serve_logging_runtime_opens(&log);
+
+    let created = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "config.toml edits reach a live session",
+            "description": "the crew projection follows the configuration on disk",
+            "complexity": "low",
+            "crew": "sol",
+        }),
+    );
+    let task_id = created["id"].as_str().expect("task id").to_string();
+    let shown = client.call_tool_ok("orbit_task_show", json!({ "id": task_id }));
+    assert_eq!(shown["resolved_crew"], json!("sol"));
+    let seeded_model = shown["crew_model"]
+        .as_str()
+        .expect("the seeded crew projects its model")
+        .to_string();
+    assert_eq!(runtime_opens(&log), 1);
+
+    // Workspace layer: `<checkout>/.orbit/config.toml` did not exist when the
+    // runtime was built. Its appearance overrides one crew field.
+    let workspace_config = workspace.work.join(".orbit").join("config.toml");
+    std::fs::write(
+        &workspace_config,
+        "[crews.sol]\nmodel = \"gpt-session-override\"\n",
+    )
+    .expect("write the workspace config layer");
+    assert_ne!(seeded_model, "gpt-session-override");
+    let shown = client.call_tool_ok("orbit_task_show", json!({ "id": task_id }));
+    assert_eq!(
+        shown["crew_model"],
+        json!("gpt-session-override"),
+        "a workspace config.toml written after the runtime opened must be served: {shown}"
+    );
+    assert_eq!(shown["resolved_crew"], json!("sol"));
+    assert_eq!(
+        runtime_opens(&log),
+        2,
+        "the workspace config edit must invalidate the cached runtime:\n{}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+
+    // Global layer: a crew defined in `~/.orbit/config.toml` after the rebuild.
+    // Assigning it goes through strict crew validation, which fails closed
+    // against a crews table that does not know the name.
+    let global_config = workspace.home.join(".orbit").join("config.toml");
+    let baseline = std::fs::read_to_string(&global_config).expect("read the seeded config");
+    std::fs::write(
+        &global_config,
+        format!(
+            "{baseline}\n[crews.late-arrival]\nprovider = \"codex\"\nmodel = \"gpt-late-arrival\"\n"
+        ),
+    )
+    .expect("define a crew in the global config layer");
+    client.call_tool_ok(
+        "orbit_task_update",
+        json!({ "id": task_id, "crew": "late-arrival" }),
+    );
+    let shown = client.call_tool_ok("orbit_task_show", json!({ "id": task_id }));
+    assert_eq!(shown["resolved_crew"], json!("late-arrival"));
+    assert_eq!(shown["crew_model"], json!("gpt-late-arrival"));
+    assert_eq!(
+        runtime_opens(&log),
+        3,
+        "the global config edit must invalidate the cached runtime:\n{}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+
+    // With both layers at rest the rebuilt runtime is reused again.
+    client.call_tool_ok("orbit_task_show", json!({ "id": task_id }));
+    assert_eq!(runtime_opens(&log), 3);
+}
+
 /// How many workspace runtimes the server reported opening, from the tracing
 /// target `crates/orbit-cli/src/command/mcp/server.rs` emits once per open.
 fn runtime_opens(log_path: &Path) -> usize {
