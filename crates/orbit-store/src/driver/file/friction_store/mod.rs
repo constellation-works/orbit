@@ -248,16 +248,112 @@ fn directory_trees_identical(left: &Path, right: &Path) -> Result<bool, OrbitErr
     Ok(left_directories == right_directories && left_files == right_files)
 }
 
+/// Seed or merge the default friction tag taxonomy into `tags.yaml`.
+///
+/// A missing file is created from [`DEFAULT_FRICTION_TAGS`]. An existing file
+/// receives any later default tags it lacks; operator-added tags and their
+/// values are left in place. Parse failures and empty taxonomies fail closed
+/// without rewriting the file.
 pub fn ensure_default_tag_taxonomy(frictions_root: &Path) -> Result<PathBuf, OrbitError> {
     let path = frictions_root.join(TAGS_FILENAME);
     if !path.exists() {
-        let mut body = String::new();
-        for (tag, description) in DEFAULT_FRICTION_TAGS {
-            body.push_str(&format!("{tag}: \"{description}\"\n"));
-        }
-        atomic_write_text(&path, &body).map_err(|error| OrbitError::from_write_io(&path, error))?;
+        atomic_write_text(&path, &default_taxonomy_body())
+            .map_err(|error| OrbitError::from_write_io(&path, error))?;
+        return Ok(path);
     }
+    merge_missing_default_tags(&path)?;
     Ok(path)
+}
+
+fn default_taxonomy_body() -> String {
+    let mut body = String::new();
+    for (tag, description) in DEFAULT_FRICTION_TAGS {
+        body.push_str(&format!("{tag}: \"{description}\"\n"));
+    }
+    body
+}
+
+fn merge_missing_default_tags(path: &Path) -> Result<(), OrbitError> {
+    let raw = fs::read_to_string(path)
+        .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
+    let mut value: serde_yaml::Value = parse_yaml_with(&raw, path, |_, error| {
+        OrbitError::InvalidInput(format!("parse {}: {error}", path.display()))
+    })?;
+    let mut tags = BTreeSet::new();
+    collect_tags_from_yaml(&value, &mut tags);
+    if tags.is_empty() {
+        return Err(OrbitError::InvalidInput(format!(
+            "{} must define at least one friction tag",
+            path.display()
+        )));
+    }
+    let mut missing = Vec::new();
+    for &(tag, description) in DEFAULT_FRICTION_TAGS {
+        if !tags.contains(tag) {
+            missing.push((tag, description));
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    insert_default_tags(&mut value, &missing, path)?;
+    let serialized = serialize_yaml_with(&value, |error| {
+        OrbitError::Store(format!("serialize {}: {error}", path.display()))
+    })?;
+    atomic_write_text(path, &serialized).map_err(|error| OrbitError::from_write_io(path, error))?;
+    Ok(())
+}
+
+fn insert_default_tags(
+    value: &mut serde_yaml::Value,
+    missing: &[(&str, &str)],
+    path: &Path,
+) -> Result<(), OrbitError> {
+    match value {
+        serde_yaml::Value::Mapping(map) => {
+            let tags_key = serde_yaml::Value::String("tags".to_string());
+            if let Some(tags_value) = map.get_mut(&tags_key) {
+                match tags_value {
+                    serde_yaml::Value::Sequence(items) => {
+                        for (tag, _) in missing {
+                            items.push(serde_yaml::Value::String((*tag).to_string()));
+                        }
+                        Ok(())
+                    }
+                    serde_yaml::Value::Mapping(tag_map) => {
+                        insert_tag_descriptions(tag_map, missing);
+                        Ok(())
+                    }
+                    _ => Err(OrbitError::InvalidInput(format!(
+                        "{} tags entry must be a list or mapping of tags",
+                        path.display()
+                    ))),
+                }
+            } else {
+                insert_tag_descriptions(map, missing);
+                Ok(())
+            }
+        }
+        serde_yaml::Value::Sequence(items) => {
+            for (tag, _) in missing {
+                items.push(serde_yaml::Value::String((*tag).to_string()));
+            }
+            Ok(())
+        }
+        _ => Err(OrbitError::InvalidInput(format!(
+            "{} must define at least one friction tag",
+            path.display()
+        ))),
+    }
+}
+
+fn insert_tag_descriptions(map: &mut serde_yaml::Mapping, missing: &[(&str, &str)]) {
+    for (tag, description) in missing {
+        map.insert(
+            serde_yaml::Value::String((*tag).to_string()),
+            serde_yaml::Value::String((*description).to_string()),
+        );
+    }
 }
 
 pub(crate) fn load_tag_taxonomy(frictions_root: &Path) -> Result<BTreeSet<String>, OrbitError> {

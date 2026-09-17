@@ -194,11 +194,88 @@ fn the_tag_taxonomy_is_seeded_and_read_from_the_workspace_file() {
     let path = ensure_default_tag_taxonomy(root).expect("seed taxonomy");
     assert!(path.ends_with(TAGS_FILENAME));
     assert!(load_tag_taxonomy(root).expect("load").contains("tooling"));
+}
 
-    fs::write(root.join(TAGS_FILENAME), "surprise-tag: allowed\n").expect("rewrite taxonomy");
-    let taxonomy = load_tag_taxonomy(root).expect("reload");
+#[test]
+fn existing_taxonomy_gains_missing_defaults_and_keeps_operator_tags() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::write(
+        root.join(TAGS_FILENAME),
+        "build: \"make/fmt/lint friction\"\nsurprise-tag: allowed\n",
+    )
+    .expect("stale taxonomy");
+
+    let taxonomy = load_tag_taxonomy(root).expect("merge on load");
     assert!(taxonomy.contains("surprise-tag"));
-    assert!(!taxonomy.contains("tooling"));
+    assert!(taxonomy.contains("automation"));
+    assert!(taxonomy.contains("history-diverged"));
+    assert!(taxonomy.contains("build"));
+    assert!(taxonomy.contains("tooling"));
+
+    let rewritten = fs::read_to_string(root.join(TAGS_FILENAME)).expect("reread");
+    assert!(rewritten.contains("surprise-tag"), "{rewritten}");
+    assert!(rewritten.contains("automation"), "{rewritten}");
+}
+
+#[test]
+fn a_tags_list_taxonomy_gains_missing_defaults_and_keeps_operator_tags() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::write(root.join(TAGS_FILENAME), "tags:\n- tooling\n- custom-ops\n").expect("list taxonomy");
+
+    let taxonomy = load_tag_taxonomy(root).expect("merge list taxonomy");
+    assert!(taxonomy.contains("custom-ops"));
+    assert!(taxonomy.contains("tooling"));
+    assert!(taxonomy.contains("automation"));
+    assert!(taxonomy.contains("history-diverged"));
+}
+
+#[test]
+fn a_complete_taxonomy_is_not_rewritten() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    ensure_default_tag_taxonomy(root).expect("seed");
+    let path = root.join(TAGS_FILENAME);
+    let original = fs::read_to_string(&path).expect("seeded body");
+
+    load_tag_taxonomy(root).expect("reload");
+
+    assert_eq!(fs::read_to_string(&path).expect("reread"), original);
+}
+
+#[test]
+fn malformed_taxonomy_fails_closed_without_rewrite() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    let path = root.join(TAGS_FILENAME);
+    let original = "tags: [\nunterminated";
+    fs::write(&path, original).expect("malformed taxonomy");
+
+    let error = load_tag_taxonomy(root).expect_err("malformed taxonomy must fail");
+    assert!(
+        error.to_string().contains("parse"),
+        "expected a parse failure, got {error}"
+    );
+    assert_eq!(fs::read_to_string(&path).expect("unchanged"), original);
+}
+
+#[test]
+fn empty_taxonomy_fails_closed_without_rewrite() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    let path = root.join(TAGS_FILENAME);
+    let original = "{}\n";
+    fs::write(&path, original).expect("empty mapping");
+
+    let error = load_tag_taxonomy(root).expect_err("empty taxonomy must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("must define at least one friction tag"),
+        "{error}"
+    );
+    assert_eq!(fs::read_to_string(&path).expect("unchanged"), original);
 }
 
 /// The record walk is what the importer streams; it must find every month's
