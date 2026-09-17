@@ -92,9 +92,17 @@ fn a_successful_import_preserves_every_field() {
         Some("ORB-00002")
     );
     assert_eq!(imported.record.body, "Report body for F2026-05-001");
+    // Import walks a canonicalized corpus root, so on macOS the stored path is
+    // `/private/var/...` while `tempfile` may still present `$TMPDIR` as `/var`.
+    let expected_path =
+        fs::canonicalize(source.join("2026-05/F001.md")).expect("canonical evidence path");
+    let imported_path = imported
+        .path
+        .as_ref()
+        .map(|path| fs::canonicalize(path).expect("canonical imported evidence path"));
     assert_eq!(
-        imported.path.as_deref(),
-        Some(source.join("2026-05/F001.md").as_path()),
+        imported_path.as_deref(),
+        Some(expected_path.as_path()),
         "an imported record keeps its evidence pointer"
     );
     assert_eq!(
