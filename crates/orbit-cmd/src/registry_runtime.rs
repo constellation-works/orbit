@@ -60,12 +60,16 @@ pub struct ResolvedWorkspaceSelection {
 /// caller that also compares the registry records it resolved (as the MCP
 /// server does) covers same-size edits to those records; the stamp covers the
 /// remaining composition inputs — the rest of the registry file, the host
-/// identity behind the task-prefix projection and machine identity, and the
-/// checkout's own `config.yaml` task binding.
+/// identity behind the task-prefix projection and machine identity, the
+/// checkout's own `config.yaml` task binding, and both `config.toml` layers
+/// the runtime settings (crews, default crew, execution policy) are resolved
+/// from at open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRuntimeStamp {
     registry: FileStamp,
     host_identity: FileStamp,
+    workspace_binding: FileStamp,
+    global_config: FileStamp,
     workspace_config: FileStamp,
 }
 
@@ -73,14 +77,24 @@ impl RegisteredRuntimeStamp {
     /// Stamp the composition inputs for `checkout`. An absent or unreadable
     /// file stamps as nothing, so a file that later appears or disappears is
     /// itself a change.
+    ///
+    /// The `config.toml` paths mirror `ConfigRoots::new(global_root,
+    /// shared_root)` in Core's composition, where a registered checkout's
+    /// shared root is its own `.orbit` directory.
     pub fn read(global_root: &Path, checkout: &WorkspaceCheckout) -> Self {
         Self {
             registry: FileStamp::read(&workspace_registry::registry_path_for(global_root)),
             host_identity: FileStamp::read(&global_root.join(HOST_TOML_FILE)),
-            workspace_config: FileStamp::read(&workspace_config_path(&checkout.orbit_dir)),
+            workspace_binding: FileStamp::read(&workspace_config_path(&checkout.orbit_dir)),
+            global_config: FileStamp::read(&global_root.join(CONFIG_TOML_FILE)),
+            workspace_config: FileStamp::read(&checkout.orbit_dir.join(CONFIG_TOML_FILE)),
         }
     }
 }
+
+/// The layered runtime configuration file, read from both `global_root` and
+/// the checkout's `.orbit` directory (`orbit_config::ConfigRoots`).
+const CONFIG_TOML_FILE: &str = "config.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileStamp(Option<(SystemTime, u64)>);

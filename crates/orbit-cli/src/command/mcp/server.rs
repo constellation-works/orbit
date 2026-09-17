@@ -250,7 +250,9 @@ const OPENED_WORKSPACE_RUNTIME_LOG: &str = "opened a workspace runtime";
 /// registry and all workspace stores, and started a fresh embed worker. An
 /// entry is reused only while everything it was composed from still holds: the
 /// registry records this call resolved, plus a [`RegisteredRuntimeStamp`] over
-/// the files behind them.
+/// the files behind them and over both `config.toml` layers, so an edit to the
+/// runtime configuration takes effect on the next call rather than at the next
+/// server restart.
 ///
 /// Generic over the cached value so the unit tests can exercise reuse and
 /// invalidation without opening real stores.

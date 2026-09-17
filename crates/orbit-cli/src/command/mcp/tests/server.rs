@@ -14,8 +14,10 @@ use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceStatus};
 
 use super::WorkspaceRuntimeCache;
 
-/// A global root whose registry, host identity, and workspace config all exist,
-/// so every stamped input starts out readable.
+/// A global root whose registry, host identity, workspace binding, and global
+/// `config.toml` all exist, so those stamped inputs start out readable. The
+/// workspace `config.toml` is deliberately absent, as it is for a checkout
+/// that never overrode a setting locally.
 struct Root {
     temp: tempfile::TempDir,
 }
@@ -28,8 +30,9 @@ impl Root {
         std::fs::write(root.path().join("host.toml"), "schema_version = 2\n")
             .expect("host identity");
         std::fs::create_dir_all(root.orbit_dir()).expect("orbit dir");
-        std::fs::write(root.workspace_config_path(), "workspace_id: ws_local\n")
-            .expect("workspace config");
+        std::fs::write(root.workspace_binding_path(), "workspace_id: ws_local\n")
+            .expect("workspace binding");
+        std::fs::write(root.global_config_path(), "[crews]\n").expect("global config");
         root
     }
 
@@ -45,8 +48,16 @@ impl Root {
         self.path().join("checkout/.orbit")
     }
 
-    fn workspace_config_path(&self) -> PathBuf {
+    fn workspace_binding_path(&self) -> PathBuf {
         self.orbit_dir().join("config.yaml")
+    }
+
+    fn global_config_path(&self) -> PathBuf {
+        self.path().join("config.toml")
+    }
+
+    fn workspace_config_path(&self) -> PathBuf {
+        self.orbit_dir().join("config.toml")
     }
 
     fn selection(&self) -> ResolvedWorkspaceSelection {
@@ -161,13 +172,59 @@ fn a_host_identity_or_workspace_config_edit_rebuilds_the_runtime() {
     assert_eq!(builds.count(), 2);
 
     overwrite(
-        &root.workspace_config_path(),
+        &root.workspace_binding_path(),
         "workspace_id: ws_relocated\n",
     );
     cache
         .resolve(root.path(), &selection, || builds.next())
-        .expect("rebuild after the workspace config changed");
+        .expect("rebuild after the workspace binding changed");
     assert_eq!(builds.count(), 3);
+}
+
+#[test]
+fn a_config_toml_edit_in_either_layer_rebuilds_the_runtime() {
+    let root = Root::new();
+    let selection = root.selection();
+    let cache = WorkspaceRuntimeCache::<usize>::default();
+    let builds = Builds::default();
+
+    cache
+        .resolve(root.path(), &selection, || builds.next())
+        .expect("first build");
+    // Crews, the default crew, and execution policy are resolved from the
+    // layered config.toml once at open, so either layer changing means the
+    // cached runtime no longer reflects the configuration on disk.
+    overwrite(
+        &root.global_config_path(),
+        "[crews.late]\nprovider = \"codex\"\nmodel = \"gpt-late\"\n",
+    );
+    cache
+        .resolve(root.path(), &selection, || builds.next())
+        .expect("rebuild after the global config changed");
+    assert_eq!(builds.count(), 2);
+
+    // The workspace layer did not exist when the entry was built; its
+    // appearance is a change in its own right.
+    overwrite(
+        &root.workspace_config_path(),
+        "[crews.late]\nmodel = \"gpt-local\"\n",
+    );
+    cache
+        .resolve(root.path(), &selection, || builds.next())
+        .expect("rebuild after the workspace config appeared");
+    assert_eq!(builds.count(), 3);
+
+    // And so is its removal.
+    std::fs::remove_file(root.workspace_config_path()).expect("remove the workspace config");
+    cache
+        .resolve(root.path(), &selection, || builds.next())
+        .expect("rebuild after the workspace config disappeared");
+    assert_eq!(builds.count(), 4);
+
+    cache
+        .resolve(root.path(), &selection, || builds.next())
+        .expect("reuse the rebuilt entry");
+    assert_eq!(builds.count(), 4);
 }
 
 #[test]
