@@ -15,8 +15,9 @@ pub use title::{FRICTION_TITLE_MAX_CHARS, derive_title, effective_title, normali
 
 /// Default friction tags and their human-readable glosses.
 ///
-/// This list seeds `.orbit/frictions/tags.yaml` for new workspaces and keeps
-/// tool-schema affordances aligned with the default validator vocabulary.
+/// This list seeds `.orbit/frictions/tags.yaml` for new workspaces, is merged
+/// into existing files when a later default is missing, and keeps tool-schema
+/// affordances aligned with the default validator vocabulary.
 pub const DEFAULT_FRICTION_TAGS: &[(&str, &str)] = &[
     (
         "automation",

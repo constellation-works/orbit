@@ -435,7 +435,67 @@ fn tag_validation_uses_the_taxonomy_file() {
     frictions
         .add(add_params(TEST_CODEX_MODEL, at(1, 0), &["surprise-tag"]))
         .expect("new taxonomy tag succeeds");
-    assert_eq!(frictions.tags().expect("tags"), vec!["surprise-tag"]);
+    let tags = frictions.tags().expect("tags");
+    assert!(tags.contains(&"surprise-tag".to_string()), "{tags:?}");
+    assert!(tags.contains(&"tooling".to_string()), "{tags:?}");
+}
+
+#[test]
+fn a_tag_absent_from_defaults_and_the_workspace_file_is_rejected() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let frictions = friction_store(temp.path(), "ws_one");
+
+    let error = frictions
+        .add(add_params(TEST_CODEX_MODEL, at(1, 0), &["invented-tag"]))
+        .expect_err("invented tag must stay rejected");
+    let message = error.to_string();
+    assert!(
+        message.contains("unknown friction tag(s): invented-tag"),
+        "{message}"
+    );
+}
+
+#[test]
+fn add_accepts_later_defaults_on_a_pre_default_taxonomy_file() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let files_root = temp.path().join("ws_one");
+    std::fs::create_dir_all(&files_root).expect("files root");
+    std::fs::write(
+        files_root.join("tags.yaml"),
+        "build: \"make/fmt/lint friction\"\ndocs: docs\nlifecycle: lifecycle\n\
+         naming: naming\nother: fallback\npolicy: policy\n\
+         skill-guidance: skill\ntooling: tools\n",
+    )
+    .expect("stale taxonomy");
+
+    let frictions = friction_store(temp.path(), "ws_one");
+    let stored = frictions
+        .add(add_params(
+            TEST_CODEX_MODEL,
+            at(1, 0),
+            &["automation", "build"],
+        ))
+        .expect("later default tags must be accepted after merge");
+    assert_eq!(
+        stored.record.tags,
+        vec!["automation".to_string(), "build".to_string()]
+    );
+}
+
+#[test]
+fn empty_and_whitespace_tags_default_to_other() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let frictions = friction_store(temp.path(), "ws_one");
+
+    let empty = frictions
+        .add(add_params(TEST_CODEX_MODEL, at(1, 0), &[]))
+        .expect("empty tags");
+    assert_eq!(empty.record.tags, vec!["other".to_string()]);
+
+    let whitespace = frictions
+        .add(add_params(TEST_CODEX_MODEL, at(1, 1), &["  ", "\t"]))
+        .expect("whitespace tags");
+    assert_eq!(whitespace.record.tags, vec!["other".to_string()]);
 }
 
 #[test]

@@ -228,9 +228,9 @@ task is abandoned, not cancelled), and refuses a state-member consumer. Never
 hand-edit the `automation_consumers` row instead: that leaves no audit record.
 
 Automation frictions are tagged `automation`, plus `history-diverged` for a
-rewritten history. Those tags ship in the default vocabulary; a workspace whose
-`.orbit/frictions/tags.yaml` predates them gets the record under `other`, so add
-them to that file if you filter on tags.
+rewritten history. Those tags ship in the default vocabulary; loading the
+taxonomy merges any missing defaults into an existing `.orbit/frictions/tags.yaml`
+without removing operator-added tags.
 
 ## Scheduling notes
 
