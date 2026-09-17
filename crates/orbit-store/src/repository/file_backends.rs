@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_types::policy::PolicyDef;
@@ -61,6 +61,14 @@ impl TaskStoreBackend for TaskV2Store {
 
     fn task_status_index(&self) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
         self.task_status_index()
+    }
+
+    fn task_status_index_for(
+        &self,
+        workspace_id: &str,
+        targets: &BTreeSet<String>,
+    ) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
+        TaskV2Store::task_status_index_for(self, workspace_id, targets)
     }
 
     fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {

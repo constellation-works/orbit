@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use orbit_common::{NotFoundKind, OrbitError};
+use orbit_common::OrbitError;
 use orbit_types::task::{
     ArtifactPresentation, MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, TaskComment,
     TaskHistoryEntry, TaskStatus, artifact_presentation, is_valid_orb_task_id,
@@ -100,9 +100,9 @@ fn serialize_task_record(
 /// Resolve only the referenced task IDs needed by one task projection.
 ///
 /// The list surface already owns a bounded status page and passes its index to
-/// [`task_to_json`]. Individual task reads must not replace that bounded page
-/// with a registry-wide scan, so they point-read the handful of dependency and
-/// relation targets instead.
+/// [`task_to_json`]. Individual task reads use the same registry projection,
+/// bounded to the handful of dependency and relation targets, so they resolve
+/// cross-workspace references without hydrating their bundles.
 ///
 /// Relation targets are not always task ids — a `resolves` relation may
 /// legitimately point at a friction, ADR, or learning id (e.g.
@@ -123,20 +123,7 @@ fn task_reference_status_index(
         )
         .filter(|id| is_valid_orb_task_id(id))
         .collect::<BTreeSet<_>>();
-    let mut status_by_id = BTreeMap::new();
-    for id in referenced_ids {
-        match runtime.get_task_row(&id) {
-            Ok(row) => {
-                status_by_id.insert(id, row.task.status);
-            }
-            Err(OrbitError::NotFound {
-                kind: NotFoundKind::Task,
-                ..
-            }) => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(status_by_id)
+    runtime.task_status_index_for(&referenced_ids)
 }
 
 /// Enrich a task projection with its resolved crew, when this host can resolve

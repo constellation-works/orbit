@@ -2,8 +2,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use orbit_store::maintenance::task_registry::read_workspace_config;
-use orbit_types::task::{TASK_SHOW_PUBLIC_DTO_FIELDS, TaskComplexity, TaskStatus};
+use orbit_store::compose::coordination_task_backends;
+use orbit_store::contracts::TaskCreateParams;
+use orbit_store::maintenance::task_registry::{
+    RegisterWorkspaceParams, TaskRegistryStore, read_workspace_config, task_registry_path,
+};
+use orbit_types::task::{
+    TASK_SHOW_PUBLIC_DTO_FIELDS, TaskComplexity, TaskPriority, TaskStatus, TaskType,
+};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::{Value, json};
 
@@ -2321,6 +2327,122 @@ fn foreign_task_references_are_marked_and_do_not_block_readiness() {
             .any(|task| task["id"] == task_id),
         "foreign dependencies do not gate readiness"
     );
+}
+
+#[test]
+fn mcp_task_show_and_update_resolve_cross_workspace_references_from_status_index() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let registry = TaskRegistryStore::open(&task_registry_path(&runtime.global_root()))
+        .expect("open shared task registry");
+    let foreign_partition = "foreign-workspace-aaaaaa";
+    registry
+        .register_workspace(RegisterWorkspaceParams {
+            partition_id: foreign_partition.to_string(),
+            slug: "Foreign workspace".to_string(),
+            repo_fingerprint: None,
+        })
+        .expect("register foreign workspace");
+
+    let foreign = coordination_task_backends(registry, foreign_partition.to_string());
+    let target = foreign
+        .task
+        .create_task(TaskCreateParams {
+            actor: "test".to_string(),
+            parent_id: None,
+            title: "Cross-workspace target".to_string(),
+            description: "The source task lives in another partition.".to_string(),
+            acceptance_criteria: Vec::new(),
+            dependencies: Vec::new(),
+            relations: Vec::new(),
+            tags: Vec::new(),
+            required_tools: Vec::new(),
+            plan: String::new(),
+            execution_summary: String::new(),
+            context_files: Vec::new(),
+            repo_root: None,
+            created_by: Some("test".to_string()),
+            planned_by: None,
+            implemented_by: None,
+            status: TaskStatus::Done,
+            priority: TaskPriority::Medium,
+            complexity: None,
+            task_type: TaskType::Chore,
+            external_refs: Vec::new(),
+            source_task_id: None,
+            crew: None,
+            orchestrator: None,
+            comments: Vec::new(),
+        })
+        .expect("create foreign target");
+    let source = create_task(
+        &runtime,
+        &repo_root,
+        "Cross-workspace source",
+        "The MCP projections must resolve the foreign target status.",
+        TaskStatus::Backlog,
+        &[],
+    );
+    let workspace = repo_root.to_string_lossy().into_owned();
+    let update = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.task.update",
+            json!({
+                "id": source.id.clone(),
+                "dependencies": [target.id.clone()],
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+            ToolEntryPoint::Mcp,
+            ToolSessionContext::with_workspace(workspace.clone()),
+        )
+        .expect("MCP update resolves cross-workspace target")
+        .value;
+
+    assert_eq!(
+        update["resolved_dependencies"],
+        json!([format!("{} [done]", target.id)])
+    );
+
+    let updated_with_relation = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.task.update",
+            json!({
+                "id": source.id.clone(),
+                "relations": [
+                    {"type": "blocked_by", "target": target.id.clone()},
+                    {"type": "related_to", "target": target.id.clone()},
+                ],
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+            ToolEntryPoint::Mcp,
+            ToolSessionContext::with_workspace(workspace.clone()),
+        )
+        .expect("MCP relation update resolves cross-workspace target")
+        .value;
+    assert_eq!(
+        updated_with_relation["resolved_dependencies"],
+        json!([format!("{} [done]", target.id)])
+    );
+    assert!(updated_with_relation["relations"][0]["verification"].is_null());
+    assert!(updated_with_relation["relations"][1]["verification"].is_null());
+
+    let shown = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.task.show",
+            json!({"id": source.id.clone()}),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+            ToolEntryPoint::Mcp,
+            ToolSessionContext::with_workspace(workspace),
+        )
+        .expect("MCP show resolves cross-workspace target")
+        .value;
+    assert_eq!(
+        shown["resolved_dependencies"],
+        json!([format!("{} [done]", target.id)])
+    );
+    assert!(shown["relations"][0]["verification"].is_null());
 }
 
 #[test]

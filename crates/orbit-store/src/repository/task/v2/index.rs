@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::contracts::{IndexedTaskRow, TaskCompletionByComplexity};
@@ -8,6 +8,14 @@ impl TaskV2Store {
         &self,
     ) -> Result<std::collections::BTreeMap<String, TaskStatus>, OrbitError> {
         self.registry.global_task_status_index()
+    }
+
+    pub(crate) fn task_status_index_for(
+        &self,
+        workspace_id: &str,
+        targets: &BTreeSet<String>,
+    ) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
+        self.registry.task_status_index_for(workspace_id, targets)
     }
 
     pub(crate) fn task_completion_by_complexity(
