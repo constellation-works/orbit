@@ -841,9 +841,10 @@ async fn create_task_with_unknown_workspace_is_404_and_creates_nothing() {
 // ---------------------------------------------------------------------------
 // ORB-10294: refresh orbit-web workspace state after native registry mutations.
 // A registry-backed `DashboardState` reloads `~/.orbit/workspaces.json` when
-// that file's mtime or length changes, so native `orbit workspace init/remove`
-// and binding changes are honored without a restart. Unchanged request
-// boundaries skip `load` and do not take `refresh_lock`.
+// that file's mtime or length changes, or when a registered checkout's
+// filesystem fingerprint changes, so native `orbit workspace init/remove`,
+// binding changes, and checkout repair are honored without a restart.
+// Unchanged request boundaries skip `load` and do not take `refresh_lock`.
 // ---------------------------------------------------------------------------
 
 /// Write a registry file at `<global_root>/workspaces.json` binding each
@@ -890,7 +891,7 @@ fn registry_state(global_root: &Path) -> DashboardState {
     DashboardState::from_registry(global_root.to_path_buf(), source).expect("from_registry")
 }
 
-/// Sorted workspace ids as seen over `GET /api/workspaces` (which refreshes).
+/// Sorted workspace ids as seen over `GET /api/workspaces` (which pins).
 async fn workspace_ids(state: &DashboardState) -> Vec<String> {
     let response = router()
         .with_state(state.clone())
@@ -1088,10 +1089,11 @@ async fn refresh_rebuilds_runtime_for_ship_mode_only_change() {
     );
 }
 
-/// A path that disappears after startup is reported inactive on refresh, not
-/// left falsely active and not auto-deleted from the registry.
+/// A path that disappears after startup is reported inactive on the next
+/// request-path pin, and the same state recovers after the checkout is repaired
+/// without rewriting the registry or restarting the dashboard.
 #[tokio::test]
-async fn refresh_marks_vanished_path_inactive_without_deleting_record() {
+async fn request_pin_revalidates_vanished_and_repaired_path() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let global_root = tmp.path().join("global");
     std::fs::create_dir_all(&global_root).expect("create global root");
@@ -1099,10 +1101,11 @@ async fn refresh_marks_vanished_path_inactive_without_deleting_record() {
     write_registry(&global_root, &[("alpha", &alpha_repo)]);
     let state = registry_state(&global_root);
     assert_eq!(route_status(&state, "alpha").await, StatusCode::OK);
+    let registry_before =
+        std::fs::read_to_string(global_root.join("workspaces.json")).expect("read registry");
 
     // The checkout vanishes after startup; the registry record stays.
     std::fs::remove_dir_all(&alpha_repo).expect("remove checkout");
-    state.refresh();
 
     let response = router()
         .with_state(state.clone())
@@ -1123,9 +1126,32 @@ async fn refresh_marks_vanished_path_inactive_without_deleting_record() {
     let content =
         std::fs::read_to_string(global_root.join("workspaces.json")).expect("read registry");
     assert!(
-        content.contains("\"alpha\""),
-        "registry record must not be auto-deleted, got {content}"
+        content == registry_before,
+        "request-path revalidation must not rewrite the registry"
     );
+
+    // Repair the same checkout without changing workspaces.json. The next
+    // request-path pin must make it active and routable again.
+    let (_repaired_orbit, repaired_repo) = seed_workspace(&global_root, tmp.path(), "alpha");
+    assert_eq!(repaired_repo, alpha_repo);
+    assert_eq!(route_status(&state, "alpha").await, StatusCode::OK);
+
+    let response = router()
+        .with_state(state)
+        .oneshot(get("/workspaces"))
+        .await
+        .expect("response");
+    let listed = body_json(response).await;
+    let alpha = listed
+        .as_array()
+        .expect("array")
+        .iter()
+        .find(|w| w["id"] == json!("alpha"))
+        .expect("alpha still listed");
+    assert_eq!(alpha["status"], json!("active"), "repaired checkout active");
+    let content =
+        std::fs::read_to_string(global_root.join("workspaces.json")).expect("read registry");
+    assert_eq!(content, registry_before, "registry remains untouched");
 }
 
 /// A malformed or partially-written registry cannot replace the last valid
