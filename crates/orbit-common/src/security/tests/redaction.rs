@@ -263,7 +263,18 @@ fn credential_shaped_names_stay_classified_sensitive() {
     }
     // Identity / runtime-context vars are NOT sensitive: their values are
     // ordinary paths and names that must stay readable in diagnostics.
-    for name in ["USER", "LOGNAME", "HOME", "PATH"] {
+    for name in [
+        "USER",
+        "LOGNAME",
+        "HOME",
+        "PATH",
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_AUTHOR_DATE",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_COMMITTER_DATE",
+    ] {
         assert!(
             !is_sensitive_env_name(name),
             "{name} must not be classified sensitive"
@@ -345,7 +356,8 @@ fn redact_all_error_sanitizes_artifact_origin_locations() {
 #[test]
 fn ordinary_words_are_not_redactable_env_values() {
     for word in [
-        "user", "true", "none", "root", "main", "test", "prod", "local", "auto", "User", "USER",
+        "user", "true", "false", "none", "null", "root", "main", "test", "prod", "local", "auto",
+        "User", "USER", "False", "NULL",
     ] {
         assert!(
             !is_redactable_value(word),
@@ -405,6 +417,57 @@ fn all_letter_secret_env_value_is_redacted_by_both_entry_points() {
 }
 
 #[test]
+fn git_author_name_env_value_is_not_substring_replaced() {
+    // [DANI-10514] `GIT_AUTHOR_NAME` matches the bare "AUTH" substring test
+    // that `is_sensitive_env_name` used to run, so an ordinary all-letter
+    // name (an env var Orbit itself sets for child git processes) must not
+    // be scrubbed out of logs, agent transcripts, or blob-stored output.
+    let _env = EnvVarGuard::set("GIT_AUTHOR_NAME", "Daniel");
+    let raw = "committed by Daniel on behalf of the automation";
+
+    assert_eq!(redact_sensitive_env_text(raw), raw);
+    assert_eq!(redact_all(raw), raw);
+}
+
+#[test]
+fn boolean_and_null_sentinels_are_symmetric_in_the_value_gate() {
+    // [DANI-10514] `true`/`none` were exempt but `false`/`null` were not,
+    // so a sensitive-named boolean or sentinel left `true` readable while
+    // scrubbing every literal `false`/`null` elsewhere in the text.
+    for word in ["false", "null", "False", "NULL"] {
+        assert!(
+            !is_redactable_value(word),
+            "{word} must be treated the same as true/none by the value gate"
+        );
+    }
+
+    let _enabled = EnvVarGuard::set("ORBIT_AUTH_ENABLED", "false");
+    let raw = "retry succeeded: false, fallback: false";
+    assert_eq!(redact_sensitive_env_text(raw), raw);
+    assert_eq!(redact_all(raw), raw);
+}
+
+#[test]
+fn genuine_credential_all_letter_secret_still_redacted_alongside_git_author_name() {
+    // [DANI-10514] Pins that the GIT_AUTHOR_NAME / false / null carve-outs
+    // above don't regress the DANI-10471 fix: an all-letter secret in a
+    // genuine credential variable must still be scrubbed.
+    let _env = EnvVarGuard::set_many(&[
+        ("GIT_AUTHOR_NAME", "Daniel"),
+        ("GITHUB_TOKEN", "correcthorse"),
+    ]);
+    let raw = "committed by Daniel using token correcthorse";
+
+    let redacted = redact_all(raw);
+    assert!(redacted.contains("Daniel"), "author name must survive");
+    assert!(
+        !redacted.contains("correcthorse"),
+        "credential value must still be redacted: {redacted}"
+    );
+    assert!(redacted.contains("[REDACTED_ENV]"));
+}
+
+#[test]
 fn secret_shaped_env_value_is_still_replaced_as_a_substring() {
     // Pin: eligible (non-letter-containing) values keep bare substring
     // matching. Mid-word occurrences of a short secret-shaped value are
@@ -420,27 +483,35 @@ fn secret_shaped_env_value_is_still_replaced_as_a_substring() {
 
 struct EnvVarGuard {
     _lock: MutexGuard<'static, ()>,
-    name: &'static str,
-    previous: Option<String>,
+    vars: Vec<(&'static str, Option<String>)>,
 }
 
 impl EnvVarGuard {
     fn set(name: &'static str, value: &str) -> Self {
+        Self::set_many(&[(name, value)])
+    }
+
+    // A single `Mutex::lock` is not reentrant: acquiring it twice from the
+    // same test (one `set` call per env var) deadlocks. Callers that need
+    // more than one var set at once must go through this instead.
+    fn set_many(pairs: &[(&'static str, &str)]) -> Self {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         let lock = LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let previous = std::env::var(name).ok();
-        // SAFETY: this test guard serializes environment mutation and restores on drop.
-        unsafe {
-            std::env::set_var(name, value);
-        }
-        Self {
-            _lock: lock,
-            name,
-            previous,
-        }
+        let vars = pairs
+            .iter()
+            .map(|(name, value)| {
+                let previous = std::env::var(name).ok();
+                // SAFETY: this test guard serializes environment mutation and restores on drop.
+                unsafe {
+                    std::env::set_var(name, value);
+                }
+                (*name, previous)
+            })
+            .collect();
+        Self { _lock: lock, vars }
     }
 }
 
@@ -448,9 +519,11 @@ impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         // SAFETY: the guard holds the serialization lock for the full mutation window.
         unsafe {
-            match &self.previous {
-                Some(value) => std::env::set_var(self.name, value),
-                None => std::env::remove_var(self.name),
+            for (name, previous) in &self.vars {
+                match previous {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
             }
         }
     }
