@@ -119,6 +119,7 @@ const EXPECTED_FAILURE_MARKERS: &[&str] = &[
     "unsupported",
     "not local to the current worktree",
     "artifact unavailable",
+    "companion not installed",
 ];
 
 /// Message fragments that mark a refusal rather than a failure. A refusal
