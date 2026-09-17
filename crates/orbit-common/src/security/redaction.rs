@@ -605,9 +605,10 @@ fn sensitive_env_values() -> Cow<'static, [String]> {
 ///
 /// A value is eligible when, after trim, it is at least 4 characters and is
 /// not one of the small compatibility set of ordinary words (`user`, `true`,
-/// `none`, `root`, `main`, `test`, `prod`, `local`, `auto`). This keeps those
-/// known prose values readable while allowing all-letter secrets and
-/// passphrases from sensitive credential variables to be scrubbed.
+/// `false`, `none`, `null`, `root`, `main`, `test`, `prod`, `local`, `auto`).
+/// This keeps those known prose/sentinel values readable while allowing
+/// all-letter secrets and passphrases from sensitive credential variables to
+/// be scrubbed.
 ///
 /// Eligible values are still matched with a bare substring replace so
 /// embedded tokens in URLs and concatenated log fragments stay scrubbed.
@@ -622,7 +623,7 @@ pub(crate) fn is_redactable_value(value: &str) -> bool {
 
 fn is_compatibility_ordinary_word(value: &str) -> bool {
     [
-        "user", "true", "none", "root", "main", "test", "prod", "local", "auto",
+        "user", "true", "false", "none", "null", "root", "main", "test", "prod", "local", "auto",
     ]
     .into_iter()
     .any(|word| value.eq_ignore_ascii_case(word))
@@ -642,7 +643,19 @@ pub fn is_sensitive_env_name(name: &str) -> bool {
         || upper.contains("COOKIE")
         || upper.contains("SESSION")
         || upper.contains("BEARER")
-        || upper.contains("AUTH")
+        || contains_auth_word(&upper)
+}
+
+/// True when `upper` (already uppercased) has `AUTH` as a standalone
+/// underscore-delimited segment, e.g. `AUTH_TOKEN` or `GITHUB_AUTH`.
+///
+/// A bare substring test also matches `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`
+/// (ordinary git identity vars Orbit itself sets for child processes), which
+/// are not credentials.
+fn contains_auth_word(upper: &str) -> bool {
+    upper
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|segment| segment == "AUTH")
 }
 
 // ---------------------------------------------------------------------------
