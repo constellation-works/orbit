@@ -513,12 +513,11 @@ fn checkout_fallback_is_bound_to_its_job_and_missing_logs_leave_siblings_complet
     assert_eq!(jobs[1]["checkout_identity"]["provenance"]["job_id"], 202);
     assert_eq!(jobs[1]["actual_checkout_shas"], json!([CHECKOUT]));
     assert_ne!(jobs[1]["actual_checkout_shas"], json!([HEAD]));
-    // Collection now spends a single log read per job, so a fallback that
-    // names the wrong job is caught on that one read (`log_job_identity`)
-    // instead of a separate checkout-only second read.
+    // The failed-step read remains bound to its job, while the separate
+    // checkout-only read rejects fallback evidence from a sibling.
     assert_eq!(
         evidence["retryable_errors"][0]["operation"],
-        "log_job_identity"
+        "checkout_job_identity"
     );
 
     let mut queries = two_job_queries(false);
