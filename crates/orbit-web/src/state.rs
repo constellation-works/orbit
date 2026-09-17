@@ -226,11 +226,8 @@ impl RegistrySource {
     /// be observed, which forces a reload so a vanished or unreadable file is
     /// not sticky behind a stale fingerprint.
     fn fingerprint(&self) -> Option<RegistryFingerprint> {
-        let meta = std::fs::metadata(&self.registry_path).ok()?;
-        Some(RegistryFingerprint {
-            mtime: meta.modified().ok()?,
-            len: meta.len(),
-        })
+        let (mtime, len) = workspace_registry::registry_file_fingerprint(&self.registry_path)?;
+        Some(RegistryFingerprint { mtime, len })
     }
 
     /// Reload the authoritative registry into a fresh (generation-less) snapshot
