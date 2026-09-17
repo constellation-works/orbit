@@ -172,3 +172,146 @@ fi
         .expect_err("only confirmed synchronous merges are accepted");
     }
 }
+
+/// DANI-10524: a `PR_LIST` lookup that fails once with a transient GitHub
+/// gateway error is retried and succeeds, rather than aborting `pr_open`'s
+/// existing-PR check after a single API blip.
+#[cfg(unix)]
+#[test]
+fn private_pr_list_retries_transient_gateway_failure_then_succeeds() {
+    use std::fs;
+
+    use super::super::operations::{PR_LIST, run};
+    use super::with_fake_gh;
+
+    let script = r#"#!/bin/sh
+set -eu
+count_file="attempt-count"
+if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+else
+    count=0
+fi
+count=$((count+1))
+printf '%s' "$count" > "$count_file"
+if [ "$count" -lt 2 ]; then
+    echo "gh: We couldn't respond to your request in time. Please try that request again. (HTTP 504)" >&2
+    exit 1
+fi
+printf '%s\n' '[{"number":42,"title":"t","headRefName":"orbit/feature","author":{"login":"bot"}}]'
+"#;
+    if !with_fake_gh(
+        module_path!(),
+        "private_pr_list_retries_transient_gateway_failure_then_succeeds",
+        script,
+    ) {
+        return;
+    }
+    let workspace = tempfile::tempdir().expect("workspace");
+    let result = run(
+        PR_LIST,
+        &json!({"head": "orbit/feature", "workspace_path": workspace.path()}),
+    )
+    .expect("transient gateway failure is retried");
+    assert_eq!(
+        result["pull_requests"],
+        json!([{"number": 42, "title": "t", "headRefName": "orbit/feature", "author": {"login": "bot"}}])
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.path().join("attempt-count")).expect("attempt count"),
+        "2",
+        "must retry exactly once before succeeding"
+    );
+}
+
+/// DANI-10524: a `PR_VIEW` lookup retries the same way after a GraphQL
+/// timeout, since `pr_open` calls it (via `view_pr`) both after creating a PR
+/// and after reusing one found by `PR_LIST`.
+#[cfg(unix)]
+#[test]
+fn private_pr_view_retries_transient_graphql_timeout_then_succeeds() {
+    use std::fs;
+
+    use super::super::operations::{PR_VIEW, run};
+    use super::with_fake_gh;
+
+    let script = r#"#!/bin/sh
+set -eu
+count_file="attempt-count"
+if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+else
+    count=0
+fi
+count=$((count+1))
+printf '%s' "$count" > "$count_file"
+if [ "$count" -lt 2 ]; then
+    echo "X GraphQL: Something went wrong (timeout)" >&2
+    exit 1
+fi
+printf '%s\n' '{"number":42,"title":"t","body":"b","headRefName":"orbit/feature","files":[],"commits":[],"url":"https://github.com/o/r/pull/42"}'
+"#;
+    if !with_fake_gh(
+        module_path!(),
+        "private_pr_view_retries_transient_graphql_timeout_then_succeeds",
+        script,
+    ) {
+        return;
+    }
+    let workspace = tempfile::tempdir().expect("workspace");
+    let result = run(
+        PR_VIEW,
+        &json!({"pr": "42", "workspace_path": workspace.path()}),
+    )
+    .expect("transient GraphQL timeout is retried");
+    assert_eq!(result["pull_request"]["number"], 42);
+    assert_eq!(
+        fs::read_to_string(workspace.path().join("attempt-count")).expect("attempt count"),
+        "2",
+        "must retry exactly once before succeeding"
+    );
+}
+
+/// DANI-10524: a permanent failure (auth) must fail on the first attempt, not
+/// burn retry budget or mask the real cause behind a transient-looking retry.
+#[cfg(unix)]
+#[test]
+fn private_pr_lookup_does_not_retry_permanent_failure() {
+    use std::fs;
+
+    use super::super::operations::{PR_LIST, run};
+    use super::with_fake_gh;
+
+    let script = r#"#!/bin/sh
+set -eu
+count_file="attempt-count"
+if [ -f "$count_file" ]; then
+    count=$(cat "$count_file")
+else
+    count=0
+fi
+count=$((count+1))
+printf '%s' "$count" > "$count_file"
+echo "gh: authentication failed, run 'gh auth login'" >&2
+exit 1
+"#;
+    if !with_fake_gh(
+        module_path!(),
+        "private_pr_lookup_does_not_retry_permanent_failure",
+        script,
+    ) {
+        return;
+    }
+    let workspace = tempfile::tempdir().expect("workspace");
+    let error = run(
+        PR_LIST,
+        &json!({"head": "orbit/feature", "workspace_path": workspace.path()}),
+    )
+    .expect_err("permanent failures are not retried");
+    assert!(error.to_string().contains("authentication failed"));
+    assert_eq!(
+        fs::read_to_string(workspace.path().join("attempt-count")).expect("attempt count"),
+        "1",
+        "must not retry a non-transient failure"
+    );
+}

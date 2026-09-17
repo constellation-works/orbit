@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
@@ -15,6 +16,12 @@ pub(crate) const PR_STATUS: &str = "pr.status";
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 const SLOW_TIMEOUT_MS: u64 = 30_000;
 const LONG_TIMEOUT_MS: u64 = 60_000;
+
+/// Bounded attempts for a private automation PR lookup, including the first
+/// try. `pr_open`'s existing-PR check must survive a single GitHub API blip
+/// rather than abort a delivery whose branch is already pushed (F2026-09-011).
+const GITHUB_LOOKUP_TRANSIENT_ATTEMPTS: u32 = 3;
+const GITHUB_LOOKUP_TRANSIENT_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 /// Execute the VCS operations owned by deterministic shipment automation.
 ///
@@ -87,9 +94,9 @@ fn pr_list(input: &Value) -> Result<Value, OrbitError> {
         "--json".to_string(),
         "number,title,headRefName,author".to_string(),
     ];
-    let result = execute(
+    let result = execute_with_transient_retry(
         "gh",
-        args,
+        &args,
         Some(Path::new(workspace_path)),
         DEFAULT_TIMEOUT_MS,
         "PR list",
@@ -154,9 +161,9 @@ fn pr_view(input: &Value) -> Result<Value, OrbitError> {
         "--json".to_string(),
         "number,title,body,headRefName,files,commits,url".to_string(),
     ];
-    let result = execute(
+    let result = execute_with_transient_retry(
         "gh",
-        args,
+        &args,
         Some(Path::new(workspace_path)),
         DEFAULT_TIMEOUT_MS,
         "PR view",
@@ -457,6 +464,54 @@ fn pr_status(input: &Value) -> Result<Value, OrbitError> {
         ))
     })?;
     Ok(json!({ "pull_request": pull_request }))
+}
+
+/// Retry a private automation VCS lookup (`PR_LIST`/`PR_VIEW`) across a
+/// bounded number of attempts when GitHub answers with a transient gateway
+/// failure. `pr_open` calls these two operations to check for an existing PR
+/// before deciding whether to create one; a single dropped attempt must not
+/// abandon that check. Mutating operations (`push`, `pr.create`, `pr.merge`)
+/// go through `execute` directly and are never retried here, since resending
+/// a mutation after an ambiguous failure risks a duplicate side effect.
+fn execute_with_transient_retry(
+    program: &str,
+    args: &[String],
+    current_dir: Option<&Path>,
+    timeout_ms: u64,
+    operation: &str,
+) -> Result<orbit_exec::ExecutionResult, OrbitError> {
+    let mut attempt = 1;
+    loop {
+        match execute(program, args.to_vec(), current_dir, timeout_ms, operation) {
+            Ok(result) => return Ok(result),
+            Err(error)
+                if attempt < GITHUB_LOOKUP_TRANSIENT_ATTEMPTS
+                    && is_transient_github_lookup_failure(&error.to_string()) =>
+            {
+                tracing::warn!(
+                    operation,
+                    attempt,
+                    "retrying private automation VCS lookup after a transient GitHub failure"
+                );
+                std::thread::sleep(GITHUB_LOOKUP_TRANSIENT_RETRY_DELAY);
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// True when a private automation VCS failure looks like a transient GitHub
+/// gateway hiccup (502/503/504, or the GraphQL "couldn't respond in time"
+/// timeout) rather than a permanent failure such as auth, an unknown head, or
+/// an invalid selector. Permanent failures must fail on the first attempt.
+fn is_transient_github_lookup_failure(message: &str) -> bool {
+    let text = message.to_ascii_lowercase();
+    text.contains("http 502")
+        || text.contains("http 503")
+        || text.contains("http 504")
+        || text.contains("we couldn't respond to your request in time")
+        || (text.contains("graphql") && text.contains("timeout"))
 }
 
 fn execute(
