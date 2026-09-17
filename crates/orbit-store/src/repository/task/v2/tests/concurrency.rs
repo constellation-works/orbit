@@ -95,7 +95,12 @@ fn task_update_times_out_with_live_process_holder_diagnostics_then_recovers() {
     let timeout = error
         .file_lock_timeout()
         .expect("timeout must retain its structured type");
-    assert_eq!(timeout.lock_path, lock_path);
+    // Acquisition canonicalizes the lock parent, so on macOS the timeout names
+    // `/private/var/...` while the fixture path may still be `$TMPDIR` as `/var`.
+    let expected_lock = std::fs::canonicalize(&lock_path).expect("canonical lock path");
+    let reported_lock =
+        std::fs::canonicalize(&timeout.lock_path).expect("canonical reported lock path");
+    assert_eq!(reported_lock, expected_lock);
     let holder = timeout.holder.as_ref().expect("holder metadata");
     assert_eq!(holder.pid, child_pid);
     assert_eq!(holder.label, "task update test holder");
