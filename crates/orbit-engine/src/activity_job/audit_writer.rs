@@ -23,11 +23,22 @@ pub trait EnvelopeSink: Send + Sync {
     /// Persist one envelope event. An `Err` is recorded by the writer as a
     /// non-fatal audit failure rather than crashing the run.
     fn write_envelope(&self, event: &V2AuditEvent) -> Result<(), OrbitError>;
+
+    /// Read persisted events when the sink supports inspection. Backs
+    /// [`V2AuditWriter::events_snapshot`] outside this crate's own unit
+    /// tests; sinks that cannot be inspected return `Ok(None)`.
+    fn events_snapshot(&self) -> Result<Option<Vec<V2AuditEvent>>, OrbitError> {
+        Ok(None)
+    }
 }
 
 impl EnvelopeSink for V2SqliteSink {
     fn write_envelope(&self, event: &V2AuditEvent) -> Result<(), OrbitError> {
         V2SqliteSink::write_envelope(self, event)
+    }
+
+    fn events_snapshot(&self) -> Result<Option<Vec<V2AuditEvent>>, OrbitError> {
+        self.snapshot_events().map(Some)
     }
 }
 
@@ -70,6 +81,10 @@ pub(crate) struct ParentStackGuard<'a> {
 pub enum WriteError {
     #[error("audit writer mutex poisoned")]
     Poisoned,
+    #[error("audit event snapshot is unavailable for this sink")]
+    SnapshotUnavailable,
+    #[error("read persisted audit events: {0}")]
+    Snapshot(#[source] OrbitError),
 }
 
 impl V2AuditWriter {
@@ -355,8 +370,8 @@ impl V2AuditWriter {
         self.emitted_event_count.load(Ordering::Relaxed)
     }
 
-    /// Snapshot of emitted events, retained only for tests that inspect
-    /// envelope contents.
+    /// Snapshot of emitted events, retained only for this crate's own unit
+    /// tests that inspect envelope contents.
     #[cfg(test)]
     pub fn events_snapshot(&self) -> Result<Vec<V2AuditEvent>, WriteError> {
         Ok(self
@@ -364,6 +379,25 @@ impl V2AuditWriter {
             .lock()
             .map_err(|_| WriteError::Poisoned)?
             .clone())
+    }
+
+    /// Read envelope events back from the configured persistence sink.
+    ///
+    /// This is the cross-crate snapshot path: `#[cfg(test)]` items are
+    /// invisible to dependent crates, so `orbit-core`'s engine-host tests
+    /// (and any integration test) reach persisted events through the sink
+    /// instead of an in-memory buffer. Test helpers stay always-compiled
+    /// rather than feature-gated so build and test dependency graphs remain
+    /// identical. Fails with [`WriteError::SnapshotUnavailable`] when no sink
+    /// is attached or the sink cannot be inspected.
+    #[cfg(not(test))]
+    pub fn events_snapshot(&self) -> Result<Vec<V2AuditEvent>, WriteError> {
+        self.envelope_sink
+            .as_ref()
+            .ok_or(WriteError::SnapshotUnavailable)?
+            .events_snapshot()
+            .map_err(WriteError::Snapshot)?
+            .ok_or(WriteError::SnapshotUnavailable)
     }
 
     /// Access to the inner loop-level sink for the loop engine to emit

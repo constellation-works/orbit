@@ -81,6 +81,24 @@ impl V2SqliteSink {
         })
     }
 
+    /// Persisted envelope events for this run in insertion order. Backs the
+    /// cross-crate `V2AuditWriter::events_snapshot` path.
+    pub(crate) fn snapshot_events(&self) -> Result<Vec<V2AuditEvent>, OrbitError> {
+        let mut rows = self.store.list_v2_audit_events(&V2AuditEventFilter {
+            workspace_id: self.workspace_id.clone(),
+            run_id: Some(self.run_id.clone()),
+            source: Some("v2_envelope".to_string()),
+            ..Default::default()
+        })?;
+        rows.reverse();
+        rows.into_iter()
+            .map(|row| {
+                serde_json::from_str(&row.payload_json)
+                    .map_err(|error| OrbitError::Store(format!("decode v2 audit event: {error}")))
+            })
+            .collect()
+    }
+
     pub fn blob_store(&self) -> &BlobStore {
         &self.blob_store
     }
