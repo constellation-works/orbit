@@ -381,7 +381,7 @@ Vectors and FTS rows stay workspace-local ([§3](#3-vector-storage)); only the *
 | Cost | Paid |
 |------|------|
 | `workspaces.json` read, parse, and checkout validation | once per query — `resolve_scope` keeps the records it resolved, and `open` reads that snapshot rather than the file. The snapshot is replaced by the next `resolve_scope`, so it never outlives its query; a target it does not cover falls back to a registry lookup |
-| Query-side model resolution and companion spawn | once per query — one `SharedQueryEmbedder` is handed to every workspace's vector branch |
+| Query-side model resolution | once per query — one `SharedQueryEmbedder` is handed to every workspace's vector branch. Its companion is borrowed from the host's `EmbedderPool` rather than spawned for the query, so a long-lived host that already holds the model pays no model load, and the companion keeps the pool's stderr policy |
 | Embedding the query text | once per query — the same text under the same model, memoized behind the shared embedder. A host with no companion installed resolves no embedder and every workspace degrades to lexical exactly as a single-workspace query does |
 | Runtime open, index read, and the query itself | once per workspace, on a pool of at most `MAX_FEDERATED_CONCURRENCY` (8). Workers claim the next unclaimed target, so one slow checkout does not idle the pool behind it |
 

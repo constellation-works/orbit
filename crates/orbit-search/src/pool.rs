@@ -89,22 +89,18 @@ impl EmbedderPool {
         })
     }
 
-    fn with_spawner(
+    /// Pool that hands out caller-supplied embedders.
+    ///
+    /// Production hosts take [`command_process`](Self::command_process) or
+    /// [`process_shared`](Self::process_shared); this is the seam a test uses
+    /// to observe spawn counts and reuse without an installed companion.
+    pub fn with_spawner(
         spawn: impl Fn(&str) -> Result<Arc<dyn Embedder>, OrbitError> + Send + Sync + 'static,
     ) -> Self {
         Self {
             spawn: Box::new(spawn),
             cached: Mutex::new(BTreeMap::new()),
         }
-    }
-
-    /// Pool that hands out caller-supplied embedders. Tests observe reuse
-    /// through the spawner without an installed companion.
-    #[cfg(test)]
-    pub(crate) fn for_test(
-        spawn: impl Fn(&str) -> Result<Arc<dyn Embedder>, OrbitError> + Send + Sync + 'static,
-    ) -> Self {
-        Self::with_spawner(spawn)
     }
 
     /// The live embedder for `model`, spawning one only if this pool has none.
