@@ -135,6 +135,100 @@ fn separates_event_sha_current_head_and_actual_checkout_commit() {
 }
 
 #[test]
+fn failed_step_excerpt_and_diagnostic_are_isolated_from_an_oversized_multi_failure_log() {
+    let checkout = "3333333333333333333333333333333333333333";
+    let failed_log = "build\tTest\t##[group]Run cargo test --workspace\n\
+                      build\tTest\t##[endgroup]\n\
+                      build\tTest\terror: assertion failed in focused_test\n\
+                      build\tTest\t##[error]Process completed with exit code 101.\n";
+    let whole_log = format!(
+        "ci\tCheckout\tHEAD is now at {checkout}\n{}\
+         build\tAllowed failure\t##[group]Run cargo test --keep-going\n\
+         build\tAllowed failure\t##[error]Process completed with exit code 2.\n\
+         {failed_log}",
+        "runner setup output\n".repeat(200)
+    );
+    assert!(whole_log.len() > 512);
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_runs(vec![vec![run(
+            10,
+            "ci",
+            HEAD,
+            "completed",
+            Some("failure"),
+            "2026-08-30T01:00:00Z",
+        )]])
+        .with_run_view(
+            "10",
+            json!({"failed_jobs": [{
+                "job_id": 5,
+                "name": "build",
+                "conclusion": "failure",
+                "failed_steps": [{"name": "Test", "conclusion": "failure"}],
+            }]}),
+        )
+        .with_log("10", false, failed_log)
+        .with_log("10", true, &whole_log);
+
+    let evidence = collect(
+        &queries,
+        &json!({
+            "integration_branch": "topic", "log_max_bytes": 512, "max_checkout_log_reads": 1,
+        }),
+    )
+    .expect("collect");
+    let failure = &evidence["current_failures"][0];
+    let excerpt = failure["log_excerpt"].as_str().expect("excerpt");
+    assert!(excerpt.contains("##[group]Run cargo test --workspace"));
+    assert!(excerpt.contains("error: assertion failed in focused_test"));
+    assert_eq!(failure["log_scope"], "failed");
+    assert_eq!(failure["diagnostic_unit"]["step"], "Test");
+    assert!(
+        failure["diagnostic_unit"]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("focused_test"))
+    );
+    assert_eq!(failure["actual_checkout_shas"], json!([checkout]));
+    assert_eq!(evidence["truncation"]["checkout_log_reads"], 1);
+    assert_eq!(evidence["retryable_errors"], json!([]));
+}
+
+#[test]
+fn failed_all_scope_read_does_not_consume_checkout_budget() {
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_head("main", HEAD)
+        .with_runs(vec![vec![run(
+            10,
+            "ci",
+            HEAD,
+            "completed",
+            Some("failure"),
+            "2026-08-30T01:00:00Z",
+        )]])
+        .with_run_view("10", json!({"failed_jobs": [failed_job(5, "build")]}))
+        .with_log(
+            "10",
+            false,
+            "build\tbuild\t##[group]Run cargo test\n\
+             build\tbuild\terror: assertion failed\n\
+             build\tbuild\t##[error]Process completed with exit code 101.\n",
+        )
+        .with_log_error("10", true, "temporary full-log failure");
+
+    let evidence = collect(&queries, &input()).expect("collect");
+
+    assert_eq!(evidence["truncation"]["checkout_log_reads"], 0);
+    assert_eq!(evidence["retryable_errors"][0]["operation"], "run_logs_all");
+    assert_eq!(
+        evidence["current_failures"][0]["checkout_evidence_scope"],
+        "unavailable"
+    );
+}
+
+#[test]
 fn checkout_identity_is_observed_from_the_middle_of_a_bounded_full_log() {
     let checkout = "3333333333333333333333333333333333333333";
     let full_log = format!(
