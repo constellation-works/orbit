@@ -461,6 +461,25 @@ fn expected_task_show_and_update_negatives_do_not_enter_unexpected_counts() {
 }
 
 #[test]
+fn companion_not_installed_is_an_expected_negative_not_an_unexpected_failure() {
+    let failures = vec![
+        FailureFixture::new(1, 0, "semantic.index")
+            .message(
+                "companion not installed: Semantic search not enabled. Run `orbit semantic \
+                 install` to download the inference companion.",
+            )
+            .build(),
+    ];
+
+    let report = build_report(&failures, false);
+
+    assert_eq!(report.raw_events_by_class.get("expected"), Some(&1));
+    assert_eq!(report.incidents_by_class.get("expected"), Some(&1));
+    assert_eq!(report.raw_events_by_class.get("unexpected"), None);
+    assert_eq!(report.incidents[0].class, FailureClass::Expected);
+}
+
+#[test]
 fn a_denial_recorded_with_failure_status_still_classifies_as_a_denial() {
     let failures = vec![
         FailureFixture::new(1, 0, "surface.alpha")
