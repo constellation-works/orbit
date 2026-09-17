@@ -3,21 +3,23 @@
 //! A fan-out that asks N indexes the same question otherwise pays the query
 //! side N times: N companion spawns, each loading the model, and N identical
 //! embeddings of one string. Both costs collapse here — the companion is
-//! spawned once when the embedder is built, and a batch identical to the
-//! previous one is answered from the memo [DANI-10365].
+//! borrowed from the host's [`EmbedderPool`], which already holds a warm one
+//! on a long-lived host and spawns at most one otherwise, and a batch
+//! identical to the previous one is answered from the memo [DANI-10365].
+//! Because the companion is the pool's, so is its stderr policy: a federated
+//! query is exactly as loud as a single-workspace one on the same host.
 //!
 //! The memo is deliberately one entry deep. A query embeds the same text for
 //! every reader and every branch, so a single slot is the whole win; a growing
 //! map would only retain vectors nothing asks for again.
 
 use std::fmt;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_common::OrbitError;
 
-use crate::commands::resolve_query_model;
 use crate::embedder::Embedder;
-use crate::subprocess::{CompanionStderr, SubprocessEmbedder};
+use crate::pool::EmbedderPool;
 
 /// One batch and the vectors it produced.
 #[derive(Debug)]
@@ -39,28 +41,26 @@ impl Memo {
 
 /// An [`Embedder`] that answers a repeated batch without re-embedding it.
 pub struct SharedQueryEmbedder {
-    inner: Box<dyn Embedder>,
+    inner: Arc<dyn Embedder>,
     memo: Mutex<Option<Memo>>,
 }
 
 impl SharedQueryEmbedder {
     /// Wrap an embedder so repeated identical batches are embedded once.
-    pub fn new(inner: Box<dyn Embedder>) -> Self {
+    pub fn new(inner: Arc<dyn Embedder>) -> Self {
         Self {
             inner,
             memo: Mutex::new(None),
         }
     }
 
-    /// Spawn one companion for this host's query-side model.
+    /// Borrow the pool's companion for `model` and share it across a fan-out.
     ///
-    /// `model` is the selector [`crate::query_model_id`] resolves, so a caller
-    /// that already resolved the model can pass it rather than resolve twice.
-    pub fn for_query_model(model: Option<&str>) -> Result<Self, OrbitError> {
-        let spec = resolve_query_model(model)?;
-        Ok(Self::new(Box::new(
-            SubprocessEmbedder::with_model_and_stderr(spec.alias, CompanionStderr::Inherit)?,
-        )))
+    /// `model` is the canonical alias [`crate::query_model_id`] resolves — the
+    /// pool's cache key — so a warm host hands back its live companion and a
+    /// cold one spawns exactly one, under the pool's stderr policy.
+    pub fn from_pool(embedders: &EmbedderPool, model: &str) -> Result<Self, OrbitError> {
+        Ok(Self::new(embedders.embedder(model)?))
     }
 }
 

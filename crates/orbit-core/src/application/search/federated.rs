@@ -116,25 +116,29 @@ impl OrbitRuntime {
             .hybrid
             .then(|| orbit_search::query_model_id(None).ok())
             .flatten();
+        // Federated targets are opened short-lived (one per fan-out call), so
+        // without an explicit handoff each would spawn its own companions
+        // instead of borrowing this host's already-warm pool [DANI-10364].
+        let embedder_pool = self.stores().semantic_embedder_pool();
         // One companion, one embedding. The model is resolved above and the
-        // query text is the same for every workspace, so spawning an embedder
-        // per workspace would reload the model N times to answer the same
-        // question. Building it costs a companion spawn, so it is built only
-        // when a vector branch can actually run — a `--tag`-only hybrid query
-        // embeds nothing. A host with no companion installed yields `None` and
-        // each workspace degrades to lexical exactly as it did before.
+        // query text is the same for every workspace, so embedding per
+        // workspace would answer the same question N times. The shared
+        // embedder borrows the pool's companion for that model rather than
+        // spawning its own: on a long-lived host the pool already holds a warm
+        // one, so a federated query pays no model load at all, and the
+        // companion keeps the pool's stderr policy. A cold pool spawns once,
+        // so it is asked only when a vector branch can actually run — a
+        // `--tag`-only hybrid query embeds nothing. A host with no companion
+        // installed yields `None` and each workspace degrades to lexical
+        // exactly as a single-workspace query does.
         let query_embedder = params
             .query
             .as_deref()
             .is_some_and(|query| !query.trim().is_empty())
             .then_some(query_model.as_deref())
             .flatten()
-            .and_then(|model| SharedQueryEmbedder::for_query_model(Some(model)).ok());
+            .and_then(|model| SharedQueryEmbedder::from_pool(&embedder_pool, model).ok());
 
-        // Federated targets are opened short-lived (one per fan-out call), so
-        // without an explicit handoff each would spawn its own companions
-        // instead of borrowing this host's already-warm pool [DANI-10364].
-        let embedder_pool = self.stores().semantic_embedder_pool();
         let outcomes = fan_out(
             catalog.as_ref(),
             &targets,

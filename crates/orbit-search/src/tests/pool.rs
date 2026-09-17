@@ -20,7 +20,7 @@ use crate::{
 fn counting_pool() -> (EmbedderPool, Arc<AtomicUsize>) {
     let spawns = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&spawns);
-    let pool = EmbedderPool::for_test(move |_model| {
+    let pool = EmbedderPool::with_spawner(move |_model| {
         counter.fetch_add(1, Ordering::SeqCst);
         Ok(Arc::new(NoopEmbedder::small()) as Arc<dyn Embedder>)
     });
@@ -202,7 +202,7 @@ fn clear_drops_cached_companions_so_the_next_request_respawns() {
 fn a_failed_spawn_is_not_cached() {
     let attempts = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&attempts);
-    let pool = EmbedderPool::for_test(move |_model| {
+    let pool = EmbedderPool::with_spawner(move |_model| {
         if counter.fetch_add(1, Ordering::SeqCst) == 0 {
             return Err(OrbitError::Execution("companion not installed".to_string()));
         }

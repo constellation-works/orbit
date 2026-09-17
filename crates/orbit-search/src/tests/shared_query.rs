@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use orbit_common::OrbitError;
@@ -8,16 +9,16 @@ use crate::{Embedder, NoopEmbedder, SharedQueryEmbedder};
 #[derive(Debug, Default)]
 struct CountingEmbedder {
     inner: NoopEmbedder,
-    calls: std::sync::Arc<AtomicUsize>,
+    calls: Arc<AtomicUsize>,
 }
 
 impl CountingEmbedder {
-    fn new() -> (Self, std::sync::Arc<AtomicUsize>) {
-        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+    fn new() -> (Self, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
         (
             Self {
                 inner: NoopEmbedder::small(),
-                calls: std::sync::Arc::clone(&calls),
+                calls: Arc::clone(&calls),
             },
             calls,
         )
@@ -54,7 +55,7 @@ impl Embedder for CountingEmbedder {
 #[test]
 fn a_repeated_query_is_embedded_once_and_answered_identically() {
     let (counting, calls) = CountingEmbedder::new();
-    let shared = SharedQueryEmbedder::new(Box::new(counting));
+    let shared = SharedQueryEmbedder::new(Arc::new(counting));
 
     let first = shared.embed(&["federated query"]).expect("first embed");
     let second = shared.embed(&["federated query"]).expect("memoized embed");
@@ -70,7 +71,7 @@ fn a_repeated_query_is_embedded_once_and_answered_identically() {
 #[test]
 fn a_different_batch_is_embedded_again() {
     let (counting, calls) = CountingEmbedder::new();
-    let shared = SharedQueryEmbedder::new(Box::new(counting));
+    let shared = SharedQueryEmbedder::new(Arc::new(counting));
 
     shared.embed(&["first"]).expect("first embed");
     shared.embed(&["second"]).expect("second embed");
@@ -83,7 +84,7 @@ fn a_different_batch_is_embedded_again() {
 #[test]
 fn concurrent_readers_of_one_query_share_a_single_embedding() {
     let (counting, calls) = CountingEmbedder::new();
-    let shared = SharedQueryEmbedder::new(Box::new(counting));
+    let shared = SharedQueryEmbedder::new(Arc::new(counting));
 
     let vectors = std::thread::scope(|scope| {
         let handles = (0..8)
@@ -101,7 +102,7 @@ fn concurrent_readers_of_one_query_share_a_single_embedding() {
 
 #[test]
 fn the_wrapper_reports_the_inner_model() {
-    let shared = SharedQueryEmbedder::new(Box::new(NoopEmbedder::new("minilm-l6", 4, 128)));
+    let shared = SharedQueryEmbedder::new(Arc::new(NoopEmbedder::new("minilm-l6", 4, 128)));
 
     assert_eq!(shared.model_id(), "minilm-l6");
     assert_eq!(shared.dim(), 4);

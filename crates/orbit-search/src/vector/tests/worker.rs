@@ -52,7 +52,7 @@ fn wait_until(timeout: Duration, mut ready: impl FnMut() -> bool) {
 #[test]
 fn long_lived_worker_indexes_enqueued_task_into_vector_store() {
     let store = VectorStore::open_in_memory().expect("open in-memory vector store");
-    let embedders = Arc::new(EmbedderPool::for_test(|_| {
+    let embedders = Arc::new(EmbedderPool::with_spawner(|_| {
         Ok(Arc::new(NoopEmbedder::small()))
     }));
     let worker = EmbedWorker::start(store.clone(), embedders);
