@@ -572,8 +572,22 @@ fn run_cli_backend_rejects_copilot_trailing_terminal_prose() {
 /// "No authentication information found". The step message — which becomes
 /// `job_run_steps.error_message` and the task's `workflow_run_failed` note —
 /// must carry Orbit's diagnosis, not only the exit code. [ORB-12261]
+///
+/// The diagnosis depends on the fixture actually running under the compiled
+/// profile. On a macOS host where `sandbox-exec` cannot apply a profile at all
+/// (an already-confined Orbit process), the wrapper exits 71 before Copilot
+/// starts and there is no auth marker to diagnose, so this skips on the same
+/// can-apply probe orbit-exec's own sandbox tests use rather than asserting a
+/// keychain message for a sandbox that never applied. [DANI-10509]
 #[test]
 fn run_cli_backend_copilot_keychain_auth_failure_reaches_the_step_message() {
+    #[cfg(target_os = "macos")]
+    {
+        if !super::test_support::sandbox_exec_can_apply_for_test() {
+            return;
+        }
+    }
+
     let temp = tempdir().expect("tempdir");
     let script = temp.path().join("copilot");
     write_executable(
@@ -593,8 +607,10 @@ fn run_cli_backend_copilot_keychain_auth_failure_reaches_the_step_message() {
         sink_for_writer,
     ));
     let mut sandbox = sandbox_for_test();
-    // Linux CI has no sandbox-exec; the diagnostic is about the compiled
-    // profile, not about whether the wrapper actually applied.
+    // Linux CI has no sandbox-exec binary at all, so the fixture runs bare and
+    // still exercises the diagnostic, which reads the compiled profile. On
+    // macOS the probe above already established that the wrapper applies, so
+    // this flag changes nothing there.
     sandbox.allow_fallback = true;
     let host = TestHost {
         command: script.display().to_string(),
@@ -630,7 +646,7 @@ fn run_cli_backend_copilot_keychain_auth_failure_reaches_the_step_message() {
         "the exit code still belongs in the step message: {message}"
     );
     assert!(
-        message.contains("macOS sandbox") && message.contains("copilot"),
+        message.contains("$HOME/Library/Keychains") && message.contains("copilot"),
         "the persisted step message must carry the keychain diagnosis, not only the exit code: {message}"
     );
 
@@ -649,8 +665,173 @@ fn run_cli_backend_copilot_keychain_auth_failure_reaches_the_step_message() {
         .as_deref()
         .expect("blocked update carries a note");
     assert!(
-        note.contains("macOS sandbox") && note.contains("copilot"),
+        note.contains("$HOME/Library/Keychains") && note.contains("copilot"),
         "workflow_run_failed must inline the diagnosis: {note}"
+    );
+}
+
+/// `sandbox-exec` exits 71 (`EX_OSERR`) with
+/// `sandbox_apply: Operation not permitted` when the kernel refuses to apply
+/// the profile — an already-confined Orbit process, or one without the
+/// entitlement. The provider binary never starts, so this is a host condition
+/// shared by every provider and has nothing to do with a credential store.
+/// Every provider must get the sandbox-application diagnosis and its remedy,
+/// and none may be told to inspect Keychain access. [DANI-10509]
+#[test]
+fn run_cli_backend_names_a_sandbox_application_failure_for_every_provider() {
+    for provider in [
+        orbit_types::workflow::activity_job::Provider::Claude,
+        orbit_types::workflow::activity_job::Provider::Codex,
+        orbit_types::workflow::activity_job::Provider::Copilot,
+        orbit_types::workflow::activity_job::Provider::Gemini,
+    ] {
+        let temp = tempdir().expect("tempdir");
+        let script = temp.path().join(provider.as_str());
+        // Stands in for the wrapper's own failure: on a host where
+        // `sandbox-exec` cannot apply, this is verbatim what the step captures
+        // before the provider is reached.
+        write_executable(
+            &script,
+            concat!(
+                "#!/bin/sh\ncat > /dev/null\n",
+                "printf '%s\\n' 'sandbox-exec: sandbox_apply: Operation not permitted' >&2\n",
+                "exit 71\n",
+            ),
+        );
+
+        let sink = Arc::new(RecordingSink::default());
+        let sink_for_writer: Arc<dyn AuditSink> = sink;
+        let audit = Arc::new(V2AuditWriter::new(
+            "job-sandbox-apply",
+            provider.as_str(),
+            sink_for_writer,
+        ));
+        let mut sandbox = sandbox_for_test();
+        // Linux CI has no sandbox-exec binary, so the fixture stands in for the
+        // wrapper there; the diagnosis keys on the captured stderr either way.
+        sandbox.allow_fallback = true;
+        let host = TestHost {
+            command: script.display().to_string(),
+            executor_args: Vec::new(),
+            provider_config: HashMap::new(),
+            sandbox: Some(sandbox),
+            task_context: None,
+            workspace_root: None,
+            orbit_registry_root: None,
+            orbit_workspace_selector: None,
+        };
+        let mut spec = test_agent_loop_spec(Duration::from_secs(5));
+        spec.provider = provider;
+
+        let outcome = run_cli_backend(
+            &host,
+            &spec,
+            "implement_one",
+            "jrun-sandbox-apply",
+            audit,
+            &serde_json::json!({"prompt": "say ok"}),
+            None,
+        )
+        .expect("the invocation outcome should be classified");
+
+        assert!(!outcome.success);
+        let message = outcome
+            .message
+            .as_deref()
+            .expect("failed step carries a message");
+        assert!(
+            message.contains("exited with code"),
+            "the exit code still belongs in the step message: {message}"
+        );
+        assert!(
+            message.contains("sandbox-exec could not apply")
+                && message.contains("sandbox_apply: Operation not permitted"),
+            "the step message must name the sandbox-application failure: {message}"
+        );
+        assert!(
+            message.contains("Run Orbit outside the enclosing sandbox")
+                && message.contains("`sandbox: off`"),
+            "the step message must name the remedy: {message}"
+        );
+        assert!(
+            !message.to_lowercase().contains("keychain"),
+            "a wrapper that never applied says nothing about Keychain access: {message}"
+        );
+    }
+}
+
+/// The same exit code without the wrapper's marker is an ordinary provider
+/// failure: exit 71 alone must not be read as a sandbox-application failure.
+///
+/// This needs the fixture's own stderr to be what the step captures, so it
+/// skips on a macOS host where `sandbox-exec` cannot apply — there the wrapper
+/// exits 71 with its own marker and the provider never runs, which is the
+/// condition the sibling test covers. [DANI-10509]
+#[test]
+fn run_cli_backend_leaves_a_bare_exit_71_undiagnosed() {
+    #[cfg(target_os = "macos")]
+    {
+        if !super::test_support::sandbox_exec_can_apply_for_test() {
+            return;
+        }
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("copilot");
+    write_executable(
+        &script,
+        concat!(
+            "#!/bin/sh\ncat > /dev/null\n",
+            "printf '%s\\n' 'copilot: internal service error' >&2\n",
+            "exit 71\n",
+        ),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-bare-71",
+        "copilot:claude-sonnet-5",
+        sink_for_writer,
+    ));
+    let mut sandbox = sandbox_for_test();
+    sandbox.allow_fallback = true;
+    let host = TestHost {
+        command: script.display().to_string(),
+        executor_args: Vec::new(),
+        provider_config: HashMap::new(),
+        sandbox: Some(sandbox),
+        task_context: None,
+        workspace_root: None,
+        orbit_registry_root: None,
+        orbit_workspace_selector: None,
+    };
+    let mut spec = test_agent_loop_spec(Duration::from_secs(5));
+    spec.provider = orbit_types::workflow::activity_job::Provider::Copilot;
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "implement_one",
+        "jrun-bare-71",
+        audit,
+        &serde_json::json!({"prompt": "say ok"}),
+        None,
+    )
+    .expect("the invocation outcome should be classified");
+
+    assert!(!outcome.success);
+    let message = outcome
+        .message
+        .as_deref()
+        .expect("failed step carries a message");
+    assert!(
+        message.contains("exited with code"),
+        "the exit code still belongs in the step message: {message}"
+    );
+    assert!(
+        !message.contains("sandbox-exec could not apply") && !message.contains("Keychain"),
+        "exit 71 without the wrapper marker must not be diagnosed: {message}"
     );
 }
 

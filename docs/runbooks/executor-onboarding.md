@@ -106,6 +106,8 @@ On macOS, Orbit's `macos-sandbox-exec` profile denies `$HOME/Library/Keychains` 
 
 A failed keychain-backed step records Orbit's diagnosis — sandbox hid the item versus a real logout — on the run error and the task's `workflow_run_failed` note, not only `exited with code Some(1)`. Do not document a provider as file-backed on macOS from its state directory alone; inspect the CLI's credential store.
 
+Exit 71 with `sandbox-exec: sandbox_apply: Operation not permitted` is a different failure and never a credential one: the wrapper could not apply the profile at all — the Orbit process is already sandboxed, or lacks the entitlement to nest one — so no provider CLI started. Orbit reports that condition for every provider and names the remedies that work: run Orbit outside the enclosing sandbox, or set the executor's `sandbox: off`. `allow_fallback` does not help here; it permits bare exec only when the trusted `sandbox-exec` binary is missing. Engine tests that need the profile to actually apply skip on a can-apply probe rather than asserting a diagnosis for a sandbox that never applied.
+
 ### Copilot model pins
 
 Copilot's model catalog depends on the authenticated account and can change

@@ -698,6 +698,46 @@ fn keychain_auth_failure_marker(provider: &str) -> Option<&'static str> {
     }
 }
 
+/// Text `sandbox-exec` writes when the kernel refuses to apply the compiled
+/// profile at all. It is the wrapper's own failure, not the confined program's.
+const MACOS_SANDBOX_APPLY_FAILURE_MARKER: &str = "sandbox_apply: Operation not permitted";
+
+/// Name a `sandbox-exec` wrapper that could not apply Orbit's profile.
+///
+/// Darwin reports this as exit 71 (`EX_OSERR`) with
+/// `sandbox-exec: sandbox_apply: Operation not permitted` on stderr, and it
+/// happens whenever the Orbit process is itself already confined — nesting a
+/// second `sandbox-exec` is refused — or lacks the entitlement to apply one.
+/// The provider binary never starts, so every later diagnostic that reads
+/// provider output has nothing to key on and the step would otherwise persist a
+/// bare exit code. This is a host/executor condition shared by every provider;
+/// it says nothing about the profile's *contents* or about any credential store.
+/// [DANI-10509]
+pub(super) fn macos_sandbox_apply_failure_diagnostic(
+    provider: &str,
+    sandbox: Option<&ResolvedSandbox>,
+    exit_code: Option<i32>,
+    stderr: &str,
+) -> Option<String> {
+    let sandbox = sandbox?;
+    if sandbox.kind != ExecutorSandboxKind::MacosSandboxExec
+        || exit_code != Some(71)
+        || !stderr.contains(MACOS_SANDBOX_APPLY_FAILURE_MARKER)
+    {
+        return None;
+    }
+
+    Some(format!(
+        "sandbox-exec could not apply Orbit's macOS sandbox profile \
+         (`{MACOS_SANDBOX_APPLY_FAILURE_MARKER}`), so the `{provider}` CLI never started: the \
+         Orbit process is already sandboxed — nested sandbox-exec is refused — or lacks the \
+         entitlement to apply a profile. Run Orbit outside the enclosing sandbox, or set this \
+         executor's `sandbox: off` to run the provider unconfined. `allow_fallback` does not \
+         cover this case: it permits bare exec only when the trusted sandbox-exec binary is \
+         missing."
+    ))
+}
+
 /// Turn Copilot's rejected `--model` error into crew-scoped remediation.
 ///
 /// The CLI's stderr names the unavailable id but does not identify the Orbit

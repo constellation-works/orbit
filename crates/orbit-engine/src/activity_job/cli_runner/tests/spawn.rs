@@ -17,7 +17,8 @@ use tempfile::tempdir;
 use super::super::super::dispatcher::ResolvedSandbox;
 use super::super::spawn::{
     SUPPORTED_SYSTEM_BIN_DIRS, SpawnError, SpawnedChild, copilot_model_unavailable_diagnostic,
-    linux_bwrap_failed_write_diagnostic, macos_keychain_auth_diagnostic_with, orbit_tool_env_with,
+    linux_bwrap_failed_write_diagnostic, macos_keychain_auth_diagnostic_with,
+    macos_sandbox_apply_failure_diagnostic, orbit_tool_env_with,
     prepare_linux_sandbox_for_dispatch_with_probe, prepare_macos_codex_ca_environment_with,
     reject_unsatisfiable_managed_grants, resolve_provider_launcher_with,
     resolve_provider_launcher_with_extra_dirs, spawn_bare, spawn_macos_sandboxed_with,
@@ -729,6 +730,78 @@ fn spawn_macos_sandboxed_returns_error_when_sandbox_exec_missing_and_fallback_di
         err.message.contains("allow_fallback: true"),
         "error should describe fallback opt-in: {}",
         err.message
+    );
+}
+
+/// The wrapper's own refusal is a host condition, so the diagnosis is
+/// provider-independent and names the remedies that actually apply.
+/// [DANI-10509]
+#[test]
+fn sandbox_apply_failure_diagnostic_is_provider_independent_and_names_the_remedy() {
+    let sandbox = sandbox_for_test();
+    let stderr = "sandbox-exec: sandbox_apply: Operation not permitted\n";
+
+    for provider in ["claude", "codex", "copilot", "gemini", "cursor", "grok"] {
+        let diagnostic =
+            macos_sandbox_apply_failure_diagnostic(provider, Some(&sandbox), Some(71), stderr)
+                .unwrap_or_else(|| panic!("provider `{provider}` must get the diagnosis"));
+        assert!(
+            diagnostic.contains(provider),
+            "the diagnosis names the CLI that never started: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("sandbox_apply: Operation not permitted"),
+            "the diagnosis quotes the wrapper's own failure: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("Run Orbit outside the enclosing sandbox")
+                && diagnostic.contains("`sandbox: off`"),
+            "the diagnosis names remedies that work: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("`allow_fallback` does not cover this case"),
+            "allow_fallback only covers a missing wrapper, so say so: {diagnostic}"
+        );
+        assert!(
+            !diagnostic.to_lowercase().contains("keychain"),
+            "no credential store is involved before the CLI starts: {diagnostic}"
+        );
+    }
+}
+
+/// Exit 71 alone, a different exit code, a non-macOS backend, and an
+/// unsandboxed run are all ordinary failures the generic path owns.
+/// [DANI-10509]
+#[test]
+fn sandbox_apply_failure_diagnostic_stays_silent_outside_its_exact_failure_shape() {
+    let sandbox = sandbox_for_test();
+    let stderr = "sandbox-exec: sandbox_apply: Operation not permitted\n";
+
+    assert!(
+        macos_sandbox_apply_failure_diagnostic(
+            "copilot",
+            Some(&sandbox),
+            Some(71),
+            "copilot: internal service error\n"
+        )
+        .is_none()
+    );
+    assert!(
+        macos_sandbox_apply_failure_diagnostic("copilot", Some(&sandbox), Some(1), stderr)
+            .is_none()
+    );
+    assert!(
+        macos_sandbox_apply_failure_diagnostic("copilot", Some(&sandbox), None, stderr).is_none()
+    );
+    assert!(macos_sandbox_apply_failure_diagnostic("copilot", None, Some(71), stderr).is_none());
+    assert!(
+        macos_sandbox_apply_failure_diagnostic(
+            "copilot",
+            Some(&linux_sandbox_for_test(false)),
+            Some(71),
+            stderr
+        )
+        .is_none()
     );
 }
 
