@@ -799,6 +799,17 @@ policy:\n  timeout_minutes: 30\n  overlap: forbid\n";
             1
         );
         assert!(!path.exists());
+        // `is_removable()` deletes outright only a byte-exact match; a shape
+        // match recognized by lifecycle edits still keeps a copy, exactly as
+        // `orbit workspace sync` does, so the two repair surfaces agree.
+        assert_eq!(
+            std::fs::read_to_string(
+                workspace_root.join(".retired-managed/routines/auto_task_scheduler.yaml")
+            )
+            .expect("lifecycle-edited content is preserved, not destroyed"),
+            lifecycle_edited,
+            "doctor must keep the operator's lifecycle-edited bytes, matching `workspace sync`"
+        );
     }
 
     /// The same retired default with no manifest entry at all [DANI-10502].

@@ -169,8 +169,14 @@ pub enum ArtifactProvenance {
 }
 
 impl ArtifactProvenance {
-    /// Whether `--fix-stale-artifacts` may delete this file outright. Only a
-    /// digest match proves Orbit wrote it and that no local edit is at risk.
+    /// Whether a deprecated finding's detail may describe this artifact as
+    /// Orbit's own, unmodified content. `OrbitWritten` also covers a routine
+    /// recognized by shape rather than by digest (an operator's lifecycle
+    /// edit), so this alone does not license `--fix-stale-artifacts` to
+    /// delete the file outright: `retire_catalog` independently re-checks
+    /// the digest and deletes only a byte-exact match, preserving a copy
+    /// under `.retired-managed/` for anything else — exactly as `workspace
+    /// sync` does.
     fn is_removable(self) -> bool {
         matches!(self, Self::OrbitWritten)
     }
@@ -850,7 +856,13 @@ fn retire_catalog(catalog: &ManagedCatalog) -> Result<usize, OrbitError> {
             // removing it here would act on a target outside this catalog.
             None => continue,
         };
-        if provenance(kind, name, Some(digest), &on_disk).is_removable() {
+        // Deletion outright requires an exact digest match, the same
+        // `byte_exact` test `reconcile_default_routines` applies: a routine
+        // recognized as Orbit-written by shape rather than by digest (an
+        // operator's lifecycle edit) is not byte-for-byte what Orbit wrote,
+        // so it is preserved here exactly as `workspace sync` preserves it —
+        // `is_removable()` alone does not license the delete.
+        if sha256_hex(on_disk.as_bytes()) == *digest {
             std::fs::remove_file(&path).map_err(|error| {
                 OrbitError::Io(format!(
                     "retire deprecated {} '{}': {error}",
@@ -871,7 +883,7 @@ fn retire_catalog(catalog: &ManagedCatalog) -> Result<usize, OrbitError> {
                 artifact_kind = kind.singular(),
                 artifact = name.as_str(),
                 preserved = %preserved.display(),
-                "locally modified deprecated artifact was preserved outside the active catalog"
+                "deprecated artifact differs from the bytes Orbit wrote and was preserved outside the active catalog"
             );
         }
         settled.push(name.clone());
