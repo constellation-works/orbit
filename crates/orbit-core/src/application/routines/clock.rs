@@ -924,7 +924,7 @@ fn observe_clock_enabled_for_pause(
         ClockPlatform::Systemd if systemd_reports_disabled_or_missing(&status_output) => Ok(false),
         ClockPlatform::Systemd => Err(clock_manager_unavailable_error(
             platform,
-            [(&status_command, &status_output)],
+            &[(&status_command, &status_output)],
             None,
         )),
         ClockPlatform::Launchd if launchd_reports_not_loaded(&status_output) => Ok(false),
@@ -938,7 +938,7 @@ fn observe_clock_enabled_for_pause(
             } else {
                 Err(clock_manager_unavailable_error(
                     platform,
-                    [
+                    &[
                         (&status_command, &status_output),
                         (&manager_command, &manager_output),
                     ],
@@ -976,26 +976,18 @@ pub(super) fn clock_status_with(
     let status_output = runner
         .probe(&status_command)
         .map_err(|error| clock_manager_probe_error(platform, &status_command, &error))?;
+    // A `launchctl print` dump captured while deciding `enabled`, so the
+    // health check below does not ask launchd twice.
+    let mut launchd_dump = None;
     let enabled = match platform {
         ClockPlatform::Launchd if !status_output.success => {
             if launchd_reports_not_loaded(&status_output) {
                 false
             } else {
-                let manager_command = launchd_manager_probe_command();
-                let manager_output = runner.probe(&manager_command).map_err(|error| {
-                    clock_manager_probe_error(platform, &manager_command, &error)
-                })?;
-                if !manager_output.success {
-                    return Err(clock_manager_unavailable_error(
-                        platform,
-                        [
-                            (&status_command, &status_output),
-                            (&manager_command, &manager_output),
-                        ],
-                        None,
-                    ));
-                }
-                false
+                let (loaded, dump) =
+                    launchd_loaded_without_list(runner, launchd, &status_command, &status_output)?;
+                launchd_dump = dump;
+                loaded
             }
         }
         _ => status_output.success,
@@ -1030,13 +1022,13 @@ pub(super) fn clock_status_with(
             Err(error) => {
                 return Err(clock_manager_unavailable_error(
                     platform,
-                    [(&status_command, &status_output)],
+                    &[(&status_command, &status_output)],
                     Some(&error),
                 ));
             }
         }
     } else if enabled {
-        match launchd.and_then(|probe| launchd_health_issue(probe, runner)) {
+        match launchd.and_then(|probe| launchd_health_issue(probe, runner, launchd_dump)) {
             Some(issue) => (false, Some(issue)),
             None => (true, None),
         }
@@ -1100,13 +1092,65 @@ fn launchd_reports_not_loaded(output: &ManagerCommandOutput) -> bool {
     .any(|marker| diagnostic.contains(marker))
 }
 
-fn clock_manager_unavailable_error<'a, const N: usize>(
+/// Decide whether the launchd agent is loaded after `launchctl list <label>`
+/// failed without naming a not-loaded state, and return the `launchctl print`
+/// dump when that is what answered.
+///
+/// A macOS agent sandbox denies `launchctl list` outright (exit 1, no output)
+/// while still allowing `launchctl print gui/<uid>/<label>` [DANI-10519], so
+/// the per-service dump is consulted first: success means loaded, a
+/// not-loaded diagnostic means paused. Only when `print` cannot answer either
+/// way does the bare `launchctl list` decide between a paused clock and a
+/// manager this process cannot query.
+fn launchd_loaded_without_list(
+    runner: &dyn ClockCommandRunner,
+    launchd: Option<&LaunchdHealthProbe>,
+    status_command: &ManagerCommand,
+    status_output: &ManagerCommandOutput,
+) -> Result<(bool, Option<String>), OrbitError> {
+    let print_attempt = launchd.map(|probe| launchd_print_command(probe.uid));
+    let print_output =
+        match &print_attempt {
+            Some(command) => Some(runner.probe(command).map_err(|error| {
+                clock_manager_probe_error(ClockPlatform::Launchd, command, &error)
+            })?),
+            None => None,
+        };
+    if let Some(output) = &print_output {
+        if output.success {
+            return Ok((true, Some(output.stdout.clone())));
+        }
+        if launchd_reports_not_loaded(output) {
+            return Ok((false, None));
+        }
+    }
+
+    let manager_command = launchd_manager_probe_command();
+    let manager_output = runner.probe(&manager_command).map_err(|error| {
+        clock_manager_probe_error(ClockPlatform::Launchd, &manager_command, &error)
+    })?;
+    if manager_output.success {
+        return Ok((false, None));
+    }
+    let mut attempts = vec![(status_command, status_output)];
+    if let (Some(command), Some(output)) = (&print_attempt, &print_output) {
+        attempts.push((command, output));
+    }
+    attempts.push((&manager_command, &manager_output));
+    Err(clock_manager_unavailable_error(
+        ClockPlatform::Launchd,
+        &attempts,
+        None,
+    ))
+}
+
+fn clock_manager_unavailable_error<'a>(
     platform: ClockPlatform,
-    attempts: [(&'a ManagerCommand, &'a ManagerCommandOutput); N],
+    attempts: &[(&'a ManagerCommand, &'a ManagerCommandOutput)],
     detail_error: Option<&OrbitError>,
 ) -> OrbitError {
     let mut diagnostics = attempts
-        .into_iter()
+        .iter()
         .map(|(command, output)| manager_probe_diagnostic(command, output))
         .collect::<Vec<_>>();
     if let Some(error) = detail_error {
@@ -1229,9 +1273,11 @@ fn current_uid() -> u32 {
 ///    Only [`ClockUnitVerdict::Unrunnable`] is a health issue: a version or
 ///    path mismatch names a binary that still runs, so the clock still ticks.
 /// 2. `launchctl print`, for the outcome of the runs that already happened.
+///    `dump` is that output when the enabled decision already captured it.
 fn launchd_health_issue(
     probe: &LaunchdHealthProbe,
     runner: &dyn ClockCommandRunner,
+    dump: Option<String>,
 ) -> Option<String> {
     let inspection = inspect_clock_unit_at(
         &probe.home,
@@ -1249,26 +1295,32 @@ fn launchd_health_issue(
         )));
     }
 
-    let command = launchd_print_command(probe.uid);
-    let output = match runner.probe(&command) {
-        Ok(output) if output.success => output.stdout,
-        Ok(output) => {
+    let output = match dump.map_or_else(|| launchd_print_dump(probe.uid, runner), Ok) {
+        Ok(dump) => dump,
+        Err(diagnostic) => {
             return Some(launchd_recovery(&format!(
-                "launchd agent {LAUNCHD_LABEL} is loaded but its state could not be verified ({})",
-                manager_probe_diagnostic(&command, &output)
-            )));
-        }
-        Err(error) => {
-            return Some(launchd_recovery(&format!(
-                "launchd agent {LAUNCHD_LABEL} is loaded but its state could not be verified (`{}` could not run: {})",
-                command.display(),
-                bounded_manager_text(&error.to_string())
+                "launchd agent {LAUNCHD_LABEL} is loaded but its state could not be verified ({diagnostic})"
             )));
         }
     };
     LaunchdClockDetails::parse(&output)
         .failure_summary()
         .map(|summary| launchd_recovery(&summary))
+}
+
+/// Run `launchctl print gui/<uid>/<label>` and return its dump, or the
+/// diagnostic explaining why the agent's state could not be read.
+fn launchd_print_dump(uid: u32, runner: &dyn ClockCommandRunner) -> Result<String, String> {
+    let command = launchd_print_command(uid);
+    match runner.probe(&command) {
+        Ok(output) if output.success => Ok(output.stdout),
+        Ok(output) => Err(manager_probe_diagnostic(&command, &output)),
+        Err(error) => Err(format!(
+            "`{}` could not run: {}",
+            command.display(),
+            bounded_manager_text(&error.to_string())
+        )),
+    }
 }
 
 fn launchd_recovery(issue: &str) -> String {

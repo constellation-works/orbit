@@ -1097,6 +1097,174 @@ fn launchd_not_loaded_is_disabled_but_transport_failure_is_unavailable() {
     );
 }
 
+/// The observed agent-sandbox denial: `launchctl list` exits 1 with no output
+/// at all, while `launchctl print gui/<uid>/<label>` still answers, so status
+/// must trust the per-service dump instead of declaring the manager
+/// unavailable [DANI-10519]. The dump is reused for the health check rather
+/// than asking launchd a second time.
+#[test]
+fn sandboxed_launchctl_list_denial_falls_back_to_launchctl_print() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    write_launchd_unit(home.path(), INSTALLED_PROGRAM);
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![
+            Ok(manager_output(false, "", "")),
+            Ok(manager_output(
+                true,
+                &launchctl_print("last exit code = 0", "runatload | inferred program"),
+                "",
+            )),
+        ],
+    );
+
+    let status = clock_status_with(
+        root.path(),
+        ClockPlatform::Launchd,
+        &runner,
+        Some(&launchd_probe(home.path(), installed_version)),
+    )
+    .expect("a loaded agent visible through launchctl print is not unavailable");
+
+    assert!(status.enabled);
+    assert!(status.loaded);
+    assert!(status.schedulable);
+    assert!(status.health_issue.is_none());
+    assert_eq!(
+        runner.commands(),
+        vec![
+            "launchctl list com.orbit.sweep",
+            "launchctl print gui/501/com.orbit.sweep",
+        ]
+    );
+}
+
+/// The same denial with a stalled agent: the dump that proved the agent is
+/// loaded also carries the failure launchd recorded, so the health issue is
+/// still surfaced without a second `launchctl print`.
+#[test]
+fn sandboxed_launchctl_list_denial_still_reports_launchd_health_from_print() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    write_launchd_unit(home.path(), INSTALLED_PROGRAM);
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![
+            Ok(manager_output(false, "", "")),
+            Ok(manager_output(
+                true,
+                &launchctl_print("last exit code = 78: EX_CONFIG", "penalty box"),
+                "",
+            )),
+        ],
+    );
+
+    let status = clock_status_with(
+        root.path(),
+        ClockPlatform::Launchd,
+        &runner,
+        Some(&launchd_probe(home.path(), installed_version)),
+    )
+    .expect("read launchd status");
+
+    assert!(status.enabled);
+    assert!(!status.schedulable);
+    let issue = status
+        .health_issue
+        .expect("stalled agent reports a health issue");
+    assert!(issue.contains("exited 78 without sweeping"));
+    assert!(issue.contains("penalty box"));
+    assert_eq!(
+        runner.commands(),
+        vec![
+            "launchctl list com.orbit.sweep",
+            "launchctl print gui/501/com.orbit.sweep",
+        ]
+    );
+}
+
+/// A paused or unloaded agent inside the same sandbox: `list` is denied and
+/// `print` names the not-loaded state, which is disabled rather than
+/// unavailable, and never enabled.
+#[test]
+fn sandboxed_launchctl_list_denial_with_unloaded_agent_is_not_enabled() {
+    let root = tempdir().expect("create global root");
+    let home = tempdir().expect("create home");
+    write_launchd_unit(home.path(), INSTALLED_PROGRAM);
+    let runner = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![
+            Ok(manager_output(false, "", "")),
+            Ok(manager_output(
+                false,
+                "",
+                "Could not find service \"com.orbit.sweep\" in domain for uid: 501",
+            )),
+        ],
+    );
+
+    let status = clock_status_with(
+        root.path(),
+        ClockPlatform::Launchd,
+        &runner,
+        Some(&launchd_probe(home.path(), installed_version)),
+    )
+    .expect("an unloaded agent named by launchctl print is disabled");
+
+    assert!(!status.enabled);
+    assert!(!status.loaded);
+    assert!(!status.schedulable);
+    assert!(status.health_issue.is_none());
+    assert_eq!(
+        runner.commands(),
+        vec![
+            "launchctl list com.orbit.sweep",
+            "launchctl print gui/501/com.orbit.sweep",
+        ]
+    );
+
+    // When neither probe names a not-loaded state, the bare `launchctl list`
+    // still decides between paused and unavailable, and every attempt is
+    // named in the diagnostic.
+    let unavailable = MockRunner::with_probes(
+        Vec::new(),
+        Vec::new(),
+        vec![
+            Ok(manager_output(false, "", "")),
+            Ok(manager_output(false, "", "")),
+            Ok(manager_output(false, "", "")),
+        ],
+    );
+    let error = clock_status_with(
+        root.path(),
+        ClockPlatform::Launchd,
+        &unavailable,
+        Some(&launchd_probe(home.path(), installed_version)),
+    )
+    .expect_err("silent failure at every probe is unavailable");
+    let message = error.to_string();
+    assert!(message.contains("launchd clock manager is unavailable"));
+    assert!(
+        message.contains("`launchctl list com.orbit.sweep` failed with exit code 1 without output")
+    );
+    assert!(message.contains(
+        "`launchctl print gui/501/com.orbit.sweep` failed with exit code 1 without output"
+    ));
+    assert!(message.contains("`launchctl list` failed with exit code 1 without output"));
+    assert_eq!(
+        unavailable.commands(),
+        vec![
+            "launchctl list com.orbit.sweep",
+            "launchctl print gui/501/com.orbit.sweep",
+            "launchctl list",
+        ]
+    );
+}
+
 /// The observed Mac mini failure: the plist still names a package-manager
 /// install that no longer exists, so no sweep can fire even though launchd
 /// keeps reporting the agent as loaded [DANI-10386].
