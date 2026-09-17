@@ -36,8 +36,8 @@ use super::inspection::SourceInspection;
 use super::spawn::{
     CODEX_CA_CERTIFICATE_ENV, PreparedSandbox, SSL_CERT_FILE_ENV,
     copilot_model_unavailable_diagnostic, linux_bwrap_failed_write_diagnostic,
-    macos_keychain_auth_diagnostic, orbit_tool_env, prepare_sandbox_for_dispatch,
-    resolve_provider_launcher,
+    macos_keychain_auth_diagnostic, macos_sandbox_apply_failure_diagnostic, orbit_tool_env,
+    prepare_sandbox_for_dispatch, resolve_provider_launcher,
 };
 use super::supervisor::{
     DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS, SpawnTraceContext, SpawnWithTimeoutRequest,
@@ -674,6 +674,19 @@ pub fn run_cli_backend(
         Some(
             sandbox_write_diagnostic
                 .clone()
+                // Ordered first among the provider-output diagnostics: when
+                // sandbox-exec itself could not apply the profile the provider
+                // never ran, so no marker any later branch keys on can be
+                // genuine. [DANI-10509]
+                .or_else(|| {
+                    macos_sandbox_apply_failure_diagnostic(
+                        &provider,
+                        sandbox,
+                        exit_code,
+                        stderr_text.as_ref(),
+                    )
+                    .map(|diagnostic| format!("{} {diagnostic}", exit_message()))
+                })
                 // Copilot reports an unavailable explicit model only on
                 // stderr. Join it to the resolved crew before the generic
                 // exit-code path loses the configuration source.
@@ -708,23 +721,6 @@ pub fn run_cli_backend(
                         &format!("{trace_stdout_text}\n{stderr_text}"),
                     )
                     .map(|diagnostic| format!("{} {diagnostic}", exit_message()))
-                })
-                // Darwin's sandbox-exec reports an OS error as exit 71 and can
-                // terminate before Copilot writes its authentication marker.
-                // Keep that provider/sandbox boundary visible instead of
-                // falling through to an opaque exit code. [DANI-10476]
-                .or_else(|| {
-                    (provider == "copilot"
-                        && exit_code == Some(71)
-                        && sandbox.is_some_and(|sandbox| {
-                            sandbox.kind == ExecutorSandboxKind::MacosSandboxExec
-                        }))
-                    .then(|| {
-                        format!(
-                            "{} copilot invocation failed under the macOS sandbox; inspect the sandbox profile and Copilot Keychain access before retrying.",
-                            exit_message()
-                        )
-                    })
                 })
                 // [ORB-10746] A bare exit code cannot distinguish "this CLI
                 // has no --json-schema" from "the provider rejected Orbit's
