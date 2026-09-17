@@ -140,10 +140,16 @@ fn teardown_rejects_a_selector_that_is_not_registered() {
 #[test]
 fn teardown_rejects_a_selector_that_does_not_match_the_cwd_checkout() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let global_root = temp.path().join("global");
-    let here = temp.path().join("here");
+    // `orbit init` registers the checkout as `current_dir()` reports it, which
+    // is the resolved path. Register through the same canonical root here so
+    // the cwd guard compares like with like: on macOS `$TMPDIR` lives under
+    // the `/var` -> `/private/var` symlink, and registering the unresolved
+    // path would let the mismatched selector slip past the refusal.
+    let temp_root = std::fs::canonicalize(temp.path()).expect("canonical tempdir");
+    let global_root = temp_root.join("global");
+    let here = temp_root.join("here");
     let here_orbit = here.join(".orbit");
-    let other = temp.path().join("other");
+    let other = temp_root.join("other");
     let other_orbit = other.join(".orbit");
     std::fs::create_dir_all(&global_root).expect("create global root");
     std::fs::create_dir_all(&here_orbit).expect("create here workspace root");

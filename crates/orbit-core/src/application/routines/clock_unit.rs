@@ -266,6 +266,18 @@ pub(crate) fn inspect_clock_unit_at(
 
 /// Run `<program> --version` with a short timeout. Never panics.
 pub fn probe_program_version(program: &Path) -> Result<String, String> {
+    probe_program_version_within(program, VERSION_PROBE_TIMEOUT)
+}
+
+/// [`probe_program_version`] with an explicit budget.
+///
+/// Production keeps the short [`VERSION_PROBE_TIMEOUT`] so a hung program
+/// cannot stall `orbit doctor`; a test that spawns a real script under a
+/// loaded runner passes a budget that only a genuinely hung process exceeds.
+pub(crate) fn probe_program_version_within(
+    program: &Path,
+    timeout: Duration,
+) -> Result<String, String> {
     if !program.exists() {
         return Err(format!("program does not exist: {}", program.display()));
     }
@@ -278,7 +290,7 @@ pub fn probe_program_version(program: &Path) -> Result<String, String> {
         .spawn()
         .map_err(|error| format!("could not start {}: {error}", program.display()))?;
 
-    let deadline = Instant::now() + VERSION_PROBE_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -314,10 +326,7 @@ pub fn probe_program_version(program: &Path) -> Result<String, String> {
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!(
-                    "--version timed out after {}s",
-                    VERSION_PROBE_TIMEOUT.as_secs()
-                ));
+                return Err(format!("--version timed out after {}s", timeout.as_secs()));
             }
             Err(error) => {
                 let _ = child.kill();
