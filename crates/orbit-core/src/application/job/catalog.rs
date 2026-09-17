@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::activity_job::{
-    CatalogDirectory, CatalogDirectoryList, V2JobCatalog, catalog_error_to_orbit,
+    CatalogDirectory, CatalogDirectoryList, CatalogError, V2JobCatalog, catalog_error_to_orbit,
 };
 use orbit_types::workflow::{JobKind, JobRun, JobScheduleState, JobV2};
 use serde_json::Value;
@@ -132,6 +132,34 @@ impl JobCatalogEntry {
 pub(crate) struct V2JobExecutionMembership {
     pub(crate) names: BTreeSet<String>,
     pub(crate) errors: Vec<OrbitError>,
+}
+
+#[derive(Debug)]
+struct V2JobCatalogDiagnostic {
+    directory_index: usize,
+    path: PathBuf,
+    error: OrbitError,
+}
+
+impl V2JobCatalogDiagnostic {
+    fn applies_to_job(
+        &self,
+        job_id: &str,
+        selected_path: Option<&Path>,
+        dirs: &[CatalogDirectory<V2JobCatalogDirKind>],
+    ) -> bool {
+        if self.path.file_stem().and_then(|stem| stem.to_str()) != Some(job_id) {
+            return false;
+        }
+        let Some(selected_path) = selected_path else {
+            return true;
+        };
+        let selected_directory_index = dirs
+            .iter()
+            .position(|dir| selected_path.starts_with(dir.path()))
+            .unwrap_or(usize::MAX);
+        self.directory_index <= selected_directory_index
+    }
 }
 
 impl OrbitRuntime {
@@ -264,15 +292,23 @@ impl OrbitRuntime {
     }
 
     pub fn show_job_catalog_entry(&self, job_id: &str) -> Result<JobCatalogEntry, OrbitError> {
-        let v2_jobs = self.load_v2_job_assets()?;
-        v2_jobs
-            .get(job_id)
-            .map(|(path, spec)| JobCatalogEntry {
+        let dirs = self.v2_job_asset_dirs();
+        let (v2_jobs, diagnostics) = self.load_v2_job_catalog_with_diagnostics(dirs.clone())?;
+        let selected_path = v2_jobs.get(job_id).map(|(path, _)| path.to_path_buf());
+        if let Some(diagnostic) = diagnostics
+            .into_iter()
+            .find(|diagnostic| diagnostic.applies_to_job(job_id, selected_path.as_deref(), &dirs))
+        {
+            return Err(diagnostic.error);
+        }
+        if let Some((path, spec)) = v2_jobs.get(job_id) {
+            return Ok(JobCatalogEntry {
                 job_id: job_id.to_string(),
                 path: path.to_path_buf(),
                 spec: spec.clone(),
-            })
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
+            });
+        }
+        Err(OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
     }
 
     fn load_v2_job_assets(&self) -> Result<V2JobCatalog, OrbitError> {
@@ -329,17 +365,52 @@ impl OrbitRuntime {
         &self,
         dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
     ) -> Result<V2JobCatalog, OrbitError> {
+        self.load_v2_job_catalog_with_diagnostics(dirs)
+            .map(|(catalog, _)| catalog)
+    }
+
+    fn load_v2_job_catalog_with_diagnostics(
+        &self,
+        dirs: Vec<CatalogDirectory<V2JobCatalogDirKind>>,
+    ) -> Result<(V2JobCatalog, Vec<V2JobCatalogDiagnostic>), OrbitError> {
         #[cfg(test)]
         V2_JOB_CATALOG_LOADS.with(|count| count.set(count.get() + 1));
         let mut catalog = V2JobCatalog::new();
-        for dir in dirs {
+        let mut diagnostics = Vec::new();
+        for (directory_index, dir) in dirs.into_iter().enumerate() {
             if dir.path().is_dir() {
-                catalog
-                    .load_dir_prefer_existing_best_effort(dir.path())
-                    .map_err(catalog_error_to_orbit)?;
+                match catalog.load_dir_prefer_existing_best_effort(dir.path()) {
+                    Ok(parse_errors) => {
+                        diagnostics.extend(
+                            parse_errors
+                                .into_iter()
+                                .map(|error| {
+                                    let path = match &error {
+                                        CatalogError::Parse { path, .. } => path.clone(),
+                                        _ => return Err(catalog_error_to_orbit(error)),
+                                    };
+                                    Ok(V2JobCatalogDiagnostic {
+                                        directory_index,
+                                        path,
+                                        error: catalog_error_to_orbit(error),
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, _>>()?,
+                        );
+                    }
+                    Err(error) => return Err(catalog_error_to_orbit(error)),
+                }
             }
         }
-        Ok(catalog)
+        for diagnostic in &diagnostics {
+            tracing::warn!(
+                target: "orbit.core.jobs",
+                path = %diagnostic.path.display(),
+                error = %diagnostic.error,
+                "skipping malformed job catalog file"
+            );
+        }
+        Ok((catalog, diagnostics))
     }
 
     fn load_v2_job_catalog_best_effort(
@@ -405,11 +476,19 @@ impl OrbitRuntime {
         &self,
         job_id: &str,
     ) -> Result<(PathBuf, JobV2), OrbitError> {
-        let catalog = self.load_v2_job_catalog(self.v2_job_asset_dirs_for_execution(job_id))?;
-        catalog
-            .get(job_id)
-            .map(|(path, spec)| (path.to_path_buf(), spec.clone()))
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
+        let dirs = self.v2_job_asset_dirs_for_execution(job_id);
+        let (catalog, diagnostics) = self.load_v2_job_catalog_with_diagnostics(dirs.clone())?;
+        let selected_path = catalog.get(job_id).map(|(path, _)| path.to_path_buf());
+        if let Some(diagnostic) = diagnostics
+            .into_iter()
+            .find(|diagnostic| diagnostic.applies_to_job(job_id, selected_path.as_deref(), &dirs))
+        {
+            return Err(diagnostic.error);
+        }
+        if let Some((path, spec)) = catalog.get(job_id) {
+            return Ok((path.to_path_buf(), spec.clone()));
+        }
+        Err(OrbitError::not_found(NotFoundKind::Job, job_id.to_string()))
     }
 
     fn v2_job_asset_dirs_for_execution(

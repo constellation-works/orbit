@@ -2526,6 +2526,54 @@ fn malformed_job_assets_do_not_hide_healthy_jobs_in_a_shared_root() {
         .show_job_catalog_entry("task_auto_pipeline")
         .expect("healthy job remains showable");
     assert_eq!(shown.job_id, "task_auto_pipeline");
+
+    let show_error = runtime
+        .show_job_catalog_entry("malformed")
+        .expect_err("the malformed job must report its parse error");
+    assert!(
+        show_error.to_string().contains("malformed.yaml"),
+        "{show_error}"
+    );
+    assert!(show_error.to_string().contains("parse"), "{show_error}");
+
+    let run_error = runtime
+        .load_v2_job_asset_by_name("malformed")
+        .expect_err("named execution must report its parse error");
+    assert!(
+        run_error.to_string().contains("malformed.yaml"),
+        "{run_error}"
+    );
+    assert!(run_error.to_string().contains("parse"), "{run_error}");
+
+    let resolved_error = runtime
+        .resolved_job_spec("malformed")
+        .expect_err("resolved specs must not hide a malformed on-disk job");
+    assert!(
+        resolved_error.to_string().contains("malformed.yaml"),
+        "{resolved_error}"
+    );
+}
+
+#[test]
+fn malformed_on_disk_shipped_job_does_not_use_embedded_spec() {
+    let root = tempdir().expect("tempdir");
+    let shared_root = root.path().join("shared");
+    std::fs::create_dir_all(&shared_root).expect("create shared root");
+    let runtime = OrbitRuntime::from_roots(&shared_root, &shared_root).expect("build runtime");
+    let malformed = shared_root.join("resources/jobs/task_auto_pipeline.yaml");
+    std::fs::create_dir_all(malformed.parent().expect("job path has parent"))
+        .expect("create jobs dir");
+    std::fs::write(&malformed, "schemaVersion: 2\nkind: Job\nspec: [")
+        .expect("write malformed job");
+
+    let error = runtime
+        .resolved_job_spec("task_auto_pipeline")
+        .expect_err("a malformed on-disk job must not fall back to the shipped spec");
+    assert!(
+        error.to_string().contains("task_auto_pipeline.yaml"),
+        "{error}"
+    );
+    assert!(error.to_string().contains("parse"), "{error}");
 }
 
 /// [ORB-11187] The completion policy is one shared input threaded through every
