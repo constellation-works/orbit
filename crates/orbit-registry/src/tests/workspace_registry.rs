@@ -13,7 +13,7 @@ use tempfile::tempdir;
 use crate::workspace_registry::{
     assign_checkout_role, find_checkout_by_path, find_workspace, find_workspace_by_id,
     find_workspace_by_path, load_registry_from, load_registry_from_read_only,
-    load_registry_from_with_writer, register_checkout, remove_workspace,
+    load_registry_from_with_writer, register_checkout, registry_file_fingerprint, remove_workspace,
     rename_local_owner_host_id, resolve_logical_workspace, save_registry_to, set_path_override,
     validate_workspaces, with_registry_lock,
 };
@@ -754,6 +754,32 @@ fn registry_io_rejects_a_symlinked_registry_file() {
         error.to_string().contains("must not be a symlink"),
         "unexpected: {error}"
     );
+}
+
+#[test]
+fn registry_file_fingerprint_uses_the_validated_registry_path() {
+    let root = tempdir().expect("tempdir");
+    let path = root.path().join("workspaces.json");
+    fs::write(&path, b"{}").expect("write registry");
+
+    let fingerprint = registry_file_fingerprint(&path).expect("existing registry fingerprint");
+    assert_eq!(fingerprint.1, 2);
+
+    let missing_root = root.path().join("missing").join("workspaces.json");
+    assert_eq!(registry_file_fingerprint(&missing_root), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_file_fingerprint_rejects_a_symlinked_registry_file() {
+    let root = tempdir().expect("tempdir");
+    let outside = tempdir().expect("tempdir");
+    let target = outside.path().join("workspaces.json");
+    fs::write(&target, b"{}").expect("write target");
+    let path = root.path().join("workspaces.json");
+    std::os::unix::fs::symlink(&target, &path).expect("create registry symlink");
+
+    assert_eq!(registry_file_fingerprint(&path), None);
 }
 
 #[test]

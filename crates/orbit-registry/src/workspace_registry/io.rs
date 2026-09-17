@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
@@ -26,6 +27,15 @@ pub fn registry_path() -> Result<PathBuf, OrbitError> {
 /// Return the workspace registry path under an already-resolved global root.
 pub fn registry_path_for(global_root: &Path) -> PathBuf {
     global_root.join(REGISTRY_FILE_NAME)
+}
+
+/// Return the mtime and length of a registry after validating its selected
+/// root and fixed file name. A missing root, missing registry, invalid path, or
+/// symlinked registry has no fingerprint.
+pub fn registry_file_fingerprint(path: &Path) -> Option<(SystemTime, u64)> {
+    let path = validated_registry_path_if_root_exists(path).ok()??;
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
 }
 
 /// Load the machine-global workspace registry.
