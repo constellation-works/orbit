@@ -1,9 +1,13 @@
 //! Core assembly for routine sources and target catalog resolution.
 
 use crate::OrbitRuntime;
+use crate::application::routine::sync_retires_routine;
 pub use orbit_automation::routines::loader::{
     LoadedRoutine, RetiredRoutine, RoutineCatalogLookup, RoutineCollection, RoutineLoadError,
     RoutineOrigin, RoutineSource,
+};
+use orbit_automation::routines::loader::{
+    ROUTINES_DIR, manual_retirement_advice, retired_routine_job_reason, retired_routine_reason,
 };
 use orbit_common::OrbitError;
 use orbit_types::workspace::Workspace;
@@ -37,7 +41,53 @@ pub fn collect_routines(workspaces: &[(Workspace, OrbitRuntime)]) -> RoutineColl
             orbit_dir: runtime.shared_root(),
         })
         .collect::<Vec<_>>();
-    orbit_automation::routines::loader::collect_routines(&sources, &|root, job| {
+    let mut collection = collect_from_sources(&sources, &job_names_by_root);
+    narrow_retired_advice(&sources, &mut collection);
+    collection
+}
+
+/// Discovery states the synchronization step for every retired definition
+/// because it cannot tell one Orbit seeded from one the operator wrote. Core
+/// owns the managed-routine templates and the manifest, so it is the layer
+/// that can: replace the advice wherever synchronization would leave the file
+/// exactly where it is, so the operator is never sent back to a command that
+/// reports `unchanged` forever [DANI-10502].
+fn narrow_retired_advice(sources: &[RoutineSource], collection: &mut RoutineCollection) {
+    let routines_dirs: BTreeMap<&str, PathBuf> = sources
+        .iter()
+        .map(|source| {
+            (
+                source.workspace.as_str(),
+                source.orbit_dir.join(ROUTINES_DIR),
+            )
+        })
+        .collect();
+    for retired in &mut collection.retired {
+        let Some(routines_dir) = routines_dirs.get(retired.source_workspace.as_str()) else {
+            continue;
+        };
+        if sync_retires_routine(routines_dir, &retired.path) {
+            continue;
+        }
+        let Some(retirement) = retired_routine_job_reason(&retired.job) else {
+            continue;
+        };
+        retired.reason = retired_routine_reason(
+            &retired.job,
+            retirement,
+            &manual_retirement_advice(&retired.path),
+        );
+    }
+}
+
+fn collect_from_sources(
+    sources: &[RoutineSource],
+    job_names_by_root: &BTreeMap<
+        PathBuf,
+        crate::application::job::catalog::V2JobExecutionMembership,
+    >,
+) -> RoutineCollection {
+    orbit_automation::routines::loader::collect_routines(sources, &|root, job| {
         job_names_by_root
             .get(root)
             .map(|membership| RoutineCatalogLookup {

@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use orbit_automation::routines::loader::declared_routine_names;
+use orbit_automation::routines::loader::{declared_routine_names, retired_routine_job_reason};
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_types::workflow::RoutineDefinition;
@@ -697,6 +697,20 @@ pub(crate) fn reconcile_default_routines(
         );
     }
 
+    // A definition targeting a retired job that neither loop above could
+    // reach: the manifest never recorded it (a release wrote the file without
+    // recording the write, or the manifest was since reset or hand-edited) and
+    // it wears no shipped name. Left alone it loads as retired on every tick
+    // while every surface advises a sync that reports `unchanged` forever
+    // [DANI-10502], so judge it by content exactly as a tracked file is judged.
+    reconcile_untracked_retired_routines(
+        routines_dir,
+        previous.as_ref(),
+        &shipped,
+        mode,
+        &mut result,
+    )?;
+
     let next = ManagedAssetManifest {
         schema_version: ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION,
         asset_kind: "routine".to_string(),
@@ -713,6 +727,143 @@ pub(crate) fn reconcile_default_routines(
         })?;
     }
     Ok(result)
+}
+
+/// Reconcile every top-level definition in `routines_dir` that targets a
+/// retired job and that the manifest does not track. A copy of a template a
+/// prior release shipped leaves the active catalog exactly as a tracked one
+/// does; anything else is the operator's own file and is only reported —
+/// with the step that actually clears it, since synchronization never deletes
+/// a routine Orbit did not write.
+///
+/// Untracked bytes are never deleted outright: with no recorded digest there
+/// is nothing proving Orbit wrote this exact file, so the copy under
+/// `.retired-managed/routines/` is what makes the removal safe.
+fn reconcile_untracked_retired_routines(
+    routines_dir: &Path,
+    previous: Option<&ManagedAssetManifest>,
+    shipped: &BTreeSet<&str>,
+    mode: ManagedAssetReconcileMode,
+    result: &mut ManagedAssetReconciliation,
+) -> Result<(), OrbitError> {
+    for path in top_level_routine_files(routines_dir) {
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        if shipped.contains(stem)
+            || previous.is_some_and(|manifest| manifest.assets.contains_key(stem))
+        {
+            continue;
+        }
+        // An unreadable or unparsable file states no target, so it is not a
+        // retired definition; the loader and `orbit doctor` report it.
+        let Ok(existing) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(definition) = parse_routine_yaml(&existing) else {
+            continue;
+        };
+        let job = definition.target.job_name();
+        let Some(retirement) = retired_routine_job_reason(job) else {
+            continue;
+        };
+
+        if shipped_shape_of(stem, &existing) != Some(ShippedShape::Retired) {
+            let detail = format!(
+                "routine '{}' targets retired job '{job}' ({retirement}) but is not one Orbit wrote, so `orbit workspace sync` cannot retire it; delete the file or retarget it at a job this Orbit ships",
+                path.display()
+            );
+            result.warnings.push(detail.clone());
+            result.actions.push(ManagedAssetAction {
+                name: stem.to_string(),
+                path,
+                outcome: ManagedAssetOutcome::Preserved,
+                detail: Some(detail),
+            });
+            continue;
+        }
+
+        let preserved = if mode == ManagedAssetReconcileMode::Apply {
+            preserve_modified_retired_asset(
+                routines_dir,
+                "routine",
+                ManagedAssetLayout::YamlStem,
+                stem,
+                &path,
+            )?
+        } else {
+            retired_preservation_path(routines_dir, "routine", ManagedAssetLayout::YamlStem, stem)
+        };
+        result.actions.push(ManagedAssetAction {
+            name: stem.to_string(),
+            path,
+            outcome: ManagedAssetOutcome::Retired,
+            detail: Some(format!(
+                "retired a prior release's routine the managed manifest never recorded; a copy is at '{}'",
+                preserved.display()
+            )),
+        });
+        result.retired += 1;
+    }
+    Ok(())
+}
+
+/// Regular `*.yaml` / `*.yml` files directly in `routines_dir`, in stable
+/// filename order. The `local/` subdirectory is a separate origin that
+/// seeding never writes to, so it is skipped with every other subdirectory.
+/// A directory that cannot be listed yields nothing: reconciliation of the
+/// managed defaults has already reported what it could not read.
+fn top_level_routine_files(routines_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(routines_dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("yaml") || extension.eq_ignore_ascii_case("yml")
+                })
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// Whether `orbit workspace sync` would remove the routine definition at
+/// `path` from `routines_dir`'s active catalog.
+///
+/// Every surface that tells an operator to run the sync asks this first: the
+/// advice is only true for a file reconciliation can reach — one the manifest
+/// tracks under a name this Orbit no longer ships, or an untracked copy of a
+/// retired template. An operator's own definition is preserved by design, so
+/// naming the sync for it would loop forever [DANI-10502].
+pub(crate) fn sync_retires_routine(routines_dir: &Path, path: &Path) -> bool {
+    if path.parent() != Some(routines_dir) {
+        // A `local/` definition, or a file outside this catalog entirely:
+        // seeding writes neither and retires neither.
+        return false;
+    }
+    let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    if DEFAULT_ROUTINE_FILES.iter().any(|(name, _)| *name == stem) {
+        return false;
+    }
+    let manifest_path = routines_dir.join(MANAGED_ASSET_MANIFEST_FILE);
+    if load_managed_asset_manifest(&manifest_path, "routine", ManagedAssetLayout::YamlStem)
+        .ok()
+        .flatten()
+        .is_some_and(|manifest| manifest.assets.contains_key(stem))
+    {
+        return true;
+    }
+    fs::read_to_string(path)
+        .ok()
+        .is_some_and(|existing| shipped_shape_of(stem, &existing) == Some(ShippedShape::Retired))
 }
 
 /// Which template family an on-disk managed routine is a lifecycle-only

@@ -21,6 +21,7 @@ use crate::OrbitRuntime;
 use crate::application::job::catalog::{
     DEFAULT_JOB_FILES, reset_v2_job_catalog_loads, v2_job_catalog_loads,
 };
+use crate::application::routine::RETIRED_ROUTINE_FILES;
 use crate::application::routines::loader::{
     LoadedRoutine, RoutineCollection, RoutineOrigin, collect_routines,
 };
@@ -316,11 +317,62 @@ fn routine_targeting_a_retired_job_is_skipped_not_failed() {
         retired.path,
         ws.routines_dir.join("auto_task_scheduler.yaml")
     );
+    // This definition is the operator's own, so synchronization preserves it:
+    // advising the sync would send them back to a command that reports
+    // `unchanged` forever [DANI-10502].
+    assert!(
+        !retired.reason.contains("orbit workspace sync"),
+        "sync does not retire a definition Orbit did not write: {}",
+        retired.reason
+    );
+    assert!(
+        retired.reason.contains("delete")
+            && retired.reason.contains(
+                &ws.routines_dir
+                    .join("auto_task_scheduler.yaml")
+                    .display()
+                    .to_string()
+            ),
+        "the reason names a step that changes something, and the file it applies to: {}",
+        retired.reason
+    );
+}
+
+/// The other half of the same rule: a copy of the template the release that
+/// retired it shipped *is* Orbit's file, and `orbit workspace sync` retires it
+/// by content even with no manifest entry — so naming the sync is true, and
+/// the operator is told the one command that clears it [DANI-10502].
+#[test]
+fn orbit_seeded_retired_default_keeps_the_sync_advice() {
+    let ws = seed_source_workspace();
+    write_routine(
+        &ws.routines_dir,
+        "auto_task_scheduler.yaml",
+        &retired_scheduler_template("auto-task-scheduler-polaris"),
+    );
+
+    let collection = collect(&ws);
+    assert!(collection.errors.is_empty(), "{:?}", collection.errors);
+    let retired = collection
+        .retired
+        .iter()
+        .find(|routine| routine.name == "auto-task-scheduler-polaris")
+        .expect("the definition is reported as retired");
     assert!(
         retired.reason.contains("orbit workspace sync"),
         "the reason names the command that retires the file: {}",
         retired.reason
     );
+}
+
+/// The retired scheduler template as the release that last shipped it wrote
+/// it for `name`.
+fn retired_scheduler_template(name: &str) -> String {
+    RETIRED_ROUTINE_FILES
+        .iter()
+        .find(|(stem, _)| *stem == "auto_task_scheduler")
+        .map(|(_, template)| template.replace("__ORBIT_ROUTINE_NAME__", name))
+        .expect("the retired scheduler ships as a provenance shape")
 }
 
 /// The catalog still wins: a workspace that defines a job of the retired

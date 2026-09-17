@@ -10,7 +10,10 @@
 //! - **Residual** — an on-disk skill directory has no `SKILL.md` entry point,
 //!   so it cannot load but still occupies the catalog.
 //! - **Deprecated** — the managed manifest proves Orbit wrote this file for a
-//!   default that the running binary no longer ships.
+//!   default that the running binary no longer ships. A routine is also
+//!   deprecated when its content matches a retired template and the manifest
+//!   never recorded it: reconciliation retires that file by content, so
+//!   reporting the catalog healthy would contradict it [DANI-10502].
 //! - **Stale** — the file is a managed copy of an *older* release of a default
 //!   this binary still ships, or an untracked file colliding with a bundled
 //!   default name.
@@ -62,7 +65,9 @@ use super::{
     preserve_modified_retired_asset, sha256_hex,
 };
 use crate::application::auto_tasks::{DEFAULT_AUTO_TASK_FILES, render_default_auto_task};
-use crate::application::routine::DEFAULT_ROUTINE_FILES;
+use crate::application::routine::{
+    DEFAULT_ROUTINE_FILES, RETIRED_ROUTINE_FILES, ShippedShape, shipped_shape_of,
+};
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 /// The five definition-artifact kinds Orbit ships defaults for.
@@ -464,6 +469,46 @@ fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog) -> Artifac
             detail,
             remediation: "Run `orbit doctor --fix-stale-artifacts`.".to_string(),
         });
+    }
+
+    // Deprecated without a manifest entry: a retired default a prior release
+    // wrote but never recorded. The loop above cannot see it and it wears no
+    // shipped name, so nothing else reaches it — and the catalog would read
+    // healthy while a dead definition sits in it, contradicting the retired
+    // row `orbit routine list` shows on every pass [DANI-10502]. `orbit
+    // workspace sync` judges the same file by content and retires it.
+    if kind == ArtifactKind::Routine {
+        for (name, _) in RETIRED_ROUTINE_FILES {
+            if tracked.contains_key(*name) || catalog.shipped.contains(*name) {
+                continue;
+            }
+            let path = catalog.path_of(name);
+            let Some(on_disk) = read_artifact(&path) else {
+                continue;
+            };
+            if shipped_shape_of(name, &on_disk) != Some(ShippedShape::Retired) {
+                continue;
+            }
+            findings.push(ArtifactFinding {
+                kind,
+                name: (*name).to_string(),
+                path,
+                condition: ArtifactCondition::Deprecated,
+                // No recorded digest, so nothing proves Orbit wrote these
+                // exact bytes: retirement keeps a copy rather than deleting,
+                // which is why the repair flag is not the remediation here.
+                provenance: ArtifactProvenance::UserAuthored,
+                detail: format!(
+                    "`{name}` matches a managed default this Orbit no longer ships but is absent \
+                     from the managed manifest; it stays in the active catalog until it is \
+                     retired"
+                ),
+                remediation: format!(
+                    "Run `{}` to retire it and keep a copy outside the active catalog.",
+                    init_command(kind)
+                ),
+            });
+        }
     }
 
     // Stale: a managed copy of an older release, or an untracked file wearing
