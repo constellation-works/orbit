@@ -102,9 +102,27 @@ fn live_isolated_group_returns_typed_cancellation_evidence() {
     survivor.wait().expect("reap isolated survivor");
 }
 
+/// The TZ fixtures below assert on what `ps -o lstart=` yields under two
+/// timezones. Where the host denies executing `ps` at all (the macOS
+/// agent-executor sandbox), no token is derivable under either, so there is
+/// nothing to compare: name the constraint and let the caller return early.
+#[cfg(unix)]
+fn skip_without_ps(test: &str) -> bool {
+    match orbit_common::test_env::start_identity_probe_blocker() {
+        Some(reason) => {
+            tracing::warn!(test, %reason, "skipping: start-identity probe unavailable here");
+            true
+        }
+        None => false,
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn live_owner_survives_tz_change_across_read_paths() {
+    if skip_without_ps("live_owner_survives_tz_change_across_read_paths") {
+        return;
+    }
     let (_root, runtime) = test_runtime();
     let run = insert_pending_run(&runtime, "qa_tz_change");
     let mut sentinel = spawn_sentinel();
@@ -188,6 +206,9 @@ fn live_owner_survives_tz_change_across_read_paths() {
 #[cfg(unix)]
 #[test]
 fn versioned_token_is_stable_across_tz_change() {
+    if skip_without_ps("versioned_token_is_stable_across_tz_change") {
+        return;
+    }
     let mut sentinel = spawn_sentinel();
     let pid = sentinel.id();
 

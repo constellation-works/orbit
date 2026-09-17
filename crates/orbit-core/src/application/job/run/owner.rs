@@ -22,6 +22,8 @@ use std::time::{Duration, Instant};
 
 #[cfg(all(test, unix))]
 use std::cell::RefCell;
+#[cfg(all(test, unix))]
+use std::rc::Rc;
 
 #[cfg(unix)]
 pub(super) const RUN_OWNER_TERMINATION_GRACE: Duration = Duration::from_secs(2);
@@ -363,10 +365,26 @@ pub(super) fn classify_run_owner(run: &JobRun) -> OwnerIdentity {
         run.pid,
         run.pid_start_time.as_deref(),
         pid_namespace_scope(run.pid_start_time.as_deref()),
-        probe_process_start_identity,
+        start_identity_probe,
         |pid| legacy_lstart_matches(pid, run.pid_start_time.as_deref().unwrap_or_default()),
         process_is_alive,
     )
+}
+
+#[cfg(all(not(test), unix))]
+fn start_identity_probe(pid: u32) -> ProbeOutcome {
+    probe_process_start_identity(pid)
+}
+
+/// Under test the start-identity probe defers to a per-thread override
+/// (see [`override_start_identity_probe`]) before asking `ps`, so a fixture
+/// can present a verified owner on a host whose sandbox denies `ps`.
+#[cfg(all(test, unix))]
+fn start_identity_probe(pid: u32) -> ProbeOutcome {
+    START_IDENTITY_PROBE_OVERRIDE.with(|slot| match slot.borrow().as_ref() {
+        Some(probe) => probe(pid),
+        None => probe_process_start_identity(pid),
+    })
 }
 
 /// Inner, testable form of [`classify_run_owner`] with the probes injected.
@@ -560,6 +578,40 @@ fn record_classify_owner_snapshot(run: &JobRun) {
             pid_start_time: run.pid_start_time.clone(),
         });
     });
+}
+
+/// A test-installed stand-in for the `ps`-backed start-identity probe.
+#[cfg(all(test, unix))]
+type StartIdentityProbe = Rc<dyn Fn(u32) -> ProbeOutcome>;
+
+#[cfg(all(test, unix))]
+thread_local! {
+    static START_IDENTITY_PROBE_OVERRIDE: RefCell<Option<StartIdentityProbe>> =
+        const { RefCell::new(None) };
+}
+
+/// Answers start-identity probes on the current thread from `probe` instead
+/// of `ps` until dropped. Owner *verification* against a real `ps` token is
+/// covered by the identity and TZ fixtures; process-group cancellation
+/// fixtures only need a verified owner so the signalling path they assert on
+/// is reached, and the macOS agent-executor sandbox denies `ps` outright.
+#[cfg(all(test, unix))]
+pub(super) fn override_start_identity_probe(
+    probe: impl Fn(u32) -> ProbeOutcome + 'static,
+) -> StartIdentityProbeOverride {
+    START_IDENTITY_PROBE_OVERRIDE.with(|slot| *slot.borrow_mut() = Some(Rc::new(probe)));
+    StartIdentityProbeOverride
+}
+
+/// Guard returned by [`override_start_identity_probe`]; restores the real probe.
+#[cfg(all(test, unix))]
+pub(super) struct StartIdentityProbeOverride;
+
+#[cfg(all(test, unix))]
+impl Drop for StartIdentityProbeOverride {
+    fn drop(&mut self) {
+        START_IDENTITY_PROBE_OVERRIDE.with(|slot| *slot.borrow_mut() = None);
+    }
 }
 
 #[cfg(all(test, unix))]

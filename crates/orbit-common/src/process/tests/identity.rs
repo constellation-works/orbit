@@ -70,9 +70,17 @@ mod liveness {
         // that was recorded. Reporting it alive would tell an operator their
         // dead agent is still working.
         let pid = std::process::id();
+        // Detecting the reuse means re-deriving the identity from `ps`. Where
+        // `ps` cannot be executed the probe has nothing to compare, and the
+        // documented fail-safe keeps a PID `kill(pid, 0)` still sees `Alive`:
+        // an unanswerable probe is never evidence of death.
+        let expected = match crate::test_env::start_identity_probe_blocker() {
+            None => ProcessLiveness::Exited,
+            Some(_) => ProcessLiveness::Alive,
+        };
         assert_eq!(
             probe_process_liveness(pid, Some("ps-lstart-utc-v1:Thu Jan  1 00:00:00 1970")),
-            ProcessLiveness::Exited
+            expected
         );
     }
 

@@ -499,6 +499,20 @@ fn pipeline_worker_root_override_forwards_a_pinned_global_store() {
     );
 }
 
+/// The worker log path `configure_pipeline_worker_stdio` hands back is rooted
+/// at the *canonical* log directory, so compare against the same root: a
+/// `tempfile` fixture on macOS lives under `/var/folders/...`, which is a
+/// symlink to `/private/var/...`.
+#[cfg(unix)]
+fn canonical_worker_log_path(runtime: &OrbitRuntime, run_id: &str) -> PathBuf {
+    let logs_dir = runtime
+        .paths()
+        .logs_dir
+        .canonicalize()
+        .expect("canonicalize worker log directory");
+    pipeline_worker_log_path(&logs_dir, run_id).expect("worker log path validation")
+}
+
 #[cfg(unix)]
 #[test]
 fn worker_exit_before_claim_terminalizes_persisted_run_with_diagnostic() {
@@ -548,11 +562,7 @@ fn worker_exit_before_claim_terminalizes_persisted_run_with_diagnostic() {
         "{message}"
     );
 
-    assert_eq!(
-        log_path,
-        pipeline_worker_log_path(&runtime.paths().logs_dir, &run.run_id)
-            .expect("worker log path validation")
-    );
+    assert_eq!(log_path, canonical_worker_log_path(&runtime, &run.run_id));
     let durable_output = std::fs::read_to_string(&log_path).expect("read durable worker log");
     assert!(durable_output.contains("worker stdout context"));
     assert!(durable_output.contains("action registration missing: routine_dispatch"));
@@ -611,11 +621,7 @@ fn routine_style_detached_worker_is_claimed_within_ownership_window() {
             && audit.target_id.as_deref() == Some(run.run_id.as_str())
     });
 
-    assert_eq!(
-        log_path,
-        pipeline_worker_log_path(&runtime.paths().logs_dir, &run.run_id)
-            .expect("worker log path validation")
-    );
+    assert_eq!(log_path, canonical_worker_log_path(&runtime, &run.run_id));
     let durable_output = wait_for_log_contains(&log_path, "routine worker startup");
     assert!(durable_output.contains("routine worker startup"));
 

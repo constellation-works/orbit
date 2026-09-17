@@ -870,9 +870,20 @@ fn mcp_run_show_rejects_a_recycled_pid_and_refuses_to_judge_a_foreign_namespace(
 
     let shown = run_tool_as_operator(&runtime, "orbit.workflow.run.show", json!({"id": run_id}))
         .expect("operator run show");
+    // Recycled-PID detection re-derives the identity from `ps`. A host that
+    // denies executing `ps` (the macOS agent-executor sandbox) cannot answer,
+    // and the documented fail-safe keeps a PID that `kill(pid, 0)` still
+    // sees `alive`: an unanswerable probe is never evidence of death.
+    let expected_liveness = match orbit_common::test_env::start_identity_probe_blocker() {
+        None => "exited",
+        Some(reason) => {
+            tracing::warn!(%reason, "asserting the probe-unavailable fail-safe instead of recycled-PID detection");
+            "alive"
+        }
+    };
     assert_eq!(
         shown["execution_progress"]["provider_processes"]["items"][0]["liveness"],
-        json!("exited")
+        json!(expected_liveness)
     );
 
     // Only Linux reports a PID namespace, so only there can a reader stand

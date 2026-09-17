@@ -3,10 +3,14 @@
 use super::*;
 
 #[cfg(unix)]
-use super::super::owner::process_is_alive;
+use super::super::owner::{
+    StartIdentityProbeOverride, override_start_identity_probe, process_is_alive,
+};
 use chrono::{Duration, Utc};
 #[cfg(unix)]
 use orbit_common::OrbitError;
+#[cfg(unix)]
+use orbit_common::process::identity::{ProbeOutcome, STABLE_TOKEN_PREFIX, current_pid_namespace};
 use std::path::Path;
 #[cfg(unix)]
 use std::process::{Command, Stdio};
@@ -262,6 +266,42 @@ fn cancel_job_run_does_not_signal_reused_pid_identity_mismatch() {
     let _ = sentinel.wait();
 }
 
+/// Make `owner_pid` classify as the run's verified owner, so the fixtures
+/// below reach the process-group signalling path they assert on.
+///
+/// Wherever `ps` runs, this does nothing: `mark_job_run_running` already
+/// persisted a real identity token and the real probe verifies it, so the
+/// fixture keeps exercising production's own owner verification. Only where
+/// `ps` cannot be executed — the macOS agent-executor sandbox denies it — is
+/// the identity supplied instead: there no token is derivable, cancellation
+/// correctly refuses to signal an owner it cannot verify, and the TERM/KILL
+/// escalation under test would never be reached. What is substituted is the
+/// *premise* (this pid is the recorded owner), never the behaviour asserted.
+#[cfg(unix)]
+fn verify_owner_identity(
+    runtime: &OrbitRuntime,
+    run: &JobRun,
+    owner_pid: u32,
+) -> Option<StartIdentityProbeOverride> {
+    let reason = orbit_common::test_env::start_identity_probe_blocker()?;
+    tracing::warn!(
+        %reason,
+        "supplying the recorded owner identity: `ps` cannot verify it here"
+    );
+    let token = format!(
+        "{STABLE_TOKEN_PREFIX}pidns={}:qa-cancel-owner-start",
+        current_pid_namespace().unwrap_or("-")
+    );
+    set_run_pid_start_time(runtime, run, &token);
+    Some(override_start_identity_probe(move |pid| {
+        if pid == owner_pid {
+            ProbeOutcome::Token(token.clone())
+        } else {
+            ProbeOutcome::NoProcess
+        }
+    }))
+}
+
 #[cfg(unix)]
 #[test]
 fn cancel_job_run_kills_term_resistant_process_group() {
@@ -308,6 +348,7 @@ fn cancel_job_run_kills_term_resistant_process_group() {
         .jobs()
         .mark_job_run_running(&run.run_id, Utc::now(), owner_pid)
         .expect("mark running");
+    let _verified = verify_owner_identity(&runtime, &run, owner_pid);
 
     let result = runtime.cancel_job_run(&run.run_id).expect("cancel run");
     let _ = owner.wait();
@@ -351,6 +392,7 @@ fn cancel_job_run_terminates_cooperative_process_group() {
         .jobs()
         .mark_job_run_running(&run.run_id, Utc::now(), owner_pid)
         .expect("mark running");
+    let _verified = verify_owner_identity(&runtime, &run, owner_pid);
 
     let result = runtime.cancel_job_run(&run.run_id).expect("cancel run");
     owner.wait().expect("reap cooperative owner");
