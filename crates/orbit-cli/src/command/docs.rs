@@ -216,13 +216,22 @@ fn docs_index_text(result: SemanticIndexResult) -> Result<String, OrbitError> {
         ));
     };
     Ok(format!(
-        "Indexed docs: model={} indexed_sources={} embedded_chunks={} skipped_fields={} stale_sources={}",
+        "Indexed docs: model={} indexed_sources={} embedded_chunks={} skipped_fields={} skipped_sources={} stale_sources={}",
         model_id,
         indexed_sources,
         report.embedded_chunks,
         report.skipped_fields,
+        source_list(&report.skipped_sources),
         stale_sources.len()
     ))
+}
+
+fn source_list(sources: &[String]) -> String {
+    if sources.is_empty() {
+        "-".to_string()
+    } else {
+        sources.join(",")
+    }
 }
 
 impl Execute for DocsMigrateArgs {

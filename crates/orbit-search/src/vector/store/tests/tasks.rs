@@ -1,12 +1,13 @@
 //! Unit tests for `tasks` — sibling layout under store/tests/.
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 
-use crate::vector::{SOURCE_KIND_TASK, VectorStore};
+use crate::vector::{EmbeddingField, SOURCE_KIND_TASK, VectorStore};
 use crate::{Embedder, NoopEmbedder};
 
 fn task(id: &str, title: &str, description: &str) -> Task {
@@ -142,6 +143,48 @@ fn reindex_tasks_batches_chunks_across_sources_and_skips_unchanged_fields() {
     );
 }
 
+#[test]
+fn reindex_tasks_skips_a_mid_run_edit_and_continues_later_source_batches() {
+    const TASKS: usize = 130;
+
+    let store = VectorStore::open_in_memory().unwrap();
+    let tasks = (0..TASKS)
+        .map(|index| {
+            task(
+                &format!("T{index:03}"),
+                &format!("Title {index}"),
+                &format!("Description {index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let embedder = EditingEmbedder::new(store.clone(), "T001");
+
+    let report = store.reindex_tasks(&tasks, &embedder, false).unwrap();
+
+    assert_eq!(report.upsert.skipped_sources, vec!["T001"]);
+    assert_eq!(report.upsert.embedded_chunks, (TASKS - 1) * 4);
+    assert_eq!(
+        field_count(&store, "T000"),
+        4,
+        "the first write batch must commit non-conflicting sources"
+    );
+    assert_eq!(
+        field_count(&store, "T064"),
+        4,
+        "a later write batch must run after the conflict"
+    );
+    assert_eq!(
+        field_count(&store, "T129"),
+        4,
+        "the final write batch must run after the conflict"
+    );
+    assert_eq!(
+        field_contents(&store, "T001"),
+        vec!["newer".to_string()],
+        "the conflicting source must retain the concurrent writer's complete set"
+    );
+}
+
 struct RecordingEmbedder {
     inner: NoopEmbedder,
     batch_sizes: Mutex<Vec<usize>>,
@@ -185,4 +228,89 @@ impl Embedder for RecordingEmbedder {
     fn token_boundaries(&self, text: &str) -> Result<Vec<usize>, OrbitError> {
         self.inner.token_boundaries(text)
     }
+}
+
+struct EditingEmbedder {
+    inner: NoopEmbedder,
+    store: VectorStore,
+    target: String,
+    edited: Arc<AtomicBool>,
+}
+
+impl EditingEmbedder {
+    fn new(store: VectorStore, target: &str) -> Self {
+        Self {
+            inner: NoopEmbedder::small(),
+            store,
+            target: target.to_string(),
+            edited: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl Embedder for EditingEmbedder {
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    fn max_input_tokens(&self) -> usize {
+        self.inner.max_input_tokens()
+    }
+
+    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, OrbitError> {
+        if !self.edited.swap(true, Ordering::SeqCst) {
+            let store = self.store.clone();
+            let target = self.target.clone();
+            let embedder = self.inner.clone();
+            std::thread::spawn(move || {
+                store.upsert_embeddings(
+                    SOURCE_KIND_TASK,
+                    &target,
+                    &[EmbeddingField::new("purpose", "newer")],
+                    &embedder,
+                    false,
+                )
+            })
+            .join()
+            .expect("concurrent writer should finish")?;
+        }
+        self.inner.embed(texts)
+    }
+
+    fn token_count(&self, text: &str) -> Result<usize, OrbitError> {
+        self.inner.token_count(text)
+    }
+
+    fn token_boundaries(&self, text: &str) -> Result<Vec<usize>, OrbitError> {
+        self.inner.token_boundaries(text)
+    }
+}
+
+fn field_count(store: &VectorStore, source_id: &str) -> usize {
+    let conn = store.connection();
+    let conn = conn.lock().unwrap();
+    conn.query_row(
+        "SELECT COUNT(DISTINCT field) FROM chunks WHERE source_kind = ?1 AND source_id = ?2",
+        (SOURCE_KIND_TASK, source_id),
+        |row| row.get::<_, i64>(0),
+    )
+    .unwrap() as usize
+}
+
+fn field_contents(store: &VectorStore, source_id: &str) -> Vec<String> {
+    let conn = store.connection();
+    let conn = conn.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT content FROM chunks WHERE source_kind = ?1 AND source_id = ?2 ORDER BY field, chunk_idx",
+        )
+        .unwrap();
+    stmt.query_map((SOURCE_KIND_TASK, source_id), |row| row.get(0))
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect()
 }

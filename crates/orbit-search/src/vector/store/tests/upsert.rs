@@ -238,7 +238,7 @@ fn concurrent_same_source_replacement_keeps_the_first_committed_complete_set() {
             false,
         );
         done_tx
-            .send(result.err().map(|error| error.to_string()))
+            .send(result.map(|report| report.skipped_sources))
             .unwrap();
     });
     wait_until_inference_started(&started);
@@ -257,14 +257,11 @@ fn concurrent_same_source_replacement_keeps_the_first_committed_complete_set() {
         .unwrap();
 
     release.wait();
-    let error = done_rx
+    let skipped_sources = done_rx
         .recv_timeout(UNBLOCKED_WAIT)
         .expect("stale upsert should finish after release")
-        .expect("stale upsert should abort");
-    assert!(
-        error.contains("changed during embedding"),
-        "unexpected error: {error}"
-    );
+        .expect("stale upsert should report the conflicting source");
+    assert_eq!(skipped_sources, vec!["S1"]);
     assert_eq!(
         field_contents(&store, "S1"),
         BTreeMap::from([
@@ -307,7 +304,7 @@ fn concurrent_same_source_delete_is_not_resurrected_by_in_flight_upsert() {
             false,
         );
         done_tx
-            .send(result.err().map(|error| error.to_string()))
+            .send(result.map(|report| report.skipped_sources))
             .unwrap();
     });
     wait_until_inference_started(&started);
@@ -315,19 +312,16 @@ fn concurrent_same_source_delete_is_not_resurrected_by_in_flight_upsert() {
     store.delete_source("task", "S1").unwrap();
 
     release.wait();
-    let error = done_rx
+    let skipped_sources = done_rx
         .recv_timeout(UNBLOCKED_WAIT)
         .expect("stale upsert should finish after release")
-        .expect("stale upsert should abort");
-    assert!(
-        error.contains("changed during embedding"),
-        "unexpected error: {error}"
-    );
+        .expect("stale upsert should report the conflicting source");
+    assert_eq!(skipped_sources, vec!["S1"]);
     assert!(field_contents(&store, "S1").is_empty());
 }
 
 #[test]
-fn conflicting_source_rolls_back_other_sources_in_the_same_write_batch() {
+fn conflicting_source_skips_without_rolling_back_other_sources_in_the_same_write_batch() {
     let store = VectorStore::open_in_memory().unwrap();
     let noop = NoopEmbedder::small();
     store
@@ -368,7 +362,7 @@ fn conflicting_source_rolls_back_other_sources_in_the_same_write_batch() {
         let result =
             store_for_batch.upsert_embedding_sources("task", &source_refs, &embedder, false);
         done_tx
-            .send(result.err().map(|error| error.to_string()))
+            .send(result.map(|report| (report.embedded_chunks, report.skipped_sources)))
             .unwrap();
     });
     wait_until_inference_started(&started);
@@ -384,17 +378,15 @@ fn conflicting_source_rolls_back_other_sources_in_the_same_write_batch() {
         .unwrap();
 
     release.wait();
-    let error = done_rx
+    let (embedded_chunks, skipped_sources) = done_rx
         .recv_timeout(UNBLOCKED_WAIT)
         .expect("batched upsert should finish after release")
-        .expect("conflicting source should abort its write batch");
+        .expect("conflicting source should be skipped");
+    assert_eq!(embedded_chunks, 1);
+    assert_eq!(skipped_sources, vec!["CONFLICT"]);
     assert!(
-        error.contains("changed during embedding"),
-        "unexpected error: {error}"
-    );
-    assert!(
-        field_contents(&store, "FIRST").is_empty(),
-        "the earlier source write must roll back with its transaction batch"
+        !field_contents(&store, "FIRST").is_empty(),
+        "the non-conflicting source should commit in the same transaction batch"
     );
     assert_eq!(
         field_contents(&store, "CONFLICT"),

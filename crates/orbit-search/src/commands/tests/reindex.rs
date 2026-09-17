@@ -77,6 +77,7 @@ fn tasks_variant_serializes_flat_like_the_task_index_result() {
         report: UpsertReport {
             embedded_chunks: 7,
             skipped_fields: 2,
+            skipped_sources: Vec::new(),
         },
         stale_sources: vec!["T9".to_string()],
     };
@@ -85,14 +86,15 @@ fn tasks_variant_serializes_flat_like_the_task_index_result() {
             "model_id": "bge-small-en-v1.5",
             "report": {
                 "embedded_chunks": 7,
-                "skipped_fields": 2
+                "skipped_fields": 2,
+                "skipped_sources": []
             },
             "stale_sources": ["T9"]
     });
     assert_eq!(serde_json::to_value(&result).unwrap(), expected);
     assert_eq!(
         serde_json::to_string(&result).unwrap(),
-        r#"{"model_id":"bge-small-en-v1.5","report":{"embedded_chunks":7,"skipped_fields":2},"stale_sources":["T9"]}"#
+        r#"{"model_id":"bge-small-en-v1.5","report":{"embedded_chunks":7,"skipped_fields":2,"skipped_sources":[]},"stale_sources":["T9"]}"#
     );
 }
 

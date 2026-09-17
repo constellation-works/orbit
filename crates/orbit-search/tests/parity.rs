@@ -4,10 +4,10 @@
 
 //! Behavioral parity smoke for the relocated VectorStore.
 //!
-//! Asserts that the post-refactor reindex over a fixed task corpus produces
-//! the same `UpsertReport` shape (JSON keys + dedup contract) as the pre-T-20
-//! `orbit-store::vector` did. The snapshot pins counts so that any future
-//! change to chunking or field extraction is caught here.
+//! Asserts that the post-refactor reindex over a fixed task corpus produces a
+//! stable `UpsertReport` shape (JSON keys + dedup contract). The snapshot pins
+//! counts so that any future change to chunking or field extraction is caught
+//! here.
 
 use chrono::Utc;
 use orbit_search::NoopEmbedder;
@@ -76,14 +76,15 @@ fn reindex_report_shape_is_stable_across_runs() {
     );
 
     // JSON shape contract: orbit-cli + MCP adapters serialize this.
-    let snapshot = serde_json::to_value(second).expect("serialize report");
+    let snapshot = serde_json::to_value(&second).expect("serialize report");
     assert_eq!(
         snapshot,
         json!({
             "embedded_chunks": 0,
             "skipped_fields": second.skipped_fields,
+            "skipped_sources": [],
         }),
-        "UpsertReport JSON keys must remain `embedded_chunks` + `skipped_fields`"
+        "UpsertReport JSON keys must include the source-conflict report"
     );
 }
 
