@@ -137,9 +137,13 @@ impl SourceInspection {
                     &format!("--object-format={}", format.trim()),
                 ],
             )?;
-            // Fetch only this immutable revision as a shallow private object set.
-            // The detached checkout needs no ancestry; avoiding alternates also
-            // keeps sandboxed Git independent from the primary object database.
+            // Fetch this revision with its full ancestry into a private object
+            // set: the task-pilot contract inspects history from this checkout
+            // (merge-base, log, show at an older commit), so the slot needs
+            // more than the pinned commit itself. The fetch still copies
+            // objects into this repository's own store rather than linking
+            // alternates, so sandboxed Git stays independent from the primary
+            // object database.
             git(
                 &inspection.root,
                 &[
@@ -148,8 +152,6 @@ impl SourceInspection {
                     "fetch",
                     "--quiet",
                     "--no-tags",
-                    "--depth",
-                    "1",
                     common,
                     revision,
                 ],

@@ -153,6 +153,35 @@ fn creating_an_inspection_retires_an_abandoned_in_metadata_pool() {
     drop(snapshot);
 }
 
+/// The task-pilot contract inspects history from inside the slot (ancestry
+/// checks, `git log` over a path, `git show <old-revision>:<path>`), so the
+/// checkout must carry more than the pinned commit itself.
+#[test]
+fn slot_carries_ancestry_for_history_dependent_inspection() {
+    let (repo, first) = repository();
+    fs::write(repo.path().join("target.txt"), "second\n").unwrap();
+    git(repo.path(), &["commit", "-am", "second"]);
+    let second = git(repo.path(), &["rev-parse", "HEAD"]);
+
+    let snapshot = inspect(repo.path(), &second);
+    assert!(
+        run_git(
+            snapshot.root(),
+            &["merge-base", "--is-ancestor", &first, "HEAD"]
+        )
+        .unwrap()
+        .success,
+        "the pinned commit's parent must be reachable for `git merge-base --is-ancestor`"
+    );
+    let show = run_git(snapshot.root(), &["show", &format!("{first}:target.txt")]).unwrap();
+    assert!(show.success, "{}", show.stderr);
+    assert_eq!(show.stdout, "pinned\n");
+    let log = run_git(snapshot.root(), &["log", "--oneline"]).unwrap();
+    assert!(log.success, "{}", log.stderr);
+    assert_eq!(log.stdout.lines().count(), 2, "{}", log.stdout);
+    snapshot.verify().unwrap();
+}
+
 #[test]
 fn rejects_invalid_revision_and_write_profiles_and_detects_edits() {
     let (repo, revision) = repository();
