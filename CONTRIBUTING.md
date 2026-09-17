@@ -135,6 +135,22 @@ When touching those crates, check the coverage summary in the CI job log (or
 run `cargo llvm-cov -p <crate> --summary-only` locally) and prefer adding
 tests that close the gap toward the target.
 
+### Tests that depend on host process visibility
+
+A few suites derive a process-start identity token from `ps -o lstart=`
+(`orbit_common::process::identity`). Some launch environments refuse to
+execute `ps` at all — the macOS agent-executor sandbox denies it — so those
+probes return `Unavailable` and production takes its documented fail-safe
+branch: an owner it cannot verify is neither finalized nor signalled.
+
+A test whose subject *is* the derived token must therefore ask before
+asserting, rather than fail for a reason unrelated to the code under test.
+Call `orbit_common::test_env::start_identity_probe_blocker()`: `None` means
+the probe works and the full assertion applies; `Some(reason)` names the
+constraint, and the test either returns early or asserts the fail-safe
+branch, logging `reason` so the choice is attributable from the log. Never
+weaken the assertion taken when the probe *is* available.
+
 ## Repository Shape
 
 Rust workspace crates live under `crates/` (for example `crates/orbit-cli`).

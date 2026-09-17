@@ -227,6 +227,24 @@ pub fn harden_dir(path: &std::path::Path) {
 #[cfg(not(unix))]
 pub fn harden_dir(_path: &std::path::Path) {}
 
+/// Why this process cannot derive its own process-start identity token, when
+/// it cannot. `None` means the probe works and a test may rely on it.
+///
+/// The token is `ps -o lstart=` output (see [`crate::process::identity`]),
+/// and some launch environments refuse to run `ps` at all: the macOS
+/// agent-executor sandbox denies executing `/bin/ps` (`EPERM`), so every
+/// identity probe reports [`crate::process::identity::ProbeOutcome::Unavailable`]
+/// and production takes its documented fail-safe branch — an owner it cannot
+/// verify is neither finalized nor signalled. A test whose subject *is* the
+/// derived token (TZ stability, recycled-PID detection, verified-owner
+/// cancellation) has nothing to observe there. It names the constraint from
+/// this helper and returns early, instead of failing for a reason unrelated to
+/// the code under test. The message carries the OS error so the skip is
+/// attributable from a log line.
+pub fn start_identity_probe_blocker() -> Option<String> {
+    crate::process::identity::self_start_identity_probe_blocker()
+}
+
 #[cfg(test)]
 #[path = "tests/test_env.rs"]
 mod tests;

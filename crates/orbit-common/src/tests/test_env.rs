@@ -90,3 +90,24 @@ fn clear_inherited_authority_visits_every_name_once() {
         assert!(cleared.iter().any(|seen| seen == name), "missing {name}");
     }
 }
+
+/// The blocker is the one signal environment-dependent tests skip on, so it
+/// must agree with the probe they would otherwise rely on: `None` exactly when
+/// the current process can derive its own versioned token.
+#[test]
+fn start_identity_probe_blocker_agrees_with_the_probe() {
+    let token = crate::process::identity::process_start_identity_token(std::process::id());
+    match super::start_identity_probe_blocker() {
+        None => assert!(
+            token.is_some(),
+            "no blocker reported but the probe yielded no token"
+        ),
+        Some(reason) => {
+            assert!(
+                token.is_none(),
+                "blocker reported ({reason}) but the probe yielded a token"
+            );
+            assert!(!reason.is_empty());
+        }
+    }
+}

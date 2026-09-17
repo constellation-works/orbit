@@ -182,6 +182,26 @@ fn lstart_raw(pid: u32, stable_env: bool) -> Result<Option<String>, io::Error> {
     Ok((!token.is_empty()).then_some(token))
 }
 
+/// Backs [`crate::test_env::start_identity_probe_blocker`]: the reason the
+/// stable probe cannot produce a token for the current process, if any.
+#[cfg(unix)]
+pub(crate) fn self_start_identity_probe_blocker() -> Option<String> {
+    match lstart_raw(std::process::id(), true) {
+        Ok(Some(_)) => None,
+        Ok(None) => {
+            Some("`ps -o lstart=` reported no process for this process's own pid".to_string())
+        }
+        Err(error) => Some(format!(
+            "`ps` cannot be executed from this process (an agent sandbox that denies `ps`?): {error}"
+        )),
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn self_start_identity_probe_blocker() -> Option<String> {
+    Some("process-start identity probes are Unix-only".to_string())
+}
+
 /// Probe a running process and classify the outcome.
 #[cfg(unix)]
 pub fn probe_process_start_identity(pid: u32) -> ProbeOutcome {
