@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.23.0
+
+### Breaking Changes
+
+- **MCP task-write response projections**: `orbit.task.add`, `orbit.task.update`, and `orbit.task.reject` no longer include `comments` and `history` by default; request those fields explicitly with `fields` or `field`. ([DANI-10379])
+
+### Highlights
+
+- **Federated semantic search**: search fans out concurrently across workspaces, reuses one query embedder, and batches embedding and reindex work for faster large-corpus queries. ([DANI-10365])
+- **Workflow failure recovery**: agent-declared failed envelopes now enter step recovery instead of sending otherwise recoverable tasks directly to `blocked`. ([DANI-10438])
+- **Safer process supervision**: execution cleanup validates process-group identity before signaling, preventing PID reuse from killing an unrelated process group. ([DANI-10447])
+- **Reliable worktree cleanup**: garbage collection can continue cleaning stale worktrees whose large build directories exceed a single cleanup window. ([DANI-10448])
+- **Actionable job diagnostics**: strict job catalog reads now surface malformed job files instead of silently hiding them from listing, inspection, and execution. ([DANI-10500])
+
 ## 0.22.1
 
 ### Highlights
