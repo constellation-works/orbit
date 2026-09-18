@@ -31,7 +31,7 @@ description: >
   Deduped against still-open tasks by failure key.
 enabled: true
 trigger:
-  cron: "5 * * * *"
+  cron: "*/20 * * * *"
   missed_run: skip
 target: job:ci_failure_sweep_pipeline
 policy:

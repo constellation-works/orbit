@@ -14,7 +14,7 @@ sandbox = "danger-full-access"
 [workflow]
 auto_ship = true
 base_branch = "agent-main"
-default_crew = "sonnet"
+default_crew = "opus"
 system_crew = "luna"
 
 [crews.opus]
@@ -79,4 +79,4 @@ roots = ["docs/"]
 
 [operation]
 review_crew = "luna"
-review_policy = "after-landing"
+review_policy = "none"
