@@ -102,35 +102,42 @@ The homepage uses an in-content hero in place of Starlight's auto-rendered title
 - **Provider strip** — the shipped CLI executors as a plain list under a
   hairline, with the legacy Gemini executor named in a footnote rather than
   implied current.
-- **Session preview** — a `figure` of the five-command walkthrough as one
-  terminal session: `task add` (task in `proposed`), `task update --approve`
-  (task in `backlog`), `run ship` (run ID, file scope reserved, worktree
-  isolated), `run show` (steps settled, pull request opened, task in
-  `review`), `task update --approve` again (task in `done`, PR still
-  unmerged). The product surface is the CLI, so the CLI is the hero visual.
-  `role="img"` plus a `figcaption` mark it as illustrative, not captured
-  output. Identifiers are placeholders; no measured counts or durations.
-  Output rows share one column template (mark, key, text) so keys line up
-  across steps; flags are wrapped so a line break never splits `--flag`.
+- **Session preview** — a `figure` of one exchange between the reader, their
+  agent, and Orbit, as a transcript: the reader asks for a change; the agent
+  calls `orbit.task.add` (task in `proposed`); the agent asks for the
+  go-ahead and the reader gives it; `orbit.task.update` with
+  `status: backlog` (the approval), then `orbit.workflow.ship` (run ID, file
+  scope reserved, worktree isolated); `orbit.workflow.run.show` (steps
+  settled, pull request opened, task in `review`); the agent reports the PR
+  is open and the merge is the reader's. The agent drives Orbit over MCP, so
+  the transcript is the hero visual and the CLI is plumbing. `role="img"`
+  plus a `figcaption` mark it as illustrative, not captured output.
+  Identifiers are placeholders; tool names and arguments are real; no
+  measured counts or durations. Three row kinds — turns, calls, results —
+  share one column template (mark, key, text) so labels line up across the
+  exchange.
 
 Below the hero, each section opens on a two-column head — mono eyebrow and a
 one-sentence heading on the left, a short lede on the right — and in order:
 
-1. **One task, one pull request** — the task lifecycle as a rail
+1. **One conversation, one pull request** — the task lifecycle as a rail
    (`proposed → backlog → in-progress → review → done`, with the default
    ship's stop at `review` marked and `done` dashed), then a 4-card grid for
-   create → approve → ship and watch → review. Each card carries a mono
-   numbered tag `01`–`04` and the command it runs; the review card is
-   outlined in the accent because that is where the default path stops. New
-   tasks start in `proposed` until approved into the backlog; the same
-   `--approve` later takes `review` to `done`, and neither step merges the
-   pull request. A sentence under the grid points at Install and First Task.
-2. **Other delivery modes** — one table over `orbit run ship`, `--mode local`,
-   `orbit run auto` and `orbit run ship-sweep`: the command, where the run
-   stops, and that `--complete` is a separate explicit authorization, side by
-   side so modes compare without clicking. Row headers link to each mode's
-   guide. This section stays after the walkthrough so the default path is
-   read first.
+   say what you want → the agent files it → you say go, it ships → you
+   review the pull request. Each card carries a mono numbered tag `01`–`04`
+   and the command or MCP call behind it; the review card is outlined in the
+   accent because that is where the default path stops. New tasks start in
+   `proposed` until approved into the backlog; the same `--approve` later
+   takes `review` to `done`, and neither step merges the pull request. A
+   sentence under the grid points at Install and Set Up MCP, with First Task
+   as the by-hand CLI route.
+2. **When you are not in the loop** — one table over `orbit run ship`,
+   `--mode local`, `orbit run auto`, a scoped `orbit operation` grant, and
+   `orbit run ship-sweep`: the command, where the run stops, and that
+   completing delivery is a separate explicit authorization, side by side so
+   modes compare without clicking. Row headers link to each mode's guide.
+   This section stays after the walkthrough so the attended path is read
+   first.
 3. **Why Orbit** — a 2×2 value-prop grid. Each card carries a thin SVG glyph
    beside its copy and the command that shows the property; these and the
    walkthrough tags are the only glyphs in content.
