@@ -251,10 +251,9 @@ html:not([data-has-sidebar]) header.header {
 .orbit-session-frame > *,
 .orbit-session-bar > *,
 .orbit-session-body > *,
-.orbit-session-step > *,
 .orbit-session-turn > *,
-.orbit-session-call > *,
-.orbit-session-out > *,
+.orbit-session-receipt > *,
+.orbit-session-row > *,
 .orbit-section > *,
 .orbit-section-head > *,
 .orbit-section-intro > *,
@@ -497,9 +496,10 @@ html:not([data-has-sidebar]) header.header {
 }
 
 /* Hero session: one exchange between the reader, their agent, and Orbit. The
-   agent drives Orbit over MCP, so the hero visual is a transcript of that:
-   the reader's and the agent's turns, the tool calls the agent makes, and
-   what Orbit returns. `role="img"` on the frame and a figcaption mark it as
+   agent drives Orbit over MCP, so the hero visual is that conversation: the
+   reader's and the agent's turns in body type, and under each agent turn a
+   receipt — one mono line per tool call with what Orbit returned, arguments
+   omitted. `role="img"` on the frame and a figcaption mark it as
    illustrative, not captured output. */
 .orbit-session {
   display: flex;
@@ -553,91 +553,77 @@ html:not([data-has-sidebar]) header.header {
 }
 
 .orbit-session-body {
-  --orbit-session-line: 1.7;
+  --orbit-session-key: 3rem;
   display: flex;
   flex-direction: column;
-  font-family: var(--sl-font-mono);
-  font-size: 0.8125rem;
-  gap: 1.125rem;
-  line-height: var(--orbit-session-line);
+  gap: 0.875rem;
   padding: 1.25rem 1.375rem 1.375rem;
 }
 
-.orbit-session-step {
-  display: flex;
-  flex-direction: column;
-}
-
-/* Every row kind shares one column template — mark, key, text — so the
-   speaker labels, the `mcp` tags, and the result keys line up across the whole
-   exchange, and a wrapped line hangs under its own text rather than under the
-   key. */
-.orbit-session-turn,
-.orbit-session-call,
-.orbit-session-out {
-  display: grid;
-  gap: 0 0.875rem;
-  grid-template-columns: 0.5rem 3rem minmax(0, 1fr);
-}
-
-/* A turn is plain prose from the reader or the agent: full text colour, and
-   the reader's label in the accent so the two voices read apart. */
+/* A turn: speaker label in the key column, prose beside it. The reader's
+   label is in the accent so the two voices read apart at a glance. */
 .orbit-session-turn {
-  color: var(--sl-color-text);
+  align-items: baseline;
+  display: grid;
+  gap: 0 0.75rem;
+  grid-template-columns: var(--orbit-session-key) minmax(0, 1fr);
 }
 
 .orbit-session-turn .orbit-session-key {
   color: var(--sl-color-gray-3);
+  font-family: var(--sl-font-mono);
+  font-size: 0.75rem;
 }
 
 .orbit-session-turn.is-you .orbit-session-key {
   color: var(--sl-color-text-accent);
 }
 
-/* A tool call: the tool name carries the weight, the arguments recede. */
-.orbit-session-call {
-  color: var(--sl-color-gray-3);
+.orbit-session-turn .orbit-session-text {
+  color: var(--sl-color-gray-2);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  min-width: 0;
 }
 
-/* A small right-pointing triangle drawn in CSS, so it renders the same in
-   every mono font; centred on the first line like the result mark. */
-.orbit-session-glyph {
-  align-self: start;
-  border-bottom: 4px solid transparent;
-  border-left: 5px solid var(--sl-color-gray-4);
-  border-top: 4px solid transparent;
-  display: block;
-  font-size: 0;
-  height: 0;
-  margin-top: calc((var(--orbit-session-line) * 0.8125rem - 8px) / 2);
-  width: 0;
+.orbit-session-turn.is-you .orbit-session-text {
+  color: var(--sl-color-text);
+}
+
+/* A receipt sits under the agent's turn, indented to the text column: the
+   tool calls that turn made and what Orbit returned, one row each. */
+.orbit-session-receipt {
+  background: color-mix(in srgb, var(--sl-color-bg) 55%, transparent);
+  border-left: 2px solid var(--sl-color-gray-5);
+  border-radius: 0 6px 6px 0;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--sl-font-mono);
+  font-size: 0.78rem;
+  gap: 0.375rem;
+  line-height: 1.6;
+  margin-left: calc(var(--orbit-session-key) + 0.75rem);
+  padding: 0.625rem 0.875rem;
+}
+
+.orbit-session-row {
+  align-items: baseline;
+  display: grid;
+  gap: 0 0.625rem;
+  grid-template-columns: auto auto minmax(0, 1fr);
 }
 
 .orbit-session-tool {
   color: var(--sl-color-text);
+  white-space: nowrap;
 }
 
-.orbit-session-args {
+.orbit-session-arrow {
+  color: var(--sl-color-gray-4);
+}
+
+.orbit-session-result {
   color: var(--sl-color-gray-3);
-}
-
-/* What Orbit returned for the call above it. */
-.orbit-session-out {
-  color: var(--sl-color-gray-3);
-}
-
-/* Centred on the first line of text, whatever the row later wraps to. */
-.orbit-session-mark {
-  align-self: start;
-  background: var(--sl-color-accent);
-  border-radius: 999px;
-  display: block;
-  height: 7px;
-  margin-top: calc((var(--orbit-session-line) * 1em - 7px) / 2);
-  width: 7px;
-}
-
-.orbit-session-text {
   min-width: 0;
   overflow-wrap: anywhere;
 }
@@ -646,13 +632,16 @@ html:not([data-has-sidebar]) header.header {
   color: var(--sl-color-gray-2);
 }
 
-.orbit-session-arrow {
-  color: var(--sl-color-gray-4);
-}
-
-.orbit-session-text em {
-  color: var(--sl-color-text-accent);
+/* A task status, drawn as a pill so the state change is the thing you see. */
+.orbit-session-result em {
+  background: var(--sl-color-accent-low);
+  border: 1px solid color-mix(in srgb, var(--sl-color-accent) 45%, transparent);
+  border-radius: 999px;
+  color: var(--sl-color-accent-high);
+  font-size: 0.92em;
   font-style: normal;
+  padding: 0 0.5em;
+  white-space: nowrap;
 }
 
 .orbit-landing .orbit-session-caption {
@@ -1360,8 +1349,25 @@ a.orbit-card:focus-visible h3 {
   }
 
   .orbit-session-body {
-    font-size: 0.75rem;
+    --orbit-session-key: 2.5rem;
     padding: 1rem 1rem 1.125rem;
+  }
+
+  .orbit-session-receipt {
+    font-size: 0.72rem;
+    padding: 0.5rem 0.625rem;
+  }
+
+  /* Three columns leave the result a sliver this narrow; the result drops
+     under its tool name and takes the full width, indented a step. */
+  .orbit-session-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 0.125rem;
+  }
+
+  .orbit-session-row .orbit-session-result {
+    grid-column: 1 / -1;
+    padding-left: 1rem;
   }
 
   /* The generic docs rule above turns tables into scrolling blocks; the

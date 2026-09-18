@@ -103,19 +103,20 @@ The homepage uses an in-content hero in place of Starlight's auto-rendered title
   hairline, with the legacy Gemini executor named in a footnote rather than
   implied current.
 - **Session preview** — a `figure` of one exchange between the reader, their
-  agent, and Orbit, as a transcript: the reader asks for a change; the agent
-  calls `orbit.task.add` (task in `proposed`); the agent asks for the
-  go-ahead and the reader gives it; `orbit.task.update` with
-  `status: backlog` (the approval), then `orbit.workflow.ship` (run ID, file
-  scope reserved, worktree isolated); `orbit.workflow.run.show` (steps
-  settled, pull request opened, task in `review`); the agent reports the PR
-  is open and the merge is the reader's. The agent drives Orbit over MCP, so
-  the transcript is the hero visual and the CLI is plumbing. `role="img"`
-  plus a `figcaption` mark it as illustrative, not captured output.
-  Identifiers are placeholders; tool names and arguments are real; no
-  measured counts or durations. Three row kinds — turns, calls, results —
-  share one column template (mark, key, text) so labels line up across the
-  exchange.
+  agent, and Orbit, laid out as a conversation with receipts. Turns are
+  body type with a mono speaker label (`you` in the accent, `agent` in
+  grey). Under each agent turn a receipt block, indented to the text column,
+  lists that turn's tool calls one per mono row — tool name, arrow, what
+  Orbit returned — with task statuses drawn as pills: `orbit.task.add`
+  (task in `proposed`); the agent asks for the go-ahead and the reader gives
+  it; `orbit.task.update` (`proposed → backlog`, the approval) and
+  `orbit.workflow.ship` (run ID, scope reserved, worktree isolated);
+  `orbit.workflow.run.show` (steps settled, PR opened, task in `review`); the
+  agent reports the PR is open and the diff and merge are the reader's. The
+  agent drives Orbit over MCP, so the conversation is the hero visual and the
+  CLI is plumbing. Arguments are omitted so the calls read as one line each;
+  tool names are real and identifiers are placeholders, and the `figcaption`
+  says so. `role="img"` marks it illustrative, not captured output.
 
 Below the hero, each section opens on a two-column head — mono eyebrow and a
 one-sentence heading on the left, a short lede on the right — and in order:
