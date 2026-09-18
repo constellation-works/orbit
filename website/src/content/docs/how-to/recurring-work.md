@@ -9,7 +9,7 @@ Orbit has two layers of scheduling, and they answer different questions.
 
 | Layer | Question it answers | Where it lives |
 |---|---|---|
-| **Routines** | *Which job should fire, on what cadence, on which host?* | Versioned YAML in `.orbit/routines/` |
+| **Routines** | *Which job should fire, on what cadence?* | Versioned YAML in `.orbit/routines/` |
 | **Auto-tasks** | *Which recurring chore should become a task?* | Versioned YAML in `.orbit/auto_tasks/`, managed by `orbit auto-task` |
 
 Both are driven by the same clock: `orbit clock tick`. Nothing is scheduled until
@@ -63,7 +63,7 @@ orbit clock tick --json
 orbit --workspace <name> clock tick  # only that workspace's schedules
 ```
 
-A pass visits every registered routine-source workspace on the host. The global
+A pass visits every registered owner checkout on the host. The global
 `--workspace` selector narrows it to one — in both dry-run and live passes,
 nothing outside the selected workspace is evaluated, fired, or recorded. An
 unregistered selector fails instead of falling back to the whole host.
@@ -79,9 +79,10 @@ Registering the checkout is the whole opt-in — there is no config key to set,
 and every registered owner checkout's definitions are evaluated by this host's
 clock.
 
-`orbit init` seeds a set of default routines into `.orbit/routines/`, each
-**disabled**, because enabling unattended agent work is a deliberate, versioned
-decision. The shipped set covers task pilot preflight, ship sweeps, triage,
+`orbit workspace init` seeds a set of default routines into `.orbit/routines/`,
+each **disabled**, because enabling unattended agent work is a deliberate,
+versioned decision. `orbit workspace sync` refreshes that shipped set on a newer
+binary while preserving local edits. The shipped set covers task pilot preflight, ship sweeps, triage,
 worktree GC, and CI/dependency alert sweeps.
 
 ```bash
@@ -165,7 +166,11 @@ orbit auto-task add \
   --tag maintenance
 ```
 
-Schedule it with **either** `--cron` (5-field) or `--every-minutes`, not both.
+Schedule it with exactly one trigger: `--cron` (5-field), `--every-minutes`,
+or `--deliveries-landed '<JSON>'`. The delivery trigger fires once verified
+deliveries land on a branch (`branch`, `threshold`, `max_wait_minutes`,
+`coverage`); preview one with `orbit auto-task show <name> --preview` before
+enabling it.
 
 Useful options:
 
@@ -195,6 +200,22 @@ orbit auto-task toggle weekly-dep-audit off
 `orbit auto-task update` changes only the fields you pass. `toggle` is the
 kill-switch, not a delete — the definition and its history are preserved, so you
 can turn it back `on` later.
+
+### Recover a delivery-triggered definition
+
+A definition scheduled with `--deliveries-landed` keeps a coverage ledger, so it
+has extra controls. `recover` and `reset` preview without `--reason` and apply
+only with it:
+
+```bash
+orbit auto-task show delivery-qa --preview                                 # baseline and observations; admits nothing
+orbit auto-task recover delivery-qa --adopt-settings --reason "cadence changed"  # resume after a settings change; keeps coverage debt
+orbit auto-task reset delivery-qa --reason "re-baseline"                   # forget coverage debt; re-baseline at the branch head
+orbit auto-task update delivery-qa --waive-batch "$BATCH_ID" --waiver-reason "flaky infra"  # waive one settled failed batch
+```
+
+`recover` also takes `--reissue-action` and `--replay-history`. `reset --force`
+abandons an executing action rather than cancelling it.
 
 ### Mint one now
 

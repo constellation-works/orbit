@@ -177,11 +177,9 @@ Orbit spawns official provider CLIs as supervised subprocesses under an
 `FsProfile` and policy guardrails. The agent CLI is responsible for talking to
 its provider.
 
-This is the only agent execution path. The `backend: http | cli | auto`
-selector was retired: an activity, job, or config that still declares
-`backend: cli` keeps working and the value is ignored, while `http` and `auto`
-are rejected with a migration message rather than being remapped onto the CLI
-agent.
+This is the only agent execution path; the `backend: http | cli | auto`
+selector was retired — see
+[Retired backend selection](../../reference/config/#retired-backend-selection).
 
 ## Providers
 

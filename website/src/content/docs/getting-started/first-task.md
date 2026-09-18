@@ -79,7 +79,8 @@ orbit task lint "$TASK_ID"
 ```
 
 `orbit task lint` is the quality check: it flags stale paths and vague
-acceptance criteria before an agent wastes a run on them.
+acceptance criteria before an agent wastes a run on them. `orbit task lint
+"$TASK_ID" --fix` drops `context_files` entries whose paths no longer exist.
 
 ## Approve it into the backlog
 
@@ -90,10 +91,9 @@ orbit task update "$TASK_ID" --approve --note "Scope reviewed."
 ```
 
 `--approve` takes the task's *next* approval step from its current status:
-`proposed` becomes `backlog`. The same flag later takes `review` to `done`.
-Because the transition is derived, `--approve` cannot be combined with field
-edits or an explicit `--status`. Approving a task that is already `backlog`
-is refused — that is a different status, not a missing approval.
+`proposed` becomes `backlog`, and the same flag later takes `review` to `done`.
+It cannot be combined with field edits or an explicit `--status`; see
+[Tasks](../../concepts/tasks/#approval).
 
 After this command, `orbit task show "$TASK_ID"` reports `backlog`.
 

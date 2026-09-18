@@ -30,11 +30,9 @@ Use this section when you are setting up Orbit for the first time.
 
 ## Prerequisites
 
-You need an authenticated supported provider CLI — `claude`, `codex`, `gemini`,
-or `grok` — because agent activities dispatch through it. PR mode also requires
-the GitHub CLI to be authenticated in the environment where Orbit runs.
-
-Orbit itself can be installed without Rust. You only need a Rust toolchain if you build from source or contribute to the Rust workspace.
+You need at least one authenticated provider CLI — `orbit executor list` names
+the nine Orbit supports — and, for PR mode, an authenticated GitHub CLI. See
+[Prerequisites](./install/#prerequisites).
 
 ## Then what
 

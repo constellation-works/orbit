@@ -11,8 +11,9 @@ asynchronous run ID is never mistaken for a completed change.
 
 ## 1. Prepare proposed work
 
-Start with the zero-input pilot. It discovers only `proposed` and `backlog`
-tasks that have no `context_files`, then prepares bounded pilot groups.
+Start with the zero-input pilot. It discovers `proposed` and `backlog` tasks
+whose `context_files` is empty or whose complexity is unassessed, then prepares
+bounded pilot groups.
 
 ```bash
 orbit run task-pilot --wait
@@ -96,13 +97,9 @@ window expires still finishes. `--concurrency` (default 5) is parallelism, not
 batch size: the drain tops the slots up from the whole backlog as each one
 frees.
 
-`--complete` is opt-in authorization for this run to take the work it ships from
-`review` to `done`. On a drain it is *blanket* authorization covering every task
-the run admits during its whole window, including work that reaches the backlog
-after the command starts. It does **not** approve `proposed` tasks into the
-backlog — that stayed a human step in step 2 — and it does not substitute for a
-review verdict. The full semantics, including how PR and local modes verify a
-merge before completing, are in [Completing work with
+`--complete` authorizes this run to take the work it ships from `review` to
+`done` — on a drain, every task admitted during the window — and never approves
+`proposed` tasks into the backlog. Full semantics are in [Completing work with
 `--complete`](../../getting-started/workflows/#completing-work-with---complete).
 
 The command returns a durable parent run ID after submission, not a statement
@@ -142,14 +139,14 @@ one run:
   An unknown or empty one fails the command before anything is dispatched. No
   configuration file is written or changed.
 - **Inherited by the whole run.** The leaf and epic pipelines the drain starts
-  carry the same restriction, and it is re-checked at each activity against the
-  crew that actually resolved — including an activity that uses
-  `[workflow] system_crew`. An excluded provider cannot be reached by naming a
-  different alias for it. The check compares effective configured identity, so a
-  crew resolving to the same provider and model as a permitted one is permitted;
-  naming a wrapper is not by itself provider usage. Crew precedence is unchanged
-  (explicit, then `task.crew`, then `[workflow] default_crew`) — the allowlist
-  gates the winner rather than picking one.
+  carry the same restriction, and it is re-checked at every activity against
+  the crew that actually resolved, including one that uses
+  `[workflow] system_crew`. The comparison is by effective provider and model,
+  not crew name: a differently named alias of a permitted crew is permitted,
+  and a wrapper that resolves to an excluded provider or model is refused.
+  Crew precedence is unchanged (explicit, then `task.crew`, then
+  `[workflow] default_crew`); the allowlist gates the winner rather than
+  picking one.
 - **Skips, never remaps.** A backlog task whose crew is excluded stays in
   `backlog` on its own crew; the drain simply does not start it, and
   `orbit run readiness --allow-crew ...` reports it as `crew_not_allowed` along
@@ -158,6 +155,28 @@ one run:
   yourself with `orbit task update <id> --crew <name>`.
 - **Only affects what this run starts.** Work another invocation already has in
   flight keeps running; nothing is cancelled.
+
+### Running under an operation-mode grant
+
+`--complete` is per-invocation authority. For a finite task set with separately
+granted rights, record a grant first and bind the drain to it:
+
+```bash
+orbit operation explain                                   # effective policy and any active grant
+orbit operation enable --task TASK-123,TASK-456 --for 2h --right prepare,promote,complete
+orbit run auto --grant "$GRANT_ID"                        # window capped at the grant's remaining time
+orbit operation list
+orbit operation show "$GRANT_ID"
+orbit operation stop --reason 'enough for today'          # no new admissions; admitted work keeps its bounds
+orbit operation revoke --reason 'bad build'               # admitted work also loses completion
+```
+
+`enable` prints the grant ID. `--task` takes at most 50 IDs, `--for` at most
+`24h`, and `--right` any of `prepare`, `promote`, `complete`. A drain bound
+with `--grant` admits only the grant's tasks and takes completion from the
+grant, so `--complete` is refused alongside it. `stop` and `revoke` default to
+the workspace's active grant; neither cancels running children. Preferences
+under `[operation]` in `config.toml` authorize nothing by themselves.
 
 ## 5. Retune a running drain
 
@@ -228,8 +247,10 @@ orbit run show "$CHILD_RUN_ID"
 orbit run logs "$CHILD_RUN_ID"
 ```
 
-For a task blocked by an attributable failed run, use bounded triage to
-re-backlog only an environmental failure:
+A failed envelope the agent declares itself enters step recovery first rather
+than sending the task straight to `blocked`, so check the run's recovery steps
+before assuming a task needs triage. For a task blocked by an attributable
+failed run, use bounded triage to re-backlog only an environmental failure:
 
 ```bash
 orbit run triage "$TASK_ID"
@@ -252,8 +273,10 @@ settled tasks:
 
 ```bash
 orbit doctor
-orbit gc worktrees             # reports what it would reap
-orbit gc worktrees --confirm   # actually removes them
+orbit gc worktrees                                     # reports what it would reap
+orbit gc worktrees --confirm                           # actually removes them
+orbit gc worktrees --older-than-hours 24 --confirm     # only runs finished at least a day ago
+orbit gc worktrees --run "$CHILD_RUN_ID" --confirm     # one job run only
 ```
 
 `orbit gc worktrees` only collects worktrees whose task has settled to `done`,

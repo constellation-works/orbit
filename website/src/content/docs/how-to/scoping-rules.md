@@ -7,16 +7,9 @@ sidebar:
 
 ## Artifact Scope
 
-Orbit uses these scope strategies:
-
-| Artifact | Strategy |
-|----------|----------|
-| Tasks | WorkspaceOnly |
-| Activities and jobs | MergeByKey |
-| Policies | MergeByKey |
-| Job runs | WorkspaceOnly |
-| Skills | MergeByKey |
-| Audit | GlobalOnly |
+Tasks and job runs are workspace-only; activities, jobs, policies, and skills
+merge global defaults with workspace overrides by key; audit is global-only.
+The full table is in [Scoping Rules](../../reference/scoping/).
 
 Use workspace-local state for work tied to a repository. Use global state for shared defaults and the audit trail; skills use global defaults with optional workspace overrides by skill name.
 

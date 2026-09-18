@@ -10,10 +10,7 @@ errors, and Operations. It is not a login portal and it is not a replica of
 another machine's store. Open it on loopback, or reach a remote host over an
 authenticated SSH tunnel.
 
-Commands and UI labels below were verified against current `orbit web`
-help and the dashboard sources in this repository. Examples use sanitized
-identifiers and are **illustrative**, not captured from a live host, unless a
-caption says otherwise.
+Identifiers in the examples below are placeholders.
 
 ## Open it locally
 
@@ -106,7 +103,7 @@ The left rail is the section map:
 | **Tasks** | Backlog and other statuses for the selected workspace (or the aggregate list). |
 | **Audit** | Recent events and a 24-hour summary. |
 | **Diagnostics** | Recent runs, metrics, errors, incidents, reliability, and the scoreboard. |
-| **Operations** | Routines, auto-tasks, auto-drain, and operation-mode grants. |
+| **Operations** | Three subtabs: **Routines** (with the host clock), **Auto-tasks**, and **Auto-drain** (with operation-mode grants). |
 | **Knowledge** | Friction records. |
 
 ### Tasks
@@ -203,8 +200,9 @@ orbit audit list
 
 ## Operations: mint, toggle, clock, drain
 
-Operations has three subtabs. All of them require a **single active
-workspace**. In **All workspaces** the panels stay read-only and explain
+Operations has three subtabs: **Routines**, which also holds the host clock
+panel; **Auto-tasks**; and **Auto-drain**, which also holds the Operation Mode
+panel. All of them require a **single active workspace**. In **All workspaces** the panels stay read-only and explain
 why.
 
 ### Routines
@@ -224,7 +222,7 @@ Toggling a routine does not start or stop the host sweep clock.
 
 ### Host sweep clock
 
-The clock panel is host-scoped (`orbit sweep` on this machine). **Start** /
+The clock panel is host-scoped (`orbit clock tick` on this machine). **Start** /
 **Stop** asks for confirmation and does not change any routine definition.
 **Apply cadence** reloads the native clock interval without changing whether
 the service is enabled. Both need the same operator authorization as routine
@@ -260,7 +258,7 @@ scheduler fire.
 
 ```bash
 orbit auto-task list
-orbit auto-task toggle "$NAME"
+orbit auto-task toggle "$NAME" off   # or on
 orbit auto-task mint "$NAME"
 ```
 
@@ -284,8 +282,9 @@ preset, caps, and the active grant. **Stop grant** and **Revoke grant** are
 supported when a grant is active and the session is authorized.
 
 **Enablement is not a dashboard action.** Creating a grant names a finite
-task set and explicit rights; that decision stays on the CLI or operator MCP
-surface. Do not treat a missing Enable control as a broken button.
+task set and explicit rights; that decision stays on the CLI
+(`orbit operation enable`). Do not treat a missing Enable control as a broken
+button.
 
 ## Authorization
 

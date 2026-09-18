@@ -18,18 +18,20 @@ import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
   <p>
     You followed a link of the form <code>orbit-cli.com/tasks/&lt;id&gt;</code>. Orbit writes
     those links into pull-request descriptions so a merged change stays attributable to the
-    task it was delivered under. The task record itself lives in the owning repository's
-    <code>.orbit/</code> state and is not published on this site.
+    task it was delivered under. The task record itself lives in the owning host's Orbit root
+    (<code>~/.orbit/tasks/workspaces/&lt;workspace&gt;/</code>) and is not published on this site.
   </p>
   <p class="orbit-task-lookup" hidden>
-    Looking for <code data-task-id></code>? Its merged pull request is on <a
+    Looking for <code data-task-id></code>? If it came from the Orbit repository, its merged
+    pull request is on <a
       data-task-search
       href="https://github.com/constellation-works/orbit/pulls?q=is%3Apr+is%3Amerged">GitHub</a
     >, and the release that shipped it is in the <a href="/changelog/">changelog</a>.
   </p>
   <p>
-    To see what an ID delivered, search merged pull requests for it, or open the
-    <a href="/changelog/">changelog</a>, where each entry cites the task IDs it was compiled from.
+    To see what an ID delivered, search the owning repository's merged pull requests for it.
+    For Orbit's own tasks, the <a href="/changelog/">changelog</a> cites the task IDs each entry
+    was compiled from.
     To inspect a task record in a workspace you have access to, run
     <code>orbit task show &lt;id&gt;</code>. See <a href="/concepts/tasks/">Tasks</a> for what a
     record contains.

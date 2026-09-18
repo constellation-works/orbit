@@ -20,17 +20,28 @@ sidebar:
 
 ```text
 .orbit/
-  adrs/
-  auto_tasks/
-  frictions/
-  learnings/
-  resources/
-  routines/
+  auto_tasks/        # auto-task definitions
+  frictions/         # friction records, tags.yaml
+  knowledge/
+  resources/         # activities/, executors/, jobs/, policies/ overrides
+  routines/          # routine definitions
   state/
-  tasks/
+    audit/
+    diagnostics/
+    job-runs/
+    logs/
+    scoreboard/
+    worktrees/
+    auto-tasks.json  # scheduler cursor
+    layout.version
+    semantic.db
   config.toml
   config.yaml
 ```
+
+Task bundles are not under `.orbit/`. They live in the global root at
+`~/.orbit/tasks/workspaces/<workspace>/`, next to the audit database
+`~/.orbit/orbit.db`.
 
 ## Rule of Thumb
 

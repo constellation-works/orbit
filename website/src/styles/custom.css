@@ -275,8 +275,8 @@ html:not([data-has-sidebar]) header.header {
 .orbit-hero {
   align-items: start;
   display: grid;
-  gap: 4.5rem;
-  grid-template-columns: minmax(0, 37.5rem) minmax(0, 1fr);
+  gap: 4rem;
+  grid-template-columns: minmax(0, 34rem) minmax(0, 1fr);
   padding: 4rem 0 4rem;
 }
 
@@ -550,12 +550,13 @@ html:not([data-has-sidebar]) header.header {
 }
 
 .orbit-session-body {
+  --orbit-session-line: 1.7;
   display: flex;
   flex-direction: column;
   font-family: var(--sl-font-mono);
   font-size: 0.8125rem;
   gap: 1.125rem;
-  line-height: 1.7;
+  line-height: var(--orbit-session-line);
   padding: 1.25rem 1.375rem 1.375rem;
 }
 
@@ -564,9 +565,12 @@ html:not([data-has-sidebar]) header.header {
   flex-direction: column;
 }
 
+/* A command longer than the frame wraps like a terminal would: continuation
+   lines hang under the command text, never under the prompt. */
 .orbit-session-cmd {
-  display: flex;
-  gap: 0.5rem;
+  display: grid;
+  gap: 0 0.5rem;
+  grid-template-columns: auto minmax(0, 1fr);
 }
 
 .orbit-session-cmd code {
@@ -575,37 +579,57 @@ html:not([data-has-sidebar]) header.header {
   color: var(--sl-color-text);
   font-family: var(--sl-font-mono);
   font-size: inherit;
+  hyphens: none;
+  overflow-wrap: normal;
   padding: 0;
+  white-space: pre-wrap;
 }
 
 .orbit-session-prompt {
   color: var(--sl-color-gray-3);
-  flex: 0 0 auto;
 }
 
+/* Browsers treat the hyphens in `--flag` as a break opportunity; a flag
+   split across lines reads as two tokens. */
+.orbit-session-flag {
+  white-space: nowrap;
+}
+
+/* Output rows share one column template — mark, key, text — so the keys and
+   the text line up across every step, and a wrapped line hangs under its own
+   text rather than under the key. */
 .orbit-session-out {
-  align-items: baseline;
   color: var(--sl-color-gray-3);
   display: grid;
   gap: 0 0.875rem;
-  grid-template-columns: auto 4.25rem auto minmax(0, 1fr);
+  grid-template-columns: 0.5rem 3rem minmax(0, 1fr);
 }
 
+/* Centred on the first line of text, whatever the row later wraps to. */
 .orbit-session-mark {
-  align-self: center;
+  align-self: start;
   background: var(--sl-color-accent);
   border-radius: 999px;
   display: block;
   height: 7px;
+  margin-top: calc((var(--orbit-session-line) * 1em - 7px) / 2);
   width: 7px;
+}
+
+.orbit-session-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .orbit-session-id {
   color: var(--sl-color-gray-2);
-  white-space: nowrap;
 }
 
-.orbit-session-note em {
+.orbit-session-arrow {
+  color: var(--sl-color-gray-4);
+}
+
+.orbit-session-text em {
   color: var(--sl-color-text-accent);
   font-style: normal;
 }
@@ -803,7 +827,7 @@ html:not([data-has-sidebar]) header.header {
   border-radius: 0;
   font-size: 0.875rem;
   margin: 0;
-  min-width: 70rem;
+  min-width: 64rem;
   width: 100%;
 }
 
@@ -1317,16 +1341,6 @@ a.orbit-card:focus-visible h3 {
   .orbit-session-body {
     font-size: 0.75rem;
     padding: 1rem 1rem 1.125rem;
-  }
-
-  /* The output rows lose their fixed key column; the note wraps under the
-     identifier instead of running off the frame. */
-  .orbit-session-out {
-    grid-template-columns: auto auto minmax(0, 1fr);
-  }
-
-  .orbit-session-note {
-    grid-column: 2 / -1;
   }
 
   /* The generic docs rule above turns tables into scrolling blocks; the

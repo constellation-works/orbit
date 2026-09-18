@@ -124,20 +124,10 @@ source or contribute to the workspace.
 
 ## Prepare the sandbox
 
-Orbit wraps each spawned agent subprocess in an OS-level sandbox scoped by the
-activity's resolved filesystem profile. `orbit init` persists the
-host-appropriate backend into the shipped executor assets:
-
-| Platform | Backend | Behavior |
-|---|---|---|
-| macOS | `sandbox-exec` | The profile is compiled to SBPL and applied to the subprocess. |
-| Linux | `bwrap` (Bubblewrap) | Writes are confined to the resolved profile. Host filesystem reads and host network access remain available. |
-| Windows and others | none | No OS-level wrapper. Orbit's process supervision, tool allowlists, and in-process guards for its own built-in tools still apply. |
-
-**Linux fails closed.** Dispatch requires a trusted `/usr/bin/bwrap` that passes
-a namespace-and-mount capability probe. If Bubblewrap is missing, or the probe
-fails, the run fails rather than executing unconfined — unless an executor
-explicitly sets `allow_fallback: true`.
+Orbit wraps each spawned agent subprocess in an OS-level sandbox — `sandbox-exec`
+on macOS, Bubblewrap on Linux (which fails closed without a trusted
+`/usr/bin/bwrap`), none on Windows; see
+[Platform Support](../../concepts/agents/#platform-support).
 
 On Ubuntu 24.04 and other distributions that restrict unprivileged user
 namespaces under AppArmor, install Bubblewrap and load the narrow profile before
@@ -189,9 +179,10 @@ orbit update --version 0.19.0 # install one exact release
 
 The download is verified against the signed release checksum manifest before
 anything is replaced. After the executable is swapped, the new binary applies
-pending `.orbit` layout and store migrations and then reconciles managed
-workspace assets, in that order. Re-running `orbit update` is idempotent and is
-the supported way to finish a run that did not complete.
+pending `.orbit` layout and store migrations, reconciles managed workspace
+assets, then repoints the host scheduler clock unit at the installed binary
+(`orbit clock repair`), in that order. Re-running `orbit update` is idempotent
+and is the supported way to finish a run that did not complete.
 
 Two limits are worth knowing:
 

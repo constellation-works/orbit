@@ -41,8 +41,8 @@ If the task is `proposed`, approve it into the backlog:
 orbit task update "$TASK_ID" --approve --note "Scope reviewed."
 ```
 
-`--approve` takes the next approval step from the current status, so the same
-command later takes the task from `review` to `done`.
+`--approve` takes the next approval step for the current status (`proposed` →
+`backlog`, `review` → `done`); see [Tasks](../../concepts/tasks/).
 
 ## Execute
 

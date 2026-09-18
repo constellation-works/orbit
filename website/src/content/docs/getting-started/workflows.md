@@ -37,13 +37,13 @@ orbit run ship "$TASK_ID" "$SECOND_TASK_ID" --mode local
 orbit run ship "$TASK_ID" --base main
 ```
 
-`--mode pr` (the default) opens or updates a pull request, then stops with the
-task in `review` and the PR unmerged unless you authorize `--complete`.
-`--mode local` delivers in place: it commits and merges to the configured base
-before the task reaches `review`, and may push that base as part of the same
-delivery. `review` is therefore not a pre-merge stop in local mode. When you
-omit `--mode`, the mode comes from the workspace's registry entry, falling back
-to `pr`.
+In local mode the merge happens before review. `--mode local` delivers in
+place: it commits and merges to the configured base before the task reaches
+`review`, and may push that base as part of the same delivery, so `review` is
+not a pre-merge stop. `--mode pr` (the default) opens or updates a pull
+request, then stops with the task in `review` and the PR unmerged unless you
+authorize `--complete`. When you omit `--mode`, the mode comes from the
+workspace's registry entry, falling back to `pr`.
 
 Underlying job: `task_auto_pipeline`, which fans into `task_gate_pipeline` and
 then routes to `task_pr_pipeline` or `task_local_pipeline`.
@@ -195,7 +195,7 @@ orbit run trace "$RUN_ID"                # parent/child run tree
 ```
 
 `orbit run show` with no run ID shows the most recently scheduled run. Add
-`-s <step_id>` to any of these to narrow to a single step.
+`-s <step_id>` to `show`, `logs`, or `events` to narrow to a single step.
 
 To stop a run that has not reached a terminal state:
 

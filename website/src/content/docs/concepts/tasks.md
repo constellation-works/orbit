@@ -7,15 +7,13 @@ sidebar:
 
 ## Definition
 
-A task is a durable unit of work stored in workspace-local Orbit state. It carries a title, description, acceptance criteria, lifecycle state, context, review notes, and audit history.
+A task is a durable unit of work. Its bundle lives under the global Orbit root at
+`~/.orbit/tasks/workspaces/<workspace>/<task-id>`, not in the repository checkout. It carries a title, description, acceptance criteria, lifecycle state, context, review notes, and audit history.
 
 Use tasks for work an agent can execute and a human can review. Do not use a task as a scratch note when no observable outcome exists.
 
-A task may also declare `required_tools` as exact canonical registered tool
-names. Orbit normalizes, sorts, and deduplicates the list at creation and
-defaults older tasks to an empty list. The list is immutable authority:
-existing-task update APIs and commands reject `required_tools`, regardless of
-lifecycle status.
+A task may also declare `required_tools`, which are fixed at creation — see
+[Transition rules](#transition-rules).
 
 ## Lifecycle
 
@@ -64,9 +62,9 @@ defining one.
 | `in-progress` | Actively being worked on. |
 | `review`      | Implementation complete; awaiting review/merge. Completion out of `review` requires an `execution_summary` or a successful run. |
 | `done`        | Accepted and closed. **Terminal** — reopening needs an explicit human override. |
-| `blocked`     | Temporarily paused (waiting on a dependency or decision). |
-| `archived`    | Soft-deleted, with `orbit task archive` or a `--status archived` update. **Terminal** — restore it with `orbit task update <id> --status backlog --force`. |
-| `rejected`    | Declined. Can be re-opened to `backlog` or `in-progress`. |
+| `blocked`     | Temporarily paused (waiting on a dependency or decision). A failed run sends a task here only once step recovery is exhausted; an agent-declared failed envelope enters recovery first rather than blocking recoverable work. |
+| `archived`    | Soft-deleted, with `orbit task archive` or a `--status archived` update. **Terminal** — restore it to any other status with `orbit task update <id> --status <status> --force`. |
+| `rejected`    | Declined. Reconsidered to `backlog` or `in-progress` on the lifecycle table; any other status needs `--force`. |
 
 ### Transition rules
 
@@ -91,10 +89,14 @@ any open status → blocked | archived
    *new* task with a `regression_from` relation, not a reopened one. Only a
    rejection may be reconsidered, back to `backlog` or `in-progress`.
 3. **`in-progress` requires a plan** when it is entered from `proposed`,
-   `someday`, or `blocked` — the same rule `orbit task start` enforces. Send
-   `--plan` on the same command.
-4. **Required tools freeze at execution admission.** They may be edited only
-   before the task enters `in-progress`.
+   `someday`, or `blocked` — `orbit task update <id> --status in-progress`
+   refuses the transition while the plan is empty or still the unauthored
+   placeholder. Send `--plan` on the same command.
+4. **Required tools are fixed at creation.** `required_tools` is a list of
+   exact canonical registered tool names, normalized, sorted, and deduplicated
+   when the task is created; older tasks default to an empty list. No update
+   surface — `orbit task update`, the dashboard, or `orbit.task.update` —
+   accepts `required_tools` afterwards, regardless of status.
 
 A refused transition is an `invalid_input` error naming the from/to pair and
 the missing precondition. A human can override the table from either human

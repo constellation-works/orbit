@@ -38,8 +38,8 @@ collaborators, retention, and branch protection stay your responsibility.
 
 ## Bind the repository
 
-The global `--workspace` selector must come *before* `workspace publication` or
-`task publication`:
+Select the workspace with `--workspace`. The examples below put it before
+`workspace publication` and `task publication`; the subcommands accept it too:
 
 ```bash
 orbit --workspace ws_example workspace publication bind \
