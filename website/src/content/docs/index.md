@@ -1,6 +1,6 @@
 ---
 title: What Orbit Is
-description: "Orbit runs your coding agents as tracked, reviewable tasks — isolated worktrees, declared file scope, a gated delivery pipeline, and joined audit records. Local-first, bring your own provider CLI."
+description: "Your coding agent files the task over MCP, Orbit ships it in an isolated worktree with declared file scope and a gated pipeline, and you review the pull request. Every mutation lands in a joined audit record. Local-first, bring your own provider CLI."
 template: splash
 prev: false
 next: false
@@ -11,8 +11,8 @@ next: false
 <section class="orbit-hero">
   <div class="orbit-hero-copy">
     <div class="orbit-hero-eyebrow">early access</div>
-    <h1 class="orbit-hero-headline">Run coding agents as tracked, reviewable tasks.</h1>
-    <p class="orbit-hero-lede">Write a task with acceptance criteria. Orbit runs an agent in an isolated worktree, opens a pull request you review, and keeps every mutation in a joined audit record. Local-first, driving the provider CLI you already have.</p>
+    <h1 class="orbit-hero-headline">Your agent files the work. Orbit ships it. You review the pull request.</h1>
+    <p class="orbit-hero-lede">Say what you want in the agent you already use. Over MCP it files a task with acceptance criteria, Orbit runs it in an isolated worktree, and a pull request comes back for you to review. Every mutation lands in a joined audit record. Local-first, driving the provider CLI you already have.</p>
     <div class="orbit-hero-install">
       <span class="orbit-hero-install-prompt" aria-hidden="true">$</span>
       <code>npm install -g @orbit-tools/cli</code>
@@ -23,7 +23,7 @@ next: false
     </div>
     <div class="orbit-hero-actions">
       <a class="orbit-button primary" href="/getting-started/install/">Install Orbit →</a>
-      <a class="orbit-button" href="/getting-started/first-task/">Write your first task</a>
+      <a class="orbit-button" href="/how-to/mcp-integration/">Connect your agent</a>
     </div>
     <div class="orbit-hero-providers">
       <div class="orbit-hero-providers-label">Drives the provider CLI you already have</div>
@@ -42,47 +42,46 @@ next: false
   </div>
 
   <figure class="orbit-session">
-    <div class="orbit-session-frame" role="img" aria-label="Illustrative terminal session. orbit task add creates a task in proposed. orbit task update --approve moves it to backlog. orbit run ship returns a run ID and reserves the task's file scope in an isolated worktree. orbit run show reports the plan, execute and review steps settled and a pull request opened, with the task in review. A second orbit task update --approve moves the task to done; merging the pull request stays with you.">
+    <div class="orbit-session-frame" role="img" aria-label="Illustrative session between you, your agent, and Orbit. You ask for the fsProfile lookup to be documented. The agent calls orbit.task.add and Orbit creates a task in proposed. The agent asks whether to approve and ship; you say yes. The agent calls orbit.task.update with status backlog, then orbit.workflow.ship, and Orbit returns a run ID with the task's file scope reserved in an isolated worktree. The agent calls orbit.workflow.run.show: plan, execute and review settled, a pull request opened, and the task in review. The agent tells you the pull request is open and that merging it stays with you.">
       <div class="orbit-session-bar" aria-hidden="true">
         <span class="orbit-session-dots"><span></span><span></span><span></span></span>
-        <span class="orbit-session-name">example-repo — one task, one pull request</span>
+        <span class="orbit-session-name">example-repo — you, your agent, and Orbit</span>
       </div>
       <div class="orbit-session-body" aria-hidden="true">
         <div class="orbit-session-step">
-          <div class="orbit-session-cmd"><span class="orbit-session-prompt">$</span><code>orbit task add <span class="orbit-session-flag">--title</span> "Document fsProfile lookup" <span class="orbit-session-flag">--complexity</span> low</code></div>
-          <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">task</span><span class="orbit-session-text"><span class="orbit-session-id">&lt;task-id&gt;</span> <em>proposed</em> · waiting for your approval</span></div>
+          <div class="orbit-session-turn is-you"><span></span><span class="orbit-session-key">you</span><span class="orbit-session-text">The fsProfile lookup is undocumented. Get that fixed.</span></div>
+          <div class="orbit-session-turn"><span></span><span class="orbit-session-key">agent</span><span class="orbit-session-text">Filing it as a task with acceptance criteria.</span></div>
+          <div class="orbit-session-call"><span class="orbit-session-glyph"></span><span class="orbit-session-key">mcp</span><span class="orbit-session-text"><span class="orbit-session-tool">orbit.task.add</span> <span class="orbit-session-args">{ title: "Document fsProfile lookup", description: "…", complexity: "low", acceptance_criteria: […] }</span></span></div>
+          <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">task</span><span class="orbit-session-text"><span class="orbit-session-id">&lt;task-id&gt;</span> <em>proposed</em> · nothing runs until it is approved</span></div>
         </div>
         <div class="orbit-session-step">
-          <div class="orbit-session-cmd"><span class="orbit-session-prompt">$</span><code>orbit task update "&lt;task-id&gt;" <span class="orbit-session-flag">--approve</span></code></div>
+          <div class="orbit-session-turn"><span></span><span class="orbit-session-key">agent</span><span class="orbit-session-text">Filed. Approve it into the backlog and ship?</span></div>
+          <div class="orbit-session-turn is-you"><span></span><span class="orbit-session-key">you</span><span class="orbit-session-text">Yes.</span></div>
+          <div class="orbit-session-call"><span class="orbit-session-glyph"></span><span class="orbit-session-key">mcp</span><span class="orbit-session-text"><span class="orbit-session-tool">orbit.task.update</span> <span class="orbit-session-args">{ id: "&lt;task-id&gt;", status: "backlog" }</span></span></div>
           <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">task</span><span class="orbit-session-text"><span class="orbit-session-id">&lt;task-id&gt;</span> proposed <span class="orbit-session-arrow">→</span> <em>backlog</em></span></div>
-        </div>
-        <div class="orbit-session-step">
-          <div class="orbit-session-cmd"><span class="orbit-session-prompt">$</span><code>orbit run ship "&lt;task-id&gt;"</code></div>
+          <div class="orbit-session-call"><span class="orbit-session-glyph"></span><span class="orbit-session-key">mcp</span><span class="orbit-session-text"><span class="orbit-session-tool">orbit.workflow.ship</span> <span class="orbit-session-args">{ task_ids: ["&lt;task-id&gt;"] }</span></span></div>
           <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">run</span><span class="orbit-session-text"><span class="orbit-session-id">&lt;run-id&gt;</span> submitted · file scope reserved · worktree isolated</span></div>
         </div>
         <div class="orbit-session-step">
-          <div class="orbit-session-cmd"><span class="orbit-session-prompt">$</span><code>orbit run show</code></div>
+          <div class="orbit-session-call"><span class="orbit-session-glyph"></span><span class="orbit-session-key">mcp</span><span class="orbit-session-text"><span class="orbit-session-tool">orbit.workflow.run.show</span> <span class="orbit-session-args">{ id: "&lt;run-id&gt;" }</span></span></div>
           <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">steps</span><span class="orbit-session-text">plan · execute · review — settled</span></div>
           <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">pr</span><span class="orbit-session-text">opened, not merged</span></div>
           <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">task</span><span class="orbit-session-text"><span class="orbit-session-id">&lt;task-id&gt;</span> <em>review</em> · waiting for you</span></div>
-        </div>
-        <div class="orbit-session-step">
-          <div class="orbit-session-cmd"><span class="orbit-session-prompt">$</span><code>orbit task update "&lt;task-id&gt;" <span class="orbit-session-flag">--approve</span></code></div>
-          <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">task</span><span class="orbit-session-text"><span class="orbit-session-id">&lt;task-id&gt;</span> review <span class="orbit-session-arrow">→</span> <em>done</em> · merging the PR is still your call</span></div>
+          <div class="orbit-session-turn"><span></span><span class="orbit-session-key">agent</span><span class="orbit-session-text">Pull request open. The diff and the merge are yours.</span></div>
         </div>
       </div>
     </div>
-    <figcaption class="orbit-session-caption">Illustrative session, not captured output. Identifiers are placeholders.</figcaption>
+    <figcaption class="orbit-session-caption">Illustrative session, not captured output. Identifiers are placeholders; tool names and arguments are real.</figcaption>
   </figure>
 </section>
 
 <section class="orbit-section">
   <div class="orbit-section-head">
     <div class="orbit-section-intro">
-      <p class="orbit-section-eyebrow">One task, one pull request</p>
-      <h2 class="orbit-section-heading">Five commands from intent to a pull request you review.</h2>
+      <p class="orbit-section-eyebrow">One conversation, one pull request</p>
+      <h2 class="orbit-section-heading">From a sentence to a pull request you review, without leaving your agent.</h2>
     </div>
-    <p class="orbit-section-lede">Create a task, approve it, ship it, inspect the run, then review the pull request. The task stops in <code>review</code> with the PR open and unmerged. Orbit and GitHub stay separate: approving the task never merges the PR, and merging the PR never completes the task.</p>
+    <p class="orbit-section-lede">Your agent files the task, asks for the go-ahead, ships it, and reports back. The task stops in <code>review</code> with the PR open and unmerged. Orbit and GitHub stay separate: approving the task never merges the PR, and merging the PR never completes the task.</p>
   </div>
 
   <ol class="orbit-rail" aria-label="Task lifecycle">
@@ -94,38 +93,38 @@ next: false
   </ol>
 
   <div class="orbit-card-grid orbit-card-grid-4">
-    <a class="orbit-card" data-tag="01" href="/getting-started/first-task/">
-      <h3>Create a task</h3>
-      <p>Give it a title, a complexity, and acceptance criteria. The criteria are the finish line: the agent self-evaluates against them. New tasks start in <code>proposed</code>.</p>
-      <div class="orbit-card-cmd">orbit task add --title "…" --complexity low</div>
+    <a class="orbit-card" data-tag="01" href="/how-to/mcp-integration/">
+      <h3>Say what you want</h3>
+      <p>Describe the change in the agent you already use. One command registers Orbit's operator-authorized MCP server with it; the bare agent surface can file and read tasks but never dispatch.</p>
+      <div class="orbit-card-cmd">orbit workspace init --mcp</div>
     </a>
-    <a class="orbit-card" data-tag="02" href="/getting-started/first-task/#approve-it-into-the-backlog">
-      <h3>Approve it</h3>
-      <p>Nothing runs a <code>proposed</code> task. <code>--approve</code> takes the next approval step from the current status, so here it moves the task into <code>backlog</code>.</p>
-      <div class="orbit-card-cmd">orbit task update "$TASK_ID" --approve</div>
+    <a class="orbit-card" data-tag="02" href="/concepts/tasks/">
+      <h3>The agent files it</h3>
+      <p>A title, a complexity, and acceptance criteria: the finish line the executing agent self-evaluates against. New tasks land in <code>proposed</code>, so nothing runs yet.</p>
+      <div class="orbit-card-cmd">orbit.task.add { title, complexity, … }</div>
     </a>
     <a class="orbit-card" data-tag="03" href="/how-to/task-lifecycle/">
-      <h3>Ship and watch it</h3>
-      <p>Orbit reserves the task's files, runs an agent in an isolated worktree, and opens a pull request. <code>ship</code> returns a run ID at once; <code>orbit run show</code> follows the run, and the dashboard shows the same state.</p>
-      <div class="orbit-card-cmd">orbit run ship "$TASK_ID"</div>
+      <h3>You say go, it ships</h3>
+      <p>Approval into <code>backlog</code> is a separate write, so the agent asks before taking it. Then it submits the ship workflow: file scope reserved, isolated worktree, gates, pull request. It reads the run back the same way.</p>
+      <div class="orbit-card-cmd">orbit.workflow.ship { task_ids }</div>
     </a>
     <a class="orbit-card is-stop" data-tag="04" href="/how-to/task-lifecycle/">
-      <h3>Review the pull request</h3>
-      <p>Read the diff, CI, and execution summary, then merge on your terms. The same <code>--approve</code> now moves the task from <code>review</code> to <code>done</code>. GitHub approvals and merges never touch the task.</p>
+      <h3>You review the pull request</h3>
+      <p>Read the diff, CI, and the execution summary, then merge on your terms. Moving the task from <code>review</code> to <code>done</code> is a separate approval. GitHub approvals and merges never touch it.</p>
       <div class="orbit-card-cmd">orbit task update "$TASK_ID" --approve</div>
     </a>
   </div>
 
-  <p class="orbit-walk-next">Next: <a href="/getting-started/install/">install Orbit</a>, then <a href="/getting-started/first-task/">run this sequence in a scratch repository</a>.</p>
+  <p class="orbit-walk-next">Next: <a href="/getting-started/install/">install Orbit</a> and <a href="/how-to/mcp-integration/">connect your agent</a>. Prefer to drive it by hand? <a href="/getting-started/first-task/">First task</a> runs the same sequence from the CLI.</p>
 </section>
 
 <section class="orbit-section">
   <div class="orbit-section-head">
     <div class="orbit-section-intro">
-      <p class="orbit-section-eyebrow">Other delivery modes</p>
-      <h2 class="orbit-section-heading">Same pipeline. You choose where it stops and who authorizes the last step.</h2>
+      <p class="orbit-section-eyebrow">When you are not in the loop</p>
+      <h2 class="orbit-section-heading">Same pipeline, running unattended. You choose where it stops and who authorizes the last step.</h2>
     </div>
-    <p class="orbit-section-lede">Every <code>orbit run</code> command is asynchronous: it prints a durable run ID and returns before the outcome is known. Follow up with <code>orbit run show</code>. Finishing delivery is always a separate, explicit <code>--complete</code>.</p>
+    <p class="orbit-section-lede">Agents and auto-tasks keep filing work; these are the ways it gets shipped without you at the keyboard. Every <code>orbit run</code> command is asynchronous: it prints a durable run ID and returns before the outcome is known. Finishing delivery is always a separate, explicit authorization: <code>--complete</code> on the command, or the <code>complete</code> right on a grant.</p>
   </div>
 
   <div class="orbit-modes">
@@ -140,7 +139,7 @@ next: false
       </thead>
       <tbody>
         <tr>
-          <th scope="row"><a href="/how-to/task-lifecycle/">One task, one PR</a><span class="orbit-modes-sub">the default</span></th>
+          <th scope="row"><a href="/how-to/task-lifecycle/">One task, one PR</a><span class="orbit-modes-sub">the default · <code>orbit.workflow.ship</code> over MCP</span></th>
           <td><code>orbit run ship "$TASK_ID"</code></td>
           <td><em>review</em>, with the pull request open and not merged. The base branch is <code>[workflow] base_branch</code> from <code>config.toml</code>, or <code>main</code> when unset; <code>--base</code> overrides it.</td>
           <td><code>--complete</code> merges the PR as soon as GitHub allows it and moves the task to <em>done</em> once the merge is verified. Only branch protection holds it back: with no required checks it does not wait for CI.</td>
@@ -156,6 +155,12 @@ next: false
           <td><code>orbit run auto --for 4h --concurrency 8</code></td>
           <td>When the window closes. <code>--for</code> only stops new work from starting; a task already being shipped still finishes. Concurrency defaults to 5. Check first with <code>orbit run readiness</code>, which reserves and submits nothing.</td>
           <td><code>--complete</code> covers every task the drain admits during the window, not just the backlog visible when you started it.</td>
+        </tr>
+        <tr>
+          <th scope="row"><a href="/how-to/continuous-delivery/#running-under-an-operation-mode-grant">A scoped grant</a><span class="orbit-modes-sub">a finite task set</span></th>
+          <td><code>orbit operation enable --task "$IDS" \</code><br><code>&nbsp;&nbsp;--for 2h --right prepare,promote</code><br><code>orbit run auto --grant "$GRANT_ID"</code></td>
+          <td>When the grant's window closes or its tasks run out, whichever is first. At most 50 tasks and 24 hours. <code>stop</code> halts new admissions; <code>revoke</code> also strips admitted work of privileged actions.</td>
+          <td>Only when the grant carries the <code>complete</code> right. <code>--complete</code> is refused alongside <code>--grant</code>; the grant is the authorization.</td>
         </tr>
         <tr>
           <th scope="row"><a href="/how-to/recurring-work/">Unattended sweep</a><span class="orbit-modes-sub">for a scheduler</span></th>

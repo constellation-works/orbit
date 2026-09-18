@@ -252,7 +252,8 @@ html:not([data-has-sidebar]) header.header {
 .orbit-session-bar > *,
 .orbit-session-body > *,
 .orbit-session-step > *,
-.orbit-session-cmd > *,
+.orbit-session-turn > *,
+.orbit-session-call > *,
 .orbit-session-out > *,
 .orbit-section > *,
 .orbit-section-head > *,
@@ -495,9 +496,11 @@ html:not([data-has-sidebar]) header.header {
   text-decoration: underline;
 }
 
-/* Hero session: the four-command walkthrough as one terminal session. The
-   product surface is the CLI, so the CLI is the hero visual. `role="img"` on
-   the frame and a figcaption mark it as illustrative, not captured output. */
+/* Hero session: one exchange between the reader, their agent, and Orbit. The
+   agent drives Orbit over MCP, so the hero visual is a transcript of that:
+   the reader's and the agent's turns, the tool calls the agent makes, and
+   what Orbit returns. `role="img"` on the frame and a figcaption mark it as
+   illustrative, not captured output. */
 .orbit-session {
   display: flex;
   flex-direction: column;
@@ -565,44 +568,62 @@ html:not([data-has-sidebar]) header.header {
   flex-direction: column;
 }
 
-/* A command longer than the frame wraps like a terminal would: continuation
-   lines hang under the command text, never under the prompt. */
-.orbit-session-cmd {
-  display: grid;
-  gap: 0 0.5rem;
-  grid-template-columns: auto minmax(0, 1fr);
-}
-
-.orbit-session-cmd code {
-  background: transparent;
-  border: 0;
-  color: var(--sl-color-text);
-  font-family: var(--sl-font-mono);
-  font-size: inherit;
-  hyphens: none;
-  overflow-wrap: normal;
-  padding: 0;
-  white-space: pre-wrap;
-}
-
-.orbit-session-prompt {
-  color: var(--sl-color-gray-3);
-}
-
-/* Browsers treat the hyphens in `--flag` as a break opportunity; a flag
-   split across lines reads as two tokens. */
-.orbit-session-flag {
-  white-space: nowrap;
-}
-
-/* Output rows share one column template — mark, key, text — so the keys and
-   the text line up across every step, and a wrapped line hangs under its own
-   text rather than under the key. */
+/* Every row kind shares one column template — mark, key, text — so the
+   speaker labels, the `mcp` tags, and the result keys line up across the whole
+   exchange, and a wrapped line hangs under its own text rather than under the
+   key. */
+.orbit-session-turn,
+.orbit-session-call,
 .orbit-session-out {
-  color: var(--sl-color-gray-3);
   display: grid;
   gap: 0 0.875rem;
   grid-template-columns: 0.5rem 3rem minmax(0, 1fr);
+}
+
+/* A turn is plain prose from the reader or the agent: full text colour, and
+   the reader's label in the accent so the two voices read apart. */
+.orbit-session-turn {
+  color: var(--sl-color-text);
+}
+
+.orbit-session-turn .orbit-session-key {
+  color: var(--sl-color-gray-3);
+}
+
+.orbit-session-turn.is-you .orbit-session-key {
+  color: var(--sl-color-text-accent);
+}
+
+/* A tool call: the tool name carries the weight, the arguments recede. */
+.orbit-session-call {
+  color: var(--sl-color-gray-3);
+}
+
+/* A small right-pointing triangle drawn in CSS, so it renders the same in
+   every mono font; centred on the first line like the result mark. */
+.orbit-session-glyph {
+  align-self: start;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--sl-color-gray-4);
+  border-top: 4px solid transparent;
+  display: block;
+  font-size: 0;
+  height: 0;
+  margin-top: calc((var(--orbit-session-line) * 0.8125rem - 8px) / 2);
+  width: 0;
+}
+
+.orbit-session-tool {
+  color: var(--sl-color-text);
+}
+
+.orbit-session-args {
+  color: var(--sl-color-gray-3);
+}
+
+/* What Orbit returned for the call above it. */
+.orbit-session-out {
+  color: var(--sl-color-gray-3);
 }
 
 /* Centred on the first line of text, whatever the row later wraps to. */
