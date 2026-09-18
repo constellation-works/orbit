@@ -42,36 +42,30 @@ next: false
   </div>
 
   <figure class="orbit-session">
-    <div class="orbit-session-frame" role="img" aria-label="Illustrative session between you, your agent, and Orbit. You ask for the fsProfile lookup to be documented. The agent calls orbit.task.add and Orbit creates a task in proposed. The agent asks whether to approve and ship; you say yes. The agent calls orbit.task.update with status backlog, then orbit.workflow.ship, and Orbit returns a run ID with the task's file scope reserved in an isolated worktree. The agent calls orbit.workflow.run.show: plan, execute and review settled, a pull request opened, and the task in review. The agent tells you the pull request is open and that merging it stays with you.">
+    <div class="orbit-session-frame" role="img" aria-label="Illustrative session between you, your agent, and Orbit. You ask for the fsProfile lookup to be documented. The agent calls orbit.task.add and Orbit creates a task in proposed. The agent asks whether to approve and ship; you say yes. The agent calls orbit.task.update, which moves the task from proposed to backlog, then orbit.workflow.ship, and Orbit returns a run ID with the task's file scope reserved in an isolated worktree. The agent calls orbit.workflow.run.show: plan, execute and review settled, a pull request opened, and the task in review. The agent tells you the pull request is open and that the diff and the merge are yours.">
       <div class="orbit-session-bar" aria-hidden="true">
         <span class="orbit-session-dots"><span></span><span></span><span></span></span>
         <span class="orbit-session-name">example-repo — you, your agent, and Orbit</span>
       </div>
       <div class="orbit-session-body" aria-hidden="true">
-        <div class="orbit-session-step">
-          <div class="orbit-session-turn is-you"><span></span><span class="orbit-session-key">you</span><span class="orbit-session-text">The fsProfile lookup is undocumented. Get that fixed.</span></div>
-          <div class="orbit-session-turn"><span></span><span class="orbit-session-key">agent</span><span class="orbit-session-text">Filing it as a task with acceptance criteria.</span></div>
-          <div class="orbit-session-call"><span class="orbit-session-glyph"></span><span class="orbit-session-key">mcp</span><span class="orbit-session-text"><span class="orbit-session-tool">orbit.task.add</span> <span class="orbit-session-args">{ title: "Document fsProfile lookup", description: "…", complexity: "low", acceptance_criteria: […] }</span></span></div>
-          <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">task</span><span class="orbit-session-text"><span class="orbit-session-id">&lt;task-id&gt;</span> <em>proposed</em> · nothing runs until it is approved</span></div>
+        <div class="orbit-session-turn is-you"><span class="orbit-session-key">you</span><span class="orbit-session-text">The fsProfile lookup is undocumented. Get that fixed.</span></div>
+        <div class="orbit-session-turn"><span class="orbit-session-key">agent</span><span class="orbit-session-text">Filing it as a task with acceptance criteria.</span></div>
+        <div class="orbit-session-receipt">
+          <div class="orbit-session-row"><span class="orbit-session-tool">orbit.task.add</span><span class="orbit-session-arrow">→</span><span class="orbit-session-result">task <span class="orbit-session-id">&lt;task-id&gt;</span> <em>proposed</em></span></div>
         </div>
-        <div class="orbit-session-step">
-          <div class="orbit-session-turn"><span></span><span class="orbit-session-key">agent</span><span class="orbit-session-text">Filed. Approve it into the backlog and ship?</span></div>
-          <div class="orbit-session-turn is-you"><span></span><span class="orbit-session-key">you</span><span class="orbit-session-text">Yes.</span></div>
-          <div class="orbit-session-call"><span class="orbit-session-glyph"></span><span class="orbit-session-key">mcp</span><span class="orbit-session-text"><span class="orbit-session-tool">orbit.task.update</span> <span class="orbit-session-args">{ id: "&lt;task-id&gt;", status: "backlog" }</span></span></div>
-          <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">task</span><span class="orbit-session-text"><span class="orbit-session-id">&lt;task-id&gt;</span> proposed <span class="orbit-session-arrow">→</span> <em>backlog</em></span></div>
-          <div class="orbit-session-call"><span class="orbit-session-glyph"></span><span class="orbit-session-key">mcp</span><span class="orbit-session-text"><span class="orbit-session-tool">orbit.workflow.ship</span> <span class="orbit-session-args">{ task_ids: ["&lt;task-id&gt;"] }</span></span></div>
-          <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">run</span><span class="orbit-session-text"><span class="orbit-session-id">&lt;run-id&gt;</span> submitted · file scope reserved · worktree isolated</span></div>
+        <div class="orbit-session-turn"><span class="orbit-session-key">agent</span><span class="orbit-session-text">Filed. Approve it into the backlog and ship?</span></div>
+        <div class="orbit-session-turn is-you"><span class="orbit-session-key">you</span><span class="orbit-session-text">Yes.</span></div>
+        <div class="orbit-session-receipt">
+          <div class="orbit-session-row"><span class="orbit-session-tool">orbit.task.update</span><span class="orbit-session-arrow">→</span><span class="orbit-session-result">proposed → <em>backlog</em></span></div>
+          <div class="orbit-session-row"><span class="orbit-session-tool">orbit.workflow.ship</span><span class="orbit-session-arrow">→</span><span class="orbit-session-result">run <span class="orbit-session-id">&lt;run-id&gt;</span> · scope reserved · worktree isolated</span></div>
         </div>
-        <div class="orbit-session-step">
-          <div class="orbit-session-call"><span class="orbit-session-glyph"></span><span class="orbit-session-key">mcp</span><span class="orbit-session-text"><span class="orbit-session-tool">orbit.workflow.run.show</span> <span class="orbit-session-args">{ id: "&lt;run-id&gt;" }</span></span></div>
-          <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">steps</span><span class="orbit-session-text">plan · execute · review — settled</span></div>
-          <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">pr</span><span class="orbit-session-text">opened, not merged</span></div>
-          <div class="orbit-session-out"><span class="orbit-session-mark"></span><span class="orbit-session-key">task</span><span class="orbit-session-text"><span class="orbit-session-id">&lt;task-id&gt;</span> <em>review</em> · waiting for you</span></div>
-          <div class="orbit-session-turn"><span></span><span class="orbit-session-key">agent</span><span class="orbit-session-text">Pull request open. The diff and the merge are yours.</span></div>
+        <div class="orbit-session-turn"><span class="orbit-session-key">agent</span><span class="orbit-session-text">Pull request open. The diff and the merge are yours.</span></div>
+        <div class="orbit-session-receipt">
+          <div class="orbit-session-row"><span class="orbit-session-tool">orbit.workflow.run.show</span><span class="orbit-session-arrow">→</span><span class="orbit-session-result">plan · execute · review settled · PR opened · task <em>review</em></span></div>
         </div>
       </div>
     </div>
-    <figcaption class="orbit-session-caption">Illustrative session, not captured output. Identifiers are placeholders; tool names and arguments are real.</figcaption>
+    <figcaption class="orbit-session-caption">Illustrative session, not captured output. Identifiers are placeholders; tool names are real, arguments omitted.</figcaption>
   </figure>
 </section>
 
