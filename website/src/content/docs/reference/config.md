@@ -12,8 +12,16 @@ sidebar:
 | `~/.orbit/config.toml` | Global defaults |
 | `.orbit/config.toml` | Workspace-local |
 
-The workspace config **replaces** the global config when present — it does not
-merge. Move settings into the workspace file, or rely on the global file alone.
+Settings layer per key: a workspace value overrides the global value, the
+global value fills a workspace omission, and built-in defaults fill the rest.
+Tables layer down to individual settings; scalars and arrays replace the
+matching global value; named crews layer by crew name and field, so a workspace
+can override one crew's `model` without restating the crew.
+
+Three security-sensitive keys never inherit from global once a workspace file
+exists: `execution.codex.sandbox`, `execution.codex.approval_policy`, and
+`execution.env.pass`. Omit one of them in the workspace file and its built-in
+default applies. `orbit config show` annotates every value with its source.
 
 `orbit init` seeds the global config with crews for the provider CLIs it
 detects. `orbit init --force` resets the global root before initialization.
@@ -56,20 +64,18 @@ default_crew = "sol"
 | `description` | Optional human-facing summary. |
 | `tags` | Optional discovery labels. |
 
-`ollama` and `openai_compat` are recognized provider ids that no shipped crew
-uses: `openai_compat` has no CLI runtime, and Orbit ships no `ollama` executor
-definition or crew. Config load accepts a crew naming either one — the failure
-comes later, at dispatch, rather than the run being remapped onto another
-family. `gemini` is the legacy Google lane —
-`orbit init` prefers `antigravity` when `agy` is installed. For the full
-catalog, the deprecated vendor aliases, and a starter crew per executor, see
-[Agents](../../concepts/agents/#set-up-an-executor).
+`ollama` and `openai_compat` are recognized provider ids with no shipped
+executor or crew: a crew naming either one loads and fails at dispatch — see
+[Providers](../../concepts/agents/#providers). `gemini` is the legacy Google
+lane; `orbit init` prefers `antigravity` when `agy` is installed. For the
+deprecated vendor aliases and a starter crew per executor, see
+[Set up an executor](../../concepts/agents/#set-up-an-executor).
 
 Crew precedence at dispatch is: an explicit crew on the activity input, then the
 task's `crew` field, then `[workflow] default_crew`.
 
-`[workflow] default_crew` is required as soon as you define any `[crews.*]`
-table, so a crew snippet is only loadable together with the crew it defaults to.
+Defining any `[crews.*]` table makes `[workflow] default_crew` mandatory, and
+it must name one of those crews.
 
 ### Reasoning effort
 
@@ -113,7 +119,7 @@ a failed task's crew or the workspace default.
 
 ## Settable keys
 
-These are the keys `orbit config set` accepts:
+These are the keys `orbit config set` accepts, as printed by `orbit config keys`:
 
 | Key | Type | Purpose |
 |---|---|---|
@@ -121,7 +127,11 @@ These are the keys `orbit config set` accepts:
 | `workflow.default_crew` | string | Crew used when a task declares none and no override is given. |
 | `workflow.system_crew` | string | Crew used by system activities such as step-failure recovery and failed-run triage. |
 | `workflow.auto_ship` | bool | Opt in to unattended ship dispatch via the routine/sweep scheduler. |
+| `workflow.low_complexity_crews` | array&lt;string&gt; | Random crew pool for unassigned low-complexity tasks in auto drains; empty disables the pool. |
+| `workflow.medium_complexity_crews` | array&lt;string&gt; | Random crew pool for unassigned medium-complexity tasks in auto drains; empty disables the pool. |
+| `workflow.hard_complexity_crews` | array&lt;string&gt; | Random crew pool for unassigned hard-complexity tasks in auto drains; empty disables the pool. |
 | `tasks.id_start` | integer | Floor for this machine's task-id allocator. Forward-only; lets machines hold disjoint ID ranges. |
+| `automation.stall_window_minutes` | integer | Minutes a deferred delivery-automation reason may persist before the evaluator logs a warning and files one friction (1–1440). |
 | `scoring.enabled` | bool | Whether scoreboard metrics are recorded for task runs. |
 | `pr.task_url_template` | string | URL template used to link a task ID in PR descriptions. |
 | `execution.env.pass` | array&lt;string&gt; | Environment variable names allow-listed for passthrough into agent subprocesses. |
@@ -130,6 +140,21 @@ These are the keys `orbit config set` accepts:
 | `runtime.log_max_file_mb` | integer | Roll the active JSONL log past this size. Must be ≥ 1 and ≤ `runtime.log_max_total_mb`. |
 | `runtime.log_max_total_mb` | integer | Total size budget across JSONL log archives; oldest pruned first. |
 | `runtime.log_retention_days` | integer | Delete JSONL log archives older than this. |
+| `operation.preset` | string | Operation-mode preset: `supervised` (default) or `autonomous`. Selecting a preset resets the preset-managed `operation.*` keys at that layer. Grants nothing by itself. |
+| `operation.preparation` | string | Preparation preference: `manual` or `automatic`. Preset-managed. |
+| `operation.preparation_due_seconds` | integer | Seconds after a material change before an in-grant task's preparation is due (1–86400). Preset-managed. |
+| `operation.promotion` | string | Promotion preference: `separate_approval` or `automatic`. Preset-managed; automatic promotion still needs a grant with the `promote` right. |
+| `operation.completion` | string | Completion preference: `review` or `done`. Preset-managed; bounded by `operation.delivery_cap` and the grant. |
+| `operation.delivery_cap` | string | Repository ceiling on managed delivery: `review` (default) or `done`. Independent of the preset. |
+| `operation.leaf_ceiling` | integer | Ceiling on concurrently live leaf runs (1–500). Preset-managed; the job's hard limit still applies. |
+| `operation.recovery` | string | Recovery preference: `existing` or `scheduled`. Preset-managed. |
+| `operation.recovery_episodes_per_task` | integer | Recovery episodes allowed per task inside a grant (0–10). Preset-managed. |
+| `operation.recovery_minutes_per_task` | integer | Recovery wall-time minutes allowed per task inside a grant (1–1440). Preset-managed. |
+| `operation.review_policy` | string | Automatic review timing: `none` (default), `before-pr`, or `after-landing`. `before-pr` holds PR creation for a fresh reviewer and is refused for local-only delivery. |
+| `operation.review_crew` | string | Crew for before-PR automatic review. After-landing review uses its delivery auto-task's template crew. |
+| `operation.review_reviewer_starts` | integer | Fresh reviewer invocations allowed per delivery candidate lineage (1–10, default 2). |
+| `operation.review_repair_cycles` | integer | Reviewer repair/validation cycles allowed per delivery candidate lineage (0–10, default 2). |
+| `operation.review_minutes` | integer | Before-PR reviewer, repair, and final-validation wall-time minutes per delivery candidate lineage (1–1440, default 30). |
 
 Named crew fields are also settable as `crews.<name>.<field>` (`model`,
 `provider`, `effort`, `description`, `tags`). Example:

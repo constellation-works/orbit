@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Owner:** Orbit contributors
-**Last updated:** 2026-09-13
+**Last updated:** 2026-09-17
 
 ---
 
@@ -102,13 +102,16 @@ The homepage uses an in-content hero in place of Starlight's auto-rendered title
 - **Provider strip** — the shipped CLI executors as a plain list under a
   hairline, with the legacy Gemini executor named in a footnote rather than
   implied current.
-- **Session preview** — a `figure` of the four-command walkthrough as one
-  terminal session: `task add` (task in `proposed`), `run ship` (run ID,
-  file scope reserved, worktree isolated), `run show` (steps settled, pull
-  request opened, task in `review`), `task update --approve` (task in
-  `done`). The product surface is the CLI, so the CLI is the hero visual.
+- **Session preview** — a `figure` of the five-command walkthrough as one
+  terminal session: `task add` (task in `proposed`), `task update --approve`
+  (task in `backlog`), `run ship` (run ID, file scope reserved, worktree
+  isolated), `run show` (steps settled, pull request opened, task in
+  `review`), `task update --approve` again (task in `done`, PR still
+  unmerged). The product surface is the CLI, so the CLI is the hero visual.
   `role="img"` plus a `figcaption` mark it as illustrative, not captured
   output. Identifiers are placeholders; no measured counts or durations.
+  Output rows share one column template (mark, key, text) so keys line up
+  across steps; flags are wrapped so a line break never splits `--flag`.
 
 Below the hero, each section opens on a two-column head — mono eyebrow and a
 one-sentence heading on the left, a short lede on the right — and in order:
@@ -116,12 +119,12 @@ one-sentence heading on the left, a short lede on the right — and in order:
 1. **One task, one pull request** — the task lifecycle as a rail
    (`proposed → backlog → in-progress → review → done`, with the default
    ship's stop at `review` marked and `done` dashed), then a 4-card grid for
-   create → ship → inspect → review. Each card carries a mono numbered tag
-   `01`–`04` and the command it runs; the review card is outlined in the
-   accent because that is where the default path stops. New tasks start in
-   `proposed` until approved into the backlog; approving the task does not
-   merge the pull request. A sentence under the grid points at Install and
-   First Task.
+   create → approve → ship and watch → review. Each card carries a mono
+   numbered tag `01`–`04` and the command it runs; the review card is
+   outlined in the accent because that is where the default path stops. New
+   tasks start in `proposed` until approved into the backlog; the same
+   `--approve` later takes `review` to `done`, and neither step merges the
+   pull request. A sentence under the grid points at Install and First Task.
 2. **Other delivery modes** — one table over `orbit run ship`, `--mode local`,
    `orbit run auto` and `orbit run ship-sweep`: the command, where the run
    stops, and that `--complete` is a separate explicit authorization, side by

@@ -54,4 +54,4 @@ spec:
   fsProfile: implementer
 ```
 
-> **Platform support.** Spawned agent CLIs use a platform-specific OS boundary where supported: macOS uses `sandbox-exec`, and Linux uses trusted `/usr/bin/bwrap` after a namespace-and-mount capability probe. The Linux boundary enforces writes from the resolved profile while leaving host filesystem reads and host network access available; read rules and network-egress policy remain delegated. Linux dispatch fails closed when `/usr/bin/bwrap` is unavailable or the probe fails, unless the executor explicitly sets `allow_fallback: true`, which runs without Linux write confinement. On Windows and other unsupported platforms, the same policy YAML is applied to in-process FS-tool calls, but no OS-level backend wraps the agent subprocess.
+Which OS-level sandbox enforces the profile on each platform, and what happens where none is available, is covered in [Platform Support](../../concepts/agents/#platform-support).

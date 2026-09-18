@@ -55,9 +55,9 @@ tools:
 provider: claude
 ```
 
-Orbit dispatches every agent loop through the provider's CLI agent. There is no
-backend to choose: the retired `backend:` key still parses as `cli` and is
-ignored, while `backend: http` and `backend: auto` are refused at load.
+Orbit dispatches every agent loop through the provider's CLI agent; the retired
+`backend:` key is covered in [Retired backend
+selection](../../reference/config/#retired-backend-selection).
 
 Treat `tools` as the baseline every task using the activity needs. A task may
 add exact canonical names through `required_tools`; Orbit deduplicates that
@@ -70,6 +70,6 @@ capability, policy, sandbox, subprocess, or authentication checks.
 
 ```bash
 orbit activity list
-orbit job run path/to/job.yaml --input key=value   # submits and returns a run ID
-orbit job run path/to/job.yaml --wait              # block until the run is terminal
+orbit run job path/to/job.yaml --input key=value   # submits and returns a run ID
+orbit run job path/to/job.yaml --wait              # block until the run is terminal
 ```

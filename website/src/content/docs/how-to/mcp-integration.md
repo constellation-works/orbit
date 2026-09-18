@@ -1,6 +1,6 @@
 ---
 title: Set Up MCP
-description: "Expose Orbit's safe MCP tool surface to Claude Code, Codex, Gemini, or Grok Build."
+description: "Expose Orbit's safe MCP tool surface to Claude Code, Codex, Gemini, Antigravity, Grok Build, Cursor, VS Code, or Windsurf."
 sidebar:
   order: 5
 ---
@@ -22,14 +22,19 @@ workspace setup instead:
 orbit workspace init --mcp
 ```
 
-Or target a client explicitly:
+Or target clients explicitly and choose where the config is written:
 
 ```bash
 orbit mcp init --claude
-orbit mcp init --codex
-orbit mcp init --gemini
-orbit mcp init --grok
+orbit mcp init --codex --gemini
+orbit mcp init --client cursor --client vscode --scope home
+orbit mcp init --all
 ```
+
+`--client` accepts `claude`, `codex`, `gemini`, `antigravity`, `grok`, `cursor`,
+`vscode`, and `windsurf`; each also has a flag of the same name, and `--all`
+targets every supported client. `--scope workspace` (the default) writes
+repo-local config; `--scope home` writes user-level config.
 
 **Grok Build** uses the native `.grok/config.toml` format (similar to how Claude Code can use a config file). `orbit mcp init --grok` will create or update `.grok/config.toml` in your workspace root (or `~/.grok/config.toml` for global).
 
@@ -89,6 +94,11 @@ availability is the availability of the selected destination. Task reads are
 owner-only, so `orbit_task_list` and `orbit_task_show` must use the owner
 selector. A replica selector returns `capability_refused`.
 
+Over SSH, `--operator` is a request, not a grant: the serving host answers from
+its `~/.orbit/mcp-callers.toml`, and a remote session holds the intersection of
+what it asked for and what that file allows. Inspect the file with
+`orbit mcp callers list`, or test one caller with `orbit mcp callers check`.
+
 ## Serve
 
 Start the MCP surface:
@@ -100,6 +110,13 @@ orbit mcp serve
 Use `orbit tool list` to inspect the current local registry. MCP exposure is a
 capability-filtered subset of that registry. The retired graph tools are not
 exposed.
+
+### Response shapes
+
+`orbit.task.list` returns `{ tasks, total, truncated }`; read the `tasks` array.
+The task-write tools — `orbit.task.add`, `orbit.task.update`, and
+`orbit.task.reject` — omit `comments` and `history` unless you request them
+with `fields` (or `field`).
 
 ### Attribute the tasks a session creates
 
@@ -129,7 +146,8 @@ orbit mcp serve --mode federated --orchestrator <crew>
 
 A destination whose `authorized_keys` pins a forced command composes its own
 argv, so its configuration wins there — the same rule that already applies to
-the authority a remote session asks for.
+the authority a remote session asks for, which the serving host caps through
+`orbit mcp callers`.
 
 Treat the flag as configuration, not as evidence of which model is answering a
 given call: an MCP connection commonly outlives a model switch on the client

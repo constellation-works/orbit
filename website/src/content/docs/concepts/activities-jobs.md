@@ -13,15 +13,15 @@ Supported activity types:
 
 | Type | Use |
 |------|-----|
-| `agent_loop` | Run an agent with an instruction, provider, and tool allowlist. Agent execution uses the CLI path only; `spec.backend: http` and `auto` fail catalog load. Remove a leftover backend with `orbit doctor --fix-retired-activity-backends`. |
+| `agent_loop` | Run an agent with an instruction, provider, and tool allowlist. The retired `backend:` selector is covered in [Retired backend selection](../../reference/config/#retired-backend-selection). |
 | `deterministic` | Run a registered deterministic action. |
 
 For a task-backed `agent_loop`, the activity's `tools` are a baseline. Orbit
-adds the task's exact `required_tools` and deduplicates the union before provider
-launch. The list is immutable after task creation. A task with no requirements
-receives the baseline unchanged. Unknown,
-inactive, malformed, wildcard, and non-agent-facing requirements fail admission
-before launch. If one agent activity selects multiple tasks, their requirements
+adds the task's `required_tools` — fixed at creation, see
+[Transition rules](../tasks/#transition-rules) — and deduplicates the union
+before provider launch. A task with no requirements receives the baseline
+unchanged. Unknown, inactive, malformed, wildcard, and non-agent-facing
+requirements fail admission before launch. If one agent activity selects multiple tasks, their requirements
 are all included in the same union. The effective list is included in the CLI envelope,
 `ORBIT_ACTIVITY_TOOLS`, and audit evidence.
 
@@ -50,8 +50,8 @@ kind: Activity
 name: analyze_code
 spec:
   type: agent_loop
-  provider: gemini
-  model: gemini-3.1-pro
+  provider: claude
+  model: opus
   instruction: "Analyze the provided code."
 
 ---

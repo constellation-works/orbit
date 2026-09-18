@@ -95,10 +95,10 @@ Invariants that shape how routines behave:
 - **Overlap is forbidden by default.** A due fire is skipped while the previous
   one is in flight; `timeout_minutes` is also the staleness horizon after which
   a stuck fire stops blocking the next.
-- **Seeded disabled.** `orbit init` writes a default set — task pilot, ship
-  sweep, triage, worktree GC, CI and dependency alert
-  sweeps — every one `enabled: false`. Enabling unattended agent work is an
-  explicit, versioned decision.
+- **Seeded disabled.** `orbit workspace init` writes a default set — task
+  pilot, ship sweep, triage, worktree GC, CI and dependency alert
+  sweeps — every one `enabled: false`, and `orbit workspace sync` refreshes
+  them. Enabling unattended agent work is an explicit, versioned decision.
 
 All scheduler state — last fire, cursor, pause, run history — is host-local.
 Two hosts sharing a repository share the definitions and nothing else.
@@ -132,9 +132,10 @@ Invariants that shape how auto-tasks behave:
   scheduler's cursor — so trying a definition never shifts its next fire.
 - **Catch-up collapses.** A downtime gap mints one make-up task, not one per
   missed slot.
-- **Seeded disabled.** Orbit embeds a small default catalog (QA sweep, friction
-  curation, security review, code review), materialized on init with
-  `enabled: false`. Seeding never mints a task.
+- **Seeded disabled.** Orbit embeds a small default catalog — QA sweep,
+  friction curation, security review, code review, delivery code review, and
+  delivery QA — materialized by `orbit workspace init` with `enabled: false`
+  and refreshed by `orbit workspace sync`. Seeding never mints a task.
 
 ## Why both exist
 
@@ -145,7 +146,7 @@ kinds of thing.
 | | Routine | Auto-task |
 |---|---|---|
 | Schedules | A job | A task |
-| Question | Which job, when, on which host? | Which chore becomes a task? |
+| Question | Which job, when? | Which chore becomes a task? |
 | Fires through | `orbit clock tick` | `orbit clock tick` in-process |
 | Lives in | `.orbit/routines/*.yaml` | `.orbit/auto_tasks/*.yaml` |
 | Adding one means | A new versioned trigger | A new definition, no new trigger |
@@ -165,9 +166,9 @@ authorities stay with humans regardless of how a task was created or fired:
 
 - **Entry into the backlog** for a `proposed` task is always a human decision.
   An auto-task can mint into `proposed`, but nothing scheduled approves it.
-- **Completion out of `review`** can only be granted with `--complete` on an
-  explicit invocation. No workspace setting, environment variable, or routine
-  turns it on; unattended shipment always leaves work in `review`.
+- **Completion out of `review`** is granted only by `--complete` on an explicit
+  invocation, never by a routine — see
+  [Completing work with `--complete`](../../getting-started/workflows/#completing-work-with---complete).
 
 See [Tasks](../tasks/#approval) for the two gates, and
 [Schedule Recurring Work](../../how-to/recurring-work/) for installing the
