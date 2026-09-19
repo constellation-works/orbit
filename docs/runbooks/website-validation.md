@@ -154,23 +154,25 @@ export PREVIEW_URL="http://127.0.0.1:$PREVIEW_PORT"
 curl --fail --silent --show-error "$PREVIEW_URL/" >/dev/null
 ```
 
-For security.txt changes, validate both the source and generated static asset:
+For security.txt changes, validate both the source and generated static asset. Run the
+generated-asset check only from an authorized operator or validator surface with explicit
+access to `website/dist/`; if the current agent lacks that access, record this validation
+leg as blocked/not-run and record the required authorized follow-up:
 
 ```bash
 npm --prefix "$REPO/website" run validate:security-txt -- public/.well-known/security.txt
+# Run this generated-asset check only on the authorized surface described above.
 npm --prefix "$REPO/website" run validate:security-txt -- dist/.well-known/security.txt
 ```
 
 Claude's committed `.claude/settings.json` permissions deny `Read(./website/dist/**)`;
 the same deny applies when `grep` or `rg` is invoked through the Claude shell. Do not
-try to inspect generated files under `website/dist/` with Read, `grep`, or `rg`. Validate
-those artifacts through a shell interpreter instead, such as `python3 -c`, or use the
-repository validator, for example:
-
-```bash
-python3 -c 'from pathlib import Path; print(Path("website/dist/_headers").read_text())'
-npm --prefix "$REPO/website" run validate:security-txt -- dist/.well-known/security.txt
-```
+inspect generated files under `website/dist/` after that denial with Read, `grep`, `rg`,
+another executable, a copy, or a wrapper. A repository validator is not automatically
+authorized to access a denied path: use it only from a genuinely authorized operator or
+validator surface. If no such surface is available, leave this validation leg
+blocked/not-run and record the required authorized follow-up; do not broaden the committed
+permission or substitute a different executable to bypass it.
 
 The validator rejects missing or malformed RFC 9116 fields, invalid or expired
 `Expires`, non-HTTPS `Contact`/`Policy` URIs, an incorrect `Canonical`, invalid
