@@ -2,7 +2,7 @@
 title: Task Publication — Design
 owner: codex
 last_updated: 2026-08-30
-last_validated: 2026-08-30
+last_validated: 2026-09-19
 status: Accepted
 feature: task-publication
 doc_role: design
@@ -34,7 +34,7 @@ write permission.
 | Concern | Authority |
 |---|---|
 | Task allocation, lifecycle, relations, and comments | Declared workspace owner |
-| Task bundles in `~/.orbit/tasks/workspaces/<workspace-id>/` | Declared workspace owner |
+| Task bundles in `~/.orbit/tasks/workspaces/<task-workspace-id>/` | Declared workspace owner |
 | Publication-repository binding and lineage | Owner machine's Orbit registry |
 | Publication branch advancement | Declared workspace owner |
 | Repository visibility, collaborators, and retention | Git host and operator |
@@ -43,7 +43,9 @@ write permission.
 
 Only the owner may publish. Consumers do not import a fetched tree into their
 live task store automatically. Consequently publication is a derived durability
-channel, not replicated task-store leadership.
+channel, not replicated task-store leadership. Publication metadata records the
+logical workspace ID; the owner runtime supplies the corresponding
+task-workspace partition when it enumerates or restores bundles.
 
 ## 2. Publication Repository and Binding
 
@@ -146,7 +148,7 @@ source_repository_fingerprint: <portable-source-identity>
 authority_machine_id: hm_example
 generation: 42
 published_at: 2026-08-29T00:00:00Z
-task_schema_version: 2
+task_schema_version: 1
 previous_publication: <git-oid-or-null>
 attachment_policy: include
 task_ids: [ORB-00001, ORB-00002]
@@ -260,15 +262,15 @@ Restore is explicit and fail-closed:
    and every included attachment checksum.
 3. Require an empty destination or a deliberate operator-selected recovery
    mode. Any non-identical live task-ID collision aborts the restore.
-4. Restore canonical bundles, rebuild registry indexes and checkout
-   projections, and advance the local allocator beyond the restored IDs.
+4. Restore canonical bundles, rebuild registry indexes, and advance the local
+   allocator beyond the restored IDs.
 5. Report every omitted attachment; an incomplete publication cannot produce a
    "complete backup restored" result.
 
 The `orbit-store` recovery implementation follows this contract by consuming
-the inspector's validated snapshot, staging bundle and projection trees, and
-rolling back bundle publication, registry indexing, projection replacement,
-and allocator advancement as one recovery operation [ORB-11076]. Exact-content
+the inspector's validated snapshot, staging bundle trees, and rolling back
+bundle publication, registry indexing, and allocator advancement as one
+recovery operation [ORB-11076]. Exact-content
 retries require the explicit identical-retry mode and do not replay bundle
 streams or advance the allocator.
 
