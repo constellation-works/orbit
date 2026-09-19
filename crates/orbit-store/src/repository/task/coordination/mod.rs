@@ -749,5 +749,7 @@ fn unique_journal_id() -> String {
 mod admission;
 mod lifecycle;
 
+pub use admission::admission_refusal;
+
 #[cfg(test)]
 mod tests;

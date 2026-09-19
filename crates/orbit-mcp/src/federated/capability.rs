@@ -54,6 +54,12 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_auto_task_list"
         | "orbit_auto_task_mint"
         | "orbit_search"
+        // The distributed drain's read-only surface answers for the owner's
+        // coordination store — receipts, claims, and the ship contract
+        // admission would resolve — so a replica must refuse it rather than
+        // answer about itself [ORB-12495].
+        | "orbit_drain_probe"
+        | "orbit_drain_receipt_lookup"
         | "orbit_workflow_ship" => McpToolClass::ControlPlane,
         // Runs a process on the destination host outside Orbit's sandbox, so
         // the host that would execute it owns the decision — the same reason

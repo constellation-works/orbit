@@ -53,6 +53,13 @@ pub(super) fn execute(
         OrbitBuiltinAction::AutoTaskUpdate => super::auto_task_tools::update(runtime, input),
         OrbitBuiltinAction::AutoTaskToggle => super::auto_task_tools::toggle(runtime, input),
         OrbitBuiltinAction::CommandExec => super::command_tools::exec(runtime, input, agent, model),
+        OrbitBuiltinAction::DrainClaims => super::drain_tools::claims(runtime, input),
+        OrbitBuiltinAction::DrainProbe => {
+            super::drain_tools::probe(runtime, session_context, input)
+        }
+        OrbitBuiltinAction::DrainReceiptLookup => {
+            super::drain_tools::receipt_lookup(runtime, session_context, input)
+        }
         OrbitBuiltinAction::DocsList => super::docs_tools::list(runtime, input),
         OrbitBuiltinAction::DocsShow => super::docs_tools::show(runtime, input),
         OrbitBuiltinAction::DocsAdd => super::docs_tools::add(runtime, input),

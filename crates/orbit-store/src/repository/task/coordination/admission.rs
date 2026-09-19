@@ -480,11 +480,20 @@ impl TaskCommitBoundary {
     }
 }
 
-fn validate_request(
+/// The ordered pre-admission ladder, shared by admission and the read-only
+/// preflight probe.
+///
+/// Selector resolution, session capability, and trusted invocation context are
+/// decided by the calling surface before this function is reached; identity
+/// here is already trusted. Order is the spec's: input shape, then
+/// version/schema, then ship mode, then review policy. Evaluating it returns a
+/// verdict and writes nothing, so a probe and an admission cannot disagree
+/// about what would be refused.
+pub fn admission_refusal(
     identity: &AdmissionIdentity,
     request: &AdmissionRequest,
-    version: &str,
-) -> Result<(), OrbitError> {
+    owner_version: &str,
+) -> Option<AdmissionRefusal> {
     if [
         &identity.location().machine_id,
         &request.request_id,
@@ -495,7 +504,7 @@ fn validate_request(
     .iter()
     .any(|v| v.trim().is_empty())
     {
-        return Err(OrbitError::InvalidInput("invalid_input".into()));
+        return Some(AdmissionRefusal::InvalidInput);
     }
     if request.caller_schema == 0
         || request.ship.base_branch.trim().is_empty()
@@ -508,18 +517,33 @@ fn validate_request(
                 .as_deref()
                 .is_none_or(|r| r.trim().is_empty()))
     {
-        return Err(OrbitError::InvalidInput("invalid_input".into()));
+        return Some(AdmissionRefusal::InvalidInput);
     }
-    if request.caller_version != version || request.caller_schema != 1 {
-        return Err(OrbitError::InvalidInput("version_mismatch".into()));
+    if request.caller_version != owner_version
+        || request.caller_schema != DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA
+    {
+        return Some(AdmissionRefusal::VersionMismatch);
     }
     if !matches!(request.ship.mode.as_str(), "pr" | "local")
         || (identity.is_remote() && request.ship.mode == "local")
     {
-        return Err(OrbitError::InvalidInput("ship_mode_unsupported".into()));
+        return Some(AdmissionRefusal::ShipModeUnsupported);
     }
+    // Both endpoints must say `none`; every other policy is rejected by name
+    // rather than downgraded.
     if request.caller_review_policy != "none" || request.ship.review_policy != "none" {
-        return Err(OrbitError::InvalidInput("review_policy_unsupported".into()));
+        return Some(AdmissionRefusal::ReviewPolicyUnsupported);
     }
-    Ok(())
+    None
+}
+
+fn validate_request(
+    identity: &AdmissionIdentity,
+    request: &AdmissionRequest,
+    version: &str,
+) -> Result<(), OrbitError> {
+    match admission_refusal(identity, request, version) {
+        Some(refusal) => Err(OrbitError::InvalidInput(refusal.as_str().into())),
+        None => Ok(()),
+    }
 }

@@ -154,7 +154,7 @@ pub use driver::sqlite::connection::{Store, StoreTx};
 pub use driver::sqlite::routine_store::{RoutineSweepLock, try_acquire_routine_sweep_lock};
 pub use fs::lock::{LockHolderInfo, read_lock_holder};
 pub use json_schema::{validate_instance_against_schema, validate_schema_document};
-pub use repository::task::TaskCommitBoundary;
+pub use repository::task::{TaskCommitBoundary, admission_refusal};
 
 pub(crate) fn parse_timestamp(raw: &str) -> rusqlite::Result<DateTime<Utc>> {
     let parsed = DateTime::parse_from_rfc3339(raw)

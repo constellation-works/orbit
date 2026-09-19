@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-09-18
-last_validated: 2026-09-18
+last_updated: 2026-09-19
+last_validated: 2026-09-19
 status: Draft
 feature: distributed-drain
 doc_role: decisions
@@ -32,14 +32,16 @@ table, which is the fleet control plane host-registry's vision explicitly forbid
 ### Decision
 
 A host with a free slot asks the owner for work. The owner answers from its backlog and records
-the authenticated execution machine on each claim. Capacity stays local; it is not declared per
+the execution machine its trusted invocation context names on each claim. Capacity stays local; it is not declared per
 call. There is no liveness protocol. A follower that disappears stops taking new work; existing
 claims remain until settlement or deliberate recovery.
 
 ### Consequences
 
-- The owner has no worker table, no placement logic, and no host-specific configuration beyond the
-  callers-file row that authorizes the caller.
+- The owner has no worker table, no placement logic, and no host-specific configuration at all:
+  after [ORB-12564] an SSH login to the owner is what admits a follower, and the destination
+  keeps no per-caller row (see [SSH login is the admission; machine labels are
+  attribution](#ssh-login-is-the-admission-machine-labels-are-attribution)).
 - Joining or leaving the drain is a follower-side action.
 - Cost: the owner cannot distinguish a dead follower from an unreachable one. Operators must
   inspect claim/run evidence and explicitly reclaim work; TTL expiry is not proof of death.
@@ -167,13 +169,15 @@ payload that names its own host can name any host.
 
 Every run, run link, and artifact carries the stable `machine_id` (with `host_id` for display) of
 the host that produced it, set by the host that writes the record — or, for writes that arrive
-over federated MCP, by the owner from the authenticated caller identity. Fields are additive and
-nullable; absent means unknown.
+over federated MCP, by the owner from the trusted runtime invocation context that fences the
+claim. A forwarded machine label is attribution and never becomes provenance on its own, so a
+remote write whose execution context is unknown reads as unknown rather than as the caller it
+claims to be. Fields are additive and nullable; absent means unknown.
 
 ### Consequences
 
 - Cross-host references (`job_run_id` + `job_run_host`) are resolvable without a fleet table.
-- Provenance cannot be spoofed by a follower payload.
+- Provenance cannot be spoofed by a follower payload: a label in the payload is not the source.
 - Cost: one schema bump across run, task, and artifact records, and every existing row reads as
   unknown until a run touches it.
 
@@ -245,8 +249,8 @@ run ownership checks are valuable but must be carried across hosts and checked i
 ### Decision
 
 Give every intended pull a durable request ID and every admitted attempt a distinct claim ID.
-Record the request receipt with admission. Bind the claim to an authenticated execution machine
-and one leaf run. Check it atomically on worker mutations and revoke it before reassignment.
+Record the request receipt with admission. Bind the claim to the execution machine its trusted
+runtime invocation context names, and to one leaf run. Check it atomically on worker mutations and revoke it before reassignment.
 No heartbeat or automatic reclamation is introduced. Age and TTL support inspection only.
 
 ### Consequences
@@ -405,6 +409,49 @@ context remains a pre-admission diagnostic requiring operator correction, not a 
   already pruned from stored tasks need history-backed restoration (`orbit task lint
   --restore-pruned`, which re-declares only what a `context_files_pruned` history entry recorded)
   or operator repair.
+
+## SSH login is the admission; machine labels are attribution
+
+**Recorded:** 2026-09 · Daniel's backlog-audit decision, 2026-09-19, reconciling this design with
+the caller-authorization removal shipped in [ORB-12564]; applied to the code by [ORB-12495].
+**Code anchors:** `crates/orbit-mcp/src/remote/identity.rs::mcp_server_identity`,
+`crates/orbit-mcp/src/remote/proxy.rs::remote_serve_command`,
+`crates/orbit-core/src/application/distributed.rs`
+
+### Context
+
+This design was written while destination-side caller authorization still existed, so its §5 asked
+for a `KeyBound` caller identity: a destination callers file, a forced-command acceptance
+requirement, and a per-caller row the owner would check before admitting a pull. [ORB-12564]
+removed that machinery — an SSH login to a destination is ownership of it, and a destination now
+serves the authority its session's argv asks for — which left this folder requiring an
+authorization mechanism with nothing behind it. A backlog audit parked the dependent work rather
+than let an implementation quietly rebuild the retired path or reinterpret an audit label as proof
+of identity.
+
+### Decision
+
+The removal stands, and this feature follows it. SSH login establishes owner access; there is no
+destination callers file, forced-command acceptance requirement, key-bound proof, or replacement
+identity registry, and none is to be reintroduced under another name. What still decides a
+distributed call is the session's `agent`/`operator` capability, the caller-side rule that a client
+running inside a managed run never propagates operator authority, and the trusted runtime
+invocation context that fences a claim to its machine, bound run, and phase. A forwarded
+`--remote-caller-machine-id` is attribution: it names a receipt namespace and appears in
+diagnostics, and it grants nothing. Operator access is not narrowed by the retired cross-caller
+ACL: an owner operator retains cross-attempt receipt inspection and deliberate recovery.
+
+### Consequences
+
+- Adding a host is an SSH-access decision on the owner, not an Orbit configuration step.
+- Claim fencing, receipt namespacing, and revocation carry the whole weight of attempt ownership;
+  there is no second identity check behind them to fall back on.
+- Validation covers SSH session capability and claim revocation instead of caller-file contents and
+  key revocation, which is what [design §8](./2_design.md#8-required-validation-scenarios) now lists.
+- Cost: anyone who can log into the owner can ask it for work, and the accident guard is the
+  session capability rather than a per-caller allowlist. That is the same boundary every other
+  Orbit destination already has, and a second one here would have bought protection Orbit does not
+  actually provide.
 
 ## Task References
 

@@ -2,7 +2,7 @@
 title: Distributed Drain — Vision
 owner: claude
 last_updated: 2026-09-18
-last_validated: 2026-09-18
+last_validated: 2026-09-19
 status: Draft
 feature: distributed-drain
 doc_role: vision
@@ -70,8 +70,10 @@ See [resident-orchestrator 2_design.md §4](../resident-orchestrator/2_design.md
 The `control_plane` / `execute` split, host-qualified selectors, and fail-closed routing are
 specified and live. Destination-side caller authorization is **not**: it shipped and was removed in
 [ORB-12564], because an SSH login to a destination is ownership of it. A destination now serves the
-authority the session's argv asks for, so the `KeyBound` identity this design's §5 requires has no
-implementation behind it and that requirement needs re-deciding before pull is built. Pull uses the
+authority the session's argv asks for. This design originally required a `KeyBound` caller identity
+in its §5; that requirement was withdrawn rather than rebuilt (see
+[4_decisions.md](./4_decisions.md#ssh-login-is-the-admission-machine-labels-are-attribution)), and
+session capability plus trusted claim fencing carry attempt ownership instead. Pull uses the
 federated surface and adds no transport. Core runtime reads, claim-scoped mutations, and
 subprocess context still need explicit routing; MCP federation alone does not wire them together.
 

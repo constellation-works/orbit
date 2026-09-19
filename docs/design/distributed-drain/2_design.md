@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-09-18
-last_validated: 2026-09-18
+last_updated: 2026-09-19
+last_validated: 2026-09-19
 status: Draft
 feature: distributed-drain
 doc_role: design
@@ -318,6 +318,19 @@ The distributed-drain protocol schema starts at `1` and versions pull, probe, an
 request/response shapes; incompatible changes increment it. It is not the scoreboard's
 `ORCHESTRATION_SCHEMA_VERSION`. MCP initialization's binary/protocol metadata alone is insufficient.
 
+[ORB-12495] implemented this section together with the pull spec's receipt reconciliation, as the
+owner's whole read-only surface: `orbit.drain.probe`, `orbit.drain.receipt.lookup`, and the
+operator-only `orbit.drain.claims` listing from [§3.1](#31-attempt-ownership-and-recovery). The MCP
+server and `orbit tool run` reach them through the same registry and the same application entry
+points (`orbit-core`'s `application::distributed`), so neither surface can drift into a different
+check; both read-only tools are `control_plane`, so a replica destination refuses them instead of
+answering about itself. A caller may declare its version, protocol schema, and review policy, and
+the probe reports the first refusal admission would raise by running the same ordered ladder
+(`orbit_store::admission_refusal`) rather than a second copy of it. The mutating entry points —
+pull, binding, settlement, handoff, approval — are not registered tools and are refused by one
+named gate (`application::distributed::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`), so the
+incomplete feature cannot be enabled by configuration.
+
 ## 5. Transport and authority routing
 
 > **Authority decision (2026-09-19):** SSH login establishes ownership of the destination.
@@ -501,8 +514,9 @@ These are implementation acceptance criteria, not tests reported as passing by t
 | Truly empty legacy task/epic context | Diagnostic with pre-admission repair; no guessed or inherited surface |
 | `none`, `before-pr`, and `after-landing` review policies | Only `none` admits; typed not-required handoff works without reviewed SHAs or a review artifact |
 | Owner-local task without origin | Local candidate handoff and authorized local landing; no PR dispatch or remote credentials required |
-| SSH session and managed worker invocation | Session capability gates operator actions; payload labels cannot replace current claim/run authority |
-| Read-only probe and receipt lookup after binary upgrade | No admission side effects; lookup finds original outcome without rewriting original input; revoked claims cannot acquire execution authority |
+| SSH session and managed worker invocation | Session capability gates operator actions; a client inside a managed run never propagates operator authority; payload labels cannot replace current claim/run authority |
+| Claim revocation during a live attempt | The revoked attempt cannot bind, mutate, settle, or promote, and its receipt reports the revoked phase rather than reviving it |
+| Read-only probe and receipt lookup after binary upgrade | No admission side effects; lookup finds original outcome without rewriting original input; an incompatible lookup protocol refuses and `not_found` licenses no replacement request; revoked claims cannot acquire execution authority |
 | Approve a review-only handoff twice, or revoke before merge | One durable authorization/start request; revoked or stale candidate cannot land |
 | Idle polling and receipt compaction | One idle request per refill pass; tombstone replay cannot re-admit; unsettled receipt retained; growth metrics visible |
 | PR/local leaves replace auto wrappers in capacity accounting | Configured local ceiling includes actual bound/queued runs and unrepresented admissions exactly once |
@@ -537,5 +551,8 @@ These are implementation acceptance criteria, not tests reported as passing by t
 ## Task References
 
 - [ORB-12488] — authored this design folder for the pull-based multi-host drain.
+- [ORB-12495] — implemented §4.1's probe, the pull spec's receipt lookup, and the claim listing, and
+  reconciled this folder with the authorization decision recorded in
+  [4_decisions.md](./4_decisions.md#ssh-login-is-the-admission-machine-labels-are-attribution).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

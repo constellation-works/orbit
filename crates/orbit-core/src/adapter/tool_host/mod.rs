@@ -4,6 +4,7 @@ mod auto_task_tools;
 mod command_tools;
 mod dispatch;
 mod docs_tools;
+mod drain_tools;
 mod friction_tools;
 mod host;
 mod hub_registry;

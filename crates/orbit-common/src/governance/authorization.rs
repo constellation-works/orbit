@@ -314,6 +314,13 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "command execution reaches the machine's shell surface through an explicit argv, not a filtered allowlist",
     },
     GovernedOperation {
+        id: "orbit.drain.claims",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "execution-claim inspection is the operator's recovery surface: it names every \
+                    in-flight attempt, the machine running it, and its landing state",
+    },
+    GovernedOperation {
         id: "orbit.task.delete",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

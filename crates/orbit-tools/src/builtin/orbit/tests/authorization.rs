@@ -66,6 +66,11 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     // Destructive administration: off MCP, and governed so that being off MCP
     // is not the only thing standing between an agent and the operation
     // [ORB-10453].
+    // [ORB-12495] Claim inspection: off MCP beside the other coordination-hold
+    // tools, governed so cross-attempt inspection is an operator act. The
+    // read-only probe and receipt lookup beside it are ungoverned, because a
+    // follower's `agent` session is exactly who must call them.
+    ("orbit.drain.claims", Placement::Unadvertised),
     ("orbit.semantic.uninstall", Placement::Unadvertised),
     ("orbit.task.delete", Placement::Unadvertised),
     ("orbit.task.locks.release", Placement::Unadvertised),

@@ -38,6 +38,10 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.auto_task.list",
             "orbit.auto_task.mint",
             "orbit.command.exec",
+            // [ORB-12495] The distributed drain's read-only half: a follower
+            // reaches these over federated MCP before pull exists at all.
+            "orbit.drain.probe",
+            "orbit.drain.receipt.lookup",
             "orbit.friction.add",
             "orbit.friction.list",
             "orbit.friction.update",

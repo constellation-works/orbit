@@ -1,7 +1,7 @@
 ---
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
-last_validated: 2026-09-18
+last_validated: 2026-09-19
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
@@ -17,7 +17,11 @@ related_artifacts: [ORB-12488]
 ready, valid, conflict-free task in its canonical order and atomically records the reservation,
 attempt identity, `in-progress` transition, history, and request receipt. Retries replay the same
 receipt. The internal store foundation now implements admission receipts, claims, replay,
-and compaction. The public tool and companion lifecycle operations remain unavailable;
+and compaction, and [ORB-12495] exposed the owner's read-only half — the
+[preflight probe](../2_design.md#41-read-only-admission-probe) and the
+[receipt lookup](#read-only-receipt-reconciliation) below — on the managed MCP and registered CLI
+surfaces. The public pull tool and the mutating lifecycle operations remain unavailable behind one
+named gate (`orbit-core`'s `application::distributed`), so no configuration can reach them; the
 contracts for those entry points below are still proposed v1 behavior.
 
 ## Why This Exists
@@ -120,7 +124,8 @@ idempotent owner-side binding check and execution mutations require the current 
 
 ## Read-only receipt reconciliation
 
-Add an owner-served lookup keyed by workspace, original caller machine, and request ID. It returns
+Add an owner-served lookup keyed by workspace, original caller machine, and request ID
+(`orbit.drain.receipt.lookup`, live since [ORB-12495]). It returns
 `found` (original receipt and current claim state), `expired` (tombstone), or `not_found` from an
 owner transaction. It never creates a receipt, binds a run, or grants execution authority. The
 original input remains immutable; a client upgraded to the owner's binary can look up an old request
@@ -128,7 +133,10 @@ without changing `caller_version` inside it. The lookup uses receipt schema `1`,
 does not reapply original binary parity, ship mode, or review policy admission checks.
 
 Current session capability is mandatory. Trusted worker invocations retain their original receipt
-namespace; owner operators may inspect across attempts without a retired cross-caller ACL.
+namespace — the machine their session is trusted to speak for, never a machine named in tool input
+— and owner operators may inspect across attempts without a retired cross-caller ACL. Naming
+another machine's namespace from a worker session is refused; reading one's own namespace returns
+`not_found`, so a forwarded label buys nothing.
 Claim revocation fences execution independently of SSH access. On an incompatible lookup protocol,
 use owner claim inspection and deliberate recovery. `not_found` is not proof that an earlier transport request cannot still arrive: retry only
 the original request ID while it remains admissible, or quiesce old sends and reconcile on the owner
@@ -157,6 +165,11 @@ Queue depth and returned claim state are snapshots, not authorization for later 
 Authorization and compatibility are checked before reading/replaying caller receipts. The remaining
 checks run in the following table order; a malformed or absent version field is `invalid_input`, not
 a compatibility comparison. Policy is rechecked at binding without rewriting the receipt.
+
+Selector resolution and session capability belong to the calling surface, because only it knows
+which workspace was addressed and what the destination served this session; the rest is one ordered
+store-side ladder (`orbit_store::admission_refusal`) that admission and the read-only probe both
+read, so a preflight cannot report a verdict admission would not reach.
 
 | Error | When |
 |---|---|
@@ -228,7 +241,8 @@ substitute for these tests.
 ## Agent Signature
 
 claude authored the initial contract under [ORB-12488]; codex revised it after design review,
-2026-09-18. The feature remains Draft.
+2026-09-18; claude reconciled it with the authorization decision and the shipped read-only surface
+under [ORB-12495], 2026-09-19. The feature remains Draft.
 
 ## Internal storage accounting
 
