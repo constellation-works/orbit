@@ -606,3 +606,72 @@ fn claimed_leaf_refuses_generic_resume_but_same_run_evidence_retries_work() {
         TaskStatus::InProgress
     );
 }
+
+/// [ORB-12575] A worker killed between the pending marker and its clear leaves
+/// `.task-commit-pending` in the task partition. Resume is the operator's next
+/// command, so it has to replay that journal like every other runtime read —
+/// not refuse with the doctor's non-repairing "claim inspection" error and
+/// leave the marker for an unrelated task command to clear.
+#[test]
+fn resume_recovers_a_pending_commit_marker_instead_of_refusing_claim_inspection() {
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    let (_root, runtime, _repo, global) = test_runtime();
+    let jobs_dir = global.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
+    write_delivery_tail_job(
+        &jobs_dir.join("qa_resume_pending.yaml"),
+        "qa_resume_pending",
+    );
+    let registry = TaskRegistryStore::open(&task_registry_path(&global)).expect("registry");
+    let partition = registry
+        .workspace_partition_dir(&runtime.workspace_id().expect("workspace"))
+        .expect("partition dir");
+    let marker = partition.join(".task-commit-pending");
+
+    // The interrupted-commit signal with no journal row behind it: exactly what
+    // a SIGKILL between `write_pending_marker` and the journal insert leaves.
+    let leave_marker = || std::fs::write(&marker, b"commit-1-1-0").expect("write pending marker");
+    leave_marker();
+    let inspection = runtime
+        .inspect_execution_claims()
+        .expect_err("doctor inspection stays non-repairing");
+    assert!(
+        inspection.to_string().contains("claim inspection"),
+        "{inspection}"
+    );
+    assert!(marker.exists(), "inspection must not clear the marker");
+
+    // CLI surface: the guard settles the partition and resume reaches its
+    // ordinary resolution of the source run.
+    let error = runtime
+        .plan_job_run_resume("jrun-does-not-exist")
+        .err()
+        .expect("unknown run is still refused");
+    assert!(
+        !error.to_string().contains("claim inspection"),
+        "resume must not surface the inspection error: {error}"
+    );
+    assert!(error.to_string().contains("not found"), "{error}");
+    assert!(!marker.exists(), "resume recovered the pending commit");
+
+    // Submission surface (MCP/HTTP/dashboard) funnels through the same planner.
+    leave_marker();
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("qa_resume_pending", 1, Utc::now(), None, None)
+        .expect("insert pending run");
+    let error = runtime
+        .submit_resume_run(&run.run_id, Some("test"), None)
+        .expect_err("a pending run is not resumable");
+    assert!(
+        error
+            .to_string()
+            .contains("resume requires an interrupted, failed, or timed-out run"),
+        "{error}"
+    );
+    assert!(
+        !marker.exists(),
+        "submit_resume_run recovered the pending commit"
+    );
+}

@@ -51,6 +51,11 @@ pub trait TaskStoreBackend: Send + Sync {
     fn inspect_execution_claims(&self) -> Result<Vec<super::ClaimInspection>, OrbitError> {
         Err(OrbitError::Store("claim inspection unavailable".into()))
     }
+    /// Repairing claim read: settles an interrupted commit before reading.
+    /// Unavailable backends fail closed.
+    fn resolve_execution_claims(&self) -> Result<Vec<super::ClaimInspection>, OrbitError> {
+        Err(OrbitError::Store("claim inspection unavailable".into()))
+    }
     /// Read-only receipt reconciliation. Creates no receipt, binds no run, and
     /// grants no execution authority; the caller authorizes the identity.
     fn lookup_admission(

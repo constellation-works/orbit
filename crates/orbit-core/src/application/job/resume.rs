@@ -79,7 +79,24 @@ impl OrbitRuntime {
         // Refuse before show_job_run can reconcile local liveness. Settled claims
         // retain immutable bindings, so even a revoked attempt cannot resume.
         let recorded = self.get_job_run_backend(source_run_id)?;
-        if self.inspect_execution_claims()?.iter().any(|claim| {
+        // [ORB-12575] Read the claims as an ordinary participant, not through
+        // the doctor's non-repairing inspection. A worker killed mid-commit
+        // leaves the partition's pending marker behind, and resume is the
+        // command the operator reaches for next; it must replay that journal
+        // like every other runtime read does, not refuse until something
+        // unrelated happens to.
+        let claims = self.resolve_execution_claims().map_err(|error| {
+            let partition = self
+                .workspace_id()
+                .unwrap_or_else(|_| "<unresolved>".to_string());
+            OrbitError::Store(format!(
+                "task partition '{partition}' could not settle its execution claims before \
+                 resuming '{source_run_id}': {error}. An interrupted coordination commit stays \
+                 pending until its journal replays; inspect the partition with `orbit doctor`, \
+                 repair it, then retry `orbit job resume {source_run_id}`"
+            ))
+        })?;
+        if claims.iter().any(|claim| {
             claim.bound_run.as_ref().is_some_and(|run| {
                 run.run_id == source_run_id
                     && recorded
