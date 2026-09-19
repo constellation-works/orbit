@@ -599,7 +599,7 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
         !operations.contains("hashchange") && !operations.contains("location.reload"),
         "refresh/back must not replay a toggle or mint POST"
     );
-    assert!(router.contains(r#"const OPERATIONS_SUBTABS = ["routines", "auto-tasks"];"#));
+    assert!(router.contains(r#"const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "jobs"];"#));
     assert!(router.contains(r#"hash = `#operations/${sub}`;"#));
     assert!(css.contains("@media (max-width: 720px)"));
     assert!(css.contains("@media (max-width: 600px)"));
@@ -613,6 +613,101 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
     assert!(router.contains(
         r#"classList.toggle("operations-active", top === "operations" || top === "auto-drain")"#
     ));
+}
+
+/// The Operations subtabs live in the rail like the Diagnostics ones, and the
+/// third one, Jobs, is projected purely from what the dashboard already
+/// serves (routine `job:` targets plus `/api/job-runs`): Run is offered as a
+/// control but is not wired to any endpoint yet, so the row hands over the
+/// CLI command instead of posting anywhere.
+#[test]
+fn dashboard_operations_rows_share_one_vocabulary_and_jobs_is_projected() {
+    let index = include_str!("../../assets/dashboard/index.html");
+    let operations = include_str!("../../assets/dashboard/operations.js");
+    let router = include_str!("../../assets/dashboard/router.js");
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+
+    assert!(
+        index.contains(r#"<nav class="subtabs rail-subtabs" id="operations-subtabs" aria-label="Operations views">"#),
+        "the Operations subtabs sit in the rail"
+    );
+    for subtab in ["routines", "auto-tasks", "jobs"] {
+        assert!(
+            index.contains(&format!(r#"data-subtab="{subtab}""#)),
+            "{subtab} must be an Operations subtab"
+        );
+    }
+    for id in [
+        "operations-jobs-main",
+        "jobs-panel",
+        "jobs-count",
+        "job-operation-feedback",
+        "jobs-body",
+        "rail-count-ops-routines",
+        "rail-count-ops-auto-tasks",
+        "rail-count-ops-jobs",
+    ] {
+        assert!(index.contains(&format!(r#"id="{id}""#)), "{id}");
+    }
+    // The clock reads as a bar above the routines, not a card beside them.
+    let routines_main = index
+        .split(r#"id="operations-routines-main""#)
+        .nth(1)
+        .expect("routines main");
+    assert!(
+        routines_main.find(r#"id="clock-panel""#) < routines_main.find(r#"id="routines-panel""#),
+        "the sweep clock panel precedes the routines panel"
+    );
+    assert!(
+        router.contains(r#"const jobs = $("operations-jobs-main");"#)
+            && router.contains(r#"jobs.hidden = name !== "jobs";"#)
+            && router
+                .contains(r#"operationsSubtabs.classList.toggle("dimmed", top !== "operations")"#),
+        "the router toggles the jobs main and dims the rail subtabs like Diagnostics"
+    );
+
+    // Shared row furniture.
+    for needle in [
+        "function operationSwitch(",
+        r#"button.setAttribute("role", "switch");"#,
+        "function operationGroup(",
+        "function operationColumns(",
+        "function routineTimeline(",
+        "function cronText(",
+        "function relativeTime(",
+        "function syncAutoTaskSchedulerNote(",
+        "still open · scheduler will skip",
+    ] {
+        assert!(operations.contains(needle), "{needle}");
+    }
+    for needle in [
+        ".operation-switch {",
+        ".operation-group {",
+        ".operation-columns {",
+        "--ops-columns:",
+        ".operation-timeline-track {",
+        ".operation-running-grid {",
+        ".operation-columns { display: none; }",
+        r#".operation-cell[data-label]:not([data-label=""])::before {"#,
+    ] {
+        assert!(css.contains(needle), "{needle}");
+    }
+
+    // Jobs: projected, read-only for now.
+    assert!(operations.contains("fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}`)"));
+    assert!(
+        operations.contains("function jobIdFromTarget(")
+            && operations.contains("function jobCatalog(")
+    );
+    assert!(
+        operations.contains("Running a job from the dashboard is not wired yet.")
+            && operations.contains("orbit run job ${jobId} --workspace"),
+        "the Run control explains itself and hands over the CLI command"
+    );
+    assert!(
+        !operations.contains("/api/jobs"),
+        "no job endpoint exists yet; the pane must not call one"
+    );
 }
 
 /// ORB-11559: below 760px the 216px rail must give up the content column so

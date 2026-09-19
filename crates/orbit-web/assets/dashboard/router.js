@@ -46,7 +46,7 @@ function markWorkspaceSelectorScope(fleetWide) {
 // still accepted and rewritten so bookmarks keep resolving.
 const TABS = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge", "run-detail"];
 const DIAG_SUBTABS = ["runs", "metrics", "errors", "incidents", "reliability", "scoreboard"];
-const OPERATIONS_SUBTABS = ["routines", "auto-tasks"];
+const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "jobs"];
 // ORB-10444/ORB-10588: subtabs that replace the two-column diagnostics layout
 // with their own full-width <main>, keyed by the element they reveal.
 const DIAG_FULL_WIDTH_MAINS = {
@@ -158,8 +158,10 @@ function setOperationsSubtabImpl(ctx, name) {
   }
   const routines = $("operations-routines-main");
   const autoTasks = $("operations-auto-tasks-main");
+  const jobs = $("operations-jobs-main");
   if (routines) routines.hidden = name !== "routines";
   if (autoTasks) autoTasks.hidden = name !== "auto-tasks";
+  if (jobs) jobs.hidden = name !== "jobs";
 }
 
 function setKnowledgeSubtabImpl(ctx, name) {
@@ -236,6 +238,9 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // `.active` class itself is left alone; it is still the remembered choice.
   const diagSubtabs = $("diag-subtabs");
   if (diagSubtabs) diagSubtabs.classList.toggle("dimmed", top !== "diagnostics");
+  // The Operations subtabs live in the rail the same way.
+  const operationsSubtabs = $("operations-subtabs");
+  if (operationsSubtabs) operationsSubtabs.classList.toggle("dimmed", top !== "operations");
   if (top !== "diagnostics") {
     document.body.classList.remove("reliability-active");
     markWorkspaceSelectorScope(false);

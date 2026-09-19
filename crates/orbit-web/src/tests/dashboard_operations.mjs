@@ -61,8 +61,19 @@ globalThis.fetch = async (path, options = {}) => {
   }
   if (url.pathname === '/api/routines') return response({
     host_id: 'fixture-host', controls_authorized: capabilities.routine_toggle.authorized, capabilities: { ...capabilities }, session_explanation: 'Session access: restart the dashboard server with explicit operator authority.',
-    routines: ['one', 'two'].map(source => ({ name: `Routine ${source}`, source, target: 'job:fixture', enabled: enabled[source], cron: '30 14 * * *', description: 'Sweep landed deliveries.', next_evaluation: { state: enabled[source] ? 'scheduled' : 'disabled', at: '2026-09-07T21:30:00Z', hypothetical: !enabled[source] } })),
+    routines: [
+      ...['one', 'two'].map(source => ({ name: `Routine ${source}`, source, target: 'job:fixture', enabled: enabled[source], cron: '30 14 * * *', description: 'Sweep landed deliveries.', last_fire: { state: 'succeeded', run_id: 'jrun-fixture-done', started_at: '2026-09-07T20:30:05Z', finished_at: '2026-09-07T20:33:10Z', duration_ms: 185000 }, next_evaluation: { state: enabled[source] ? 'scheduled' : 'disabled', at: '2026-09-07T21:30:00Z', hypothetical: !enabled[source] } })),
+      { name: 'Parked one', source: 'one', target: 'job:parked_pipeline', enabled: false, cron: '*/20 * * * *', description: 'Kept in the repo, never fires.', next_evaluation: { state: 'disabled', at: '2026-09-07T21:40:00Z', hypothetical: true } },
+    ],
     clock: { ...clock },
+  });
+  if (url.pathname === '/api/job-runs') return response({
+    items: [
+      { run_id: 'jrun-fixture-running', job_id: 'fixture', state: 'running', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:59:00Z', started_at: '2026-09-07T20:59:10Z', finished_at: null, duration_ms: null },
+      { run_id: 'jrun-fixture-done', job_id: 'fixture', state: 'succeeded', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:30:00Z', started_at: '2026-09-07T20:30:05Z', finished_at: '2026-09-07T20:33:10Z', duration_ms: 185000 },
+      { run_id: 'jrun-orphan', job_id: 'task_pr_pipeline', state: 'failed', run_role: 'child', resolved_crew: 'opus', created_at: '2026-09-07T19:00:00Z', started_at: '2026-09-07T19:00:01Z', finished_at: '2026-09-07T19:05:00Z', duration_ms: 299000 },
+    ],
+    total: 3, limit: 100, truncated: false,
   });
   if (url.pathname === '/api/workflows/auto/readiness') return response({
     controls_authorized: true,
@@ -109,6 +120,29 @@ await fetchAndRenderOperations();
 assert(get('auto-drain-body').textContent.includes('No readiness rows were returned in this bounded snapshot.'), 'empty readiness snapshot avoids claiming the workspace has no backlog');
 readinessTasks.push(...populatedReadiness);
 await fetchAndRenderOperations();
+// Routines are grouped by whether they will fire, the toggle is a switch that
+// still reads Enable/Disable, and the row names the job it runs.
+const routineGroups = descendants(get('routines-body')).filter(node => String(node.className || '').includes('operation-group-title')).map(node => node.textContent);
+assert(routineGroups.some(text => text.startsWith('Active1')) && routineGroups.some(text => text.startsWith('Paused1')), `routines grouped by state: ${routineGroups}`);
+const routineSwitch = descendants(get('routines-body')).find(node => String(node.className || '').includes('operation-switch'));
+assert(routineSwitch?.getAttribute('role') === 'switch' && routineSwitch.getAttribute('aria-checked') === 'true' && routineSwitch.textContent === 'Disable', 'routine toggle is a switch named by its action');
+assert(descendants(get('routines-body')).some(node => node.href === '#operations/jobs?job=fixture'), 'routine row links the job it runs');
+assert(descendants(get('routines-body')).some(node => String(node.className || '').includes('operation-timeline')), 'routines pane projects the next hour');
+assert(!get('routines-body').textContent.includes('Routine two'), 'routines stay scoped to the selected workspace');
+assert(descendants(get('clock-body')).some(node => String(node.className || '').includes('operation-clock-bar')), 'clock renders as a bar');
+// Jobs are projected from routine targets plus recent runs; Run is offered but
+// not wired, so no job endpoint is ever posted to.
+const jobsText = get('jobs-body').textContent;
+assert(jobsText.includes('Running now1'), `running strip counts in-flight runs: ${jobsText.slice(0, 120)}`);
+const jobCards = descendants(get('jobs-body')).filter(node => String(node.className || '').includes('job-card'));
+assert(jobCards.length === 3 && ['fixture', 'task_pr_pipeline', 'parked_pipeline'].every(id => jobCards.some(card => card.dataset.job === id)), `catalogue unions routine targets (paused included) and run job ids: ${jobCards.map(card => card.dataset.job)}`);
+const fixtureCard = jobCards.find(card => card.dataset.job === 'fixture');
+assert(fixtureCard.textContent.includes('Routine one') && fixtureCard.textContent.includes('1 running') && fixtureCard.textContent.includes('jrun-fixture-running'), 'job row shows its routine, active count and latest run');
+const runButton = descendants(fixtureCard).find(node => node.textContent === 'Run ▸' && node.type === 'button');
+assert(runButton?.disabled && String(runButton.title).includes('orbit run job fixture --workspace one'), 'run is offered but hands over the CLI command until the endpoint lands');
+assert(fixtureCard.textContent.includes('orbit run job fixture --workspace one'), 'job details carry the CLI command');
+assert(!requests.some(r => r.path.startsWith('/api/jobs')), 'no job endpoint is called');
+assert(requests.some(r => r.path === '/api/job-runs' && r.workspace === 'one'), 'jobs read the workspace-scoped recent runs');
 assert(!button('auto-tasks-body', 'Disable').disabled, 'authorized toggle available');
 assert(!button('auto-tasks-body', 'Mint now').disabled, 'authorized mint available');
 assert(!button('clock-body', 'Pause clock').disabled, 'authorized clock available');
@@ -292,6 +326,15 @@ else autoDetails.listeners?.toggle?.();
 await fetchAndRenderOperations();
 const restored = descendants(get('auto-tasks-body')).find(node => node.className === 'operation-details');
 assert(restored?.open, 'details stay open across rerender');
+
+// Definitions are grouped by trigger with a stats strip; the toggle is a switch.
+const autoGroups = descendants(get('auto-tasks-body')).filter(node => String(node.className || '').includes('operation-group-title')).map(node => node.textContent);
+assert(autoGroups.some(text => text.startsWith('On a schedule2')), `auto-tasks grouped by trigger: ${autoGroups}`);
+const autoStats = descendants(get('auto-tasks-body')).filter(node => String(node.className || '').includes('operation-stat ')).map(node => node.textContent);
+assert(autoStats.some(text => text.startsWith('Definitions2')) && autoStats.some(text => text.startsWith('Enabled2')) && autoStats.some(text => text.startsWith('Open duplicates1')), `auto-task stats: ${autoStats}`);
+const autoSwitch = descendants(autoCard).find(node => String(node.className || '').includes('operation-switch'));
+assert(autoSwitch?.getAttribute('role') === 'switch' && autoSwitch.getAttribute('aria-checked') === 'true', 'auto-task toggle is a switch');
+assert(autoHead.textContent.includes('still open · scheduler will skip'), 'open duplicate is called out on the row');
 
 // A skip_if_open auto-task whose only instance is parked in someday reports no open duplicate and mint confirmation does not claim an open instance exists [ORB-12158].
 const autoCards = descendants(get('auto-tasks-body')).filter(node => String(node.className || '').includes('auto-task-card'));
