@@ -51,10 +51,10 @@ template:
   - no-diff-expected
   priority: high
   complexity: hard
-  crew: grok
+  crew: opus
   status: backlog
 dedupe: skip_if_open
 created_by: codex
 created_at: 2026-09-10T07:20:00Z
-updated_by: codex
-updated_at: 2026-09-10T07:20:00Z
+updated_by: human:daniel
+updated_at: 2026-09-19T06:45:34.930746394+00:00
