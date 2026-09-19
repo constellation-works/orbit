@@ -1,220 +1,145 @@
 # Authoring a task
 
-Write a task another engineer or agent can execute without guessing: a crisp
-problem statement plus acceptance criteria that define observable success. The
-execution plan is authored later, at pickup, not here.
+Give the implementer a coherent outcome, enough evidence to start, and a way to
+prove completion. A small fix may need a paragraph and two criteria; a larger
+change needs explicit boundaries. The implementer authors the detailed plan at
+pickup. Do not confuse a task description with a design document or a transcript.
 
-Every `orbit.task.*` call needs `model` — your agent family. Never use bare
-`orbit task ...`; it skips agent provenance.
+## Establish the contract
 
-## Workflow
+- **Problem and outcome:** name the concrete trigger, current behavior and desired
+  result. Include reproduction/evidence for a bug; distinguish observations from
+  hypotheses. Cite the authoritative design when relevant and state any approved
+  decisions that supersede it.
+- **Owned work:** say what this task delivers and what it deliberately leaves to
+  another task. Missing ordinary methods, types, adapters and tests needed for
+  that result are implementation work, not an external dependency.
+- **Prerequisites:** name actual task IDs and the capability each supplies. Record
+  blocking edges in `dependencies` through `orbit.task.update` right after
+  creation (`orbit.task.add` drops that field), not only in prose. Do not require an upstream
+  slice to demonstrate behavior that needs its downstream consumer: use the
+  agreed interface and isolated fixtures, and assign end-to-end proof to integration.
+- **Decisions and constraints:** separate settled product choices from choices the
+  implementer can make. Include compatibility, authority, rollout or resource
+  constraints only where they affect this task. Ask for a consequential missing
+  decision; do not ask for permission to make ordinary implementation choices.
+- **Acceptance:** define observable behavior and evidence, including important
+  refusal/negative cases. Commands are validation methods, not substitutes for an
+  expected result. Distinguish implemented, tested, merged and deployed when those
+  differ; do not make an implementation task require an unauthorized live rollout.
 
-1. **Establish** the objective, constraints, and what done means from the user's
-   request. Ask only for information that is genuinely missing. Select the
-   authoritative workspace before searching or writing.
-2. **Check for overlapping prior work.** Run a hybrid search on the title and
-   description before creating anything — a brand-new task has no embeddings, so
-   `--hybrid --kind task` on the text is the check that works. (`search similar`
-   needs an existing task with vectors; it is for pickup, not creation.)
-   → [search.md](search.md)
-3. **Write acceptance criteria that name observable success** — a command, an
-   inspection step, or an output. "Works correctly" is not a criterion.
-4. **Optionally fill `context_files`** (see below).
-5. **Set `complexity`** (`low` / `medium` / `hard`). It is required at
-   creation and on every human or agent update — `orbit.task.update`, `orbit
-   task update`, and the dashboard all reject `unassessed`, which is reserved
-   for automated mint/import and system callers.
-6. **Add assumptions, risks, and rollback notes** to the description when they
-   matter.
-7. **Call `orbit.task.add`.** Confirm creation by requesting a compact
-   field projection (`"fields": ["id"]`) or by extracting `id` with a JSON
-   parser (such as `jq`). **Never truncate the payload with `head` or `cut`** —
-   piping through `head` or `cut` risks truncating the JSON before the `id` field
-   appears, making a successful write look incomplete and leading to accidental
-   duplicate tasks. Confirm via the result, or re-fetch with `orbit.task.show`.
+Split work when independently deliverable outcomes or real dependency boundaries
+justify it. A coherent cross-layer change can remain one task; file count and
+breadth alone are not blockers. Each slice must be verifiable at its own boundary.
+Keep incomplete entry points unavailable when later slices are needed for safety.
+
+## Prepare and create
+
+1. Select the authoritative workspace. For findings discovered by review, QA,
+   friction or triage, search open and closed work before filing a new owner.
+   For an explicit user request, reuse a supplied task; search when duplication is
+   plausible rather than turning every request into an investigation.
+   See [search](search.md); a new task has no vectors for `search similar`.
+2. Inspect the likely modification anchors and relevant interfaces. Background
+   reading belongs in the description, not the lock footprint. Use targeted
+   reads; a task does not need a dump of the surrounding subsystem.
+3. Write the contract and criteria. Confirm the assigned lane can obtain the
+   evidence: deterministic fixtures for service/time/filesystem behavior,
+   required repository gates, and explicit platform or operator handoffs where
+   necessary. See [task fields](task-fields.md) for `required_tools` and capabilities.
+4. Create through `orbit.task.add` with `model` attribution. Required inputs are
+   title, description, workspace and assessed complexity (`low`, `medium`, `hard`).
+   Use the advertised schema; detailed `plan` belongs to pickup, not task creation.
+   Creation does not approve promotion, dispatch or completion.
+5. Read the returned ID using `fields: ["id"]` or a JSON parser. Never truncate a
+   write response with `head`/`cut`. If the result is uncertain, list/search before
+   retrying: a lost reply does not mean the task was not created.
+6. Wire `dependencies` (and any `child_of` relation) with `orbit.task.update`
+   on the returned ID; creation silently discards `dependencies`.
 
 ```bash
 orbit tool run orbit.task.add --input '{
-  "title": "<title>",
-  "description": "<multi-line markdown>",
-  "acceptance_criteria": ["<observable outcome>", "<observable outcome>"],
-  "context_files": ["file:src/lib.rs", "dir:src/command"],
-  "required_tools": ["<exact.canonical.tool>"],
-  "workspace": "<selector>", "priority": "<low|medium|high|critical>",
-  "complexity": "<low|medium|hard>", "type": "<feature|bug|refactor|chore>",
-  "model": "<agent-family>",
+  "title": "<concrete outcome>",
+  "description": "<problem, scope, prerequisites and constraints>",
+  "acceptance_criteria": ["<behavior and evidence>"],
+  "context_files": ["file:<verified-modification-target>"],
+  "workspace": "<discovered-selector>",
+  "complexity": "medium", "type": "feature", "model": "<agent-family>",
   "fields": ["id"]
 }'
 ```
 
-### Confirming creation and duplicate recovery
+Assign `crew` to the actual intended implementer. If you will implement the task
+personally, use your own configured crew rather than the crew you would have
+chosen for delegation. On an authorized takeover, correct a stale assignment
+before continuing; do not leave another crew named for work it is not doing.
+`model` is tool-call provenance (agent family), while `orchestrator` identifies
+who prepared/supervised the work; neither substitutes for execution `crew`.
 
-- **Confirm with `fields: ["id"]` or a JSON parser, never `head`/`cut`.**
-  Task creation is a durable write with no natural deduplication key. Do not
-  pipe `orbit.task.add` through `head` or `cut` to limit output volume; request
-  a compact projection like `"fields": ["id"]` or parse the output with a JSON
-  parser instead.
-- **List before retrying.** If an add appears to fail, times out, or yields an
-  ambiguous response, list existing tasks (`orbit.task.list` or `orbit task list`)
-  before retrying.
-- **Neutralize duplicates with `status: archived`.** If a duplicate task lands:
-  - Agent-facing deletion (`orbit.task.delete`) and rejection (`orbit.task.reject`)
-    remain inactive (human/admin-only).
-  - Orbit has no `cancelled` status; `orbit.task.update` rejects `status: "cancelled"`.
-  - Neutralize the duplicate using `orbit.task.update` with `status: "archived"`
-    and provide an explanatory `execution_summary` naming the canonical task
-    (for example: `execution_summary: "Duplicate of <canonical-task-id>; archiving duplicate"`).
+Task IDs come from the store. Use task tools to change records, never edit their
+filesystem projections. Reuse existing tags. Use `feature`, `bug`, `refactor` or
+`chore` for type. An update may reassess complexity but cannot reset it to
+`unassessed`. See [task fields](task-fields.md) for dependency/relationship semantics,
+duplicate handling and additional tool grants.
 
+## Modification footprint
 
-## `context_files`
+`context_files` declares intended creation, modification and deletion targets
+inside this workspace using `file:`, `dir:` or `symbol:path#name:kind`. Prefer
+precise verified files/symbols; a directory is appropriate for a genuinely owned
+area, not a shortcut for all possibly relevant code.
 
-Names *only* modification and deletion targets, as canonical selectors
-(`file:`, `dir:`, `symbol:path#name:kind`), each resolving inside the target
-workspace's root — an out-of-root path fails pipeline admission.
+For a known new target, use the supported `allow_missing_context` option and
+explain creation intent. Missing-file selectors remain valid declarations; do
+not prune them because a checkout cannot yet resolve them. Do not invent paths
+to satisfy admission. Unknown targets can be prepared by task-pilot before
+execution; empty context does not guarantee eligibility for every admission path.
 
-Read-for-context files, convention and pattern docs, and files that don't exist
-yet do not belong there; cite those in prose instead. Include a design doc only
-when it exists and is itself an expected modification target.
+Put read-only designs, conventions and examples in prose links. A design document
+belongs in the footprint only if this task will change it. Cross-workspace edits
+need separate tasks in their owning workspaces, with explicit dependencies when
+one supplies the other; one managed worktree cannot deliver another repository.
 
-Prefer `file:`/`symbol:` over `dir:` when the change can be named precisely.
+## Revise without accumulating contradictions
 
-The field is optional unless the workspace's own policy requires it. Leaving it
-empty is valid, and **guessing entries to avoid an empty field is worse than
-empty** — the list is what conflict detection reads, so a wrong entry actively
-misleads. When an orchestrator needs selectors prepared at scale, the task-pilot
-job fills them from real inspection. → [orchestration.md](orchestration.md)
+When an authorized decision changes, rewrite the canonical description and
+reconcile criteria, dependencies and any stale plan. Preserve comments as audit
+history and identify what was superseded. A worker should not have to reconstruct
+the current contract from a pile of contradictory addenda.
 
-### Acceptance criteria outside the workspace
-
-An acceptance criterion cannot require a change outside the task's own
-workspace. A managed run mounts everything outside its own worktree
-read-only, and the delivery boundary refuses untracked paths — so there is no
-place for a cross-workspace edit to land, no matter how the criterion is
-worded. This holds for any out-of-workspace path, not one particular
-companion repository. If the work genuinely spans two workspaces, file the
-companion change as its own task in its own workspace and relate the two
-(for example, a `related_to` relation) instead of asking one task to reach
-outside its root.
-
-## Operating rules
-
-- Never edit task files directly; never invent task IDs (`orbit.task.add`
-  allocates them).
-- Confirm `orbit.task.add` with `fields: ["id"]` or a JSON parser; never truncate
-  the payload with `head`/`cut`.
-- If an add seems to fail, list with `orbit.task.list` before retrying. Neutralize
-  landed duplicates with `orbit.task.update` `status: "archived"` and an explanatory
-  summary naming the canonical task. Agent-facing `delete` and `reject` are
-  inactive; Orbit has no `cancelled` status.
-- Required: `title`, `description`, `workspace`, `complexity`. Strongly prefer
-  `acceptance_criteria`.
-- `complexity` stays assessed for its whole life: an update may move it between
-  `low`, `medium`, and `hard`, but a human or agent can never set it back to
-  `unassessed`.
-- `description` should be multi-line markdown for anything non-trivial.
-- Valid `type`: `feature`, `bug`, `refactor`, `chore`.
-- Do not pass `plan` to task creation; author it later through task update.
-- Set `status: proposed` when filing findings for consideration. Creation does
-  not imply approval, dispatch, or completion; preserve the user's intent.
-- Blank companion files (`plan.md`, `execution-summary.md`) are blank *fields* —
-  repair with `orbit.task.update`, never by hand.
-
-## Behavior-affecting optional fields
-
-- `dependencies: ["<task-id>", ...]` — prerequisites must reach a satisfying
-  status first. Unlike `resolves`, task IDs are global: a prerequisite owned by
-  another workspace registered on this machine is read from its owner, and
-  completing it there satisfies the dependency here. A prerequisite this
-  machine has never registered stays explicitly unverifiable — it is never
-  treated as satisfied from here, and it is never restored or edited from the
-  depending workspace.
-- `relations: [{"type": "resolves", "target": "<friction-id>"}]` — auto-resolves
-  that friction when this task reaches `done`, **only in the same workspace**.
-  Friction IDs are workspace-local; an unqualified target is never a global
-  lookup. Completing a task whose `resolves` target exists only in another
-  workspace on this host is rejected with `friction_not_local` — resolve the
-  friction from its owning workspace instead: `orbit friction resolve <id>` is
-  the operator CLI path, or an agent runs `orbit tool run
-  orbit.friction.update --input '{"id":"<id>","status":"resolved"}'` (same
-  resolution metadata); a covering task there also counts. Other types
-  (`produces`, `blocked_by`, `child_of`,
-  `spawned_from`, `regression_from`, `supersedes`, `related_to`) are tracked
-  but inert. Only `produces`/`resolves` accept non-task targets; the rest
-  require a task ID. A dangling target (unknown in every workspace this host
-  can see) succeeds but emits a `TaskRelationDangling` audit event.
-- `parent_id` is a retired `orbit.task.add` input and is stripped with the
-  other entries in `RETIRED_TASK_ADD_INPUT_FIELDS`; use a `child_of` relation
-  in `relations` when creating a subtask. `source_task_id` is also retired
-  from `orbit.task.add`; for bug tasks, set it after creation with
-  `orbit.task.update` (which accepts the field), and use an empty string there
-  to clear it. `tags` (reuse existing before inventing new).
-- `required_tools: ["<exact.canonical.tool>", ...]` — tools the task must add to
-  any agent activity's baseline. Use only exact, active, agent-facing registered
-  names; wildcards and prefixes are rejected at dispatch. The list is normalized,
-  sorted, and deduplicated at creation. It is immutable afterward, and every
-  existing-task update surface rejects `required_tools` — so declare every tool
-  your acceptance criteria name **at creation**, because setting it later
-  cannot widen an already-dispatched activity. → [Validation your lane can
-  actually run](#validation-your-lane-can-actually-run)
-  Inclusion grants only activity allowlist membership: caller role, host
-  capability, tool policy, filesystem/subprocess policy, and external
-  authentication can still deny execution. A task that names exactly
-  `github.auth.status`, `github.run.list`, `github.run.view`,
-  `github.run.logs`, and `github.pr.list` is the worked example:
-  `agent_implement` stays unchanged and
-  `effective_tools = activity baseline ∪ those five`. Reaching
-  `github.auth.status` can still yield a structured `available: false` or
-  `authenticated: false` capability-unavailable result when the lane has no
-  GitHub client or credentials; that is not a clean CI pass.
-
-## Validation your lane can actually run
-
-A criterion that names a tool is a promise about the lane that will run it, and
-`required_tools` is the only field that can keep that promise — which is why it
-has to be right at creation. Task-pilot preparation reads each criterion
-against the registered tool surface, the canonical MCP tool list, the
-implementation activity's allowlist, and the governed-operation registry, and
-reports one `validation_tool_warnings` finding per contradiction before the
-task is admitted. A finding never rejects a task; it names the repair.
-
-- **Transport.** An MCP session reaches only MCP-advertised tools. `proc.spawn`
-  is registered CLI-only, so a criterion that requires it over MCP can never
-  pass — drive it through `orbit tool run proc.spawn` instead. Never ask for
-  the MCP surface to be widened to match a criterion's wording.
-- **Allowlist.** A tool outside the implementation activity's baseline has to
-  be in `required_tools`, or the criterion is unreachable from the lane.
-- **Operator capability.** Governed operations — workflow run observation and
-  resume, the operation grants, `orbit.command.exec`, `orbit.agent.invoke`,
-  and the other destructive surfaces — are reserved for an operator.
-  `required_tools` grants allowlist membership, not capability, and an
-  implementing agent must never set an authority environment variable to get
-  past that gate. Write the criterion as an explicit operator handoff, or scope
-  it to the registered dispatch path an agent can reach.
-- **External credentials.** `github.*` reads depend on authentication the lane
-  may not hold, so state that precondition instead of treating a
-  capability-unavailable result as a pass.
-
-A criterion that *expects* a refusal is a correct negative test, and a tool
-name inside a quoted example is a copied observation, not a requirement.
-Neither is reported, and neither grants anything.
-
-## Quality bar
-
-Validation must not assume uncommitted artifacts or workspace-local runtime
-state under `.orbit/state/`. File I/O checks use temp dirs or fakes.
-Behavior-changing work that touches external services, the filesystem, or time
-should ask for deterministic mock coverage in its acceptance criteria.
+Before changing an active task's scope, inspect its run and coordinate with the
+worker/operator. Do not silently expand an admitted footprint or invalidate live
+work. Re-prepare changed scope before another admission. Preserve existing user
+choices and delivery evidence.
 
 ## Description template
 
+Use only the sections that help this task:
+
 ```markdown
-## Problem
-<what is broken, missing, or needs to change>
-## Why It Matters
-<user impact, operational impact, or engineering rationale>
-## Constraints / Notes
-- <important constraint>
+## Outcome
+<trigger/current behavior → observable desired behavior; supporting evidence>
+
+## Scope and prerequisites
+<what this task owns; prerequisite IDs and their supplied interfaces>
+<downstream work excluded here and how this slice is independently tested>
+
+## Constraints and decisions
+<settled choices, compatibility/authority limits, implementation discretion>
+
+## Acceptance
+<observable positive/negative behavior and the evidence the lane can produce>
 ```
 
-Exit: the task exists with a strong description, clear acceptance criteria, and
-— when filled — `context_files` naming only real modification targets.
+Example — retry-safe export submission:
+
+> A client retry after a lost reply currently starts a second export. Persist
+> one submission result per request ID and return it on retry. This task owns
+> the submission transaction and lookup API; it consumes the durable job store
+> from `<prerequisite-task-id>`. A later task owns the CLI retry loop. Prove this
+> slice with direct API fixtures: concurrent identical requests create one job;
+> a retry after a simulated lost reply returns that job; a changed payload with
+> the same ID is refused without another write. Preserve existing access checks.
+
+This names a deliverable and its proof without prescribing every implementation
+step or requiring the future CLI to exist first.

@@ -6,7 +6,7 @@ Use `ci_failure_sweep_pipeline` for CI discovery. Its current admission path
 files proposed repairs, runs pilot, and can promote its own warning-free,
 selector-backed tasks; it does not implement them. Inspect the resulting task
 and admission evidence rather than duplicating that work. See
-[workflows.md](../../orbit/references/workflows.md).
+[workflows.md](workflows.md).
 
 Before filing or dispatching a repair, compare the failing run/job and SHA
 with the current landing branch and prior fix PRs. An old CI failure can arrive
@@ -47,7 +47,7 @@ or configuration correction before another attempt.
 A live process is not stopped merely because a tool observation timed out.
 Re-poll the same run and inspect current process liveness. Conversely, a stale
 lock file alone does not prove a worker is alive. Follow
-[run-debugging.md](../../orbit/references/run-debugging.md) before process-level
+[run-debugging.md](run-debugging.md) before process-level
 intervention, and never weaken protected-path policies to make a retry pass.
 
 ## A PR exists but completion failed
@@ -96,6 +96,6 @@ only an intermediate result. On the owning host:
    Restore temporarily changed routines/settings unless the user made the
    change permanent.
 
-See [maintenance.md](../../orbit/references/setup/maintenance.md) for supported
+See [maintenance.md](../../orbit-setup/references/maintenance.md) for supported
 sync/upgrade mechanics. If capability or authority is missing, report it;
 never create a shadow store or edit runtime state directly to bypass the gap.

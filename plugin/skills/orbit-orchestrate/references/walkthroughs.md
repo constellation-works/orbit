@@ -23,7 +23,7 @@ A valid prepared task can wait in backlog on its dependency. For a live lock
 holder, observe its run and keep independent work moving. Do not remove
 selectors or dependencies to bypass admission. Release a stale reservation
 only after confirming the owning run is inactive, through the supported lock
-operation described in [common-failures.md](../../orbit/references/common-failures.md).
+operation described in [common-failures.md](common-failures.md).
 
 ## Missing operator capability
 

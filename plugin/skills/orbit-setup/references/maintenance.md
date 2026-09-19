@@ -66,7 +66,7 @@ orbit task locks release <reservation_id>  # operator escape hatch
 Release only after confirming the holding task is genuinely inactive, and only
 through this surface — never by editing the store. The full diagnostic sequence
 for a reservation blocking a run is in
-[common-failures.md](../common-failures.md).
+[common-failures.md](../../orbit-orchestrate/references/common-failures.md).
 
 ## Managed resources and upgrades
 
@@ -178,7 +178,7 @@ orbit log tail --level warn --since 1h
 ```
 
 For diagnosing a host-level incident rather than tuning retention, see
-[operational-logs.md](../operational-logs.md).
+[operational-logs.md](operational-logs.md).
 
 ## Search indexes
 
@@ -189,7 +189,7 @@ orbit docs index                           # doc corpus embeddings
 ```
 
 Both are idempotent and safe to re-run. Reindex after bulk imports, large doc
-moves, or a restore. → [search.md](../search.md)
+moves, or a restore. → [search.md](../../orbit/references/search.md)
 
 ## What is evidence and must not be edited
 

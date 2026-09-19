@@ -2,7 +2,7 @@
 
 Orbit's execution layer. This covers the mechanics; for deciding *what* to
 dispatch see [orchestration.md](orchestration.md), and for scheduling it see
-[automation.md](setup/automation.md).
+[automation.md](../../orbit-setup/references/automation.md).
 
 ## Concepts
 
@@ -71,7 +71,7 @@ not a rewrite of failed history.
 | `ci_failure_sweep_pipeline` | File GitHub Actions findings as proposed, pilot them, and admit only current warning-free repairs to backlog; never implements them. |
 | `dependabot_alert_sweep_pipeline` | Collect Dependabot/code/secret-scanning evidence and file remediation tasks. |
 | `worktree_gc_pipeline` | Reclaim settled worktrees. |
-| `agent_invoke_pipeline` | One operator-admitted agent invocation for exploration or debugging, run on the host outside the executor sandbox. Submit it with `orbit run agent` / `orbit_agent_invoke`, never `orbit run job`: it needs a per-invocation operator admission — the same test locally and over SSH — changes no task, and is not resumable. See [tool-surface.md](tool-surface.md). |
+| `agent_invoke_pipeline` | One operator-admitted agent invocation for exploration or debugging, run on the host outside the executor sandbox. Submit it with `orbit run agent` / `orbit_agent_invoke`, never `orbit run job`: it needs a per-invocation operator admission — the same test locally and over SSH — changes no task, and is not resumable. See [tool-surface.md](../../orbit/references/tool-surface.md). |
 
 Inspect any of them with `orbit job show <id>` before invoking — the step list is
 the contract.
@@ -248,7 +248,7 @@ group and the safe termination order.
 - A known failure signature, once the failing step is identified →
   [common-failures.md](common-failures.md).
 - Host-level incident, service warning, or missing run output →
-  [operational-logs.md](operational-logs.md).
+  [operational-logs.md](../../orbit-setup/references/operational-logs.md).
 
 **Safety, up front:**
 
@@ -262,7 +262,7 @@ group and the safe termination order.
 - Task state and run state are the durable handoff. Never parse agent prose in
   their place.
 - If Orbit's own tooling or diagnostics mislead you, record friction
-  ([friction.md](friction.md)).
+  ([friction.md](../../orbit/references/friction.md)).
 
 ## Custom jobs and resource overrides
 

@@ -14,17 +14,17 @@ then use
 required outcome), `plan` (author one if blank or placeholder), `context_files`,
 and `status`.
 
-Also read `comments` (chronological, each with `by` and `at`) before trusting
-the description. A description is written once at filing time and is never
-rewritten when an orchestrator later posts a refinement, so a comment that
-postdates the description always takes precedence over a "Suggested
-direction"/"Suggested fix" section still sitting in that description —
-implement the comment's direction, not the description's.
+Read `comments` (chronological, each with `by` and `at`) alongside the
+canonical description. An orchestrator or operator refinement posted after the
+description supersedes a stale "Suggested direction"/"Suggested fix" section
+still sitting in it: implement the comment's direction. An arbitrary comment is
+not authority by timestamp alone; resolve material contradictions before
+implementing, without reopening already settled decisions.
 
-Read each `file:` target with the provider-native file-read tool. For a `dir:`
-selector, do not call the file-read tool on the directory: after verifying it
-resolves beneath the workspace root, use `rg --files <directory>` to list it,
-then read its key files individually.
+Use `context_files` as the modification boundary, not a demand to ingest the
+whole repository before editing. Verify paths and inspect the interfaces needed
+for the next increment; for directories use `rg --files` to find those targets.
+Read enough of each affected file and its consumers to make a correct change.
 
 Then look for related work the author did not link. Treat historical documents
 as context, not authority over current requirements:
@@ -34,6 +34,11 @@ orbit tool run orbit.search --input '{"semantic":"<task-id>","limit":5,"model":"
 ```
 
 Non-blocking — skip it if nothing is relevant, or if the task has no vectors yet.
+
+For personal execution or an authorized takeover, check that the task's `crew`
+represents your configured crew; correct stale delegation metadata through the
+task tools. A managed worker follows its assigned run and must not reassign
+itself to evade the operator's crew choice. Keep `model` provenance separate.
 
 ## Step 2 — Plan
 
@@ -48,13 +53,14 @@ transitions to the pipeline. Direct execution below applies only when the user
 and repository policy authorize it; a technical lifecycle transition is not a
 substitute for human approval.
 
-For first-time pickup or resuming eligible work, use `orbit.task.update` with
+For authorized direct pickup (not an already-started managed activity), use `orbit.task.update` with
 `status: "in-progress"` and a `note`. It moves `proposed`, `backlog`, `someday`,
-or `blocked` → `in-progress` and records approval. Starting from `proposed`
-still requires a real plan:
+or `blocked` → `in-progress`; the transition records existing authorization, not
+a new grant. Supply a real plan when starting from `proposed`, `someday` or
+`blocked`:
 
 ```bash
-orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"in-progress","note":"<why work is starting or resuming>","model":"<agent-family>"}'
+orbit tool run orbit.task.update --input '{"id":"<task-id>","status":"in-progress","plan":"<implementation and validation steps>","note":"<authorized pickup>","model":"<agent-family>"}'
 ```
 
 `rejected` is not a pickup state. Reconsider it only when a reviewer or other
@@ -73,14 +79,16 @@ Verify transitive impact with `rg` or by reading callers directly. Run the
 repo-approved verification commands, honoring repo instructions if tests are
 forbidden.
 
-**Keep `context_files` current.** If implementation surfaces a file outside the
-original list, append its canonical selector via `orbit.task.update` as soon as
-you discover it — don't wait until handoff. Conflict detection reads live from
-in-flight tasks, not only from reservation records, so an up-to-date list is how
-a worker excludes others from files it owns. Reservation itself is the system's
-job: there is no worker-callable lock tool, and none should be reached for. One
-caveat — an added entry binds only reservations requested *after* the update; it
-cannot retroactively revoke one a concurrent run already holds.
+Implement in testable increments. Breadth or an ordinary missing API is not a
+blocker when the task owns that outcome. A real authority refusal, unavailable
+prerequisite or unresolved product decision is: record the specific evidence and
+what is needed to proceed. A clean baseline check is not feature validation.
+
+**Keep `context_files` current.** Declare newly identified modification targets
+through the task tools before editing, within the approved scope and activity
+rules. A declaration does not acquire a lock or expand an already frozen claim
+footprint. If the admitted boundary cannot cover the change, request coordinated
+re-preparation; do not bypass the conflict or claim guard.
 
 **In a linked pipeline worktree, never use positional `git stash` /
 `git stash pop`.** Refs and the stash list are repository-global, so a positional

@@ -1,6 +1,7 @@
 # Setting Orbit up
 
-Get from nothing to a workspace where tasks, search, and dispatch all work. Use
+Get to a workspace supporting the user's requested workflow. Task tracking and
+search can stand alone; configure execution only when wanted. Use
 this when `.orbit/` is absent, when the user is still deciding whether to adopt
 Orbit, or when a second machine or repository needs onboarding.
 
@@ -11,7 +12,7 @@ or a locally modified resource catalog matches the installed binary.
 
 ## Step 1 — Detect current state
 
-Run in parallel; the answers pick the branch:
+Inspect the requested machine/repository; reuse existing setup rather than reinstalling:
 
 ```bash
 command -v orbit          # is the binary on PATH?
@@ -19,7 +20,8 @@ test -d .orbit            # is this workspace initialized?
 test -d ~/.orbit          # is this machine initialized?
 ```
 
-Report all three before proposing any install.
+Use these results and the user's goal to choose the needed steps. Skip installation
+when the existing executable is suitable; skip MCP registration if no agent client is wanted.
 
 ## Step 2 — Install
 
@@ -43,7 +45,7 @@ follow the published README for toolchain and build instructions if that is
 what the user requested. Respect the user's install destination and existing
 installation; ask only for missing choices or required host permissions.
 
-Before dispatch, verify an authenticated supported agent CLI on the execution
+Only when agent execution is requested, verify an authenticated supported agent CLI on the execution
 host. PR mode also needs an authenticated `gh` client. On Linux, `/usr/bin/bwrap`
 must pass its namespace/mount probe; Ubuntu's AppArmor restrictions may require
 the packaged narrow Bubblewrap profile. Complete the [Linux sandbox setup](linux-sandbox.md)
@@ -82,7 +84,7 @@ orbit init --non-interactive --host-name <name> --task-prefix <PREFIX>
 
 ## Step 4 — Initialize the workspace
 
-From the repository root:
+For agent-assisted PR delivery, from the repository root (omit `--mcp` if no client registration is wanted):
 
 ```bash
 orbit workspace init --base-branch <integration-branch> --ship-mode pr --mcp
@@ -164,32 +166,34 @@ orbit doctor
 ```
 
 `orbit doctor` is the real check — it inspects config, database, disk, indexes,
-locks, and runs. Report its output. If anything fails, fix it before handing
-off; do not declare success on a passing `--version` alone.
+locks, and runs. Report its output. Distinguish failures affecting the requested workflow from optional capabilities
+not configured. Resolve relevant failures or report the specific blocker; a
+passing `--version` alone is not sufficient.
 
-Optional, and only with explicit operator consent — semantic search needs a
-local companion downloaded:
+If semantic search is requested, its local companion requires a model download.
+Use existing authorization or confirm this addition before downloading:
 
 ```bash
 orbit semantic install
 orbit semantic stats
 ```
 
-Lexical search works without it. → [search.md](../search.md)
+Lexical search works without it. → [search.md](../../orbit/references/search.md)
 
 ## Step 6 — Hand off
 
-- **First real task** — route through [task-authoring.md](../task-authoring.md).
-  Do not silently author it; the quality gates are worth the user seeing.
+- **First real task** — route through [task-authoring.md](../../orbit/references/task-authoring.md).
+  Create it when requested; setup alone does not authorize unrelated work.
 - **Feature tour** — read the README's feature section and summarize against the
   user's stated goal, not generically.
 
 ## What to set up next
 
-In rough order of payoff, once the first task has landed:
+Offer only additions relevant to the user's goal; none is required merely because
+initial setup succeeded:
 
 1. **A docs corpus** — register the markdown the repo already has, so agents
-   retrieve by concept instead of filename. → [docs-corpus.md](../docs-corpus.md)
+   retrieve by concept instead of filename. → [docs-corpus.md](../../orbit/references/docs-corpus.md)
 2. **Crews and base branch** — point `workflow.base_branch` at the branch task
    PRs should target, and set a default crew. → [configuration.md](configuration.md)
 3. **The scheduler** — host clock, then routines, in the documented order.
@@ -208,4 +212,4 @@ In rough order of payoff, once the first task has landed:
 - Don't pick a task prefix casually on a second machine. It cannot be changed.
 - Don't enable every seeded routine at once. Enable worktree GC before, not
   after, scheduling ship traffic.
-- Don't run `orbit semantic install` without consent — it downloads a model.
+- A semantic model download needs authorization; lexical search remains available without it.

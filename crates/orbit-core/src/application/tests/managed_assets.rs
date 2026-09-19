@@ -137,6 +137,58 @@ fn make_writable(path: &Path) {
 
 #[cfg(unix)]
 #[test]
+fn skill_split_retires_old_paths_preserves_edits_and_seeds_new_routers() {
+    let root = tempdir().expect("create tempdir");
+    let skills = root.path().join("skills");
+    let seed = || {
+        super::super::skill::seed_default_skills(&skills, root.path(), false).expect("seed skills")
+    };
+    seed();
+    let old_paths = [
+        "orbit/references/setup/first-run.md",
+        "orbit/references/setup/maintenance.md",
+    ];
+    for name in old_paths {
+        let path = skills.join(name);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("create old tree");
+        std::fs::write(&path, "old shipped guidance\n").expect("write previous asset");
+        add_managed_manifest_entry(&skills, name, "old shipped guidance\n");
+    }
+    let customized = "operator's upgrade procedure\n";
+    std::fs::write(skills.join(old_paths[1]), customized).expect("customize old reference");
+
+    let result = seed();
+    assert_eq!(result.retired, 2);
+    assert_eq!(result.warnings.len(), 1);
+    for old in old_paths {
+        assert!(!skills.join(old).exists(), "old active path retired: {old}");
+    }
+    let preserved = root
+        .path()
+        .join(".retired-managed/skills")
+        .join(old_paths[1]);
+    assert_eq!(
+        std::fs::read_to_string(preserved).expect("preserved edit"),
+        customized
+    );
+    for entry in [
+        "orbit/SKILL.md",
+        "orbit-orchestrate/SKILL.md",
+        "orbit-setup/SKILL.md",
+        "orbit-setup/references/first-run.md",
+        "orbit-setup/references/maintenance.md",
+    ] {
+        assert!(skills.join(entry).is_file(), "new catalog entry: {entry}");
+    }
+    let again = seed();
+    assert_eq!(again.retired, 0);
+    assert!(
+        again.warnings.is_empty(),
+        "steady-state seeding is idempotent"
+    );
+}
+
+#[test]
 fn steady_state_reconcile_skips_asset_and_manifest_writes() {
     let root = tempdir().expect("create tempdir");
     let global_root = root.path().join("global");
@@ -482,11 +534,11 @@ mod artifacts {
             "reference files are managed too: {keys:?}"
         );
         assert!(
-            keys.contains(&"orbit/references/setup/first-run.md"),
+            keys.contains(&"orbit-setup/references/first-run.md"),
             "references nest, so a manifest key is a full relative path: {keys:?}"
         );
         assert!(
-            keys.contains(&"orbit/references/setup/linux-sandbox.md"),
+            keys.contains(&"orbit-setup/references/linux-sandbox.md"),
             "Linux sandbox setup is an embedded managed reference: {keys:?}"
         );
     }
@@ -557,8 +609,8 @@ mod artifacts {
             .expect("inspect artifacts");
         let skill_health = health_of(&report, ArtifactKind::Skill);
         assert_eq!(
-            skill_health.scanned, 4,
-            "two healthy skills plus two residues"
+            skill_health.scanned, 5,
+            "three healthy skills plus two residues"
         );
         for residue in [&untracked_dir, &tracked_dir] {
             let name = residue

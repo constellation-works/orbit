@@ -24,7 +24,9 @@ large provider logs. Keep those logs for targeted failure diagnosis.
 
 ## Search, then author
 
-Search open and closed tasks before creating work. Use `orbit_search` with
+Search open and closed tasks before filing findings from sweeps, CI, review or
+curation. For direct user requests, follow the task-authoring guidance rather
+than adding an unnecessary discovery step. Use `orbit_search` with
 `kind: "task"`, `all: true`, the explicit workspace, and concrete problem
 terms; inspect likely matches and their merge evidence. Search descriptions,
 not a new task ID that has no embedding yet.
@@ -40,8 +42,9 @@ See [task-authoring.md](../../orbit/references/task-authoring.md).
 Create as `proposed` with required `complexity` (`low`, `medium`, or `hard`).
 Use the current session's preparation authorization; task creation alone does
 not grant implementation or completion. Leave `context_files` empty unless
-modification targets are already verified. Selectors identify existing
-modification/deletion targets, not background reading or future files.
+modification targets are already verified. Selectors identify modification/deletion
+targets and known creation intent (using supported missing-context input), not
+background reading or invented paths.
 
 ## Select an allowed crew
 
@@ -50,6 +53,11 @@ Persist the selected task crew, using the workspace's complexity mapping;
 record a reason for a deliberate exception. Do not silently remap tasks or
 undo an operator's crew change. Reuse existing authorization rather than
 asking for the same permission again.
+
+If you take over implementation personally, assign your own configured crew
+before continuing and record the takeover; do not retain the delegation choice
+as though that crew performed the work. `orchestrator` remains supervision
+attribution and does not correct a stale execution crew.
 
 Task crew and system-activity crew are different. Inspect the effective job
 and resolved provider/model, not just its crew label. The shipped
@@ -110,7 +118,7 @@ persists context selectors. Read applied task IDs and partition outcomes from
 `orbit run show <run-id> --json`, then read the tasks themselves. A failed
 pilot may still have applied independent valid partitions. Do not rerun all
 of them or infer success from the agent's prose. See
-[orchestration.md](../../orbit/references/orchestration.md) for source
+[orchestration.md](orchestration.md) for source
 preparation, partial apply, and checkpoint behavior.
 
 An enabled routine may already prepare tasks. Inspect its schedule and live

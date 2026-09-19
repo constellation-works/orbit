@@ -107,7 +107,7 @@ Agents and auto-tasks keep filing work; these are the ways it gets shipped witho
 
 ### Agent plugins
 
-Use a plugin to attach Orbit's MCP tools and `orbit` skill to one agent without the CLI on `$PATH`; use the CLI install for the dashboard and cross-agent workspace setup. All three load `plugin/skills/orbit` and launch the npm CLI pinned to that release (`npx -y @orbit-tools/cli@<version> mcp serve`). Cursor's public marketplace listing is a separate human-reviewed catalog update; a git tag does not publish it.
+Use a plugin to attach Orbit's MCP tools and skills to one agent without the CLI on `$PATH`; use the CLI install for the dashboard and cross-agent workspace setup. All three load the bundled skills under `plugin/skills/` and launch the npm CLI pinned to that release (`npx -y @orbit-tools/cli@<version> mcp serve`). Cursor's public marketplace listing is a separate human-reviewed catalog update; a git tag does not publish it.
 
 ```bash
 # Claude Code
@@ -164,7 +164,13 @@ The companion is released for macOS arm64 and Linux x86_64/aarch64 (glibc >= 2.3
 
 ## Agent Skills
 
-`orbit workspace init` seeds the `orbit` skill under `~/.orbit/skills/` and symlinks it into `~/.claude/skills/` and `~/.agents/skills/`, so Claude Code, Codex, and Gemini CLI discover it with no per-agent configuration. Its `SKILL.md` routes to on-demand references for working through Orbit (tasks, search, friction, `orbit run`, debugging) and setting it up (crews, routines, auto-tasks, GC, remote access). `orbit skill doctor` reports drift from the shipped copy; edit the seeded `SKILL.md` to customize it.
+`orbit workspace init` seeds three skills under `~/.orbit/skills/` and links them for supported agent discovery:
+
+- **`orbit`** — everyday task creation, execution, review, search and evidence.
+- **`orbit-orchestrate`** — backlog preparation, dispatch, supervision and run recovery.
+- **`orbit-setup`** — configure a user's machine and repositories for their needs, from task tracking to scheduled or remote work.
+
+Each entrypoint loads only the relevant references on demand. `orbit skill doctor` reports drift from the shipped copies; managed synchronization preserves local modifications and reports conflicts.
 
 ---
 
