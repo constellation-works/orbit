@@ -1,7 +1,7 @@
 //! Run lifecycle: detail, cancel, replay, events, logs.
 
-use crate::state::Ws;
-use axum::extract::{Path, Query};
+use crate::state::{DashboardState, Ws};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_AUTO_DRAIN_COMPLETE;
@@ -194,6 +194,7 @@ fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
 /// the ones visible now, so it is gated the same way `auto_task.mint`'s
 /// unconditional mint is.
 pub(super) async fn auto_drain_workflow_action(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     body: Option<Json<AutoDrainBody>>,
 ) -> Response {
@@ -203,7 +204,7 @@ pub(super) async fn auto_drain_workflow_action(
         Err(message) => return bad_request(message),
     };
     let completion = if body.complete {
-        match authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE) {
+        match authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, state.operator_session()) {
             Ok(_) => orbit_core::CompletionPolicy::Done,
             Err(denial) => return authorization_denied(denial),
         }
@@ -250,6 +251,7 @@ pub(super) struct AutoDrainReadinessQuery {
 /// snapshot `orbit run readiness` prints) rather than a dashboard-local
 /// recomputation of eligibility.
 pub(super) async fn auto_drain_readiness(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Query(query): Query<AutoDrainReadinessQuery>,
 ) -> Response {
@@ -264,7 +266,10 @@ pub(super) async fn auto_drain_readiness(
             if let Some(object) = payload.as_object_mut() {
                 object.insert(
                     "controls_authorized".to_string(),
-                    Value::Bool(authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE).is_ok()),
+                    Value::Bool(
+                        authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, state.operator_session())
+                            .is_ok(),
+                    ),
                 );
             }
             Json(payload).into_response()

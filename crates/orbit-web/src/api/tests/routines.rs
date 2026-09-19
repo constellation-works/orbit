@@ -13,7 +13,8 @@ use tower::ServiceExt;
 
 use super::super::router;
 use super::super::routines::{
-    clock_json, duration_ms, fire_json, fire_ok, next_evaluation_json, unavailable_clock_json,
+    authorized_caller, clock_json, duration_ms, fire_json, fire_ok, next_evaluation_json,
+    unavailable_clock_json,
 };
 use super::test_support::body_json;
 use crate::state::DashboardState;
@@ -405,7 +406,7 @@ async fn routine_and_clock_capabilities_use_each_canonical_operation() {
                     &DASHBOARD_CLOCK_SERVICE,
                     &DASHBOARD_CLOCK_CADENCE,
                 ] {
-                    let capability = action_capability(operation);
+                    let capability = action_capability(operation, false);
                     assert_eq!(capability["authorized"], operator);
                     if operator {
                         assert!(capability["reason"].is_null());
@@ -422,6 +423,99 @@ async fn routine_and_clock_capabilities_use_each_canonical_operation() {
         )
         .await;
     }
+}
+
+#[test]
+fn operator_session_grants_without_tty_or_override() {
+    use orbit_common::governance::authorization::DASHBOARD_ROUTINE_TOGGLE;
+
+    let _env = orbit_common::test_env::scoped([
+        (OPERATOR_OVERRIDE_ENV, None),
+        ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
+        ("ORBIT_AGENT_MODEL", Some("orbit-web-test")),
+    ]);
+    assert!(
+        authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, false).is_err(),
+        "agent envelope without --operator must remain unauthorized"
+    );
+    assert!(
+        authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, true).is_ok(),
+        "--operator must grant the session regardless of TTY or ORBIT_OPERATOR"
+    );
+}
+
+fn empty_host_state() -> (tempfile::TempDir, DashboardState) {
+    let temp = tempfile::tempdir().expect("temp global root");
+    ensure_host_identity(temp.path(), || {
+        Ok(NewHostIdentity {
+            host_id: "dashboard-test".to_string(),
+            task_prefix: "DA".to_string(),
+        })
+    })
+    .expect("seed host identity");
+    let state = DashboardState::global(temp.path().to_path_buf(), Vec::new(), None);
+    (temp, state)
+}
+
+#[tokio::test]
+async fn operator_session_enables_operations_controls_on_the_list() {
+    let (_temp, state) = empty_host_state();
+    state.set_operator_session(true);
+    let response = with_caller_env(
+        [
+            (OPERATOR_OVERRIDE_ENV, None),
+            ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
+            ("ORBIT_AGENT_MODEL", Some("orbit-web-test")),
+        ],
+        routine_request(state, "/routines", None),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["controls_authorized"], true);
+    assert!(
+        json["session_explanation"]
+            .as_str()
+            .expect("explanation")
+            .contains("operator authority"),
+        "{}",
+        json["session_explanation"]
+    );
+    assert!(
+        !json["session_explanation"]
+            .as_str()
+            .expect("explanation")
+            .contains("ORBIT_OPERATOR"),
+        "non-operator copy must not appear when the session is authorized"
+    );
+}
+
+#[tokio::test]
+async fn session_explanation_names_serve_operator_not_env_override() {
+    let (_temp, state) = empty_host_state();
+    let response = with_caller_env(
+        [
+            (OPERATOR_OVERRIDE_ENV, None),
+            ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
+            ("ORBIT_AGENT_MODEL", Some("orbit-web-test")),
+        ],
+        routine_request(state, "/routines", None),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    let explanation = json["session_explanation"].as_str().expect("explanation");
+    assert!(
+        explanation.contains("orbit web serve --operator"),
+        "{explanation}"
+    );
+    assert!(explanation.contains("orbit web connect"), "{explanation}");
+    assert!(
+        !explanation.contains("ORBIT_OPERATOR=1"),
+        "remote users cannot act on an env restart: {explanation}"
+    );
 }
 
 #[tokio::test]

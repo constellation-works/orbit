@@ -34,7 +34,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
@@ -348,6 +348,10 @@ struct StateInner {
     /// Per-server memo for `/api/audit/summary`. Keyed by runtime identity
     /// and the raw `since` window so relative cutoffs (`24h`) still hit.
     audit_summary: AuditSummaryMemo,
+    /// `orbit web serve --operator` (and `orbit web connect` by default):
+    /// stamp operator onto the dashboard session envelope regardless of TTY
+    /// or `ORBIT_OPERATOR`.
+    operator: AtomicBool,
     /// Test seam: paused just before a freshly-built runtime is published.
     #[cfg(test)]
     on_pre_publish: Mutex<Option<PrePublishHook>>,
@@ -648,6 +652,7 @@ impl DashboardState {
                 // Next successful refresh allocates INITIAL_GENERATION + 1.
                 generation_counter: AtomicU64::new(INITIAL_GENERATION + 1),
                 audit_summary: AuditSummaryMemo::new(),
+                operator: AtomicBool::new(false),
                 #[cfg(test)]
                 on_pre_publish: Mutex::new(None),
                 #[cfg(test)]
@@ -675,6 +680,18 @@ impl DashboardState {
     /// Process-local `/api/audit/summary` memo for this server instance.
     pub(crate) fn audit_summary_memo(&self) -> &AuditSummaryMemo {
         &self.inner.audit_summary
+    }
+
+    /// Whether this server was started with `--operator`, granting operator
+    /// capability through the session envelope (independent of TTY / env).
+    pub(crate) fn operator_session(&self) -> bool {
+        self.inner.operator.load(Ordering::Relaxed)
+    }
+
+    /// Record the `--operator` flag after construction. Set once at boot,
+    /// before the server accepts requests.
+    pub(crate) fn set_operator_session(&self, enabled: bool) {
+        self.inner.operator.store(enabled, Ordering::Relaxed);
     }
 
     /// Observe the native host clock. Production retains the direct native

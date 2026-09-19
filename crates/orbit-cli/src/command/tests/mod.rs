@@ -383,6 +383,36 @@ fn cli_parses_web_connect() {
             WebSubcommand::Connect(args) => {
                 assert_eq!(args.ssh_host, "my-host");
                 assert!(args.no_open);
+                assert!(!args.no_operator);
+            }
+            WebSubcommand::Serve(_) => panic!("expected connect"),
+        },
+        _ => panic!("expected top-level web command"),
+    }
+}
+
+#[test]
+fn cli_parses_web_serve_operator() {
+    let cli = Cli::parse_from(["orbit", "web", "serve", "--operator", "--no-open"]);
+    match cli.command {
+        Commands::Web(command) => match command.command {
+            WebSubcommand::Serve(args) => {
+                assert!(args.operator);
+                assert!(args.no_open);
+            }
+            WebSubcommand::Connect(_) => panic!("expected serve"),
+        },
+        _ => panic!("expected top-level web command"),
+    }
+}
+
+#[test]
+fn cli_parses_web_connect_no_operator() {
+    let cli = Cli::parse_from(["orbit", "web", "connect", "my-host", "--no-operator"]);
+    match cli.command {
+        Commands::Web(command) => match command.command {
+            WebSubcommand::Connect(args) => {
+                assert!(args.no_operator);
             }
             WebSubcommand::Serve(_) => panic!("expected connect"),
         },

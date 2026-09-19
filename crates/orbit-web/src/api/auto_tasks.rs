@@ -73,9 +73,13 @@ pub(super) async fn list_auto_tasks(
         let workspace = workspace.clone();
         move || {
             Ok(match resolve_workspace(&state, &workspace) {
-                Ok((workspace_name, runtime)) => {
-                    list_json(&runtime, &workspace, &workspace_name, generated_at)
-                }
+                Ok((workspace_name, runtime)) => list_json(
+                    &runtime,
+                    &workspace,
+                    &workspace_name,
+                    generated_at,
+                    state.operator_session(),
+                ),
                 Err(reason) => read_only_envelope(generated_at, Some(&workspace), &reason),
             })
         }
@@ -101,7 +105,7 @@ pub(super) async fn toggle_auto_task(
         Ok(runtime) => runtime,
         Err(response) => return *response,
     };
-    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE) {
+    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
             record_operation_audit(
@@ -228,7 +232,7 @@ pub(super) async fn mint_auto_task(
         )
             .into_response();
     }
-    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_MINT) {
+    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_MINT, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
             record_operation_audit(
@@ -359,6 +363,7 @@ fn list_json(
     workspace: &str,
     workspace_name: &str,
     generated_at: DateTime<Utc>,
+    operator_session: bool,
 ) -> Value {
     let collection = collect_auto_tasks(&runtime.paths().local_dir);
     let cursor_load = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir));
@@ -378,16 +383,17 @@ fn list_json(
             )
         })
         .collect::<Vec<_>>();
-    let controls_authorized = authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE).is_ok()
-        && authorized_caller(&DASHBOARD_AUTO_TASK_MINT).is_ok();
+    let controls_authorized = authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE, operator_session)
+        .is_ok()
+        && authorized_caller(&DASHBOARD_AUTO_TASK_MINT, operator_session).is_ok();
     json!({
         "generated_at": generated_at.to_rfc3339(),
         "workspace": workspace,
         "workspace_name": workspace_name,
         "controls_authorized": controls_authorized,
         "capabilities": {
-            "auto_task_toggle": action_capability(&DASHBOARD_AUTO_TASK_TOGGLE),
-            "auto_task_mint": action_capability(&DASHBOARD_AUTO_TASK_MINT),
+            "auto_task_toggle": action_capability(&DASHBOARD_AUTO_TASK_TOGGLE, operator_session),
+            "auto_task_mint": action_capability(&DASHBOARD_AUTO_TASK_MINT, operator_session),
         },
         "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,

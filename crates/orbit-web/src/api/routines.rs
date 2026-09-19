@@ -18,7 +18,7 @@ use orbit_core::application::routines::{
 };
 use orbit_core::{AuditEventInsertParams, OrbitRuntime, RoutineFireRecord, RoutineFireState};
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::tool::ToolSessionContext;
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -66,6 +66,7 @@ pub(super) struct ClockControlRequest {
 /// `health: unknown` rather than HTTP 500.
 pub(super) async fn list_routine_health(State(state): State<DashboardState>) -> Response {
     let generated_at = Utc::now();
+    let operator_session = state.operator_session();
     match blocking("routine health", move || {
         let report = routine_statuses(state.global_root())?;
         let clock = match state.clock_status() {
@@ -76,7 +77,9 @@ pub(super) async fn list_routine_health(State(state): State<DashboardState>) -> 
     })
     .await
     {
-        Ok((report, clock)) => Json(report_json(&report, clock, generated_at)).into_response(),
+        Ok((report, clock)) => {
+            Json(report_json(&report, clock, generated_at, operator_session)).into_response()
+        }
         Err(response) => *response,
     }
 }
@@ -93,7 +96,7 @@ pub(super) async fn toggle_routine(
         Ok(workspace) => workspace,
         Err(rejection) => return rejection.into_response(),
     };
-    let caller = match authorized_caller(&DASHBOARD_ROUTINE_TOGGLE) {
+    let caller = match authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
             record_operation_audit(
@@ -224,7 +227,7 @@ pub(super) async fn control_clock(
         ClockAction::SetCadence => &DASHBOARD_CLOCK_CADENCE,
     };
     let operation = governed.id;
-    let caller = match authorized_caller(governed) {
+    let caller = match authorized_caller(governed, state.operator_session()) {
         Ok(caller) => caller,
         Err(denial) => {
             record_operation_audit(
@@ -355,21 +358,22 @@ pub(super) fn report_json(
     report: &RoutineStatusReport,
     clock: Value,
     generated_at: DateTime<Utc>,
+    operator_session: bool,
 ) -> Value {
     json!({
         "generated_at": generated_at.to_rfc3339(),
         "host_id": report.host_id,
         "machine_id": report.machine_id,
-        "controls_authorized": authorized_caller(&DASHBOARD_ROUTINE_TOGGLE).is_ok(),
+        "controls_authorized": authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, operator_session).is_ok(),
         "capabilities": {
-            "routine_toggle": action_capability(&DASHBOARD_ROUTINE_TOGGLE),
-            "clock_service": action_capability(&DASHBOARD_CLOCK_SERVICE),
-            "clock_cadence": action_capability(&DASHBOARD_CLOCK_CADENCE),
+            "routine_toggle": action_capability(&DASHBOARD_ROUTINE_TOGGLE, operator_session),
+            "clock_service": action_capability(&DASHBOARD_CLOCK_SERVICE, operator_session),
+            "clock_cadence": action_capability(&DASHBOARD_CLOCK_CADENCE, operator_session),
         },
-        "session_explanation": if authorized_caller(&DASHBOARD_ROUTINE_TOGGLE).is_ok() {
+        "session_explanation": if authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, operator_session).is_ok() {
             "Session access: this dashboard server has operator authority. Actions also check workspace and host selection. Mint creates a task without starting delivery; bounded-window submission has separate permissions."
         } else {
-            "Session access comes from the dashboard server. For deliberate operator access, restart it with ORBIT_OPERATOR=1 orbit web serve and its existing options, then reload this page. Opening a terminal does not authorize a running server. Bounded-window submission has separate permissions."
+            "Session access comes from the dashboard server. For operator access, start it with `orbit web serve --operator` (or `orbit web connect`, which does that by default) and reload this page. Opening a terminal does not authorize a running server. Bounded-window submission has separate permissions."
         },
         "clock": clock,
         "routines": report.statuses.iter().map(status_json).collect::<Vec<_>>(),
@@ -480,17 +484,26 @@ pub(super) fn explicit_workspace(
 
 pub(super) fn authorized_caller(
     operation: &'static GovernedOperation,
+    operator_session: bool,
 ) -> Result<CallerCapabilities, AuthorizationDenial> {
-    let caller = CallerCapabilities::resolve(&CallerEnvelope::from_process_env(
-        &ToolSessionContext::default(),
-    ));
+    let mut session = ToolSessionContext::default();
+    if operator_session {
+        session.effective_capabilities.insert(McpCapability::Agent);
+        session
+            .effective_capabilities
+            .insert(McpCapability::Operator);
+    }
+    let caller = CallerCapabilities::resolve(&CallerEnvelope::from_process_env(&session));
     authorize(operation, &caller)?;
     Ok(caller)
 }
 
 /// Project the same authorization decision enforced by the mutation endpoint.
-pub(super) fn action_capability(operation: &'static GovernedOperation) -> Value {
-    match authorized_caller(operation) {
+pub(super) fn action_capability(
+    operation: &'static GovernedOperation,
+    operator_session: bool,
+) -> Value {
+    match authorized_caller(operation, operator_session) {
         Ok(_) => json!({"authorized": true, "reason": null}),
         Err(denial) => json!({
             "authorized": false,

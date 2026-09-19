@@ -8,7 +8,8 @@
 
 use std::time::Instant;
 
-use crate::state::Ws;
+use crate::state::{DashboardState, Ws};
+use axum::extract::State;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
     DASHBOARD_OPERATION_REVOKE, DASHBOARD_OPERATION_STOP, GovernedOperation,
@@ -37,13 +38,19 @@ pub(super) struct GrantControlBody {
 
 /// `GET /operation/explain?workspace=<id>` — the effective policy, authority,
 /// caps, and limiting reasons, plus whether this caller may stop or revoke.
-pub(super) async fn explain_operation(Ws(runtime): Ws) -> Response {
+pub(super) async fn explain_operation(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+) -> Response {
     match blocking("operation explain", move || runtime.explain_operation(None)).await {
         Ok(mut payload) => {
             if let Some(object) = payload.as_object_mut() {
                 object.insert(
                     "controls_authorized".to_string(),
-                    Value::Bool(authorized_caller(&DASHBOARD_OPERATION_STOP).is_ok()),
+                    Value::Bool(
+                        authorized_caller(&DASHBOARD_OPERATION_STOP, state.operator_session())
+                            .is_ok(),
+                    ),
                 );
             }
             Json(payload).into_response()
@@ -54,15 +61,21 @@ pub(super) async fn explain_operation(Ws(runtime): Ws) -> Response {
 
 /// `POST /operation/stop?workspace=<id>` — stop new admissions under a grant.
 pub(super) async fn stop_operation_action(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     body: Option<Json<GrantControlBody>>,
 ) -> Response {
     let Json(body) = body.unwrap_or_default();
-    let caller =
-        match authorize_control(&runtime, &DASHBOARD_OPERATION_STOP, "operation.stop", &body) {
-            Ok(caller) => caller,
-            Err(response) => return *response,
-        };
+    let caller = match authorize_control(
+        &runtime,
+        &DASHBOARD_OPERATION_STOP,
+        "operation.stop",
+        &body,
+        state.operator_session(),
+    ) {
+        Ok(caller) => caller,
+        Err(response) => return *response,
+    };
     let grant_id = body.grant_id.clone();
     let reason = body.reason.clone();
     let expected_revision = body.expected_revision;
@@ -91,6 +104,7 @@ pub(super) async fn stop_operation_action(
 
 /// `POST /operation/revoke?workspace=<id>` — hard-revoke a grant.
 pub(super) async fn revoke_operation_action(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     body: Option<Json<GrantControlBody>>,
 ) -> Response {
@@ -100,6 +114,7 @@ pub(super) async fn revoke_operation_action(
         &DASHBOARD_OPERATION_REVOKE,
         "operation.revoke",
         &body,
+        state.operator_session(),
     ) {
         Ok(caller) => caller,
         Err(response) => return *response,
@@ -144,6 +159,7 @@ fn authorize_control(
     governed: &'static GovernedOperation,
     operation: &str,
     body: &GrantControlBody,
+    operator_session: bool,
 ) -> Result<orbit_common::governance::authorization::CallerCapabilities, Box<Response>> {
     let workspace = runtime.workspace_id().unwrap_or_default();
     let target = body
@@ -155,7 +171,7 @@ fn authorize_control(
         "reason": body.reason,
         "expected_revision": body.expected_revision,
     });
-    match authorized_caller(governed) {
+    match authorized_caller(governed, operator_session) {
         Ok(caller) => Ok(caller),
         Err(denial) => {
             record_operation_audit(
