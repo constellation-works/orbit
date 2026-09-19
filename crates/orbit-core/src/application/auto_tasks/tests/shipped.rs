@@ -138,7 +138,7 @@ fn repository_definitions_all_parse() {
         let expected = match stem {
             "release-prep" => TaskComplexity::Low,
             "code-review" | "doc-duties" | "friction-curation" | "model-price-audit"
-            | "qa-sweep" => TaskComplexity::Medium,
+            | "qa-sweep" | "skill-validation" => TaskComplexity::Medium,
             "ci-failure-remediation"
             | "delivery-code-review"
             | "delivery-qa"
