@@ -38,13 +38,13 @@ spec:
         type: boolean
         description: >
           Treat a clean empty stage as `skipped_no_diff_expected` even when
-          the task does not carry the no-diff-expected tag. Used by
-          `epic_pipeline` so a no-op epic does not fail commit.
+          the task does not carry the no-diff-expected tag, so a caller that
+          may legitimately produce no diff does not fail commit.
       allow_moved_head:
         type: boolean
         description: >
-          Allow HEAD to have moved past the pinned `base_sha` (child merges
-          into an epic branch). A clean moved HEAD is `already_committed`
+          Allow HEAD to have moved past the pinned `base_sha`, as a stacked
+          local merge does. A clean moved HEAD is `already_committed`
           rather than `skipped_no_diff_expected`, so delivery still runs.
   output_schema_json:
     type: object

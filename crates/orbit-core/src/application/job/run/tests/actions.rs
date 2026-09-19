@@ -592,8 +592,12 @@ fn cancelling_a_waiting_parent_cascades_to_its_blocking_child_and_keeps_the_link
 #[test]
 fn cancelling_a_parent_leaves_its_detached_child_running() {
     let (_root, runtime) = test_runtime();
-    let (parent, child) =
-        parent_waiting_on_child(&runtime, "workspace_auto_pipeline", "epic_pipeline", false);
+    let (parent, child) = parent_waiting_on_child(
+        &runtime,
+        "workspace_auto_pipeline",
+        "task_auto_pipeline",
+        false,
+    );
 
     runtime
         .cancel_job_run_with_context(&parent.run_id, "operator", "cli")

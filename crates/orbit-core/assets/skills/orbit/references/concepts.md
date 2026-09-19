@@ -45,8 +45,9 @@ diagnostics — and does not.
 plan, `context_files` selectors naming what it will modify, a lifecycle status,
 and a full history. IDs are allocated by the store; never invented.
 
-**Epic** — a task with descendants, shipped through a pipeline that gives the
-whole family one worktree and one branch, instead of one per child.
+**Epic tag** — a size hint on one large task: work a top-tier crew takes on
+whole. Crew selection reads it; admission ignores it, and a tagged task ships as
+an ordinary leaf on its own declared context.
 
 **Publication** — an explicitly published, validated task snapshot in a
 dedicated Git repository. It has source/workspace/authority identity, a

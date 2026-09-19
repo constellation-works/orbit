@@ -106,9 +106,11 @@ impl WorktreeIdentity {
         engine_run_id: Option<&str>,
     ) -> Result<Self, OrbitError> {
         let task_ids = task_ids_from_input(input)?;
-        // The stored epic_pipeline input is the one worktree-owning shape
-        // whose task and naming fields are supplied to the nested worktree
-        // step rather than persisted on the run itself.
+        // Historical decoding only [ORB-12491]: `epic_pipeline` is retired and
+        // nothing emits this shape any more, but its stored inputs named the
+        // worktree through `epic_task_id` rather than persisting `run_id` on
+        // the run itself. GC re-derives identities from stored run records, so
+        // dropping this would strand every worktree an epic run left behind.
         let epic_run_id =
             input_string_field(input, "epic_task_id").map(|task_id| format!("epic-{task_id}"));
         let run_id = input_string_field(input, "run_id")
@@ -179,6 +181,9 @@ fn task_ids_from_input(input: &Value) -> Result<Vec<String>, OrbitError> {
         }
     }
 
+    // Historical decoding only, alongside the `epic-` run token above: a
+    // retired `epic_pipeline` run record names its task this way and GC must
+    // still recognize the worktree it left behind [ORB-12491].
     if let Some(epic_task_id) = input_string_field(input, "epic_task_id") {
         return Ok(vec![epic_task_id]);
     }

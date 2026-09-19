@@ -26,9 +26,9 @@ enum WorkspaceAutoScenario {
     KeepsDispatching,
     /// `invoke_detached` fails before a durable child exists.
     DispatchFailure,
-    /// One iteration offering a single leaf *and* an epic root, so both
-    /// detached dispatch shapes can be inspected in one run [ORB-11242].
-    LeafAndEpic,
+    /// One iteration offering a single leaf, so the detached dispatch shape
+    /// can be inspected in one run [ORB-11242].
+    SingleLeaf,
     /// The classifier itself fails.
     ClassifierFailure,
 }
@@ -74,7 +74,7 @@ impl<'a> ScriptedWorkspaceAutoHost<'a> {
             }
             WorkspaceAutoScenario::KeepsDispatching => vec!["ORB-LATER"],
             WorkspaceAutoScenario::DispatchFailure => vec!["ORB-DISPATCH-BROKEN"],
-            WorkspaceAutoScenario::LeafAndEpic => vec!["ORB-LEAF"],
+            WorkspaceAutoScenario::SingleLeaf => vec!["ORB-LEAF"],
             WorkspaceAutoScenario::ClassifierFailure => {
                 unreachable!("classifier failure returns before building a classification")
             }
@@ -86,16 +86,11 @@ impl<'a> ScriptedWorkspaceAutoHost<'a> {
                 .map(|task_id| json!({ "task_ids": [task_id] }))
                 .collect::<Vec<_>>(),
             "has_leaves": true,
-            "epic_task_id": matches!(self.scenario, WorkspaceAutoScenario::LeafAndEpic)
-                .then_some("ORB-EPIC"),
-            "has_epic": matches!(self.scenario, WorkspaceAutoScenario::LeafAndEpic),
             "idle": false,
             "sleep_seconds": 0,
             "pending_backlog": task_ids.len(),
             "active_leaf_runs": 0,
             "free_slots": 5,
-            "active_epic_run_id": null,
-            "active_epic_task_id": null,
         })
     }
 
@@ -140,7 +135,6 @@ impl<'a> ScriptedWorkspaceAutoHost<'a> {
     fn detached_result(&self, input: &Value) -> Result<Value, DispatchError> {
         let task_id = input["run_input"]["task_ids"][0]
             .as_str()
-            .or_else(|| input["run_input"]["epic_task_id"].as_str())
             .expect("scripted task id");
         if task_id == "ORB-DISPATCH-BROKEN" {
             return Err(DispatchError::DeterministicActionFailed {
@@ -186,7 +180,7 @@ impl RuntimeHost for ScriptedWorkspaceAutoHost<'_> {
                     WorkspaceAutoScenario::KeepsDispatching => reread >= 1,
                     WorkspaceAutoScenario::DispatchFailure
                     | WorkspaceAutoScenario::ClassifierFailure
-                    | WorkspaceAutoScenario::LeafAndEpic => true,
+                    | WorkspaceAutoScenario::SingleLeaf => true,
                 };
                 Ok(json!({
                     "deadline": "2099-01-01T00:00:00Z",
@@ -415,15 +409,15 @@ fn workspace_auto_preserves_concrete_workspace_step_failure() {
 }
 
 /// [ORB-11242] The allowlist is only useful if it survives the hand-off: the
-/// drain dispatches its leaves and its epic root *detached*, so a restriction
-/// that stopped at this run's own input would leave every child unrestricted.
+/// drain dispatches its leaves *detached*, so a restriction that stopped at
+/// this run's own input would leave every child unrestricted.
 /// Driven through the shipped YAML so what is pinned is the forwarding the
 /// job declares, not a Rust helper.
 #[test]
 fn workspace_auto_forwards_its_crew_allowlist_to_every_detached_child() {
     let (root, runtime, repo_root, global_root) = test_runtime();
     seed_default_catalogs(&global_root);
-    let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::LeafAndEpic);
+    let host = ScriptedWorkspaceAutoHost::new(&runtime, WorkspaceAutoScenario::SingleLeaf);
     let input = json!({
         "max_tasks": 50,
         "for_seconds": 10,
@@ -471,7 +465,7 @@ fn workspace_auto_forwards_its_crew_allowlist_to_every_detached_child() {
         "the classifier must see the window's restriction: {classified:?}"
     );
 
-    // Both detached shapes carry it: the leaf job and the epic root.
+    // The detached leaf carries it.
     let dispatched = host.inputs_for("invoke_detached");
     let by_job: Vec<(String, Value)> = dispatched
         .iter()
@@ -484,10 +478,7 @@ fn workspace_auto_forwards_its_crew_allowlist_to_every_detached_child() {
         .collect();
     assert_eq!(
         by_job,
-        vec![
-            ("task_auto_pipeline".to_string(), json!(["opus", "sonnet"])),
-            ("epic_pipeline".to_string(), json!(["opus", "sonnet"])),
-        ],
+        vec![("task_auto_pipeline".to_string(), json!(["opus", "sonnet"]))],
         "every detached child inherits the window: {dispatched:?}"
     );
 }

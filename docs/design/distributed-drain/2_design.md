@@ -379,6 +379,12 @@ What stays:
 - **`workspace_auto_pipeline`'s drain window, slot refill, and detached leaves** — the parts of
   the resident-orchestrator work that were actually about throughput.
 
+[ORB-12491] implemented this section. The migration check is `orbit-core`'s
+`application::epic_retirement`: `assess_epic_retirement` is a pure decision over a
+tasks/runs/reservations snapshot, and `OrbitRuntime::epic_retirement_readiness` is its read-only
+gatherer. It writes nothing — the refusal, the inherited-only roots, and the historical runs GC
+must still discover are the product.
+
 Migration refuses while any old epic execution, child execution, reservation, or uncertain landing
 is unreconciled, regardless of root status. A root already in `review` can still have a live
 `complete_pr` step; a status-only `in-progress` check is insufficient. Drain or deliberately stop

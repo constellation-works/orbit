@@ -173,16 +173,19 @@ fn excludes_cancelled_and_live_runs() {
     assert_eq!(output["run_ids"], json!([]));
 }
 
+/// [ORB-12491] No job is exempt any more: the scan wakes on every failed or
+/// timed-out run, including one left behind by a retired job.
 #[test]
-fn excludes_epic_pipeline_own_failed_runs() {
+fn every_failed_or_timed_out_run_wakes_the_scan() {
     let (_root, runtime, _repo) = runtime_with_workspace_layout();
-    seed_run(&runtime, "epic_pipeline", JobRunState::Failed);
-    seed_run(&runtime, "epic_pipeline", JobRunState::Timeout);
+    let retired = seed_run(&runtime, "epic_pipeline", JobRunState::Failed);
     let child = seed_run(&runtime, "task_gate_pipeline", JobRunState::Failed);
 
     let output = scan(&runtime, json!({}));
 
-    assert_eq!(output["run_ids"], json!([child]));
+    let mut expected = vec![retired, child];
+    expected.sort();
+    assert_eq!(output["run_ids"], json!(expected));
 }
 
 #[test]

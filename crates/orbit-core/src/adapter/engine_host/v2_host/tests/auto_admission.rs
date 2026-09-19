@@ -239,69 +239,76 @@ fn a_wave_is_pairwise_nonconflicting_across_shared_directories() {
     );
 }
 
-/// An epic root reserves the union of its descendants' context files, so a leaf
-/// overlapping any descendant must not join the same wave as the root.
+/// [ORB-12491] A parent covers only what it declares. A leaf that overlaps a
+/// *child's* file is deferred by that child's claim, not by the root's — and a
+/// leaf that overlaps nothing the claimed root declared is admitted.
 #[test]
-fn an_epic_roots_descendant_coverage_defers_an_overlapping_leaf() {
+fn a_claimed_parent_defers_only_leaves_overlapping_its_own_files() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     write_workspace_file(&repo_root, "crates/epic/src/child.rs");
-    let epic = seed_list_backlog_task(
+    write_workspace_file(&repo_root, "crates/epic/src/root.rs");
+    let tagged_root = seed_list_backlog_task(
         &runtime,
-        "Epic root",
+        "Tagged root",
         TaskStatus::Backlog,
         TaskPriority::High,
         TaskType::Feature,
         None,
-        vec![],
+        vec!["file:crates/epic/src/root.rs"],
     );
     runtime
         .update_task(
-            &epic.id,
+            &tagged_root.id,
             TaskUpdateParams {
                 tags: Some(vec!["epic".to_string()]),
                 ..Default::default()
             },
         )
-        .expect("tag epic root");
+        .expect("tag root");
     seed_list_backlog_task(
         &runtime,
-        "Epic descendant",
+        "Descendant",
         TaskStatus::Backlog,
         TaskPriority::High,
         TaskType::Chore,
-        Some(epic.id.clone()),
+        Some(tagged_root.id.clone()),
         vec!["file:crates/epic/src/child.rs"],
     );
-    let overlapping_leaf = backlog_task(
+    let leaf_on_child_file = backlog_task(
         &runtime,
         &repo_root,
         "Leaf touching the descendant's file",
         TaskPriority::Medium,
         vec!["file:crates/epic/src/child.rs"],
     );
+    let leaf_on_root_file = backlog_task(
+        &runtime,
+        &repo_root,
+        "Leaf touching the root's own file",
+        TaskPriority::Medium,
+        vec!["file:crates/epic/src/root.rs"],
+    );
 
-    // The epic family is excluded from the leaf population, so the leaf is the
-    // only candidate; the root's reservation reaches it through the holder set.
     let lookup = task_lookup(&runtime);
     let holders = AdmissionHolders::new(
         &BTreeMap::new(),
-        &BTreeSet::from([epic.id.clone()]),
+        &BTreeSet::from([tagged_root.id.clone()]),
         &lookup,
         &repo_root,
     );
     let selection = select_admissions(
-        std::slice::from_ref(&overlapping_leaf.id),
+        &[leaf_on_child_file.id.clone(), leaf_on_root_file.id.clone()],
         &lookup,
         &repo_root,
         &holders,
         5,
     );
 
-    assert!(selection.selected.is_empty());
+    assert_eq!(selection.selected, vec![leaf_on_child_file.id.clone()]);
     let deferred = selection
-        .deferred_for(&overlapping_leaf.id)
-        .expect("overlapping leaf is deferred");
-    assert_eq!(deferred.blocking_task_ids(), vec![epic.id.clone()]);
+        .deferred_for(&leaf_on_root_file.id)
+        .expect("leaf overlapping the claimed root is deferred");
+    assert_eq!(deferred.blocking_task_ids(), vec![tagged_root.id.clone()]);
     assert_eq!(
         deferred.conflicts[0].provenance,
         ConflictProvenance::LiveClaim

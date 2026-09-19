@@ -933,13 +933,13 @@ and review activities at dispatch, and operation grants keep their scope and
 admission limits.
 
 The coordinator captures effective pools in run input `auto_crew_pools`.
-Each admitted leaf or epic root records `crew` and `crew_selection`, including
+Each admitted leaf records `crew` and `crew_selection`, including
 the task ID, complexity, source (`task.crew`, `run_input.<complexity>_complexity_crews`,
 `workflow.<complexity>_complexity_crews`, `explicit`, or `default`), and eligible
 pool. Inspect these with `orbit run show <RUN_ID>`. Same-task pipeline children
 and retries/resumes retain the admitted selection even if configuration or
-the task assignment changes later. Different tasks, including epic descendants,
-receive independent draws at their own admission. No choice rewrites
+the task assignment changes later. Different tasks, including a parent and its
+children, receive independent draws at their own admission. No choice rewrites
 `task.crew`; a newly admitted run outside the retry lineage can select again.
 
 ### Setting `task.crew`

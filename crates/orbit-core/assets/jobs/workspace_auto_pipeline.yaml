@@ -5,8 +5,8 @@
 # that entered `backlog` after the run started still ships.
 #
 # Throughput model
-# - Leaves are dispatched *detached*, exactly as an epic root is, and the
-#   number of live `task_auto_pipeline` runs is the concurrency ceiling.
+# - Leaves are dispatched *detached*, and the number of live
+#   `task_auto_pipeline` runs is the concurrency ceiling.
 #   `classify_workspace_auto_tasks` counts those runs, offers only as many
 #   leaves as there are free slots, and excludes tasks that a live child is
 #   already carrying — a detached leaf stays `backlog` until its child moves
@@ -18,9 +18,9 @@
 #   long as it ran, and nothing that arrived in the meantime could start.
 # - The cost of detaching is that this run no longer observes its leaves'
 #   outcomes and no longer cascades cancellation to them; each child records
-#   its own result and is durably linked either way. That is the same trade
-#   `start_epic` has always made, and a terminal leaf was already explicitly
-#   not a failure of this sequencer (`allow_non_success: true`).
+#   its own result and is durably linked either way. A terminal leaf was
+#   already explicitly not a failure of this sequencer
+#   (`allow_non_success: true`).
 #
 # `for_seconds` gates *starting* the next iteration. It never cancels or
 # shortens a child that has already begun. A zero or absent window is expired
@@ -32,7 +32,7 @@
 # saturated or empty drain waits at least `poll_sleep_seconds` (30s) per
 # iteration, so 4000 outlasts the 24h maximum window with room for the fast
 # iterations that only dispatch. An expired window with nothing left is a plain
-# success; fail-closed lives at the epic gate, not here.
+# success.
 
 schemaVersion: 2
 kind: Job
@@ -73,7 +73,7 @@ spec:
     completion: review
     # ORB-11242: opt-in, run-scoped crew restriction. Empty means unrestricted,
     # which is the behavior of every caller that does not pass it. Forwarded
-    # unchanged so the leaf/epic jobs this run admits inherit the same window.
+    # unchanged so the leaf jobs this run admits inherit the same window.
     allowed_crews: []
     # Complexity pools are captured by Core at coordinator admission from
     # workflow configuration and low/medium/hard_complexity_crews run overrides.
@@ -129,19 +129,6 @@ spec:
               join:
                 mode: all
               collect: leaf_dispatches
-
-          # `classify_workspace_auto_tasks` re-observes this run and withholds
-          # another root until it is terminal, so the drain never queues a
-          # second epic behind `max_active_runs: 1`.
-          - id: start_epic
-            when: "{{ steps.admissible.output.has_epic }} == true"
-            target: activity:invoke_detached
-            default_input:
-              job_name: epic_pipeline
-              run_input:
-                epic_task_id: "{{ steps.admissible.output.epic_task_id }}"
-                completion: "{{ input.completion }}"
-                allowed_crews: "{{ input.allowed_crews }}"
 
           - id: window
             target: activity:drain_window

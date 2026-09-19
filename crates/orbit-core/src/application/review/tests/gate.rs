@@ -1018,9 +1018,9 @@ fn the_gate_reads_the_captured_snapshot_not_the_live_preference() {
 }
 
 #[test]
-fn epic_worktree_token_does_not_mask_the_admitted_run() {
+fn a_worktree_token_does_not_mask_the_admitted_run() {
     let gated = gated_fixture(GATED_CONFIG);
-    let worktree_token = format!("epic-{}", gated.task_id);
+    let worktree_token = format!("worktree-{}", gated.task_id);
     let mut input = admit_input(
         &worktree_token,
         std::slice::from_ref(&gated.task_id),

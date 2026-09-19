@@ -40,20 +40,12 @@ pub(super) enum BacklogTaskExclusionReason {
     /// it is — never silently re-crewed — and the remaining eligible work
     /// keeps filling the drain's slots.
     CrewNotAllowed,
-    EpicChild,
-    EpicRoot,
     GroupMemberConflict,
     /// Automated work must be prepared before an implementation lane can
     /// consume it; urgency does not substitute for a complexity assessment.
     /// Work tagged [`NO_DIFF_EXPECTED_TAG`] is exempt — see
     /// [`clears_complexity_gate`].
     UnassessedComplexity,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum EpicFamilyMembership {
-    Child,
-    Root,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -63,13 +55,13 @@ pub(super) struct BacklogTaskConflict {
 }
 
 /// The task population and leaf eligibility result shared by automatic
-/// dispatch and its read-only diagnostic.  Keeping the lock/epic filter here
+/// dispatch and its read-only diagnostic.  Keeping the lock filter here
 /// prevents the diagnostic from becoming a second scheduler.
 pub(super) struct BacklogSnapshot {
-    /// Every task in the workspace, whole: an epic's lock set is the union
-    /// over its descendants, a downward walk a status-filtered map would
-    /// silently shorten. This is the one materialized copy; the other fields
-    /// refer into it by ID rather than holding clones.
+    /// Every task in the workspace, whole: parent-chain walks and the
+    /// group-conflict roll-up read tasks at any status, which a status-filtered
+    /// map would silently shorten. This is the one materialized copy; the other
+    /// fields refer into it by ID rather than holding clones.
     pub(super) task_lookup: BTreeMap<String, Task>,
     /// The registry-global status projection. Deliberately not derived from
     /// `task_lookup`: task lists are workspace-scoped, dependency readiness
@@ -99,7 +91,7 @@ fn active_task_lock_holders(
     let mut holders: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for task in tasks.values() {
         if matches!(task.status, TaskStatus::InProgress | TaskStatus::Review) {
-            for file in lock_context_files_for_task(task, tasks, workspace_root) {
+            for file in lock_context_files_for_task(task, workspace_root) {
                 holders.entry(file).or_default().push(task.id.clone());
             }
         }
@@ -124,12 +116,11 @@ fn lock_holder_index(lock_holders: &BTreeMap<String, Vec<String>>) -> OverlapInd
 
 fn task_overlap_conflicts(
     task: &Task,
-    task_lookup: &BTreeMap<String, Task>,
     holders: &OverlapIndex<&[String]>,
     workspace_root: &Path,
 ) -> Vec<BacklogTaskConflict> {
     let mut conflicts = Vec::new();
-    for requested_file in lock_context_files_for_task(task, task_lookup, workspace_root) {
+    for requested_file in lock_context_files_for_task(task, workspace_root) {
         for (_, locking_task_ids) in holders.overlapping(&requested_file) {
             for locking_task_id in locking_task_ids.iter() {
                 conflicts.push(BacklogTaskConflict {
@@ -323,8 +314,8 @@ pub(super) fn backlog_snapshot(
     // Once the assessment gate has held back unprepared work, the crew filter
     // runs before scheduling exclusions so a task reports the reason an
     // operator can act on — reassign it, or run a drain that permits its crew
-    // — rather than a downstream epic/lock reason. Everything that survives
-    // keeps its ordinary priority/age order.
+    // — rather than a downstream lock reason. Everything that survives keeps
+    // its ordinary priority/age order.
     if let Some(allowlist) = allowlist {
         backlog.retain(|task| {
             match runtime.auto_task_crew_candidates(task, pools, None) {
@@ -351,28 +342,12 @@ pub(super) fn backlog_snapshot(
             }
         });
     }
-    backlog.retain(|task| {
-        let Some(membership) = epic_family_membership(task, &task_lookup) else {
-            return true;
-        };
-        excluded.push(BacklogTaskExclusion {
-            id: task.id.clone(),
-            reason: match membership {
-                EpicFamilyMembership::Root => BacklogTaskExclusionReason::EpicRoot,
-                EpicFamilyMembership::Child => BacklogTaskExclusionReason::EpicChild,
-            },
-            conflicts: Vec::new(),
-            crew: None,
-        });
-        false
-    });
     if !lock_holders.is_empty() {
         let holder_index = lock_holder_index(&lock_holders);
         let direct_conflicts: BTreeMap<String, Vec<BacklogTaskConflict>> = backlog
             .iter()
             .filter_map(|task| {
-                let conflicts =
-                    task_overlap_conflicts(task, &task_lookup, &holder_index, workspace_root);
+                let conflicts = task_overlap_conflicts(task, &holder_index, workspace_root);
                 (!conflicts.is_empty()).then(|| (task.id.clone(), conflicts))
             })
             .collect();
@@ -471,31 +446,6 @@ pub(super) fn sort_tasks_for_automatic_dispatch<T: Borrow<Task>>(tasks: &mut [T]
             .then(left.created_at.cmp(&right.created_at))
             .then(left.id.cmp(&right.id))
     });
-}
-
-pub(super) fn epic_family_membership(
-    task: &Task,
-    task_lookup: &BTreeMap<String, Task>,
-) -> Option<EpicFamilyMembership> {
-    if task.tags.iter().any(|tag| tag == "epic") {
-        return Some(EpicFamilyMembership::Root);
-    }
-
-    let mut visited = vec![task.id.clone()];
-    let mut next_parent_id = task.parent_id().map(ToOwned::to_owned);
-    for _ in 0..MAX_TASK_PARENT_CHAIN_DEPTH {
-        let parent_id = next_parent_id?;
-        if visited.iter().any(|task_id| task_id == &parent_id) {
-            return None;
-        }
-        let parent = task_lookup.get(&parent_id)?;
-        if parent.tags.iter().any(|tag| tag == "epic") {
-            return Some(EpicFamilyMembership::Child);
-        }
-        visited.push(parent.id.clone());
-        next_parent_id = parent.parent_id().map(ToOwned::to_owned);
-    }
-    None
 }
 
 fn task_root_id(task: &Task, task_lookup: &BTreeMap<String, Task>) -> String {

@@ -273,11 +273,12 @@ covers the child rather than only submission ([Delegate workspace ship routines 
 
 Successful delivery runs remove their own task worktree after the run has been
 durably terminalized. `task_pr_pipeline` does this only after `pr_complete` has
-verified the PR's merged state and completed the task; `task_local_pipeline` and
-`epic_pipeline` use the same boundary after local delivery. For an epic, the
-stored run input carries `epic_task_id`; the shared identity derivation maps it
-to the `epic-epic-<epic_task_id>` worktree created by the epic's `worktree`
-step. The
+verified the PR's merged state and completed the task; `task_local_pipeline`
+uses the same boundary after local delivery. The retired `epic_pipeline` is no
+longer a delivery owner, but the shared identity derivation still decodes its
+stored `epic_task_id` input to the `epic-epic-<epic_task_id>` worktree, so the
+scheduled sweep can still reap what a historical epic run left behind
+[ORB-12491]. The
 `workspace_auto_pipeline` and `task_gate_pipeline` jobs are coordinators: their
 child delivery run owns the worktree and performs the removal, so a drain does
 not need to wait for a separate GC fire.

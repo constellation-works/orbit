@@ -60,8 +60,7 @@ orbit run auto --for 4h --concurrency 8
 
 The drain re-lists the whole backlog every pass and keeps `--concurrency` tasks
 in flight (default 5), starting a replacement as each one finishes rather than
-waiting for a batch to drain. An epic root runs alongside the leaves, one at a
-time. `--for` bounds only the *start* of new work: a task already being shipped
+waiting for a batch to drain. `--for` bounds only the *start* of new work: a task already being shipped
 when the window expires still finishes.
 
 Running a real delivery window — preparing work, choosing concurrency,

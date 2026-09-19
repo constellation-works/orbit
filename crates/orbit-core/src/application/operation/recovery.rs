@@ -41,10 +41,8 @@ fn run_task_ids(run: &JobRun) -> Vec<String> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    for key in ["task_id", "epic_task_id"] {
-        if let Some(id) = input.get(key).and_then(Value::as_str) {
-            ids.push(id.to_string());
-        }
+    if let Some(id) = input.get("task_id").and_then(Value::as_str) {
+        ids.push(id.to_string());
     }
     ids.sort();
     ids.dedup();

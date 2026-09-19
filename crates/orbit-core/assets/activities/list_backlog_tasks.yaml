@@ -7,13 +7,12 @@ spec:
   description: >
     Materialize the current workspace backlog as an ordered task list for
     the auto-pipeline. In automatic mode it filters to `status: backlog` with
-    all task dependencies satisfied, excludes `epic`-tagged roots and every
-    descendant of such a root (`epic_root` / `epic_child`), and
-    drops any backlog parent/subtask group whose `context_files` overlap the
-    active task-lock surface from `in-progress` or `review` tasks. Automatic
-    mode includes an `excluded` array that attributes epic-family and pre-gate
-    lock exclusions; it does not report status-based admission or `max_tasks`
-    truncation. Explicit `task_ids` input is treated as an override, skips
+    all task dependencies satisfied and drops any backlog parent/subtask group
+    whose `context_files` overlap the active task-lock surface from
+    `in-progress` or `review` tasks. Parent/child relations order nothing here:
+    every task is a leaf admitted on its own declared footprint. Automatic mode
+    includes an `excluded` array that attributes pre-gate lock exclusions; it
+    does not report status-based admission or `max_tasks` truncation. Explicit `task_ids` input is treated as an override, skips
     conflict filtering, and omits `excluded`.
     Automatic ordering puts critical tasks first, then corrective tasks (`bug`
     type or an exact `code-review` / `security-review` tag), then all remaining
@@ -81,7 +80,7 @@ spec:
               type: string
             reason:
               type: string
-              enum: [context_lock_conflict, epic_child, epic_root, group_member_conflict]
+              enum: [context_lock_conflict, group_member_conflict]
             conflicts:
               type: array
               items:

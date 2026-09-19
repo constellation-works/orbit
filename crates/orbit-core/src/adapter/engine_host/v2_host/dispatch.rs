@@ -242,9 +242,8 @@ pub(crate) fn run_deterministic(
             })
         }
         // The admissible work for one drain iteration [ORB-10819]: the
-        // conflict-free backlog leaves, plus one backlog epic root when no
-        // `epic_pipeline` run is live. Leaves and epic are independent — an
-        // active epic excludes overlapping leaves through its lock
+        // conflict-free backlog leaves this tick may start. Every candidate is
+        // an ordinary leaf; overlapping work is excluded through its lock
         // reservation, not through a blanket hold.
         CoreDeterministicAction::ClassifyWorkspaceAutoTasks => {
             workspace_auto::classify_workspace_auto_tasks(runtime, action, input)
@@ -270,17 +269,10 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::ListBacklogTasks => {
             backlog_exclusion::list_backlog_tasks(runtime, action, input)
         }
-        // Resolve one epic's unfinished descendants once, in a deterministic
-        // dependency-first order, so the enclosing workflow can drain them
-        // with an ordinary sequential loop.
-        CoreDeterministicAction::ListEpicDescendants => {
-            workspace_auto::list_epic_descendants(runtime, action, input)
-        }
         // Workspace drain scan [ORB-10779]: proposed/backlog/blocked
         // tasks, failed/timeout job-runs, and unresolved check_later notes.
         // Read-only; empty is success. Optional `fail_if_nonempty` fails
-        // closed for a workspace-wide leftover set; `epic_pipeline` now
-        // gates on `list_epic_descendants` instead [ORB-10818].
+        // closed for a workspace-wide leftover set.
         CoreDeterministicAction::ScanUnresolvedWork => {
             scan_unresolved::scan_unresolved_work(runtime, action, input)
         }
@@ -429,8 +421,8 @@ pub(crate) fn run_deterministic(
         }
         // Post-loop gate signal: the admission window never opened in
         // time. Emits a `gate.starvation` audit event with task_ids and
-        // conflicting_files so an epic-orchestrator parent can decide
-        // to replan, then fails the Run with a structured error.
+        // conflicting_files so a supervising parent can decide to
+        // replan, then fails the Run with a structured error.
         CoreDeterministicAction::GateStarvationFail => {
             pipeline_actions::gate_starvation_fail(runtime, action, input)
         }
@@ -490,8 +482,8 @@ pub(super) struct BundleDependencyAdmission {
 
 impl BundleDependencyAdmission {
     /// Failure message for the unsatisfiable set. Prefixed with a stable
-    /// `task.dependencies.unsatisfiable:` marker so an operator (or an
-    /// epic-level orchestrator parsing run errors) can tell this apart from
+    /// `task.dependencies.unsatisfiable:` marker so an operator (or a
+    /// parent job parsing run errors) can tell this apart from
     /// `gate.starvation`, which means the opposite thing: waiting was
     /// legitimate but ran out of budget.
     pub(super) fn unsatisfiable_message(&self) -> String {

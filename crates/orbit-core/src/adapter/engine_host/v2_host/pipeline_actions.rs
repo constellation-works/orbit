@@ -356,9 +356,9 @@ fn wait_args(child_run_id: &str, input: &Value) -> Value {
 /// Submit a child v2 Job and return as soon as its Run is durable [ORB-10819].
 ///
 /// The non-blocking counterpart to [`invoke_and_wait`], for a parent that must
-/// keep working while the child runs. `workspace_auto_pipeline` dispatches
-/// `epic_pipeline` this way: waiting on a multi-hour epic would consume the
-/// rest of the drain window and starve the conflict-free leaves behind it.
+/// keep working while the child runs. `workspace_auto_pipeline` dispatches its
+/// leaves this way: waiting on a multi-hour child would consume the rest of the
+/// drain window and starve the conflict-free work behind it.
 ///
 /// The caller owns re-observing the child. There is deliberately no `status`
 /// in the output: this action never looks at one, and reporting a freshly
@@ -835,8 +835,8 @@ pub(super) fn pipeline_success_guard(action: &str, input: &Value) -> Result<Valu
 /// Validate and retain terminal child results without converting a child
 /// failure into a failure of the workspace-level sequencer.
 ///
-/// This is deliberately an opt-in policy on the existing guard action. Gate,
-/// epic, and wrapper pipelines keep their fail-fast behavior; only a caller
+/// This is deliberately an opt-in policy on the existing guard action. Gate
+/// and wrapper pipelines keep their fail-fast behavior; only a caller
 /// that explicitly asks to record terminal non-successes receives counts and
 /// the exact entries it supplied. Structural problems remain errors because a
 /// missing run id or non-terminal status is not an observed leaf outcome.

@@ -53,10 +53,10 @@ fn seeded_runtime(root: &Path) -> (OrbitRuntime, PathBuf, PathBuf) {
 fn workspace_http_backend_is_a_catalog_fault_and_named_repair() {
     let root = tempdir().expect("tempdir");
     let (runtime, _workspace, activities) = workspace_runtime(root.path());
-    let path = activities.join("epic_orchestrator.yaml");
+    let path = activities.join("workspace_finisher.yaml");
     std::fs::write(
         &path,
-        agent_loop_yaml("epic_orchestrator", "  backend: http\n"),
+        agent_loop_yaml("workspace_finisher", "  backend: http\n"),
     )
     .expect("write fixture");
 
@@ -65,7 +65,7 @@ fn workspace_http_backend_is_a_catalog_fault_and_named_repair() {
         .expect_err("production catalog must reject spec.backend: http");
     let catalog_text = catalog_err.to_string();
     assert!(
-        catalog_text.contains("epic_orchestrator.yaml"),
+        catalog_text.contains("workspace_finisher.yaml"),
         "{catalog_text}"
     );
     assert!(catalog_text.contains("backend: http"), "{catalog_text}");
@@ -76,7 +76,7 @@ fn workspace_http_backend_is_a_catalog_fault_and_named_repair() {
     let finding = health_of(&report, ArtifactKind::Activity)
         .findings
         .iter()
-        .find(|finding| finding.name == "epic_orchestrator")
+        .find(|finding| finding.name == "workspace_finisher")
         .expect("workspace activity must be reported");
     assert_eq!(finding.condition, ArtifactCondition::Faulty);
     assert!(
@@ -157,12 +157,12 @@ fn unknown_tool_cannot_pass_doctor_while_failing_catalog() {
 fn repair_removes_only_known_backends_across_files_and_is_idempotent() {
     let root = tempdir().expect("tempdir");
     let (runtime, _workspace, activities) = workspace_runtime(root.path());
-    let http_path = activities.join("epic_orchestrator.yaml");
+    let http_path = activities.join("workspace_finisher.yaml");
     let auto_path = activities.join("agent_review.yaml");
     let unknown_path = activities.join("custom_loop.yaml");
     let malformed_path = activities.join("broken.yaml");
     let comment_marker = "# keep this comment";
-    let http_body = agent_loop_yaml("epic_orchestrator", "  backend: http\n  model: grok\n");
+    let http_body = agent_loop_yaml("workspace_finisher", "  backend: http\n  model: grok\n");
     let auto_body = agent_loop_yaml("agent_review", "  backend: auto\n");
     let unknown_body = agent_loop_yaml("custom_loop", "  backend: weave\n");
     let malformed_body = "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: broken\nspec: [\n";
@@ -221,7 +221,7 @@ fn repair_removes_only_known_backends_across_files_and_is_idempotent() {
         "{leftovers:?}"
     );
     assert!(
-        !leftovers.contains(&"epic_orchestrator") && !leftovers.contains(&"agent_review"),
+        !leftovers.contains(&"workspace_finisher") && !leftovers.contains(&"agent_review"),
         "{leftovers:?}"
     );
 

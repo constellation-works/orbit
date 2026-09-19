@@ -9,8 +9,8 @@ spec:
     admission-gate workflow (`task_gate_pipeline`) as the post-loop
     guard when the reserve-wait window never opened within
     `max_wait_seconds`. The audit payload carries `task_ids`,
-    `conflicting_files`, and `waiting_on_deps` so an epic-level
-    orchestrator can decide to replan the bundle rather than retry
+    `conflicting_files`, and `waiting_on_deps` so a supervising
+    parent can decide to replan the bundle rather than retry
     indefinitely — the gate can starve on either axis, so both are
     reported.
 

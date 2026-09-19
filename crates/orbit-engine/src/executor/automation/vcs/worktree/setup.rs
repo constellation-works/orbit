@@ -36,9 +36,8 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     // rule (ORB-10427) — never re-spelled per call site.
     let identity = WorktreeIdentity::from_input(input, None)?;
     let task_ids = &identity.task_ids;
-    // `identity.run_id` names the stable checkout (epic pipelines pin
-    // `epic-<task-id>`). Execution authority stays on the admitted job when
-    // the dispatcher supplied `job_run_id`.
+    // `identity.run_id` names the stable checkout. Execution authority stays
+    // on the admitted job when the dispatcher supplied `job_run_id`.
     let worktree_run_id = &identity.run_id;
     let job_run_id =
         input_string_field(input, "job_run_id").unwrap_or_else(|| worktree_run_id.clone());

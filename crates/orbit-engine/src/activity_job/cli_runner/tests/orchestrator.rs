@@ -8,11 +8,11 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::activity_job::{load_activity_asset, load_job_asset};
+use crate::activity_job::load_job_asset;
 use orbit_agent::loop_engine::audit::AuditSink;
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
 use orbit_store::Store;
-use orbit_types::workflow::activity_job::{ActivityV2Spec, JobV2StepBody, V2AuditEventKind};
+use orbit_types::workflow::activity_job::{JobV2StepBody, V2AuditEventKind};
 use tempfile::{TempDir, tempdir};
 
 use crate::context::{ProvenanceEnv, provenance_env};
@@ -2315,10 +2315,6 @@ const TASK_LOCAL_PIPELINE_YAML: &str =
     include_str!("../../../../../../.orbit/resources/jobs/task_local_pipeline.yaml");
 const TASK_PR_PIPELINE_YAML: &str =
     include_str!("../../../../../../.orbit/resources/jobs/task_pr_pipeline.yaml");
-const EPIC_PIPELINE_YAML: &str =
-    include_str!("../../../../../../.orbit/resources/jobs/epic_pipeline.yaml");
-const EPIC_ORCHESTRATOR_YAML: &str =
-    include_str!("../../../../../../.orbit/resources/activities/epic_orchestrator.yaml");
 
 #[test]
 fn actual_ship_pipeline_implementers_run_for_each_provider_and_stay_in_the_worktree() {
@@ -2380,90 +2376,6 @@ printf '%s\n' '{{"schemaVersion":1,"status":"success","result":{{}},"error":null
         ]),
         "the matrix must load and render both committed shipment assets"
     );
-}
-
-#[test]
-fn epic_orchestrator_finisher_writes_stay_in_the_epic_worktree() {
-    let fixture = linked_worktree_fixture();
-    let assigned = fixture.assigned.display().to_string();
-    let script = fixture.root().join("codex");
-    write_executable(
-        &script,
-        &format!(
-            r#"#!/bin/sh
-cat > /dev/null
-test "$(pwd -P)" = '{assigned}' || exit 41
-test "$(git rev-parse --show-toplevel)" = '{assigned}' || exit 42
-printf '%s\n' 'finisher work' > finisher.txt
-printf '%s\n' '{{"schemaVersion":1,"status":"success","result":{{}},"error":null}}'
-"#
-        ),
-    );
-    let mut host = TestHost::with_command(script.display().to_string());
-    host.workspace_root = Some(fixture.primary.clone());
-    let input = rendered_finish_input_from_epic_pipeline(&fixture.assigned, "ORB-EPIC-FINISH");
-    let spec = epic_orchestrator_spec(Duration::from_secs(5));
-
-    let outcome = run_cli_backend(
-        &host,
-        &spec,
-        "test_activity",
-        "run-epic-finisher",
-        test_audit("run-epic-finisher", "codex"),
-        &input,
-        None,
-    )
-    .expect("epic finisher invocation");
-
-    assert!(outcome.success);
-    assert_eq!(
-        fs::read_to_string(fixture.assigned.join("finisher.txt")).expect("assigned finisher write"),
-        "finisher work\n"
-    );
-    assert!(
-        !fixture.primary.join("finisher.txt").exists(),
-        "finisher must not write the registered primary checkout"
-    );
-}
-
-#[test]
-fn epic_orchestrator_declared_root_mismatch_fails_before_provider_spawn() {
-    let fixture = linked_worktree_fixture();
-    let marker = fixture.root().join("provider-started");
-    let script = fixture.root().join("codex");
-    write_executable(
-        &script,
-        &format!(
-            "#!/bin/sh\nprintf started > '{}'\nexit 0\n",
-            marker.display()
-        ),
-    );
-    let mut host = TestHost::with_command(script.display().to_string());
-    host.workspace_root = Some(fixture.primary.clone());
-    let mut input =
-        rendered_finish_input_from_epic_pipeline(&fixture.assigned, "ORB-EPIC-MISMATCH");
-    input["repo_root"] = serde_json::json!(fixture.primary);
-    let spec = epic_orchestrator_spec(Duration::from_secs(5));
-    let audit = test_audit("run-epic-finisher-mismatch", "codex");
-
-    let error = run_cli_backend(
-        &host,
-        &spec,
-        "test_activity",
-        "run-epic-finisher-mismatch",
-        audit.clone(),
-        &input,
-        None,
-    )
-    .expect_err("mismatched epic finisher roots must fail closed");
-
-    assert_worktree_mismatch(
-        &error,
-        "ORB-EPIC-MISMATCH",
-        "run-epic-finisher-mismatch",
-        "different Git checkouts",
-    );
-    assert_pre_spawn_failure(&audit, &marker);
 }
 
 #[test]
@@ -4004,68 +3916,6 @@ fn rendered_implement_input_from_asset(
     assert_eq!(rendered["workspace_path"], assigned);
     assert_eq!(rendered["repo_root"], assigned);
     (asset.name, rendered)
-}
-
-fn rendered_finish_input_from_epic_pipeline(
-    assigned_root: &Path,
-    task_id: &str,
-) -> serde_json::Value {
-    let asset = load_job_asset(EPIC_PIPELINE_YAML).expect("epic pipeline parses");
-    let assemble = asset
-        .spec
-        .steps
-        .iter()
-        .find(|step| step.id == "assemble")
-        .expect("epic pipeline has assemble");
-    let JobV2StepBody::Loop { loop_ } = &assemble.body else {
-        panic!("epic assemble must be a loop");
-    };
-    let finish = loop_
-        .steps
-        .iter()
-        .find(|step| step.id == "finish")
-        .expect("epic assemble has finish");
-    let JobV2StepBody::TargetRef(finish) = &finish.body else {
-        panic!("epic finish must reference epic_orchestrator");
-    };
-    assert_eq!(finish.target, "activity:epic_orchestrator");
-    let template_input = finish
-        .default_input
-        .as_ref()
-        .expect("epic_orchestrator default input");
-    for field in ["workspace_path", "repo_root"] {
-        assert_eq!(
-            template_input[field], "{{ steps.worktree.output.workspace_path }}",
-            "epic finisher must source {field} from the assigned worktree"
-        );
-    }
-
-    let assigned = assigned_root.display().to_string();
-    let mut steps = HashMap::new();
-    steps.insert(
-        "worktree".to_string(),
-        serde_json::json!({ "output": { "workspace_path": assigned } }),
-    );
-    let context = TemplateContext {
-        input: serde_json::json!({ "epic_task_id": task_id }),
-        steps: std::sync::Arc::new(steps),
-        ..TemplateContext::default()
-    };
-    let rendered = render_asset_value(template_input, &context);
-    assert_eq!(rendered["task_id"], task_id);
-    assert_eq!(rendered["workspace_path"], assigned);
-    assert_eq!(rendered["repo_root"], assigned);
-    rendered
-}
-
-fn epic_orchestrator_spec(timeout: Duration) -> orbit_types::workflow::activity_job::AgentLoopSpec {
-    let asset = load_activity_asset(EPIC_ORCHESTRATOR_YAML).expect("parse epic orchestrator");
-    let ActivityV2Spec::AgentLoop(mut spec) = asset.spec.spec else {
-        panic!("epic_orchestrator must be an agent_loop");
-    };
-    spec.wall_clock_timeout_seconds = timeout.as_secs();
-    spec.provider = orbit_types::workflow::activity_job::Provider::Codex;
-    spec
 }
 
 fn render_asset_value(value: &serde_json::Value, context: &TemplateContext) -> serde_json::Value {

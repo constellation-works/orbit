@@ -78,7 +78,7 @@ spec:
     auto_push: false
     # ORB-11242: opt-in, run-scoped crew restriction. Empty means unrestricted,
     # which is the behavior of every caller that does not pass it. Forwarded
-    # unchanged so the leaf/epic jobs this run admits inherit the same window.
+    # unchanged so the leaf jobs this run admits inherit the same window.
     allowed_crews: []
     max_wait_seconds: 3600
     poll_interval_seconds: 30

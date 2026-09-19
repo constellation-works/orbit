@@ -229,8 +229,10 @@ fn lock_surface_reports_out_of_workspace_selectors_as_invalid() {
     assert!(message.contains("file:../escape.rs"), "{message}");
 }
 
+/// [ORB-12491] Hierarchy is metadata: a parent — `epic`-tagged or not —
+/// reserves exactly what it declares and never inherits a child's surface.
 #[test]
-fn active_epic_root_holds_union_of_descendant_context_files() {
+fn a_tagged_root_holds_only_its_own_context_files() {
     let _env = unmanaged_tool_env_guard();
     let (_root, runtime, repo_root) = test_runtime();
     for path in ["src/root.rs", "src/one.rs", "src/two.rs"] {
@@ -239,22 +241,22 @@ fn active_epic_root_holds_union_of_descendant_context_files() {
             .expect("create fixture directory");
         std::fs::write(full_path, "fixture\n").expect("write fixture");
     }
-    let epic = runtime
+    let root = runtime
         .add_task(TaskAddParams {
-            title: "Epic root".to_string(),
-            description: "Epic fixture".to_string(),
+            title: "Tagged root".to_string(),
+            description: "Root fixture".to_string(),
             acceptance_criteria: vec!["assembled".to_string()],
             tags: vec!["epic".to_string()],
-            plan: "drain children".to_string(),
+            plan: "do the large task".to_string(),
             context_files: vec!["file:src/root.rs".to_string()],
             status: Some(TaskStatus::InProgress),
             ..Default::default()
         })
-        .expect("create epic");
+        .expect("create root");
     for (title, path) in [("one", "src/one.rs"), ("two", "src/two.rs")] {
         runtime
             .add_task(TaskAddParams {
-                parent_id: Some(epic.id.clone()),
+                parent_id: Some(root.id.clone()),
                 title: title.to_string(),
                 description: "Child fixture".to_string(),
                 acceptance_criteria: vec!["done".to_string()],
@@ -263,35 +265,76 @@ fn active_epic_root_holds_union_of_descendant_context_files() {
                 status: Some(TaskStatus::Backlog),
                 ..Default::default()
             })
-            .expect("create epic child");
+            .expect("create child");
     }
 
     assert_eq!(
         requested_task_files_indexed(
-            &TaskLockIndex::load(&runtime, std::slice::from_ref(&epic.id))
+            &TaskLockIndex::load(&runtime, std::slice::from_ref(&root.id))
                 .expect("index task envelopes"),
-            std::slice::from_ref(&epic.id),
+            std::slice::from_ref(&root.id),
             runtime.paths().repo_root.as_path()
         )
-        .expect("collect epic lock surface"),
-        vec![
-            "file:src/one.rs".to_string(),
-            "file:src/root.rs".to_string(),
-            "file:src/two.rs".to_string(),
-        ]
+        .expect("collect root lock surface"),
+        vec!["file:src/root.rs".to_string()]
     );
     let locks = runtime
         .run_tool("orbit.task.locks", json!({}))
         .expect("list task locks");
-    let epic_lock = locks["by_task"]
+    let root_lock = locks["by_task"]
         .as_array()
         .expect("task locks")
         .iter()
-        .find(|entry| entry["id"] == epic.id)
-        .expect("epic lock entry");
-    assert_eq!(
-        epic_lock["context_files"],
-        json!(["file:src/one.rs", "file:src/root.rs", "file:src/two.rs"])
+        .find(|entry| entry["id"] == root.id)
+        .expect("root lock entry");
+    assert_eq!(root_lock["context_files"], json!(["file:src/root.rs"]));
+}
+
+/// [ORB-12491] A root that declared nothing of its own inherits nothing, so a
+/// task-scope reservation refuses it by name instead of minting a claim that
+/// holds no files. Repair is operator-supplied context, or retirement.
+#[test]
+fn an_inherited_only_root_reserves_nothing_and_is_refused() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    std::fs::create_dir_all(repo_root.join("src")).expect("create src dir");
+    std::fs::write(repo_root.join("src/one.rs"), "fixture\n").expect("write fixture");
+    let root = runtime
+        .add_task(TaskAddParams {
+            title: "Inherited-only root".to_string(),
+            description: "Root fixture".to_string(),
+            acceptance_criteria: vec!["assembled".to_string()],
+            tags: vec!["epic".to_string()],
+            plan: "do the large task".to_string(),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("create root");
+    runtime
+        .add_task(TaskAddParams {
+            parent_id: Some(root.id.clone()),
+            title: "child".to_string(),
+            description: "Child fixture".to_string(),
+            acceptance_criteria: vec!["done".to_string()],
+            plan: "implement".to_string(),
+            context_files: vec!["file:src/one.rs".to_string()],
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("create child");
+
+    let message = invalid_input_message(run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [root.id],
+            "agent": "codex",
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    ));
+    assert!(
+        message.contains("no context surface to reserve"),
+        "{message}"
     );
 }
 

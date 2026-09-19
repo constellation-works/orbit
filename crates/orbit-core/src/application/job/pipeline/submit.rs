@@ -157,11 +157,6 @@ impl OrbitRuntime {
         // worker discovers eligible backlog tasks after it starts.
         for task_id in task_ids {
             let task = self.get_task(task_id)?;
-            if task.tags.iter().any(|tag| tag == "epic") {
-                return Err(OrbitError::InvalidInput(format!(
-                    "task '{task_id}' is an epic root and cannot be shipped as a leaf; use `orbit run auto` or `orbit run job epic_pipeline`"
-                )));
-            }
             if let Some(allowlist) = allowlist.as_ref() {
                 let crew = self.effective_task_crew(&task)?;
                 crate::runtime::engine::crew::enforce_crew_allowlist(

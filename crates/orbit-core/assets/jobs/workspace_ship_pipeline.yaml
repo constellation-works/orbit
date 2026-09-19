@@ -2,7 +2,7 @@
 #
 # Existing sweeps retain this stable job name while delegating the drain to the
 # workspace sequencer. Waiting keeps this wrapper active for the full child
-# run, so the routine's `overlap: forbid` covers leaf or epic dispatch.
+# run, so the routine's `overlap: forbid` covers leaf dispatch.
 #
 # The window is chosen for that inheritance, not for the sequencer. The enabled
 # `ship-sweep-orbit` routine fires every 30 minutes under `overlap: forbid`, and

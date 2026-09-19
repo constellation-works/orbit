@@ -3,7 +3,7 @@ title: Resident Orchestrator — Design
 owner: codex, grok, claude
 last_updated: 2026-09-05
 last_validated: 2026-09-05
-status: Draft
+status: Superseded
 feature: resident-orchestrator
 doc_role: design
 type: design
@@ -15,6 +15,8 @@ related_artifacts: [ORB-10332, ORB-10775, ORB-10776, ORB-10779, ORB-10788, ORB-1
 ---
 
 # Resident Orchestrator — Design
+
+> **Superseded (ORB-12491, 2026-09-19).** Epic execution is retired: there is no `epic_pipeline`, no `epic_orchestrator`, no epic-tagged admission exclusion, and no descendant-union lock footprint. Parent/child relations remain backlog metadata and the `epic` tag remains a size hint that admission ignores. The drain window, slot refill, and detached leaves described here survive in `workspace_auto_pipeline`. The current contract is [docs/design/distributed-drain/](../../distributed-drain/1_overview.md) — see [§7.1 Epic machinery](../../distributed-drain/2_design.md#71-epic-machinery). This folder is retained only as the historical record.
 
 > **Status: Draft, landing incrementally.** This is the v2 contract ([ORB-10815]).
 > [§10](#10-what-v1-did-and-why-it-changed) records the v1 shape and why each piece changed. It

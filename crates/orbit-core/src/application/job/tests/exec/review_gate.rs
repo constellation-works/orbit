@@ -3,8 +3,7 @@
 //! Git mechanics that reach a remote are scripted; the review gate actions,
 //! the failure handoff, and the task/run records are real. The reviewer
 //! agent is replaced by a deterministic stub that persists the same report
-//! artifact the reviewer tool would. Epic-pipeline coverage lives in the
-//! sibling `epic_review_gate` module.
+//! artifact the reviewer tool would.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

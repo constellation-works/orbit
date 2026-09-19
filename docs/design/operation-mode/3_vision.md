@@ -270,7 +270,7 @@ Ten is a leaf-run ceiling, not a batch size or a machine-wide agent count.
 Admission is bounded by requested ceiling, catalog hard limits, available
 host/provider capacity and budgets, dependencies, workspace claims, and context
 conflicts/reservations. Account for pilots, reviewers, recovery workers, nested
-task fan-outs, and the additional epic separately; advertise both the leaf ceiling and actual
+task fan-outs separately; advertise both the leaf ceiling and actual
 active agent total. Never reserve ten task workers while starving the recovery
 needed to release their slots. A later implementation must expose the limiting
 reason through existing readiness diagnostics.
@@ -596,7 +596,7 @@ If those invariants cannot be enforced, do not promise covered automatic landing
 A race detected only after external merge yields uncovered delivery and an
 escalation, never a retroactively fabricated pass.
 
-For a bundle or epic, evaluate the final combined diff and retain each task's
+For a bundle, evaluate the final combined diff and retain each task's
 criteria/evidence. Child pass flags do not cover sibling interactions. When only
 part of a delivery is covered, record its exact covered and uncovered subsets;
 conservatively keep the delivery eligible for review unless the full requested

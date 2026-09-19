@@ -99,7 +99,7 @@ MCP surface have no `force`.
 | [search.md](references/search.md) | Finding prior tasks, docs, and frictions by topic, path, or related task. |
 | [docs-corpus.md](references/docs-corpus.md) | Authoring and registering the markdown corpus agents retrieve from. |
 | [friction.md](references/friction.md) | Recording what made the work harder than it should have been. |
-| [orchestration.md](references/orchestration.md) | Driving a backlog through: `orbit run ship`, `run auto`, epics, and keeping parallel runs from colliding. |
+| [orchestration.md](references/orchestration.md) | Driving a backlog through: `orbit run ship`, `run auto`, and keeping parallel runs from colliding. |
 | [workflows.md](references/workflows.md) | Jobs, activities, and the `orbit run` surface. |
 | [run-debugging.md](references/run-debugging.md) | A `jrun-*` run that failed, stuck, or was cancelled. |
 | [common-failures.md](references/common-failures.md) | Matching a known failure signature to its remedy, once the failing step is identified. |

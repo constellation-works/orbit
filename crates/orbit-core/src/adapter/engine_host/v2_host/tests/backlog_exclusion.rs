@@ -551,29 +551,32 @@ fn list_backlog_tasks_reports_direct_context_lock_conflicts() {
 }
 
 #[test]
-fn active_epic_excludes_only_loose_tasks_overlapping_descendant_union() {
+fn an_active_tagged_root_excludes_only_leaves_overlapping_its_own_files() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     write_workspace_file(&repo_root, "crates/epic/src/lib.rs");
     write_workspace_file(&repo_root, "crates/loose/src/lib.rs");
-    let epic = runtime
+    let tagged_root = runtime
         .add_task(TaskAddParams {
-            title: "Active epic".to_string(),
-            description: "Epic fixture".to_string(),
-            acceptance_criteria: vec!["Assembled".to_string()],
+            title: "Active tagged root".to_string(),
+            description: "Root fixture".to_string(),
+            acceptance_criteria: vec!["Delivered".to_string()],
             tags: vec!["epic".to_string()],
-            plan: "Drain children".to_string(),
+            plan: "Do the large task".to_string(),
+            context_files: vec!["file:crates/epic/src/lib.rs".to_string()],
             status: Some(TaskStatus::InProgress),
             ..Default::default()
         })
-        .expect("seed active epic");
-    seed_list_backlog_task(
+        .expect("seed active tagged root");
+    // [ORB-12491] The child's own surface is not the root's: it is admitted
+    // like any other leaf while the root holds only what it declared.
+    let child = seed_list_backlog_task(
         &runtime,
-        "Epic child",
+        "Child elsewhere",
         TaskStatus::Backlog,
         TaskPriority::High,
         TaskType::Chore,
-        Some(epic.id.clone()),
-        vec!["file:crates/epic/src/lib.rs"],
+        Some(tagged_root.id.clone()),
+        vec!["file:crates/loose/src/child.rs"],
     );
     let overlapping = seed_list_backlog_task(
         &runtime,
@@ -596,10 +599,10 @@ fn active_epic_excludes_only_loose_tasks_overlapping_descendant_union() {
 
     let output = list_backlog_tasks(&runtime, json!({}));
 
-    assert_eq!(output_task_ids(&output), vec![unrelated.id]);
+    assert_eq!(output_task_ids(&output), vec![child.id, unrelated.id]);
     let excluded = excluded_entry(&output, &overlapping.id);
     assert_eq!(excluded["reason"], "context_lock_conflict");
-    assert_eq!(excluded["conflicts"][0]["locking_task_id"], epic.id);
+    assert_eq!(excluded["conflicts"][0]["locking_task_id"], tagged_root.id);
 }
 
 #[test]
@@ -757,7 +760,7 @@ fn list_backlog_tasks_reports_empty_exclusions_for_assessed_explicit_task_ids() 
 }
 
 #[test]
-fn list_backlog_tasks_excludes_epic_roots_and_descendants_with_reasons() {
+fn list_backlog_tasks_admits_a_tagged_root_and_its_descendants_as_leaves() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let loose_one = seed_list_backlog_task(
         &runtime,
@@ -777,40 +780,43 @@ fn list_backlog_tasks_excludes_epic_roots_and_descendants_with_reasons() {
         None,
         vec![],
     );
-    let epic = runtime
+    let tagged_root = runtime
         .add_task(TaskAddParams {
-            title: "Epic root".to_string(),
-            description: "Epic fixture".to_string(),
-            acceptance_criteria: vec!["Supervised".to_string()],
+            title: "Tagged root".to_string(),
+            description: "Root fixture".to_string(),
+            acceptance_criteria: vec!["Delivered".to_string()],
             tags: vec!["epic".to_string()],
-            plan: "Delegate children".to_string(),
+            plan: "Do the large task".to_string(),
             status: Some(TaskStatus::Backlog),
             complexity: TaskComplexity::Medium,
             ..Default::default()
         })
-        .expect("seed epic root");
+        .expect("seed tagged root");
     let children = (0..3)
         .map(|index| {
             seed_list_backlog_task(
                 &runtime,
-                &format!("Epic child {index}"),
+                &format!("Child {index}"),
                 TaskStatus::Backlog,
                 TaskPriority::Medium,
                 TaskType::Chore,
-                Some(epic.id.clone()),
+                Some(tagged_root.id.clone()),
                 vec![],
             )
         })
         .collect::<Vec<_>>();
 
+    // [ORB-12491] Nothing is withheld for a family: the tagged root and its
+    // children queue by priority and age like every other leaf, and the
+    // `excluded` array reports no family reason at all.
     let output = list_backlog_tasks(&runtime, json!({}));
-    assert_eq!(output_task_ids(&output), vec![loose_one.id, loose_two.id]);
-    assert_eq!(excluded_entry(&output, &epic.id)["reason"], "epic_root");
-    assert_eq!(excluded_entry(&output, &epic.id)["conflicts"], json!([]));
-    for child in children {
-        assert_eq!(excluded_entry(&output, &child.id)["reason"], "epic_child");
-        assert_eq!(excluded_entry(&output, &child.id)["conflicts"], json!([]));
-    }
+    let mut expected = vec![loose_one.id, loose_two.id, tagged_root.id];
+    expected.extend(children.into_iter().map(|child| child.id));
+    expected.sort();
+    let mut admitted = output_task_ids(&output);
+    admitted.sort();
+    assert_eq!(admitted, expected);
+    assert_eq!(output["excluded"], json!([]));
 }
 
 /// `list_backlog_tasks` builds its candidate list by walking the task lookup,

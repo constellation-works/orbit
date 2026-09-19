@@ -161,44 +161,6 @@ fn drain_window(runtime: &OrbitRuntime, input: Value) -> Value {
         .expect("drain window")
 }
 
-fn list_epic_descendants(runtime: &OrbitRuntime, epic_task_id: &str) -> Value {
-    list_epic_descendants_with(runtime, epic_task_id, json!({}))
-}
-
-fn list_epic_descendants_with(runtime: &OrbitRuntime, epic_task_id: &str, extra: Value) -> Value {
-    let mut input = extra;
-    if let Some(object) = input.as_object_mut() {
-        object.insert("epic_task_id".to_string(), json!(epic_task_id));
-    }
-    runtime
-        .run_deterministic(
-            "list_epic_descendants",
-            &json!({}),
-            &input,
-            ToolContext::default(),
-        )
-        .expect("list epic descendants")
-}
-
-fn list_epic_descendants_err(
-    runtime: &OrbitRuntime,
-    epic_task_id: &str,
-    extra: Value,
-) -> orbit_engine::DispatchError {
-    let mut input = extra;
-    if let Some(object) = input.as_object_mut() {
-        object.insert("epic_task_id".to_string(), json!(epic_task_id));
-    }
-    runtime
-        .run_deterministic(
-            "list_epic_descendants",
-            &json!({}),
-            &input,
-            ToolContext::default(),
-        )
-        .expect_err("list epic descendants should fail")
-}
-
 fn readiness(runtime: &OrbitRuntime, task_ids: &[String], concurrency: Option<u32>) -> Value {
     readiness_allowing(runtime, task_ids, concurrency, &[])
 }
@@ -224,7 +186,7 @@ fn readiness_task<'a>(output: &'a Value, task_id: &str) -> &'a Value {
 }
 
 #[test]
-fn readiness_explains_dependencies_locks_epics_claims_and_capacity() {
+fn readiness_explains_dependencies_locks_children_claims_and_capacity() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     write_workspace_file(&repo_root, "crates/locked/src/lib.rs");
     let dependency = seed_list_backlog_task(
@@ -288,9 +250,11 @@ fn readiness_explains_dependencies_locks_epics_claims_and_capacity() {
         None,
         vec!["crates/locked/src/lib.rs"],
     );
-    let epic = runtime
+    // [ORB-12491] A child of an `epic`-tagged root is an ordinary leaf: it is
+    // never "managed", and only the scarce slot keeps it waiting.
+    let tagged_root = runtime
         .add_task(TaskAddParams {
-            title: "Managed epic".to_string(),
+            title: "Tagged root".to_string(),
             description: "fixture".to_string(),
             acceptance_criteria: vec!["fixture".to_string()],
             plan: "fixture".to_string(),
@@ -298,14 +262,14 @@ fn readiness_explains_dependencies_locks_epics_claims_and_capacity() {
             status: Some(TaskStatus::Backlog),
             ..Default::default()
         })
-        .expect("seed epic");
-    let epic_child = seed_list_backlog_task(
+        .expect("seed tagged root");
+    let child = seed_list_backlog_task(
         &runtime,
-        "Managed epic child",
+        "Child of a tagged root",
         TaskStatus::Backlog,
         TaskPriority::Medium,
         TaskType::Chore,
-        Some(epic.id),
+        Some(tagged_root.id),
         vec![],
     );
     let claimed = seed_list_backlog_task(
@@ -332,7 +296,7 @@ fn readiness_explains_dependencies_locks_epics_claims_and_capacity() {
         blocked.id.clone(),
         missing.id.clone(),
         locked.id.clone(),
-        epic_child.id.clone(),
+        child.id.clone(),
         claimed.id.clone(),
         saturated.id.clone(),
     ];
@@ -351,8 +315,8 @@ fn readiness_explains_dependencies_locks_epics_claims_and_capacity() {
         "context_lock_conflict"
     );
     assert_eq!(
-        readiness_task(&output, &epic_child.id)["reason"],
-        "epic_managed"
+        readiness_task(&output, &child.id)["reason"],
+        "capacity_saturated"
     );
     assert_eq!(
         readiness_task(&output, &claimed.id)["reason"],
@@ -589,201 +553,7 @@ fn readiness_candidate_pool_parsing_matches_classifier_for_numeric_and_string_on
 }
 
 #[test]
-fn epic_descendants_are_dependency_then_dispatch_ordered_and_terminal_tasks_are_skipped() {
-    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
-    let epic = runtime
-        .add_task(TaskAddParams {
-            title: "Epic root".to_string(),
-            description: "Epic fixture".to_string(),
-            acceptance_criteria: vec!["Supervised".to_string()],
-            tags: vec!["epic".to_string()],
-            plan: "Delegate children".to_string(),
-            status: Some(TaskStatus::InProgress),
-            ..Default::default()
-        })
-        .expect("seed epic root");
-    let foundation = runtime
-        .add_task(TaskAddParams {
-            parent_id: Some(epic.id.clone()),
-            title: "Foundation".to_string(),
-            description: "Foundation fixture".to_string(),
-            acceptance_criteria: vec!["Done".to_string()],
-            plan: "Implement".to_string(),
-            priority: TaskPriority::Low,
-            status: Some(TaskStatus::Backlog),
-            ..Default::default()
-        })
-        .expect("seed foundation");
-    let dependent = runtime
-        .add_task(TaskAddParams {
-            parent_id: Some(epic.id.clone()),
-            title: "Dependent".to_string(),
-            description: "Dependent fixture".to_string(),
-            acceptance_criteria: vec!["Done".to_string()],
-            dependencies: vec![foundation.id.clone()],
-            plan: "Implement".to_string(),
-            priority: TaskPriority::High,
-            status: Some(TaskStatus::Backlog),
-            ..Default::default()
-        })
-        .expect("seed dependent");
-    let independent = runtime
-        .add_task(TaskAddParams {
-            parent_id: Some(epic.id.clone()),
-            title: "Independent".to_string(),
-            description: "Independent fixture".to_string(),
-            acceptance_criteria: vec!["Done".to_string()],
-            plan: "Implement".to_string(),
-            priority: TaskPriority::Critical,
-            status: Some(TaskStatus::Backlog),
-            ..Default::default()
-        })
-        .expect("seed independent");
-    let corrective = runtime
-        .add_task(TaskAddParams {
-            parent_id: Some(epic.id.clone()),
-            title: "Corrective".to_string(),
-            description: "Corrective fixture".to_string(),
-            acceptance_criteria: vec!["Done".to_string()],
-            plan: "Implement".to_string(),
-            priority: TaskPriority::Low,
-            task_type: Some(TaskType::Bug),
-            status: Some(TaskStatus::Backlog),
-            ..Default::default()
-        })
-        .expect("seed corrective child");
-    let done = runtime
-        .add_task(TaskAddParams {
-            parent_id: Some(epic.id.clone()),
-            title: "Already done".to_string(),
-            description: "Done fixture".to_string(),
-            acceptance_criteria: vec!["Done".to_string()],
-            plan: "Implemented".to_string(),
-            status: Some(TaskStatus::Done),
-            ..Default::default()
-        })
-        .expect("seed done child");
-
-    let output = list_epic_descendants(&runtime, &epic.id);
-    assert_eq!(
-        output["task_ids"],
-        json!([independent.id, corrective.id, foundation.id, dependent.id])
-    );
-    assert_eq!(output["task_count"], 4);
-    assert!(
-        !output["task_ids"]
-            .as_array()
-            .expect("task ids")
-            .contains(&json!(done.id))
-    );
-}
-
-#[test]
-fn epic_with_no_descendants_has_an_empty_drain() {
-    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
-    let epic = runtime
-        .add_task(TaskAddParams {
-            title: "Empty epic".to_string(),
-            description: "Epic fixture".to_string(),
-            acceptance_criteria: vec!["No children".to_string()],
-            tags: vec!["epic".to_string()],
-            plan: "No-op".to_string(),
-            status: Some(TaskStatus::InProgress),
-            ..Default::default()
-        })
-        .expect("seed empty epic");
-
-    let output = list_epic_descendants(&runtime, &epic.id);
-    assert_eq!(output["task_ids"], json!([]));
-    assert_eq!(output["task_count"], 0);
-    assert_eq!(output["empty"], true);
-}
-
-#[test]
-fn leftover_descendants_fail_closed_and_name_the_ids() {
-    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
-    let epic = runtime
-        .add_task(TaskAddParams {
-            title: "Epic root".to_string(),
-            description: "Epic fixture".to_string(),
-            acceptance_criteria: vec!["Supervised".to_string()],
-            tags: vec!["epic".to_string()],
-            plan: "Delegate children".to_string(),
-            status: Some(TaskStatus::InProgress),
-            ..Default::default()
-        })
-        .expect("seed epic root");
-    let leftover = runtime
-        .add_task(TaskAddParams {
-            parent_id: Some(epic.id.clone()),
-            title: "Still open".to_string(),
-            description: "Unfinished descendant".to_string(),
-            acceptance_criteria: vec!["Done".to_string()],
-            plan: "Implement".to_string(),
-            status: Some(TaskStatus::Backlog),
-            ..Default::default()
-        })
-        .expect("seed leftover child");
-    let unrelated = seed_list_backlog_task(
-        &runtime,
-        "Unrelated chore",
-        TaskStatus::Backlog,
-        TaskPriority::Low,
-        TaskType::Chore,
-        None,
-        vec![],
-    );
-
-    let error = list_epic_descendants_err(&runtime, &epic.id, json!({ "fail_if_nonempty": true }));
-    match error {
-        orbit_engine::DispatchError::DeterministicActionFailed { action, message } => {
-            assert_eq!(action, "list_epic_descendants");
-            assert!(message.contains(&leftover.id), "{message}");
-            assert!(
-                message.contains("epic descendants remain after drain"),
-                "{message}"
-            );
-            assert!(
-                !message.contains(&unrelated.id),
-                "unrelated backlog must not appear in the epic fail-closed message: {message}"
-            );
-        }
-        other => panic!("expected leftover-descendant failure, got {other:?}"),
-    }
-}
-
-#[test]
-fn fail_if_nonempty_ignores_unrelated_backlog_when_the_epic_is_empty() {
-    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
-    let epic = runtime
-        .add_task(TaskAddParams {
-            title: "Empty epic".to_string(),
-            description: "Epic fixture".to_string(),
-            acceptance_criteria: vec!["No children".to_string()],
-            tags: vec!["epic".to_string()],
-            plan: "No-op".to_string(),
-            status: Some(TaskStatus::InProgress),
-            ..Default::default()
-        })
-        .expect("seed empty epic");
-    seed_list_backlog_task(
-        &runtime,
-        "Unrelated chore",
-        TaskStatus::Backlog,
-        TaskPriority::Low,
-        TaskType::Chore,
-        None,
-        vec![],
-    );
-
-    let output =
-        list_epic_descendants_with(&runtime, &epic.id, json!({ "fail_if_nonempty": true }));
-    assert_eq!(output["empty"], true);
-    assert_eq!(output["task_ids"], json!([]));
-}
-
-#[test]
-fn two_loose_tasks_and_one_epic_root_are_admissible_together() {
+fn an_epic_tagged_root_and_its_children_are_admitted_as_ordinary_leaves() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let loose_one = seed_list_backlog_task(
         &runtime,
@@ -803,118 +573,56 @@ fn two_loose_tasks_and_one_epic_root_are_admissible_together() {
         None,
         vec![],
     );
-    let epic = runtime
+    // [ORB-12491] The tag is a size hint. The root takes a slot like any other
+    // leaf, in its own priority/age position, and its children are admitted
+    // alongside it rather than withheld for it.
+    let tagged_root = runtime
         .add_task(TaskAddParams {
-            title: "Epic root".to_string(),
-            description: "Epic fixture".to_string(),
-            acceptance_criteria: vec!["Supervised".to_string()],
+            title: "Tagged root".to_string(),
+            description: "Root fixture".to_string(),
+            acceptance_criteria: vec!["Delivered".to_string()],
             tags: vec!["epic".to_string()],
-            plan: "Delegate children".to_string(),
+            plan: "Do the large task".to_string(),
             status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Hard,
             ..Default::default()
         })
-        .expect("seed epic root");
+        .expect("seed tagged root");
+    let mut children = Vec::new();
     for index in 0..3 {
-        seed_list_backlog_task(
-            &runtime,
-            &format!("Epic child {index}"),
-            TaskStatus::Backlog,
-            TaskPriority::Medium,
-            TaskType::Chore,
-            Some(epic.id.clone()),
-            vec![],
+        children.push(
+            seed_list_backlog_task(
+                &runtime,
+                &format!("Child {index}"),
+                TaskStatus::Backlog,
+                TaskPriority::Medium,
+                TaskType::Chore,
+                Some(tagged_root.id.clone()),
+                vec![],
+            )
+            .id,
         );
     }
 
-    // Leaves and the epic are independent answers, so both are admissible in
-    // the same iteration: the drain ships the leaves and starts the epic.
-    let first = classify(&runtime);
-    assert_eq!(first["loose_task_ids"], json!([loose_one.id, loose_two.id]));
-    assert_eq!(
-        first["loose_task_dispatches"],
-        json!([
-            { "task_ids": [loose_one.id] },
-            { "task_ids": [loose_two.id] },
-        ])
-    );
-    assert_eq!(first["has_leaves"], true);
-    assert_eq!(first["epic_task_id"], epic.id);
-    assert_eq!(first["has_epic"], true);
-    assert_eq!(first["idle"], false);
-
-    for loose in [&loose_one, &loose_two] {
-        runtime
-            .update_task(
-                &loose.id,
-                TaskUpdateParams {
-                    status: Some(TaskStatus::Done),
-                    ..Default::default()
-                },
-            )
-            .expect("complete loose task");
+    // A ceiling above the population, so what the wave omits is a decision and
+    // not a free-slot artifact.
+    let admissible = classify_with(&runtime, json!({ "max_active_leaf_runs": 10 }));
+    let admitted = admissible["loose_task_ids"]
+        .as_array()
+        .expect("loose task ids")
+        .iter()
+        .map(|task_id| task_id.as_str().expect("task id").to_string())
+        .collect::<BTreeSet<_>>();
+    assert!(admitted.contains(&loose_one.id), "{admitted:?}");
+    assert!(admitted.contains(&loose_two.id), "{admitted:?}");
+    assert!(admitted.contains(&tagged_root.id), "{admitted:?}");
+    for child in &children {
+        assert!(admitted.contains(child), "{admitted:?}");
     }
-    let second = classify(&runtime);
-    assert_eq!(second["epic_task_id"], epic.id);
-    assert_eq!(second["loose_task_ids"], json!([]));
-    assert_eq!(second["has_leaves"], false);
-}
-
-#[test]
-fn automatic_epic_root_choice_uses_the_shared_dispatch_order() {
-    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
-    let high_feature = runtime
-        .add_task(TaskAddParams {
-            title: "High feature epic".to_string(),
-            description: "Epic fixture".to_string(),
-            acceptance_criteria: vec!["Supervised".to_string()],
-            tags: vec!["epic".to_string()],
-            plan: "Delegate children".to_string(),
-            priority: TaskPriority::High,
-            task_type: Some(TaskType::Feature),
-            status: Some(TaskStatus::Backlog),
-            ..Default::default()
-        })
-        .expect("seed high feature epic");
-    let corrective = runtime
-        .add_task(TaskAddParams {
-            title: "Low security review epic".to_string(),
-            description: "Epic fixture".to_string(),
-            acceptance_criteria: vec!["Supervised".to_string()],
-            tags: vec!["epic".to_string(), "security-review".to_string()],
-            plan: "Delegate children".to_string(),
-            priority: TaskPriority::Low,
-            task_type: Some(TaskType::Chore),
-            status: Some(TaskStatus::Backlog),
-            ..Default::default()
-        })
-        .expect("seed corrective epic");
-    let critical = runtime
-        .add_task(TaskAddParams {
-            title: "Critical refactor epic".to_string(),
-            description: "Epic fixture".to_string(),
-            acceptance_criteria: vec!["Supervised".to_string()],
-            tags: vec!["epic".to_string()],
-            plan: "Delegate children".to_string(),
-            priority: TaskPriority::Critical,
-            task_type: Some(TaskType::Refactor),
-            status: Some(TaskStatus::Backlog),
-            ..Default::default()
-        })
-        .expect("seed critical epic");
-
-    assert_eq!(classify(&runtime)["epic_task_id"], critical.id);
-
-    runtime
-        .update_task(
-            &critical.id,
-            TaskUpdateParams {
-                status: Some(TaskStatus::Done),
-                ..Default::default()
-            },
-        )
-        .expect("complete critical epic");
-    assert_eq!(classify(&runtime)["epic_task_id"], corrective.id);
-    assert_ne!(classify(&runtime)["epic_task_id"], high_feature.id);
+    assert_eq!(admissible["has_leaves"], true);
+    assert_eq!(admissible["idle"], false);
+    assert!(admissible.get("epic_task_id").is_none());
+    assert!(admissible.get("has_epic").is_none());
 }
 
 #[test]
@@ -1029,34 +737,36 @@ model = "gpt-5.6-terra"
 }
 
 /// The `hold` decision this replaces froze every conflict-free chore for as
-/// long as an epic root was `in-progress`. Admission is the epic's lock
-/// reservation instead: the leaf that overlaps its descendants' declared files
-/// is excluded, and the one that does not still ships in the same drain.
+/// long as a large root was `in-progress`. Admission is that task's own lock
+/// reservation instead: the leaf that overlaps its declared files is excluded,
+/// and the one that does not still ships in the same drain [ORB-12491].
 #[test]
-fn a_live_epic_excludes_only_the_leaves_that_overlap_its_reservation() {
+fn a_live_tagged_root_excludes_only_the_leaves_that_overlap_its_own_files() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     write_workspace_file(&repo_root, "crates/epic/src/lib.rs");
     write_workspace_file(&repo_root, "crates/elsewhere/src/lib.rs");
-    let epic = runtime
+    let tagged_root = runtime
         .add_task(TaskAddParams {
-            title: "Active epic".to_string(),
-            description: "Epic fixture".to_string(),
-            acceptance_criteria: vec!["Supervised".to_string()],
+            title: "Active tagged root".to_string(),
+            description: "Root fixture".to_string(),
+            acceptance_criteria: vec!["Delivered".to_string()],
             tags: vec!["epic".to_string()],
-            plan: "Delegate children".to_string(),
+            plan: "Do the large task".to_string(),
+            context_files: vec!["file:crates/epic/src/lib.rs".to_string()],
             status: Some(TaskStatus::InProgress),
             ..Default::default()
         })
-        .expect("seed active epic");
-    // The epic root reserves the union of its descendants' context files.
-    seed_list_backlog_task(
+        .expect("seed active tagged root");
+    // [ORB-12491] The root holds its own declared file, not its child's: the
+    // child's surface is the child's to reserve when it starts.
+    let child = seed_list_backlog_task(
         &runtime,
-        "Epic child",
+        "Child elsewhere",
         TaskStatus::Backlog,
         TaskPriority::Medium,
         TaskType::Chore,
-        Some(epic.id.clone()),
-        vec!["crates/epic/src/lib.rs"],
+        Some(tagged_root.id.clone()),
+        vec!["crates/child/src/lib.rs"],
     );
     let overlapping = seed_list_backlog_task(
         &runtime,
@@ -1078,7 +788,10 @@ fn a_live_epic_excludes_only_the_leaves_that_overlap_its_reservation() {
     );
 
     let admissible = classify(&runtime);
-    assert_eq!(admissible["loose_task_ids"], json!([conflict_free.id]));
+    assert_eq!(
+        admissible["loose_task_ids"],
+        json!([child.id, conflict_free.id])
+    );
     assert_eq!(admissible["has_leaves"], true);
     assert_eq!(admissible["idle"], false);
     assert!(
@@ -1086,7 +799,7 @@ fn a_live_epic_excludes_only_the_leaves_that_overlap_its_reservation() {
             .as_array()
             .expect("loose task ids")
             .contains(&json!(overlapping.id)),
-        "a leaf overlapping the epic's reserved files must not ship"
+        "a leaf overlapping the root's declared files must not ship"
     );
 }
 
@@ -1098,50 +811,7 @@ fn an_empty_workspace_is_admissibly_empty() {
 
     assert_eq!(quiet["loose_task_ids"], json!([]));
     assert_eq!(quiet["has_leaves"], false);
-    assert_eq!(quiet["epic_task_id"], Value::Null);
-    assert_eq!(quiet["has_epic"], false);
     assert_eq!(quiet["idle"], true);
-    assert_eq!(quiet["active_epic_run_id"], Value::Null);
-}
-
-#[test]
-fn a_backlog_epic_root_waits_while_an_epic_run_is_live() {
-    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
-    let waiting = runtime
-        .add_task(TaskAddParams {
-            title: "Second epic root".to_string(),
-            description: "Epic fixture".to_string(),
-            acceptance_criteria: vec!["Supervised".to_string()],
-            tags: vec!["epic".to_string()],
-            plan: "Delegate children".to_string(),
-            status: Some(TaskStatus::Backlog),
-            ..Default::default()
-        })
-        .expect("seed backlog epic root");
-
-    assert_eq!(classify(&runtime)["epic_task_id"], waiting.id);
-
-    // `epic_pipeline` admits one active run. Once one is live, offering
-    // another root would queue a pending run rather than start work — and the
-    // drain loop would mint a fresh one every iteration.
-    let live = runtime
-        .stores()
-        .jobs()
-        .insert_job_run(
-            "epic_pipeline",
-            1,
-            Utc::now(),
-            Some(json!({ "epic_task_id": "ORB-00001" })),
-            None,
-        )
-        .expect("insert live epic run");
-
-    let admissible = classify(&runtime);
-    assert_eq!(admissible["epic_task_id"], Value::Null);
-    assert_eq!(admissible["has_epic"], false);
-    assert_eq!(admissible["idle"], true);
-    assert_eq!(admissible["active_epic_run_id"], live.run_id);
-    assert_eq!(admissible["active_epic_task_id"], "ORB-00001");
 }
 
 #[test]
@@ -1498,14 +1168,15 @@ fn crew_allowlist_permits_an_alias_of_a_permitted_identity() {
     assert_eq!(classified["loose_task_ids"], json!([aliased]));
 }
 
-/// An epic root is admitted through the same effective-crew rule as a leaf, so
-/// a restricted window cannot start one whose crew it excluded.
+/// An `epic`-tagged root goes through the same effective-crew rule as any other
+/// leaf, so a restricted window withholds it exactly as it withholds a chore
+/// [ORB-12491].
 #[test]
-fn crew_allowlist_withholds_an_excluded_epic_root() {
+fn crew_allowlist_withholds_an_excluded_tagged_root() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_config(Some(ALLOWLIST_CREW_CONFIG));
-    let epic = seed_list_backlog_task(
+    let tagged_root = seed_list_backlog_task(
         &runtime,
-        "Excluded epic",
+        "Excluded large task",
         TaskStatus::Backlog,
         TaskPriority::Medium,
         TaskType::Feature,
@@ -1514,20 +1185,23 @@ fn crew_allowlist_withholds_an_excluded_epic_root() {
     );
     runtime
         .update_task(
-            &epic.id,
+            &tagged_root.id,
             TaskUpdateParams {
                 crew: Some(Some("fable".to_string())),
                 tags: Some(vec!["epic".to_string()]),
                 ..Default::default()
             },
         )
-        .expect("tag epic root");
+        .expect("tag root");
 
     assert_eq!(
-        classify_with(&runtime, json!({ "allowed_crews": ["opus"] }))["has_epic"],
-        json!(false)
+        classify_with(&runtime, json!({ "allowed_crews": ["opus"] }))["loose_task_ids"],
+        json!([])
     );
-    assert_eq!(classify(&runtime)["epic_task_id"], json!(epic.id));
+    assert_eq!(
+        classify(&runtime)["loose_task_ids"],
+        json!([tagged_root.id])
+    );
 }
 
 /// The allowlist is validated where the operator can act on it, not silently
@@ -1610,21 +1284,22 @@ fn seed_backlog_leaves(runtime: &OrbitRuntime, count: usize) -> Vec<String> {
 }
 
 #[test]
-fn a_stopped_drain_admits_no_leaves_or_epics_and_leaves_live_children() {
+fn a_stopped_drain_admits_nothing_and_leaves_live_children() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     write_workspace_file(&repo_root, "crates/leaf_0/src/lib.rs");
     seed_backlog_leaves(&runtime, 1);
-    let epic = runtime
+    let tagged_root = runtime
         .add_task(crate::application::task::TaskAddParams {
-            title: "Epic root".to_string(),
+            title: "Tagged root".to_string(),
             description: "fixture".to_string(),
             acceptance_criteria: vec!["fixture".to_string()],
             plan: "fixture".to_string(),
             tags: vec!["epic".to_string()],
             status: Some(TaskStatus::Backlog),
+            complexity: TaskComplexity::Hard,
             ..Default::default()
         })
-        .expect("seed epic");
+        .expect("seed tagged root");
     let drain_run_id = seed_running_drain(&runtime, 5);
     let live = seed_live_leaf_run(&runtime, &["CARRIED"]);
 
@@ -1650,18 +1325,18 @@ fn a_stopped_drain_admits_no_leaves_or_epics_and_leaves_live_children() {
             .is_empty(),
         "a stopped drain admits no leaves: {output}"
     );
-    assert_eq!(output["epic_task_id"], Value::Null);
-    assert_eq!(output["has_epic"], false);
     assert_eq!(output["has_leaves"], false);
+    assert!(
+        !output["loose_task_ids"]
+            .as_array()
+            .expect("admitted")
+            .contains(&json!(tagged_root.id)),
+        "a stopped drain must not start an admissible large task: {output}"
+    );
     let child = runtime.show_job_run(&live).expect("show child");
     assert!(
         !child.state.is_terminal(),
         "stop must not cancel an already admitted child"
-    );
-    assert_ne!(
-        output["epic_task_id"],
-        json!(epic.id),
-        "a stopped drain must not start an admissible epic"
     );
 
     let readiness = readiness(&runtime, &[], None);

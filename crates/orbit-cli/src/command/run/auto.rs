@@ -15,12 +15,12 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
 
 #[derive(Args)]
 #[command(
-    about = "Drain the workspace backlog for a window (loose leaves, plus one epic)",
+    about = "Drain the workspace backlog for a window",
     override_usage = "orbit run auto [OPTIONS]",
     after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,terra\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --stop\n\n\
                   The drain re-lists the whole backlog every pass and keeps `--concurrency`\n\
                   tasks in flight, starting a replacement as each one finishes rather than\n\
-                  waiting for the batch. An epic root runs alongside the leaves, one at a time.\n\n\
+                  waiting for the batch.\n\n\
                   `--complete` is blanket authorization: it applies to every task the drain\n\
                   admits for the whole window, including work that reaches the backlog after\n\
                   the run starts. The drain is asynchronous, so this prints the durable run ID\n\

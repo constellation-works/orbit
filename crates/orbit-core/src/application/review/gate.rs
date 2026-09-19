@@ -53,8 +53,8 @@ pub(crate) fn review_gate_admit(
     // never a delivery submission: it keeps the pre-existing behavior and
     // never loads tasks or Git state for a gate that cannot apply.
     // Prefer the dispatcher-injected `run_id` (the admitted job) over
-    // `job_run_id`, which an epic pipeline may still spell as the stable
-    // worktree token that has no run record [ORB-11520].
+    // `job_run_id`, which a caller may spell as a stable worktree token that
+    // has no run record [ORB-11520].
     let run_id = admitted_run_id(input).map_err(|error| failed(error.to_string()))?;
     let Some(admission) =
         run_review_admission(runtime, &run_id).map_err(|error| failed(error.to_string()))?
@@ -80,7 +80,7 @@ pub(crate) fn review_gate_admit(
     }
     if input.get("mode").and_then(Value::as_str) == Some("local") {
         // V1 rejects `before-pr` on a local-only route instead of changing
-        // what the policy means; the epic pipeline learns its route late.
+        // what the policy means; a pipeline may learn its route late.
         return Err(failed(
             "review_policy_local_route_refused: this run carries a before-pr review admission \
              but delivers locally; ship through the PR route or choose none/after-landing"
@@ -372,8 +372,8 @@ fn required_string(input: &Value, key: &str) -> Result<String, OrbitError> {
 
 /// The admitted job that captured review policy and owns the candidate.
 ///
-/// Dispatcher injects the executing run as `run_id`. Epic pipelines may pass
-/// the stable worktree token as `job_run_id`; that token is not a run record.
+/// Dispatcher injects the executing run as `run_id`. A caller may pass a
+/// stable worktree token as `job_run_id`; that token is not a run record.
 fn admitted_run_id(input: &Value) -> Result<String, OrbitError> {
     let job_run_id = required_string(input, "job_run_id")?;
     let injected = input

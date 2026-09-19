@@ -67,7 +67,6 @@ not a rewrite of failed history.
 | `task_auto_pipeline` | Discover ready backlog tasks and ship them. |
 | `task_gate_pipeline` | Gated shipment with windowing and starvation handling. |
 | `task_pilot_pipeline` | Read-only agent preflight plus deterministic task-isolated apply. Apply normalizes only unambiguous bare file/directory targets from the pinned source, records the normalization, and commits valid siblings even when another assessment is invalid or stale; the overall run still fails while anything is unresolved. Replays use durable per-task operation receipts. It defaults to no lifecycle promotion. An omitted optional `base_branch` binds as empty at the prepare activity boundary, then preparation resolves the owning workspace's `[workflow] base_branch`; pass a non-empty run input to inspect another branch. |
-| `epic_pipeline` | Ship an epic and its descendants against one worktree. |
 | `workspace_ship_pipeline` / `workspace_auto_pipeline` | Workspace-scoped wrappers that resolve mode and base branch, then invoke the pipelines above. |
 | `ci_failure_sweep_pipeline` | File GitHub Actions findings as proposed, pilot them, and admit only current warning-free repairs to backlog; never implements them. |
 | `dependabot_alert_sweep_pipeline` | Collect Dependabot/code/secret-scanning evidence and file remediation tasks. |
@@ -218,7 +217,7 @@ Every pipeline above that ships a task takes a `completion` input, defaulting to
 `review`. `orbit run ship --complete` / `orbit run auto --complete` set it to
 `done` on the submitted run, and it propagates unchanged through
 `workspace_auto_pipeline` → `task_auto_pipeline` → `task_gate_pipeline` → the
-leaf pipelines, and into `epic_pipeline`. Because the workspace drain reads it
+leaf pipelines. Because the workspace drain reads it
 from its own input each iteration, work discovered mid-window inherits the same
 authorization.
 
