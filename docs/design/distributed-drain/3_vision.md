@@ -16,11 +16,11 @@ related_artifacts: [ORB-12488]
 
 # Distributed Drain — Vision
 
-V1 distributes execution while retaining one coordination authority. Drains are explicitly
-invoked; the unused ship sweep is retired, while authorized landing follows durable handoff requests. Its required scope includes
-idempotent admission, attempt ownership, manual recovery, routed task reads/writes, and durable
-landing handoff. The questions below extend that contract; they are not prerequisites hidden as
-future work.
+V1 distributes execution while retaining one coordination authority. Explicit drains and retained
+ship-sweep entry points share claim admission, while authorized landing follows durable handoff
+requests. Its required scope includes idempotent admission, attempt ownership, manual recovery,
+routed task reads/writes, and durable landing handoff. The questions below extend that contract;
+they are not prerequisites hidden as future work.
 
 ## 1. Open Questions
 
@@ -43,7 +43,16 @@ future work.
    `job_run_host` on the task, a read-only `execute`-class run lookup routed to that destination is
    the obvious shape; whether the dashboard should
    aggregate it is a separate question.
-6. **Hosted sessions as followers.** A cloud session could pull if the owner store were reachable
+6. **Review policies beyond none.** V1 requires `review_policy = none` on owner and executor,
+   with validation evidence and a typed not-required review disposition. Before-PR and after-landing
+   review need explicit admission, artifact, and landing contracts before either can be enabled.
+7. **Bounded request receipt retention.** V1 compacts settled receipts to permanent tombstones and
+   stops each refill pass at its first idle response. A future retired-namespace/sequence protocol
+   could bound storage while rejecting every old request; random IDs and age-based deletion cannot.
+8. **Checkpoint resume under claims.** V1 refuses generic resume of interrupted claimed leaves;
+   recovery creates a fenced new claim/run. A future logical execution identity or fenced run
+   transfer can preserve checkpoints without permitting two run identities under one immutable binding.
+9. **Hosted sessions as followers.** A cloud session could pull if the owner store were reachable
    from it, which today it is not. Revisit once question 4 has an answer.
 
 ## 2. Prior Work

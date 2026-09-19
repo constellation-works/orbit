@@ -38,6 +38,10 @@ The queue is a logical owner-side query, not a required maintained table:
   admission. Ordinary task and reservation mutations must participate in the same serialization.
 - **Invalid entries:** dangling/rejected/archived dependencies or invalid/empty lock surfaces are
   excluded with diagnostics. They do not prevent unrelated valid work from being admitted.
+  Missing filesystem targets are valid declarations, not grounds for pruning: retain canonical
+  selectors for new files and symbols, and freeze the full footprint on the claim through review.
+  All task context read/write and status-lock paths use this non-pruning rule. A truly empty
+  declaration requires operator correction before admission; execution cannot expand its scope.
 
 V1 has no caller-selected crew or platform filter. Each participant must meet all workspace
 execution requirements and resolve configured crews equivalently. This is a v1 restriction;
@@ -46,9 +50,13 @@ future owner-evaluated eligibility can preserve the same ordering authority.
 ## Class and routing
 
 Only the owner serves this `control_plane` tool. A caller must have the workspace's `agent`
-capability. `agent_invoke` is not needed because execution starts locally. Workspace selection
-uses the host-qualified selector; authenticated caller identity supplies `machine_id`, never a
-payload assertion. Owner-local drains use the same logical admission contract.
+capability. `agent_invoke` is not needed because execution starts locally. Workspace selection uses
+the host-qualified selector; authenticated caller identity supplies `machine_id`, never a payload
+assertion. Remote callers must present destination-bound `KeyBound` identity proof; Tier 1
+self-assertion plus an `agent` capability is insufficient. Owner-local drains use trusted local
+runtime identity and the same logical admission contract. V1 admits only `review_policy = none`;
+reject `before-pr` and `after-landing` before creating a claim. The read-only preflight response is
+defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
 
 ## Input
 
@@ -57,7 +65,8 @@ payload assertion. Owner-local drains use the same logical admission contract.
 | `workspace` | selector | Host-qualified owner/workspace selector |
 | `request_id` | string | Durable unique ID for one intended admission; reused unchanged after uncertainty |
 | `caller_version` | string | Caller binary version |
-| `caller_schema` | integer | Caller orchestration schema version |
+| `caller_schema` | integer | Caller distributed-drain wire-protocol schema version |
+| `caller_review_policy` | enum | Executor's effective review policy; only `none` is supported |
 | `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `host_id` |
 
 The caller persists the request before sending it. One drain run uses many request IDs. There is
@@ -66,8 +75,11 @@ from durable owner-side grants; the input does not grant merge rights.
 
 ## Idempotency and admission
 
-1. Validate selector, current caller authorization, version/schema, and required input. Refuse a
-   remote caller for a local-only ship workspace. These checks also apply to receipt replay.
+1. Apply pre-admission refusals in the table order below: selector, current authorization,
+   identity proof, input shape, version/schema, ship mode, then review policy. Check both owner
+   policy and the executor's declared `caller_review_policy`; neither may differ from `none`.
+   These checks also apply to pull receipt replay; the separate read-only receipt lookup below
+   is for reconciliation across configuration/upgrades.
 2. Begin the owner store transaction. Look up the receipt by workspace, authenticated machine, and
    request ID. An existing ID with different input yields `request_mismatch`; identical input
    returns its original outcome without new admission, history, or reservation.
@@ -75,20 +87,44 @@ from durable owner-side grants; the input does not grant merge rights.
    and report diagnostics. Skip candidates conflicting with status-derived locks of `in-progress`
    or `review` tasks or active reservations; record `deferred_conflicts`.
 4. For the first valid non-conflicting task, allocate an immutable claim ID. Reserve its own
-   canonical footprint with the gate TTL default, record its execution machine and drain context,
-   transition `backlog → in-progress`, append history, and persist the response receipt atomically.
+   canonical non-pruned footprint with an explicit default TTL of 14,400 seconds (four hours),
+   record its execution machine and drain context, transition `backlog → in-progress`, append a
+   `pulled_by { machine_id, run_context, claim_id, request_id }` history record, and persist the
+   response receipt atomically. The pulled path passes this TTL explicitly rather than inheriting
+   `reserve_with_index`'s 1,800-second fallback.
    No local leaf run, branch, or worktree is created by this transaction.
 5. If none is eligible, persist an `idle` receipt with diagnostics. This changes receipt state but
-   creates no task transition, claim, or reservation. A later poll must use a new request ID.
+   creates no task transition, claim, or reservation. End this refill pass on the first idle
+   response, sleep for the configured poll interval, and use a new request ID for the next poll.
 
-The receipt stores owner-resolved ship configuration as of admission. Replays do not silently
-change the execution contract. Exact request retries may return the same task repeatedly; only
-one admission occurred. Full receipts may be compacted to non-reusable tombstones, in which case
-replay returns `request_expired`, never a new task. Unsettled claims retain their receipts.
+The receipt stores owner-resolved ship configuration as of admission. Replays do not silently change
+the execution contract. Exact request retries may return the same task repeatedly; only one
+admission occurred. Full receipts may be compacted to non-reusable tombstones, in which case replay
+returns `request_expired`, never a new task. Unsettled claims retain their receipts. Tombstones are
+permanent in v1; neither random IDs nor age permit safe deletion. Expose counts and bytes, and
+document the storage cost of idle polls. Bounded retention is deferred until a protocol can reject
+retired request namespaces without retaining every individual ID.
 
 A receipt is historical evidence, not current execution authority. Replay includes current claim
 phase separately. A revoked or settled claim is never reactivated; local launch requires an
 idempotent owner-side binding check and execution mutations require the current claim.
+
+## Read-only receipt reconciliation
+
+Add an owner-served lookup keyed by workspace, original caller machine, and request ID. It returns
+`found` (original receipt and current claim state), `expired` (tombstone), or `not_found` from an
+owner transaction. It never creates a receipt, binds a run, or grants execution authority. The
+original input remains immutable; a client upgraded to the owner's binary can look up an old request
+without changing `caller_version` inside it. The lookup uses receipt schema `1`, versioned independently of admission, and
+does not reapply original binary parity, ship mode, or review policy admission checks.
+
+Current workspace authorization and remote identity proof are mandatory. A caller may inspect only
+its own receipts; separately authorized owner operators may inspect claims across callers. On
+revoked access or an incompatible lookup protocol, use owner claim inspection and deliberate
+recovery. `not_found` is not proof that an earlier transport request cannot still arrive: retry only
+the original request ID while it remains admissible, or quiesce old sends and reconcile on the owner
+before replacement. A found claim cannot launch if its saved ship/policy contract is incompatible
+with the current executor; preserve it for explicit recovery rather than rewriting it.
 
 ## Output
 
@@ -98,7 +134,7 @@ idempotent owner-side binding check and execution mutations require the current 
 | `task` | Task summary: ID, title, complexity, crew, context selectors; absent for idle |
 | `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, authenticated execution machine; absent for idle |
 | `claim_state` | Current phase at response time, separate from the stored admission receipt |
-| `ship` | Owner-resolved mode, base/landing branches, completion policy and optional durable authorization reference |
+| `ship` | Owner-resolved mode, base/landing branches, `review_policy: none`, completion policy and optional durable authorization reference |
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors |
 | `invalid_candidates[]` | Invalid dependency or lock-surface exclusions with reasons |
 | `idle` | No claim created by this request |
@@ -110,15 +146,18 @@ Queue depth and returned claim state are snapshots, not authorization for later 
 ## Refusals
 
 Authorization and compatibility are checked before reading/replaying caller receipts. The remaining
-checks run in the order described above.
+checks run in the following table order; a malformed or absent version field is `invalid_input`, not
+a compatibility comparison. Policy is rechecked at binding without rewriting the receipt.
 
 | Error | When |
 |---|---|
 | `unknown_selector` | Selector cannot resolve to the named owner workspace |
 | `capability_refused` | Destination is a replica or caller lacks required authority |
+| `identity_unverified` | Remote machine identity is self-asserted rather than destination key-bound |
+| `invalid_input` | Required request, version/policy declaration, or drain context is missing or malformed |
 | `version_mismatch` | Caller binary/schema differs from owner |
-| `invalid_input` | Required request or drain context is missing or malformed |
 | `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
+| `review_policy_unsupported` | Owner/executor review policy is not `none` |
 | `request_mismatch` | Existing request ID is reused with different input |
 | `request_expired` | An old request is represented only by a non-reusable tombstone |
 
@@ -133,9 +172,11 @@ store schema are implementation choices; their atomic behavior is required:
 
 | Operation | Required owner behavior |
 |---|---|
-| Bind execution | Validate claim and machine; bind one host-qualified leaf run idempotently; move `claimed → running` |
+| Bind execution | Validate claim, machine, captured policy and mode; bind one host-qualified leaf run idempotently; move `claimed → running`; generic resume may not replace this run |
 | Execution mutation | Check current claim, machine/run, and phase within the write transaction; deduplicate repeated mutation IDs |
-| Accept handoff | Persist evidence and completion-authority reference, promote to review, close execution writes, release only this reservation atomically |
+| Accept handoff | Persist candidate/base SHAs, validation evidence, typed `{ policy: none, disposition: not_required }`, and any completion-authority reference; promote to review, close execution writes, release only this reservation atomically; authorized acceptance also records the landing-start request |
+| Approve handoff | Owner operator only: deduplicate mutation ID, verify current review handoff and exact candidate/base, persist scoped authorization with approver/revocation state, and record landing-start request atomically; agent access cannot approve |
+| Revoke completion authorization | Owner operator only: invalidate pending landing permission atomically; reconcile any uncertain merge intent before reassignment |
 | Fail/cancel | Persist failure evidence, block the task, invalidate execution authority, release only this reservation atomically |
 | Deliberate recovery | Reconcile any uncertain landing intent; revoke old claim, invalidate pending handoff, release reservation, and apply an authorized task transition atomically |
 
@@ -143,10 +184,16 @@ store schema are implementation choices; their atomic behavior is required:
 `in-progress`. Replay of a previously committed mutation may return its recorded outcome without
 performing it again. All worker write routes carry claim context; generic task tools cannot bypass
 these checks. Status/run/footprint edits affecting an active claim must preserve it or use recovery.
+Interrupted claimed leaves cannot use generic `orbit job resume`, which creates a different run.
+Deliberate recovery revokes the old claim before a new attempt; branch evidence may be reused but
+validation/handoff must be fresh. Owner-local mode uses a local-candidate handoff and authorized
+local merge evidence; it must not enter the PR pipeline or require an origin. See [design
+§3](../2_design.md#3-pull-mode-drain-and-the-pulled-leaf-pipeline) for both dispatch variants.
 
-The reservation TTL is not a claim lease. Expiry does not authorize another worker, revoke a
-claim, or remove status-derived task locks. Manual inspection/recovery is required when no worker
-settles the claim. See [2_design.md §3.1](../2_design.md#31-attempt-ownership-and-recovery).
+The reservation TTL is not a claim lease. Expiry does not authorize another worker, revoke a claim,
+or remove the frozen non-pruned footprint used by status-derived task locks. Manual
+inspection/recovery is required when no worker settles the claim. See [2_design.md
+§3.1](../2_design.md#31-attempt-ownership-and-recovery).
 
 ## Invariants
 
@@ -158,7 +205,10 @@ settles the claim. See [2_design.md §3.1](../2_design.md#31-attempt-ownership-a
 - Reassignment invalidates former attempt writes and landing authority before a new admission.
 - Reservation cleanup can affect only the reservation associated with the settling claim.
 - Owner and follower drains use the same admission boundary; legacy local admission cannot bypass it.
-- Pull and task promotion do not grant merge authority.
+- Pull and task promotion do not grant merge authority; explicit handoff approval does.
+- `none` is the only review policy in v1; review status does not imply an automated review.
+- Existing ship-sweep routines, wrapper, CLI, and owner-local drains cannot bypass this admission
+  contract; queued/bound leaf runs and unrepresented admissions consume capacity exactly once.
 
 ## Required failure coverage
 

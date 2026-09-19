@@ -7,7 +7,7 @@ status: Draft
 feature: distributed-drain
 doc_role: decisions
 type: design
-summary: Pull-based admission, durable request and attempt identity, owner ordering, explicit landing authority, and the epic, triage, and ship-sweep retirements.
+summary: Pull-based admission, durable request and attempt identity, owner ordering, explicit landing authority, the epic and triage retirements, retained ship sweep, none-only review, and non-pruning footprints.
 tags: [distributed-drain, multi-host, decisions]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks.rs"]
 related_features: [distributed-drain, federated-mcp, host-registry, resident-orchestrator]
@@ -225,7 +225,9 @@ transition.
 
 ### Consequences
 
-- No LLM call runs unattended against failure output.
+- Terminal failed-run classification and automatic re-backlogging are removed. In-run
+  `step_failure_recovery` remains; it may invoke an LLM against failure output within its existing
+  authorization and recovery budget. Retirement does not disable that separate mechanism.
 - Environmental failures accumulate in `blocked` until someone looks.
 - Cost: the 30-second-read diagnosis triage attached is gone; the reader gets the raw failure.
 
@@ -291,11 +293,12 @@ follower promotion as a complete handoff would leave delivery stuck or lose its 
 
 ### Decision
 
-Validate where execution happens, then submit a durable candidate and review evidence to a new
-owner-side landing consumer. Admission and review promotion never grant merge rights. Completion
-requires a recorded authorization and pinned delivery evidence. Persist external merge intent and
-reconcile uncertain outcomes before task reassignment or completion. Conflicts require a newly
-validated repair, not an owner-side unvalidated rebase.
+Validate where execution happens, then submit a durable candidate, validation evidence, and typed
+`review_policy: none` / `not_required` disposition to a new owner-side landing consumer. Admission
+and review promotion never grant merge rights. Completion requires a recorded authorization and
+pinned delivery evidence. Persist external merge intent and reconcile uncertain outcomes before task
+reassignment or completion. Conflicts require a newly validated repair, not an owner-side
+unvalidated rebase.
 
 ### Consequences
 
@@ -305,6 +308,8 @@ validated repair, not an owner-side unvalidated rebase.
   landing can hold a review lock until repair or explicit recovery, limiting throughput.
 
 ## Explicit drains replace the unused ship sweep
+
+**Superseded by:** [Ship sweep remains an admission entry point](#ship-sweep-remains-an-admission-entry-point). The original decision below is retained as history.
 
 **Recorded:** 2026-09 · Daniel requested retirement during revision of the design authored by [ORB-12488].
 **Code anchors:** `crates/orbit-core/assets/routines/ship_sweep.yaml`, `crates/orbit-core/assets/jobs/workspace_ship_pipeline.yaml`, `crates/orbit-core/src/application/routine.rs`
@@ -329,6 +334,75 @@ The generic scheduler and unrelated routines remain.
 - Cost: operators who configured ship-sweep instances must remove or retarget them and reconcile
   active wrappers during migration. The built-in periodic backlog-start feature is no longer
   available; this change installs no replacement schedule.
+
+## Ship sweep remains an admission entry point
+
+**Recorded:** 2026-09 · Daniel reversed ship-sweep retirement after review of [ORB-12488].
+**Code anchors:** `crates/orbit-core/assets/routines/ship_sweep.yaml`, `crates/orbit-core/assets/jobs/workspace_ship_pipeline.yaml`, `crates/orbit-cli/src/command/run/sweep.rs`
+
+### Context
+
+The earlier removal proposal covered the seeded routine and wrapper but missed the independent CLI
+dispatch path. Daniel now wants the feature retained.
+
+### Decision
+
+Keep all three entry points and their existing opt-ins. Adapt them to common claim admission; none
+may rediscover and dispatch around owner serialization or imply completion authority. Preserve
+schedules and enablement without enabling new ones. The handoff consumer remains independent of
+whether a sweep or drain is running.
+
+### Consequences
+
+- Existing scheduled and explicit starts remain supported.
+- Cost: every retained entry point needs claim-aware admission and capacity coverage.
+
+## V1 review policy is none
+
+**Recorded:** 2026-09 · Daniel narrowed v1 after review of the contract authored by [ORB-12488].
+**Code anchors:** `crates/orbit-core/src/application/review/gate.rs`, `crates/orbit-core/assets/jobs/task_pr_pipeline.yaml`
+
+### Context
+
+The previous handoff required reviewed SHAs and review artifacts even though the default `none`
+policy produces neither. Supporting multiple review timings would require distinct handoff and
+completion contracts.
+
+### Decision
+
+V1 admits only `review_policy = none` on both owner and executor. Capture it on the claim and carry
+an explicit `not_required` disposition alongside candidate/base SHAs and validation artifacts. Do
+not fabricate reviewed SHAs or run an automatic review. Review task status remains the delivery
+handoff state; completion still requires explicit authorization and verified landing evidence.
+
+### Consequences
+
+- Default no-review execution can produce a valid handoff without pretending a review happened.
+- Cost: workspaces configured for before-PR or after-landing review must explicitly change policy
+  or wait for a later version; pull never silently downgrades their policy.
+
+## Declared context survives missing filesystem targets
+
+**Recorded:** 2026-09 · Daniel requested removal of context-file pruning after review of [ORB-12488].
+**Code anchors:** `crates/orbit-core/src/runtime/task/locks.rs::existing_envelope_context_files_at_root`, `crates/orbit-core/src/application/task/paths.rs`
+
+### Context
+
+Filesystem-existence pruning drops selectors for files a task intends to create. On a follower, that
+also lets an owner-computed status lock lose declared scope after reservation expiry.
+
+### Decision
+
+Canonicalize and boundary-check declarations without dropping absent files or symbols. Apply the
+same rule to task context storage/projections, reservations, and status locks. Freeze the admitted
+canonical footprint through execution and review, independent of checkout contents. Empty declared
+context remains a pre-admission diagnostic requiring operator correction, not a zero-file claim.
+
+### Consequences
+
+- New-file work retains its declared conflict protection before creation and after TTL expiry.
+- Cost: obsolete selectors continue holding locks until deliberately corrected; declarations
+  already pruned from stored tasks need history-backed restoration or operator repair.
 
 ## Task References
 

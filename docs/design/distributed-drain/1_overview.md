@@ -44,10 +44,12 @@ that record is invisible to every other host: two hosts draining one store would
 leaf twice. Two hosts each owning an independent store is what the operator has now — two control
 planes over one repository, which the federated-mcp spec names an operator misconfiguration.
 
-Existing roles, capability routing, reservations, and PR checks provide foundations. V1 must
-add atomic admission, durable request/claim identity, routed task reads and writes, settlement,
-and an owner landing consumer. These are substantive integration changes. Throughput depends on
-file conflicts, provider limits, shared CI, and landing capacity as well as local build slots.
+Existing roles, capability routing, reservations, and PR checks provide foundations. V1 must add
+atomic admission, durable request/claim identity, routed task reads and writes, settlement, and an
+owner landing consumer. V1 supports only `review_policy = none`; implementation validation still
+runs, and declared context selectors remain protected even when their files do not exist. These are
+substantive integration changes. Throughput depends on file conflicts, provider limits, shared CI,
+and landing capacity as well as local build slots.
 
 ## 2. Core Concepts
 
@@ -75,13 +77,14 @@ runs. The owner does not track host capacity.
 **Epic (tag).** A size hint on a task: one large piece of work a top-tier crew takes on whole. It
 no longer names a pipeline, a worktree, a reservation class, or an admission rule.
 
-**Handoff.** The follower's durable PR and validation/review evidence, accepted by the owner
-atomically with promotion to `review`. Execution writes close at this boundary.
+**Handoff.** Durable PR (or owner-local candidate), validation evidence, and a typed
+`review_policy: none` disposition, accepted by the owner atomically with promotion to `review`. Execution writes close at this boundary.
 
 **Landing.** An owner-side consumer verifies the pinned candidate and merges only with recorded
 completion authority, then verifies actual merge evidence before marking the task done. This
-consumer is new v1 work, triggered by accepted authorized handoffs. The unused scheduled
-ship sweep and its wrapper are retired; explicit owner and follower drains remain.
+consumer is new v1 work, triggered by accepted authorized handoffs or explicit owner approval.
+Ship-sweep routines, their wrapper, and the separate CLI remain available alongside explicit drains;
+every entry point uses the same claim admission. No schedule is enabled by this design.
 
 ## 3. At a Glance
 
@@ -95,16 +98,20 @@ ship sweep and its wrapper are retired; explicit owner and follower drains remai
 | Replica task reads and coordination writes route to the owner | [crates/orbit-cmd/src/registry_runtime.rs](../../../crates/orbit-cmd/src/registry_runtime.rs), [crates/orbit-mcp](../../../crates/orbit-mcp) | — | to file |
 | Manual claim inspection and recovery | [2_design.md §3.1](./2_design.md#31-attempt-ownership-and-recovery) | — | to file |
 | Durable handoff and authorized landing consumer | [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | to file |
+| Review-only handoff approval and revocation | [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | to file |
+| Non-pruning selector storage/projection and frozen footprints | [2_design.md §2](./2_design.md#2-the-ready-queue-and-orbittaskpull) | — | to file |
+| Enforce v1 review policy `none` and typed handoff evidence | [2_design.md §3.2](./2_design.md#32-durable-review-and-landing-handoff) | — | to file |
+| Claim-aware capacity accounting and interrupted-run recovery | [2_design.md §3](./2_design.md#3-pull-mode-drain-and-the-pulled-leaf-pipeline) | — | to file |
 | Failure and concurrency acceptance coverage | [2_design.md §8](./2_design.md#8-required-validation-scenarios) | — | to file |
 | Execution provenance on runs, tasks, artifacts | [2_design.md §6](./2_design.md#6-execution-provenance) | — | to file |
 | Retire epic machinery; `epic` becomes a tag | [2_design.md §7.1](./2_design.md#71-epic-machinery) | — | to file |
-| Retire ship sweep and its scheduled wrapper | [2_design.md §7.3](./2_design.md#73-ship-sweep) | — | to file |
+| Retain ship sweep and adapt all entry points to claim admission | [2_design.md §7.3](./2_design.md#73-ship-sweep) | — | to file |
 | Retire failed-run triage | [2_design.md §7.2](./2_design.md#72-failed-run-triage) | — | to file |
-| Follower preconditions: auth probe, version parity | [2_design.md §4](./2_design.md#4-follower-preconditions) | — | to file |
+| Read-only identity/capability/version probe and receipt reconciliation | [2_design.md §4](./2_design.md#4-follower-preconditions) | — | to file |
 | Followers pull; the owner never places | [4_decisions.md](./4_decisions.md#followers-pull-the-owner-never-places) | [ORB-12488] | recorded |
 | Requests identify admissions and claims identify attempts | [4_decisions.md](./4_decisions.md#requests-identify-admissions-and-claims-identify-attempts) | [ORB-12488] | recorded |
 | Owner ordering does not require a materialized queue | [4_decisions.md](./4_decisions.md#owner-ordering-does-not-require-a-materialized-queue) | [ORB-12488] | recorded |
-| Validation runs where the work ran | [4_decisions.md](./4_decisions.md#landing-consumes-durable-evidence-and-explicit-completion-authority) | [ORB-12488] | recorded |
+| Landing consumes durable evidence and explicit completion authority | [4_decisions.md](./4_decisions.md#landing-consumes-durable-evidence-and-explicit-completion-authority) | [ORB-12488] | recorded |
 | Owner is the always-on host | [4_decisions.md](./4_decisions.md#the-owner-is-the-always-on-host-that-followers-can-reach) | [ORB-12488] | recorded |
 | Epic is a tag, not a pipeline | [4_decisions.md](./4_decisions.md#epic-is-a-tag-not-a-pipeline) | [ORB-12488] | recorded |
 | Blocked tasks wait for a reader, not a classifier | [4_decisions.md](./4_decisions.md#blocked-tasks-wait-for-a-reader-not-a-classifier) | [ORB-12488] | recorded |
