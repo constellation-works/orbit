@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::body::Body;
+use axum::body::{Body, to_bytes};
 use axum::http::{HeaderValue, Method, Request, StatusCode, header};
 use chrono::{Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
@@ -914,6 +914,87 @@ async fn require_localhost_origin_rejects_missing_or_unparsable_host() {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN, "{label}");
+    }
+}
+
+async fn request_healthz(host: Option<&str>, uri: &str) -> axum::response::Response {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let mut builder = Request::builder().method(Method::GET).uri(uri);
+    if let Some(host) = host {
+        builder = builder.header(header::HOST, host);
+    }
+    crate::health_router()
+        .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
+        .oneshot(builder.body(Body::empty()).expect("request"))
+        .await
+        .expect("response")
+}
+
+#[tokio::test]
+async fn healthz_require_localhost_origin_rejects_forged_host_detailed() {
+    let response = request_healthz(Some("attacker.example:7878"), "/healthz?detailed=true").await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        response.headers().get("x-content-type-options"),
+        Some(&HeaderValue::from_static("nosniff"))
+    );
+    let body = body_json(response).await;
+    assert_eq!(body, json!({"error": "cross-origin requests not allowed"}));
+    let serialized = body.to_string();
+    assert!(
+        !serialized.contains("workspaces_open")
+            && !serialized.contains("sqlite_writable")
+            && !serialized.contains("log_sink")
+            && !serialized.contains("orbit.jsonl")
+            && !serialized.contains("/home/")
+            && !serialized.contains(".orbit"),
+        "refused detailed healthz must not leak workspace names or paths: {serialized}"
+    );
+}
+
+#[tokio::test]
+async fn healthz_require_localhost_origin_accepts_loopback_host() {
+    let hosts = [
+        "localhost:7878",
+        "127.0.0.1:7878",
+        "[::1]:7878",
+        "localhost",
+        "localhost:80",
+        "127.0.0.1",
+        "[::1]",
+    ];
+
+    for host in hosts {
+        let liveness = request_healthz(Some(host), "/healthz").await;
+        assert_eq!(liveness.status(), StatusCode::OK, "liveness {host}");
+        let liveness_body = to_bytes(liveness.into_body(), usize::MAX)
+            .await
+            .expect("read liveness body");
+        assert_eq!(&liveness_body[..], b"ok", "liveness {host}");
+
+        let detailed = request_healthz(Some(host), "/healthz?detailed=true").await;
+        assert_ne!(
+            detailed.status(),
+            StatusCode::FORBIDDEN,
+            "detailed {host} must pass the Host gate"
+        );
+        assert!(
+            detailed.status() == StatusCode::OK
+                || detailed.status() == StatusCode::SERVICE_UNAVAILABLE,
+            "detailed {host} status {}",
+            detailed.status()
+        );
+        let body = body_json(detailed).await;
+        assert!(
+            body["status"] == json!("ok") || body["status"] == json!("fail"),
+            "detailed {host} body: {body}"
+        );
+        assert!(body["checks"].is_array(), "detailed {host} checks: {body}");
+        assert!(
+            body.get("error").is_none(),
+            "detailed {host} must not be the Host-gate error: {body}"
+        );
     }
 }
 
