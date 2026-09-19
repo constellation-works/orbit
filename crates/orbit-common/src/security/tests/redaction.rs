@@ -255,6 +255,15 @@ fn credential_shaped_names_stay_classified_sensitive() {
         "AWS_SECRET_ACCESS_KEY",
         "SOME_PRIVATE_KEY",
         "AUTH_BEARER",
+        "AUTHORIZATION",
+        "AUTHZ",
+        "OAUTH",
+        "GOOGLE_OAUTH",
+        "BASIC_AUTHORIZATION",
+        "AUTHKEY",
+        "AUTHN",
+        "XAUTH",
+        "GITHUB_OAUTH",
     ] {
         assert!(
             is_sensitive_env_name(name),
@@ -445,6 +454,97 @@ fn boolean_and_null_sentinels_are_symmetric_in_the_value_gate() {
     let raw = "retry succeeded: false, fallback: false";
     assert_eq!(redact_sensitive_env_text(raw), raw);
     assert_eq!(redact_all(raw), raw);
+}
+
+#[test]
+fn auth_family_credential_names_are_sensitive_and_author_identity_is_not() {
+    // [ORB-12508] DANI-10514 required an exact AUTH segment so GIT_AUTHOR_*
+    // stayed readable; that also dropped AUTHORIZATION / AUTHZ / OAUTH and
+    // AUTH*-prefixed / *AUTH-suffixed credential names.
+    for name in [
+        "AUTHORIZATION",
+        "AUTHZ",
+        "OAUTH",
+        "GOOGLE_OAUTH",
+        "BASIC_AUTHORIZATION",
+        "AUTHKEY",
+        "AUTHN",
+        "XAUTH",
+        "GITHUB_OAUTH",
+        "AUTH_TOKEN",
+        "GH_AUTH",
+    ] {
+        assert!(
+            is_sensitive_env_name(name),
+            "{name} must be classified sensitive"
+        );
+    }
+    for name in ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL"] {
+        assert!(
+            !is_sensitive_env_name(name),
+            "{name} must stay a non-credential author identity var"
+        );
+    }
+}
+
+#[test]
+fn auth_family_env_values_are_redacted_while_git_author_names_survive() {
+    let authorization = "SEC-AUTHORIZATION-ORB12508-AAA";
+    let authz = "SEC-AUTHZ-ORB12508-BBB";
+    let oauth = "SEC-OAUTH-ORB12508-CCC";
+    let google_oauth = "SEC-GOAUTH-ORB12508-DDD";
+    let basic_authorization = "SEC-BASICAUTHZ-ORB12508-EEE";
+    let authkey = "SEC-AUTHKEY-ORB12508-FFF";
+    let authn = "SEC-AUTHN-ORB12508-GGG";
+    let xauth = "SEC-XAUTH-ORB12508-HHH";
+    let github_oauth = "SEC-GHOAUTH-ORB12508-III";
+    let author_name = "OrbitAuthorFixture";
+    let author_email = "orbit-author-fixture@example.test";
+    let _env = EnvVarGuard::set_many(&[
+        ("AUTHORIZATION", authorization),
+        ("AUTHZ", authz),
+        ("OAUTH", oauth),
+        ("GOOGLE_OAUTH", google_oauth),
+        ("BASIC_AUTHORIZATION", basic_authorization),
+        ("AUTHKEY", authkey),
+        ("AUTHN", authn),
+        ("XAUTH", xauth),
+        ("GITHUB_OAUTH", github_oauth),
+        ("GIT_AUTHOR_NAME", author_name),
+        ("GIT_AUTHOR_EMAIL", author_email),
+    ]);
+    let raw = format!(
+        "1={authorization} 2={authz} 3={oauth} 4={google_oauth} \
+         5={basic_authorization} 6={authkey} 7={authn} 8={xauth} \
+         9={github_oauth} author={author_name} email={author_email}"
+    );
+
+    let redacted = redact_sensitive_env_text(&raw);
+    for secret in [
+        authorization,
+        authz,
+        oauth,
+        google_oauth,
+        basic_authorization,
+        authkey,
+        authn,
+        xauth,
+        github_oauth,
+    ] {
+        assert!(
+            !redacted.contains(secret),
+            "credential value must be redacted: {redacted}"
+        );
+    }
+    assert_eq!(redacted.matches("[REDACTED_ENV]").count(), 9);
+    assert!(
+        redacted.contains(author_name),
+        "GIT_AUTHOR_NAME must survive: {redacted}"
+    );
+    assert!(
+        redacted.contains(author_email),
+        "GIT_AUTHOR_EMAIL must survive: {redacted}"
+    );
 }
 
 #[test]

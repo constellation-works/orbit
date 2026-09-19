@@ -188,6 +188,102 @@ fn audit_record_carries_argv_working_directory_caller_and_workspace() {
 }
 
 #[test]
+fn auth_family_env_is_excluded_from_child_and_not_leaked_in_persisted_output() {
+    // [ORB-12508] AUTHKEY / AUTHN / XAUTH / GITHUB_OAUTH must not reach
+    // orbit.command.exec's child environment, and GIT_AUTHOR_* identity
+    // values must still pass through. Synthetic fixtures only.
+    const AUTHKEY: &str = "SEC-AUTHKEY-ORB12508-CMD";
+    const AUTHN: &str = "SEC-AUTHN-ORB12508-CMD";
+    const XAUTH: &str = "SEC-XAUTH-ORB12508-CMD";
+    const GITHUB_OAUTH: &str = "SEC-GHOAUTH-ORB12508-CMD";
+    const AUTHOR_NAME: &str = "OrbitAuthorCmdFixture";
+    const AUTHOR_EMAIL: &str = "orbit-author-cmd@example.test";
+    let _env = orbit_common::test_env::scoped([
+        ("ORBIT_MANAGED_RUN_CONTEXT", None),
+        ("ORBIT_TASK_ID", None),
+        ("ORBIT_ACTIVE_TASK_ID", None),
+        ("ORBIT_AGENT_NAME", None),
+        ("ORBIT_AGENT_MODEL", None),
+        ("ORBIT_RUN_ID", None),
+        ("ORBIT_ACTIVITY_ID", None),
+        ("ORBIT_STEP_INDEX", None),
+        ("AUTHKEY", Some(AUTHKEY)),
+        ("AUTHN", Some(AUTHN)),
+        ("XAUTH", Some(XAUTH)),
+        ("GITHUB_OAUTH", Some(GITHUB_OAUTH)),
+        ("GIT_AUTHOR_NAME", Some(AUTHOR_NAME)),
+        ("GIT_AUTHOR_EMAIL", Some(AUTHOR_EMAIL)),
+    ]);
+    let (_root, runtime, repo_root) = test_runtime();
+    let token = acquire_claim(&runtime, "claude");
+
+    let result = run_tool_as_operator(
+        &runtime,
+        "orbit.command.exec",
+        json!({
+            "argv": [
+                "sh",
+                "-c",
+                "printf 'AUTHKEY=%s\\nAUTHN=%s\\nXAUTH=%s\\nGITHUB_OAUTH=%s\\nGIT_AUTHOR_NAME=%s\\nGIT_AUTHOR_EMAIL=%s\\n' \
+                 \"$AUTHKEY\" \"$AUTHN\" \"$XAUTH\" \"$GITHUB_OAUTH\" \"$GIT_AUTHOR_NAME\" \"$GIT_AUTHOR_EMAIL\""
+            ],
+            "working_directory": repo_root.display().to_string(),
+            "claim_token": token,
+            "model": "claude",
+        }),
+    )
+    .expect("claim holder executes");
+
+    assert_eq!(
+        result["success"],
+        json!(true),
+        "unexpected result: {result}"
+    );
+    let stdout = result["stdout"].as_str().expect("stdout is a string");
+    for secret in [AUTHKEY, AUTHN, XAUTH, GITHUB_OAUTH] {
+        assert!(
+            !stdout.contains(secret),
+            "synthetic credential leaked into the child environment: {stdout}"
+        );
+    }
+    assert!(
+        stdout.contains(&format!("GIT_AUTHOR_NAME={AUTHOR_NAME}")),
+        "GIT_AUTHOR_NAME must reach the child: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("GIT_AUTHOR_EMAIL={AUTHOR_EMAIL}")),
+        "GIT_AUTHOR_EMAIL must reach the child: {stdout}"
+    );
+
+    let rendered = result.to_string();
+    for secret in [AUTHKEY, AUTHN, XAUTH, GITHUB_OAUTH] {
+        assert!(
+            !rendered.contains(secret),
+            "synthetic credential leaked into command.exec diagnostic output: {rendered}"
+        );
+    }
+    assert!(
+        rendered.contains(AUTHOR_NAME),
+        "author name must remain intact in diagnostic output: {rendered}"
+    );
+
+    let events = runtime
+        .list_audit_events(None, None, None, None, 200)
+        .expect("read audit events");
+    let event = events
+        .iter()
+        .find(|event| event.command == "command.exec")
+        .expect("command execution is audited");
+    let raw_record = event.arguments_json.as_deref().unwrap_or_default();
+    for secret in [AUTHKEY, AUTHN, XAUTH, GITHUB_OAUTH] {
+        assert!(
+            !raw_record.contains(secret),
+            "synthetic credential leaked into the durable audit record: {raw_record}"
+        );
+    }
+}
+
+#[test]
 fn secret_argv_reaches_child_but_is_redacted_in_the_audit_record() {
     let _env = unmanaged_tool_env_guard();
     let (_root, runtime, repo_root) = test_runtime();

@@ -646,16 +646,24 @@ pub fn is_sensitive_env_name(name: &str) -> bool {
         || contains_auth_word(&upper)
 }
 
-/// True when `upper` (already uppercased) has `AUTH` as a standalone
-/// underscore-delimited segment, e.g. `AUTH_TOKEN` or `GITHUB_AUTH`.
+/// True when `upper` (already uppercased) has an AUTH-family credential
+/// segment, e.g. `AUTH_TOKEN`, `AUTHORIZATION`, `OAUTH`, or `XAUTH`.
 ///
 /// A bare substring test also matches `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`
 /// (ordinary git identity vars Orbit itself sets for child processes), which
-/// are not credentials.
+/// are not credentials. Requiring an exact `AUTH` segment overshoots that
+/// carve-out and misses `AUTH*` / `*AUTH` words other than `AUTHOR*`.
 fn contains_auth_word(upper: &str) -> bool {
     upper
         .split(|c: char| !c.is_ascii_alphanumeric())
-        .any(|segment| segment == "AUTH")
+        .any(segment_is_auth_sensitive)
+}
+
+fn segment_is_auth_sensitive(segment: &str) -> bool {
+    if matches!(segment, "AUTHOR" | "AUTHORS" | "AUTHORED") {
+        return false;
+    }
+    segment.starts_with("AUTH") || segment.ends_with("AUTH")
 }
 
 // ---------------------------------------------------------------------------

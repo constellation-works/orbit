@@ -388,6 +388,39 @@ fn task_add_redacts_secrets_in_stored_fields() {
 }
 
 #[test]
+fn task_add_redacts_authorization_env_value_in_persisted_description() {
+    // [ORB-12508] AUTHORIZATION is an AUTH-family credential name, not an
+    // author-identity var. A value held there must be scrubbed at the
+    // orbit.task.add choke point so it never lands in the task registry.
+    let secret = "SEC-AUTHORIZATION-ORB12508-TASKADD";
+    let _env = orbit_common::test_env::scoped([("AUTHORIZATION", Some(secret))]);
+    let (_root, runtime) = test_runtime();
+
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "authorization redaction probe".to_string(),
+            description: format!("token={secret}"),
+            acceptance_criteria: vec!["n/a".to_string()],
+            ..Default::default()
+        })
+        .expect("task add succeeds");
+
+    assert_eq!(task.description, "token=[REDACTED_ENV]");
+    assert!(
+        !task.description.contains(secret),
+        "AUTHORIZATION value leaked into the returned description: {}",
+        task.description
+    );
+    let reloaded = runtime.get_task(&task.id).expect("get task");
+    assert_eq!(reloaded.description, "token=[REDACTED_ENV]");
+    assert!(
+        !reloaded.description.contains(secret),
+        "AUTHORIZATION value leaked into the persisted description: {}",
+        reloaded.description
+    );
+}
+
+#[test]
 fn task_add_applies_normalized_provenance_title_prefixes() {
     for (tag, expected_prefix) in [
         (" qa-SWEEP ", "[qa-sweep] "),
