@@ -84,34 +84,36 @@ Core dependency on MCP or the registry crate.
 source IP. A forwarded label is self-asserted, while a destination can also
 receive a forced-command identity tied to the key sshd authenticated.
 
-**Decision.** Record the caller label or destination-composed caller identity,
-best-effort SSH caller IP, accepting process identity, transport, and a fresh
-trace ID. Use `host/local` when no machine identity is available. Resolve remote
-session authority from the destination's `~/.orbit/mcp-callers.toml`; the
-forwarded label and IP alone do not grant authority, and a forced-command caller
-identity is recorded as key-bound when sshd authenticated its key.
+**Decision.** Record the forwarded caller label, best-effort SSH caller IP,
+accepting process identity, transport, and a fresh trace ID. Use `host/local`
+when no machine identity is available. All of it is attribution: the session's
+authority comes from the argv the accepting server was started with, and neither
+the label nor the IP contributes to it.
 
-**Consequences.** Records support correlation and make the destination's
-authority decision inspectable. Tier 1 remains a self-asserted identity, while
-the optional Tier 2 path establishes a key-bound remote caller without treating
-the network address as a credential.
+**Consequences.** Records support correlation without any of them being a
+credential. *(Amended by [ORB-12564]: the original decision resolved remote
+session authority from `~/.orbit/mcp-callers.toml` and recorded a `key-bound`
+identity proof. Both are removed — see
+[federated-mcp 4_decisions.md](../federated-mcp/4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it).)*
 
 ## Authorization is enforced by the destination and Core
 
 **Context.** A UI or proxy check can always be bypassed by invoking the server.
 
-**Decision.** The destination resolves `~/.orbit/mcp-callers.toml` at SSH session
-establishment. The caller's requested `agent`/`operator` authority is intersected
-with that destination grant, and Core enforces the effective capabilities and
-governed operations after server-side workspace resolution. The optional forced
-command binds a caller identity to the key sshd authenticated; `agent_invoke`
-remains a separate workspace-scoped grant. The TCP listener authenticates no
-client and therefore serves agent authority only.
+**Decision.** The destination resolves session authority from the argv it was
+started with, for an SSH-originated session exactly as for a local one, and Core
+enforces the effective capabilities and governed operations after server-side
+workspace resolution. An SSH login to the destination is ownership of it, so the
+client's `--operator` is the operator statement there; a client running as an
+agent never propagates it. The TCP listener authenticates no client and
+therefore serves agent authority only.
 
 **Consequences.** Direct local, SSH, and socket calls share Core's operation
-boundary, while remote authority is capped by the destination that executes the
-call. Federated destinations apply their own policy independently, so the mux
-cannot grant authority on a destination's behalf.
+boundary. *(Amended by [ORB-12564]: the original decision intersected the
+caller's request with a destination-side callers file and a forced-command
+identity, and treated `agent_invoke` as a separate workspace-scoped grant. All
+three are removed — see
+[federated-mcp 4_decisions.md](../federated-mcp/4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it).)*
 
 ## Crates follow present responsibilities
 

@@ -310,8 +310,14 @@ request/response shapes; incompatible changes increment it. It is not the scoreb
 
 ## 5. Transport and authority routing
 
-Followers initiate federated MCP over SSH stdio. The owner's callers file authorizes the machine
-for the workspace; the follower's destinations file locates the owner. SSH connection reuse is a
+> **Open, as of [ORB-12564].** This section's `KeyBound` requirement predates the removal of
+> destination-side caller authorization. There is no callers file and no key-bound identity proof;
+> a destination serves the authority the session's argv asks for. Pull cannot be built on the
+> identity model below without first re-deciding it. See
+> [federated-mcp 4_decisions.md](../federated-mcp/4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it).
+
+Followers initiate federated MCP over SSH stdio. The follower's destinations file locates the
+owner, and the SSH login to the owner is what admits the follower at all. SSH connection reuse is a
 transport optimization, not a delivery guarantee. Every coordination mutation has an idempotency
 or reconciliation contract before step recovery retries it.
 

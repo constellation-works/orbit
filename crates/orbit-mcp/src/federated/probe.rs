@@ -19,6 +19,7 @@ use orbit_types::workspace::Workspace;
 use serde_json::{Value, json};
 
 use super::config::Destination;
+use crate::remote::McpSessionAuthority;
 
 /// Lines the probe reader may queue ahead of the consumer before it blocks.
 const PROBE_LINE_QUEUE: usize = 64;
@@ -108,6 +109,10 @@ pub struct SshDestinationProbe {
     /// session context of its own, so this travels the same way the caller
     /// machine identity does.
     orchestrator: Option<String>,
+    /// Authority the mux was started with, asked of every destination it
+    /// opens [ORB-12564]. It travels in the same argv for the same reason the
+    /// orchestrator does, and unlike the orchestrator it is a grant.
+    authority: McpSessionAuthority,
 }
 
 impl SshDestinationProbe {
@@ -119,12 +124,14 @@ impl SshDestinationProbe {
         probe_timeout: Duration,
         delivery_timeout: Duration,
         orchestrator: Option<String>,
+        authority: McpSessionAuthority,
     ) -> Self {
         Self {
             caller_machine_id,
             probe_timeout,
             delivery_timeout,
             orchestrator,
+            authority,
         }
     }
 }
@@ -251,6 +258,7 @@ impl SshDestinationProbe {
             destination,
             &self.caller_machine_id,
             self.orchestrator.as_deref(),
+            self.authority,
         )?;
         // The session is one process; the guard ends it on every path,
         // including the timeout path where the child is still mid-answer.
@@ -325,6 +333,7 @@ fn spawn_destination_session(
     destination: &Destination,
     caller_machine_id: &str,
     orchestrator: Option<&str>,
+    authority: McpSessionAuthority,
 ) -> Result<Child, OrbitError> {
     let ssh = destination.ssh_target().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
@@ -339,6 +348,7 @@ fn spawn_destination_session(
         .arg(crate::remote::remote_serve_command(
             caller_machine_id,
             orchestrator,
+            authority,
         ))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

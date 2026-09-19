@@ -256,98 +256,96 @@ fn ungoverned_operations_have_no_registry_entry_to_enforce() {
     }
 }
 
-/// [ORB-11052] A remote-originated MCP session carries the destination's own
-/// statement about the caller, and a refusal has to be actionable from the
-/// calling machine — which cannot reach the file it names.
+/// [ORB-12564] A session that arrived over SSH is decided exactly like a local
+/// one — the destination honors the authority in the argv the caller composed,
+/// because an SSH login to the destination is ownership of it. The forwarded
+/// label rides along as attribution and nothing more.
 fn remote_session(
     caller_machine_id: &str,
-    granted: BTreeSet<McpCapability>,
     effective: BTreeSet<McpCapability>,
 ) -> ToolSessionContext {
     ToolSessionContext {
         effective_capabilities: effective,
-        remote_caller_grant: Some(orbit_types::tool::RemoteCallerGrant {
-            caller_machine_id: caller_machine_id.to_string(),
-            granted_capabilities: granted,
-            source: "~/.orbit/mcp-callers.toml".to_string(),
-            ..orbit_types::tool::RemoteCallerGrant::default()
-        }),
+        caller_machine_id: Some(caller_machine_id.to_string()),
+        transport: Some(orbit_types::tool::McpTransport::SshMcp),
         ..ToolSessionContext::default()
     }
 }
 
 #[test]
-fn a_callers_file_grant_is_distinguishable_from_a_local_session_stamp() {
-    let granted = CallerCapabilities::resolve(&CallerEnvelope::mcp_session(&remote_session(
+fn a_remote_session_resolves_the_same_way_a_local_stamp_does() {
+    let remote = CallerCapabilities::resolve(&CallerEnvelope::mcp_session(&remote_session(
         "hm_alpha",
-        BTreeSet::from([McpCapability::Agent]),
-        BTreeSet::from([McpCapability::Agent]),
+        BTreeSet::from([McpCapability::Agent, McpCapability::Operator]),
     )));
     let stamped = CallerCapabilities::resolve(&CallerEnvelope::mcp_session(&ToolSessionContext {
-        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+        effective_capabilities: BTreeSet::from([McpCapability::Agent, McpCapability::Operator]),
         ..ToolSessionContext::default()
     }));
 
-    assert_eq!(granted.provenance(), CallerProvenance::RemoteGrant);
+    assert_eq!(remote.provenance(), CallerProvenance::Session);
     assert_eq!(stamped.provenance(), CallerProvenance::Session);
-    assert_eq!(granted.grants(), stamped.grants());
+    assert_eq!(remote.grants(), stamped.grants());
+    assert!(
+        authorize(operation("orbit.command.exec"), &remote).is_ok(),
+        "an operator-propagated remote session performs governed operations"
+    );
 }
 
 #[test]
-fn a_capped_remote_caller_is_told_which_file_capped_it() {
+fn a_remote_session_without_operator_is_refused_and_told_where_to_raise_it() {
     let caller = CallerCapabilities::resolve(&CallerEnvelope::mcp_session(&remote_session(
         "hm_alpha",
-        BTreeSet::from([McpCapability::Agent]),
         BTreeSet::from([McpCapability::Agent]),
     )));
 
     let denial = authorize(operation("orbit.command.exec"), &caller)
-        .expect_err("an agent-capped caller must not reach command execution");
+        .expect_err("an agent session must not reach command execution");
     let message = denial.to_string();
 
-    assert!(message.contains("hm_alpha"), "{message}");
-    assert!(message.contains("~/.orbit/mcp-callers.toml"), "{message}");
     assert!(message.contains("operator"), "{message}");
     assert!(
-        !message.contains(OPERATOR_OVERRIDE_ENV),
-        "the override is inert here and advising it would send the caller in a circle: {message}"
+        message.contains("orbit mcp serve --operator"),
+        "the remedy is on the calling side and must be named: {message}"
+    );
+    assert!(
+        message.contains("propagates into the argv every SSH destination is started with"),
+        "a remote caller must be told its own `--operator` is what reaches the destination: \
+         {message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "{OPERATOR_OVERRIDE_ENV} in that process's environment is \
+             deliberately ignored"
+        )),
+        "the override is named only to say it is inert here: {message}"
     );
 }
 
 #[test]
-fn a_denied_caller_holds_nothing_and_still_reads_as_a_remote_grant() {
-    let caller = CallerCapabilities::resolve(&CallerEnvelope::mcp_session(&remote_session(
-        "hm_beta",
-        BTreeSet::new(),
-        BTreeSet::new(),
-    )));
-
-    assert!(caller.grants().is_empty());
-    assert_eq!(
-        caller.provenance(),
-        CallerProvenance::RemoteGrant,
-        "a deny row must not fall through to the destination's ambient signals"
-    );
-}
-
-#[test]
-fn the_grant_survives_to_the_denial_so_audit_can_record_both_sets() {
+fn the_forwarded_caller_label_survives_to_the_denial_for_attribution() {
     let caller = CallerCapabilities::resolve(&CallerEnvelope::mcp_session(&remote_session(
         "hm_alpha",
-        BTreeSet::from([McpCapability::Agent]),
         BTreeSet::from([McpCapability::Agent]),
     )));
 
     let denial = authorize(operation("orbit.workflow.ship"), &caller).expect_err("denied");
 
-    let grant = denial
-        .remote_caller_grant
-        .expect("the denial carries the grant it refused against");
-    assert_eq!(grant.granted_capabilities, *caller.grants());
+    assert_eq!(denial.remote_caller_machine_id.as_deref(), Some("hm_alpha"));
+    assert_eq!(caller.remote_caller_machine_id(), Some("hm_alpha"));
+}
+
+#[test]
+fn a_local_session_carries_no_remote_caller_attribution() {
+    let caller = CallerCapabilities::resolve(&CallerEnvelope::mcp_session(&ToolSessionContext {
+        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+        caller_machine_id: Some("hm_self".to_string()),
+        ..ToolSessionContext::default()
+    }));
+
     assert_eq!(
-        caller
-            .remote_caller_grant()
-            .map(|g| g.caller_machine_id.as_str()),
-        Some("hm_alpha")
+        caller.remote_caller_machine_id(),
+        None,
+        "this machine's own identity is not a statement about a caller elsewhere"
     );
 }

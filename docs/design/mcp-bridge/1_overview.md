@@ -79,10 +79,9 @@ Each tool call carries a fresh `trace_id`. The server also records:
   what distinguishes it.
 
 `host/local` is the fallback machine label when no persisted identity is
-available. A forwarded caller label is audit-only under the self-asserted
-Tier-1 path. The optional forced-command path binds the caller identity to a
-key sshd authenticated and the destination's callers file then caps the
-session; `caller_ip` remains observational metadata in both cases.
+available. A forwarded caller label is audit-only: it marks the session's
+transport as `ssh-mcp` and names the calling machine, and it contributes to no
+authorization decision [ORB-12564]. `caller_ip` is likewise observational.
 
 ## Ownership
 
@@ -91,7 +90,7 @@ session; `caller_ip` remains observational metadata in both cases.
 | MCP framing, tool discovery, server identity context, TCP listener, direct SSH stdio proxy, and the federated mux | `orbit-mcp` |
 | Host identity and workspace-registry state | `orbit-registry` |
 | Server composition and server-local runtime selection | `orbit-cli` |
-| Domain validation, capability enforcement, sandboxing, audit persistence, and runtime authorization | `orbit-core` (with destination caller grants resolved by `orbit-mcp`) |
+| Domain validation, capability enforcement, sandboxing, audit persistence, and runtime authorization | `orbit-core` (with the session envelope composed by `orbit-mcp`) |
 | Canonical builtin tool definitions | `orbit-tools` |
 | HTTP UI and its own local-forward SSH connection | `orbit-web` |
 
@@ -102,11 +101,12 @@ transport and is not reused by MCP.
 
 Direct v1 deliberately has no shared broker, client-side checkout preflight,
 owner-placement routing, or client-side capability filtering. The destination
-does apply authorization: `~/.orbit/mcp-callers.toml` caps a remote session's
-requested `agent`/`operator` authority, and Core enforces those effective
-capabilities at the tool boundary. Tier 1 resolves a self-asserted forwarded
-machine label; the optional Tier 2 forced-command path binds that identity to
-the key sshd authenticated. The TCP listener remains a transport only and
+resolves session authority from the argv it was started with — for an
+SSH-originated session exactly as for a local one, because an SSH login to the
+destination is ownership of it [ORB-12564] — and Core enforces those effective
+capabilities at the tool boundary. The client is what decides: a proxy started
+with `--operator` composes an operator argv for its destination, and a client
+running as an agent never does. The TCP listener remains a transport only and
 authenticates no client, so it is hardcoded to agent authority and binds
 loopback unless a wider bind is explicitly requested.
 
