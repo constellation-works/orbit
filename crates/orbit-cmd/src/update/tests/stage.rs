@@ -36,12 +36,21 @@ fn a_failed_atomic_restore_keeps_both_complete_files_and_cleans_staging() {
     assert_eq!(std::fs::read(&backup).expect("read backup"), previous);
     #[cfg(unix)]
     {
-        let installed = std::process::Command::new(&destination)
-            .output()
-            .expect("launch intact replacement");
-        let retained = std::process::Command::new(&backup)
-            .output()
-            .expect("launch retained backup");
+        #[cfg(target_os = "linux")]
+        use orbit_common::test_process::retry_executable_busy;
+
+        let launch = |path: &std::path::Path| {
+            #[cfg(target_os = "linux")]
+            {
+                retry_executable_busy(|| std::process::Command::new(path).output())
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                std::process::Command::new(path).output()
+            }
+        };
+        let installed = launch(&destination).expect("launch intact replacement");
+        let retained = launch(&backup).expect("launch retained backup");
         assert!(installed.status.success());
         assert!(retained.status.success());
         assert_eq!(installed.stdout, b"orbit replacement-complete\n");
