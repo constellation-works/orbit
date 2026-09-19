@@ -1,6 +1,6 @@
 //! Lint findings for task context declarations. After [ORB-12490] a missing
 //! target is a warning that keeps the declaration; an empty or unusable
-//! surface is the error that blocks admission.
+//! surface is an advisory warning because legacy v2 admission permits it.
 
 use chrono::Utc;
 use orbit_types::task::{TaskHistoryEntry, TaskStatus, TaskType};
@@ -48,7 +48,7 @@ fn a_missing_declared_target_warns_without_asking_for_its_removal() {
 }
 
 #[test]
-fn an_empty_surface_is_an_error_that_names_its_repair() {
+fn an_empty_surface_is_an_advisory_warning_that_names_each_admission_rule() {
     let (_root, runtime) = test_runtime();
     let task = runtime
         .add_task(TaskAddParams {
@@ -64,8 +64,24 @@ fn an_empty_surface_is_an_error_that_names_its_repair() {
         .iter()
         .find(|finding| finding.check == "context_surface")
         .expect("an empty-surface finding");
-    assert_eq!(finding.severity, TaskLintSeverity::Error);
+    assert_eq!(finding.severity, TaskLintSeverity::Warning);
+    assert!(finding.message.contains("legacy v2 admission permits"));
+    assert!(
+        finding
+            .message
+            .contains("operator task-scope reservation refuses")
+    );
+    assert!(
+        finding
+            .message
+            .contains("distributed pull admission will exclude")
+    );
     assert!(finding.fix_it.contains("orbit task update --context"));
+    assert!(
+        finding
+            .fix_it
+            .contains("before claiming an operator task-scope reservation")
+    );
     assert!(!finding.fix_it.contains("--restore-pruned"));
 
     // With pruning evidence, the same finding points at the auditable repair.
@@ -101,9 +117,8 @@ fn an_empty_surface_is_an_error_that_names_its_repair() {
     assert!(finding.fix_it.contains("--restore-pruned"), "{finding:?}");
 }
 
-/// A chore that declares nothing is ordinary enough to report at the lower
-/// severity, but reservation still refuses an empty surface, so it is still
-/// reported.
+/// A chore that declares nothing receives the same advisory finding because
+/// legacy v2 admission permits an empty surface regardless of task type.
 #[test]
 fn an_empty_chore_surface_is_reported_as_a_warning() {
     let (root, runtime) = test_runtime();

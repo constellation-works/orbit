@@ -90,7 +90,11 @@ There is no epic path after the retirement in [§7](#7-retirements-and-retained-
 tagged `epic` is an ordinary entry using its own canonicalized `context_files`; hierarchy does not
 implicitly order execution. Required sequencing must be expressed with dependencies. Empty or
 invalid lock surfaces are reported as ineligible rather than silently treated as a claim protecting
-no files.
+no files. This is the distributed pull contract: the owner excludes an empty surface before
+creating a claim. The legacy v2 dispatch admission path currently permits an empty surface as a
+compatibility no-op, while the operator-facing `orbit.task.locks.reserve` path refuses an empty
+task-scope reservation. Diagnostics distinguish those paths; the pull path must retain the
+no-empty rule when it is implemented.
 
 Remove filesystem-existence pruning from task context normalization/read projections and all
 admission, reservation, and status-lock calculations used by this workspace. Canonicalize selector
@@ -102,8 +106,9 @@ paths with the shared non-pruning calculation
 `runtime/task/mod.rs::declared_context_files` [ORB-12490]. Missing is not invalid. Freeze the full canonical footprint on the claim and use it through
 execution and review, including after reservation expiry; current checkout contents cannot shrink
 it. Unclaimed legacy status locks use the same non-pruning canonicalization. A truly empty declared
-surface remains ineligible until an operator supplies context before admission; diagnostics name
-that remedy. Restore previously pruned declarations from authoritative task history where possible
+surface is eligible for the current legacy v2 dispatch no-op but remains ineligible for distributed
+pull admission and operator task-scope reservation until an operator supplies context; diagnostics
+name that distinction and remedy. Restore previously pruned declarations from authoritative task history where possible
 (`application/task/context_repair.rs`, reached by `orbit task lint --restore-pruned`), or report
 them for operator repair; do not guess their intended scope.
 
