@@ -19,6 +19,17 @@ template:
     or the product's live data root. A writable temporary location may be too
     small for build output; choose the build cache location for capacity.
 
+    Agent-executor sandboxes often mount the real `~/.orbit` read-only and
+    without `.generation.lock`. Two isolations work; `--root` is not ignored
+    for generation admission:
+    - `orbit --root /tmp/<scratch> init --non-interactive --host-name <name>
+      --task-prefix <XXXX>` pins and writes under that scratch data dir and
+      must not create files under the real home Orbit root.
+    - `HOME=/tmp/<scratch-home> orbit init --non-interactive …` pins under
+      `$HOME/.orbit`. MCP roundtrip fixtures use this form.
+    Do not chmod or otherwise grant writes to the real `~/.orbit`, and do not
+    unlink `.generation.lock` / `.generation-admission.lock`.
+
     In agent-executor sandboxes and linked job-run worktrees, the repository's
     managed `.git` mount is read-only by design and must not be worked around by
     chmod or host-side gitdir writes. Because `.git` is read-only, commands that

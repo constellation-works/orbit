@@ -246,12 +246,16 @@ fn main() {
     // Update owns exclusive admission and pins its candidate before convergence.
     // Every other command pins the exact running inode before any bootstrap.
     // This also covers all MCP transports, managed workers and automatic migrations.
+    // `--root` / `ORBIT_ROOT` isolate that pin so a read-only unpinned
+    // `~/.orbit` cannot block scratch init; without those, the host-global root
+    // remains the authority.
     let inspection =
         matches!(&cli.command, command::Commands::Migrate(command) if !command.confirm);
+    let root_override = cli.root.clone();
     let _generation = if matches!(&cli.command, command::Commands::Update(_)) || inspection {
         None
     } else {
-        match orbit_core::runtime::resolve_global_root()
+        match orbit_core::runtime::resolve_generation_root(root_override.as_deref())
             .and_then(|root| orbit_common::fs::generation::GenerationGuard::for_process(&root))
         {
             Ok(guard) => Some(guard),
@@ -261,7 +265,6 @@ fn main() {
             }
         }
     };
-    let root_override = cli.root.clone();
     let workspace_selector = cli.workspace.clone();
     let actor = ActorIdentity::from_env();
     let CommandOperation {

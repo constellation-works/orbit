@@ -76,6 +76,30 @@ fn interrupted_exclusive_holder_releases_os_locks_without_repair() {
     assert!(GenerationGuard::acquire(root.path(), OLD).is_ok());
 }
 
+#[cfg(unix)]
+#[test]
+fn first_create_on_readonly_root_is_refused_without_creating_lock_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let parent = tempfile::tempdir().expect("parent");
+    let root = parent.path().join("readonly");
+    std::fs::create_dir(&root).expect("create readonly root");
+    let mut permissions = std::fs::metadata(&root).expect("metadata").permissions();
+    permissions.set_mode(0o555);
+    std::fs::set_permissions(&root, permissions.clone()).expect("chmod readonly");
+    let error = match GenerationGuard::acquire(&root, OLD) {
+        Ok(_) => panic!("readonly first-create should be refused"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("upgrade admission refused"),
+        "{error}"
+    );
+    assert!(!root.join(".generation.lock").exists());
+    assert!(!root.join(".generation-admission.lock").exists());
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&root, permissions).expect("restore writable");
+}
+
 #[test]
 fn exclusive_child() {
     use std::io::{Read, Write};
