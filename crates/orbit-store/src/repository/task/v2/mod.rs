@@ -71,8 +71,8 @@ pub(crate) struct TaskV2Store {
     /// With it, every ordinary mutation runs inside the boundary and every
     /// read settles an interrupted commit before exposing state, so an
     /// admission decision can read readiness and publish without a task write
-    /// slipping in between. Without it this store behaves exactly as before:
-    /// per-bundle locking and independent registry rows.
+    /// slipping in between. Legacy composition retains per-bundle locking,
+    /// but is refused once this partition has activated coordination.
     coordination: Option<Arc<TaskCommitBoundary>>,
 }
 
@@ -99,15 +99,15 @@ impl TaskV2Store {
         }
     }
 
-    /// Run an ordinary mutation inside the boundary, or directly when this
-    /// store has none.
-    pub(super) fn in_boundary<T, F>(&self, op: F) -> Result<T, OrbitError>
+    /// Run an ordinary mutation inside the boundary. Legacy stores acquire
+    /// the same locks and refuse partitions requiring coordinated backends.
+    pub(crate) fn in_boundary<T, F>(&self, op: F) -> Result<T, OrbitError>
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
         match &self.coordination {
             Some(boundary) => boundary.enter_ordinary(op),
-            None => op(),
+            None => TaskCommitBoundary::enter_uncoordinated(&self.registry, &self.workspace_id, op),
         }
     }
 
@@ -116,7 +116,11 @@ impl TaskV2Store {
     pub(super) fn ensure_recovered(&self) -> Result<(), OrbitError> {
         match &self.coordination {
             Some(boundary) => boundary.recover_if_pending(),
-            None => Ok(()),
+            None => {
+                TaskCommitBoundary::enter_uncoordinated(&self.registry, &self.workspace_id, || {
+                    Ok(())
+                })
+            }
         }
     }
 }

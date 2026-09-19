@@ -934,6 +934,17 @@ fn apply_task_automation_update_under_lock(
         let task = runtime.stores().task_records().update(
             task_id,
             StoreTaskUpdateParams {
+                job_run_host: update
+                    .job_run_id
+                    .as_ref()
+                    .map(|run_id| {
+                        runtime
+                            .stores()
+                            .jobs()
+                            .get_job_run(run_id)
+                            .map(|run| run.and_then(|run| run.executed_on))
+                    })
+                    .transpose()?,
                 actor: attribution.actor.clone(),
                 planned_by: attribution.planned_by.clone(),
                 implemented_by: attribution.implemented_by.clone(),

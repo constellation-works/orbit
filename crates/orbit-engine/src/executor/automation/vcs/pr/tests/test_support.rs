@@ -157,6 +157,7 @@ impl PrOpenTestHost {
     pub fn with_job_run(self, run_id: &str, retry_source_run_id: Option<&str>) -> Self {
         let now = Utc::now();
         self.job_runs.lock().expect("job runs lock").push(JobRun {
+            executed_on: None,
             run_id: run_id.to_string(),
             job_id: "task_pr_pipeline".to_string(),
             attempt: 1,
@@ -640,6 +641,7 @@ impl RuntimeHost for PrOpenTestHost {
 pub fn task(id: &str, title: &str, execution_summary: &str) -> Task {
     let now = Utc::now();
     Task {
+        job_run_host: None,
         id: id.to_string(),
         title: title.to_string(),
         description: String::new(),

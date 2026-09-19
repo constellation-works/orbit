@@ -196,11 +196,11 @@ impl ScopedStore<AuditEvent> for SqliteAuditEventStoreBackend {
 #[derive(Clone)]
 pub(crate) struct SqliteTaskReservationStoreBackend {
     pub(crate) store: Store,
-    /// The partition's commit boundary, when composed with one. Reservation
+    /// The partition's mandatory commit boundary. Reservation
     /// mutations then share the serialization an admission decision holds, so
     /// a reservation cannot be taken between an admission's readiness read and
     /// its commit (ORB-12528).
-    pub(crate) coordination: Option<std::sync::Arc<TaskCommitBoundary>>,
+    pub(crate) coordination: std::sync::Arc<TaskCommitBoundary>,
 }
 
 impl SqliteTaskReservationStoreBackend {
@@ -208,10 +208,7 @@ impl SqliteTaskReservationStoreBackend {
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
-        match &self.coordination {
-            Some(boundary) => boundary.enter_ordinary(op),
-            None => op(),
-        }
+        self.coordination.enter_ordinary(op)
     }
 }
 
@@ -248,7 +245,22 @@ impl TaskReservationStoreBackend for SqliteTaskReservationStoreBackend {
         &self,
         params: TaskReservationReserveParams,
     ) -> Result<TaskReservationReserveResult, OrbitError> {
-        self.in_boundary(|| self.store.reserve_task_reservation(&params))
+        self.in_boundary(|| {
+            let conflicts = self
+                .coordination
+                .frozen_claim_conflicts(&params.requested_files)?;
+            if !conflicts.is_empty() {
+                return Ok(TaskReservationReserveResult {
+                    reserved: false,
+                    reservation_id: None,
+                    expires_at: None,
+                    reserved_files: Vec::new(),
+                    conflicts,
+                    expired_reservations: Vec::new(),
+                });
+            }
+            self.store.reserve_task_reservation(&params)
+        })
     }
 
     fn release_task_reservation(

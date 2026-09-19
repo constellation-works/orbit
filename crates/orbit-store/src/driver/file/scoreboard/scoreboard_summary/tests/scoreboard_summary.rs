@@ -503,6 +503,7 @@ fn test_task(
 fn test_task_no_attrib(id: &str, status: TaskStatus) -> orbit_types::task::Task {
     use orbit_types::task::{Task, TaskPriority, TaskType};
     Task {
+        job_run_host: None,
         id: id.to_string(),
         title: id.to_string(),
         description: String::new(),
@@ -537,6 +538,7 @@ fn test_job_run(
     finished_at: chrono::DateTime<Utc>,
 ) -> JobRun {
     JobRun {
+        executed_on: None,
         run_id: run_id.to_string(),
         job_id: job_id.to_string(),
         attempt: 1,

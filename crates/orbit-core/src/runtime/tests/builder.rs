@@ -493,3 +493,89 @@ fn absent_semantic_index_on_unwritable_state_keeps_the_runtime_observational() {
         (listed, semantic, hybrid)
     }
 }
+
+#[test]
+fn runtime_task_and_reservation_backends_share_admission_serialization() {
+    use orbit_store::contracts::{TaskDocumentUpdateParams, TaskReservationReserveParams};
+    use std::sync::mpsc::sync_channel;
+    use std::time::Duration;
+    let (_temp, global, orbit_dir, runtime) = v2_runtime();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "runtime boundary".into(),
+            plan: "implement".into(),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("task");
+    let partition = runtime.workspace_id().expect("partition");
+    let backends = orbit_store::compose::workspace_coordinated_backends(
+        TaskRegistryStore::open(&task_registry_path(&global)).expect("registry"),
+        partition.clone(),
+        runtime.stores().host.sqlite.clone(),
+    )
+    .expect("boundary");
+    let (attempted_tx, attempted_rx) = sync_channel(2);
+    let (finished_tx, finished_rx) = sync_channel(2);
+    std::thread::scope(|scope| {
+        backends
+            .commit_boundary
+            .with_admission(|| {
+                let attempted = attempted_tx.clone();
+                let finished = finished_tx.clone();
+                let runtime_ref = &runtime;
+                let task_id = &task.id;
+                scope.spawn(move || {
+                    attempted.send(()).expect("attempt");
+                    runtime_ref
+                        .stores()
+                        .task_documents()
+                        .update_task_document(
+                            task_id,
+                            TaskDocumentUpdateParams {
+                                actor: "test".into(),
+                                plan: Some("new plan".into()),
+                                ..Default::default()
+                            },
+                        )
+                        .expect("document write");
+                    finished.send(()).expect("finished");
+                });
+                let runtime_ref = &runtime;
+                let task_id = task.id.clone();
+                scope.spawn(move || {
+                    attempted_tx.send(()).expect("attempt");
+                    runtime_ref
+                        .stores()
+                        .task_reservations()
+                        .reserve_task_reservation(TaskReservationReserveParams {
+                            workspace_orbit_dir: orbit_dir.to_string_lossy().into_owned(),
+                            workspace_id: Some(partition),
+                            task_ids: vec![task_id],
+                            requested_files: vec!["file:future.rs".into()],
+                            actor: "test".into(),
+                            ttl_seconds: 600,
+                            owner_run_id: None,
+                            owner_metadata_json: None,
+                        })
+                        .expect("reservation write");
+                    finished_tx.send(()).expect("finished");
+                });
+                attempted_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("task attempting");
+                attempted_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("reservation attempting");
+                assert!(
+                    finished_rx
+                        .recv_timeout(Duration::from_millis(250))
+                        .is_err()
+                );
+                Ok(())
+            })
+            .expect("admission section");
+    });
+    assert_eq!(finished_rx.try_iter().count(), 2);
+    assert_eq!(runtime.get_task(&task.id).expect("task").plan, "new plan");
+}

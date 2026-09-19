@@ -454,6 +454,13 @@ pub trait TaskReservationStoreBackend: Send + Sync {
 }
 
 pub trait JobRunStoreBackend: Send + Sync {
+    /// Configure trusted runtime identity for future insertions only. Neither
+    /// caller input nor updates to existing runs can rewrite their origin.
+    fn with_execution_location(
+        &self,
+        location: Option<orbit_types::task::ExecutionLocation>,
+    ) -> std::sync::Arc<dyn JobRunStoreBackend>;
+
     /// Exact retry children; missing evidence cannot be replaced by a time-window scan.
     fn job_run_retries(&self, _run_id: &str, _limit: usize) -> Result<Vec<JobRun>, OrbitError> {
         Err(OrbitError::Store("retry lineage lookup unavailable".into()))

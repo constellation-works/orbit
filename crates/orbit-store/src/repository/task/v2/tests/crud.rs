@@ -344,6 +344,7 @@ fn search_tasks_matches_artifact_paths_but_does_not_read_contents() {
         .upsert_task_artifacts(
             "ORB-00000",
             &TaskArtifactUpdateParams {
+                origin: None,
                 owner_run_id: None,
                 actor: "codex:gpt-5.5".to_string(),
                 upsert_artifacts: vec![TaskArtifact::from_text(
@@ -405,6 +406,7 @@ fn search_tasks_skips_binary_artifacts_without_poisoning_results() {
             &ArtifactManifestV2 {
                 schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
                 files: vec![ArtifactManifestFileV2 {
+                    origin: None,
                     path: "payload.bin".to_string(),
                     blob: "files/payload.bin".to_string(),
                     sha256: format!("{:x}", Sha256::digest(&binary)),
@@ -421,6 +423,7 @@ fn search_tasks_skips_binary_artifacts_without_poisoning_results() {
         .upsert_task_artifacts(
             "ORB-00001",
             &TaskArtifactUpdateParams {
+                origin: None,
                 owner_run_id: None,
                 actor: "codex:gpt-5.5".to_string(),
                 upsert_artifacts: vec![TaskArtifact::from_text(

@@ -19,8 +19,10 @@ recovery) over `crates/orbit-store/src/driver/sqlite/task_commit_journal/` (the 
 
 ## The two mechanisms
 
-**One serialization boundary per task-store partition.** An advisory lock beside the
-partition directory. Ordinary task reads and writes, and ordinary reservation writes, take it
+**One serialization boundary per task-store partition, with a host admission lock.**
+The host lock excludes ordinary writers across partitions during admission, because a task
+may depend on a task in another workspace. Ordinary operations hold it shared; admission
+holds it exclusive. The partition advisory lock then protects recovery and bundle publication. Ordinary task reads and writes, and ordinary reservation writes, take it
 *shared* — they still run concurrently with one another and still take their own per-bundle or
 SQLite locks underneath. An admission section takes it *exclusive*, so its readiness reads and
 its commit see state no ordinary write can change in between. Every participant takes the
@@ -40,16 +42,17 @@ Nothing infers the decision from bundle contents, and nothing tries to un-publis
 Because no bundle file is touched before the commit point, a pre-commit failure has nothing to
 compensate beyond the journal row and the marker.
 
-**Recovery before exposure.** The marker is the cheap signal: one existence check on a read.
-Whoever sees it takes the boundary exclusively and settles the journal before exposing any
-state — so a committed reservation whose transition has not landed is never observable, and a
+**Recovery before exposure.** The marker signals interrupted publication. Ordinary operations check it again
+after acquiring their shared partition lock, so a commit that crashed while they waited cannot
+be missed. Recovery drops that shared acquisition and settles the journal exclusively before
+exposing any state — so a committed reservation whose transition has not landed is never observable, and a
 live commit blocks a reader for its (short) duration instead of showing it a half-applied task.
 A compensation or replay that fails leaves the marker in place and returns the error: the
 partition stays closed until recovery succeeds, rather than opening with unknown commit state.
 
 ## Integration API
 
-Compose the participants together — the boundary only serializes what holds the same instance:
+Compose the participants together so every instance shares the same locks and decision journal:
 
 ```rust
 let backends = orbit_store::compose::workspace_coordinated_backends(registry, partition_id, store)?;
@@ -91,21 +94,26 @@ replay semantics, and retention belong to the caller, not here.
 
 ## Composition and cost
 
-`compose::workspace_task_backends` plus `task_reservation_store_sqlite` still compose an
-*uncoordinated* pair with exactly the behaviour they always had: per-bundle locking,
-independent reservation transactions, no journal, no marker. Storage layout is identical either
-way — the coordinated composition adds serialization and recovery, not a new bundle or row
-format — so the two can be composed for different partitions on the same host, and a partition
-can move between them without migrating data.
+Every runtime builder branch uses `workspace_coordinated_backends`, including explicit
+data roots, checkoutless partitions, and alternate runtime constructors. The task and
+reservation stores come from the same composition; the uncoordinated reservation factory
+has been removed. A durable `.task-commit-required` marker makes legacy task compositions
+refuse access to a coordinated partition, including compositions opened before activation.
+There is no automatic downgrade. Maintenance/import operations must be quiesced separately.
 
-Serve a partition through **one** composition at a time. An uncoordinated writer neither takes
-the boundary nor sees the pending marker, so a partition served by both at once could have an
-ordinary write land between a commit and its replay and be overwritten by that replay.
+Ordinary operations remain concurrent under shared host and partition locks. Admissions
+exclude ordinary writers across the host registry while checking cross-workspace
+dependencies. Recovery nesting is tracked per partition rather than by a process-wide depth.
 
-What coordination costs: one shared advisory-lock acquisition per ordinary task or reservation
-operation, one existence check per read, and — during an admission commit — exclusion of that
-partition's ordinary writes and of readers that observe the marker. What it does not cost:
-concurrency between ordinary writers, which still serialize only per bundle.
+Internal distributed admission builds on this journal. Dependent rows can be finalized from
+the reservation result inside the deciding SQLite transaction, so the receipt captures the
+actual reservation ID and expiry atomically. Idle receipts use a SQL-only transaction because
+there is no task bundle to publish. Receipt compaction replaces the payload with a permanent
+tombstone; it never deletes the request identity and refuses unsettled claims.
+
+The public pull/lifecycle tools remain unavailable. Generic task writes refuse active
+execution claims until the lifecycle layer supplies a claim-scoped mutation path. Frozen
+claim footprints also participate in ordinary reservation conflicts after TTL expiry.
 
 ## When to reach for it
 
@@ -122,3 +130,8 @@ concurrency between ordinary writers, which still serialize only per bundle.
 - **A general distributed-transaction framework.** This boundary is deliberately one shape —
   one task transition plus its reservation and coordination rows — because that shape can be
   replayed deterministically. A generic multi-resource transaction manager cannot.
+
+Coordinated activation pins the partition to its canonical file-backed journal path.
+A second composition using another database is refused; dependency recovery also
+checks this binding before reading a foreign partition. Moving a journal requires
+an explicit offline migration of its binding, not an implicit reopen.

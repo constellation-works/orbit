@@ -39,12 +39,11 @@
 //!
 //! # One composition per partition
 //!
-//! The boundary serializes what holds the same instance, so a partition must
-//! be served by *one* composition: coordinated
-//! ([`crate::compose::workspace_coordinated_backends`]) or uncoordinated, not
-//! both at once. An uncoordinated writer neither takes the boundary nor sees
-//! the pending marker, so it could write a bundle between a commit and its
-//! replay and have the replay overwrite it.
+//! Every runtime composition participates in the same filesystem locks. A
+//! durable required marker prevents legacy task stores from accessing a
+//! partition after coordinated composition has activated it. A shared host
+//! lock additionally protects dependency reads across workspace partitions;
+//! admission takes it exclusively before its partition lock.
 //!
 //! # Recovery before exposure
 //!
@@ -98,6 +97,7 @@ const COORDINATION_LOCK_LABEL: &str = "task commit boundary";
 /// Present from the first durable step of a commit until the commit has been
 /// applied or abandoned.
 const PENDING_MARKER_FILE: &str = ".task-commit-pending";
+const REQUIRED_MARKER_FILE: &str = ".task-commit-required";
 const COMMIT_INTENT_SCHEMA_VERSION: u32 = 1;
 
 static JOURNAL_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -122,6 +122,7 @@ pub(crate) enum CoordinationFault {
 
 #[cfg(test)]
 thread_local! {
+    static BEFORE_ORDINARY_LOCK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
     static INJECTED_FAULTS: std::cell::RefCell<std::collections::HashSet<CoordinationFault>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
 }
@@ -150,25 +151,27 @@ thread_local! {
     /// Depth of boundary sections this thread is inside. Recovery must never
     /// run *inside* a commit this thread is performing: that commit's own
     /// journal row is legitimately unsettled.
-    static BOUNDARY_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static BOUNDARY_DEPTH: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 struct BoundaryDepth;
 
 impl BoundaryDepth {
-    fn enter() -> Self {
-        BOUNDARY_DEPTH.with(|depth| depth.set(depth.get() + 1));
+    fn enter(partition: &Path) -> Self {
+        BOUNDARY_DEPTH.with(|depth| depth.borrow_mut().push(partition.to_path_buf()));
         Self
     }
 
-    fn active() -> bool {
-        BOUNDARY_DEPTH.with(|depth| depth.get() > 0)
+    fn active(partition: &Path) -> bool {
+        BOUNDARY_DEPTH.with(|depth| depth.borrow().iter().any(|held| held == partition))
     }
 }
 
 impl Drop for BoundaryDepth {
     fn drop(&mut self) {
-        BOUNDARY_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        BOUNDARY_DEPTH.with(|depth| {
+            depth.borrow_mut().pop();
+        });
     }
 }
 
@@ -188,8 +191,8 @@ struct TaskCommitIntent {
 
 /// One task-store partition's durable commit and recovery authority.
 ///
-/// Construct it once per partition and share it: the boundary is only a
-/// boundary if every participant holds the same one. See the module docs for
+/// Compositions for the same partition share filesystem locks and the durable
+/// journal. Legacy compositions refuse activated partitions. See the module docs for
 /// the protocol and [`TaskCommitBoundary::commit_task_transition`] for the
 /// integration entry point.
 pub struct TaskCommitBoundary {
@@ -209,12 +212,68 @@ impl TaskCommitBoundary {
         let partition_dir = registry.workspace_partition_dir(&workspace_id)?;
         create_private_dir_all(&partition_dir)
             .map_err(|error| OrbitError::from_write_io(&partition_dir, error))?;
-        Ok(Self {
+        let boundary = Self {
             bundle_store: TaskBundleStoreV2::new(registry.clone(), workspace_id.clone()),
             store,
             registry,
             workspace_id,
             partition_dir,
+        };
+        with_exclusive_file_lock(
+            &boundary.lock_target(),
+            COORDINATION_LOCK_LABEL,
+            || -> Result<(), OrbitError> {
+                let marker = boundary.partition_dir.join(REQUIRED_MARKER_FILE);
+                if marker.try_exists()? {
+                    boundary.verify_journal_binding()?;
+                } else {
+                    let path = serde_json::to_string(&boundary.store.task_commit_database_path()?)
+                        .map_err(|error| OrbitError::Store(error.to_string()))?;
+                    atomic_write_text(&marker, &path)
+                        .map_err(|error| OrbitError::from_write_io(&marker, error))?;
+                }
+                Ok(())
+            },
+        )?;
+        Ok(boundary)
+    }
+
+    fn verify_journal_binding(&self) -> Result<(), OrbitError> {
+        let marker = self.partition_dir.join(REQUIRED_MARKER_FILE);
+        if marker.try_exists()? {
+            let path: PathBuf = serde_json::from_str(&std::fs::read_to_string(marker)?)
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            if path != self.store.task_commit_database_path()? {
+                return Err(OrbitError::Store(
+                    "task partition is bound to a different coordination journal".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Legacy compositions may serve an uncoordinated partition, but cannot
+    /// race or overwrite one that has opted into durable coordination.
+    pub(crate) fn enter_uncoordinated<T>(
+        registry: &TaskRegistryStore,
+        workspace_id: &str,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        let partition = registry.workspace_partition_dir(workspace_id)?;
+        let host_lock = host_lock_for_partition(&partition);
+        with_shared_file_lock(&host_lock, COORDINATION_LOCK_LABEL, || {
+            with_shared_file_lock(
+                &partition.join(COORDINATION_LOCK_FILE),
+                COORDINATION_LOCK_LABEL,
+                || {
+                    if partition.join(REQUIRED_MARKER_FILE).try_exists()? {
+                        return Err(OrbitError::Store(
+                            "this task partition requires coordinated backends".into(),
+                        ));
+                    }
+                    op()
+                },
+            )
         })
     }
 
@@ -232,9 +291,43 @@ impl TaskCommitBoundary {
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
-        self.recover_if_pending()?;
-        let _depth = BoundaryDepth::enter();
-        with_shared_file_lock(&self.lock_target(), COORDINATION_LOCK_LABEL, op)
+        with_shared_file_lock(&self.host_lock_target(), COORDINATION_LOCK_LABEL, || {
+            self.enter_ordinary_locked(op)
+        })
+    }
+
+    fn enter_ordinary_locked<T>(
+        &self,
+        op: impl FnOnce() -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        let mut op = Some(op);
+        loop {
+            self.recover_if_pending()?;
+            #[cfg(test)]
+            BEFORE_ORDINARY_LOCK.with(|hook| {
+                if let Some(hook) = hook.borrow_mut().take() {
+                    hook();
+                }
+            });
+            let result =
+                with_shared_file_lock(&self.lock_target(), COORDINATION_LOCK_LABEL, || {
+                    // A commit may have crashed while we waited for this lock.
+                    // Drop the shared acquisition before taking recovery exclusive.
+                    if !BoundaryDepth::active(&self.partition_dir)
+                        && self.pending_marker_path().try_exists()?
+                    {
+                        return Ok(None);
+                    }
+                    let _depth = BoundaryDepth::enter(&self.partition_dir);
+                    let operation = op.take().ok_or_else(|| {
+                        OrbitError::Store("ordinary boundary operation was already consumed".into())
+                    })?;
+                    operation().map(Some)
+                })?;
+            if let Some(result) = result {
+                return Ok(result);
+            }
+        }
     }
 
     /// Hold the boundary exclusively for one admission decision.
@@ -247,9 +340,13 @@ impl TaskCommitBoundary {
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
-        self.recover_if_pending()?;
-        let _depth = BoundaryDepth::enter();
-        with_exclusive_file_lock(&self.lock_target(), COORDINATION_LOCK_LABEL, op)
+        with_exclusive_file_lock(&self.host_lock_target(), COORDINATION_LOCK_LABEL, || {
+            with_exclusive_file_lock(&self.lock_target(), COORDINATION_LOCK_LABEL, || {
+                self.recover_if_pending()?;
+                let _depth = BoundaryDepth::enter(&self.partition_dir);
+                op()
+            })
+        })
     }
 
     /// Publish a task transition and history together with an optional
@@ -272,15 +369,14 @@ impl TaskCommitBoundary {
         &self,
         kind: &str,
     ) -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError> {
-        self.recover_if_pending()?;
-        self.store.task_coordination_rows(&self.workspace_id, kind)
+        self.enter_ordinary(|| self.store.task_coordination_rows(&self.workspace_id, kind))
     }
 
     /// Replay the journal when a marker says a commit may be unfinished.
     ///
     /// Cheap on the common path: one existence check.
     pub fn recover_if_pending(&self) -> Result<(), OrbitError> {
-        if BoundaryDepth::active() {
+        if BoundaryDepth::active(&self.partition_dir) {
             // This thread is inside its own commit; its journal row is
             // unsettled on purpose.
             return Ok(());
@@ -294,8 +390,14 @@ impl TaskCommitBoundary {
     /// Settle every unfinished commit for this partition: roll undecided
     /// intents back, roll committed decisions forward.
     pub fn recover(&self) -> Result<(), OrbitError> {
+        with_shared_file_lock(&self.host_lock_target(), COORDINATION_LOCK_LABEL, || {
+            self.recover_locked()
+        })
+    }
+
+    fn recover_locked(&self) -> Result<(), OrbitError> {
         with_exclusive_file_lock(&self.lock_target(), COORDINATION_LOCK_LABEL, || {
-            let _depth = BoundaryDepth::enter();
+            let _depth = BoundaryDepth::enter(&self.partition_dir);
             fail_if_injected(CoordinationFault::DuringRecovery)?;
             for record in self
                 .store
@@ -328,6 +430,17 @@ impl TaskCommitBoundary {
     fn commit_locked(
         &self,
         params: &TaskCoordinationCommitParams,
+    ) -> Result<TaskCoordinationCommitOutcome, OrbitError> {
+        self.commit_locked_with_rows(params, &mut |_| Ok(params.rows.clone()))
+    }
+
+    fn commit_locked_with_rows(
+        &self,
+        params: &TaskCoordinationCommitParams,
+        make_rows: &mut impl FnMut(
+            Option<&crate::contracts::TaskReservationReserveResult>,
+        )
+            -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError>,
     ) -> Result<TaskCoordinationCommitOutcome, OrbitError> {
         orbit_types::task::validate_orb_task_id(&params.task_id)?;
         if params.actor.trim().is_empty() {
@@ -367,10 +480,11 @@ impl TaskCommitBoundary {
                     return Err(error);
                 }
 
-                let decided = match self.store.commit_task_commit_journal(
+                let decided = match self.store.commit_task_commit_journal_with_rows(
                     &journal_id,
                     params.reservation.as_ref(),
                     &params.rows,
+                    make_rows,
                 ) {
                     Ok(decided) => decided,
                     Err(error) => {
@@ -533,6 +647,10 @@ impl TaskCommitBoundary {
         }
     }
 
+    fn host_lock_target(&self) -> PathBuf {
+        host_lock_for_partition(&self.partition_dir)
+    }
+
     fn lock_target(&self) -> PathBuf {
         self.partition_dir.join(COORDINATION_LOCK_FILE)
     }
@@ -562,6 +680,16 @@ impl TaskCommitBoundary {
     }
 }
 
+fn host_lock_for_partition(partition: &Path) -> PathBuf {
+    // Partitions are tasks/workspaces/<id>. Keep host metadata beside the
+    // registry database, outside the directory enumerated as workspaces.
+    partition
+        .ancestors()
+        .nth(2)
+        .unwrap_or(partition)
+        .join("host-task-commit")
+}
+
 fn remove_file_if_present(path: &Path) -> Result<(), OrbitError> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -580,6 +708,8 @@ fn unique_journal_id() -> String {
     let sequence = JOURNAL_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     format!("commit-{nanos}-{}-{sequence}", std::process::id())
 }
+
+mod admission;
 
 #[cfg(test)]
 mod tests;

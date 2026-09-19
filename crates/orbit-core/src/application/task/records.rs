@@ -85,6 +85,7 @@ impl TaskRecordService<'_> {
                     pr_status: params.pr_status.clone(),
                     source_task_id: params.source_task_id.clone(),
                     job_run_id: params.job_run_id.clone(),
+                    job_run_host: params.job_run_host.clone(),
                     crew: params.crew.clone(),
                     orchestrator: params.orchestrator.clone(),
                 },
@@ -110,6 +111,7 @@ impl TaskRecordService<'_> {
             self.artifact.upsert_task_artifacts(
                 id,
                 TaskArtifactUpdateParams {
+                    origin: params.artifact_origin.clone(),
                     owner_run_id: params.artifact_owner_run_id.clone(),
                     actor: params.actor.clone(),
                     upsert_artifacts: params.upsert_artifacts.clone(),

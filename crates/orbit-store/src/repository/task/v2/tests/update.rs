@@ -218,6 +218,7 @@ fn artifact_update_writes_manifest_and_sorted_text_artifacts() {
         .upsert_task_artifacts(
             "ORB-00000",
             &TaskArtifactUpdateParams {
+                origin: None,
                 owner_run_id: None,
                 actor: "codex:gpt-5.5".to_string(),
                 upsert_artifacts: vec![
@@ -232,6 +233,7 @@ fn artifact_update_writes_manifest_and_sorted_text_artifacts() {
         .upsert_task_artifacts(
             "ORB-00000",
             &TaskArtifactUpdateParams {
+                origin: None,
                 owner_run_id: None,
                 actor: "codex:gpt-5.5".to_string(),
                 upsert_artifacts: vec![TaskArtifact::from_text(
@@ -279,6 +281,7 @@ fn artifact_update_writes_manifest_and_sorted_text_artifacts() {
         .upsert_task_artifacts(
             "ORB-00000",
             &TaskArtifactUpdateParams {
+                origin: None,
                 owner_run_id: None,
                 actor: "codex:gpt-5.5".to_string(),
                 upsert_artifacts: vec![TaskArtifact::from_text("../escape.txt", "")],
@@ -451,6 +454,7 @@ fn executor_origin_is_store_authored_and_normalized_alias_cannot_forge_it() {
         .create_task(create_params("Coverage", TaskStatus::Backlog))
         .unwrap();
     let params = TaskArtifactUpdateParams {
+        origin: None,
         actor: "codex".into(),
         owner_run_id: Some("trusted-run".into()),
         upsert_artifacts: vec![TaskArtifact::from_text(
@@ -476,6 +480,7 @@ fn executor_origin_is_store_authored_and_normalized_alias_cannot_forge_it() {
                 .upsert_task_artifacts(
                     &task.id,
                     &TaskArtifactUpdateParams {
+                        origin: None,
                         actor: "attacker".into(),
                         owner_run_id: None,
                         upsert_artifacts: vec![TaskArtifact::from_text(&path, "forged")]
@@ -775,5 +780,93 @@ fn atomic_task_mutation_rolls_back_receipt_when_envelope_publish_fails() {
     assert_eq!(
         store.get_task_history("ORB-00000").unwrap().unwrap(),
         history_before
+    );
+}
+
+#[test]
+fn artifact_origin_comes_only_from_trusted_put_context() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let task = store
+        .create_task(create_params("origin", TaskStatus::Backlog))
+        .expect("task");
+    let mut params = TaskArtifactUpdateParams {
+        actor: "payload-host".into(),
+        owner_run_id: None,
+        origin: None,
+        upsert_artifacts: vec![TaskArtifact::from_text(
+            "origin.txt",
+            "payload machine_id=forged",
+        )],
+    };
+    store
+        .upsert_task_artifacts(&task.id, &params)
+        .expect("unknown put");
+    assert!(
+        store
+            .get_task_artifact_manifest(&task.id)
+            .expect("manifest")
+            .expect("task")[0]
+            .origin
+            .is_none()
+    );
+    params.origin = Some(orbit_types::task::ExecutionLocation {
+        machine_id: "authenticated-machine".into(),
+        host_id: Some("display".into()),
+    });
+    store
+        .upsert_task_artifacts(&task.id, &params)
+        .expect("trusted put");
+    assert_eq!(
+        store
+            .get_task_artifact_manifest(&task.id)
+            .expect("manifest")
+            .expect("task")[0]
+            .origin,
+        params.origin
+    );
+}
+
+#[test]
+fn task_run_location_is_immutable_for_a_binding_and_unknown_without_trusted_origin() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let task = store
+        .create_task(create_params("binding", TaskStatus::Backlog))
+        .expect("task");
+    let location = orbit_types::task::ExecutionLocation {
+        machine_id: "trusted".into(),
+        host_id: None,
+    };
+    let mut params = TaskDocumentUpdateParams {
+        actor: "test".into(),
+        job_run_id: Some(Some("run-a".into())),
+        job_run_host: Some(Some(location.clone())),
+        ..Default::default()
+    };
+    store
+        .update_task_document(&task.id, &params)
+        .expect("binding");
+    assert_eq!(
+        store
+            .get_task(&task.id)
+            .expect("read")
+            .expect("task")
+            .job_run_host,
+        Some(location)
+    );
+    params.job_run_host = Some(None);
+    assert!(store.update_task_document(&task.id, &params).is_err());
+    params.job_run_id = Some(Some("run-b".into()));
+    store
+        .update_task_document(&task.id, &params)
+        .expect("unqualified binding");
+    assert_eq!(
+        store
+            .get_task(&task.id)
+            .expect("read")
+            .expect("task")
+            .job_run_host,
+        None
     );
 }

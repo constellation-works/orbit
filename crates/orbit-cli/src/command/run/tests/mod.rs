@@ -46,6 +46,7 @@ fn cancel_requires_confirmation_before_terminalizing_pending_run() {
     let store = runtime.sqlite_store().expect("store");
     let now = Utc::now();
     let run = JobRun {
+        executed_on: None,
         run_id: "jrun-confirm-test".to_string(),
         job_id: "cancel-test".to_string(),
         attempt: 1,
@@ -370,6 +371,7 @@ fn run_show_projects_parallel_provider_completion_by_invocation_parent() {
     let workspace_id = runtime.workspace_id().expect("workspace id");
     let scheduled_at = Utc::now();
     let run = JobRun {
+        executed_on: None,
         run_id: "jrun-cli-parallel-provider".to_string(),
         job_id: "task_pr_pipeline".to_string(),
         attempt: 1,
@@ -456,6 +458,7 @@ fn run_show_recovers_steps_from_the_audit_trail_when_the_record_stores_none() {
     let workspace_id = runtime.workspace_id().expect("workspace id");
     let scheduled_at = Utc::now();
     let run = JobRun {
+        executed_on: None,
         run_id: "jrun-cli-audit-steps".to_string(),
         job_id: "task_pipeline".to_string(),
         attempt: 1,
@@ -578,6 +581,7 @@ fn run_show_human_view_reports_backlog_exclusions() {
     let workspace_id = runtime.workspace_id().expect("workspace id");
     let now = Utc::now();
     let run = JobRun {
+        executed_on: None,
         run_id: "jrun-cli-exclusions".to_string(),
         job_id: "task_auto_pipeline".to_string(),
         attempt: 1,
@@ -686,6 +690,7 @@ fn run_logs_falls_back_to_worker_log_when_no_cli_invocations_are_recorded() {
     let workspace_id = runtime.workspace_id().expect("workspace id");
     let scheduled_at = Utc::now();
     let run = JobRun {
+        executed_on: None,
         run_id: "jrun-cli-worker-log".to_string(),
         job_id: "task_gate_pipeline".to_string(),
         attempt: 1,

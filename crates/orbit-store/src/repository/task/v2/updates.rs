@@ -39,6 +39,9 @@ impl TaskV2Store {
                 return Ok(AtomicTaskMutationOutcome::Stale);
             }
 
+            if let Some(boundary) = &self.coordination {
+                boundary.guard_ordinary_footprint(fields.status, &fields.context_files)?;
+            }
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
             let now = Utc::now();
             let status_changed = fields.status != bundle.envelope.status;
@@ -163,6 +166,18 @@ impl TaskV2Store {
                 envelope_changed = true;
             }
             if let Some(value) = &fields.job_run_id {
+                if value != &bundle.envelope.job_run_id {
+                    bundle.envelope.job_run_host = fields.job_run_host.clone().flatten();
+                } else if let Some(host) = &fields.job_run_host
+                    && host != &bundle.envelope.job_run_host
+                {
+                    return Err(OrbitError::InvalidInput(
+                        "execution location is immutable for a run binding".into(),
+                    ));
+                }
+                if value.is_none() {
+                    bundle.envelope.job_run_host = None;
+                }
                 bundle.envelope.job_run_id = value.clone();
                 envelope_changed = true;
             }
@@ -179,6 +194,12 @@ impl TaskV2Store {
                 envelope_changed = true;
             }
 
+            if let Some(boundary) = &self.coordination {
+                boundary.guard_ordinary_footprint(
+                    bundle.envelope.status,
+                    &bundle.envelope.context_files,
+                )?;
+            }
             if relations_changed {
                 self.registry.validate_task_relations(
                     &self.workspace_id,
@@ -282,6 +303,9 @@ impl TaskV2Store {
                 )));
             }
             let target_status = fields.status.unwrap_or(current_status);
+            if let Some(boundary) = &self.coordination {
+                boundary.guard_ordinary_footprint(target_status, &bundle.envelope.context_files)?;
+            }
             let status_transition =
                 (target_status != current_status).then_some((current_status, target_status));
             let mut next_event = next_sequence(&bundle.events, "EV-");

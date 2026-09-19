@@ -211,3 +211,52 @@ fn a_failed_compensation_keeps_the_partition_closed_until_recovery_succeeds() {
             .is_empty()
     );
 }
+
+#[test]
+fn an_entrant_recovers_a_commit_that_failed_after_its_initial_check() {
+    // Hold a partition lock only, to simulate a commit which was already
+    // publishing before this entrant checked its pending marker.
+    let temp = TempDir::new().expect("temp");
+    let fixture = Coordinated::open(temp.path());
+    let task = fixture.create_task("gap");
+    let entrant = Coordinated::open(temp.path());
+    let (checked_tx, checked_rx) = std::sync::mpsc::sync_channel(1);
+    let (continue_tx, continue_rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::scope(|scope| {
+        let writer = scope.spawn(|| {
+            BEFORE_ORDINARY_LOCK.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    checked_tx.send(()).expect("signal check");
+                    continue_rx
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .expect("continue");
+                }))
+            });
+            entrant
+                .boundary()
+                .enter_ordinary(|| {
+                    let bundle = entrant
+                        .boundary()
+                        .bundle_store
+                        .read_bundle_lightweight(&task.id)?;
+                    Ok(bundle.envelope.status)
+                })
+                .expect("recovered read")
+        });
+        checked_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("initial check");
+        // Bypass the outer host lock only in this fault-injection fixture:
+        // reproduce the pending marker arriving after the cheap check.
+        inject_coordination_faults(&[CoordinationFault::AfterCommit]);
+        let _depth = BoundaryDepth::enter(&fixture.boundary().partition_dir);
+        let error = fixture
+            .boundary()
+            .commit_locked(&fixture.admission_params(&task.id, "src/lib.rs"))
+            .expect_err("lost apply");
+        assert!(error.to_string().contains("AfterCommit"));
+        drop(_depth);
+        continue_tx.send(()).expect("release entrant");
+        assert_eq!(writer.join().expect("thread"), TaskStatus::InProgress);
+    });
+}

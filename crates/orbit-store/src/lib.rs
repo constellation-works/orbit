@@ -27,7 +27,7 @@
 //!   [`JobRunStoreBackend`], [`AuditEventStoreBackend`], [`ToolStoreBackend`]
 //! - Composition functions: `compose::workspace_task_backends`, `compose::workspace_job_run_store`,
 //!   `global_executor_def_store`, `global_policy_def_store`,
-//!   `audit_event_store_sqlite`, `task_reservation_store_sqlite`, `tool_store_sqlite`
+//!   `audit_event_store_sqlite`, `workspace_coordinated_backends`, `tool_store_sqlite`
 //! - [`SessionLogStore`] — lock-safe workspace session-log persistence
 //! - [`Store`] / [`StoreTx`] — SQLite connection handle and transaction wrapper
 //! - [`validate_instance_against_schema`] — JSON Schema validation for activity I/O

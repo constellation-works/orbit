@@ -847,6 +847,9 @@ pub struct Task {
     pub relations: Vec<TaskRelation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_run_id: Option<String>,
+    /// Trusted execution location of the linked run; legacy links are unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_run_host: Option<ExecutionLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
     /// Explicit named crew that owns orchestration of this task. This is
@@ -1296,4 +1299,41 @@ where
     trail.pop();
     visiting.remove(current);
     Ok(None)
+}
+
+/// Canonical automatic admission order, shared by reporting and the owner store.
+pub fn automatic_dispatch_cmp(left: &Task, right: &Task) -> std::cmp::Ordering {
+    let band = |task: &Task| {
+        if task.priority == TaskPriority::Critical {
+            0
+        } else if task.task_type == TaskType::Bug
+            || task
+                .tags
+                .iter()
+                .any(|tag| matches!(tag.as_str(), "code-review" | "security-review"))
+        {
+            1
+        } else {
+            2
+        }
+    };
+    let priority = |value| match value {
+        TaskPriority::Critical => 0,
+        TaskPriority::High => 1,
+        TaskPriority::Medium => 2,
+        TaskPriority::Low => 3,
+    };
+    band(left)
+        .cmp(&band(right))
+        .then(priority(left.priority).cmp(&priority(right.priority)))
+        .then(left.created_at.cmp(&right.created_at))
+        .then(left.id.cmp(&right.id))
+}
+
+/// Persisted execution location. Absence on older records means unknown.
+/// Host labels are display metadata; only the stable machine identifies execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionLocation {
+    pub machine_id: String,
+    pub host_id: Option<String>,
 }

@@ -175,6 +175,29 @@ pub fn workspace_runtime_binding(
 }
 
 impl OrbitRuntime {
+    /// Only the accepting transport's authenticated facts may label artifact bytes.
+    pub(crate) fn artifact_origin(
+        &self,
+        session: &orbit_types::tool::ToolSessionContext,
+    ) -> Option<orbit_types::task::ExecutionLocation> {
+        if let Some(grant) = &session.remote_caller_grant {
+            return (grant.identity == orbit_types::tool::CallerIdentityProof::KeyBound).then(
+                || orbit_types::task::ExecutionLocation {
+                    machine_id: grant.caller_machine_id.clone(),
+                    host_id: None,
+                },
+            );
+        }
+        session
+            .process_machine_id
+            .as_deref()
+            .or_else(|| self.automation_machine_identity())
+            .map(|machine_id| orbit_types::task::ExecutionLocation {
+                machine_id: machine_id.into(),
+                host_id: session.process_host_id.clone(),
+            })
+    }
+
     pub(crate) fn build_from_resolved_config(
         global_root: &Path,
         shared_root: &Path,
@@ -305,6 +328,13 @@ impl OrbitRuntime {
 
     /// Registry-owning composition supplies stable machine identity; Core never discovers it.
     pub fn with_automation_machine_identity(mut self, machine_id: Option<String>) -> Self {
+        self.context
+            .set_execution_location(machine_id.as_ref().map(|machine_id| {
+                orbit_types::task::ExecutionLocation {
+                    machine_id: machine_id.clone(),
+                    host_id: None,
+                }
+            }));
         self.automation_machine_identity = machine_id.map(Arc::from);
         self
     }

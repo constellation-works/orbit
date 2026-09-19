@@ -223,3 +223,48 @@ fn same_minute_siblings_and_children_get_role_marked_ids() {
     assert_eq!(linked, vec![child.run_id.clone()]);
     assert!(!linked.contains(&second.run_id));
 }
+
+#[test]
+fn execution_location_is_trusted_immutable_and_legacy_unknown() {
+    use orbit_types::task::ExecutionLocation;
+    let store = Store::open_in_memory().expect("store");
+    let plain = SqliteJobRunStore::new(store.clone(), "ws_a");
+    let forged = serde_json::json!({"executed_on":{"machine_id":"payload-machine"},"host_id":"payload-host"});
+    let legacy = plain
+        .insert_job_run("job", 1, Utc::now(), Some(forged.clone()), None)
+        .expect("legacy");
+    assert!(legacy.executed_on.is_none());
+    let location = ExecutionLocation {
+        machine_id: "registry-machine".into(),
+        host_id: Some("display-name".into()),
+    };
+    let trusted = plain.with_execution_location(Some(location.clone()));
+    let mut run = trusted
+        .insert_job_run("job", 1, Utc::now(), Some(forged), None)
+        .expect("insert");
+    assert_eq!(run.executed_on, Some(location.clone()));
+    run.executed_on = Some(ExecutionLocation {
+        machine_id: "replacement".into(),
+        host_id: None,
+    });
+    store
+        .upsert_job_run_for_workspace("ws_a", &run, None)
+        .expect("ordinary upsert");
+    assert_eq!(
+        trusted
+            .get_job_run(&run.run_id)
+            .expect("read")
+            .expect("run")
+            .executed_on,
+        Some(location)
+    );
+    assert!(
+        trusted
+            .get_job_run(&legacy.run_id)
+            .expect("read legacy")
+            .expect("legacy")
+            .executed_on
+            .is_none()
+    );
+    assert_eq!(trusted.list_job_runs("job").expect("list").len(), 2);
+}

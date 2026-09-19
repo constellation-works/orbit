@@ -71,6 +71,7 @@ impl RuntimeHost for FakeTaskHost {
 fn task_fixture(id: &str, status: TaskStatus) -> Task {
     let now = Utc::now();
     Task {
+        job_run_host: None,
         id: id.to_string(),
         title: "fixture task".to_string(),
         description: String::new(),
@@ -1124,6 +1125,7 @@ fn unattributed_run(id: &str, state: JobRunState) -> JobRun {
 fn job_run(id: &str, state: JobRunState, input: Value) -> JobRun {
     let now = Utc::now();
     JobRun {
+        executed_on: None,
         run_id: id.to_string(),
         job_id: "task_pr_pipeline".to_string(),
         attempt: 1,

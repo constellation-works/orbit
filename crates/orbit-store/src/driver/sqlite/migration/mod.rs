@@ -1552,3 +1552,13 @@ fn table_has_foreign_key_to(
 
 #[cfg(test)]
 mod tests;
+
+fn apply_execution_provenance(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "job_runs")? {
+        return Ok(());
+    }
+    add_column_if_missing(
+        conn,
+        "ALTER TABLE job_runs ADD COLUMN executed_on_json TEXT",
+    )
+}

@@ -12,6 +12,7 @@ use super::super::job::*;
 fn test_run(state: JobRunState) -> JobRun {
     let now = Utc::now();
     JobRun {
+        executed_on: None,
         run_id: "jrun-test".to_string(),
         job_id: "task_gate_pipeline".to_string(),
         attempt: 1,

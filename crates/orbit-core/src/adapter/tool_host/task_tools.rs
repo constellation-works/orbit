@@ -268,6 +268,7 @@ pub(super) fn update(
     agent: Option<String>,
     model: Option<String>,
     owner: Option<orbit_tools::ReservationOwnerContext>,
+    origin: Option<orbit_types::task::ExecutionLocation>,
 ) -> Result<Value, OrbitError> {
     if ["required_tools", "requiredTools", "required-tool"]
         .iter()
@@ -304,7 +305,8 @@ pub(super) fn update(
                         model,
                     )?,
                 GuardedLifecycleWrite::Start => {
-                    let params = task_update_params_from_input(&input, requested_status)?;
+                    let mut params = task_update_params_from_input(&input, requested_status)?;
+                    params.trusted_artifact_origin = origin.clone();
                     ensure_context_selectors_if_required(runtime, &input, &params)?;
                     runtime.start_task_with_identity_and_crew(
                         &id,
@@ -327,7 +329,8 @@ pub(super) fn update(
             "`note` is only accepted on the guarded approval (proposed → backlog) or start (pickup → in-progress) transition".to_string(),
         ));
     }
-    let params = task_update_params_from_input(&input, requested_status)?;
+    let mut params = task_update_params_from_input(&input, requested_status)?;
+    params.trusted_artifact_origin = origin.clone();
     ensure_context_selectors_if_required(runtime, &input, &params)?;
     let task = runtime.update_task_with_owner(
         &id,
@@ -433,6 +436,7 @@ fn task_update_params_from_input(
     status: Option<TaskStatus>,
 ) -> Result<TaskUpdateParams, OrbitError> {
     Ok(TaskUpdateParams {
+        trusted_artifact_origin: None,
         title: optional_string(input, "title")?,
         description: input
             .get("description")

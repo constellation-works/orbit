@@ -107,6 +107,7 @@ pub(super) fn seed(global: &Path, workspace: &str, count: usize) -> TaskV2Store 
             .upsert_task_artifacts(
                 &task.id,
                 &TaskArtifactUpdateParams {
+                    origin: None,
                     owner_run_id: None,
                     actor: "codex".to_string(),
                     upsert_artifacts: vec![TaskArtifact {

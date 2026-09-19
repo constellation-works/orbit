@@ -35,6 +35,24 @@ pub(crate) enum JournalCommitOutcome {
 }
 
 impl Store {
+    /// A durable boundary must reopen the same file-backed decision journal.
+    pub(crate) fn task_commit_database_path(&self) -> Result<std::path::PathBuf, OrbitError> {
+        let conn = self.read()?;
+        let path: String = conn
+            .query_row(
+                "SELECT file FROM pragma_database_list WHERE name = 'main'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        if path.is_empty() {
+            return Err(OrbitError::Store(
+                "task coordination requires a file-backed journal".into(),
+            ));
+        }
+        std::fs::canonicalize(path).map_err(OrbitError::from)
+    }
+
     /// Record an undecided commit intent durably, before anything else moves.
     ///
     /// A `prepared` row is the evidence that lets recovery tell "this process
@@ -74,11 +92,26 @@ impl Store {
     /// Any refusal (a reservation conflict, a duplicate coordination row)
     /// rolls the whole transaction back, leaving the journal `prepared` for
     /// the caller to compensate. A returned `Committed` is durable.
+    #[cfg(test)]
     pub(crate) fn commit_task_commit_journal(
         &self,
         journal_id: &str,
         reservation: Option<&TaskReservationReserveParams>,
         rows: &[TaskCoordinationRow],
+    ) -> Result<JournalCommitOutcome, OrbitError> {
+        self.commit_task_commit_journal_with_rows(journal_id, reservation, rows, &mut |_| {
+            Ok(rows.to_vec())
+        })
+    }
+
+    pub(crate) fn commit_task_commit_journal_with_rows(
+        &self,
+        journal_id: &str,
+        reservation: Option<&TaskReservationReserveParams>,
+        identities: &[TaskCoordinationRow],
+        make_rows: &mut impl FnMut(
+            Option<&TaskReservationReserveResult>,
+        ) -> Result<Vec<TaskCoordinationRow>, OrbitError>,
     ) -> Result<JournalCommitOutcome, OrbitError> {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             let workspace_id: String = tx
@@ -97,7 +130,8 @@ impl Store {
                     ))
                 })?;
 
-            if let Some(existing) = first_existing_coordination_row(tx, &workspace_id, rows)? {
+            if let Some(existing) = first_existing_coordination_row(tx, &workspace_id, identities)?
+            {
                 return Ok(JournalCommitOutcome::RowExists {
                     kind: existing.0,
                     row_id: existing.1,
@@ -115,8 +149,18 @@ impl Store {
                 None => None,
             };
 
+            let rows = make_rows(reserved.as_ref())?;
+            if rows.len() != identities.len()
+                || rows.iter().zip(identities).any(|(row, identity)| {
+                    row.kind != identity.kind || row.row_id != identity.row_id
+                })
+            {
+                return Err(OrbitError::Store(
+                    "coordination row identities changed during commit".into(),
+                ));
+            }
             let now = crate::now_string();
-            for row in rows {
+            for row in &rows {
                 tx.tx
                     .execute(
                         "INSERT INTO task_coordination_rows(
@@ -241,6 +285,37 @@ impl Store {
                 });
             }
             Ok(records)
+        })
+    }
+
+    /// Pure-SQL coordination facts (idle receipts) need no bundle replay.
+    pub(crate) fn insert_task_coordination_row(
+        &self,
+        workspace: &str,
+        row: &TaskCoordinationRow,
+    ) -> Result<(), OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            tx.tx.execute(
+                "INSERT INTO task_coordination_rows(workspace_id,kind,row_id,payload_json,journal_id,created_at) VALUES (?1,?2,?3,?4,'sql-only',?5)",
+                params![workspace, row.kind, row.row_id, row.payload_json, crate::now_string()],
+            ).map_err(|e| OrbitError::Store(e.to_string()))?;
+            Ok(())
+        })
+    }
+
+    /// Replace a full receipt by a permanent tombstone under the repository
+    /// boundary. A stale compactor cannot overwrite a different generation.
+    pub(crate) fn replace_task_coordination_payload(
+        &self,
+        workspace: &str,
+        old: &TaskCoordinationRow,
+        payload: &str,
+    ) -> Result<bool, OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            tx.tx.execute(
+                "UPDATE task_coordination_rows SET payload_json=?5 WHERE workspace_id=?1 AND kind=?2 AND row_id=?3 AND payload_json=?4",
+                params![workspace, old.kind, old.row_id, old.payload_json, payload],
+            ).map(|n| n == 1).map_err(|e| OrbitError::Store(e.to_string()))
         })
     }
 

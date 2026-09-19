@@ -95,9 +95,14 @@ pub(super) fn execute(
         }
         OrbitBuiltinAction::TaskReject => super::task_tools::reject(runtime, input, agent, model),
         OrbitBuiltinAction::TaskShow => super::task_tools::show(runtime, input),
-        OrbitBuiltinAction::TaskUpdate => {
-            super::task_tools::update(runtime, input, agent, model, reservation_owner)
-        }
+        OrbitBuiltinAction::TaskUpdate => super::task_tools::update(
+            runtime,
+            input,
+            agent,
+            model,
+            reservation_owner,
+            runtime.artifact_origin(session_context),
+        ),
         OrbitBuiltinAction::WorkflowShip => {
             super::workflow_tools::ship(runtime, input, agent, model)
         }

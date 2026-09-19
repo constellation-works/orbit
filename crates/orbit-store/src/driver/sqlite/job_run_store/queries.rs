@@ -98,7 +98,7 @@ impl Store {
         let mut sql = format!(
             "SELECT run_id, job_id, attempt, state, scheduled_at, started_at, finished_at, \
              duration_ms, created_at, pid, pid_start_time, input_json, retry_source_run_id, \
-             knowledge_metrics_json, resolved_crew, COALESCE(crew_model, implementer_model) \
+             knowledge_metrics_json, resolved_crew, COALESCE(crew_model, implementer_model), executed_on_json \
              FROM job_runs WHERE {where_clause} ORDER BY {order_clause}"
         );
         if let Some(limit) = query.limit {
@@ -205,13 +205,14 @@ pub(super) fn upsert_job_run_for_workspace_conn(
     let knowledge_metrics_json =
         optional_json(&run.knowledge_metrics, "job run knowledge metrics")?;
     let pipeline_state_json = optional_json(&pipeline_state, "job run pipeline state")?;
+    let executed_on_json = optional_json(&run.executed_on, "execution location")?;
     conn.execute(
         r#"INSERT INTO job_runs(
             run_id, workspace_id, job_id, attempt, state, scheduled_at,
             started_at, finished_at, duration_ms, created_at, pid, pid_start_time,
             input_json, retry_source_run_id, knowledge_metrics_json, resolved_crew,
-            crew_model, pipeline_state_json
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+            crew_model, pipeline_state_json, executed_on_json
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
         ON CONFLICT(workspace_id, run_id) DO UPDATE SET
             job_id = excluded.job_id,
             attempt = excluded.attempt,
@@ -248,6 +249,7 @@ pub(super) fn upsert_job_run_for_workspace_conn(
             run.resolved_crew,
             run.crew_model,
             pipeline_state_json,
+            executed_on_json,
         ],
     )
     .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -306,7 +308,7 @@ pub(super) fn get_job_run_for_workspace_conn(
         .prepare(
             "SELECT run_id, job_id, attempt, state, scheduled_at, started_at, finished_at, \
              duration_ms, created_at, pid, pid_start_time, input_json, retry_source_run_id, \
-             knowledge_metrics_json, resolved_crew, COALESCE(crew_model, implementer_model) \
+             knowledge_metrics_json, resolved_crew, COALESCE(crew_model, implementer_model), executed_on_json \
              FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
         )
         .map_err(|e| OrbitError::Store(e.to_string()))?;
@@ -331,6 +333,7 @@ fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun> {
     let input_json: Option<String> = row.get(11)?;
     let knowledge_metrics_json: Option<String> = row.get(13)?;
     Ok(JobRun {
+        executed_on: parse_optional_json(row.get(16)?, "executed_on_json")?,
         run_id: row.get(0)?,
         job_id: row.get(1)?,
         attempt: attempt as u32,

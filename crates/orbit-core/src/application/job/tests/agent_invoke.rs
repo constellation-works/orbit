@@ -476,6 +476,7 @@ spec:
 
 fn finished_run(state: JobRunState, output: Value) -> (JobRun, BTreeMap<u32, Value>) {
     let run = JobRun {
+        executed_on: None,
         run_id: "jrun-test-1".to_string(),
         job_id: AGENT_INVOKE_JOB_ID.to_string(),
         attempt: 1,

@@ -355,6 +355,7 @@ fn running_run_owner_stale_reason_excludes_probe_unavailable() {
     // A Running run whose probe is Unavailable and whose PID is alive
     // must NOT be classified as stale.
     let run = JobRun {
+        executed_on: None,
         run_id: "qa_run".to_string(),
         job_id: "qa_job".to_string(),
         attempt: 1,
@@ -393,6 +394,7 @@ fn running_run_owner_stale_reason_excludes_probe_unavailable() {
 #[test]
 fn stale_failure_message_distinguishes_probe_outcomes() {
     let run = JobRun {
+        executed_on: None,
         run_id: "qa_run".to_string(),
         job_id: "qa_job".to_string(),
         attempt: 1,
@@ -567,6 +569,7 @@ fn foreign_namespace_diagnostic_is_tagged_distinctly() {
 #[cfg(unix)]
 fn running_run_with_token(pid: u32, token: Option<&str>) -> JobRun {
     JobRun {
+        executed_on: None,
         run_id: "qa_run".to_string(),
         job_id: "qa_job".to_string(),
         attempt: 1,

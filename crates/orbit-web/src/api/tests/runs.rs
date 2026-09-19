@@ -656,6 +656,7 @@ fn run_detail_uses_v2_audit_steps_when_step_bundle_is_empty() {
         .expect("parse scheduled")
         .with_timezone(&Utc);
     let run = orbit_core::JobRun {
+        executed_on: None,
         run_id: run_id.to_string(),
         job_id: "job-web".to_string(),
         attempt: 1,
@@ -768,6 +769,7 @@ fn run_detail_keeps_a_parallel_provider_open_when_another_invocation_finishes() 
         .expect("parse scheduled")
         .with_timezone(&Utc);
     let run = orbit_core::JobRun {
+        executed_on: None,
         run_id: run_id.to_string(),
         job_id: "task_pr_pipeline".to_string(),
         attempt: 1,

@@ -6,6 +6,8 @@ use orbit_types::task::{
 
 #[derive(Default, Clone)]
 pub(crate) struct TaskRecordUpdateParams {
+    pub(crate) artifact_origin: Option<orbit_types::task::ExecutionLocation>,
+    pub(crate) job_run_host: Option<Option<orbit_types::task::ExecutionLocation>>,
     pub(crate) artifact_owner_run_id: Option<String>,
     pub(crate) actor: String,
     pub(crate) title: Option<String>,
@@ -138,6 +140,8 @@ impl Default for TaskAddParams {
 
 #[derive(Default, Clone)]
 pub struct TaskUpdateParams {
+    /// Trusted transport context; never populated by task input parsing.
+    pub trusted_artifact_origin: Option<orbit_types::task::ExecutionLocation>,
     pub title: Option<String>,
     pub description: Option<String>,
     pub acceptance_criteria: Option<Vec<String>>,
@@ -169,6 +173,7 @@ pub struct TaskUpdateParams {
 impl From<TaskUpdateParams> for TaskRecordUpdateParams {
     fn from(p: TaskUpdateParams) -> Self {
         Self {
+            artifact_origin: p.trusted_artifact_origin,
             title: p.title,
             description: p.description,
             acceptance_criteria: p.acceptance_criteria,

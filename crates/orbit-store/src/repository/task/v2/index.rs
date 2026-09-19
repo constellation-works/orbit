@@ -223,9 +223,10 @@ impl TaskV2Store {
         }
     }
 
-    pub(super) fn task_from_bundle(&self, bundle: TaskBundleV2) -> Result<Task, OrbitError> {
+    pub(crate) fn task_from_bundle(&self, bundle: TaskBundleV2) -> Result<Task, OrbitError> {
         let status = bundle.envelope.status;
         Ok(Task {
+            job_run_host: bundle.envelope.job_run_host,
             id: bundle.envelope.id,
             title: bundle.envelope.title,
             description: bundle.description,
@@ -278,6 +279,11 @@ impl TaskV2Store {
         // section holds the boundary exclusively and then takes bundle locks
         // inside it, so a caller that acquired them the other way round could
         // deadlock against it (ORB-12528).
-        self.in_boundary(|| self.bundle_store.with_bundle_write_lock(id, op))
+        self.in_boundary(|| {
+            if let Some(boundary) = &self.coordination {
+                boundary.refuse_unscoped_claim_write(id)?;
+            }
+            self.bundle_store.with_bundle_write_lock(id, op)
+        })
     }
 }

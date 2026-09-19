@@ -27,6 +27,7 @@ use crate::fs::path_safety::validate_path_stem;
 pub struct SqliteJobRunStore {
     store: Store,
     workspace_id: String,
+    executed_on: Option<orbit_types::task::ExecutionLocation>,
 }
 
 impl SqliteJobRunStore {
@@ -34,6 +35,7 @@ impl SqliteJobRunStore {
         Self {
             store,
             workspace_id: workspace_id.into(),
+            executed_on: None,
         }
     }
 
@@ -66,6 +68,16 @@ impl SqliteJobRunStore {
 }
 
 impl JobRunStoreBackend for SqliteJobRunStore {
+    fn with_execution_location(
+        &self,
+        location: Option<orbit_types::task::ExecutionLocation>,
+    ) -> std::sync::Arc<dyn JobRunStoreBackend> {
+        std::sync::Arc::new(Self {
+            executed_on: location,
+            ..self.clone()
+        })
+    }
+
     fn job_run_retries(&self, run_id: &str, limit: usize) -> Result<Vec<JobRun>, OrbitError> {
         self.store.with_read_connection(|conn| {
             let mut statement = conn.prepare("SELECT run_id FROM job_runs WHERE workspace_id=?1 AND retry_source_run_id=?2 ORDER BY created_at,run_id LIMIT ?3")
@@ -108,7 +120,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             }
             let now=Utc::now();
             let id=next_run_id_conn(conn,&self.workspace_id,RunIdRole::TopLevel,now)?;
-            let run=JobRun {run_id:id.clone(),job_id:job_id.into(),attempt:1,state:JobRunState::Pending,scheduled_at:now,started_at:None,finished_at:None,duration_ms:None,created_at:now,pid:None,pid_start_time:None,input:Some(input.clone()),retry_source_run_id:None,knowledge_metrics:None,resolved_crew:None,crew_model:None,steps:Vec::new()};
+            let run=JobRun {executed_on: self.executed_on.clone(),run_id:id.clone(),job_id:job_id.into(),attempt:1,state:JobRunState::Pending,scheduled_at:now,started_at:None,finished_at:None,duration_ms:None,created_at:now,pid:None,pid_start_time:None,input:Some(input.clone()),retry_source_run_id:None,knowledge_metrics:None,resolved_crew:None,crew_model:None,steps:Vec::new()};
             let state=PipelineState::new(id.clone(),job_id.into(),input.clone());
             upsert_job_run_for_workspace_conn(conn,&self.workspace_id,&run,Some(&state))?;
             conn.execute("INSERT INTO automation_job_keys VALUES (?1,?2,?3)",rusqlite::params![self.workspace_id,key,id]).map_err(|e|OrbitError::Store(e.to_string()))?;
@@ -174,6 +186,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                 let run_id =
                     next_run_id_conn(&tx.tx, &self.workspace_id, RunIdRole::TopLevel, created_at)?;
                 let run = JobRun {
+                    executed_on: self.executed_on.clone(),
                     run_id,
                     job_id: job_id.to_string(),
                     attempt,
@@ -271,6 +284,7 @@ impl JobRunStoreBackend for SqliteJobRunStore {
                     params.scheduled_at,
                 )?;
                 let run = JobRun {
+                    executed_on: self.executed_on.clone(),
                     run_id: run_id.clone(),
                     job_id: params.job_id.clone(),
                     attempt: params.attempt,

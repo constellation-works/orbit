@@ -58,6 +58,7 @@ pub(super) fn seed_run(
 ) -> JobRun {
     let now = Utc::now();
     let run = JobRun {
+        executed_on: None,
         run_id: run_id.to_string(),
         job_id: job_id.to_string(),
         attempt: 1,

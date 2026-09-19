@@ -18,7 +18,7 @@ use crate::task::Task;
 #[macro_export]
 macro_rules! task_show_projection_fields_csv {
     () => {
-        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts"
+        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_host, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts"
     };
 }
 
@@ -48,6 +48,7 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "relations",
     "source_task_id",
     "job_run_id",
+    "job_run_host",
     "crew",
     "resolved_crew",
     "crew_model",
@@ -90,6 +91,7 @@ pub const TASK_SHOW_PUBLIC_DTO_FIELDS: &[&str] = &[
     "relations",
     "source_task_id",
     "job_run_id",
+    "job_run_host",
     "crew",
     "orchestrator",
     "created_at",
@@ -166,6 +168,7 @@ pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
         "external_refs" => Some(json!(task.external_refs)),
         "source_task_id" => Some(json!(task.source_task_id())),
         "job_run_id" => Some(json!(task.job_run_id)),
+        "job_run_host" => Some(json!(task.job_run_host)),
         "crew" => Some(json!(task.crew)),
         "orchestrator" => Some(json!(task.orchestrator)),
         "created_at" => Some(json!(task.created_at.to_rfc3339())),

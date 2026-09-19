@@ -19,6 +19,7 @@ mod relative_paths {
         let manifest = ArtifactManifestV2 {
             schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
             files: vec![ArtifactManifestFileV2 {
+                origin: None,
                 path: "outputs/report.md".to_string(),
                 blob: "files/report.md".to_string(),
                 sha256: "a".repeat(64),
@@ -29,6 +30,10 @@ mod relative_paths {
             }],
         };
         assert!(manifest.validate().is_ok());
+        let legacy = serde_json::to_value(&manifest).expect("legacy shape");
+        assert!(legacy["files"][0].get("origin").is_none());
+        let loaded: ArtifactManifestV2 = serde_json::from_value(legacy).expect("legacy manifest");
+        assert_eq!(loaded.files[0].origin, None);
 
         let mut invalid = manifest;
         invalid.files[0].blob = "../blob".to_string();
@@ -58,6 +63,7 @@ updated_at: 2026-05-10T12:00:00Z
 
     fn valid_envelope(id: &str) -> TaskEnvelopeV2 {
         TaskEnvelopeV2 {
+            job_run_host: None,
             schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
             id: id.to_string(),
             title: "Build the thing".to_string(),
@@ -120,6 +126,7 @@ updated_at: 2026-05-10T12:00:00Z
             .expect("legacy v1 envelope remains readable");
         assert_eq!(envelope.schema_version, TASK_ARTIFACT_SCHEMA_VERSION);
         assert_eq!(envelope.orchestrator, None);
+        assert_eq!(envelope.job_run_host, None);
         assert!(envelope.required_tools.is_empty());
     }
 
