@@ -76,6 +76,20 @@ impl OrbitRuntime {
         &self,
         source_run_id: &str,
     ) -> Result<ResumePlan, OrbitError> {
+        // Refuse before show_job_run can reconcile local liveness. Settled claims
+        // retain immutable bindings, so even a revoked attempt cannot resume.
+        let recorded = self.get_job_run_backend(source_run_id)?;
+        if self.inspect_execution_claims()?.iter().any(|claim| {
+            claim.bound_run.as_ref().is_some_and(|run| {
+                run.run_id == source_run_id
+                    && recorded
+                        .as_ref()
+                        .and_then(|r| r.executed_on.as_ref())
+                        .is_none_or(|origin| origin.machine_id == run.machine_id)
+            })
+        }) {
+            return Err(OrbitError::JobValidation("claimed execution cannot use generic resume; deliberately recover and admit a new attempt".into()));
+        }
         // `show_job_run` reconciles a stale Running owner first, so a run
         // orphaned by SIGKILL flips to Interrupted before the state guard.
         let source = self.show_job_run(source_run_id)?;

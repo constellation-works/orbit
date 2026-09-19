@@ -104,6 +104,7 @@ impl Store {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_task_commit_journal_with_rows(
         &self,
         journal_id: &str,
@@ -112,6 +113,25 @@ impl Store {
         make_rows: &mut impl FnMut(
             Option<&TaskReservationReserveResult>,
         ) -> Result<Vec<TaskCoordinationRow>, OrbitError>,
+    ) -> Result<JournalCommitOutcome, OrbitError> {
+        self.commit_task_commit_journal_effects(
+            journal_id,
+            reservation,
+            identities,
+            make_rows,
+            &Default::default(),
+        )
+    }
+
+    pub(crate) fn commit_task_commit_journal_effects(
+        &self,
+        journal_id: &str,
+        reservation: Option<&TaskReservationReserveParams>,
+        identities: &[TaskCoordinationRow],
+        make_rows: &mut impl FnMut(
+            Option<&TaskReservationReserveResult>,
+        ) -> Result<Vec<TaskCoordinationRow>, OrbitError>,
+        effects: &crate::contracts::ClaimCommitEffects,
     ) -> Result<JournalCommitOutcome, OrbitError> {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             let workspace_id: String = tx
@@ -176,6 +196,25 @@ impl Store {
                         ],
                     )
                     .map_err(|error| OrbitError::Store(error.to_string()))?;
+            }
+
+            for (old, new) in &effects.replacements {
+                if old.kind != new.kind || old.row_id != new.row_id {
+                    return Err(OrbitError::Store("claim row identity changed".into()));
+                }
+                let count = tx.tx.execute(
+                    "UPDATE task_coordination_rows SET payload_json=?5, journal_id=?6 WHERE workspace_id=?1 AND kind=?2 AND row_id=?3 AND payload_json=?4",
+                    params![workspace_id, old.kind, old.row_id, old.payload_json, new.payload_json, journal_id],
+                ).map_err(|e| OrbitError::Store(e.to_string()))?;
+                if count != 1 {
+                    return Err(OrbitError::InvalidInput("stale_claim".into()));
+                }
+            }
+            if let Some(reservation_id) = &effects.release_reservation {
+                tx.tx.execute(
+                    "UPDATE task_reservations SET released_at=?3, release_reason='explicit' WHERE reservation_id=?1 AND workspace_id=?2 AND released_at IS NULL",
+                    params![reservation_id, workspace_id, now],
+                ).map_err(|e| OrbitError::Store(e.to_string()))?;
             }
 
             let reservation_id = reserved

@@ -4458,7 +4458,7 @@ mod artifact_get {
 
 #[test]
 fn artifact_provenance_uses_verified_session_identity_only() {
-    use orbit_types::tool::{CallerIdentityProof, RemoteCallerGrant};
+    use orbit_types::tool::McpTransport;
     let (_root, runtime, _workspace) = test_runtime();
     let mut session = ToolSessionContext {
         process_machine_id: Some("local-process".into()),
@@ -4473,21 +4473,7 @@ fn artifact_provenance_uses_verified_session_identity_only() {
             .machine_id,
         "local-process"
     );
-    session.remote_caller_grant = Some(RemoteCallerGrant {
-        caller_machine_id: "remote-machine".into(),
-        granted_capabilities: Default::default(),
-        source: "test".into(),
-        identity: CallerIdentityProof::default(),
-        agent_invoke: false,
-        agent_invoke_mode: None,
-    });
+    session.transport = Some(McpTransport::SshMcp);
+    // SSH access does not turn a supplied machine label into artifact provenance.
     assert!(runtime.artifact_origin(&session).is_none());
-    session
-        .remote_caller_grant
-        .as_mut()
-        .expect("grant")
-        .identity = CallerIdentityProof::KeyBound;
-    let location = runtime.artifact_origin(&session).expect("authenticated");
-    assert_eq!(location.machine_id, "remote-machine");
-    assert_eq!(location.host_id, None);
 }

@@ -20,6 +20,21 @@ use crate::repository::task::TaskV2Store;
 use crate::scope::{ScopeStrategy, ScopedStore, resolve};
 
 impl TaskStoreBackend for TaskV2Store {
+    fn mutate_execution_claim(
+        &self,
+        context: Option<&crate::contracts::ClaimInvocation>,
+        mutation_id: &str,
+        mutation: &crate::contracts::ClaimMutation,
+    ) -> Result<crate::contracts::ClaimMutationResult, OrbitError> {
+        self.claim_boundary()?
+            .mutate_execution_claim(context, mutation_id, mutation)
+    }
+    fn inspect_execution_claims(
+        &self,
+    ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
+        self.claim_boundary()?.inspect_execution_claims()
+    }
+
     fn create_task_idempotent(
         &self,
         params: TaskCreateParams,

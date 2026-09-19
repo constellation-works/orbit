@@ -53,9 +53,11 @@ future owner-evaluated eligibility can preserve the same ordering authority.
 
 Only the owner serves this `control_plane` tool. A caller must have the workspace's `agent`
 capability. `agent_invoke` is not needed because execution starts locally. Workspace selection uses
-the host-qualified selector; authenticated caller identity supplies `machine_id`, never a payload
-assertion. Remote callers must present destination-bound `KeyBound` identity proof; Tier 1
-self-assertion plus an `agent` capability is insufficient. Owner-local drains use trusted local
+the host-qualified selector. SSH login establishes owner access; session agent/operator capability
+and caller-side managed-run restrictions remain. There is no destination callers file, key-bound
+proof, forced-command acceptance requirement, or replacement identity registry. Trusted runtime
+invocation context supplies attempt ownership; remote machine labels alone are attribution, not
+credentials. Owner-local drains use trusted local
 runtime identity and the same logical admission contract. V1 admits only `review_policy = none`;
 reject `before-pr` and `after-landing` before creating a claim. The read-only preflight response is
 defined in [design §4.1](../2_design.md#41-read-only-admission-probe).
@@ -78,7 +80,7 @@ from durable owner-side grants; the input does not grant merge rights.
 ## Idempotency and admission
 
 1. Apply pre-admission refusals in the table order below: selector, current authorization,
-   identity proof, input shape, version/schema, ship mode, then review policy. Check both owner
+   trusted invocation context, input shape, version/schema, ship mode, then review policy. Check both owner
    policy and the executor's declared `caller_review_policy`; neither may differ from `none`.
    These checks also apply to pull receipt replay; the separate read-only receipt lookup below
    is for reconciliation across configuration/upgrades.
@@ -87,7 +89,7 @@ from durable owner-side grants; the input does not grant merge rights.
    publishes the transition, history, reservation, and dependent coordination rows as one
    durable decision ([design pattern](../../../design-patterns/task_commit_boundary.md)).
    Receipts and claims are its dependent rows; their schema and replay rules are defined here,
-   not by the boundary. Look up the receipt by workspace, authenticated machine, and
+   not by the boundary. Look up the receipt by workspace, runtime machine namespace, and
    request ID. An existing ID with different input yields `request_mismatch`; identical input
    returns its original outcome without new admission, history, or reservation.
 3. For a new request, select from current ready tasks in canonical order. Exclude invalid entries
@@ -125,10 +127,10 @@ original input remains immutable; a client upgraded to the owner's binary can lo
 without changing `caller_version` inside it. The lookup uses receipt schema `1`, versioned independently of admission, and
 does not reapply original binary parity, ship mode, or review policy admission checks.
 
-Current workspace authorization and remote identity proof are mandatory. A caller may inspect only
-its own receipts; separately authorized owner operators may inspect claims across callers. On
-revoked access or an incompatible lookup protocol, use owner claim inspection and deliberate
-recovery. `not_found` is not proof that an earlier transport request cannot still arrive: retry only
+Current session capability is mandatory. Trusted worker invocations retain their original receipt
+namespace; owner operators may inspect across attempts without a retired cross-caller ACL.
+Claim revocation fences execution independently of SSH access. On an incompatible lookup protocol,
+use owner claim inspection and deliberate recovery. `not_found` is not proof that an earlier transport request cannot still arrive: retry only
 the original request ID while it remains admissible, or quiesce old sends and reconcile on the owner
 before replacement. A found claim cannot launch if its saved ship/policy contract is incompatible
 with the current executor; preserve it for explicit recovery rather than rewriting it.
@@ -139,7 +141,7 @@ with the current executor; preserve it for explicit recovery rather than rewriti
 |---|---|
 | `request_id` | ID of the admission request |
 | `task` | Task summary: ID, title, complexity, crew, context selectors; absent for idle |
-| `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, authenticated execution machine; absent for idle |
+| `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, runtime execution machine; absent for idle |
 | `claim_state` | Current phase at response time, separate from the stored admission receipt |
 | `ship` | Owner-resolved mode, base/landing branches, `review_policy: none`, completion policy and optional durable authorization reference |
 | `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors |
@@ -160,7 +162,6 @@ a compatibility comparison. Policy is rechecked at binding without rewriting the
 |---|---|
 | `unknown_selector` | Selector cannot resolve to the named owner workspace |
 | `capability_refused` | Destination is a replica or caller lacks required authority |
-| `identity_unverified` | Remote machine identity is self-asserted rather than destination key-bound |
 | `invalid_input` | Required request, version/policy declaration, or drain context is missing or malformed |
 | `version_mismatch` | Caller binary/schema differs from owner |
 | `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
@@ -208,7 +209,7 @@ inspection/recovery is required when no worker settles the claim. See [2_design.
 - Transactional admission never admits an unsatisfied dependency or overlapping protected footprint.
 - The owner alone orders work; only invalid or conflicting candidates are skipped in v1.
 - A refusal creates no claim. Idle persists only its receipt and diagnostics.
-- The execution machine is authenticated; host labels are not authority.
+- Trusted invocation context fences execution machine and bound run; host labels confer no rights.
 - Reassignment invalidates former attempt writes and landing authority before a new admission.
 - Reservation cleanup can affect only the reservation associated with the settling claim.
 - Owner and follower drains use the same admission boundary; legacy local admission cannot bypass it.
@@ -244,3 +245,16 @@ The shared run JSON projection exposes `executed_on`, and task show exposes
 Artifact origin is supplied separately from artifact bytes and actor attribution. Task run
 location must accompany a trusted run binding; changing a legacy/unqualified link does not
 infer a location from a matching local run ID.
+
+The internal API is `TaskStoreBackend::mutate_execution_claim` with non-deserializable
+`ClaimInvocation` and typed `ClaimMutation`. Missing context fails closed. Mutation receipts are
+scoped to immutable claim and mutation ID, compare the complete input, and replay their original
+outcome without changing a newer attempt. `inspect_execution_claims` reports provenance, phase,
+age, expiry, last event, unresolved intent and landing invalidation; it does not repair journals.
+The internal handoff operation enforces transactional ownership and review transition; the later
+handoff consumer must validate the full candidate/base and completion contract before calling it.
+Generic tool/friction omitted-context fencing and transport propagation remain integration work;
+public distributed entry points must stay disabled until that proof passes.
+
+Journal intent schema 2 carries replayable evidence. The reader still accepts schema 1 intents;
+older executors refuse schema 2 rather than silently applying a transition without its evidence.
