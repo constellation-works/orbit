@@ -213,6 +213,7 @@ Retired features stay listed with their `_archive/` path as a historical record.
 | Agent Families | [docs/design/agent-families/](./agent-families/) | grok |
 | Automation Triggers | [docs/design/automation-triggers/](./automation-triggers/) | codex |
 | Auditability | [docs/design/auditability/](./auditability/) | codex |
+| Distributed Drain | [docs/design/distributed-drain/](./distributed-drain/) | claude |
 | Executors | [docs/design/executors/](./executors/) | claude |
 | Federated MCP | [docs/design/federated-mcp/](./federated-mcp/) | grok |
 | Global Store Consolidation | [docs/design/_archive/global-store-consolidation/](./_archive/global-store-consolidation/) | codex |
