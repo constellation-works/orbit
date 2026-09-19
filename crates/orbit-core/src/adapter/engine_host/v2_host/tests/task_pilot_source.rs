@@ -997,3 +997,59 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
     let accepted: MemberEvidence = serde_json::from_slice(&receipt.evidence).unwrap();
     assert_eq!(accepted, evidence);
 }
+
+/// `prepare_task_pilot` reported an accepted dependency on a task owned by
+/// another workspace on the same machine as `task not found`, because the
+/// material fingerprint resolved dependencies inside the selected workspace
+/// only [ORB-12544]. Preparation now follows the registry's ownership, and
+/// the prerequisite's meaning still binds the fingerprint it produces.
+#[test]
+fn preparation_resolves_a_dependency_owned_by_another_workspace_on_this_machine() {
+    let fixture = remote_landing_fixture();
+    let global = fixture._root.path().join("home/.orbit");
+    let other_workspace = fixture._root.path().join("other-repo/.orbit");
+    fs::create_dir_all(&other_workspace).expect("other workspace orbit dir");
+    let other = OrbitRuntime::from_roots(&global, &other_workspace).expect("build other runtime");
+    assert_ne!(
+        other.workspace_id().expect("other workspace id"),
+        fixture.runtime.workspace_id().expect("workspace id"),
+        "the prerequisite must be owned by a different workspace"
+    );
+
+    let prerequisite = seed_task(&other, "prerequisite in another workspace");
+    fixture
+        .runtime
+        .update_task(
+            &fixture.task.id,
+            crate::application::task::TaskUpdateParams {
+                dependencies: Some(vec![prerequisite.id.clone()]),
+                ..Default::default()
+            },
+        )
+        .expect("a cross-workspace dependency is accepted");
+
+    let prepared = prepare_landing(&fixture).expect("prepare the selected task");
+    let fingerprint = prepared["tasks"][0]["material_fingerprint"]
+        .as_str()
+        .expect("prepared task carries a material fingerprint")
+        .to_string();
+
+    other
+        .update_task(
+            &prerequisite.id,
+            crate::application::task::TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .expect("complete the prerequisite in its own workspace");
+
+    let reprepared = prepare_landing(&fixture).expect("re-prepare after the prerequisite changed");
+    assert_ne!(
+        reprepared["tasks"][0]["material_fingerprint"]
+            .as_str()
+            .expect("material fingerprint"),
+        fingerprint,
+        "a completed prerequisite changes the selected task's material"
+    );
+}

@@ -103,6 +103,25 @@ pub trait TaskStoreBackend: Send + Sync {
         has_external_ref_system: Option<&str>,
     ) -> Result<Vec<Task>, OrbitError>;
     fn get_task(&self, id: &str) -> Result<Option<Task>, OrbitError>;
+    /// Resolve one task through the owner this machine's coordination registry
+    /// has registered for it, instead of only within the caller's workspace.
+    ///
+    /// Task ids are globally unique and a dependency may legitimately name a
+    /// task owned by another workspace on this machine, so a dependency read
+    /// has to follow ownership the same way the registry-wide status
+    /// projection already does ([`Self::task_status_index`]). The read is
+    /// authority-preserving: it never widens what the caller may write, never
+    /// writes to the owner's partition, and never reaches another host.
+    ///
+    /// The default resolves within this backend alone — a backend without an
+    /// ownership registry has exactly one authority — so an id it cannot find
+    /// is [`RegisteredTaskResolution::Missing`].
+    fn registered_task(&self, id: &str) -> Result<RegisteredTaskResolution, OrbitError> {
+        Ok(match self.get_task(id)? {
+            Some(task) => RegisteredTaskResolution::Resolved(Box::new(task)),
+            None => RegisteredTaskResolution::Missing,
+        })
+    }
     fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError>;
     fn search_tasks_filtered(&self, query: &str, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
         let required_tags = normalize_task_tags(tags.to_vec());
@@ -155,6 +174,24 @@ pub trait TaskStoreBackend: Send + Sync {
     fn task_complexity_by_id(&self) -> Result<BTreeMap<OrbitId, String>, OrbitError> {
         Ok(BTreeMap::new())
     }
+}
+
+/// How one task id resolved against this machine's task ownership registry.
+///
+/// Every variant fails closed: only [`Self::Resolved`] carries a body, and
+/// neither of the other two may be read as a satisfied prerequisite.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegisteredTaskResolution {
+    /// A workspace registered on this machine owns the id, and its bundle was
+    /// read from the path the registry binds it to.
+    Resolved(Box<Task>),
+    /// The id is well formed and belongs to a task-id prefix this registry has
+    /// never issued or registered, so its authority is another host's. This
+    /// machine cannot read the body and must not invent one.
+    ForeignAuthority,
+    /// The id belongs to a prefix this registry knows, but no readable task is
+    /// bound to it here — deleted, never published, or not yet imported.
+    Missing,
 }
 
 pub trait SessionLogStoreBackend: Send + Sync {

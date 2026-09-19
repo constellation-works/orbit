@@ -541,3 +541,164 @@ fn stale_generated_index_is_rebuilt_before_filtered_reads() {
         Some(&current_updated_at)
     );
 }
+
+/// A dependency owned by another workspace on this machine is readable from
+/// the workspace that depends on it, and keeps reflecting its owner's state
+/// [ORB-12544]. Before ownership resolution, this read was scoped to the
+/// caller's own partition and reported the prerequisite as not found.
+#[test]
+fn registered_task_resolves_a_dependency_owned_by_another_local_workspace() {
+    let temp = TempDir::new().unwrap();
+    let dependent = store(&temp);
+    let owner = bound_store(
+        &dependent.registry,
+        &temp,
+        "orbit-test-654321",
+        "other-repo",
+    );
+
+    let prerequisite = owner
+        .create_task(create_params("Prerequisite", TaskStatus::Backlog))
+        .expect("create prerequisite");
+
+    assert_eq!(
+        dependent.get_task(&prerequisite.id).expect("local read"),
+        None,
+        "the dependent workspace owns no bundle for the prerequisite"
+    );
+
+    let resolved = dependent
+        .registered_task(&prerequisite.id)
+        .expect("resolve prerequisite");
+    assert_eq!(
+        resolved,
+        RegisteredTaskResolution::Resolved(Box::new(prerequisite.clone()))
+    );
+
+    owner
+        .update_task_history(
+            &prerequisite.id,
+            &TaskHistoryUpdateParams {
+                actor: "codex:gpt-5.5".to_string(),
+                status: Some(TaskStatus::Done),
+                status_note: Some("Delivered".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("complete prerequisite");
+
+    let RegisteredTaskResolution::Resolved(after) = dependent
+        .registered_task(&prerequisite.id)
+        .expect("re-resolve prerequisite")
+    else {
+        panic!("a registered prerequisite must stay resolvable");
+    };
+    assert_eq!(after.status, TaskStatus::Done);
+
+    // Reading a prerequisite is not authority over it: the dependent
+    // workspace still lists only its own tasks and registers no binding.
+    assert_eq!(dependent.list_tasks().expect("list").len(), 0);
+    assert_eq!(
+        dependent
+            .registry
+            .find_task_binding(&prerequisite.id)
+            .expect("binding")
+            .expect("registered")
+            .partition_id,
+        owner.workspace_id
+    );
+}
+
+/// Fail closed rather than satisfied, and distinguish the two ways a task id
+/// can fail to resolve: gone from a prefix this machine owns, versus owned by
+/// a registry this machine cannot read at all.
+#[test]
+fn registered_task_separates_a_missing_local_task_from_another_host_authority() {
+    let temp = TempDir::new().unwrap();
+    let dependent = store(&temp);
+    let owner = bound_store(
+        &dependent.registry,
+        &temp,
+        "orbit-test-654321",
+        "other-repo",
+    );
+    let prerequisite = owner
+        .create_task(create_params("Prerequisite", TaskStatus::Backlog))
+        .expect("create prerequisite");
+
+    assert_eq!(
+        dependent
+            .registered_task("ORB-09999")
+            .expect("resolve unregistered local id"),
+        RegisteredTaskResolution::Missing,
+        "an unbound id under a prefix this registry issues is missing, not foreign"
+    );
+    assert_eq!(
+        dependent
+            .registered_task("ZZZ-00001")
+            .expect("resolve foreign id"),
+        RegisteredTaskResolution::ForeignAuthority,
+        "a prefix this registry has never issued belongs to another host"
+    );
+
+    owner
+        .delete_task(&prerequisite.id)
+        .expect("delete prerequisite");
+    assert_eq!(
+        dependent
+            .registered_task(&prerequisite.id)
+            .expect("resolve deleted prerequisite"),
+        RegisteredTaskResolution::Missing,
+        "a deleted prerequisite must never read as resolvable"
+    );
+
+    assert!(
+        dependent.registered_task("not-a-task-id").is_err(),
+        "an id that is not a task id is rejected as input"
+    );
+}
+
+/// An owner bundle this process cannot read is a fail-closed error, never a
+/// resolution and never a prerequisite quietly treated as absent.
+#[cfg(unix)]
+#[test]
+fn registered_task_fails_closed_when_the_owner_bundle_is_unreadable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new().unwrap();
+    let dependent = store(&temp);
+    let owner = bound_store(
+        &dependent.registry,
+        &temp,
+        "orbit-test-654321",
+        "other-repo",
+    );
+    let prerequisite = owner
+        .create_task(create_params("Prerequisite", TaskStatus::Backlog))
+        .expect("create prerequisite");
+    let bundle_dir = owner
+        .bundle_store
+        .bundle_path(&prerequisite.id)
+        .expect("owner bundle path");
+
+    std::fs::set_permissions(&bundle_dir, std::fs::Permissions::from_mode(0o000))
+        .expect("drop bundle modes");
+    let kept_out = std::fs::read_dir(&bundle_dir).is_err();
+    let resolved = dependent.registered_task(&prerequisite.id);
+    std::fs::set_permissions(&bundle_dir, std::fs::Permissions::from_mode(0o755))
+        .expect("restore bundle modes");
+
+    if !kept_out {
+        // Running as root reads the bundle regardless, so there is no
+        // permission failure to assert on.
+        return;
+    }
+    let error = resolved.expect_err("an unreadable prerequisite must not resolve");
+    let message = error.to_string();
+    assert!(
+        message.contains(&prerequisite.id)
+            && message.contains(&owner.workspace_id)
+            && message.contains("could not be read"),
+        "the refusal must name the owner and the reason: {message}"
+    );
+}

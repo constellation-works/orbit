@@ -4,6 +4,7 @@ use super::source::Source;
 use crate::OrbitRuntime;
 use orbit_automation::{AutomationError, automation_error_to_orbit, members::preparation};
 use orbit_common::OrbitError;
+use orbit_store::RegisteredTaskResolution;
 use orbit_types::task::Task;
 use orbit_types::workflow::automation::members::MemberAssessment;
 use serde_json::{Value, json};
@@ -109,11 +110,36 @@ pub(crate) fn fingerprint_with_instructions(
         if dependencies.len() == 50 {
             return Err(AutomationError::Deferred("dependency_scan_budget".into()));
         }
-        let dependency = runtime.get_task(id)?;
-        dependencies.push(json!({"id": id, "status": dependency.status,
-            "relations": dependency.relations, "criteria": dependency.acceptance_criteria,
-            "description": dependency.description, "plan": dependency.plan,
-            "refs": dependency.external_refs, "pr_status": dependency.pr_status}));
+        match runtime.resolve_dependency_task(id)? {
+            // The serialized shape of a resolved dependency is unchanged, so
+            // following ownership changes which prerequisites can be read, not
+            // the fingerprint of any task that already prepared.
+            RegisteredTaskResolution::Resolved(dependency) => {
+                dependencies.push(json!({"id": id, "status": dependency.status,
+                    "relations": dependency.relations, "criteria": dependency.acceptance_criteria,
+                    "description": dependency.description, "plan": dependency.plan,
+                    "refs": dependency.external_refs, "pr_status": dependency.pr_status}));
+            }
+            // Another host's authority. This machine cannot read the body and
+            // must not invent one, so the reference is recorded as explicitly
+            // unverified rather than resolved or dropped. That matches the
+            // readiness contract, which treats a reference it cannot verify
+            // here as not blocking rather than as satisfied
+            // (`TaskReferenceIndex::is_not_verifiable_here`); preparation
+            // never upgrades it to a status.
+            RegisteredTaskResolution::ForeignAuthority => {
+                dependencies.push(json!({"id": id, "resolution": "not_verifiable_here"}));
+            }
+            // A prefix this machine does own, with nothing bound to it: the
+            // prerequisite is gone, not elsewhere. Fail closed and name it.
+            RegisteredTaskResolution::Missing => {
+                let reason = format!(
+                    "task '{task_id}' depends on '{id}', which no workspace registered on this machine owns; restore that task, or remove the dependency, before preparing '{task_id}'",
+                    task_id = task.id
+                );
+                return Err(OrbitError::InvalidInput(reason).into());
+            }
+        }
     }
 
     dependencies.sort_by_key(|value| value["id"].as_str().unwrap_or_default().to_string());

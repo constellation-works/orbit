@@ -29,7 +29,8 @@ use orbit_types::task::{
 use sha2::{Digest, Sha256};
 
 use crate::contracts::{
-    TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentUpdateParams, TaskHistoryUpdateParams,
+    RegisteredTaskResolution, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentUpdateParams,
+    TaskHistoryUpdateParams,
 };
 use crate::driver::file::sort::sort_by_created_desc_id_asc;
 use crate::driver::sqlite::task_registry::{TaskIndexFilter, TaskRegistryStore};
