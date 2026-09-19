@@ -1358,6 +1358,7 @@ function renderAutoDrain(payload) {
   if (reasons.submit) {
     body.appendChild(el("div", { class: "operations-readonly-note", text: reasons.submit }));
     $("auto-drain-count").textContent = "read-only";
+    setAutoDrainRailCount(null);
     return;
   }
   const counts = autoDrainCounts(payload);
@@ -1386,6 +1387,15 @@ function renderAutoDrain(payload) {
     ? ` · ${capacity.active_leaf_runs ?? "—"}/${capacity.max_active_leaf_runs} slots`
     : "";
   $("auto-drain-count").textContent = `${counts.eligible} eligible${slots} · ${workspace?.name || workspace?.id}`;
+  setAutoDrainRailCount(counts.eligible);
+}
+
+// The rail entry mirrors Tasks: it shows how many tasks are eligible now, so
+// the Work group reads as "19 tasks, 3 ready to drain" from any other tab.
+function setAutoDrainRailCount(eligible) {
+  const node = $("rail-count-auto-drain");
+  if (!node) return;
+  node.textContent = Number.isFinite(Number(eligible)) && Number(eligible) > 0 ? String(eligible) : "";
 }
 
 function fetchAndRenderAutoDrain() {
@@ -1557,16 +1567,26 @@ export function fetchAndRenderOperationMode() {
   return loadOperationPanel("operation-mode-body", "/api/operation/explain", renderOperationMode);
 }
 
-export async function fetchAndRenderOperations() {
-  const routines = fetchJson("/api/routines");
-  const results = await Promise.allSettled([
-    requestPanel("routines-body", "routines", () => routines, renderOperations, "routines-count"),
-    requestPanel("clock-body", "clock", () => routines, renderClock, "clock-host"),
-    fetchAndRenderAutoTasks(),
-    fetchAndRenderAutoDrain(),
-    fetchAndRenderOperationMode(),
-  ]);
+function throwFirstPanelError(results) {
   const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
   // Preserve transport classification even if a different panel also fails.
   if (errors.length) throw errors.find(error => error.networkFailure) || errors[0];
+}
+
+export async function fetchAndRenderOperations() {
+  const routines = fetchJson("/api/routines");
+  throwFirstPanelError(await Promise.allSettled([
+    requestPanel("routines-body", "routines", () => routines, renderOperations, "routines-count"),
+    requestPanel("clock-body", "clock", () => routines, renderClock, "clock-host"),
+    fetchAndRenderAutoTasks(),
+  ]));
+}
+
+// The Auto-drain destination (Work → Auto-drain) carries the readiness panel
+// and the Operation Mode grant that bounds it; both refresh together.
+export async function fetchAndRenderAutoDrainPane() {
+  throwFirstPanelError(await Promise.allSettled([
+    fetchAndRenderAutoDrain(),
+    fetchAndRenderOperationMode(),
+  ]));
 }

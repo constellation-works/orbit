@@ -11,7 +11,7 @@ import { renderDiagnosticsSideCard, renderDiagnostics } from './diagnostics.js';
 import { renderMarkdown } from './markdown.js';
 import { initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './router.js';
 import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './runs.js';
-import { fetchAndRenderOperations, initOperations } from './operations.js';
+import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations } from './operations.js';
 import {
   renderRunDetailEmpty,
   renderRunDetailMeta,
@@ -1293,6 +1293,11 @@ function activeRefreshJobs() {
 
   if (activeTab === "operations") {
     jobs.push(fetchAndRenderOperations());
+    return jobs;
+  }
+
+  if (activeTab === "auto-drain") {
+    jobs.push(fetchAndRenderAutoDrainPane());
     return jobs;
   }
 

@@ -37,12 +37,16 @@ function markWorkspaceSelectorScope(fleetWide) {
   if (note) note.hidden = !fleetWide;
 }
 
-// ORB-10444: the top-level nav is exactly these four tabs plus the hash-only
+// ORB-10444: the top-level nav is exactly these tabs plus the hash-only
 // `run-detail` route. A deprecated tab was retired outright and `scoreboard`,
 // being diagnostics-shaped, now routes as `#diagnostics/scoreboard`.
-const TABS = ["tasks", "audit", "diagnostics", "operations", "knowledge", "run-detail"];
+// Auto-drain sits under Work beside Tasks: draining is working the backlog,
+// not host management, so it is a destination of its own (`#auto-drain`)
+// rather than an Operations subtab. The old `#operations/auto-drain` hash is
+// still accepted and rewritten so bookmarks keep resolving.
+const TABS = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge", "run-detail"];
 const DIAG_SUBTABS = ["runs", "metrics", "errors", "incidents", "reliability", "scoreboard"];
-const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "auto-drain"];
+const OPERATIONS_SUBTABS = ["routines", "auto-tasks"];
 // ORB-10444/ORB-10588: subtabs that replace the two-column diagnostics layout
 // with their own full-width <main>, keyed by the element they reveal.
 const DIAG_FULL_WIDTH_MAINS = {
@@ -154,10 +158,8 @@ function setOperationsSubtabImpl(ctx, name) {
   }
   const routines = $("operations-routines-main");
   const autoTasks = $("operations-auto-tasks-main");
-  const autoDrain = $("operations-auto-drain-main");
   if (routines) routines.hidden = name !== "routines";
   if (autoTasks) autoTasks.hidden = name !== "auto-tasks";
-  if (autoDrain) autoDrain.hidden = name !== "auto-drain";
 }
 
 function setKnowledgeSubtabImpl(ctx, name) {
@@ -178,7 +180,14 @@ function setKnowledgeSubtabImpl(ctx, name) {
 
 function setActiveTabImpl(ctx, raw, opts = {}) {
   const { segments, query } = parseHashRoute(raw);
-  const head = segments[0] || "tasks";
+  let head = segments[0] || "tasks";
+  // Legacy route: auto-drain used to be an Operations subtab.
+  let legacyRoute = false;
+  if (head === "operations" && segments[1] === "auto-drain") {
+    head = "auto-drain";
+    segments.splice(1, 1);
+    legacyRoute = true;
+  }
   if (head === "runs" && !segments[1] && query.get("run_id")) {
     segments[1] = encodeURIComponent(query.get("run_id"));
   }
@@ -219,7 +228,8 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
       ? "Run detail"
       : top.charAt(0).toUpperCase() + top.slice(1);
   }
-  document.body.classList.toggle("operations-active", top === "operations");
+  // Auto-drain shares the Operations panel layout, so it scrolls the same way.
+  document.body.classList.toggle("operations-active", top === "operations" || top === "auto-drain");
   // ORB-10972: the Diagnostics subtabs are permanently visible in the rail now,
   // so the remembered-subtab highlight must be muted while another destination
   // is active — otherwise the rail shows two things selected at once. The
@@ -294,6 +304,10 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   const shouldUpdateHash = opts.updateHash !== false;
   if (hashChanged && shouldUpdateHash) {
     window.location.hash = hash;
+  } else if (hashChanged && legacyRoute && typeof window.history?.replaceState === "function") {
+    // A bookmarked legacy hash is rewritten in place so the address bar and
+    // any copied link name the current route, without a second hashchange.
+    window.history.replaceState(null, "", hash);
   }
   if (opts.refresh !== false && (!hashChanged || !shouldUpdateHash)) ctx.refreshDashboard();
 }

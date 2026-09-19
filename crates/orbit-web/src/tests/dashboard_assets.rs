@@ -429,7 +429,7 @@ class Node {
 }
 const byId = new Map();
 const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
-const tabs = ["tasks", "audit", "diagnostics", "operations", "knowledge"].map((tab) => Object.assign(new Node(), { dataset: { tab } }));
+const tabs = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge"].map((tab) => Object.assign(new Node(), { dataset: { tab } }));
 const panes = [...tabs, Object.assign(new Node(), { dataset: { tab: "run-detail" } })];
 globalThis.document = {
   body: new Node("body"), hidden: false,
@@ -467,6 +467,8 @@ let selected = null;
 initRouter({ setTab: (tab) => { selected = tab; }, getDiagSubtab: () => "runs", setDiagSubtab: () => {}, getOperationsSubtab: () => "routines", setOperationsSubtab: () => {}, getKnowledgeSubtab: () => "frictions", setKnowledgeSubtab: () => {}, getRunId: () => null, setRunId: () => {}, getRunSubtab: () => "steps", setRunSubtab: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {}, setRunLogs: () => {}, refreshDashboard: () => {}, fitLogPanelToViewport: () => {}, });
 setActiveTab("operations/auto-tasks", { refresh: false, updateHash: false });
 if (selected !== "operations" || !tabs.find((tab) => tab.dataset.tab === "operations").className.includes("active")) throw new Error("route did not select the Operations view");
+setActiveTab("operations/auto-drain", { refresh: false, updateHash: false });
+if (selected !== "auto-drain" || !tabs.find((tab) => tab.dataset.tab === "auto-drain").className.includes("active")) throw new Error("legacy #operations/auto-drain did not redirect to the Auto-drain view");
 await import("./app.js");
 await tick(); await tick(); requests.length = 0;
 const selector = get("rail-workspace").children.find((child) => child.id === "workspace-select");
@@ -515,12 +517,20 @@ async fn dashboard_top_level_nav_matches_the_operator_tabs() {
         .collect();
     assert_eq!(
         nav,
-        vec!["tasks", "audit", "diagnostics", "operations", "knowledge"]
+        vec![
+            "tasks",
+            "auto-drain",
+            "audit",
+            "diagnostics",
+            "operations",
+            "knowledge"
+        ]
     );
 
     // Every routable tab must still have a pane to render into.
     for tab in [
         "tasks",
+        "auto-drain",
         "audit",
         "diagnostics",
         "operations",
@@ -589,9 +599,7 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
         !operations.contains("hashchange") && !operations.contains("location.reload"),
         "refresh/back must not replay a toggle or mint POST"
     );
-    assert!(
-        router.contains(r#"const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "auto-drain"];"#)
-    );
+    assert!(router.contains(r#"const OPERATIONS_SUBTABS = ["routines", "auto-tasks"];"#));
     assert!(router.contains(r#"hash = `#operations/${sub}`;"#));
     assert!(css.contains("@media (max-width: 720px)"));
     assert!(css.contains("@media (max-width: 600px)"));
@@ -602,7 +610,9 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
     assert!(css.contains(".operation-details summary"));
     assert!(operations.contains("operation-row-head"));
     assert!(operations.contains(r#"{ class: "operation-details" }"#));
-    assert!(router.contains(r#"classList.toggle("operations-active", top === "operations")"#));
+    assert!(router.contains(
+        r#"classList.toggle("operations-active", top === "operations" || top === "auto-drain")"#
+    ));
 }
 
 /// ORB-11559: below 760px the 216px rail must give up the content column so
@@ -640,7 +650,14 @@ fn dashboard_narrow_shell_collapses_rail_and_task_rows() {
         "the 520px task row must keep its two-row areas for phone widths"
     );
 
-    for tab in ["tasks", "audit", "diagnostics", "operations", "knowledge"] {
+    for tab in [
+        "tasks",
+        "auto-drain",
+        "audit",
+        "diagnostics",
+        "operations",
+        "knowledge",
+    ] {
         assert!(
             index.contains(&format!(r#"class="tab" data-tab="{tab}""#)),
             "{tab} must remain a top-level tab"
@@ -777,14 +794,58 @@ fn dashboard_auto_drain_action_is_bounded_governed_and_guarded() {
     ] {
         assert!(index.contains(&format!(r#"id="{id}""#)), "{id}");
     }
+    // Auto-drain lives under Work beside Tasks, not under Operations: it is a
+    // top-level destination with its own pane, its rail entry mirrors the
+    // Tasks count with the eligible-now figure, and the old subtab hash is
+    // rewritten rather than dropped so bookmarks keep resolving.
     assert!(
-        index.contains(r#"<button class="subtab" data-subtab="auto-drain" type="button">"#),
-        "auto-drain must be offered as an Operations subtab"
+        index.contains(r#"<button class="tab" data-tab="auto-drain" type="button">"#)
+            && index.contains(r#"<section class="tab-pane" data-tab="auto-drain">"#)
+            && index.contains(r#"id="rail-count-auto-drain""#),
+        "auto-drain must be offered as a Work destination in the rail"
     );
     assert!(
-        router.contains(r#"const autoDrain = $("operations-auto-drain-main");"#)
-            && router.contains(r#"autoDrain.hidden = name !== "auto-drain";"#),
-        "the router must toggle the auto-drain main like its siblings"
+        !index.contains(r#"data-subtab="auto-drain""#),
+        "auto-drain must no longer be an Operations subtab"
+    );
+    let work_group = index
+        .split(r#"<div class="rail-group-label">Work</div>"#)
+        .nth(1)
+        .and_then(|rest| rest.split(r#"<div class="rail-group-label">"#).next())
+        .expect("the rail must have a Work group");
+    let tasks_at = work_group
+        .find(r#"data-tab="tasks""#)
+        .expect("Tasks in Work");
+    let drain_at = work_group
+        .find(r#"data-tab="auto-drain""#)
+        .expect("Auto-drain in Work");
+    assert!(
+        tasks_at < drain_at,
+        "Auto-drain sits beneath Tasks in the Work group"
+    );
+    assert!(router.contains(r#"const TABS = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge", "run-detail"];"#));
+    assert!(
+        router.contains(r#"if (head === "operations" && segments[1] === "auto-drain") {"#)
+            && router.contains(r#"head = "auto-drain";"#),
+        "the legacy #operations/auto-drain hash must redirect to #auto-drain"
+    );
+    assert!(
+        router.contains(
+            r#"classList.toggle("operations-active", top === "operations" || top === "auto-drain")"#
+        ),
+        "the auto-drain pane must scroll like the operations pane"
+    );
+    assert!(
+        operations.contains(r#"export async function fetchAndRenderAutoDrainPane()"#)
+            && operations.contains(r#"$("rail-count-auto-drain")"#)
+            && operations.contains("setAutoDrainRailCount(counts.eligible)"),
+        "the auto-drain pane refreshes on its own and feeds the rail count"
+    );
+    let app = include_str!("../../assets/dashboard/app.js");
+    assert!(
+        app.contains(r#"if (activeTab === "auto-drain") {"#)
+            && app.contains("jobs.push(fetchAndRenderAutoDrainPane());"),
+        "the dashboard refresh must fetch the auto-drain pane when it is active"
     );
 
     assert!(
@@ -4176,7 +4237,7 @@ class Node {
 }
 const byId = new Map();
 const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
-const tabs = ["tasks", "audit", "diagnostics", "operations", "knowledge"].map((tab) => Object.assign(new Node(), { dataset: { tab } }));
+const tabs = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge"].map((tab) => Object.assign(new Node(), { dataset: { tab } }));
 const panes = [...tabs, Object.assign(new Node(), { dataset: { tab: "run-detail" } })];
 const tabsStrip = new Node("tabs");
 tabsStrip.className = "tabs";
