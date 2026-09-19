@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Federated workspace MCP mux, selector, capabilities, list schema, and fail-closed routing"
-last_validated: 2026-08-29
+last_validated: 2026-09-19
 title: Spec — Federated workspace MCP
 owner: grok
 status: Draft
@@ -116,7 +116,7 @@ Implemented in [ORB-11014] as `orbit mcp serve --mode federated`
 file; the accepting machine is always prepended. Every list call then probes
 each destination live — local in-process, remotes over the v1 SSH argv — and
 caches nothing. The response envelope is `{"workspaces": [...]}` — no envelope
-`machine_id`. After [ORB-11015] the mux advertises the canonical 23-tool
+`machine_id`. After [ORB-11015] the mux advertises the canonical 21-tool
 surface: this list stays session-unbound and answered by the mux, and every
 workspace-scoped tool is delivered to the destination encoded in the copied
 selector.

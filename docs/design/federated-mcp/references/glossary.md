@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: Federated MCP"
-last_validated: 2026-08-29
+last_validated: 2026-09-19
 title: Glossary — Federated MCP
 owner: grok
 status: Draft
