@@ -37,33 +37,63 @@ impl Drop for GenerationGuard {
 /// Exclusive admission, before installing a candidate or mutating resources.
 pub struct GenerationUpdate {
     admission: File,
-    generation: File,
+    generation: Record,
 }
 
+const QUIESCE: &str = "Quiesce the existing Orbit processes through their owning clients, \
+     then retry. Do not delete admission files or replay a mutation whose reply was lost";
+
 fn refusal(detail: impl std::fmt::Display) -> OrbitError {
+    refused(detail, QUIESCE)
+}
+
+fn refused(detail: impl std::fmt::Display, remedy: &str) -> OrbitError {
     OrbitError::Execution(format!(
         "upgrade admission refused: {detail}; leave the installation and stores unchanged. \
-         Quiesce the existing Orbit processes through their owning clients, then retry. \
-         Do not delete admission files or replay a mutation whose reply was lost"
+         {remedy}"
     ))
 }
 
-fn open(root: &Path, name: &str) -> Result<File, OrbitError> {
+/// An admission file and whether this process may rewrite its bytes.
+///
+/// A participant can join an existing generation from a read-only mount, or
+/// from a sandboxed child denied writes under the authority root: flock needs
+/// a descriptor, not permission to rewrite bytes. Such a descriptor can never
+/// record a takeover, so writability travels with the open instead of
+/// surfacing as `write` failing with `EBADF` half way through the protocol.
+struct Record {
+    file: File,
+    writable: bool,
+}
+
+fn open(root: &Path, name: &str) -> Result<Record, OrbitError> {
     std::fs::create_dir_all(root).map_err(refusal)?;
-    OpenOptions::new()
+    let path = root.join(name);
+    match OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(root.join(name))
-        // An existing same-generation reader can participate on a read-only
-        // mount. flock needs a descriptor, not permission to rewrite bytes.
-        .or_else(|error| File::open(root.join(name)).map_err(|_| error))
-        .map_err(refusal)
+        .open(&path)
+    {
+        Ok(file) => Ok(Record {
+            file,
+            writable: true,
+        }),
+        Err(error) => File::open(&path)
+            .map(|file| Record {
+                file,
+                writable: false,
+            })
+            // The read-only retry only explains its own failure. Report why
+            // the participating open was refused.
+            .map_err(|_| refusal(error)),
+    }
 }
 
 fn admission(root: &Path) -> Result<File, OrbitError> {
-    let file = open(root, ".generation-admission.lock")?;
+    // Admission is held by lock alone, so a read-only descriptor serves.
+    let file = open(root, ".generation-admission.lock")?.file;
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         match FileExt::try_lock_exclusive(&file) {
@@ -141,12 +171,14 @@ impl GenerationGuard {
     pub fn acquire(root: &Path, digest: &str) -> Result<Self, OrbitError> {
         let admission = admission(root)?;
         let mut generation = open(root, ".generation.lock")?;
-        FileExt::try_lock_shared(&generation).map_err(refusal)?;
-        if read_generation(&mut generation)? == digest {
-            return Ok(Self { _file: generation });
+        FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
+        if read_generation(&mut generation.file)? == digest {
+            return Ok(Self {
+                _file: generation.file,
+            });
         }
-        FileExt::unlock(&generation).map_err(refusal)?;
-        FileExt::try_lock_exclusive(&generation)
+        FileExt::unlock(&generation.file).map_err(refusal)?;
+        FileExt::try_lock_exclusive(&generation.file)
             .map_err(|_| refusal("another executable generation is still running"))?;
         GenerationUpdate {
             admission,
@@ -161,9 +193,9 @@ impl GenerationUpdate {
     pub fn acquire(root: &Path) -> Result<Self, OrbitError> {
         let admission = admission(root)?;
         let mut generation = open(root, ".generation.lock")?;
-        FileExt::try_lock_exclusive(&generation)
+        FileExt::try_lock_exclusive(&generation.file)
             .map_err(|_| refusal("Orbit clients or commands are still running"))?;
-        read_generation(&mut generation)?;
+        read_generation(&mut generation.file)?;
         Ok(Self {
             admission,
             generation,
@@ -176,16 +208,31 @@ impl GenerationUpdate {
         if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(refusal("invalid executable digest"));
         }
-        self.generation.seek(SeekFrom::Start(0)).map_err(refusal)?;
+        if !self.generation.writable {
+            // Admitting here would leave joiners reading a record that names
+            // a generation other than the one actually running.
+            return Err(refused(
+                "this executable generation differs from the recorded one and the record \
+                 cannot be written from here",
+                "Run the recorded generation, or retry where the Orbit root is writable. \
+                 A read-only mount, or a sandbox that denies writes under this root, \
+                 cannot record a takeover",
+            ));
+        }
         self.generation
+            .file
+            .seek(SeekFrom::Start(0))
+            .map_err(refusal)?;
+        self.generation
+            .file
             .write_all(format!("1:{digest}\n").as_bytes())
             .map_err(refusal)?;
-        self.generation.set_len(67).map_err(refusal)?;
-        self.generation.sync_all().map_err(refusal)?;
-        FileExt::lock_shared(&self.generation).map_err(refusal)?;
+        self.generation.file.set_len(67).map_err(refusal)?;
+        self.generation.file.sync_all().map_err(refusal)?;
+        FileExt::lock_shared(&self.generation.file).map_err(refusal)?;
         drop(self.admission);
         Ok(GenerationGuard {
-            _file: self.generation,
+            _file: self.generation.file,
         })
     }
 }

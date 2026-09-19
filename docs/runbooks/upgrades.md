@@ -133,6 +133,15 @@ strings alone are not compatibility evidence. On Linux, the digest comes from
 image UUID must match the loaded image before the opened descriptor is hashed;
 a replaced path or unsupported image format refuses admission.
 
+A participant that can only read the admission files — a read-only mount, or a
+sandboxed child denied writes under its authority root — still joins the
+generation already recorded there, because a lock needs a descriptor rather than
+permission to rewrite bytes. It can never record a takeover: a differing
+generation is refused with `the record cannot be written from here`, leaving the
+record intact rather than partially written. A managed nested child therefore
+runs against the generation its host recorded; widen nothing to change that,
+and give a child a writable authority root only when it must own one.
+
 Refusal leaves the connected client and its in-flight calls running. There is
 no server handoff, connection replacement, mutation retry or blind replay. If a
 mutation committed but its reply was lost, inspect the durable task/audit through
