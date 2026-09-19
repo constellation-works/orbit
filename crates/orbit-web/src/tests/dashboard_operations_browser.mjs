@@ -85,7 +85,7 @@ try {
     });
     // Auto-drain is a Work destination now (`.tab`), the other two stay
     // Operations subtabs; all three must stay reachable and unclipped.
-    for (const tab of ['routines', 'auto-tasks', 'auto-drain']) {
+    for (const tab of ['routines', 'auto-tasks', 'jobs', 'auto-drain']) {
       const selector = tab === 'auto-drain'
         ? '.tab[data-tab="auto-drain"]'
         : `#operations-subtabs .subtab[data-subtab="${tab}"]`;

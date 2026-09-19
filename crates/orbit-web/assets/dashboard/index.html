@@ -50,6 +50,11 @@
           <div class="rail-group">
             <div class="rail-group-label">Manage</div>
           <button class="tab" data-tab="operations" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg><span class="rail-label">Operations</span><span class="rail-count" id="rail-count-operations"></span></button>
+            <nav class="subtabs rail-subtabs" id="operations-subtabs" aria-label="Operations views">
+              <button class="subtab active" data-subtab="routines" type="button">Routines<span class="rail-count" id="rail-count-ops-routines"></span></button>
+              <button class="subtab" data-subtab="auto-tasks" type="button">Auto-tasks<span class="rail-count" id="rail-count-ops-auto-tasks"></span></button>
+              <button class="subtab" data-subtab="jobs" type="button">Jobs<span class="rail-count" id="rail-count-ops-jobs"></span></button>
+            </nav>
           <button class="tab" data-tab="knowledge" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5a2 2 0 0 1 2 2v10a2 2 0 0 0-2-2H4z"/><path d="M16 4h-5a2 2 0 0 0-2 2v10a2 2 0 0 1 2-2h5z"/></svg><span class="rail-label">Knowledge</span><span class="rail-count" id="rail-count-knowledge"></span></button>
           </div>
         </div>
@@ -335,14 +340,17 @@
     </section>
     <section class="tab-pane" data-tab="operations">
       <p id="operations-session" class="operations-readonly-note" role="status"></p>
-      <nav class="subtabs" id="operations-subtabs">
-        <button class="subtab active" data-subtab="routines" type="button">Routines</button>
-        <button class="subtab" data-subtab="auto-tasks" type="button">Auto-tasks</button>
-      </nav>
-      <main class="operations-layout" id="operations-routines-main">
+      <main class="operations-layout operations-routines-layout" id="operations-routines-main">
+        <section class="panel operation-clock-panel" id="clock-panel">
+          <header><span>Sweep clock</span><span class="count" id="clock-host">-</span></header>
+          <div class="operation-feedback" id="clock-operation-feedback" role="status" aria-live="polite"></div>
+          <div class="body" id="clock-body">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
+          </div>
+        </section>
         <section class="panel" id="routines-panel">
           <header>
-            <span>Scheduled Routines</span>
+            <span>Routines</span>
             <span class="count" id="routines-count">-</span>
           </header>
           <div class="operation-feedback" id="routine-operation-feedback" role="status" aria-live="polite"></div>
@@ -350,22 +358,27 @@
             <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
           </div>
         </section>
-        <section class="panel" id="clock-panel">
-          <header><span>Host Sweep Clock</span><span class="count" id="clock-host">-</span></header>
-          <div class="operation-feedback" id="clock-operation-feedback" role="status" aria-live="polite"></div>
-          <div class="body" id="clock-body">
-            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
-          </div>
-        </section>
       </main>
       <main class="operations-layout operations-auto-tasks-layout" id="operations-auto-tasks-main" hidden>
         <section class="panel" id="auto-tasks-panel">
           <header>
-            <span>Auto-task Definitions</span>
+            <span>Auto-tasks</span>
             <span class="count" id="auto-tasks-count">-</span>
           </header>
           <div class="operation-feedback" id="auto-task-operation-feedback" role="status" aria-live="polite"></div>
           <div class="body" id="auto-tasks-body">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
+          </div>
+        </section>
+      </main>
+      <main class="operations-layout operations-jobs-layout" id="operations-jobs-main" hidden>
+        <section class="panel" id="jobs-panel">
+          <header>
+            <span>Jobs</span>
+            <span class="count" id="jobs-count">-</span>
+          </header>
+          <div class="operation-feedback" id="job-operation-feedback" role="status" aria-live="polite"></div>
+          <div class="body" id="jobs-body">
             <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
           </div>
         </section>

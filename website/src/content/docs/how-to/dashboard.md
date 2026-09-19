@@ -113,7 +113,7 @@ The left rail is the section map:
 | **Auto-drain** | Under Work beside Tasks: the bounded auto-delivery window, with the Operation Mode grant that bounds it. The rail count is the number of tasks eligible now. |
 | **Audit** | Recent events and a 24-hour summary. |
 | **Diagnostics** | Recent runs, metrics, errors, incidents, reliability, and the scoreboard. |
-| **Operations** | Two subtabs: **Routines** (with the host clock) and **Auto-tasks**. |
+| **Operations** | Three rail subtabs: **Routines** (with the sweep clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
 
 ### Tasks
@@ -210,20 +210,32 @@ orbit audit list
 
 ## Operations: mint, toggle, clock, drain
 
-Operations has two subtabs: **Routines**, which also holds the host clock
-panel, and **Auto-tasks**. **Auto-drain** is its own destination under Work
-(`#auto-drain`; the older `#operations/auto-drain` link still resolves) and
-also holds the Operation Mode panel. All of them require a **single active
-workspace**. In **All workspaces** the panels stay read-only and explain why.
+Operations has three subtabs in the rail: **Routines**, which also holds the
+sweep clock bar; **Auto-tasks**; and **Jobs**. **Auto-drain** is its own
+destination under Work (`#auto-drain`; the older `#operations/auto-drain`
+link still resolves) and also holds the Operation Mode panel. All of them
+require a **single active workspace**. In **All workspaces** the panels stay
+read-only and explain why.
+
+Routines, auto-tasks and jobs share one row layout: the thing, what triggers
+it, when it fires next, what happened last time, and one control at the
+edge. Rows are grouped by whether they will fire (Active / Paused; On a
+schedule / On delivery / Disabled), and each row's **Details** disclosure
+carries the long fields. Below 720px the column headers go and each cell
+labels itself.
 
 ### Routines
 
-Each card is one versioned routine from the selected workspace: name, enabled
-/ blocked / disabled, target job, schedule, last and next evaluation, and last
-fire.
+The pane opens with a **Next hour** strip: every routine whose next slot
+falls in the coming hour, drawn solid when it will fire and hollow when the
+routine is paused (its slot is skipped, not queued). Each row is one
+versioned routine from the selected workspace: a switch, the name and the
+job it runs (linked into **Jobs**), its cadence in words with the cron under
+it, the next fire as a relative time, and the last run with its outcome,
+duration and run link. A routine that is enabled but not effective carries
+a **blocked** pill.
 
-**Enable** / **Disable** writes that routine's enabled field. The control is
-disabled when:
+The switch writes that routine's enabled field. It is disabled when:
 
 - no single workspace is selected,
 - or the session is not an authorized operator (see
@@ -231,10 +243,13 @@ disabled when:
 
 Toggling a routine does not start or stop the host sweep clock.
 
-### Host sweep clock
+### Sweep clock
 
-The clock panel is host-scoped (`orbit clock tick` on this machine). **Start** /
-**Stop** asks for confirmation and does not change any routine definition.
+The clock bar above the routines is host-scoped (`orbit clock tick` on this
+machine): health, provider, whether the service is enabled, cadence, last
+and next tick, with **Pause clock** / **Enable clock** and the cadence picker
+at the right. **Start** / **Stop** asks for confirmation and does not change
+any routine definition.
 **Apply cadence** reloads the native clock interval without changing whether
 the service is enabled. Both need the same operator authorization as routine
 toggles.
@@ -251,12 +266,22 @@ orbit clock set --cadence-seconds 300
 
 ### Auto-tasks
 
-Each definition shows its schedule, dedupe policy, last evaluation or mint,
-last minted task, and whether an open duplicate already exists.
+A stats strip leads: definitions, how many are enabled, the next scheduled
+mint, and how many definitions have an open duplicate (the scheduler skips
+those slots). If the workspace defines an `auto_task_scheduler` routine and
+it is paused, the pane says so, because scheduled definitions will not mint
+until it runs.
 
-- **Enable** / **Disable** writes the definition's `enabled` field after a
-  confirm dialog. A disabled definition is skipped by the scheduler; it is
-  not deleted.
+Rows are grouped **On a schedule**, **On delivery** (minted after landed
+deliveries, not on a clock) and **Disabled**. Each shows the switch, the
+name with its template crew and priority, the trigger and dedupe policy, the
+next mint, and the last minted task with its status; an open duplicate is
+called out on the row. **Details** keeps the template, the scheduler cursor,
+delivery coverage and the mint warning.
+
+- The switch writes the definition's `enabled` field after a confirm
+  dialog. A disabled definition is skipped by the scheduler; it is not
+  deleted.
 - **Mint now** creates one task immediately. It **ignores** the definition's
   schedule, enabled flag, and scheduler dedupe policy. The UI warns before
   the request: `Manual mint ignores this definition's schedule, enabled flag,
@@ -275,6 +300,29 @@ orbit auto-task mint "$NAME"
 
 The CLI mint path is the same unconditional operation the dashboard button
 calls.
+
+### Jobs
+
+The Jobs subtab is the catalogue of job definitions the workspace uses,
+projected from what the dashboard already serves: every `job:` target a
+routine names plus every job id in the workspace's recent runs
+(`/api/job-runs`). There is no job endpoint yet, so the pane is read-only.
+
+- **Running now** lists in-flight runs with their job, role, crew, start
+  time and run link.
+- The catalogue is grouped **Sweeps** (housekeeping and intake, safe to run
+  by hand) and **Delivery** (task and workspace pipelines, normally started
+  by a ship or a drain). Each row shows which routines schedule the job and
+  at what cadence, the last run with outcome, duration and link, and how
+  many runs are active.
+- **Run ▸** is offered on every row but disabled; its tooltip and the row's
+  **Details** carry the exact CLI command, with a copy button:
+
+```bash
+orbit run job worktree_gc_pipeline --workspace orbit
+```
+
+The button will submit the same run once a job endpoint lands.
 
 ### Auto-drain and operation mode
 
