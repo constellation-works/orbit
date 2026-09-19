@@ -1,5 +1,5 @@
 ---
-description: Filing a task must go workspace_list → search → task_add with the fields the skill requires.
+description: A human-instructed filing goes workspace_list → task_add with the fields the skill requires; no search is required.
 tags: [task, smoke]
 max_turns: 20
 allowed_tools: [Read, Glob, Grep, Skill]

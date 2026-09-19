@@ -12,11 +12,16 @@ Every `orbit.task.*` call needs `model` — your agent family. Never use bare
 1. **Establish** the objective, constraints, and what done means from the user's
    request. Ask only for information that is genuinely missing. Select the
    authoritative workspace before searching or writing.
-2. **Check for overlapping prior work.** Run a hybrid search on the title and
-   description before creating anything — a brand-new task has no embeddings, so
+2. **Check for overlapping prior work when you did not author the backlog.**
+   A human asking for a specific task is already the dedupe: file it. Search
+   first when the task comes from findings rather than from a direct
+   instruction — a review or QA sweep, CI failures, friction curation, any
+   batch filing — because those are the filers that collide. Run a hybrid
+   search on the title and description; a brand-new task has no embeddings, so
    `--hybrid --kind task` on the text is the check that works. (`search similar`
    needs an existing task with vectors; it is for pickup, not creation.)
-   → [search.md](search.md)
+   Search is still how you find the target of a `regression_from` or
+   `resolves` relation. → [search.md](search.md)
 3. **Write acceptance criteria that name observable success** — a command, an
    inspection step, or an output. "Works correctly" is not a criterion.
 4. **Optionally fill `context_files`** (see below).
