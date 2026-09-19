@@ -15,7 +15,8 @@ pickup. Do not confuse a task description with a design document or a transcript
   another task. Missing ordinary methods, types, adapters and tests needed for
   that result are implementation work, not an external dependency.
 - **Prerequisites:** name actual task IDs and the capability each supplies. Record
-  blocking edges in `dependencies`, not only prose. Do not require an upstream
+  blocking edges in `dependencies` through `orbit.task.update` right after
+  creation (`orbit.task.add` drops that field), not only in prose. Do not require an upstream
   slice to demonstrate behavior that needs its downstream consumer: use the
   agreed interface and isolated fixtures, and assign end-to-end proof to integration.
 - **Decisions and constraints:** separate settled product choices from choices the
@@ -53,6 +54,8 @@ Keep incomplete entry points unavailable when later slices are needed for safety
 5. Read the returned ID using `fields: ["id"]` or a JSON parser. Never truncate a
    write response with `head`/`cut`. If the result is uncertain, list/search before
    retrying: a lost reply does not mean the task was not created.
+6. Wire `dependencies` (and any `child_of` relation) with `orbit.task.update`
+   on the returned ID; creation silently discards `dependencies`.
 
 ```bash
 orbit tool run orbit.task.add --input '{

@@ -15,32 +15,26 @@ use super::{ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_as
 /// instead of a bare definition name.
 ///
 /// Routers separate everyday task work, backlog orchestration and machine setup.
-/// References load on demand and may link across the bundled skill trees.
+/// References load on demand and may link across the bundled skill trees. The
+/// ordering below groups each skill's files under its router, in the order its
+/// reference table presents them.
 pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 30] = [
+    // Everyday task work: the router, then its references in table order.
     (
         "orbit/SKILL.md",
         include_str!("../../assets/skills/orbit/SKILL.md"),
     ),
     (
+        "orbit/references/task-execution.md",
+        include_str!("../../assets/skills/orbit/references/task-execution.md"),
+    ),
+    (
         "orbit/references/task-fields.md",
         include_str!("../../assets/skills/orbit/references/task-fields.md"),
-    ),
-    // The vocabulary, then working through Orbit.
-    (
-        "orbit/references/concepts.md",
-        include_str!("../../assets/skills/orbit/references/concepts.md"),
-    ),
-    (
-        "orbit/references/tool-surface.md",
-        include_str!("../../assets/skills/orbit/references/tool-surface.md"),
     ),
     (
         "orbit/references/task-authoring.md",
         include_str!("../../assets/skills/orbit/references/task-authoring.md"),
-    ),
-    (
-        "orbit/references/task-execution.md",
-        include_str!("../../assets/skills/orbit/references/task-execution.md"),
     ),
     (
         "orbit/references/task-review.md",
@@ -59,6 +53,27 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 30] = [
         include_str!("../../assets/skills/orbit/references/friction.md"),
     ),
     (
+        "orbit/references/tool-surface.md",
+        include_str!("../../assets/skills/orbit/references/tool-surface.md"),
+    ),
+    (
+        "orbit/references/concepts.md",
+        include_str!("../../assets/skills/orbit/references/concepts.md"),
+    ),
+    // The orchestrator's operating loop, layered on the primitives above.
+    (
+        "orbit-orchestrate/SKILL.md",
+        include_str!("../../assets/skills/orbit-orchestrate/SKILL.md"),
+    ),
+    (
+        "orbit-orchestrate/references/loop.md",
+        include_str!("../../assets/skills/orbit-orchestrate/references/loop.md"),
+    ),
+    (
+        "orbit-orchestrate/references/authorization.md",
+        include_str!("../../assets/skills/orbit-orchestrate/references/authorization.md"),
+    ),
+    (
         "orbit-orchestrate/references/orchestration.md",
         include_str!("../../assets/skills/orbit-orchestrate/references/orchestration.md"),
     ),
@@ -75,10 +90,14 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 30] = [
         include_str!("../../assets/skills/orbit-orchestrate/references/common-failures.md"),
     ),
     (
-        "orbit-setup/references/operational-logs.md",
-        include_str!("../../assets/skills/orbit-setup/references/operational-logs.md"),
+        "orbit-orchestrate/references/recovery.md",
+        include_str!("../../assets/skills/orbit-orchestrate/references/recovery.md"),
     ),
-    // Setting Orbit up.
+    (
+        "orbit-orchestrate/references/walkthroughs.md",
+        include_str!("../../assets/skills/orbit-orchestrate/references/walkthroughs.md"),
+    ),
+    // Setting Orbit up on a machine or repository.
     (
         "orbit-setup/SKILL.md",
         include_str!("../../assets/skills/orbit-setup/SKILL.md"),
@@ -88,12 +107,12 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 30] = [
         include_str!("../../assets/skills/orbit-setup/references/first-run.md"),
     ),
     (
-        "orbit-setup/references/linux-sandbox.md",
-        include_str!("../../assets/skills/orbit-setup/references/linux-sandbox.md"),
-    ),
-    (
         "orbit-setup/references/configuration.md",
         include_str!("../../assets/skills/orbit-setup/references/configuration.md"),
+    ),
+    (
+        "orbit-setup/references/linux-sandbox.md",
+        include_str!("../../assets/skills/orbit-setup/references/linux-sandbox.md"),
     ),
     (
         "orbit-setup/references/automation.md",
@@ -104,6 +123,14 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 30] = [
         include_str!("../../assets/skills/orbit-setup/references/auto-tasks.md"),
     ),
     (
+        "orbit-setup/references/remote-access.md",
+        include_str!("../../assets/skills/orbit-setup/references/remote-access.md"),
+    ),
+    (
+        "orbit-setup/references/multi-host.md",
+        include_str!("../../assets/skills/orbit-setup/references/multi-host.md"),
+    ),
+    (
         "orbit-setup/references/publication.md",
         include_str!("../../assets/skills/orbit-setup/references/publication.md"),
     ),
@@ -112,33 +139,8 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 30] = [
         include_str!("../../assets/skills/orbit-setup/references/maintenance.md"),
     ),
     (
-        "orbit-setup/references/multi-host.md",
-        include_str!("../../assets/skills/orbit-setup/references/multi-host.md"),
-    ),
-    (
-        "orbit-setup/references/remote-access.md",
-        include_str!("../../assets/skills/orbit-setup/references/remote-access.md"),
-    ),
-    // The orchestrator's operating loop, layered on the primitives above.
-    (
-        "orbit-orchestrate/SKILL.md",
-        include_str!("../../assets/skills/orbit-orchestrate/SKILL.md"),
-    ),
-    (
-        "orbit-orchestrate/references/loop.md",
-        include_str!("../../assets/skills/orbit-orchestrate/references/loop.md"),
-    ),
-    (
-        "orbit-orchestrate/references/authorization.md",
-        include_str!("../../assets/skills/orbit-orchestrate/references/authorization.md"),
-    ),
-    (
-        "orbit-orchestrate/references/recovery.md",
-        include_str!("../../assets/skills/orbit-orchestrate/references/recovery.md"),
-    ),
-    (
-        "orbit-orchestrate/references/walkthroughs.md",
-        include_str!("../../assets/skills/orbit-orchestrate/references/walkthroughs.md"),
+        "orbit-setup/references/operational-logs.md",
+        include_str!("../../assets/skills/orbit-setup/references/operational-logs.md"),
     ),
 ];
 

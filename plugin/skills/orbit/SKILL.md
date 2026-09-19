@@ -1,6 +1,6 @@
 ---
 name: orbit
-description: Creates, executes and reviews Orbit tasks; searches task history and docs; records evidence and friction. Use for an assigned task, task authoring, or everyday orbit.task and orbit.search operations. Use orbit-orchestrate for backlog dispatch and run recovery, and orbit-setup for installing or configuring a machine.
+description: Creates, executes and reviews Orbit tasks; searches task history, the docs corpus and friction records; records evidence. Use for an assigned task or task ID, task authoring, `orbit.task`/`orbit.search` MCP tools, `orbit tool run`, task records under `.orbit/`, docs registration or friction. Use orbit-orchestrate for `orbit run` dispatch, drains and failed `jrun-*` runs, and orbit-setup for installing or configuring a machine.
 ---
 
 # Orbit
@@ -24,6 +24,12 @@ checklist. An injected task snapshot is your starting context.
   the assigned work; the pipeline owns delivery and lifecycle transitions.
 - Verify artifacts, task/run state, diffs and checks. Agent messages are
   advisory. Do not report skipped validation as passing or merged as deployed.
+- Use the installed `orbit` binary, never `cargo run -- ...`. Bare
+  `orbit task ...` subcommands are the human surface and skip agent
+  provenance; agents call `orbit tool run orbit.task.*`. Task IDs come from
+  `orbit.task.add`; never invent one. Only a human can force an off-table
+  transition (`orbit task update --force` or the dashboard); `orbit.task.update`
+  and MCP have no `force`.
 
 ## Choose the reference
 

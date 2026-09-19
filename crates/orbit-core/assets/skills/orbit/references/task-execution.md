@@ -14,10 +14,12 @@ then use
 required outcome), `plan` (author one if blank or placeholder), `context_files`,
 and `status`.
 
-Read relevant decision comments alongside the canonical description. Later
-explicitly authorized changes supersede older suggestions; timestamps alone do
-not turn an arbitrary comment into authority. Resolve material contradictions
-before implementing, without reopening already settled decisions.
+Read `comments` (chronological, each with `by` and `at`) alongside the
+canonical description. An orchestrator or operator refinement posted after the
+description supersedes a stale "Suggested direction"/"Suggested fix" section
+still sitting in it: implement the comment's direction. An arbitrary comment is
+not authority by timestamp alone; resolve material contradictions before
+implementing, without reopening already settled decisions.
 
 Use `context_files` as the modification boundary, not a demand to ingest the
 whole repository before editing. Verify paths and inspect the interfaces needed

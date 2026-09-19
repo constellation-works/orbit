@@ -6,7 +6,9 @@ The connected tool schema is authoritative for supported fields.
 ## Behavior-affecting optional fields
 
 - `dependencies: ["<task-id>", ...]` — prerequisites must reach a satisfying
-  status first. Unlike `resolves`, task IDs are global: a prerequisite owned by
+  status first. Not an `orbit.task.add` input: it is stripped with the other
+  `RETIRED_TASK_ADD_INPUT_FIELDS`, so set it with `orbit.task.update` after
+  creation. Unlike `resolves`, task IDs are global: a prerequisite owned by
   another workspace registered on this machine is read from its owner, and
   completing it there satisfies the dependency here. A prerequisite this
   machine has never registered stays explicitly unverifiable — it is never

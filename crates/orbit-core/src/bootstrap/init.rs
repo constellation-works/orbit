@@ -1231,7 +1231,7 @@ mod tests {
                 .join("skills")
                 .join("orbit")
                 .join("references")
-                .join("run-debugging.md")
+                .join("task-execution.md")
                 .exists()
         );
         assert!(
@@ -1355,7 +1355,7 @@ mod tests {
             global_skills_dir(&root)
                 .join("orbit")
                 .join("references")
-                .join("run-debugging.md")
+                .join("task-execution.md")
                 .exists(),
             "reference files under the global catalog must survive too"
         );

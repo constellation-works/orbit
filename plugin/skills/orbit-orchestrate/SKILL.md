@@ -1,6 +1,6 @@
 ---
 name: orbit-orchestrate
-description: Prepares and supervises an Orbit backlog, assigns crews, dispatches authorized work, diagnoses failed runs and routes CI/QA findings into repairs. Use for delivery operations across tasks. Use orbit for one assigned task and orbit-setup for machine configuration or scheduler installation.
+description: Prepares and supervises an Orbit backlog. Deduplicates and pilots tasks (task-pilot), assigns crews, promotes ready work, dispatches with `orbit run ship` and `orbit run auto` drains, diagnoses failed or stuck `jrun-*` runs, and routes CI/QA sweep findings into repair tasks. Use for delivery operations across tasks, jobs, activities and workflow runs. Use orbit for one assigned task and orbit-setup for machine configuration or scheduler installation.
 ---
 
 # Orbit Orchestrate

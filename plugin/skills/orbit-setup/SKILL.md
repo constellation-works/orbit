@@ -1,6 +1,6 @@
 ---
 name: orbit-setup
-description: Sets up and maintains Orbit on a user's machine and repositories according to their needs. Use for installation, onboarding, provider and MCP configuration, scheduling, remote access, upgrades or host troubleshooting. Supports existing installations as well as first-time setup; task execution belongs to orbit and backlog dispatch to orbit-orchestrate.
+description: Sets up and maintains Orbit on a user's machine and repositories according to their needs. Use for installation, `orbit workspace init`, onboarding, provider/crew and MCP configuration, the Linux sandbox, the scheduler (sweep clock, routines, auto-tasks), worktree GC, `orbit doctor`, upgrades, task publication and backup, remote access, the dashboard, or host and service log troubleshooting. Supports existing installations as well as first-time setup; task execution belongs to orbit and backlog dispatch to orbit-orchestrate.
 ---
 
 # Orbit Setup
