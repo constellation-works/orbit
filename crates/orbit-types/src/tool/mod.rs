@@ -2,7 +2,9 @@
 
 mod definition;
 mod error;
+mod invocation;
 pub use error::ToolError;
+pub use invocation::WorkerInvocation;
 
 pub use definition::{
     ExecutionResult, McpCapability, McpToolDefinition, McpToolDefinitionError, McpToolScope,

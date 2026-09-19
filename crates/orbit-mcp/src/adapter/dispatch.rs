@@ -233,6 +233,46 @@ impl ServerHandler for OrbitToolServer {
         request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
+        let metadata = request
+            .meta
+            .as_ref()
+            .map(|meta| &meta.0)
+            .unwrap_or(&context.meta.0);
+        if let Some(value) = metadata
+            .get("orbit")
+            .and_then(|value| value.get("worker_invocation"))
+            .filter(|value| !value.is_null())
+        {
+            let binding =
+                serde_json::from_value::<orbit_types::tool::WorkerInvocation>(value.clone())
+                    .map_err(|error| McpError::invalid_params(error.to_string(), None))
+                    .and_then(|binding| {
+                        binding
+                            .validate()
+                            .map_err(|error| McpError::invalid_params(error, None))?;
+                        let mut session = self.session_context();
+                        if session.transport != Some(orbit_types::tool::McpTransport::SshMcp)
+                            || session
+                                .worker_invocation
+                                .as_ref()
+                                .is_some_and(|old| old != &binding)
+                        {
+                            return Err(McpError::invalid_params(
+                                "worker session binding refused",
+                                None,
+                            ));
+                        }
+                        session.worker_invocation = Some(binding);
+                        session
+                            .effective_capabilities
+                            .remove(&orbit_types::tool::McpCapability::Operator);
+                        self.replace_session_context(session);
+                        Ok(())
+                    });
+            if let Err(error) = binding {
+                return std::future::ready(Err(error));
+            }
+        }
         self.adopt_announced_session(session_context_from_initialize(&request, &context.meta));
         if context.peer.peer_info().is_none() {
             context.peer.set_peer_info(request);

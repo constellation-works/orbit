@@ -7,6 +7,10 @@ use serde_json::Value;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolSessionContext {
+    /// Runtime-owned attempt binding. Ordinary JSON session metadata cannot
+    /// create authority; transport adapters propagate it explicitly.
+    #[serde(skip)]
+    pub worker_invocation: Option<super::WorkerInvocation>,
     /// Legacy caller-supplied workspace address. This value is deliberately
     /// untrusted until an adapter/runtime resolves it to [`Self::workspace_id`].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,6 +94,7 @@ impl ToolSessionContext {
     ) -> Self {
         Self {
             workspace: None,
+            worker_invocation: None,
             workspace_id,
             caller_machine_id: machine_id.clone(),
             caller_host_id: host_id.clone(),

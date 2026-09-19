@@ -287,3 +287,23 @@ public distributed entry points must stay disabled until that proof passes.
 
 Journal intent schema 2 carries replayable evidence. The reader still accepts schema 1 intents;
 older executors refuse schema 2 rather than silently applying a transition without its evidence.
+
+### Worker coordination transport
+
+Internal seeded-claim execution binds `WorkerInvocation` at runtime. Task/dependency reads and
+coordination mutations route to its owner destination, never a follower-local fallback. SSH login
+provides destination access; the claim transaction independently fences task, machine, bound run
+and phase. Neither tool arguments nor editable job input can replace the invocation or elevate a
+managed proxy to operator. Protected process and Linux PID-namespace bindings carry it through
+subprocesses, detached workers and same-bound-run retries; missing required context refuses.
+
+Generic task evidence/document updates and claim-scoped friction use the owner commit journal.
+An omitted friction task inherits the bound task; conflicting arguments refuse. Friction allocation
+and its deduplication receipt commit with the claim fence. Deliberate recovery prevents a late
+attempt from publishing, including after reassignment. Identical accepted retries return the
+recorded mutation result. Generic review transitions still require typed handoff acceptance;
+executor-local Git checks are not forwarded as remote filesystem operations. Artifact bytes are
+read locally, with origins and task run links derived from runtime claim provenance.
+
+These internal seams do not enable pull, claims, recovery or approval public entry points.
+`DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` remains false. No schedules or live hosts change.

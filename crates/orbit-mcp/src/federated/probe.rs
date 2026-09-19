@@ -80,6 +80,15 @@ pub trait DestinationProbe: Send + Sync {
     /// List and route never share a session or a health cache: a list that
     /// showed a workspace does not decide the next call's error.
     fn open_route(&self, destination: &Destination) -> Result<Box<dyn RoutedSession>, OrbitError>;
+
+    fn open_worker_route(
+        &self,
+        destination: &Destination,
+        context: &ToolSessionContext,
+    ) -> Result<Box<dyn RoutedSession>, OrbitError> {
+        let _ = context;
+        self.open_route(destination)
+    }
 }
 
 /// The MCP conversation opened for one routed call.
@@ -137,6 +146,17 @@ impl SshDestinationProbe {
 }
 
 impl DestinationProbe for SshDestinationProbe {
+    fn open_worker_route(
+        &self,
+        destination: &Destination,
+        context: &ToolSessionContext,
+    ) -> Result<Box<dyn RoutedSession>, OrbitError> {
+        Ok(Box::new(SshRoutedSession::new(
+            self.start_worker_session(destination, context.worker_invocation.as_ref())?,
+            self.delivery_timeout,
+        )))
+    }
+
     fn probe(&self, destination: &Destination) -> Result<DestinationSnapshot, OrbitError> {
         let mut session = self.start_session(destination)?;
         session.discover_workspaces()
@@ -216,6 +236,19 @@ impl RoutedSession for InProcessRoutedSession {
         call_context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
         let mut destination_context = self.session_context.clone();
+        if destination_context.worker_invocation.is_some()
+            && destination_context.worker_invocation != call_context.worker_invocation
+        {
+            return Err(OrbitError::PolicyDenied(
+                "worker routed binding mismatch".into(),
+            ));
+        }
+        destination_context.worker_invocation = call_context.worker_invocation;
+        if destination_context.worker_invocation.is_some() {
+            destination_context
+                .effective_capabilities
+                .remove(&orbit_types::tool::McpCapability::Operator);
+        }
         destination_context.trace_id = call_context.trace_id;
         destination_context.self_reported_actor = call_context.self_reported_actor;
         self.inner.call_tool(name, arguments, destination_context)
@@ -243,6 +276,15 @@ impl CompositeDestinationProbe {
 }
 
 impl DestinationProbe for CompositeDestinationProbe {
+    fn open_worker_route(
+        &self,
+        destination: &Destination,
+        context: &ToolSessionContext,
+    ) -> Result<Box<dyn RoutedSession>, OrbitError> {
+        self.probe_for(destination)
+            .open_worker_route(destination, context)
+    }
+
     fn probe(&self, destination: &Destination) -> Result<DestinationSnapshot, OrbitError> {
         self.probe_for(destination).probe(destination)
     }
@@ -254,17 +296,29 @@ impl DestinationProbe for CompositeDestinationProbe {
 
 impl SshDestinationProbe {
     fn start_session(&self, destination: &Destination) -> Result<DestinationSession, OrbitError> {
+        self.start_worker_session(destination, None)
+    }
+
+    fn start_worker_session(
+        &self,
+        destination: &Destination,
+        binding: Option<&orbit_types::tool::WorkerInvocation>,
+    ) -> Result<DestinationSession, OrbitError> {
         let child = spawn_destination_session(
             destination,
             &self.caller_machine_id,
             self.orchestrator.as_deref(),
-            self.authority,
+            if binding.is_some() {
+                McpSessionAuthority::Agent
+            } else {
+                self.authority
+            },
         )?;
         // The session is one process; the guard ends it on every path,
         // including the timeout path where the child is still mid-answer.
         let mut session =
             DestinationSession::start(destination.clone(), child, self.probe_timeout)?;
-        session.handshake()?;
+        session.handshake_with_worker(binding)?;
         Ok(session)
     }
 }
@@ -313,8 +367,13 @@ impl RoutedSession for SshRoutedSession {
         &mut self,
         name: &str,
         arguments: Value,
-        _session_context: ToolSessionContext,
+        session_context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
+        if session_context.worker_invocation != self.session.worker_invocation {
+            return Err(OrbitError::PolicyDenied(
+                "SSH worker binding mismatch".into(),
+            ));
+        }
         // Classification is finished, so the tool's own budget starts here:
         // the SSH setup, handshake, discovery, and `tools/list` round trips
         // that chose this destination must not shorten it.
@@ -401,6 +460,7 @@ pub(super) struct DestinationSession {
     lines: Receiver<String>,
     deadline: Instant,
     next_id: i64,
+    worker_invocation: Option<orbit_types::tool::WorkerInvocation>,
 }
 
 impl DestinationSession {
@@ -452,6 +512,7 @@ impl DestinationSession {
             lines,
             deadline: Instant::now() + timeout,
             next_id: 0,
+            worker_invocation: None,
         })
     }
 
@@ -461,10 +522,23 @@ impl DestinationSession {
         self.deadline = Instant::now() + timeout;
     }
 
+    #[cfg(test)]
     pub(super) fn handshake(&mut self) -> Result<(), OrbitError> {
+        self.handshake_with_worker(None)
+    }
+
+    pub(super) fn handshake_with_worker(
+        &mut self,
+        binding: Option<&orbit_types::tool::WorkerInvocation>,
+    ) -> Result<(), OrbitError> {
+        if let Some(binding) = binding {
+            binding.validate().map_err(OrbitError::InvalidInput)?;
+        }
+        self.worker_invocation = binding.cloned();
         let response = self.request_probe(
             "initialize",
             json!({
+                "_meta": {"orbit": {"worker_invocation": binding}},
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {

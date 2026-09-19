@@ -486,3 +486,123 @@ fn an_unanchored_global_root_is_refused() {
         "{error}",
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn worker_process_binding_survives_descendants_and_forged_environment() {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    if let Some(root) = std::env::var_os("ORBIT_BINDING_FIXTURE_ROOT") {
+        if std::env::var_os("ORBIT_BINDING_GRANDCHILD").is_none() {
+            std::io::stdin()
+                .read_exact(&mut [0u8; 1])
+                .expect("parent binding barrier");
+        }
+        let binding = super::current_worker_binding(Path::new(&root))
+            .expect("resolve authority")
+            .expect("bound ancestor");
+        assert_eq!(binding.bound_run_id, "immutable-leaf");
+        assert_eq!(binding.execution.machine_id, "execution-machine");
+        assert_ne!(
+            binding.bound_run_id,
+            std::env::var("ORBIT_RUN_ID").expect("forged env")
+        );
+        if std::env::var_os("ORBIT_BINDING_GRANDCHILD").is_none() {
+            let mut command = Command::new(std::env::current_exe().expect("test binary"));
+            orbit_common::test_env::clear_inherited_authority(|key| {
+                command.env_remove(key);
+            });
+            let output = command.args(["--exact", "runtime::recovery_authority::tests::worker_process_binding_survives_descendants_and_forged_environment", "--nocapture"])
+                .env("ORBIT_BINDING_FIXTURE_ROOT", root).env("ORBIT_BINDING_GRANDCHILD", "1")
+                .env("ORBIT_RUN_ID", "forged-grandchild-run").output().expect("grandchild");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+        return;
+    }
+    let root = TempDir::new().expect("authority root");
+    let authority = RecoveryAuthority::open(root.path()).expect("authority");
+    let binding = orbit_types::tool::WorkerInvocation {
+        owner_machine_id: "owner-machine".into(),
+        owner_workspace_id: "workspace".into(),
+        owner_destination: "owner/workspace".into(),
+        task_id: "task".into(),
+        claim_id: "claim".into(),
+        execution: orbit_types::task::ExecutionLocation {
+            machine_id: "execution-machine".into(),
+            host_id: None,
+        },
+        bound_run_id: "immutable-leaf".into(),
+    };
+    let mut command = Command::new(std::env::current_exe().expect("test binary"));
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    let mut child = command.args(["--exact", "runtime::recovery_authority::tests::worker_process_binding_survives_descendants_and_forged_environment", "--nocapture"])
+        .env("HOME", root.path()).env("USERPROFILE", root.path())
+        .env("ORBIT_BINDING_FIXTURE_ROOT", root.path()).env("ORBIT_RUN_ID", "forged-run")
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("child");
+    authority
+        .bind_worker_process(child.id(), &binding)
+        .expect("bind");
+    authority
+        .bind_worker_process(child.id(), &binding)
+        .expect("same process retry");
+    let mut forged = binding.clone();
+    forged.bound_run_id = "replacement".into();
+    assert!(authority.bind_worker_process(child.id(), &forged).is_err());
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"1")
+        .expect("release child");
+    let output = child.wait_with_output().expect("child output");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        super::current_worker_binding(root.path())
+            .expect("no matching live process")
+            .is_none()
+    );
+    authority
+        .record_worker_namespace("different-namespace", &binding)
+        .expect("unrelated namespace");
+    assert!(
+        super::current_worker_binding(root.path())
+            .expect("unrelated namespace refused")
+            .is_none()
+    );
+    let namespace = super::namespace_key(1).expect("current init identity");
+    authority
+        .record_worker_namespace(&namespace, &binding)
+        .expect("seed namespace identity");
+    authority
+        .record_worker_namespace(&namespace, &binding)
+        .expect("namespace retry");
+    assert!(
+        authority
+            .record_worker_namespace(&namespace, &forged)
+            .is_err()
+    );
+    let mut retry = Command::new(std::env::current_exe().expect("test binary"));
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        retry.env_remove(key);
+    });
+    let output = retry.args(["--exact", "runtime::recovery_authority::tests::worker_process_binding_survives_descendants_and_forged_environment", "--nocapture"])
+        .env("HOME", root.path()).env("USERPROFILE", root.path()).env("ORBIT_BINDING_FIXTURE_ROOT", root.path())
+        .env("ORBIT_BINDING_GRANDCHILD", "1").env("ORBIT_RUN_ID", "forged-retry")
+        .output().expect("new process with namespace binding");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}

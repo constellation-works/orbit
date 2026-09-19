@@ -33,6 +33,13 @@ use crate::application::job::run::active_cancellation_request;
 /// to a process supervisor. Keeping exactly those two steps behind this seam
 /// is what lets the rest of supervision run without a runtime.
 pub(crate) trait PipelineRunHost: Send + Sync {
+    fn worker_bound(&self) -> bool {
+        false
+    }
+    fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
+        Ok(())
+    }
+
     /// The run as `orbit run show` reports it, after stale-run reconciliation.
     fn reconciled_run(&self, run_id: &str) -> Result<JobRun, OrbitError>;
 
@@ -47,6 +54,13 @@ pub(crate) trait PipelineRunHost: Send + Sync {
 }
 
 impl PipelineRunHost for OrbitRuntime {
+    fn worker_bound(&self) -> bool {
+        self.worker_invocation().is_some()
+    }
+    fn register_worker_process(&self, pid: u32) -> Result<(), OrbitError> {
+        OrbitRuntime::register_worker_process(self, pid)
+    }
+
     fn reconciled_run(&self, run_id: &str) -> Result<JobRun, OrbitError> {
         self.show_job_run(run_id)
     }
@@ -173,10 +187,18 @@ impl PipelineWorkerSupervisor {
                 OrbitError::Execution(format!("spawn pipeline worker observer: {error}"))
             })?;
 
-        let child = command
+        if self.host.worker_bound() {
+            command.env("ORBIT_WORKER_CONTEXT_REQUIRED", "1");
+        }
+        let mut child = command
             .spawn()
             .map_err(|error| OrbitError::Execution(format!("spawn pipeline worker: {error}")))?;
         let child_pid = child.id();
+        if let Err(error) = self.host.register_worker_process(child_pid) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
         sender.send(child).map_err(|error| {
             OrbitError::Execution(format!("hand pipeline worker to startup observer: {error}"))
         })?;

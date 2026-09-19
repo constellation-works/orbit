@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use orbit_types::record::{FrictionRecord, FrictionStatus};
 
 /// Everything `orbit.friction.add` needs to allocate and persist a record.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FrictionAddParams {
     pub model: String,
     /// The record's handle. Callers pass the author's title, or `None` to let
@@ -72,4 +72,34 @@ pub struct StoredFrictionRecord {
 pub struct FrictionReportedCount {
     pub model: String,
     pub count: u64,
+}
+
+/// Normalize tags against the owning workspace taxonomy before publication.
+pub fn normalize_friction_tags(
+    raw_tags: Vec<String>,
+    taxonomy: &std::collections::BTreeSet<String>,
+) -> Result<Vec<String>, orbit_common::OrbitError> {
+    let mut tags = std::collections::BTreeSet::new();
+    for raw in raw_tags {
+        let value = raw.trim().to_ascii_lowercase();
+        if !value.is_empty() {
+            tags.insert(value);
+        }
+    }
+    if tags.is_empty() {
+        tags.insert("other".to_string());
+    }
+    let invalid = tags
+        .iter()
+        .filter(|tag| !taxonomy.contains(*tag))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !invalid.is_empty() {
+        return Err(orbit_common::OrbitError::InvalidInput(format!(
+            "unknown friction tag(s): {}. valid tags: {}",
+            invalid.join(", "),
+            taxonomy.iter().cloned().collect::<Vec<_>>().join(", ")
+        )));
+    }
+    Ok(tags.into_iter().collect())
 }

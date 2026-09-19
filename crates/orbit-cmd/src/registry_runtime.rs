@@ -1117,8 +1117,9 @@ fn attach_registry_context(
         HostIdentityState::Present(identity) => Some(identity.machine_id.clone()),
         HostIdentityState::Legacy { .. } | HostIdentityState::Absent => None,
     };
-    attach_workspace_catalog(
+    let runtime = attach_workspace_catalog(
         runtime.with_automation_machine_identity(machine_id),
         global_root,
-    )
+    );
+    crate::worker_coordination::attach(runtime)
 }

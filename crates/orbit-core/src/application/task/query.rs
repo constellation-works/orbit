@@ -11,6 +11,9 @@ use crate::OrbitRuntime;
 
 impl OrbitRuntime {
     pub fn get_task(&self, id: &str) -> Result<Task, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.read_owner(id, "task");
+        }
         self.stores()
             .tasks()
             .get_task(id)?
@@ -34,10 +37,18 @@ impl OrbitRuntime {
         &self,
         id: &str,
     ) -> Result<RegisteredTaskResolution, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self
+                .read_owner(id, "dependency")
+                .map(|task| RegisteredTaskResolution::Resolved(Box::new(task)));
+        }
         self.stores().tasks().registered_task(id)
     }
 
     pub fn get_task_artifacts(&self, id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.read_owner(id, "artifacts");
+        }
         self.stores()
             .task_artifacts()
             .get_task_artifacts(id)?
@@ -48,6 +59,9 @@ impl OrbitRuntime {
         &self,
         id: &str,
     ) -> Result<Vec<ArtifactManifestFileV2>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.read_owner(id, "manifest");
+        }
         self.stores()
             .task_artifacts()
             .get_task_artifact_manifest(id)?
@@ -59,10 +73,20 @@ impl OrbitRuntime {
         id: &str,
         path: &str,
     ) -> Result<Option<TaskArtifact>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Ok(self
+                .get_task_artifacts(id)?
+                .into_iter()
+                .find(|artifact| artifact.path == path));
+        }
+
         self.stores().task_artifacts().get_task_artifact(id, path)
     }
 
     pub fn get_task_comments(&self, id: &str) -> Result<Vec<TaskComment>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.read_owner(id, "comments");
+        }
         self.stores()
             .task_history()
             .get_task_comments(id)?
@@ -70,6 +94,9 @@ impl OrbitRuntime {
     }
 
     pub fn get_task_history(&self, id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.read_owner(id, "history");
+        }
         self.stores()
             .task_history()
             .get_task_history(id)?
@@ -77,6 +104,10 @@ impl OrbitRuntime {
     }
 
     pub fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.read_owner("", "tasks");
+        }
+
         if !self.coordination_task_reads_visible() {
             return Ok(Vec::new());
         }
@@ -88,6 +119,10 @@ impl OrbitRuntime {
     pub fn task_status_index(
         &self,
     ) -> Result<BTreeMap<String, orbit_types::task::TaskStatus>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.read_owner("", "status_index");
+        }
+
         if !self.coordination_task_reads_visible() {
             return Ok(BTreeMap::new());
         }
@@ -98,6 +133,20 @@ impl OrbitRuntime {
     pub fn task_completion_by_complexity(
         &self,
     ) -> Result<Vec<orbit_store::TaskCompletionByComplexity>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            let rows: Vec<(String, i64, BTreeMap<String, i64>)> =
+                self.read_owner("", "completion_by_complexity")?;
+            return Ok(rows
+                .into_iter()
+                .map(
+                    |(complexity, total, by_status)| orbit_store::TaskCompletionByComplexity {
+                        complexity,
+                        total,
+                        by_status,
+                    },
+                )
+                .collect());
+        }
         if !self.coordination_task_reads_visible() {
             return Ok(Vec::new());
         }
@@ -106,6 +155,10 @@ impl OrbitRuntime {
 
     /// `task_id →` complexity bucket from the generated task index.
     pub fn task_complexity_by_id(&self) -> Result<BTreeMap<String, String>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.read_owner("", "complexity_by_id");
+        }
+
         if !self.coordination_task_reads_visible() {
             return Ok(BTreeMap::new());
         }
@@ -113,6 +166,10 @@ impl OrbitRuntime {
     }
 
     pub fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self
+                .read_owner_request(serde_json::json!({"_worker_read": "tags", "tags": tags}));
+        }
         if !self.coordination_task_reads_visible() {
             return Ok(Vec::new());
         }
@@ -128,6 +185,9 @@ impl OrbitRuntime {
         external_ref: Option<&ExternalRef>,
         has_external_ref_system: Option<&str>,
     ) -> Result<Vec<Task>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.read_owner_request(serde_json::json!({"_worker_read": "filtered", "status": status, "priority": priority, "parent_id": parent_id, "job_run_id": job_run_id, "external_ref": external_ref, "has_external_ref_system": has_external_ref_system}));
+        }
         if !self.coordination_task_reads_visible() {
             return Ok(Vec::new());
         }
@@ -142,6 +202,9 @@ impl OrbitRuntime {
     }
 
     pub fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.search_tasks_filtered(query, &[]);
+        }
         if !self.coordination_task_reads_visible() {
             return Ok(Vec::new());
         }
@@ -153,6 +216,11 @@ impl OrbitRuntime {
         query: &str,
         tags: &[String],
     ) -> Result<Vec<Task>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return self.read_owner_request(
+                serde_json::json!({"_worker_read": "search", "query": query, "tags": tags}),
+            );
+        }
         if !self.coordination_task_reads_visible() {
             return Ok(Vec::new());
         }

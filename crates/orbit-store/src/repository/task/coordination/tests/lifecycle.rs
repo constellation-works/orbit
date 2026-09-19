@@ -513,3 +513,154 @@ fn resolution_recovers_pending_commit_where_inspection_refuses() {
     assert_eq!(inspected[0].claim, resolved[0].claim);
     assert_eq!(inspected[0].last_event, resolved[0].last_event);
 }
+
+fn friction_mutation() -> ClaimMutation {
+    ClaimMutation::Friction(FrictionAddParams {
+        model: "codex".into(),
+        title: Some("Claim-scoped evidence".into()),
+        body: "The isolated fixture observed a failure.".into(),
+        tags: vec![],
+        during_task: None,
+        created_at: Utc::now(),
+    })
+}
+
+fn friction_count(f: &Coordinated) -> i64 {
+    f.boundary()
+        .store
+        .with_read_connection(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM friction_records", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))
+        })
+        .expect("friction count")
+}
+
+#[test]
+fn claimed_friction_is_bound_and_replayed_without_duplicate_allocation() {
+    let tmp = TempDir::new().expect("temp");
+    let f = Coordinated::open(tmp.path());
+    let c = claim(&f);
+    bind(&f, &c);
+    let op = friction_mutation();
+    let accepted = f
+        .boundary()
+        .mutate_execution_claim(Some(&worker(&c, true)), "friction", &op)
+        .expect("add");
+    assert_eq!(
+        accepted
+            .friction
+            .as_ref()
+            .expect("record")
+            .during_task
+            .as_deref(),
+        Some(c.task_id.as_str())
+    );
+    let retried = friction_mutation();
+    assert_eq!(
+        accepted,
+        f.boundary()
+            .mutate_execution_claim(Some(&worker(&c, true)), "friction", &retried)
+            .expect("replay with fresh call clock")
+    );
+    assert_eq!(friction_count(&f), 1);
+    let mut conflicting = op.clone();
+    if let ClaimMutation::Friction(params) = &mut conflicting {
+        params.during_task = Some("other".into());
+    }
+    assert!(
+        f.boundary()
+            .mutate_execution_claim(Some(&worker(&c, true)), "conflict", &conflicting)
+            .is_err()
+    );
+    f.boundary()
+        .mutate_execution_claim(
+            Some(&operator(&c)),
+            "recover",
+            &ClaimMutation::Recover {
+                status: TaskStatus::Backlog,
+                reason: "deliberate recovery".into(),
+            },
+        )
+        .expect("recover");
+    assert!(
+        f.boundary()
+            .mutate_execution_claim(Some(&worker(&c, true)), "late", &op)
+            .is_err()
+    );
+    assert_eq!(
+        accepted,
+        f.boundary()
+            .mutate_execution_claim(Some(&worker(&c, true)), "friction", &op)
+            .expect("historical outcome only")
+    );
+    assert_eq!(friction_count(&f), 1);
+}
+
+#[test]
+fn claimed_friction_faults_share_the_claim_commit_decision() {
+    for fault in [
+        CoordinationFault::BeforeCommit,
+        CoordinationFault::AfterCommit,
+    ] {
+        let tmp = TempDir::new().expect("temp");
+        let f = Coordinated::open(tmp.path());
+        let c = claim(&f);
+        bind(&f, &c);
+        let op = friction_mutation();
+        inject_coordination_faults(&[fault]);
+        assert!(
+            f.boundary()
+                .mutate_execution_claim(Some(&worker(&c, true)), "friction", &op)
+                .is_err()
+        );
+        assert_eq!(
+            friction_count(&f),
+            if fault == CoordinationFault::AfterCommit {
+                1
+            } else {
+                0
+            }
+        );
+        let recovered = Coordinated::open(tmp.path());
+        let result = recovered
+            .boundary()
+            .mutate_execution_claim(Some(&worker(&c, true)), "friction", &op)
+            .expect("retry interrupted commit");
+        assert!(result.friction.is_some());
+        assert_eq!(friction_count(&recovered), 1);
+    }
+}
+
+#[test]
+fn claimed_friction_revocation_between_failed_prepare_and_retry_cannot_publish() {
+    let tmp = TempDir::new().expect("temp");
+    let f = Coordinated::open(tmp.path());
+    let c = claim(&f);
+    bind(&f, &c);
+    let mutation = friction_mutation();
+    inject_coordination_faults(&[CoordinationFault::BeforeCommit]);
+    assert!(
+        f.boundary()
+            .mutate_execution_claim(Some(&worker(&c, true)), "interrupted-friction", &mutation)
+            .is_err()
+    );
+    assert_eq!(friction_count(&f), 0);
+    f.boundary()
+        .mutate_execution_claim(
+            Some(&operator(&c)),
+            "revoke",
+            &ClaimMutation::Recover {
+                status: TaskStatus::Backlog,
+                reason: "deliberate recovery after fault".into(),
+            },
+        )
+        .expect("revoke");
+    assert!(
+        f.boundary()
+            .mutate_execution_claim(Some(&worker(&c, true)), "interrupted-friction", &mutation)
+            .is_err()
+    );
+    assert_eq!(friction_count(&f), 0);
+}

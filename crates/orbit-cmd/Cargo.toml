@@ -19,6 +19,8 @@ orbit-common = { path = "../orbit-common" }
 orbit-config = { path = "../orbit-config" }
 orbit-types = { path = "../orbit-types" }
 orbit-core = { path = "../orbit-core" }
+orbit-mcp = { path = "../orbit-mcp" }
+orbit-tools = { path = "../orbit-tools" }
 orbit-engine = { path = "../orbit-engine" }
 orbit-registry = { path = "../orbit-registry" }
 orbit-store = { path = "../orbit-store" }

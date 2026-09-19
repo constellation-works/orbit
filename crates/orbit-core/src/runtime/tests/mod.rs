@@ -8,3 +8,5 @@ mod session_log;
 mod store_reuse;
 mod tool_exec;
 mod workspace_claim;
+
+mod worker_coordination;

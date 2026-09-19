@@ -31,6 +31,7 @@ pub(crate) mod run_input;
 pub(crate) mod task;
 pub use task::StaleTaskReservation;
 pub(crate) mod tool_exec;
+mod worker_coordination;
 pub mod workspace_catalog;
 pub mod workspace_claim;
 
@@ -80,6 +81,8 @@ pub(crate) type AfterLockedStateReadHook = Arc<dyn Fn(&orbit_types::task::Task) 
 
 #[derive(Clone)]
 pub struct OrbitRuntime {
+    worker_invocation: Option<Arc<orbit_types::tool::WorkerInvocation>>,
+    owner_coordinator: Option<Arc<dyn orbit_tools::OwnerCoordinator>>,
     pub(crate) context: OrbitContext,
     workspace_binding: Option<Arc<WorkspaceRuntimeBinding>>,
     /// A higher-level registry may mark this local checkout as a replica. Core
@@ -180,6 +183,9 @@ impl OrbitRuntime {
         &self,
         session: &orbit_types::tool::ToolSessionContext,
     ) -> Option<orbit_types::task::ExecutionLocation> {
+        if let Some(binding) = &session.worker_invocation {
+            return Some(binding.execution.clone());
+        }
         // Remote caller labels do not identify artifact authorship. Until trusted
         // claim propagation supplies execution provenance, keep remote origin unknown.
         if session
@@ -218,6 +224,8 @@ impl OrbitRuntime {
         Ok(Self {
             context,
             workspace_binding: binding.map(Arc::new),
+            worker_invocation: worker_coordination::restore_process_binding(global_root)?,
+            owner_coordinator: None,
             coordination_write_owner: None,
             automation_machine_identity: None,
             workspace_catalog: None,
@@ -259,6 +267,8 @@ impl OrbitRuntime {
         Ok(Self {
             context,
             workspace_binding: Some(Arc::new(binding)),
+            worker_invocation: None,
+            owner_coordinator: None,
             coordination_write_owner: None,
             automation_machine_identity: None,
             workspace_catalog: None,
@@ -383,6 +393,11 @@ impl OrbitRuntime {
     /// apart from "that request was invalid", so this reports
     /// `CapabilityRefused` [ORB-11012].
     pub(crate) fn ensure_coordination_task_write_permitted(&self) -> Result<(), OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Err(OrbitError::PolicyDenied(
+                "claimed coordination writes require the owner route".into(),
+            ));
+        }
         let Some(owner_machine_id) = self.coordination_write_owner.as_deref() else {
             return Ok(());
         };

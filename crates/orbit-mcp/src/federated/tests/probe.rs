@@ -144,3 +144,87 @@ fn a_flooding_destination_is_refused_without_buffering_the_flood() {
         "the first bad line must end the session, not the deadline"
     );
 }
+
+#[test]
+fn ssh_session_preserves_worker_binding_outside_tool_arguments() {
+    let binding = orbit_types::tool::WorkerInvocation {
+        owner_machine_id: OWNER_MACHINE.into(),
+        owner_workspace_id: "ws_orbit".into(),
+        owner_destination: format!("{OWNER_MACHINE}/ws_orbit"),
+        task_id: "task".into(),
+        claim_id: "claim".into(),
+        execution: orbit_types::task::ExecutionLocation {
+            machine_id: "executor".into(),
+            host_id: None,
+        },
+        bound_run_id: "immutable-leaf".into(),
+    };
+    let child = Command::new("python3")
+        .args([
+            "-u",
+            "-c",
+            r#"
+import sys,json
+binding=None
+for line in sys.stdin:
+    request=json.loads(line)
+    if 'id' not in request: continue
+    if request['method']=='initialize':
+        binding=request['params']['_meta']['orbit']['worker_invocation']
+        result={'protocolVersion':'2025-06-18'}
+    else:
+        result={'structuredContent':{'binding':binding,'arguments':request['params']['arguments']}}
+    print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}),flush=True)
+"#,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("fake SSH destination");
+    let mut session = DestinationSession::start(
+        destination("fixture", OWNER_MACHINE),
+        child,
+        Duration::from_secs(5),
+    )
+    .expect("session");
+    session
+        .handshake_with_worker(Some(&binding))
+        .expect("bound handshake");
+    let mut route = SshRoutedSession::new(session, Duration::from_secs(5));
+    let context = ToolSessionContext {
+        worker_invocation: Some(binding.clone()),
+        ..Default::default()
+    };
+    let reply = route
+        .call_tool(
+            "orbit.task.update",
+            json!({"worker_invocation":null}),
+            context.clone(),
+        )
+        .expect("call");
+    assert_eq!(
+        reply["binding"],
+        serde_json::to_value(&binding).expect("binding JSON")
+    );
+    let mut replacement = context;
+    replacement
+        .worker_invocation
+        .as_mut()
+        .expect("binding")
+        .bound_run_id = "replacement".into();
+    assert!(
+        route
+            .call_tool("orbit.task.update", json!({}), replacement)
+            .is_err()
+    );
+    assert!(
+        route
+            .call_tool(
+                "orbit.task.update",
+                json!({}),
+                ToolSessionContext::default()
+            )
+            .is_err()
+    );
+}

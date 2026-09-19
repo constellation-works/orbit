@@ -231,6 +231,18 @@ impl Store {
                 ).map_err(|e| OrbitError::Store(e.to_string()))?;
             }
 
+            if let Some((friction, receipt_id)) = &effects.friction {
+                let record = crate::driver::sqlite::friction_write::add_in_transaction(
+                    tx.connection(), &workspace_id, friction,
+                )?;
+                let payload = serde_json::to_string(&record)
+                    .map_err(|error| OrbitError::Store(error.to_string()))?;
+                tx.tx.execute(
+                    "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at) VALUES (?1, 'distributed-claim-friction-v1', ?2, ?3, ?4, ?5)",
+                    params![workspace_id, receipt_id, payload, journal_id, now],
+                ).map_err(|error| OrbitError::Store(error.to_string()))?;
+            }
+
             let reservation_id = reserved
                 .as_ref()
                 .and_then(|result| result.reservation_id.clone());

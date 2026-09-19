@@ -32,6 +32,19 @@ pub(super) fn execute(
         reservation_owner,
     } = caller;
     let (input, redaction_report) = super::artifact_redaction::sanitize_tool_input(action, input)?;
+    if let Some(mut result) =
+        super::worker_tools::execute(runtime, session_context, action, &input, model.as_deref())?
+    {
+        super::artifact_redaction::finish_tool_response(
+            runtime,
+            action,
+            &mut result,
+            &redaction_report,
+            agent.as_deref(),
+            model.as_deref(),
+        )?;
+        return Ok(result);
+    }
     let agent_for_audit = agent.clone();
     let model_for_audit = model.clone();
     let mut response = match action {

@@ -439,3 +439,233 @@ fn path_error(action: &str, path: &Path, error: std::io::Error) -> OrbitError {
 #[cfg(test)]
 #[path = "tests/recovery_authority.rs"]
 mod tests;
+
+impl RecoveryAuthority {
+    /// Bind a kernel process identity to the runtime's immutable attempt. The
+    /// authority database is outside all managed-leaf write grants; neither a
+    /// job-input edit nor an environment machine label can create this row.
+    pub(crate) fn bind_worker_process(
+        &self,
+        pid: u32,
+        binding: &orbit_types::tool::WorkerInvocation,
+    ) -> Result<(), OrbitError> {
+        binding.validate().map_err(OrbitError::InvalidInput)?;
+        let identity = orbit_common::process::identity::process_start_identity_token(pid)
+            .ok_or_else(|| OrbitError::Execution("worker process identity unavailable".into()))?;
+        self.connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS worker_process_binding (
+            pid INTEGER NOT NULL, identity TEXT NOT NULL, binding_json TEXT NOT NULL,
+            PRIMARY KEY(pid, identity)
+        ) WITHOUT ROWID;",
+            )
+            .map_err(|error| authority_error("create worker binding table", error))?;
+        let json =
+            serde_json::to_string(binding).map_err(|error| OrbitError::Store(error.to_string()))?;
+        self.connection.execute(
+            "INSERT INTO worker_process_binding(pid, identity, binding_json) VALUES (?1,?2,?3) ON CONFLICT(pid,identity) DO NOTHING",
+            params![pid, identity, json],
+        ).map_err(|error| authority_error("bind worker process", error))?;
+        let recorded: String = self
+            .connection
+            .query_row(
+                "SELECT binding_json FROM worker_process_binding WHERE pid=?1 AND identity=?2",
+                params![pid, identity],
+                |row| row.get(0),
+            )
+            .map_err(|error| authority_error("read worker process binding", error))?;
+        if recorded != json {
+            return Err(OrbitError::PolicyDenied(
+                "worker process binding is immutable".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Resolve a process or live ancestor against host-only authority. Environment
+/// values can require a binding, but never supply one or choose its identity.
+#[cfg(target_os = "linux")]
+pub(crate) fn current_worker_binding(
+    global_root: &Path,
+) -> Result<Option<orbit_types::tool::WorkerInvocation>, OrbitError> {
+    if !global_root.try_exists()? {
+        return Ok(None);
+    }
+    let root = validated_authority_global_root(global_root)?.join(AUTHORITY_DIR);
+    if !root.try_exists()? {
+        return Ok(None);
+    }
+    if std::fs::symlink_metadata(&root)?.file_type().is_symlink() {
+        return Err(refuse_symlinked(&root));
+    }
+    refuse_symlinked_authority_files(&root)?;
+    let path = root.join(AUTHORITY_DB);
+    if !path.try_exists()? {
+        return Ok(None);
+    }
+    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| authority_error("read worker authority", error))?;
+    let namespace_table: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_namespace_binding')", [], |row| row.get(0),
+    ).map_err(|error| authority_error("inspect namespace authority", error))?;
+    if namespace_table {
+        let value: Option<String> = connection
+            .query_row(
+                "SELECT binding_json FROM worker_namespace_binding WHERE namespace_key=?1",
+                params![namespace_key(1)?],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| authority_error("resolve namespace authority", error))?;
+        if let Some(value) = value {
+            let binding: orbit_types::tool::WorkerInvocation = serde_json::from_str(&value)
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            binding.validate().map_err(OrbitError::InvalidInput)?;
+            return Ok(Some(binding));
+        }
+    }
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_process_binding')", [], |row| row.get(0),
+    ).map_err(|error| authority_error("inspect worker authority", error))?;
+    if !exists {
+        return Ok(None);
+    }
+    let mut pid = std::process::id();
+    for _ in 0..256 {
+        if let Some(identity) = orbit_common::process::identity::process_start_identity_token(pid) {
+            let value: Option<String> = connection
+                .query_row(
+                    "SELECT binding_json FROM worker_process_binding WHERE pid=?1 AND identity=?2",
+                    params![pid, identity],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| authority_error("resolve worker process", error))?;
+            if let Some(value) = value {
+                let binding: orbit_types::tool::WorkerInvocation = serde_json::from_str(&value)
+                    .map_err(|error| OrbitError::Store(error.to_string()))?;
+                binding.validate().map_err(OrbitError::InvalidInput)?;
+                return Ok(Some(binding));
+            }
+        }
+        let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let parent = stat
+            .rsplit_once(')')
+            .and_then(|(_, fields)| fields.split_whitespace().nth(1))
+            .and_then(|value| value.parse::<u32>().ok())
+            .ok_or_else(|| OrbitError::Execution("worker process ancestry unavailable".into()))?;
+        if parent == 0 || parent == pid {
+            return Ok(None);
+        }
+        pid = parent;
+    }
+    Err(OrbitError::Execution(
+        "worker process ancestry limit exceeded".into(),
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn current_worker_binding(
+    _global_root: &Path,
+) -> Result<Option<orbit_types::tool::WorkerInvocation>, OrbitError> {
+    Ok(None)
+}
+
+#[cfg(target_os = "linux")]
+fn namespace_key(pid: u32) -> Result<String, OrbitError> {
+    let namespace = std::fs::read_link(format!("/proc/{pid}/ns/pid"))?;
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    let start = stat
+        .rsplit_once(')')
+        .and_then(|(_, fields)| fields.split_whitespace().nth(19))
+        .ok_or_else(|| {
+            OrbitError::Execution("namespace leader start identity unavailable".into())
+        })?;
+    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
+    Ok(format!("{}:{}:{}", namespace.display(), start, boot.trim()))
+}
+
+impl RecoveryAuthority {
+    /// Bind Bubblewrap's namespace leader as observed from the host. A process
+    /// inside that namespace sees this same kernel namespace, boot and start
+    /// identity even though all host PIDs have disappeared from its /proc.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn bind_worker_namespace(
+        &self,
+        root_pid: u32,
+        binding: &orbit_types::tool::WorkerInvocation,
+    ) -> Result<(), OrbitError> {
+        let own = std::fs::read_link("/proc/self/ns/pid")?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let mut pending = vec![root_pid];
+            for _ in 0..256 {
+                let Some(pid) = pending.pop() else { break };
+                if let Ok(namespace) = std::fs::read_link(format!("/proc/{pid}/ns/pid"))
+                    && namespace != own
+                    && std::fs::read_to_string(format!("/proc/{pid}/status")).is_ok_and(|status| {
+                        status.lines().any(|line| {
+                            line.starts_with("NSpid:")
+                                && line.split_whitespace().last() == Some("1")
+                        })
+                    })
+                {
+                    return self.record_worker_namespace(&namespace_key(pid)?, binding);
+                }
+                if let Ok(children) =
+                    std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
+                {
+                    pending.extend(
+                        children
+                            .split_whitespace()
+                            .filter_map(|value| value.parse::<u32>().ok()),
+                    );
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(OrbitError::PolicyDenied(
+                    "worker PID namespace authority unavailable".into(),
+                ));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn record_worker_namespace(
+        &self,
+        key: &str,
+        binding: &orbit_types::tool::WorkerInvocation,
+    ) -> Result<(), OrbitError> {
+        self.connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS worker_namespace_binding (
+            namespace_key TEXT PRIMARY KEY, binding_json TEXT NOT NULL
+        ) WITHOUT ROWID;",
+            )
+            .map_err(|error| authority_error("create worker namespace table", error))?;
+        let json =
+            serde_json::to_string(binding).map_err(|error| OrbitError::Store(error.to_string()))?;
+        self.connection.execute("INSERT INTO worker_namespace_binding(namespace_key,binding_json) VALUES (?1,?2) ON CONFLICT(namespace_key) DO NOTHING", params![key,json])
+            .map_err(|error| authority_error("record worker namespace", error))?;
+        let stored: String = self
+            .connection
+            .query_row(
+                "SELECT binding_json FROM worker_namespace_binding WHERE namespace_key=?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .map_err(|error| authority_error("read worker namespace", error))?;
+        if stored != json {
+            return Err(OrbitError::PolicyDenied(
+                "worker namespace binding is immutable".into(),
+            ));
+        }
+        Ok(())
+    }
+}

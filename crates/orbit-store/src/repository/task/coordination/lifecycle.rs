@@ -50,6 +50,8 @@ struct MutationReceipt {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(super) struct EvidenceIntent {
     summary: Option<String>,
+    #[serde(default)]
+    plan: Option<String>,
     comments_len: Option<u64>,
     comments: Vec<TaskCommentRowV2>,
     artifacts: Vec<orbit_types::task::TaskArtifact>,
@@ -155,13 +157,17 @@ impl TaskCommitBoundary {
         mutation_id: &str,
         mutation: &ClaimMutation,
     ) -> Result<ClaimMutationResult, OrbitError> {
+        let mut identity = mutation.clone();
+        if let ClaimMutation::Friction(params) = &mut identity {
+            params.created_at = chrono::DateTime::UNIX_EPOCH;
+        }
         let input = encode(&(
             &auth.task_id,
             &auth.claim_id,
             &auth.machine_id,
             &auth.run,
             auth.operator,
-            mutation,
+            &identity,
         ))?;
         let receipt_id = format!(
             "{:x}",
@@ -202,7 +208,7 @@ impl TaskCommitBoundary {
                     return Err(invalid("stale_claim"));
                 }
             }
-            return Ok(receipt.result);
+            return self.with_friction_result(receipt.result, &receipt_id);
         }
         let old = self
             .coordination_rows(CLAIM)?
@@ -284,6 +290,79 @@ impl TaskCommitBoundary {
         let mut release = false;
         let mut handoff_effects = ClaimCommitEffects::default();
         match mutation {
+            ClaimMutation::Update(value) => {
+                if auth.operator
+                    || !matches!(
+                        claim.phase,
+                        ExecutionClaimPhase::Running | ExecutionClaimPhase::HandedOff
+                    )
+                    || value
+                        .expected_status
+                        .is_some_and(|status| status != expected_status)
+                {
+                    return Err(invalid("stale_claim"));
+                }
+                if let Some(status) = value.status {
+                    if status == TaskStatus::Blocked && claim.phase == ExecutionClaimPhase::Running
+                    {
+                        if value
+                            .evidence
+                            .summary
+                            .as_deref()
+                            .is_none_or(|text| text.trim().is_empty())
+                        {
+                            return Err(invalid("failure settlement requires evidence"));
+                        }
+                        state.claim.phase = ExecutionClaimPhase::Failed;
+                        state.landing_invalidated = true;
+                        params.status = Some(status);
+                        release = true;
+                    } else if status != expected_status {
+                        return Err(invalid(
+                            "worker lifecycle transition requires typed handoff",
+                        ));
+                    }
+                }
+                if value
+                    .context_files
+                    .as_ref()
+                    .is_some_and(|context| context != &bundle.envelope.context_files)
+                {
+                    return Err(invalid(
+                        "claim footprint changes require recovery and readmission",
+                    ));
+                }
+                if claim.phase == ExecutionClaimPhase::HandedOff
+                    && (value.evidence != ClaimEvidence::default()
+                        || value.plan.is_some()
+                        || value.status_note.is_some()
+                        || value
+                            .external_refs
+                            .iter()
+                            .any(|reference| !bundle.envelope.external_refs.contains(reference)))
+                {
+                    return Err(invalid("stale_claim"));
+                }
+                evidence = value.evidence.clone();
+                params.status_note = value.status_note.clone();
+                handoff_effects.worker_update = Some(value.clone());
+                state.last_event = "claim_updated".into();
+            }
+            ClaimMutation::Friction(value) => {
+                if auth.operator
+                    || claim.phase != ExecutionClaimPhase::Running
+                    || value
+                        .during_task
+                        .as_ref()
+                        .is_some_and(|task| task != &auth.task_id)
+                {
+                    return Err(invalid("stale_claim"));
+                }
+                let mut value = value.clone();
+                value.during_task = Some(auth.task_id.clone());
+                handoff_effects.friction = Some((value, receipt_id.clone()));
+                state.last_event = "claim_friction".into();
+            }
             ClaimMutation::Bind { run, ship } => {
                 if auth.operator
                     || claim.phase != ExecutionClaimPhase::Claimed
@@ -436,6 +515,7 @@ impl TaskCommitBoundary {
             claim_id: claim.claim_id.clone(),
             phase: state.claim.phase,
             status: params.status.unwrap_or(expected_status),
+            friction: None,
         };
         params.rows.push(row(
             RECEIPT,
@@ -447,6 +527,9 @@ impl TaskCommitBoundary {
         )?);
         let new_state = row(STATE, &claim.claim_id, &state)?;
         let mut effects = ClaimCommitEffects {
+            execution_origin: Some(claim.executed_on.clone()),
+            worker_update: handoff_effects.worker_update,
+            friction: handoff_effects.friction,
             replacements: handoff_effects.replacements,
             completion_grant: handoff_effects.completion_grant,
             release_reservation: release.then_some(claim.reservation_id),
@@ -467,9 +550,26 @@ impl TaskCommitBoundary {
             binding.as_ref(),
         )?;
         match outcome {
-            TaskCoordinationCommitOutcome::Committed(_) => Ok(result),
+            TaskCoordinationCommitOutcome::Committed(_) => {
+                self.with_friction_result(result, &receipt_id)
+            }
             _ => Err(invalid("stale_claim")),
         }
+    }
+
+    fn with_friction_result(
+        &self,
+        mut result: ClaimMutationResult,
+        receipt_id: &str,
+    ) -> Result<ClaimMutationResult, OrbitError> {
+        if let Some(row) = self
+            .coordination_rows("distributed-claim-friction-v1")?
+            .iter()
+            .find(|row| row.row_id == receipt_id)
+        {
+            result.friction = Some(decode(&row.payload_json)?);
+        }
+        Ok(result)
     }
 
     pub(super) fn prepare_claim_evidence(
@@ -479,14 +579,25 @@ impl TaskCommitBoundary {
         evidence: &ClaimEvidence,
         binding: Option<&ClaimRun>,
         actor: &str,
+        effects: &ClaimCommitEffects,
     ) -> Result<(), OrbitError> {
+        let origin = effects.execution_origin.as_ref();
+        if let Some(update) = &effects.worker_update {
+            intent.evidence.plan = update.plan.clone();
+            if let Some(context) = &update.context_files {
+                intent.envelope.context_files = context.clone();
+            }
+            for reference in &update.external_refs {
+                if !intent.envelope.external_refs.contains(reference) {
+                    intent.envelope.external_refs.push(reference.clone());
+                }
+            }
+            intent.envelope.validate()?;
+        }
         if let Some(run) = binding {
             intent.envelope.job_run_id = Some(run.run_id.clone());
             // Host display labels never participate in ownership checks.
-            intent.envelope.job_run_host = Some(ExecutionLocation {
-                machine_id: run.machine_id.clone(),
-                host_id: None,
-            });
+            intent.envelope.job_run_host = origin.cloned();
         }
         intent.evidence.summary = evidence.summary.clone();
         if let Some(message) = &evidence.comment {
@@ -541,10 +652,7 @@ impl TaskCommitBoundary {
                         size_bytes: artifact.content.len() as u64,
                         created_by: actor.into(),
                         created_at: Utc::now(),
-                        origin: Some(ExecutionLocation {
-                            machine_id: actor.into(),
-                            host_id: None,
-                        }),
+                        origin: origin.cloned(),
                     },
                 );
             }
@@ -562,6 +670,10 @@ impl TaskCommitBoundary {
     pub(super) fn apply_claim_evidence(&self, intent: &TaskCommitIntent) -> Result<(), OrbitError> {
         let id = &intent.task_id;
         let root = self.bundle_store.bundle_path(id)?;
+        if let Some(plan) = &intent.evidence.plan {
+            self.bundle_store
+                .rewrite_document(id, TaskDocumentV2::Plan, plan)?;
+        }
         if let Some(summary) = &intent.evidence.summary {
             self.bundle_store
                 .rewrite_document(id, TaskDocumentV2::ExecutionSummary, summary)?;

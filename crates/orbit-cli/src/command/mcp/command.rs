@@ -167,6 +167,13 @@ impl ServeArgs {
                     .to_string(),
             ));
         }
+        let global_root = orbit_core::runtime::resolve_global_root()?;
+        let worker = orbit_core::OrbitRuntime::current_worker_invocation(&global_root)?;
+        if worker.is_some() && (self.operator || matches!(self.mode, Some(ServeMode::Remote))) {
+            return Err(OrbitError::PolicyDenied(
+                "managed workers require an agent session with preserved invocation context".into(),
+            ));
+        }
         match self.mode {
             Some(ServeMode::Remote) => {
                 // Each mode owns its own argument rule, so the pairing lives
