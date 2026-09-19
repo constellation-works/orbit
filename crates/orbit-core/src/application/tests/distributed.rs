@@ -26,6 +26,8 @@ use crate::application::distributed::{
     DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED, ensure_distributed_mutation_available,
     owner_binary_version,
 };
+use crate::application::workflow::ShipMode;
+use crate::runtime::WorkspaceRuntimeBinding;
 
 const FOLLOWER: &str = "hm_follower";
 const OWNER: &str = "hm_owner";
@@ -58,6 +60,26 @@ fn operator_session() -> ToolSessionContext {
         effective_capabilities: BTreeSet::from([McpCapability::Agent, McpCapability::Operator]),
         ..owner_local_session()
     }
+}
+
+/// Owner whose resolved ship mode is `local`, matching `workspace init --ship-mode local`.
+fn local_ship_runtime() -> (tempfile::TempDir, OrbitRuntime, std::path::PathBuf) {
+    let (root, runtime, repo_root) = test_runtime();
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    let runtime = OrbitRuntime::from_roots_with_binding(
+        &runtime.global_root(),
+        &repo_root.join(".orbit"),
+        WorkspaceRuntimeBinding {
+            logical_workspace_id: workspace_id.clone(),
+            task_partition_id: workspace_id,
+            owner_machine_id: None,
+            repo_root: repo_root.clone(),
+            ship_mode: ShipMode::Local,
+            base_branch: None,
+        },
+    )
+    .expect("local-ship runtime");
+    (root, runtime, repo_root)
 }
 
 fn run_as(
@@ -253,6 +275,38 @@ fn probe_reports_the_first_refusal_the_admission_ladder_would_raise() {
             .receipts,
         0
     );
+}
+
+#[test]
+fn remote_probe_against_local_ship_mode_matches_fully_declared_verdict() {
+    let (_root, runtime, _repo_root) = local_ship_runtime();
+    let matching = json!({
+        "caller_version": owner_binary_version(),
+        "caller_schema": 1,
+        "caller_review_policy": "none",
+    });
+
+    let bare =
+        run_as(&runtime, follower_session(), "orbit.drain.probe", json!({})).expect("bare probe");
+    let declared = run_as(&runtime, follower_session(), "orbit.drain.probe", matching)
+        .expect("fully declared probe");
+    let version_only = run_as(
+        &runtime,
+        follower_session(),
+        "orbit.drain.probe",
+        json!({"caller_version": owner_binary_version()}),
+    )
+    .expect("version-only probe");
+
+    assert_eq!(bare["ship"]["mode"], "local");
+    assert_eq!(bare["session"]["remote"], true);
+    assert_eq!(bare["admits"], false);
+    assert_eq!(bare["refusal"], "ship_mode_unsupported");
+    assert_eq!(declared["admits"], bare["admits"]);
+    assert_eq!(declared["refusal"], bare["refusal"]);
+    assert_ne!(version_only["refusal"], "invalid_input");
+    assert_eq!(version_only["admits"], bare["admits"]);
+    assert_eq!(version_only["refusal"], bare["refusal"]);
 }
 
 #[test]

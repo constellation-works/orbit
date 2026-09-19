@@ -76,9 +76,10 @@ pub struct DrainProbeReport {
     pub ship: AdmissionShipContract,
     /// Whether the owner's own review policy is the only admissible one.
     pub review_policy: String,
-    /// `true` when the declared caller contract would pass the admission
-    /// ladder now. Absent declarations leave it `true` with no refusal: the
-    /// probe reports what it was asked about and pull rechecks everything.
+    /// `true` when the caller would pass the admission ladder now.
+    /// Undeclared optional caller fields are unknown and skip only the legs
+    /// that compare those fields; owner-resolved ship mode and review policy
+    /// are always evaluated.
     pub admits: bool,
     /// First refusal the shared admission ladder reports, by spec name.
     pub refusal: Option<String>,
@@ -103,14 +104,6 @@ pub struct DeclaredCallerContract {
     pub caller_version: Option<String>,
     pub caller_schema: Option<u32>,
     pub caller_review_policy: Option<String>,
-}
-
-impl DeclaredCallerContract {
-    fn is_empty(&self) -> bool {
-        self.caller_version.is_none()
-            && self.caller_schema.is_none()
-            && self.caller_review_policy.is_none()
-    }
 }
 
 /// Outcome of one read-only receipt reconciliation.
@@ -318,21 +311,22 @@ impl crate::OrbitRuntime {
                 ship.review_policy
             ));
         }
-        if declared.is_empty() {
-            // Nothing was declared, so there is nothing to compare. The owner's
-            // own policy is still reported above and rechecked by pull.
-            return Ok(
-                (ship.review_policy != "none").then_some(AdmissionRefusal::ReviewPolicyUnsupported)
-            );
-        }
         let machine_id = session_machine_id(session).unwrap_or_else(|| "probe".to_string());
         let request = AdmissionRequest {
             // Probe placeholders: a probe declares no durable request identity
             // and no drain run, so these stand in for the shape checks a real
-            // pull makes against its own values.
+            // pull makes against its own values. Undeclared optional caller
+            // fields are unknown, not empty: fill the owner-matching value so
+            // those caller-dependent legs are skipped while owner-resolved
+            // ship mode and review policy still run.
             request_id: "probe".to_string(),
-            caller_version: declared.caller_version.clone().unwrap_or_default(),
-            caller_schema: declared.caller_schema.unwrap_or_default(),
+            caller_version: declared
+                .caller_version
+                .clone()
+                .unwrap_or_else(|| owner_binary_version().to_string()),
+            caller_schema: declared
+                .caller_schema
+                .unwrap_or(DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA),
             caller_review_policy: declared
                 .caller_review_policy
                 .clone()
