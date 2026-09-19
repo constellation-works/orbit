@@ -4460,20 +4460,187 @@ mod artifact_get {
 fn artifact_provenance_uses_verified_session_identity_only() {
     use orbit_types::tool::McpTransport;
     let (_root, runtime, _workspace) = test_runtime();
+
+    // Local process identity and process host are recorded; caller labels are ignored.
     let mut session = ToolSessionContext {
         process_machine_id: Some("local-process".into()),
+        process_host_id: Some("local-host".into()),
         caller_machine_id: Some("claimed-machine".into()),
         caller_host_id: Some("claimed-host".into()),
         ..Default::default()
     };
-    assert_eq!(
-        runtime
-            .artifact_origin(&session)
-            .expect("local identity")
-            .machine_id,
-        "local-process"
-    );
+    let local_origin = runtime
+        .artifact_origin(&session)
+        .expect("local process identity");
+    assert_eq!(local_origin.machine_id, "local-process");
+    assert_eq!(local_origin.host_id.as_deref(), Some("local-host"));
+
+    // When process identity is absent, local trusted runtime identity is recorded.
+    let runtime_with_identity =
+        runtime.with_automation_machine_identity(Some("runtime-machine".into()));
+    let session_no_process = ToolSessionContext {
+        process_machine_id: None,
+        process_host_id: Some("local-host".into()),
+        caller_machine_id: Some("claimed-machine".into()),
+        caller_host_id: Some("claimed-host".into()),
+        ..Default::default()
+    };
+    let runtime_origin = runtime_with_identity
+        .artifact_origin(&session_no_process)
+        .expect("local runtime identity");
+    assert_eq!(runtime_origin.machine_id, "runtime-machine");
+    assert_eq!(runtime_origin.host_id.as_deref(), Some("local-host"));
+
+    // For SSH MCP transport, caller's self-asserted machine/host labels do not
+    // become artifact origin, and the destination process is not misattributed.
     session.transport = Some(McpTransport::SshMcp);
-    // SSH access does not turn a supplied machine label into artifact provenance.
-    assert!(runtime.artifact_origin(&session).is_none());
+    assert!(runtime_with_identity.artifact_origin(&session).is_none());
+
+    // For SSH MCP without process identity, destination runtime is also not misattributed.
+    let mut ssh_no_process = session_no_process;
+    ssh_no_process.transport = Some(McpTransport::SshMcp);
+    assert!(
+        runtime_with_identity
+            .artifact_origin(&ssh_no_process)
+            .is_none()
+    );
+}
+
+#[test]
+fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution() {
+    use orbit_tools::ToolContext;
+    use orbit_types::policy::Role;
+    use orbit_types::tool::{McpCapability, McpTransport};
+    use std::collections::BTreeSet;
+
+    let (_root, runtime, repo_root) = test_runtime();
+    let runtime = runtime.with_automation_machine_identity(Some("local-runtime-box".into()));
+    let task = create_task(
+        &runtime,
+        &repo_root,
+        "artifact provenance task",
+        "verifies trusted provenance retention",
+        TaskStatus::InProgress,
+        &[],
+    );
+
+    // 1. Local session with process identity records local process provenance.
+    let local_source = repo_root.join("local-proc.txt");
+    std::fs::write(&local_source, "from local process").expect("write local fixture");
+    let local_process_session = ToolSessionContext {
+        effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+        process_machine_id: Some("worker-proc-1".into()),
+        process_host_id: Some("worker-host-1".into()),
+        caller_machine_id: Some("untrusted-caller-box".into()),
+        caller_host_id: Some("untrusted-caller-host".into()),
+        ..Default::default()
+    };
+    runtime
+        .run_tool_with_context_and_role(
+            "orbit.task.artifact.put",
+            json!({
+                "id": task.id,
+                "source_path": local_source.to_string_lossy(),
+                "path": "reports/local-proc.txt",
+            }),
+            Role::Admin,
+            ToolContext {
+                session_context: local_process_session,
+                cwd: Some(repo_root.to_string_lossy().to_string()),
+                ..ToolContext::default()
+            },
+        )
+        .expect("local process artifact put");
+
+    // 2. Local session without process identity falls back to trusted runtime identity.
+    let runtime_source = repo_root.join("local-runtime.txt");
+    std::fs::write(&runtime_source, "from local runtime").expect("write runtime fixture");
+    let local_runtime_session = ToolSessionContext {
+        effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+        process_machine_id: None,
+        process_host_id: Some("worker-host-1".into()),
+        caller_machine_id: Some("untrusted-caller-box".into()),
+        ..Default::default()
+    };
+    runtime
+        .run_tool_with_context_and_role(
+            "orbit.task.artifact.put",
+            json!({
+                "id": task.id,
+                "source_path": runtime_source.to_string_lossy(),
+                "path": "reports/local-runtime.txt",
+            }),
+            Role::Admin,
+            ToolContext {
+                session_context: local_runtime_session,
+                cwd: Some(repo_root.to_string_lossy().to_string()),
+                ..ToolContext::default()
+            },
+        )
+        .expect("local runtime artifact put");
+
+    // 3. SSH MCP session carries self-asserted caller labels and destination process id;
+    // preloaded payload is accepted, but origin remains None.
+    let ssh_session = ToolSessionContext {
+        effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+        transport: Some(McpTransport::SshMcp),
+        process_machine_id: Some("destination-machine".into()),
+        process_host_id: Some("destination-host".into()),
+        caller_machine_id: Some("remote-spoke-box".into()),
+        caller_host_id: Some("remote-spoke-host".into()),
+        ..Default::default()
+    };
+    runtime
+        .run_tool_with_context_and_role(
+            "orbit.task.artifact.put",
+            json!({
+                "id": task.id,
+                "artifacts": [{
+                    "path": "reports/ssh-remote.txt",
+                    "media_type": "text/plain",
+                    "content": "from ssh remote",
+                }],
+            }),
+            Role::Admin,
+            ToolContext {
+                session_context: ssh_session,
+                cwd: Some(repo_root.to_string_lossy().to_string()),
+                ..ToolContext::default()
+            },
+        )
+        .expect("ssh mcp artifact put");
+
+    let manifest = runtime
+        .get_task_artifact_manifest(&task.id)
+        .expect("artifact manifest");
+
+    let proc_art = manifest
+        .iter()
+        .find(|a| a.path == "reports/local-proc.txt")
+        .expect("local proc artifact");
+    assert_eq!(
+        proc_art.origin,
+        Some(orbit_types::task::ExecutionLocation {
+            machine_id: "worker-proc-1".into(),
+            host_id: Some("worker-host-1".into()),
+        })
+    );
+
+    let runtime_art = manifest
+        .iter()
+        .find(|a| a.path == "reports/local-runtime.txt")
+        .expect("local runtime artifact");
+    assert_eq!(
+        runtime_art.origin,
+        Some(orbit_types::task::ExecutionLocation {
+            machine_id: "local-runtime-box".into(),
+            host_id: Some("worker-host-1".into()),
+        })
+    );
+
+    let remote_art = manifest
+        .iter()
+        .find(|a| a.path == "reports/ssh-remote.txt")
+        .expect("remote artifact");
+    assert_eq!(remote_art.origin, None);
 }
