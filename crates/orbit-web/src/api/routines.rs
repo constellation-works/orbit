@@ -60,16 +60,23 @@ pub(super) struct ClockControlRequest {
 }
 
 /// `GET /api/routines` — routine definition state and the independent host clock.
+///
+/// Clock inspection is independent of definition load: a native-manager
+/// transport failure still returns routine rows, with the clock projected as
+/// `health: unknown` rather than HTTP 500.
 pub(super) async fn list_routine_health(State(state): State<DashboardState>) -> Response {
     let generated_at = Utc::now();
     match blocking("routine health", move || {
         let report = routine_statuses(state.global_root())?;
-        let clock = state.clock_status()?;
+        let clock = match state.clock_status() {
+            Ok(status) => clock_json(&status),
+            Err(error) => unavailable_clock_json(&error.to_string()),
+        };
         Ok((report, clock))
     })
     .await
     {
-        Ok((report, clock)) => Json(report_json(&report, &clock, generated_at)).into_response(),
+        Ok((report, clock)) => Json(report_json(&report, clock, generated_at)).into_response(),
         Err(response) => *response,
     }
 }
@@ -346,7 +353,7 @@ pub(super) async fn control_clock(
 
 pub(super) fn report_json(
     report: &RoutineStatusReport,
-    clock: &ClockStatus,
+    clock: Value,
     generated_at: DateTime<Utc>,
 ) -> Value {
     json!({
@@ -364,7 +371,7 @@ pub(super) fn report_json(
         } else {
             "Session access comes from the dashboard server. For deliberate operator access, restart it with ORBIT_OPERATOR=1 orbit web serve and its existing options, then reload this page. Opening a terminal does not authorize a running server. Bounded-window submission has separate permissions."
         },
-        "clock": clock_json(clock),
+        "clock": clock,
         "routines": report.statuses.iter().map(status_json).collect::<Vec<_>>(),
         "retired": report.retired.iter().map(|routine| json!({
             "name": routine.name,
@@ -431,6 +438,25 @@ pub(super) fn clock_json(clock: &ClockStatus) -> Value {
         "health_issue": clock.health_issue,
         "last_tick_at": clock.last_tick_at,
         "next_tick_at": clock.next_tick_at,
+        "error": null,
+    })
+}
+
+/// Clock inspection failed: no observed enabled/paused/missed authority.
+pub(super) fn unavailable_clock_json(error: &str) -> Value {
+    json!({
+        "provider": Value::Null,
+        "configured_cadence_seconds": Value::Null,
+        "effective_cadence_seconds": Value::Null,
+        "enabled": Value::Null,
+        "loaded": Value::Null,
+        "running": Value::Null,
+        "schedulable": Value::Null,
+        "health": "unknown",
+        "health_issue": error,
+        "last_tick_at": Value::Null,
+        "next_tick_at": Value::Null,
+        "error": error,
     })
 }
 

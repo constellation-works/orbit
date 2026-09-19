@@ -4625,7 +4625,7 @@
       }
       .operation-state.enabled, .operation-state.healthy { color: var(--state-success); border-color: var(--state-success); }
       .operation-state.disabled, .operation-state.paused { color: var(--fg-dim); }
-      .operation-state.blocked, .operation-state.missed { color: var(--state-failed); border-color: var(--state-failed); }
+      .operation-state.blocked, .operation-state.missed, .operation-state.unknown { color: var(--state-failed); border-color: var(--state-failed); }
       .operation-target { margin: 8px 0 10px; color: var(--accent); overflow-wrap: anywhere; }
       .operation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
       .operation-field { min-width: 0; }

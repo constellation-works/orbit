@@ -1,8 +1,8 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_updated: 2026-09-19
+last_validated: 2026-09-19
 status: Accepted
 feature: routines
 doc_role: design
@@ -54,6 +54,12 @@ the supported platforms; there is no resident Orbit daemon ([Host-local sweep cl
 The dashboard Operations view projects the same typed status and control functions
 [ORB-10875]. Routine definitions remain workspace-scoped and show their versioned
 `enabled` value; the host clock remains one independent host-scoped card.
+`GET /api/routines` still returns those definition rows when native clock
+inspection fails (for example a systemd user bus that cannot be reached): the
+clock object is `health: unknown` with the bounded diagnostic in `error` /
+`health_issue`, `enabled` is JSON null, and clock controls are disabled. That
+projection never invents paused or disabled clock authority. `orbit clock status`
+continues to fail closed with the same diagnostic.
 Next evaluation uses schedule display state (`scheduled`, `disabled`, `paused`,
 `waiting`, `never_observed`, `unavailable`) so a disabled or paused routine
 does not look armed; a theoretical next slot is labeled hypothetical. The time
