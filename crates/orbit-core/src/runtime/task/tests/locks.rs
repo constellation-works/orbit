@@ -292,7 +292,9 @@ fn a_tagged_root_holds_only_its_own_context_files() {
 
 /// [ORB-12491] A root that declared nothing of its own inherits nothing, so a
 /// task-scope reservation refuses it by name instead of minting a claim that
-/// holds no files. Repair is operator-supplied context, or retirement.
+/// holds no files. [ORB-12539] The refusal is the epic-specific one, which
+/// names both repairs and is reached on every entry point rather than only
+/// where the empty-surface policy already refuses.
 #[test]
 fn an_inherited_only_root_reserves_nothing_and_is_refused() {
     let _env = unmanaged_tool_env_guard();
@@ -332,10 +334,12 @@ fn an_inherited_only_root_reserves_nothing_and_is_refused() {
             "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
         }),
     ));
+    assert!(message.contains("`epic` size tag"), "{message}");
     assert!(
-        message.contains("no context surface to reserve"),
+        message.contains("no longer inherits its descendants' surface"),
         "{message}"
     );
+    assert!(message.contains("retire the root"), "{message}");
 }
 
 /// [ORB-12490] A holder's declared-but-absent target keeps conflicting:

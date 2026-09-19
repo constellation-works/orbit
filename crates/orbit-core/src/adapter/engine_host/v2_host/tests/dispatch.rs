@@ -7,7 +7,7 @@ use orbit_engine::DispatchError;
 use orbit_engine::RuntimeHost;
 use orbit_store::TaskStoreBackend;
 use orbit_tools::ToolContext;
-use orbit_types::task::{NO_DIFF_EXPECTED_TAG, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{EPIC_TAG, NO_DIFF_EXPECTED_TAG, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{DeterministicAction, PipelineState};
 use serde_json::json;
 use tempfile::tempdir;
@@ -513,6 +513,81 @@ fn expect_reserve_locks_failure(result: Result<serde_json::Value, DispatchError>
         }
         other => panic!("expected reserve_locks to fail fast, got {other:?}"),
     }
+}
+
+/// [ORB-12539] The managed gate reserves with `EmptyTaskSurfacePolicy::Admit`,
+/// so an empty footprint used to make `reserve_locks` succeed trivially on the
+/// path the drain actually uses. An inherited-only `epic` root is refused ahead
+/// of that policy, on this entry point and not only the operator-facing one.
+#[test]
+fn reserve_locks_refuses_an_inherited_only_epic_root() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let root = seed_epic_root(&runtime, "Inherited-only epic root");
+    seed_declared_child(&runtime, &root, "file:src/one.rs");
+
+    let (_, result) = reserve_locks_for(&runtime, vec![root]);
+
+    let message = expect_reserve_locks_failure(result);
+    assert!(message.contains("`epic` size tag"), "{message}");
+    assert!(message.contains("retire the root"), "{message}");
+}
+
+/// The refusal is scoped to the footprint the tag used to inherit: a tagged
+/// root whose family declares nothing anywhere inherited nothing, and the
+/// compatibility no-op that admits an ordinary undeclared task is untouched.
+#[test]
+fn reserve_locks_still_admits_tasks_that_inherited_no_surface() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let chore = seed_task(
+        &runtime,
+        "Undeclared chore",
+        TaskStatus::Backlog,
+        Vec::new(),
+    );
+    let undeclared_family_root = seed_epic_root(&runtime, "Tagged root declaring nothing");
+    seed_task(
+        &runtime,
+        "Child declaring nothing",
+        TaskStatus::Backlog,
+        Vec::new(),
+    );
+
+    for task_id in [chore, undeclared_family_root] {
+        let (_, result) = reserve_locks_for(&runtime, vec![task_id.clone()]);
+        let output = result.expect("reserve a task that inherited no surface");
+        assert_eq!(output["reserved"], json!(true), "{task_id}");
+    }
+}
+
+fn seed_epic_root(runtime: &OrbitRuntime, title: &str) -> String {
+    runtime
+        .add_task(TaskAddParams {
+            title: title.to_string(),
+            description: format!("Fixture task: {title}"),
+            acceptance_criteria: vec!["Fixture root is observable.".to_string()],
+            plan: "Take the large task on whole.".to_string(),
+            tags: vec![EPIC_TAG.to_string()],
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("seed epic root")
+        .id
+}
+
+fn seed_declared_child(runtime: &OrbitRuntime, parent_id: &str, selector: &str) -> String {
+    runtime
+        .add_task(TaskAddParams {
+            parent_id: Some(parent_id.to_string()),
+            title: "Child of the large task".to_string(),
+            description: "Fixture child".to_string(),
+            acceptance_criteria: vec!["Fixture child is observable.".to_string()],
+            plan: "Implement the child.".to_string(),
+            context_files: vec![selector.to_string()],
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("seed declared child")
+        .id
 }
 
 #[test]

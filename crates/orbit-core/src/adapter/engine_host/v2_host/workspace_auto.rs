@@ -505,6 +505,16 @@ pub fn explain_workspace_auto_readiness(
                             Value::String("task_pilot_preparation_required".to_string()),
                         );
                     }
+                    BacklogTaskExclusionReason::InheritedOnlyEpicRoot => {
+                        object.insert(
+                            "reason".to_string(),
+                            Value::String("inherited_only_epic_root".to_string()),
+                        );
+                        // The one exclusion no later drain clears by itself, so
+                        // readiness repeats the repair the drain recorded rather
+                        // than leaving the reason to be interpreted.
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                    }
                     BacklogTaskExclusionReason::CrewNotAllowed => {
                         object.insert("reason".to_string(), Value::String("crew_not_allowed".to_string()));
                         object.insert("crew".to_string(), json!(excluded.crew));

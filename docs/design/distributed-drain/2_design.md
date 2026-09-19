@@ -390,7 +390,12 @@ What stays:
   dependencies.
 - **The `epic` tag**, redefined: a size hint meaning *one large task a top-tier crew takes on
   whole*. Crew selection reads it (today by hand; later through auto-assignment, where `epic`
-  routes to the pools `fable` / `astra` serve). Admission ignores it.
+  routes to the pools `fable` / `astra` serve). Admission ignores it for ordering and shape, with
+  one carve-out that keeps the retirement safe: a root carrying it that declares no
+  `context_files` of its own *while a descendant does* is withheld, because nothing inherits the
+  union it used to reserve and it would otherwise run holding no reservation beside the very
+  children whose surface that union covered. A tagged root that declares its own surface, and a
+  tagged family that declares nothing anywhere, are both ordinary leaves.
 - **`workspace_auto_pipeline`'s drain window, slot refill, and detached leaves** — the parts of
   the resident-orchestrator work that were actually about throughput.
 
@@ -407,6 +412,16 @@ and reconcile those runs before removal. Preserve historical worktree discovery 
 verified. Existing epic-tagged tasks retain tags and hierarchy, but roots that relied solely on
 inherited child context need operator-supplied own context or deliberate retirement before they
 become eligible; migration reports them rather than silently converting an empty root.
+
+That ineligibility is enforced, not merely reported. `orbit_types::task::inherited_only_epic_roots`
+is the single definition of the population — the report, admission, and reservation all read it, so
+none of them decides separately what a descendant is — and every admission path applies it:
+`backlog_snapshot` withholds such a root from the automatic drain with an
+`inherited_only_epic_root` exclusion naming the descendants and the repair, `list_backlog_tasks`
+applies the same withholding to an explicit ship override, and `reserve_with_index` refuses it
+ahead of the `EmptyTaskSurfacePolicy` branch so the managed gate's compatibility `Admit` path
+cannot reserve it trivially either. An ordinary task that declares no context is unaffected: the
+rule is about the inherited footprint the tag used to carry, not about empty surfaces in general.
 
 ### 7.2 Failed-run triage
 

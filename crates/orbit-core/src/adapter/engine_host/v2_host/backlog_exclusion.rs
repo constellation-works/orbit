@@ -5,8 +5,9 @@ use std::path::Path;
 use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskPriority, TaskReferenceIndex, TaskStatus,
-    TaskType, task_dependencies_ready_with_index,
+    EpicHierarchyNode, NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskPriority,
+    TaskReferenceIndex, TaskStatus, TaskType, has_epic_tag, inherited_only_epic_roots,
+    task_dependencies_ready_with_index,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -29,6 +30,13 @@ pub(super) struct BacklogTaskExclusion {
     /// inherited — is what makes the exclusion actionable [ORB-11242].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) crew: Option<String>,
+    /// What an operator has to change for this task to become admissible, on
+    /// an exclusion the drain cannot resolve by itself. A lock conflict clears
+    /// when the holder finishes and needs no instruction; an
+    /// [`BacklogTaskExclusionReason::InheritedOnlyEpicRoot`] never clears until
+    /// the task is edited, so it carries one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) detail: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -41,6 +49,12 @@ pub(super) enum BacklogTaskExclusionReason {
     /// keeps filling the drain's slots.
     CrewNotAllowed,
     GroupMemberConflict,
+    /// An `epic`-tagged root that declared no `context_files` of its own while
+    /// its descendants did. Admission no longer inherits their surface, so the
+    /// root would take a slot while reserving nothing — the population is
+    /// [`orbit_types::task::inherited_only_epic_roots`]. Only an edit to the
+    /// task clears this, so the exclusion carries a `detail`.
+    InheritedOnlyEpicRoot,
     /// Automated work must be prepared before an implementation lane can
     /// consume it; urgency does not substitute for a complexity assessment.
     /// Work tagged [`NO_DIFF_EXPECTED_TAG`] is exempt — see
@@ -185,6 +199,11 @@ pub(super) fn list_backlog_tasks(
     } else {
         let mut tasks = Vec::new();
         let mut excluded = Vec::new();
+        // The hierarchy the inherited-only diagnostic reads, materialized only
+        // if an override actually names such a root: the explicit path is
+        // deliberately a per-id load, and one selected ship should not pay for
+        // a whole-workspace listing.
+        let mut workspace_tasks: Option<Vec<Task>> = None;
         for task_id in &explicit_task_ids {
             let task = runtime.get_task(task_id).map_err(|err| {
                 DispatchError::DeterministicActionFailed {
@@ -192,16 +211,44 @@ pub(super) fn list_backlog_tasks(
                     message: format!("load task {task_id}: {err}"),
                 }
             })?;
-            if clears_complexity_gate(&task) {
-                tasks.push(task);
-            } else {
+            if !clears_complexity_gate(&task) {
                 excluded.push(BacklogTaskExclusion {
                     id: task.id,
                     reason: BacklogTaskExclusionReason::UnassessedComplexity,
                     conflicts: Vec::new(),
                     crew: None,
+                    detail: None,
                 });
+                continue;
             }
+            // An override picks which task ships, not whether it may reserve
+            // nothing: an inherited-only root is withheld here exactly as the
+            // drain withholds it, and for the same reason. The cheap test is a
+            // superset of the rule — every inherited-only root is tagged and
+            // undeclared — so it decides only who pays for the hierarchy read,
+            // never who is withheld.
+            if has_epic_tag(&task.tags) && task.context_files.is_empty() {
+                if workspace_tasks.is_none() {
+                    workspace_tasks = Some(runtime.list_tasks().map_err(|err| {
+                        DispatchError::DeterministicActionFailed {
+                            action: action.to_string(),
+                            message: format!("list tasks: {err}"),
+                        }
+                    })?);
+                }
+                let inherited_only_roots = inherited_only_epic_roots(
+                    workspace_tasks
+                        .as_deref()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(EpicHierarchyNode::from),
+                );
+                if let Some(descendants) = inherited_only_roots.get(task.id.as_str()) {
+                    excluded.push(inherited_only_epic_root_exclusion(&task.id, descendants));
+                    continue;
+                }
+            }
+            tasks.push(task);
         }
         (tasks, excluded)
     };
@@ -308,9 +355,27 @@ pub(super) fn backlog_snapshot(
             reason: BacklogTaskExclusionReason::UnassessedComplexity,
             conflicts: Vec::new(),
             crew: None,
+            detail: None,
         });
         false
     });
+    // A root that declared no context of its own, while its descendants did,
+    // inherits nothing now that epic execution is retired: it would take a slot
+    // holding no reservation and race the very children that union covered.
+    // Withheld here rather than at the conflict filter, which has no footprint
+    // to weigh, and with a repair instruction because no later drain clears
+    // it.
+    {
+        let inherited_only_roots =
+            inherited_only_epic_roots(task_lookup.values().map(EpicHierarchyNode::from));
+        backlog.retain(|task| {
+            let Some(descendants) = inherited_only_roots.get(task.id.as_str()) else {
+                return true;
+            };
+            excluded.push(inherited_only_epic_root_exclusion(&task.id, descendants));
+            false
+        });
+    }
     // Once the assessment gate has held back unprepared work, the crew filter
     // runs before scheduling exclusions so a task reports the reason an
     // operator can act on — reassign it, or run a drain that permits its crew
@@ -336,6 +401,7 @@ pub(super) fn backlog_snapshot(
                                 .join(", "),
                             Err(error) => format!("<unresolved: {error}>"),
                         }),
+                        detail: None,
                     });
                     false
                 }
@@ -377,6 +443,7 @@ pub(super) fn backlog_snapshot(
                             .cloned()
                             .unwrap_or_else(|| trigger_conflicts.clone()),
                         crew: None,
+                        detail: None,
                     });
                 } else {
                     kept.push(task);
@@ -395,6 +462,33 @@ pub(super) fn backlog_snapshot(
         excluded,
         lock_holders,
     })
+}
+
+/// The exclusion for an inherited-only `epic` root.
+///
+/// Shared by automatic backlog selection and the explicit ship override so both
+/// withhold the same population and say the same thing about it. The detail
+/// names the descendants that do declare context: those are what an operator
+/// writes the root's own `context_files` from, and they are why this root is
+/// withheld at all.
+fn inherited_only_epic_root_exclusion(
+    task_id: &str,
+    descendants_with_context: &[&str],
+) -> BacklogTaskExclusion {
+    BacklogTaskExclusion {
+        id: task_id.to_string(),
+        reason: BacklogTaskExclusionReason::InheritedOnlyEpicRoot,
+        conflicts: Vec::new(),
+        crew: None,
+        detail: Some(format!(
+            "this task carries the `epic` size tag and declares no `context_files` of its own, \
+             while its descendants do. Admission no longer inherits their surface, so it would \
+             run holding no reservation against the work it would touch. Declare its own surface \
+             with `orbit task update --context`, or retire the root. Descendants that declare \
+             context: {}.",
+            descendants_with_context.join(", ")
+        )),
+    }
 }
 
 /// The one complexity-admission rule, shared by automatic backlog selection,

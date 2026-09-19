@@ -10,10 +10,17 @@ spec:
     all task dependencies satisfied and drops any backlog parent/subtask group
     whose `context_files` overlap the active task-lock surface from
     `in-progress` or `review` tasks. Parent/child relations order nothing here:
-    every task is a leaf admitted on its own declared footprint. Automatic mode
-    includes an `excluded` array that attributes pre-gate lock exclusions; it
-    does not report status-based admission or `max_tasks` truncation. Explicit `task_ids` input is treated as an override, skips
-    conflict filtering, and omits `excluded`.
+    every task is a leaf admitted on its own declared footprint. The one
+    exception is a root carrying the `epic` size tag that declares no
+    `context_files` of its own while a descendant does: it inherits no
+    descendant surface any more, so it would be dispatched holding no
+    reservation against the work it would touch, and it is withheld on every
+    path, automatic or explicit. Its exclusion carries a `detail` naming the
+    descendants and the repair, since no later drain clears it.
+    Automatic mode includes an `excluded` array that attributes pre-gate lock
+    exclusions; it does not report status-based admission or `max_tasks`
+    truncation. Explicit `task_ids` input is treated as an override and skips
+    conflict filtering, but still reports the eligibility exclusions it applies.
     Automatic ordering puts critical tasks first, then corrective tasks (`bug`
     type or an exact `code-review` / `security-review` tag), then all remaining
     work. Within each band it sorts critical → high → medium → low,
@@ -80,7 +87,14 @@ spec:
               type: string
             reason:
               type: string
-              enum: [context_lock_conflict, group_member_conflict]
+              enum:
+                - context_lock_conflict
+                - crew_not_allowed
+                - group_member_conflict
+                - inherited_only_epic_root
+                - unassessed_complexity
+            detail:
+              type: string
             conflicts:
               type: array
               items:

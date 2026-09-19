@@ -1,6 +1,7 @@
 //! Domain contracts for this Orbit types module.
 
 mod artifacts;
+mod epic;
 mod error;
 mod model;
 mod plan;
@@ -9,6 +10,8 @@ pub use error::TaskError;
 
 #[cfg(test)]
 mod tests;
+
+pub use epic::{EPIC_TAG, EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
 
 pub use artifacts::{
     ArtifactManifestFileV2, ArtifactManifestV2, CYCLIC_RELATION_TYPES, ORB_TASK_ID_MAX,
