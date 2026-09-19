@@ -68,7 +68,11 @@ pub struct UpdateRequest {
 /// build one directly so the whole flow runs against fixtures without touching
 /// a real installation.
 pub struct UpdateEnvironment {
-    /// Authoritative host root for cross-process upgrade admission.
+    /// Generation-admission authority for this invocation.
+    ///
+    /// Same resolution as client pins and `orbit update --preflight`: `--root`,
+    /// then `ORBIT_ROOT`, otherwise the host-global root (`~/.orbit`, or
+    /// `ORBIT_REGISTRY_ROOT` in a managed run).
     pub global_root: PathBuf,
     /// The executable to replace.
     pub executable: PathBuf,
@@ -119,7 +123,7 @@ impl UpdateEnvironment {
                 },
             );
         Ok(Self {
-            global_root: orbit_core::runtime::resolve_global_root()?,
+            global_root: orbit_core::runtime::resolve_generation_root(root_override)?,
             install_channel: InstallChannel::detect_with_homebrew_ownership(
                 &executable,
                 channel::managed_install_dir().as_deref(),

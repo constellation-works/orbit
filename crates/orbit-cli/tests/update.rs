@@ -282,6 +282,109 @@ fn update_without_a_root_override_retains_default_workspace_routing() {
     );
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn update_and_preflight_admit_against_the_same_overridden_root() {
+    use orbit_common::fs::generation::{GenerationGuard, executable_generation};
+
+    let temp = tempdir().expect("fixture tempdir");
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    let scratch = temp.path().join("scratch");
+    fs::create_dir_all(&home).expect("create home");
+    init_git_repo(&repo);
+    let mirror = mirror_publishing("99.0.0");
+    initialize_root(&repo, &home, mirror.path(), &scratch, "scratch");
+
+    let executable = install_test_binary(&temp.path().join("managed-bin"));
+    let digest = executable_generation(&executable).expect("installed digest");
+    let _client = GenerationGuard::acquire(&scratch, &digest).expect("live pin on override");
+    let before = fs::read(&executable).expect("installed bytes");
+    let scratch_arg = scratch.to_string_lossy();
+
+    let preflight = installed_orbit(&executable, &repo, &home, mirror.path())
+        .args([
+            "update",
+            "--preflight",
+            "--json",
+            "--root",
+            scratch_arg.as_ref(),
+        ])
+        .output()
+        .expect("preflight against overridden root");
+    assert_admission_refused(&preflight, "preflight --root");
+
+    let update = installed_orbit(&executable, &repo, &home, mirror.path())
+        .args([
+            "update",
+            "--version",
+            "99.0.0",
+            "--json",
+            "--root",
+            scratch_arg.as_ref(),
+        ])
+        .output()
+        .expect("update against overridden root");
+    assert_admission_refused(&update, "update --root");
+    assert_eq!(
+        fs::read(&executable).expect("installed bytes"),
+        before,
+        "overridden-root update replaced the binary under a live pin"
+    );
+
+    let env_preflight = installed_orbit(&executable, &repo, &home, mirror.path())
+        .env("ORBIT_ROOT", &scratch)
+        .args(["update", "--preflight", "--json"])
+        .output()
+        .expect("preflight against ORBIT_ROOT");
+    assert_admission_refused(&env_preflight, "preflight ORBIT_ROOT");
+
+    let env_update = installed_orbit(&executable, &repo, &home, mirror.path())
+        .env("ORBIT_ROOT", &scratch)
+        .args(["update", "--version", "99.0.0", "--json"])
+        .output()
+        .expect("update against ORBIT_ROOT");
+    assert_admission_refused(&env_update, "update ORBIT_ROOT");
+    assert_eq!(
+        fs::read(&executable).expect("installed bytes"),
+        before,
+        "ORBIT_ROOT update replaced the binary under a live pin"
+    );
+
+    let host_preflight = installed_orbit(&executable, &repo, &home, mirror.path())
+        .args(["update", "--preflight", "--json"])
+        .output()
+        .expect("host-global preflight");
+    assert!(
+        host_preflight.status.success(),
+        "host-global preflight should ignore a pin on --root\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&host_preflight.stdout),
+        String::from_utf8_lossy(&host_preflight.stderr)
+    );
+    let report: Value =
+        serde_json::from_slice(&host_preflight.stdout).expect("host-global preflight JSON");
+    assert_eq!(report["admitted"], true);
+    assert_eq!(
+        report["global_root"],
+        home.join(".orbit").to_string_lossy().as_ref()
+    );
+}
+
+fn assert_admission_refused(output: &std::process::Output, label: &str) {
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{label} should refuse admission\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("upgrade admission refused"),
+        "{label} stderr: {stderr}"
+    );
+}
+
 #[test]
 fn help_documents_both_latest_and_explicit_version_selection() {
     let home = tempdir().expect("home");

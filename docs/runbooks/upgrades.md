@@ -34,8 +34,9 @@ orbit update --json               # machine-readable report
    sequence instead — uninstall the legacy formula, then install the canonical one — because the
    two conflict rather than coexisting; a canonical-only install gets the ordinary qualified
    upgrade.
-3. Acquire host generation admission, refusing while any participating Orbit process is live,
-   then take the exclusive install-directory lock so two updates cannot interleave.
+3. Acquire generation admission against the same resolved authority `--preflight` uses,
+   refusing while any participating Orbit process is live, then take the exclusive
+   install-directory lock so two updates cannot interleave.
 4. Re-read the installed binary's version under that lock, and on Linux resolve a replaced
    running inode (`/path/to/orbit (deleted)`) back to the live install path. Equal, newer,
    and older installed versions are decided from that evidence — a writer that started on
@@ -86,17 +87,19 @@ or incompatible protocol refuses, including a downgrade to an unprotected build.
 
 `orbit update --preflight --json` is the wrapper-facing admission probe. It
 opens no runtime, migrates no store, downloads nothing, and changes no binary
-or managed resource. It uses OS locks under the **generation authority**:
-`--root` (then `ORBIT_ROOT`) isolate first-create and participation to that
-data directory; otherwise the host-global root is used (normally `~/.orbit/`;
-managed children retain their supplied registry root). Isolated `HOME=` is the
-other working isolation — it relocates `~/.orbit` itself, which is what
-in-process MCP roundtrip fixtures use. A read-only unpinned `~/.orbit` (the
-agent-executor / Cowork sandbox) therefore cannot block `orbit --root
-<scratch> init` or `--root` / isolated-HOME `--preflight`. Host-binary
-replacement (`orbit update` without those overrides) still admits against the
-host-global root so a live client there continues to refuse. Coordination lock
-files may be created. Exit 0 returns:
+or managed resource. It uses OS locks under the **generation authority**,
+resolved once for the invocation: `--root`, then `ORBIT_ROOT`, otherwise the
+host-global root (normally `~/.orbit/`; managed children retain their supplied
+registry root). Isolated `HOME=` is the other working isolation — it relocates
+`~/.orbit` itself, which is what in-process MCP roundtrip fixtures use. A
+read-only unpinned `~/.orbit` (the agent-executor / Cowork sandbox) therefore
+cannot block `orbit --root <scratch> init` or `--root` / isolated-HOME
+`--preflight`. `orbit update` acquires exclusive admission against **that same
+resolved path** — a live client pinned under `--root` or `ORBIT_ROOT` refuses
+the upgrade, and a green preflight is only evidence for an update that used
+the same invocation's root resolution. There is no path where preflight
+consults an override while the following `orbit update` admits against a
+different root. Coordination lock files may be created. Exit 0 returns:
 
 ```json
 {"schema_version":1,"admitted":true,"reservation":false,"contract":"executable-generation-v1","global_root":"/home/operator/.orbit"}
@@ -107,8 +110,8 @@ Exit 1 with `upgrade admission refused` on stderr means stop before installation
 observation, **not a reservation**. Constellation's wrapper should call it using
 the configured executable, user, environment and authority, without an ad-hoc
 MCP server or alternate store. Use `orbit update` for replacement through the
-supported installer: it acquires admission again and retains it across staging
-and replacement. `--check` only checks release availability and is not this probe.
+supported installer: it acquires admission again against that same authority
+and retains it across staging and replacement. `--check` only checks release availability and is not this probe.
 External installers do not hold Orbit's admission across their file operations;
 they must quiesce clients before replacement. A preflight alone does not make an
 external installer race-free.
