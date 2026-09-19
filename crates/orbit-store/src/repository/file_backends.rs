@@ -20,6 +20,19 @@ use crate::repository::task::TaskV2Store;
 use crate::scope::{ScopeStrategy, ScopedStore, resolve};
 
 impl TaskStoreBackend for TaskV2Store {
+    fn accepted_handoff(
+        &self,
+        claim_id: &str,
+    ) -> Result<orbit_types::workflow::handoff::AcceptedHandoff, OrbitError> {
+        self.claim_boundary()?.accepted_handoff(claim_id)
+    }
+
+    fn landing_start_requests(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::LandingStartRequest>, OrbitError> {
+        self.claim_boundary()?.landing_start_requests()
+    }
+
     fn mutate_execution_claim(
         &self,
         context: Option<&crate::contracts::ClaimInvocation>,

@@ -17,14 +17,15 @@
 //!   delivery observation feeds proven exclusions to the shared evaluator.
 //!
 //! Store persists ledgers, certificates and landings; Engine owns the Git
-//! mechanics. Nothing here approves a task, merges, or reads a verdict from
-//! a tag or a timestamp.
+//! mechanics. The internal handoff seam records explicit operator completion
+//! approval; it never merges or reads a verdict from a tag or timestamp.
 
 use orbit_common::OrbitError;
 
 mod admission;
 mod coverage;
 mod gate;
+mod handoff;
 mod landing;
 mod projection;
 

@@ -243,6 +243,36 @@ persists the handoff, promotes the task to `review`, closes execution writes, an
 reservation. The task's review lock continues to protect its footprint. A lost response replays the
 same handoff result.
 
+The internal authority foundation now implements these transitions through
+`application::review` and `TaskCommitBoundary`, using the existing task commit journal.
+`TaskHandoff` binds workspace, task, claim, execution machine/run, repository, delivery variant,
+branches and candidate/base commit/tree identities. Owner observations and required validation
+commands are trusted runtime context, never deserialized from worker input. Each validation
+reference pins the digest of an owner task artifact containing the exact identity, command,
+zero exit code and captured output. Acceptance and approval re-read that evidence; merge-intent
+publication rechecks it again. The `none` disposition has no reviewed SHA or verdict fields.
+The summary-only lifecycle handoff shape remains readable but cannot accept new writes.
+
+Already-landed delivery shares the existing typed report and task-scope projection with the
+local verifier, and requires criterion evidence and the same exact validation logs. The trusted
+owner observer must additionally perform the existing Git ancestry, task delivery marker,
+unchanged-scope and clean-tree verification; a follower assertion is insufficient. Local candidates
+use the same handoff, approval and validation boundary without requiring a PR or remote.
+
+Handoff, review transition, claim closure, reservation release, and any grant-backed authorization
+and pending landing-start record commit together. Explicit operator approval atomically creates
+one immutable candidate-scoped authorization and one deduplicated pending request. Revocation
+records a separate immutable audit row and cancels the pending request; deliberate recovery does
+the same while revoking the claim. An unresolved merge intent blocks either operation until
+reconciliation. Grant-backed acceptance and merge-intent publication recheck the grant inside the
+SQLite commit transaction, including hard revocation. A historical replay is an advisory recorded
+outcome, never renewed permission to execute or merge.
+
+The outbox is durable without a live drain or ship sweep. Its consumer, actual external merge,
+and Git/provider observation adapters are separate integration work; public distributed writes
+remain gated. No scheduler, destination caller registry, routine enablement or live rollout is
+introduced by this foundation.
+
 Completion defaults to `review`. Pull eligibility or `agent` access alone does not authorize a
 merge. Any `completion: done` must reference durable, explicitly granted completion authority
 with task/workspace scope; neither the follower nor a newly enabled consumer may invent it.
@@ -507,7 +537,7 @@ These are implementation acceptance criteria, not tests reported as passing by t
 | Merge succeeds but owner crashes before completion | Reconcile the pinned PR and merge evidence before marking done or retrying |
 | Recovery requested with an uncertain external merge in flight | Reassignment waits for merge-intent reconciliation |
 | No-diff/already-landed delivery | Typed durable evidence and completion authority still required |
-| Authorized handoff accepted while no owner drain or ship sweep runs | Landing request is durably dispatched or recovered once; review-only work remains unmerged |
+| Authorized handoff accepted while no owner drain or ship sweep runs | Foundation persists one pending landing-start request across restart; dependent consumer dispatches/reconciles it once; review-only work has no request |
 | Retained routine, wrapper, CLI ship-sweep, and explicit owner drains | All use common claim admission; existing enablement retained; none grants merge rights or bypasses slot accounting |
 | Epic retirement with active old runs, including roots in review | Refuse migration until old execution and reservation ownership are reconciled |
 | Missing file selector, then reservation expiry | Full declared footprint remains protected; no filesystem-existence pruning or overlapping admission |
@@ -517,7 +547,8 @@ These are implementation acceptance criteria, not tests reported as passing by t
 | SSH session and managed worker invocation | Session capability gates operator actions; a client inside a managed run never propagates operator authority; payload labels cannot replace current claim/run authority |
 | Claim revocation during a live attempt | The revoked attempt cannot bind, mutate, settle, or promote, and its receipt reports the revoked phase rather than reviving it |
 | Read-only probe and receipt lookup after binary upgrade | No admission side effects; lookup finds original outcome without rewriting original input; an incompatible lookup protocol refuses and `not_found` licenses no replacement request; revoked claims cannot acquire execution authority |
-| Approve a review-only handoff twice, or revoke before merge | One durable authorization/start request; revoked or stale candidate cannot land |
+| Approve a review-only handoff twice, or revoke before merge | Operator capability required; one immutable authorization/start request, including concurrent retries; revoked or stale candidate cannot publish merge intent |
+| Missing, failed, replaced or wrong-candidate validation artifact | Reject acceptance/approval/merge-intent publication without partial review, authorization or reservation effects |
 | Idle polling and receipt compaction | One idle request per refill pass; tombstone replay cannot re-admit; unsettled receipt retained; growth metrics visible |
 | PR/local leaves replace auto wrappers in capacity accounting | Configured local ceiling includes actual bound/queued runs and unrepresented admissions exactly once |
 

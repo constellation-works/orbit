@@ -39,6 +39,19 @@ use crate::contracts::{
 };
 
 pub trait TaskStoreBackend: Send + Sync {
+    fn accepted_handoff(
+        &self,
+        _claim_id: &str,
+    ) -> Result<orbit_types::workflow::handoff::AcceptedHandoff, OrbitError> {
+        Err(OrbitError::Store("typed handoff unavailable".into()))
+    }
+
+    fn landing_start_requests(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::LandingStartRequest>, OrbitError> {
+        Err(OrbitError::Store("handoff outbox unavailable".into()))
+    }
+
     /// Internal lifecycle seam; unavailable backends fail closed.
     fn mutate_execution_claim(
         &self,

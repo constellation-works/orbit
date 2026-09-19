@@ -328,6 +328,7 @@ pub struct ClaimInvocation {
     pub(crate) machine_id: String,
     pub(crate) run: Option<ClaimRun>,
     pub(crate) operator: bool,
+    pub(crate) handoff_observation: Option<HandoffObservation>,
 }
 
 impl ClaimInvocation {
@@ -344,6 +345,7 @@ impl ClaimInvocation {
             machine_id,
             run,
             operator: false,
+            handoff_observation: None,
         }
     }
 
@@ -355,6 +357,7 @@ impl ClaimInvocation {
             machine_id: actor,
             run: None,
             operator: true,
+            handoff_observation: None,
         }
     }
 }
@@ -366,8 +369,9 @@ pub struct ClaimEvidence {
     pub artifacts: Vec<orbit_types::task::TaskArtifact>,
 }
 
-/// Internal lifecycle operations. Handoff evidence validation belongs to the application
-/// consumer; this boundary enforces ownership, atomicity, and phase, not merge approval.
+/// Internal lifecycle operations. Typed handoffs validate owner observations and durable
+/// evidence inside the ownership/phase boundary. Approval records completion authority;
+/// no operation here executes an external merge.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClaimMutation {
     Bind {
@@ -375,7 +379,17 @@ pub enum ClaimMutation {
         ship: AdmissionShipContract,
     },
     Evidence(ClaimEvidence),
+    /// Legacy serialized shape retained for reading only; new writes are refused.
     Handoff(ClaimEvidence),
+    AcceptHandoff(orbit_types::workflow::handoff::TaskHandoff),
+    ApproveHandoff {
+        handoff_id: String,
+        candidate: orbit_types::workflow::handoff::HandoffCandidate,
+    },
+    RevokeHandoff {
+        handoff_id: String,
+        reason: String,
+    },
     Fail(ClaimEvidence),
     Recover {
         status: TaskStatus,
@@ -414,4 +428,23 @@ pub struct ClaimMutationResult {
 pub(crate) struct ClaimCommitEffects {
     pub replacements: Vec<(TaskCoordinationRow, TaskCoordinationRow)>,
     pub release_reservation: Option<String>,
+    pub completion_grant: Option<(String, String)>,
+}
+
+/// Owner observations from Git/provider identity and repository validation policy.
+/// Not deserializable: adapters must obtain these independently of handoff JSON.
+/// For already-landed delivery, the adapter must run the existing typed evidence,
+/// scope, ancestry, delivery-marker and clean-tree checks before constructing this.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandoffObservation {
+    pub candidate: orbit_types::workflow::handoff::HandoffCandidate,
+    pub required_commands: Vec<String>,
+}
+
+impl ClaimInvocation {
+    /// Trusted owner-domain seam; never fill observations from worker payloads.
+    pub fn with_handoff_observation(mut self, observation: HandoffObservation) -> Self {
+        self.handoff_observation = Some(observation);
+        self
+    }
 }

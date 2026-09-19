@@ -179,6 +179,20 @@ impl Store {
                     "coordination row identities changed during commit".into(),
                 ));
             }
+            // Grant revocation shares this SQLite write transaction with acceptance
+            // and merge-intent publication; a preflight grant read is insufficient.
+            if let Some((grant_id, task_id)) = &effects.completion_grant {
+                let raw: Option<String> = tx.tx.query_row(
+                    "SELECT grant_json FROM operation_grants WHERE workspace_id=?1 AND grant_id=?2",
+                    params![workspace_id, grant_id], |r| r.get(0),
+                ).optional().map_err(|e| OrbitError::Store(e.to_string()))?;
+                let grant: orbit_types::workflow::OperationGrant = serde_json::from_str(
+                    &raw.ok_or_else(|| OrbitError::InvalidInput("completion grant missing".into()))?
+                ).map_err(|e| OrbitError::Store(e.to_string()))?;
+                if !grant.completion_allowed() || !grant.covers(task_id) {
+                    return Err(OrbitError::InvalidInput("completion grant refused".into()));
+                }
+            }
             let now = crate::now_string();
             for row in &rows {
                 tx.tx
