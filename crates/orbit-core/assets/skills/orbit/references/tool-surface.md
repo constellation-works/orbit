@@ -7,8 +7,11 @@ without requiring an Orbit source checkout.
 
 ## Select the store before reading or writing
 
-Call `orbit_workspace_list({})` on the configured MCP connection first. Inspect
-host, workspace, ownership, availability, and capabilities where returned.
+When using MCP, call `orbit_workspace_list({})` on the configured connection
+first. For CLI-only use, inspect `orbit workspace list` and `orbit workspace show`
+on the intended host, then use its registered workspace in tool calls. MCP setup
+is not a prerequisite for local task tracking. Inspect host, workspace, ownership,
+availability and capabilities where returned.
 
 - Direct server: pass the returned logical workspace ID as `workspace`.
   The server can also resolve registered names and paths, but IDs avoid
@@ -110,7 +113,7 @@ the investigation succeeded.
 A session that arrived over SSH is admitted on the same terms as a local one.
 The durable admission and `trusted_host.execution_admitted` event retain the
 forwarded caller machine ID — attribution, not a grant — plus the workspace
-checkout and cwd. See [remote-access.md](setup/remote-access.md). Do not
+checkout and cwd. See [remote-access.md](../../orbit-setup/references/remote-access.md). Do not
 relaunch a server with more privileges to work around a denied call.
 
 ## Common MCP arguments

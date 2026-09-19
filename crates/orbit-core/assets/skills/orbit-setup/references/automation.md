@@ -148,7 +148,7 @@ owner (`orbit workspace list`), is the clock unit running
 (`orbit clock status`), and did the tick itself error
 (`orbit log tail --level warn --since 1h`)? For a fire
 that started and then failed, the run is the evidence —
-[run-debugging.md](../run-debugging.md).
+[run-debugging.md](../../orbit-orchestrate/references/run-debugging.md).
 
 ## GitHub evidence sweeps
 
@@ -187,7 +187,7 @@ That is not fuzzy title similarity: a shared workflow, generic npx/cargo
 exit, or the same affected file is not enough, and completion alone
 does not suppress a later recurrence. Completed owners can cover an exact pre-fix
 observation only after the bounded structured reassessment described in
-[workflows.md](../workflows.md#completed-ci-repair-reassessment). Coverage retains
+[workflows.md](../../orbit-orchestrate/references/workflows.md#completed-ci-repair-reassessment). Coverage retains
 source and validation references on the existing owner and creates no new pilot
 candidate. Missing or contradictory proof is explicitly unresolved. Discovery,
 filing, and dedupe-lookup errors must remain visible and retryable. A previous done repair is evidence

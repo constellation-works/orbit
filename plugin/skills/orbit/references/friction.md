@@ -144,7 +144,7 @@ Frictions are searchable but not vectorized, so they stay lexical even under
 
 Left alone, the corpus rots into duplicates. The seeded `friction-curation`
 auto-task deduplicates it, verifies whether each survivor still reproduces, and
-files fix tasks for the ones that do. → [auto-tasks.md](setup/auto-tasks.md)
+files fix tasks for the ones that do. → [auto-tasks.md](../../orbit-setup/references/auto-tasks.md)
 
 ## Rules
 

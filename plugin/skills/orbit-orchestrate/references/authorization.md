@@ -42,7 +42,7 @@ review-only run, or use a local shadow store. See
 Use the configured base branch and ship mode unless the user requests an
 explicit override. Inspect effective inputs; `--base` and `--mode` are deliberate
 overrides. Never replace a user's branch choice with a hardcoded convention.
-Full delivery semantics: [orchestration.md](../../orbit/references/orchestration.md).
+Full delivery semantics: [orchestration.md](orchestration.md).
 
 ## Keep authorized work moving
 

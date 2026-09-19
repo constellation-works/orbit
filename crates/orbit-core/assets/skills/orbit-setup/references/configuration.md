@@ -143,7 +143,7 @@ roots = ["docs/"]
 ```
 
 Add more with `orbit docs add <path>` rather than hand-editing.
-→ [docs-corpus.md](../docs-corpus.md)
+→ [docs-corpus.md](../../orbit/references/docs-corpus.md)
 
 ## Crew selection and actual execution
 

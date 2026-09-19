@@ -3,7 +3,7 @@
 Use this reference for host-level incidents and warnings: an `orbit-sweep`
 service failure, a global JSONL tracing warning, a missing log file, or a
 question about which evidence to inspect. For a specific failed job run, start
-with [run-debugging.md](run-debugging.md); the run bundle is normally
+with [run-debugging.md](../../orbit-orchestrate/references/run-debugging.md); the run bundle is normally
 more decisive than host logs.
 
 Treat runtime state as evidence. Do not edit files under `~/.orbit/state/`,
@@ -111,7 +111,7 @@ orbit run logs <run_id> --json
 ```
 
 For a failed, cancelled, or stuck run, continue with
-[run-debugging.md](run-debugging.md). It covers the run bundle, v2
+[run-debugging.md](../../orbit-orchestrate/references/run-debugging.md). It covers the run bundle, v2
 audit trail, blobs, and live-process checks in the right order.
 
 ## Archive-Pruning Warning

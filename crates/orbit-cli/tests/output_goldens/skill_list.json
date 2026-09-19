@@ -10,5 +10,11 @@
     "id": "orbit-orchestrate",
     "meta": null,
     "path": "<HOME>/.orbit/skills/orbit-orchestrate"
+  },
+  {
+    "content_hash": "<CONTENT_HASH>",
+    "id": "orbit-setup",
+    "meta": null,
+    "path": "<HOME>/.orbit/skills/orbit-setup"
   }
 ]

@@ -53,7 +53,7 @@ an ordinary leaf on its own declared context.
 dedicated Git repository. It has source/workspace/authority identity, a
 generation, a commit, and attachment completeness labels. Inspection is not a
 live task read; restore is an explicit same-authority operation.
-See [publication.md](setup/publication.md).
+See [publication.md](../../orbit-setup/references/publication.md).
 
 **Doc** — reviewed markdown under the configured docs roots, indexed for
 retrieval by concept rather than filename. Historical decision documents can be indexed as ordinary docs; there is no
@@ -113,4 +113,4 @@ Routine and auto-task *definitions* are versioned files and sync across
 machines. All scheduler *state* — last fire times, pauses, locks, run history —
 lives in the host's own store and never syncs. Two machines sharing a repo run
 the same definitions against completely independent state. See
-[multi-host.md](setup/multi-host.md).
+[multi-host.md](../../orbit-setup/references/multi-host.md).

@@ -1,8 +1,7 @@
 # Orchestrating work
 
-Driving a backlog through Orbit rather than executing one task by hand. Read
-[workflows.md](workflows.md) first for what jobs, activities, and runs are; this
-covers the choices an orchestrator makes on top of them.
+Dispatch and supervise authorized tasks. Use [workflows.md](workflows.md) only
+when job/activity internals or a particular run command need explanation.
 
 ## Entry points
 
@@ -11,7 +10,7 @@ when driving an authoritative MCP connection. Observe with
 `orbit_workflow_run_show/list`; resume eligible terminal work with
 `orbit_workflow_run_resume`, which returns a new linked run. These operations
 require operator authority. Managed leaf runs cannot dispatch follow-up runs.
-See [tool-surface.md](tool-surface.md).
+See [tool-surface.md](../../orbit/references/tool-surface.md).
 
 The CLI offers additional discovery modes below. Use them only where the user
 and workspace dispatch policy permit auto-discovery; creating tasks or enabling
@@ -130,9 +129,8 @@ orbit run show <run_id>
 
 ## Prepare selectors before dispatching under traffic
 
-`context_files` is what conflict detection and file reservation read. Tasks with
-an empty list can be dispatched, but they cannot be kept off each other's files
-— so under high ship traffic, fill them first.
+`context_files` is what conflict detection and file reservation read. Prepare a verified footprint before dispatch under traffic. Empty-surface
+eligibility differs by admission path; do not assume it protects files.
 
 Do **not** fill them inline. Use `orbit run task-pilot`: it audits tasks
 read-only in bounded partitions, and its apply step persists only selectors it
@@ -141,13 +139,13 @@ validated.
 ```bash
 orbit run task-pilot                            # zero-input discovery
 orbit run task-pilot <id> <id>                  # audit exactly these
-orbit run job task_pilot_pipeline --input crew=luna  # advanced: generic job form, override the pilot's crew for this run
+orbit run job task_pilot_pipeline --input 'task_ids=["<id>"]' --json
 ```
 
-`orbit run task-pilot` has no `--crew` flag; crew override is only available
-through the generic job form's `--input crew=<name>` — see
-[workflows.md](workflows.md#running-a-job) for the full contract and how it
-differs from an activity-level `system_crew` override.
+The shipped pilot steps explicitly select the `system` crew. Neither a
+`--crew` flag nor `--input crew=<name>` changes those steps. Inspect the effective
+job and system-crew configuration before promising a provider; see
+[crew selection](loop.md#select-an-allowed-crew).
 
 Zero-input mode discovers only `proposed`/`backlog` tasks in the invoking
 workspace whose `context_files` is empty, and skips tasks tagged as needing no
@@ -243,7 +241,7 @@ ORBIT_WORKSPACE_CLAIM_TOKEN=<token> orbit run auto --for 1h
 ```
 
 For splitting work across machines so their task IDs and schedules don't collide
-in the first place, see [multi-host.md](setup/multi-host.md).
+in the first place, see [multi-host.md](../../orbit-setup/references/multi-host.md).
 
 ## Unattended shipping
 
@@ -252,7 +250,7 @@ require `workflow.auto_ship = true`. Before enabling either:
 
 - Confirm `workflow.base_branch` points where PRs should actually land.
 - Enable worktree GC first — unattended shipping is the fastest way to fill a
-  disk with abandoned worktrees. → [maintenance.md](setup/maintenance.md)
+  disk with abandoned worktrees. → [maintenance.md](../../orbit-setup/references/maintenance.md)
 - Watch `orbit run ship-sweep --dry-run` across a realistic backlog first.
 
 ## Handoff discipline
