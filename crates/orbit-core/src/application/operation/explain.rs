@@ -80,7 +80,7 @@ impl OrbitRuntime {
             .filter(|(kind, _, _)| *kind == StateTriggerKind::PreparationEligible)
             .map(|(_, name, enabled)| json!({ "routine": name, "enabled": enabled }))
             .collect::<Vec<_>>();
-        let triage_owners = routines
+        let recovery_owners = routines
             .iter()
             .filter(|(kind, _, _)| *kind == StateTriggerKind::ExecutionFailed)
             .map(|(_, name, enabled)| json!({ "routine": name, "enabled": enabled }))
@@ -97,10 +97,10 @@ impl OrbitRuntime {
             None
         };
         let recovery_reason = if active_policy.recovery.value == RecoveryPreference::Scheduled
-            && !triage_owners.iter().any(|owner| owner["enabled"] == true)
+            && !recovery_owners.iter().any(|owner| owner["enabled"] == true)
         {
-            limiting_reasons.push("no_enabled_triage_routine".to_string());
-            Some("no_enabled_triage_routine")
+            limiting_reasons.push("no_enabled_recovery_routine".to_string());
+            Some("no_enabled_recovery_routine")
         } else {
             None
         };
@@ -146,7 +146,7 @@ impl OrbitRuntime {
                 "preference": active_policy.recovery.value,
                 "episodes_per_task": active_policy.recovery_episodes_per_task.value,
                 "minutes_per_task": active_policy.recovery_minutes_per_task.value,
-                "triage_owners": triage_owners,
+                "cadence_owners": recovery_owners,
                 "reason": recovery_reason,
             },
             "review": {

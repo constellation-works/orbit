@@ -305,7 +305,7 @@ define_config_settings! {
     },
     workflow_system_crew: String => String {
         key: "workflow.system_crew", value_type: "string",
-        description: "Named crew used by system activities such as step-failure recovery and failed-run triage.",
+        description: "Named crew used by system activities such as step-failure recovery and the task pilot.",
         resolve: |raw: Option<String>| resolve_non_empty(raw, DEFAULT_WORKFLOW_SYSTEM_CREW, "workflow.system_crew"),
     },
 }

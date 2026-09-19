@@ -359,7 +359,7 @@ fn explanation_names_sources_authority_caps_and_limiting_reasons() {
     );
     assert_eq!(
         explanation["recovery"]["reason"],
-        "no_enabled_triage_routine"
+        "no_enabled_recovery_routine"
     );
     let reasons = explanation["limiting_reasons"]
         .as_array()
@@ -372,7 +372,7 @@ fn explanation_names_sources_authority_caps_and_limiting_reasons() {
         vec![
             "delivery_cap_review",
             "scoped_authorization_required",
-            "no_enabled_triage_routine",
+            "no_enabled_recovery_routine",
             "review_crew_unconfigured",
         ]
     );
@@ -500,7 +500,10 @@ fn explanation_keeps_captured_grant_policy_after_preference_retune() {
         explained["preparation"]["reason"],
         "no_enabled_preparation_routine"
     );
-    assert_eq!(explained["recovery"]["reason"], "no_enabled_triage_routine");
+    assert_eq!(
+        explained["recovery"]["reason"],
+        "no_enabled_recovery_routine"
+    );
 
     assert_eq!(explained["policy"]["preset"]["value"], "supervised");
     assert_eq!(explained["policy"]["completion"]["value"], "review");

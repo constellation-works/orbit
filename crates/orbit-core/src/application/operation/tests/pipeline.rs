@@ -25,7 +25,6 @@ use crate::application::job::DrainWorkerLimitRequest;
 use crate::application::job::pipeline::{ChildPipelineAdmission, ChildSubmission};
 use crate::application::operation::{
     EnableOperationGrantRequest, OperationDrainRequest, OperationGrantControlRequest,
-    triage_recovery_reservation,
 };
 
 const AUTONOMOUS_DONE: &str = "[operation]\npreset = \"autonomous\"\ndelivery_cap = \"done\"\n";
@@ -488,7 +487,7 @@ fn promotion_needs_fresh_positive_evidence_and_the_promote_right() {
 }
 
 #[test]
-fn recovery_budget_spans_step_hooks_and_triage_and_escalates_when_spent() {
+fn recovery_budget_spans_step_hooks_across_a_lineage_and_escalates_when_spent() {
     let fixture = fixture(AUTONOMOUS_DONE);
     let runtime = &fixture.runtime;
     let task = seed_task(runtime, "recoverable", TaskStatus::Backlog);
@@ -540,17 +539,21 @@ fn recovery_budget_spans_step_hooks_and_triage_and_escalates_when_spent() {
         .settle_step_recovery(&child.run_id, "sync_base", 90)
         .expect("settle");
 
-    // Second episode: terminal-run triage shares the same lineage budget.
-    let reservation = triage_recovery_reservation(runtime, &task.id, &child)
-        .expect("triage reservation")
-        .expect("bound run");
-    assert_eq!(reservation.episode, Some(2));
-    assert_eq!(reservation.exhausted, None);
+    // Second episode: a different step in the same lineage shares the budget.
+    assert_eq!(
+        runtime
+            .authorize_step_recovery(&child.run_id, "push")
+            .expect("second"),
+        StepRecoveryAdmission::Reserved { episode: 2 }
+    );
+    runtime
+        .settle_step_recovery(&child.run_id, "push", 30)
+        .expect("settle second");
 
     // Third: spent. The task carries a durable escalation and is not retried.
     assert_eq!(
         runtime
-            .authorize_step_recovery(&child.run_id, "push")
+            .authorize_step_recovery(&child.run_id, "commit")
             .expect("third"),
         StepRecoveryAdmission::Denied {
             reason: "recovery_episodes_exhausted".to_string()
@@ -564,27 +567,8 @@ fn recovery_budget_spans_step_hooks_and_triage_and_escalates_when_spent() {
             .count(),
         1
     );
-    // The open triage episode is reused for the same run until it settles;
-    // once settled, the lineage has nothing left for a later failure.
-    let reused = triage_recovery_reservation(runtime, &task.id, &child)
-        .expect("triage reservation")
-        .expect("bound run");
-    assert_eq!(reused.episode, Some(2));
-    crate::application::operation::settle_triage_episode(runtime, &task.id, &child.run_id)
-        .expect("settle triage");
-    let later_failure = JobRun {
-        run_id: "jrun-later".to_string(),
-        ..child.clone()
-    };
-    let exhausted_triage = triage_recovery_reservation(runtime, &task.id, &later_failure)
-        .expect("triage reservation")
-        .expect("bound run");
-    assert_eq!(
-        exhausted_triage.exhausted,
-        Some("recovery_episodes_exhausted")
-    );
     // Repeated denial records the escalation once.
-    let _ = runtime.authorize_step_recovery(&child.run_id, "commit");
+    let _ = runtime.authorize_step_recovery(&child.run_id, "rebase");
     assert_eq!(
         runtime
             .get_task_history(&task.id)
@@ -601,7 +585,7 @@ fn recovery_budget_spans_step_hooks_and_triage_and_escalates_when_spent() {
         .expect("ledger")
         .expect("ledger exists");
     assert_eq!(ledger.episodes.len(), 2);
-    assert_eq!(ledger.consumed_seconds, 90);
+    assert_eq!(ledger.consumed_seconds, 120);
 }
 
 #[test]

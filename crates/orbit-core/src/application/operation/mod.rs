@@ -43,7 +43,6 @@ pub use grant::{
     EnableOperationGrantRequest, OperationGrantControlRequest, OperationGrantControlResult,
 };
 pub(crate) use promotion::promote_within_grant;
-pub(crate) use recovery::{settle_triage_episode, triage_recovery_reservation};
 
 /// Governed operation ids. Placement of the derived MCP tools is decided in
 /// `orbit-common`'s authorization registry; these strings are the claim

@@ -361,7 +361,7 @@ fn epic_descendants_draw_independently_and_system_jobs_keep_their_crew() {
     let original = system.clone();
     runtime
         .install_auto_crew_admission(
-            "task_triage_pipeline",
+            "task_pilot_pipeline",
             &mut system,
             Some(&epic_run),
             false,

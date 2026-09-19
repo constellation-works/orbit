@@ -61,7 +61,7 @@ The proposed preset behavior is:
 | Preparation | Explicit pilot runs and existing enabled routines | Automatically refresh eligible stale/unprepared tasks; suggested five-minute due interval |
 | Proposed → backlog | Separate approval | Deterministic promotion only with fresh successful pilot evidence, no decision blockers, and a matching grant |
 | Completion | Default `review`; explicit existing completion authorization remains possible | Request `done` within the grant; PR-only or other repository constraints cap delivery |
-| Recovery | Existing configured step recovery; explicit or already enabled triage | Schedule bounded diagnosis and eligible retry through existing recovery/triage paths |
+| Recovery | Existing configured step recovery | Schedule bounded in-run recovery through existing step-recovery paths; terminal failed-run triage is retired, so a terminal failure stays blocked for a reader |
 | Leaf concurrency | Existing default five, overridable | Suggested ceiling ten, bounded by capacity, hard limits, reservations, and conflicts |
 | Window | Existing one-tick/window behavior | Explicit admission scope, with a bounded window recommended; standing scope requires explicit selection |
 

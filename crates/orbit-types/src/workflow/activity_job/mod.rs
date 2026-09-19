@@ -27,7 +27,6 @@ macro_rules! deterministic_action_catalog {
     ($declare:ident) => {
         $declare! {
             core {
-                ApplyTriageDispositions => "apply_triage_dispositions",
                 ApplyTaskPilotResults => "apply_task_pilot_results",
                 ClassifyWorkspaceAutoTasks => "classify_workspace_auto_tasks",
                 ConsolidateCodeScanningTasks => "consolidate_code_scanning_tasks",
@@ -40,7 +39,6 @@ macro_rules! deterministic_action_catalog {
                 InvokeDetached => "invoke_detached",
                 ListBacklogTasks => "list_backlog_tasks",
                 ListEpicDescendants => "list_epic_descendants",
-                ListTriageCandidates => "list_triage_candidates",
                 OrbitToolCall => "orbit_tool_call",
                 PipelineSuccessGuard => "pipeline_success_guard",
                 PrepareTaskPilot => "prepare_task_pilot",

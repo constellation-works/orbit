@@ -74,8 +74,8 @@ pub struct ResolvedConfig {
     pub default_crew: Option<String>,
     /// Automatic admission pools; explicit task assignments take precedence.
     pub complexity_crews: crate::ComplexityCrewPools,
-    /// Crew used by system activities such as step-failure recovery and
-    /// failed-run triage. Resolution of the named crew is deliberately
+    /// Crew used by system activities such as step-failure recovery and the
+    /// task pilot. Resolution of the named crew is deliberately
     /// deferred to dispatch so a bad system crew does not stop unrelated
     /// activity execution.
     pub system_crew: String,

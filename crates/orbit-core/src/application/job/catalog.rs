@@ -32,8 +32,7 @@ pub(crate) fn v2_job_catalog_loads() -> usize {
 /// Shippable default workflow assets, seeded under
 /// `<orbit_root>/resources/jobs/<name>.yaml` on `orbit init`. The entries
 /// here are the admission-controlled task shipment workflows
-/// (auto / gate / local / pr) and the failed-run triage workflow [ORB-10129].
-/// Example and smoke fixtures live
+/// (auto / gate / local / pr). Example and smoke fixtures live
 /// under `crates/orbit-core/assets/jobs/examples/` and are NOT seeded —
 /// they exist for `crates/orbit-engine/examples/v2_job_runtime_smoke.rs`
 /// only.
@@ -73,10 +72,6 @@ pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "task_pr_pipeline",
         include_str!("../../../assets/jobs/task_pr_pipeline.yaml"),
-    ),
-    (
-        "task_triage_pipeline",
-        include_str!("../../../assets/jobs/task_triage_pipeline.yaml"),
     ),
     (
         "workspace_ship_pipeline",

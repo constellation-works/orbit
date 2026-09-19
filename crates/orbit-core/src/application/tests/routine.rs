@@ -188,7 +188,7 @@ fn operator_comment_on_a_shipped_default_is_adopted_in_place() {
     let routines_dir = root.path().join("routines");
     seed_default_routines(&routines_dir, "workspace", false).expect("seed current defaults");
 
-    let path = routines_dir.join("task_triage.yaml");
+    let path = routines_dir.join("dependabot_alert_sweep.yaml");
     let annotated = format!(
         "{}# enabled for the nightly backlog review\n",
         std::fs::read_to_string(&path).expect("read seeded routine")
@@ -197,7 +197,7 @@ fn operator_comment_on_a_shipped_default_is_adopted_in_place() {
 
     let reconciled = seed_default_routines(&routines_dir, "workspace", false).expect("sync");
     assert_eq!(
-        outcome_of(&reconciled, "task_triage"),
+        outcome_of(&reconciled, "dependabot_alert_sweep"),
         vec![ManagedAssetOutcome::Migrated]
     );
     assert_eq!(
@@ -423,14 +423,14 @@ fn opted_in_current_default_is_adopted_without_rewriting_it() {
     let routines_dir = root.path().join("routines");
     seed_default_routines(&routines_dir, "workspace", false).expect("seed current defaults");
 
-    let path = routines_dir.join("task_triage.yaml");
+    let path = routines_dir.join("dependabot_alert_sweep.yaml");
     let seeded = std::fs::read_to_string(&path).expect("read seeded routine");
     let opted_in = seeded.replace("enabled: false", "enabled: true");
     std::fs::write(&path, &opted_in).expect("apply the dashboard toggle's edit");
 
     let reconciled = seed_default_routines(&routines_dir, "workspace", false).expect("sync");
     assert_eq!(
-        outcome_of(&reconciled, "task_triage"),
+        outcome_of(&reconciled, "dependabot_alert_sweep"),
         vec![ManagedAssetOutcome::Migrated]
     );
     assert!(reconciled.warnings.is_empty(), "{:?}", reconciled.warnings);
@@ -442,7 +442,7 @@ fn opted_in_current_default_is_adopted_without_rewriting_it() {
 
     let second = seed_default_routines(&routines_dir, "workspace", false).expect("second sync");
     assert_eq!(
-        outcome_of(&second, "task_triage"),
+        outcome_of(&second, "dependabot_alert_sweep"),
         vec![ManagedAssetOutcome::Unchanged]
     );
 }
@@ -455,15 +455,15 @@ fn hand_edited_shipped_default_is_still_preserved() {
     let routines_dir = root.path().join("routines");
     seed_default_routines(&routines_dir, "workspace", false).expect("seed current defaults");
 
-    let path = routines_dir.join("task_triage.yaml");
+    let path = routines_dir.join("dependabot_alert_sweep.yaml");
     let seeded = std::fs::read_to_string(&path).expect("read seeded routine");
-    let edited = seeded.replace(r#"cron: "15 * * * *""#, r#"cron: "*/5 * * * *""#);
+    let edited = seeded.replace(r#"cron: "25 3 * * *""#, r#"cron: "*/5 * * * *""#);
     assert_ne!(edited, seeded, "fixture must change a template field");
     std::fs::write(&path, &edited).expect("apply a genuine hand edit");
 
     let reconciled = seed_default_routines(&routines_dir, "workspace", false).expect("sync");
     assert_eq!(
-        outcome_of(&reconciled, "task_triage"),
+        outcome_of(&reconciled, "dependabot_alert_sweep"),
         vec![ManagedAssetOutcome::Preserved]
     );
     assert_eq!(
@@ -504,11 +504,18 @@ fn shipped_shapes_are_classified_by_template_owned_fields() {
     }
 
     // A template's own fields changed: not a shipped shape.
-    let edited = render(current_template("task_triage"), "task_triage", "workspace")
-        .replace(r#"cron: "15 * * * *""#, r#"cron: "*/5 * * * *""#);
-    assert_eq!(shipped_shape_of("task_triage", &edited), None);
+    let edited = render(
+        current_template("dependabot_alert_sweep"),
+        "dependabot_alert_sweep",
+        "workspace",
+    )
+    .replace(r#"cron: "25 3 * * *""#, r#"cron: "*/5 * * * *""#);
+    assert_eq!(shipped_shape_of("dependabot_alert_sweep", &edited), None);
     // Nor is a file that does not parse as a routine.
-    assert_eq!(shipped_shape_of("task_triage", "not: a routine\n"), None);
+    assert_eq!(
+        shipped_shape_of("dependabot_alert_sweep", "not: a routine\n"),
+        None
+    );
 }
 
 /// The deliberate exception: an overwriting seed (`--force`) restores the
@@ -520,7 +527,7 @@ fn overwriting_seed_restores_the_template_default_enabled() {
     let routines_dir = root.path().join("routines");
     seed_default_routines(&routines_dir, "workspace", false).expect("seed current defaults");
 
-    let path = routines_dir.join("task_triage.yaml");
+    let path = routines_dir.join("dependabot_alert_sweep.yaml");
     let opted_in = std::fs::read_to_string(&path)
         .expect("read seeded routine")
         .replace("enabled: false", "enabled: true");
@@ -539,7 +546,11 @@ fn overwriting_seed_restores_the_template_default_enabled() {
     );
     assert_eq!(
         restored,
-        render(current_template("task_triage"), "task_triage", "workspace")
+        render(
+            current_template("dependabot_alert_sweep"),
+            "dependabot_alert_sweep",
+            "workspace"
+        )
     );
 }
 

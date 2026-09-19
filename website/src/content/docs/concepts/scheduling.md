@@ -96,7 +96,7 @@ Invariants that shape how routines behave:
   one is in flight; `timeout_minutes` is also the staleness horizon after which
   a stuck fire stops blocking the next.
 - **Seeded disabled.** `orbit workspace init` writes a default set — task
-  pilot, ship sweep, triage, worktree GC, CI and dependency alert
+  pilot, ship sweep, worktree GC, CI and dependency alert
   sweeps — every one `enabled: false`, and `orbit workspace sync` refreshes
   them. Enabling unattended agent work is an explicit, versioned decision.
 

@@ -82,8 +82,8 @@ clock.
 `orbit workspace init` seeds a set of default routines into `.orbit/routines/`,
 each **disabled**, because enabling unattended agent work is a deliberate,
 versioned decision. `orbit workspace sync` refreshes that shipped set on a newer
-binary while preserving local edits. The shipped set covers task pilot preflight, ship sweeps, triage,
-worktree GC, and CI/dependency alert sweeps.
+binary while preserving local edits. The shipped set covers task pilot preflight, ship sweeps, worktree GC, and
+CI/dependency alert sweeps.
 
 ```bash
 orbit routine list               # toggles, next-due, last fire

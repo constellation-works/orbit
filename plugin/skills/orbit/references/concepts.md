@@ -80,7 +80,7 @@ by default: the command returns once the run is durable, not once it finishes.
 available providers). A task's `crew` selects who executes it;
 `workflow.default_crew` covers tasks that don't declare one, and
 `workflow.system_crew` covers Orbit's own bounded activities like failure
-recovery and triage.
+recovery and the task pilot.
 
 **Executor** — how a provider is actually invoked. Mostly infrastructure; you
 choose crews, not executors.

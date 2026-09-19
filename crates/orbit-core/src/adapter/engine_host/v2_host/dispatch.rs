@@ -23,7 +23,7 @@ use crate::runtime::task::locks::{
 
 use super::{
     backlog_exclusion, ci_failure_tasks, dependabot_alert_tasks, pipeline_actions, scan_unresolved,
-    task_pilot, triage, workspace_auto,
+    task_pilot, workspace_auto,
 };
 
 /// Whether `action` is dispatchable by this runtime — the capability probe
@@ -57,10 +57,7 @@ pub(crate) fn run_deterministic(
         .insert(McpCapability::Runner);
     if matches!(
         deterministic_action,
-        CoreDeterministicAction::PrepareTaskPilot
-            | CoreDeterministicAction::ApplyTaskPilotResults
-            | CoreDeterministicAction::ListTriageCandidates
-            | CoreDeterministicAction::ApplyTriageDispositions
+        CoreDeterministicAction::PrepareTaskPilot | CoreDeterministicAction::ApplyTaskPilotResults
     ) {
         let claim_input = input.get("prepared").unwrap_or(input);
         if let Some(claim) = crate::application::automation::members::claim(runtime, claim_input)
@@ -279,13 +276,6 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::ListEpicDescendants => {
             workspace_auto::list_epic_descendants(runtime, action, input)
         }
-        // Materialize blocked tasks attributable to a terminally-failed job
-        // run for the triage pipeline [ORB-10129]. Human-blocked tasks (no
-        // `job_run_id`, or a non-failed run) never appear; tasks whose
-        // re-backlog budget is exhausted take the gave-up path here.
-        CoreDeterministicAction::ListTriageCandidates => {
-            triage::list_triage_candidates(runtime, action, input)
-        }
         // Workspace drain scan [ORB-10779]: proposed/backlog/blocked
         // tasks, failed/timeout job-runs, and unresolved check_later notes.
         // Read-only; empty is success. Optional `fail_if_nonempty` fails
@@ -293,12 +283,6 @@ pub(crate) fn run_deterministic(
         // gates on `list_epic_descendants` instead [ORB-10818].
         CoreDeterministicAction::ScanUnresolvedWork => {
             scan_unresolved::scan_unresolved_work(runtime, action, input)
-        }
-        // Apply the triage agent's per-task verdicts under deterministic
-        // bounds: candidates-only, `environmental`-only re-backlog, durable
-        // re-backlog budget, idempotent under overlap [ORB-10129].
-        CoreDeterministicAction::ApplyTriageDispositions => {
-            triage::apply_triage_dispositions(runtime, action, input)
         }
         // Materialize a workspace-scoped task-pilot working set and partition
         // it into bounded groups without promoting or dispatching any task.

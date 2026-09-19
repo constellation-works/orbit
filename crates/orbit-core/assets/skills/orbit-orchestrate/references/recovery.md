@@ -32,17 +32,17 @@ Check whether its routine or a manual invocation is already active first.
 ## Diagnose failed runs before retrying
 
 ```bash
-orbit run triage
-orbit run triage <task-id>
+orbit task show <task-id>
 orbit run show <run-id> --json
 orbit run logs <run-id> --step <step-id> --json
 ```
 
-`task_triage_pipeline` diagnoses eligible blocked tasks. It can re-backlog
-cases classified as environmental and leaves other failures blocked with a
-diagnosis. Inspect the evidence and resulting task state. A sandbox denial or
-provider failure is not inherently transient; repeated identical failures
-need a repair or configuration correction before another attempt.
+A failed run leaves its task `blocked` with the failure attached; nothing
+classifies or re-backlogs it automatically. Read the evidence yourself, then
+make the transition deliberately — return the task to `backlog` only once you
+know why it failed and that a rerun can succeed. A sandbox denial or provider
+failure is not inherently transient; repeated identical failures need a repair
+or configuration correction before another attempt.
 
 A live process is not stopped merely because a tool observation timed out.
 Re-poll the same run and inspect current process liveness. Conversely, a stale

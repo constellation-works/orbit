@@ -14,10 +14,6 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/agent_implement.yaml"),
     ),
     (
-        "apply_triage_dispositions",
-        include_str!("../../assets/activities/apply_triage_dispositions.yaml"),
-    ),
-    (
         "apply_task_pilot_results",
         include_str!("../../assets/activities/apply_task_pilot_results.yaml"),
     ),
@@ -94,10 +90,6 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/list_backlog_tasks.yaml"),
     ),
     (
-        "list_triage_candidates",
-        include_str!("../../assets/activities/list_triage_candidates.yaml"),
-    ),
-    (
         "scan_unresolved_work",
         include_str!("../../assets/activities/scan_unresolved_work.yaml"),
     ),
@@ -165,10 +157,6 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
     (
         "task_pilot",
         include_str!("../../assets/activities/task_pilot.yaml"),
-    ),
-    (
-        "triage_failed_runs",
-        include_str!("../../assets/activities/triage_failed_runs.yaml"),
     ),
     (
         "update_task",

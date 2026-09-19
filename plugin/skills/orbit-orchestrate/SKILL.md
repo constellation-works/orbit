@@ -49,7 +49,7 @@ Inspect evidence → search open and closed work → author a bounded task → p
 |---|---|
 | [loop.md](references/loop.md) | Discovery, task quality, crew selection, orchestrator attribution, zero-input pilot, immediate promotion, and observation. |
 | [authorization.md](references/authorization.md) | Executable `--complete` examples, concurrency and crew limits, window boundaries, and handoff metrics. |
-| [recovery.md](references/recovery.md) | CI deduplication, triage, failed completion, operational repair tasks, and deployment verification. |
+| [recovery.md](references/recovery.md) | CI deduplication, failed-run diagnosis, failed completion, operational repair tasks, and deployment verification. |
 | [walkthroughs.md](references/walkthroughs.md) | Decisions for missing context, duplicates, locks, unavailable authority, provider limits, and window expiry. |
 
 For unfamiliar Orbit vocabulary, start with [concepts.md](../orbit/references/concepts.md).

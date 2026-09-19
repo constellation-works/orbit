@@ -249,17 +249,18 @@ orbit run logs "$CHILD_RUN_ID"
 
 A failed envelope the agent declares itself enters step recovery first rather
 than sending the task straight to `blocked`, so check the run's recovery steps
-before assuming a task needs triage. For a task blocked by an attributable
-failed run, use bounded triage to re-backlog only an environmental failure:
+before deciding what a blocked task needs. A task a failed run left `blocked`
+stays there with the failure attached: nothing classifies or re-backlogs it for
+you. Read the evidence, then make the transition deliberately:
 
 ```bash
-orbit run triage "$TASK_ID"
-orbit run history -j task_triage_pipeline
+orbit task show "$TASK_ID"
+orbit task update "$TASK_ID" --status backlog
 ```
 
-Triage never changes a task a human blocked by hand, and it leaves a
-non-environmental diagnosis blocked for an operator decision. Inspect the triage
-run before reopening the delivery window.
+Return a task to the backlog only once you know why the run failed and that a
+rerun can succeed; a host-specific or environmental failure that keeps
+recurring needs the box fixed, not another attempt.
 
 If a run is stuck `pending` with no live worker, cancel it to release its task
 reservations:

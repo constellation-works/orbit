@@ -438,8 +438,7 @@ fn no_ansi_escapes_under_any_color_configuration() {
 /// json/Silent forks without a separate owner (config keys, skill link/unlink,
 /// auto_task, policy check, docs index, lint/export/import/archive/start/
 /// reindex/artifacts, locks list, semantic install/uninstall/index, audit
-/// stats, gc/sweep, run cancel/agent/auto/concurrency/sweep/ship/triage/
-/// trace/logs).
+/// stats, gc/sweep, run cancel/agent/auto/concurrency/sweep/ship/trace/logs).
 fn parse_json_stdout(output: &std::process::Output, label: &str) -> Value {
     serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(

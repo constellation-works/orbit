@@ -19,10 +19,6 @@ pub const WORKFLOWS: &[Workflow] = &[
         job_id: "task_auto_pipeline",
     },
     Workflow {
-        alias: "triage",
-        job_id: "task_triage_pipeline",
-    },
-    Workflow {
         alias: "task-pilot",
         job_id: "task_pilot_pipeline",
     },
@@ -133,10 +129,8 @@ mod tests {
     }
 
     #[test]
-    fn triage_workflow_routes_to_triage_pipeline() {
-        let workflow = find_workflow("triage").expect("triage workflow");
-
-        assert_eq!(workflow.job_id, "task_triage_pipeline");
+    fn retired_triage_workflow_is_not_dispatchable() {
+        assert!(find_workflow("triage").is_none());
     }
 
     #[test]

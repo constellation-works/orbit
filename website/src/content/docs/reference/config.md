@@ -125,7 +125,7 @@ These are the keys `orbit config set` accepts, as printed by `orbit config keys`
 |---|---|---|
 | `workflow.base_branch` | string | Default base branch for ship workflows. |
 | `workflow.default_crew` | string | Crew used when a task declares none and no override is given. |
-| `workflow.system_crew` | string | Crew used by system activities such as step-failure recovery and failed-run triage. |
+| `workflow.system_crew` | string | Crew used by system activities such as step-failure recovery and the task pilot. |
 | `workflow.auto_ship` | bool | Opt in to unattended ship dispatch via the routine/sweep scheduler. |
 | `workflow.low_complexity_crews` | array&lt;string&gt; | Random crew pool for unassigned low-complexity tasks in auto drains; empty disables the pool. |
 | `workflow.medium_complexity_crews` | array&lt;string&gt; | Random crew pool for unassigned medium-complexity tasks in auto drains; empty disables the pool. |

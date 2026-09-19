@@ -160,16 +160,15 @@ deadline or a budget.
 
 ## 6. Bounded recovery
 
-A per-task ledger in the host store spans engine step-recovery hooks,
-resumed runs, and terminal-run triage. Before a recovery hook is dispatched
-for a run carrying an `operation` snapshot, Core reserves an episode (a retry
-of the same run and step reuses it) and later settles its wall time; crashes
-and timeouts count. Triage reserves an episode when it lists a bound
-candidate and settles it when dispositions apply. When the captured
-`recovery_episodes_per_task` or `recovery_minutes_per_task` is spent, the
-hook is skipped with the original error authoritative, triage lists the task
-under `exhausted` with the reason, and the task gains a durable
-`recovery_budget_exhausted` history event (recorded once). Runs without a
+A per-task ledger in the host store spans engine step-recovery hooks and
+resumed runs. Before a recovery hook is dispatched for a run carrying an
+`operation` snapshot, Core reserves an episode (a retry of the same run and
+step reuses it) and later settles its wall time; crashes and timeouts count.
+When the captured `recovery_episodes_per_task` or `recovery_minutes_per_task`
+is spent, the hook is skipped with the original error authoritative and the
+task gains a durable `recovery_budget_exhausted` history event (recorded
+once). Terminal failed-run triage no longer consumes episodes: it is retired,
+so a spent allowance simply leaves the failure blocked for a reader. Runs without a
 snapshot keep the pre-existing unbounded behavior. Provider token/cost caps
 are not enforced: usage remains unknown.
 
@@ -182,16 +181,18 @@ evaluator `MemberConstraints`: the grant scope and a due interval
 automatic and the grant carries `prepare`; zero for incidents when recovery
 is scheduled). In-scope members become due sooner; every other member keeps
 the routine's own timing. The explanation names the cadence owners and
-reports `no_enabled_preparation_routine` / `no_enabled_triage_routine` when
-a preference has no owner to act through.
+reports `no_enabled_preparation_routine` / `no_enabled_recovery_routine` when
+a preference has no owner to act through. Since terminal failed-run triage is
+retired, an `execution_failed` state routine has no shipped target job left to
+fire, so `recovery: scheduled` always reports that limiting reason.
 
 ## 8. Surfaces and observability
 
 - CLI: `orbit operation explain|enable|list|show|stop|revoke`, `orbit run auto --grant`,
   `orbit run readiness`, whose `capacity.operation` block and per-task
   reasons (`outside_grant_scope`, `grant_*`) reflect a live grant-bound drain,
-  and `orbit run task-pilot` / `orbit run triage` for on-demand preparation and
-  failed-run triage (neither promotes or dispatches). Operation mode is an
+  and `orbit run task-pilot` for on-demand preparation (it neither promotes
+  nor dispatches). Operation mode is an
   operator control on the CLI and dashboard; agents read grant state from
   readiness rather than MCP tools.
 - Dashboard: the Operations → Auto-drain view has an **Operation Mode** panel

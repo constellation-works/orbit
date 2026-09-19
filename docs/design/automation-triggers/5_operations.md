@@ -457,6 +457,15 @@ excluded landings with their certificate and assurance label.
 
 ## State preparation and failure triage [ORB-11331]
 
+> Terminal failed-run triage is retired
+> ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
+> `kind: execution_failed` still parses — persisted member state and existing
+> definitions keep deserializing — but its target `task_triage_pipeline` is no
+> longer shipped, so such a definition loads as *retired* (the loader's
+> `RETIRED_ROUTINE_JOBS`) and fires nothing. Do not author a new one. The
+> incident semantics below are retained for that state; only
+> `kind: preparation_eligible` schedules work today.
+
 The same routine sweep now accepts `trigger.state` with one of two kinds. Core
 supplies authoritative task envelopes, pinned source and run/history evidence;
 `orbit-automation::members` owns due decisions, material fingerprints, incident
@@ -468,9 +477,9 @@ Migration is an explicit edit of a selected routine. Disable its old temporal
 owner, settle any existing run, and replace only that definition's trigger.
 Preserve the user's policy. Do not run both old and new definitions;
 a sweep preview reports `duplicate_routine_ownership` for enabled definitions
-sharing the same source and target when one uses state scheduling. Existing
-shipped pilot/triage cron definitions remain unchanged and no live routine is
-enabled by this implementation.
+sharing the same source and target when one uses state scheduling. The existing
+shipped pilot cron definition remains unchanged and no live routine is enabled
+by this implementation.
 
 ```yaml
 schemaVersion: 1
@@ -493,9 +502,9 @@ policy:
   retries: {max: 1, backoff_minutes: 5}
 ```
 
-For failure triage use `kind: execution_failed`, `target:
-job:task_triage_pipeline`, and a suitable aggregate deadline such as 30 minutes.
-Cron, deliveries and state triggers are mutually exclusive; state kinds have
+`kind: execution_failed` targets `job:task_triage_pipeline`, which this Orbit no
+longer ships; the shape is recorded here for definitions written before the
+retirement. Cron, deliveries and state triggers are mutually exclusive; state kinds have
 fixed pipeline targets, require one owner and forbid overlap. Retry limits are
 the minimum of the trigger and routine policy. Each consumer admits one member
 at a time, so a preparation action is a one-task pilot partition. `max_items`
@@ -512,18 +521,19 @@ and exact resulting assessment in immutable receipt bytes. A fresh unready resul
 is an assessment, and does not repeatedly dispatch. Changing a material input
 creates new work; the quiet period coalesces edits up to the maximum wait.
 
-Triage requires the current workflow-failure history event and coupling. Later
-human blocks, cancellations, diagnostic-origin runs, active recovery and missing
-lineage are withheld. Retry roots and an explicitly recorded blocking child cause
+Incident observation requires the current workflow-failure history event and
+coupling. Later human blocks, cancellations, active recovery and missing
+lineage are withheld; the diagnostic-origin (triage-of-triage) exclusion is
+removed with the pipeline that produced such runs. Retry roots and an explicitly recorded blocking child cause
 identify the incident; uncertain multiple-child causality is `incident_unresolved`.
 The source adapter follows exact indexed retry-child edges, bounds an episode at
 1,000 runs and reports a scan-budget limit rather than guessing when reached.
 Incident membership is gathered from at most 1,000 current blocked tasks, including
 wrappers sharing a child cause; any unsettled member withholds the whole incident.
 An incident can include at most 50 tasks. Larger inventories remain withheld.
-Normal stale-owner reconciliation and the existing evidence-gated already-landed path remain in
-place. Disposition writes hold the task lock and recheck current failure intent;
-only the existing bounded environmental re-backlog rule can move a task.
+Normal stale-owner reconciliation and the existing evidence-gated already-landed
+path remain in place. No automatic disposition writes remain: with triage
+retired, a terminal failure leaves its task blocked until a human moves it.
 
 Action-key lookup recovers a run admitted before its scheduler acknowledgement.
 Retries preserve consumed attempts and an absolute deadline across restarts;

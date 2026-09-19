@@ -453,7 +453,9 @@ fn recovery_ledger_reserves_episodes_before_dispatch_and_never_resets() {
         .expect("settle again");
     assert_eq!(ledger.consumed_seconds, 900);
 
-    // Triage after a terminal run shares the budget with step recovery.
+    // The retired terminal-triage kind still reserves against, and shares,
+    // the same per-task budget: ledgers written before that retirement must
+    // keep round-tripping through this store.
     assert!(matches!(
         reserve("jrun-2", RecoveryEpisodeKind::Triage),
         RecoveryReservation::Reserved {

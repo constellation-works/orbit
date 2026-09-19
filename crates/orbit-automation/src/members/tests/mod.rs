@@ -180,7 +180,7 @@ fn execution_tick(
         store,
         host,
         MemberEvaluation {
-            consumer: "host/ws/routine/triage",
+            consumer: "host/ws/routine/recovery",
             epoch: "epoch",
             trigger: &trigger,
             enabled: true,
@@ -447,7 +447,6 @@ fn incident_identity_uses_cause_and_episode_and_requires_settled_authority() {
         failure: true,
         recovery_settled: true,
         current_failure_coupling: true,
-        diagnostic_origin: false,
         cancellation: false,
     };
     let key = incident_key(&facts).unwrap();
@@ -458,9 +457,6 @@ fn incident_identity_uses_cause_and_episode_and_requires_settled_authority() {
     facts.cancellation = true;
     assert!(incident_key(&facts).is_err());
     facts.cancellation = false;
-    facts.diagnostic_origin = true;
-    assert!(incident_key(&facts).is_err());
-    facts.diagnostic_origin = false;
     facts.current_failure_coupling = false;
     assert!(incident_key(&facts).is_err());
     facts.current_failure_coupling = true;

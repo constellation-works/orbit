@@ -51,9 +51,9 @@ checkout already made the workspace a routine source; an older `.orbit/config.to
 may still carry a `[routines]` section, which is ignored with a warning and can
 be deleted.
 
-## The six seeded routines
+## The five seeded routines
 
-`orbit workspace init` seeds all six, **all disabled**, with a workspace-unique
+`orbit workspace init` seeds all five, **all disabled**, with a workspace-unique
 name (`<base>-<workspace>`) resolved at seed time. Nothing else is resolved per
 machine, so two hosts seed identical bytes. Run `orbit routine list` to see their
 names on this host.
@@ -62,7 +62,6 @@ names on this host.
 |---|---|---|---|
 | `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived. |
 | `task-pilot` | every 4h | `task_pilot_pipeline` | Preflights proposed/backlog tasks with empty `context_files` and fills in validated selectors. |
-| `task-triage` | hourly | `task_triage_pipeline` | Diagnoses tasks blocked by failed runs; re-backlogs environmental casualties, leaves real failures blocked with a diagnosis. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `ship-sweep` | every 20m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. |
@@ -81,9 +80,7 @@ without the ones after it; **the reverse is not true.**
 2. **`task-pilot`.** Its agent inspection is read-only; its apply step writes validated task selectors, and it makes everything downstream safer:
    populated `context_files` are what conflict detection and file reservation
    use to keep parallel runs off each other's files.
-3. **`task-triage`.** Cleanup, not a hot path. Worth having before unattended
-   shipping, so a failed run gets diagnosed instead of silently sitting blocked.
-4. **`ship-sweep` last, and only deliberately.** This is the one that commits,
+3. **`ship-sweep` last, and only deliberately.** This is the one that commits,
    pushes, and opens PRs without a human present. It also needs
    `workflow.auto_ship = true`. Do not enable it in the same change as anything
    above; let the earlier ones prove themselves against real traffic first.

@@ -18,7 +18,7 @@ use orbit_engine::{
     DispatchError, JobOutcome, ResolvedCliExecutor, RuntimeHost, TaskActivityUpdate, V2AuditWriter,
     execute_job_with_resume, resolve_job_catalog_refs_for_execution,
 };
-use orbit_store::{InvocationQuery, TaskReservationReleaseReason, V2AuditEventFilter};
+use orbit_store::{InvocationQuery, V2AuditEventFilter};
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use orbit_types::telemetry::AuditEventStatus;
@@ -1564,47 +1564,6 @@ fn write_fake_cli_response(path: &Path, stdout: &str) {
     std::fs::set_permissions(path, permissions).expect("chmod fake cli");
 }
 
-fn seed_failed_triage_candidate(runtime: &OrbitRuntime, title: &str) -> String {
-    let task = runtime
-        .add_task(TaskAddParams {
-            title: title.to_string(),
-            description: "Fixture task blocked by a failed pipeline.".to_string(),
-            status: Some(TaskStatus::Backlog),
-            ..Default::default()
-        })
-        .expect("seed triage task");
-    let run = runtime
-        .stores()
-        .jobs()
-        .insert_job_run("task_pr_pipeline", 1, Utc::now(), None, None)
-        .expect("insert failed pipeline run");
-    runtime
-        .stores()
-        .jobs()
-        .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
-        .expect("mark failed pipeline run running");
-    runtime
-        .update_task(
-            &task.id,
-            TaskUpdateParams {
-                status: Some(TaskStatus::InProgress),
-                job_run_id: Some(Some(run.run_id.clone())),
-                ..Default::default()
-            },
-        )
-        .expect("couple blocked task to failed run");
-    runtime
-        .finalize_job_run_with_reservation_cleanup(
-            &run.run_id,
-            JobRunState::Failed,
-            Utc::now(),
-            Some(1),
-            TaskReservationReleaseReason::RunTerminal,
-        )
-        .expect("finalize failed pipeline run");
-    task.id
-}
-
 #[test]
 fn direct_yaml_run_persists_history_and_run_state() {
     let (_root, runtime, repo_root, _global_root) = test_runtime();
@@ -2194,118 +2153,6 @@ fn v2_claude_fable_alias_persists_provider_reported_model_and_cost() {
     assert_eq!(records[0].agent, "claude");
     assert_eq!(records[0].model.as_deref(), Some("claude-fable-5"));
     assert_eq!(records[0].provider_cost_usd, Some(0.286169));
-}
-
-#[cfg(unix)]
-#[test]
-fn task_triage_pipeline_applies_multiple_cli_envelope_dispositions() {
-    // The triage step names `crew: system` itself, so it resolves against the
-    // built-in `system` crew rather than through `workflow.system_crew`.
-    let (_root, runtime, repo_root, global_root) = test_runtime_with_workspace_config(
-        r#"
-[workflow]
-base_branch = "main"
-"#,
-    );
-    seed_default_catalogs(&global_root);
-    let environmental = seed_failed_triage_candidate(&runtime, "Environmental triage fixture");
-    let code_defect = seed_failed_triage_candidate(&runtime, "Code-defect triage fixture");
-
-    let agent_envelope = json!({
-        "schemaVersion": 1,
-        "status": "success",
-        "result": {
-            "dispositions": [
-                {
-                    "task_id": environmental.clone(),
-                    "classification": "environmental",
-                    "disposition": "rebacklog",
-                    "diagnosis": "the runner lost its workspace lease",
-                    "mitigation": "stale lease cleared"
-                },
-                {
-                    "task_id": code_defect.clone(),
-                    "classification": "code_defect",
-                    "disposition": "stay_blocked",
-                    "diagnosis": "the task still has failing tests"
-                }
-            ],
-            "summary": "one task can retry and one needs a code fix"
-        },
-        "error": null
-    });
-    let provider_stdout = json!({
-        "type": "result",
-        "subtype": "success",
-        "result": format!("Triage complete.\n{agent_envelope}"),
-        "usage": {
-            "input_tokens": 12,
-            "output_tokens": 8
-        }
-    })
-    .to_string();
-    let fake_bin = repo_root.join("claude");
-    write_fake_cli_response(&fake_bin, &provider_stdout);
-
-    let now = Utc::now();
-    runtime
-        .upsert_executor_def(&ExecutorDef {
-            name: "claude".to_string(),
-            executor_type: ExecutorType::DirectAgent,
-            command: Some(fake_bin.display().to_string()),
-            args: Vec::new(),
-            stdout_format: None,
-            model_pair_override: None,
-            model_flag: None,
-            timeout_seconds: None,
-            env: HashMap::new(),
-            sandbox: None,
-            allow_fallback: false,
-            created_at: Some(now),
-            updated_at: Some(now),
-        })
-        .expect("seed fake claude executor");
-
-    let result = runtime
-        .run_job_v2_from_yaml(
-            &global_root.join("resources/jobs/task_triage_pipeline.yaml"),
-            json!({
-                "task_ids": [environmental.clone(), code_defect.clone()],
-                "max_tasks": 20,
-                "max_rebacklogs": 2,
-            }),
-        )
-        .expect("task triage pipeline succeeds");
-
-    assert!(result.success);
-    assert_eq!(
-        result.pipeline["triage"]["dispositions"]
-            .as_array()
-            .map(Vec::len),
-        Some(2)
-    );
-    assert_eq!(
-        result.pipeline["apply_dispositions"]["rebacklogged_count"],
-        json!(1)
-    );
-    assert_eq!(
-        result.pipeline["apply_dispositions"]["diagnosed_count"],
-        json!(1)
-    );
-    assert_eq!(
-        runtime
-            .get_task(&environmental)
-            .expect("environmental task")
-            .status,
-        TaskStatus::Backlog
-    );
-    assert_eq!(
-        runtime
-            .get_task(&code_defect)
-            .expect("code defect task")
-            .status,
-        TaskStatus::Blocked
-    );
 }
 
 fn write_three_step_job(path: &Path, name: &str) {

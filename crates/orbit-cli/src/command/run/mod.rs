@@ -17,7 +17,6 @@ pub(crate) mod support;
 pub mod sweep;
 pub mod task_pilot;
 mod trace;
-pub mod triage;
 
 pub use command::{RunCommand, RunSubcommand};
 pub use job::{JobReplayArgs, JobResumeArgs, JobRunArgs, JobRunPipelineWorkerArgs};
