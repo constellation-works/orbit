@@ -6,7 +6,7 @@ use crate::application::routines::RoutineHostIdentity;
 use crate::application::routines::clock::{ClockSettings, save_clock_settings};
 use crate::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
 use crate::application::routines::sweep::{
-    SweepOptions, configured_sweep_options, refresh_discovered_token_scoreboards,
+    SweepOptions, SweepOutcome, configured_sweep_options, refresh_discovered_token_scoreboards,
     run_sweep_at_with_providers, run_sweep_at_with_providers_at,
 };
 use chrono::{Duration, TimeZone, Utc};
@@ -177,6 +177,33 @@ impl RoutineWorkspaceProvider for ScriptedWorkspaces {
             errors: self.result.errors.clone(),
         })
     }
+}
+
+/// Lock path guarding one sweep pass under `global`.
+fn sweep_lock_path(global: &Path) -> PathBuf {
+    global.join("state/routine-sweep.lock")
+}
+
+/// Fail with the mechanism rather than an empty vector.
+///
+/// A `SweepOutcome` whose report vectors are all empty is what
+/// `run_sweep_at_with_providers_at` returns when the advisory sweep lock was
+/// busy, before any workspace is discovered — so an assertion on a row that
+/// prints only `[]` sends the reader looking at routine evaluation for a
+/// failure that happened before it. Naming `lock_busy`, the exact lock path,
+/// and the recorded holder makes the next occurrence diagnosable from CI
+/// output alone [ORB-12532].
+#[track_caller]
+fn assert_swept(outcome: &SweepOutcome, global: &Path, pass: &str) {
+    let lock = sweep_lock_path(global);
+    assert!(
+        !outcome.lock_busy,
+        "{pass}: the sweep skipped this pass because the advisory lock was busy, \
+         so every report vector is empty; lock={} recorded_holder={:?} load_errors={:?}",
+        lock.display(),
+        orbit_store::read_lock_holder(&lock),
+        outcome.load_errors,
+    );
 }
 
 fn host() -> RoutineHostIdentity {
@@ -442,13 +469,16 @@ fn tick_mints_due_auto_task_without_creating_a_job_run_and_dry_run_is_inert() {
         first,
     )
     .expect("dry tick");
+    assert_swept(&dry_baseline, &global, "dry baseline tick");
     assert_eq!(dry_baseline.auto_task_reports[0].action, "would_baseline");
     assert!(
         !crate::application::auto_tasks::cursor_state_path(&runtime.paths().state_dir).exists()
     );
 
-    run_sweep_at_with_providers_at(&global, SweepOptions::default(), host(), &provider, first)
-        .expect("baseline tick");
+    let baseline =
+        run_sweep_at_with_providers_at(&global, SweepOptions::default(), host(), &provider, first)
+            .expect("baseline tick");
+    assert_swept(&baseline, &global, "baseline tick");
     let cursor_before = std::fs::read(crate::application::auto_tasks::cursor_state_path(
         &runtime.paths().state_dir,
     ))
@@ -464,6 +494,7 @@ fn tick_mints_due_auto_task_without_creating_a_job_run_and_dry_run_is_inert() {
         first + Duration::minutes(2),
     )
     .expect("dry due tick");
+    assert_swept(&dry_due, &global, "dry due tick");
     assert_eq!(dry_due.auto_task_reports[0].action, "would_fire");
     assert!(runtime.list_tasks().expect("tasks").is_empty());
     assert_eq!(
@@ -482,6 +513,7 @@ fn tick_mints_due_auto_task_without_creating_a_job_run_and_dry_run_is_inert() {
         first + Duration::minutes(2),
     )
     .expect("due tick");
+    assert_swept(&due, &global, "due tick");
     assert_eq!(due.auto_task_reports[0].action, "minted");
     assert!(due.auto_task_reports[0].task_id.is_some());
     assert_eq!(runtime.list_tasks().expect("tasks").len(), 1);
@@ -537,8 +569,10 @@ fn one_tick_fires_a_routine_and_auto_task_and_isolates_another_workspace_error()
         .with_ymd_and_hms(2026, 9, 12, 7, 0, 0)
         .single()
         .expect("time");
-    run_sweep_at_with_providers_at(&global, SweepOptions::default(), host(), &provider, first)
-        .expect("baseline tick");
+    let baseline =
+        run_sweep_at_with_providers_at(&global, SweepOptions::default(), host(), &provider, first)
+            .expect("baseline tick");
+    assert_swept(&baseline, &global, "baseline tick");
     std::fs::write(
         broken_dir.join("auto_tasks/broken-chore.yaml"),
         "not: [valid",
@@ -556,6 +590,7 @@ fn one_tick_fires_a_routine_and_auto_task_and_isolates_another_workspace_error()
     .expect("combined tick");
     worker_command_override::clear();
 
+    assert_swept(&outcome, &global, "combined tick");
     assert!(
         outcome.reports.iter().any(|row| row.action == "fired"),
         "{:?}",

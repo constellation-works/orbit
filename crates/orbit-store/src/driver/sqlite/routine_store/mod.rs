@@ -42,9 +42,11 @@ pub struct RoutineSweepLock {
     _guard: FileLockGuard,
 }
 
-/// Try to take this host's sweep lock without waiting. `Ok(None)` means
-/// another sweep pass is in flight and the caller should exit cleanly —
-/// overlapping invocations from a slow prior pass must not double-fire.
+/// Try to take this host's sweep lock without queueing behind a live holder.
+/// `Ok(None)` means another sweep pass is in flight and the caller should exit
+/// cleanly — overlapping invocations from a slow prior pass must not
+/// double-fire. A refusal no holder claims is not such a pass; see
+/// `orbit_common::fs::file_lock::try_acquire_exclusive_file_lock`.
 pub fn try_acquire_routine_sweep_lock(
     global_state_dir: &Path,
 ) -> Result<Option<RoutineSweepLock>, OrbitError> {

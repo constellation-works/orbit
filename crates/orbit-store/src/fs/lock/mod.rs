@@ -26,11 +26,14 @@ pub(crate) fn acquire_exclusive(path: &Path, label: &str) -> Result<FileLockGuar
 }
 
 /// Single-shot exclusive acquisition: returns `Ok(None)` immediately when
-/// another process holds the lock instead of waiting. For callers whose
+/// another holder owns the lock instead of waiting. For callers whose
 /// correct response to contention is "someone else is already doing this
 /// pass, exit" (e.g. the routine sweep) rather than queueing behind the
 /// holder. The OS releases the lock on process death, so a crashed holder
-/// never wedges future acquisitions.
+/// never wedges future acquisitions. Contention is read from the holder
+/// record rather than the bare OS refusal, because a descriptor a forked
+/// child inherited refuses too — see the upstream
+/// `try_acquire_exclusive_file_lock` for why.
 pub(crate) fn try_acquire_exclusive(
     path: &Path,
     label: &str,
