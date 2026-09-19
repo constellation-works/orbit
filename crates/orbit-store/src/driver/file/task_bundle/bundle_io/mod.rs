@@ -27,7 +27,7 @@ mod commit;
 
 pub(crate) use commit::{
     BundleWriteFault, PENDING_WRITE_FILE_NAME, PendingWriteGuard, fail_if_injected,
-    publish_envelope, recover_pending_bundle_at,
+    publish_envelope, recover_pending_bundle_at, truncate_jsonl_file,
 };
 
 #[cfg(test)]

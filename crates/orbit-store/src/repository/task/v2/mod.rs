@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use chrono::Utc;
 use orbit_common::fs::io::atomic_write_bytes;
@@ -32,6 +33,7 @@ use crate::contracts::{
 };
 use crate::driver::file::sort::sort_by_created_desc_id_asc;
 use crate::driver::sqlite::task_registry::{TaskIndexFilter, TaskRegistryStore};
+use crate::repository::task::coordination::TaskCommitBoundary;
 use crate::repository::task::v2_bundle::{TaskBundleStoreV2, TaskBundleV2, TaskDocumentV2};
 
 mod acceptance;
@@ -43,7 +45,7 @@ mod index;
 mod listing;
 mod query;
 mod relations;
-mod sequencing;
+pub(crate) mod sequencing;
 mod sidecars;
 mod updates;
 
@@ -62,6 +64,15 @@ pub(crate) struct TaskV2Store {
     workspace_id: String,
     /// Envelope parses reused across listings; see [`envelope_cache`].
     envelope_cache: EnvelopeCache,
+    /// The partition's durable commit boundary, when this store was composed
+    /// with one ([`crate::compose::workspace_coordinated_backends`]).
+    ///
+    /// With it, every ordinary mutation runs inside the boundary and every
+    /// read settles an interrupted commit before exposing state, so an
+    /// admission decision can read readiness and publish without a task write
+    /// slipping in between. Without it this store behaves exactly as before:
+    /// per-bundle locking and independent registry rows.
+    coordination: Option<Arc<TaskCommitBoundary>>,
 }
 
 impl TaskV2Store {
@@ -71,6 +82,40 @@ impl TaskV2Store {
             registry,
             workspace_id,
             envelope_cache: EnvelopeCache::default(),
+            coordination: None,
+        }
+    }
+
+    /// The same store, participating in one partition's commit boundary.
+    pub(crate) fn with_commit_boundary(
+        registry: TaskRegistryStore,
+        workspace_id: String,
+        coordination: Arc<TaskCommitBoundary>,
+    ) -> Self {
+        Self {
+            coordination: Some(coordination),
+            ..Self::new(registry, workspace_id)
+        }
+    }
+
+    /// Run an ordinary mutation inside the boundary, or directly when this
+    /// store has none.
+    pub(super) fn in_boundary<T, F>(&self, op: F) -> Result<T, OrbitError>
+    where
+        F: FnOnce() -> Result<T, OrbitError>,
+    {
+        match &self.coordination {
+            Some(boundary) => boundary.enter_ordinary(op),
+            None => op(),
+        }
+    }
+
+    /// Settle an interrupted commit before a read exposes task state. One
+    /// existence check when nothing is pending.
+    pub(super) fn ensure_recovered(&self) -> Result<(), OrbitError> {
+        match &self.coordination {
+            Some(boundary) => boundary.recover_if_pending(),
+            None => Ok(()),
         }
     }
 }

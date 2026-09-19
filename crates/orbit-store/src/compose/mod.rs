@@ -18,7 +18,7 @@ use crate::repository::layered_policy::LayeredPolicyDefStore;
 use crate::repository::sqlite_backends::{
     SqliteAuditEventStoreBackend, SqliteTaskReservationStoreBackend, SqliteToolStoreBackend,
 };
-use crate::repository::task::TaskV2Store;
+use crate::repository::task::{TaskCommitBoundary, TaskV2Store};
 use crate::workflow::friction::import_workspace_frictions;
 
 pub struct WorkspaceTaskBackends {
@@ -169,7 +169,70 @@ pub fn audit_event_store_sqlite(store: Store) -> Arc<dyn AuditEventStoreBackend>
 }
 
 pub fn task_reservation_store_sqlite(store: Store) -> Arc<dyn TaskReservationStoreBackend> {
-    Arc::new(SqliteTaskReservationStoreBackend { store })
+    Arc::new(SqliteTaskReservationStoreBackend {
+        store,
+        coordination: None,
+    })
+}
+
+/// One workspace's task backends, reservation store, and the commit boundary
+/// they share.
+///
+/// Returned together on purpose: the boundary only serializes what holds the
+/// same instance, so a caller that composed the task backends here must take
+/// its reservation store from here too.
+pub struct CoordinatedWorkspaceBackends {
+    pub task: WorkspaceTaskBackends,
+    pub reservation: Arc<dyn TaskReservationStoreBackend>,
+    /// The durable commit/recovery authority. Admission publishes a task
+    /// transition, its history, a reservation, and dependent coordination rows
+    /// through [`TaskCommitBoundary::commit_task_transition`], optionally
+    /// inside a [`TaskCommitBoundary::with_admission`] section that also
+    /// covers its readiness reads.
+    pub commit_boundary: Arc<TaskCommitBoundary>,
+}
+
+/// Compose one workspace's task and reservation persistence over a shared
+/// durable commit boundary (ORB-12528).
+///
+/// The difference from [`workspace_task_backends`] plus
+/// [`task_reservation_store_sqlite`] is serialization and recovery, not
+/// storage layout: bundles, registry rows, and reservation rows are unchanged,
+/// and every existing API behaves as before. What is added is that ordinary
+/// task and reservation mutations run inside the boundary, reads settle an
+/// interrupted commit before exposing state, and an admission decision can
+/// read readiness and publish its transition plus reservation as one durable
+/// outcome.
+///
+/// `store` must be the database that holds this host's reservations.
+pub fn workspace_coordinated_backends(
+    registry: TaskRegistryStore,
+    workspace_id: String,
+    store: Store,
+) -> Result<CoordinatedWorkspaceBackends, orbit_common::OrbitError> {
+    let commit_boundary = Arc::new(TaskCommitBoundary::new(
+        store.clone(),
+        registry.clone(),
+        workspace_id.clone(),
+    )?);
+    let task_store = Arc::new(TaskV2Store::with_commit_boundary(
+        registry,
+        workspace_id,
+        Arc::clone(&commit_boundary),
+    ));
+    Ok(CoordinatedWorkspaceBackends {
+        task: WorkspaceTaskBackends {
+            task: task_store.clone(),
+            document: task_store.clone(),
+            history: task_store.clone(),
+            artifact: task_store,
+        },
+        reservation: Arc::new(SqliteTaskReservationStoreBackend {
+            store,
+            coordination: Some(Arc::clone(&commit_boundary)),
+        }),
+        commit_boundary,
+    })
 }
 
 pub fn global_policy_def_store(root: PathBuf) -> Arc<dyn PolicyDefStoreBackend> {

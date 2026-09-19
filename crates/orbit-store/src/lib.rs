@@ -129,8 +129,9 @@ pub use contracts::{
     RoutineCursor, RoutineFireIntentParams, RoutineFireRecord, RoutineFireState,
     RoutinePauseRecord, RoutineStoreBackend, SessionLogAppendParams, SessionLogEntry,
     SessionLogFilter, SessionLogKind, SessionLogStoreBackend, TaskArtifactStoreBackend,
-    TaskArtifactUpdateParams, TaskCompletionByComplexity, TaskCreateParams,
-    TaskDocumentStoreBackend, TaskDocumentUpdateParams, TaskHistoryStoreBackend,
+    TaskArtifactUpdateParams, TaskCompletionByComplexity, TaskCoordinationCommit,
+    TaskCoordinationCommitOutcome, TaskCoordinationCommitParams, TaskCoordinationRow,
+    TaskCreateParams, TaskDocumentStoreBackend, TaskDocumentUpdateParams, TaskHistoryStoreBackend,
     TaskHistoryUpdateParams, TaskInvocationMetrics, TaskLockConflict, TaskLockHolder,
     TaskReservationCheckParams, TaskReservationCheckResult, TaskReservationListResult,
     TaskReservationOwnedConflictsParams, TaskReservationOwnedConflictsResult,
@@ -152,6 +153,7 @@ pub use driver::sqlite::connection::{Store, StoreTx};
 pub use driver::sqlite::routine_store::{RoutineSweepLock, try_acquire_routine_sweep_lock};
 pub use fs::lock::{LockHolderInfo, read_lock_holder};
 pub use json_schema::{validate_instance_against_schema, validate_schema_document};
+pub use repository::task::TaskCommitBoundary;
 
 pub(crate) fn parse_timestamp(raw: &str) -> rusqlite::Result<DateTime<Utc>> {
     let parsed = DateTime::parse_from_rfc3339(raw)

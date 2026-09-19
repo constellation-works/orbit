@@ -10,6 +10,7 @@ impl TaskV2Store {
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<TaskCandidates, OrbitError> {
+        self.ensure_recovered()?;
         let filter = filter.normalized();
         if let Some(unsettled) = self.validate_index()? {
             return self.indexed_candidates(&filter, limit, unsettled);
@@ -207,6 +208,7 @@ impl TaskV2Store {
         list_read: bool,
     ) -> Result<Option<TaskRow>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
+        self.ensure_recovered()?;
         let bundle = if list_read {
             self.bundle_store.read_bundle_if_settled(id)?
         } else {

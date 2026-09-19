@@ -314,7 +314,12 @@ fn existing_file_len(path: &Path) -> Result<u64, OrbitError> {
     }
 }
 
-fn truncate_jsonl_file(path: &Path, len: u64) -> Result<(), OrbitError> {
+/// Cut a JSONL sidecar back to a recorded length.
+///
+/// Both recovery paths use it: the pending-write abort restores a bundle's
+/// pre-call state, and the commit-boundary replay drops any partial tail
+/// before re-appending its intent rows.
+pub(crate) fn truncate_jsonl_file(path: &Path, len: u64) -> Result<(), OrbitError> {
     match OpenOptions::new().write(true).open(path) {
         Ok(file) => {
             file.set_len(len)

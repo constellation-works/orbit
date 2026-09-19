@@ -58,6 +58,16 @@ serializing the final writes is insufficient. Task updates and other reservation
 must share that serialization boundary. The current reservation store transaction is an anchor,
 not an existing transaction spanning all those records; implementing this boundary is v1 work.
 
+The storage substrate for that transaction is live [ORB-12528]: `orbit-store`'s
+task/reservation commit boundary publishes a task transition, its history, a reservation, and
+dependent coordination rows as one durable decision, and gives ordinary task and reservation
+mutations the serialization an admission decision holds
+([docs/design-patterns/task_commit_boundary.md](../../design-patterns/task_commit_boundary.md)).
+It is composed explicitly (`compose::workspace_coordinated_backends`) and carries no pull,
+claim, or receipt semantics — ordering, request receipts, claim phases, provenance, and replay
+remain this section's work, and the runtime still composes the uncoordinated backends until
+that lifecycle slice lands.
+
 A caller durably allocates a `request_id` before each intended pull. Its scope is the owner
 workspace and authenticated caller machine. A retry with the same input returns the stored result,
 never another task. The drain run ID is context, not an idempotency key: one drain makes many

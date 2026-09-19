@@ -153,7 +153,11 @@ binding YAML are file behavior even though registry rows are SQLite-backed.
 
 Live task writes are committed by the composite task repository: a canonical
 bundle write plus registry allocation/binding/index rows. The drivers do not
-call each other. Task archive
+call each other. A write that must publish a task transition together with a
+reservation and dependent coordination rows goes through the repository's
+task/reservation commit boundary — one durable decision plus replay, and one
+serialization every ordinary task and reservation mutation shares
+([`docs/design-patterns/task_commit_boundary.md`](docs/design-patterns/task_commit_boundary.md)). Task archive
 import/export/reindex, owner-only task-publication transport and its read-only
 inspection, friction Markdown import/SQLite export, legacy audit and job-run
 import, and workspace layout upgrades are explicit `workflow` modules.

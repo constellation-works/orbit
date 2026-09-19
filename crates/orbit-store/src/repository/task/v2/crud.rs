@@ -9,6 +9,14 @@ impl TaskV2Store {
         params: TaskCreateParams,
         key: Option<&str>,
     ) -> Result<Task, OrbitError> {
+        self.in_boundary(|| self.create_task_locked(params, key))
+    }
+
+    fn create_task_locked(
+        &self,
+        params: TaskCreateParams,
+        key: Option<&str>,
+    ) -> Result<Task, OrbitError> {
         if params.title.trim().is_empty() {
             return Err(OrbitError::InvalidInput(
                 "task title must not be empty".to_string(),
@@ -103,6 +111,7 @@ impl TaskV2Store {
 
     /// Materialize tasks on the lightweight bundle path: no artifact hashing.
     pub(crate) fn list_tasks(&self) -> Result<Vec<Task>, OrbitError> {
+        self.ensure_recovered()?;
         if let Some(tasks) = self.indexed_tasks(TaskIndexFilter::default())? {
             return Ok(tasks);
         }
@@ -126,6 +135,7 @@ impl TaskV2Store {
         external_ref: Option<&ExternalRef>,
         has_external_ref_system: Option<&str>,
     ) -> Result<Vec<Task>, OrbitError> {
+        self.ensure_recovered()?;
         let mut tasks = match self.indexed_tasks(TaskIndexFilter {
             statuses: status.into_iter().collect(),
             priority,
@@ -155,6 +165,7 @@ impl TaskV2Store {
     }
 
     pub(crate) fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {
+        self.ensure_recovered()?;
         let required_tags = normalize_task_tags(tags.to_vec());
         if required_tags.is_empty() {
             return self.list_tasks();
@@ -176,6 +187,7 @@ impl TaskV2Store {
 
     pub(crate) fn get_task(&self, id: &str) -> Result<Option<Task>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
+        self.ensure_recovered()?;
         match self.bundle_store.read_bundle(id) {
             Ok(bundle) => self.task_from_bundle(bundle).map(Some),
             Err(OrbitError::NotFound {
@@ -195,6 +207,7 @@ impl TaskV2Store {
         query: &str,
         tags: &[String],
     ) -> Result<Vec<Task>, OrbitError> {
+        self.ensure_recovered()?;
         // Candidate materialization is lightweight; artifact content search
         // below may still open matching text blobs on demand.
         let lowered = query.to_lowercase();
@@ -229,6 +242,6 @@ impl TaskV2Store {
 
     pub(crate) fn delete_task(&self, id: &str) -> Result<bool, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
-        self.bundle_store.delete_bundle(id)
+        self.in_boundary(|| self.bundle_store.delete_bundle(id))
     }
 }
