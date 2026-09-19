@@ -35,6 +35,7 @@ async fn request_metrics(runtime: OrbitRuntime, uri: &str) -> Response {
         .oneshot(
             Request::builder()
                 .uri(format!("/api{uri}"))
+                .header("host", "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )

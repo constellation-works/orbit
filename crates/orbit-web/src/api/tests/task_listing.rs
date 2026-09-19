@@ -46,6 +46,7 @@ async fn cold_workspace_resolution_leaves_unrelated_requests_runnable() {
             .oneshot(
                 axum::http::Request::builder()
                     .uri("/tasks?workspace=alpha")
+                    .header("host", "localhost:7878")
                     .body(axum::body::Body::empty())
                     .unwrap(),
             )
@@ -58,6 +59,7 @@ async fn cold_workspace_resolution_leaves_unrelated_requests_runnable() {
         .oneshot(
             axum::http::Request::builder()
                 .uri("/workspaces")
+                .header("host", "localhost:7878")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -102,6 +104,7 @@ async fn aggregate_selects_global_newest_rows_before_reading_off_page_workspace_
         .oneshot(
             axum::http::Request::builder()
                 .uri("/tasks/all")
+                .header("host", "localhost:7878")
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

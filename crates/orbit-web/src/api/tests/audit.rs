@@ -224,6 +224,7 @@ async fn request_audit_on(
             Request::builder()
                 .method(Method::GET)
                 .uri(uri)
+                .header("host", "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )

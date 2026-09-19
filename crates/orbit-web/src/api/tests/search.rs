@@ -16,6 +16,7 @@ async fn request_search(runtime: OrbitRuntime, query: &str) -> (StatusCode, Valu
         .oneshot(
             Request::builder()
                 .uri(format!("/search?{query}"))
+                .header("host", "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )

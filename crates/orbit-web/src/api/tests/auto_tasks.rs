@@ -84,11 +84,13 @@ async fn send(
     uri: &str,
     body: Option<&str>,
 ) -> axum::response::Response {
-    let mut builder = Request::builder().method(method.clone()).uri(uri);
+    let mut builder = Request::builder()
+        .method(method.clone())
+        .uri(uri)
+        .header("host", "localhost:7878");
     if !matches!(method, Method::GET) {
         builder = builder
             .header("origin", "http://localhost:7878")
-            .header("host", "localhost:7878")
             .header("content-type", "application/json");
     }
     router()

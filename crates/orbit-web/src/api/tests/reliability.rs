@@ -30,6 +30,7 @@ async fn request_reliability(runtime: OrbitRuntime, query: &str) -> Response {
         .oneshot(
             Request::builder()
                 .uri(format!("/api/metrics/reliability{query}"))
+                .header("host", "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )

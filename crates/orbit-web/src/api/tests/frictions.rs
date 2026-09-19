@@ -33,11 +33,12 @@ async fn request(
     origin: Option<&str>,
     body: Option<Value>,
 ) -> axum::response::Response {
-    let mut builder = Request::builder().method(method).uri(uri);
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::HOST, "localhost:7878");
     if let Some(origin) = origin {
-        builder = builder
-            .header(header::ORIGIN, origin)
-            .header(header::HOST, "localhost:7878");
+        builder = builder.header(header::ORIGIN, origin);
     }
     let request = if let Some(body) = body {
         builder
