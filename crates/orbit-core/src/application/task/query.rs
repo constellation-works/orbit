@@ -1,14 +1,11 @@
 use std::collections::BTreeMap;
 
-use orbit_common::fs::task_io::prune_missing_context_files;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
     ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
 };
 
 use crate::OrbitRuntime;
-
-use super::paths::{canonicalize_context_files_for_read, context_workspace_root};
 
 impl OrbitRuntime {
     pub fn get_task(&self, id: &str) -> Result<Task, OrbitError> {
@@ -98,37 +95,6 @@ impl OrbitRuntime {
             return Ok(Vec::new());
         }
         self.stores().tasks().list_tasks_by_tags(tags)
-    }
-
-    /// Returns the `context_files` entries that would be dropped if the task
-    /// were re-saved through the normal write path. This does not mutate disk.
-    pub fn dry_run_prune_context_files(&self, task: &Task) -> Vec<String> {
-        let prune_root = context_workspace_root(&self.paths().repo_root, None);
-        let canonicalized = canonicalize_context_files_for_read(&task.context_files, &prune_root);
-        let (_kept, dropped) = prune_missing_context_files(&prune_root, canonicalized);
-        dropped
-    }
-
-    /// Drops `context_files` entries whose anchors no longer exist in the
-    /// workspace (the `orbit task lint --fix` path, formerly the standalone
-    /// `prune-context` backfill). Returns the updated task and the dropped
-    /// entries; no write happens when nothing is stale.
-    pub fn prune_task_context_files(&self, id: &str) -> Result<(Task, Vec<String>), OrbitError> {
-        let task = self.get_task(id)?;
-        let prune_root = context_workspace_root(&self.paths().repo_root, None);
-        let canonicalized = canonicalize_context_files_for_read(&task.context_files, &prune_root);
-        let (kept, dropped) = prune_missing_context_files(&prune_root, canonicalized);
-        if dropped.is_empty() {
-            return Ok((task, dropped));
-        }
-        let updated = self.update_task(
-            id,
-            super::TaskUpdateParams {
-                context_files: Some(kept),
-                ..Default::default()
-            },
-        )?;
-        Ok((updated, dropped))
     }
 
     pub fn list_tasks_filtered(

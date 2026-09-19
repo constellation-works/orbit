@@ -76,7 +76,7 @@ Start a drain under a grant with `orbit run auto --grant <ID>`.
 | `orbit task show <id>` | Show one task, found by ID across registered workspaces. `--fields` projects specific fields. |
 | `orbit task archive <id>` | Archive a task from any status. Archived is terminal: restore to any other status with `task update <id> --status <status> --force`. |
 | `orbit task artifact` | Manage task artifact files. |
-| `orbit task lint [id]` | Flag stale paths and vague acceptance criteria. Omit the ID to sweep active tasks; `--fix` drops `context_files` entries whose paths no longer exist; `--status` narrows the sweep. |
+| `orbit task lint [id]` | Flag context declarations that need repair and vague acceptance criteria. Omit the ID to sweep active tasks; `--restore-pruned` re-declares `context_files` entries an earlier prune recorded in task history; `--status` narrows the sweep. |
 | `orbit task flow` | Filed-vs-closed rates over time — is the backlog draining? |
 | `orbit task locks list` \| `contention` \| `reserve` \| `release` | Inspect and manage the file locks that gate parallel dispatch. |
 | `orbit task export` \| `import` \| `reindex` | Portable `tar.zst` task bundles, and index rebuild. |

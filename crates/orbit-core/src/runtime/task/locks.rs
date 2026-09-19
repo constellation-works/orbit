@@ -5,7 +5,6 @@ use std::path::Path;
 
 use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_common::fs::selector::{Selector, canonical_selector_in_workspace};
-use orbit_common::fs::task_io::prune_missing_context_files;
 use orbit_common::protocol::tool_input::{
     optional_string_list_alias, optional_u32_alias, required_string,
 };
@@ -23,7 +22,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::runtime::coordination_audit::{CoordinationAuditEvent, record_coordination_audit_event};
-use crate::runtime::task::canonicalize_context_files_for_read;
+use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
 
 pub(crate) const MAX_TASK_RESERVATION_TTL_SECONDS: u32 = 14400;
 
@@ -36,10 +35,10 @@ pub(crate) fn list(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
     emit_expired_reservation_events(runtime, &reservation_result.expired_reservations)?;
 
     // Expand each task's lock surface once and reuse it for both projections
-    // below. The expansion prunes every declared selector against the
-    // filesystem and, for an epic root, unions the surface of every
-    // descendant — so computing it per projection doubled the syscalls and the
-    // descendant walk for a listing that has a single answer.
+    // below. The expansion canonicalizes every declared selector and, for an
+    // epic root, unions the surface of every descendant — so computing it per
+    // projection doubled the work and the descendant walk for a listing that
+    // has a single answer.
     let repo_root = runtime.paths().repo_root.as_path();
     let locked_surfaces = TaskLockIndex::load(runtime, &[])?.into_active_lock_surfaces(repo_root);
 
@@ -252,12 +251,23 @@ pub(crate) fn reserve_with_index(
             // declares a surface, so an unknown task id is still reported as
             // not-found rather than folded into this refusal.
             let requested_files = requested_task_files_indexed(index, task_ids, repo_root)?;
-            if empty_task_surface_policy == EmptyTaskSurfacePolicy::Refuse
-                && task_ids
+            if empty_task_surface_policy == EmptyTaskSurfacePolicy::Refuse {
+                if task_ids
                     .iter()
                     .all(|task_id| !index.declares_context_surface(task_id))
-            {
-                return Err(no_lock_surface_error(task_ids));
+                {
+                    return Err(no_lock_surface_error(task_ids));
+                }
+                // Reached only when every declaration failed
+                // canonicalization: a declared-but-not-yet-created target
+                // keeps its selector, so an empty surface here is an invalid
+                // declaration, not a missing file.
+                if requested_files.is_empty() {
+                    return Err(invalid_lock_surface_error(
+                        task_ids,
+                        &invalid_declared_selectors(index, task_ids, repo_root),
+                    ));
+                }
             }
             (task_ids.clone(), requested_files)
         }
@@ -495,23 +505,20 @@ pub(crate) fn lock_context_files_for_task(
     task_lookup: &BTreeMap<String, Task>,
     workspace_root: &Path,
 ) -> Vec<String> {
-    let mut files = existing_context_files_at_root(task, workspace_root)
+    let mut files = declared_context_files(&task.context_files, workspace_root)
+        .retained
         .into_iter()
         .collect::<BTreeSet<_>>();
     if task.tags.iter().any(|tag| tag == "epic") {
         for candidate in task_lookup.values() {
             if task_is_descendant_of(candidate, &task.id, task_lookup) {
-                files.extend(existing_context_files_at_root(candidate, workspace_root));
+                files.extend(
+                    declared_context_files(&candidate.context_files, workspace_root).retained,
+                );
             }
         }
     }
     files.into_iter().collect()
-}
-
-fn existing_context_files_at_root(task: &Task, workspace_root: &Path) -> Vec<String> {
-    let canonical = canonicalize_context_files_for_read(&task.context_files, workspace_root);
-    let (kept, _dropped) = prune_missing_context_files(workspace_root, canonical);
-    kept
 }
 
 fn task_is_descendant_of(
@@ -664,9 +671,21 @@ impl TaskLockIndex {
         task: &TaskEnvelopeV2,
         workspace_root: &Path,
     ) -> Vec<String> {
-        let mut files = existing_envelope_context_files_at_root(task, workspace_root)
-            .into_iter()
-            .collect::<BTreeSet<_>>();
+        self.declared_lock_surface(task, workspace_root).retained
+    }
+
+    /// The canonical lock surface for `task` plus the declarations that could
+    /// not be canonicalized at all.
+    ///
+    /// Invalid entries are the only ones a lock surface loses, and they are
+    /// reported rather than dropped in silence: a task whose every declaration
+    /// is unusable would otherwise read as a claim protecting no files.
+    pub(crate) fn declared_lock_surface(
+        &self,
+        task: &TaskEnvelopeV2,
+        workspace_root: &Path,
+    ) -> DeclaredContextFiles {
+        let mut declared = declared_context_files(&task.context_files, workspace_root);
         if task.tags.iter().any(|tag| tag == "epic") {
             for descendant in self
                 .epic_descendants
@@ -675,25 +694,34 @@ impl TaskLockIndex {
                 .flatten()
                 .filter_map(|id| self.tasks.get(id))
             {
-                files.extend(existing_envelope_context_files_at_root(
-                    descendant,
-                    workspace_root,
-                ));
+                let descendant_surface =
+                    declared_context_files(&descendant.context_files, workspace_root);
+                declared.retained.extend(descendant_surface.retained);
+                declared.invalid.extend(descendant_surface.invalid);
             }
         }
-        files.into_iter().collect()
+        declared.retained = declared
+            .retained
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        declared.invalid = declared
+            .invalid
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        declared
     }
 
     /// Whether `task_id` (or, for an epic root, any descendant) has declared
-    /// any `context_files` entries at all, independent of whether those
-    /// selectors currently resolve to an existing path.
+    /// any `context_files` entries at all.
     ///
-    /// This is deliberately not [`Self::lock_context_files`]: a task can
-    /// declare a real selector for a file it hasn't created yet, and that is
-    /// an existing, unrelated no-op the domain already tolerates (the
-    /// selector is simply pruned when computing the lock surface). Only the
-    /// narrower case — nothing declared at all — is what a task-scope
-    /// reservation should refuse.
+    /// A selector for a file the task has not created yet is a declaration
+    /// like any other and reaches [`Self::lock_context_files`] intact, so this
+    /// answers the narrower question a task-scope reservation refuses on:
+    /// nothing declared at all.
     pub(crate) fn declares_context_surface(&self, task_id: &str) -> bool {
         let Some(task) = self.tasks.get(task_id) else {
             return false;
@@ -712,15 +740,6 @@ impl TaskLockIndex {
         }
         false
     }
-}
-
-fn existing_envelope_context_files_at_root(
-    task: &TaskEnvelopeV2,
-    workspace_root: &Path,
-) -> Vec<String> {
-    let canonical = canonicalize_context_files_for_read(&task.context_files, workspace_root);
-    let (kept, _dropped) = prune_missing_context_files(workspace_root, canonical);
-    kept
 }
 
 fn envelope_parent_id(task: &TaskEnvelopeV2) -> Option<&str> {
@@ -971,6 +990,46 @@ fn record_task_lock_audit_event(
 /// "0 file(s)" success that looks like a claim was taken when it was not.
 /// Refuse it by name instead so the caller declares context or falls back to
 /// explicit `--file` selectors.
+/// Every declared selector on the requested bundle, as stored, that cannot be
+/// canonicalized against the workspace root.
+fn invalid_declared_selectors(
+    index: &TaskLockIndex,
+    task_ids: &[String],
+    workspace_root: &Path,
+) -> Vec<String> {
+    let mut invalid = BTreeSet::new();
+    for task_id in task_ids {
+        if let Some(task) = index.get(task_id) {
+            invalid.extend(index.declared_lock_surface(task, workspace_root).invalid);
+        }
+    }
+    invalid.into_iter().collect()
+}
+
+/// A bundle that declares context whose every selector is unusable holds no
+/// files either, but for a different reason than
+/// [`no_lock_surface_error`]: the declaration exists and needs correcting
+/// rather than supplying. Naming the offending selectors is what makes the
+/// pre-admission repair actionable instead of a guess.
+fn invalid_lock_surface_error(task_ids: &[String], invalid: &[String]) -> OrbitError {
+    let (subject, verb) = if task_ids.len() == 1 {
+        ("task", "declares")
+    } else {
+        ("tasks", "declare")
+    };
+    let listed = if invalid.is_empty() {
+        "none could be canonicalized".to_string()
+    } else {
+        invalid.join(", ")
+    };
+    OrbitError::InvalidInput(format!(
+        "{subject} {} {verb} no usable context surface: no declared selector canonicalizes \
+         against this workspace ({listed}). Declared targets that do not exist yet are kept, so \
+         repair the invalid selectors with `orbit task update --context` before reserving",
+        task_ids.join(", ")
+    ))
+}
+
 fn no_lock_surface_error(task_ids: &[String]) -> OrbitError {
     let (subject, verb) = if task_ids.len() == 1 {
         ("task", "declares")

@@ -34,7 +34,7 @@ pub use error::{
     ArtifactOrigin, ArtifactOriginMode, DependencyNotDelivered, FrictionNotLocal, NotFoundKind,
     OrbitError, RecoverableVcsConflict, SqliteContention, WorkspaceClaimHeld,
 };
-pub use fs::task_io::{prune_missing_context_files, task_artifact_from_source_file};
+pub use fs::task_io::task_artifact_from_source_file;
 pub use model::pricing::{derive_cost_usd, normalize_token_usage};
 pub use observability::audit_id::audit_execution_id;
 pub use protocol::tool_input;

@@ -86,14 +86,16 @@ Remove filesystem-existence pruning from task context normalization/read project
 admission, reservation, and status-lock calculations used by this workspace. Canonicalize selector
 syntax and enforce repository boundaries, but preserve valid selectors for not-yet-created files and
 symbols. `allow_missing_context` still controls explicit operator existence checks; it must never
-cause a stored selector to disappear later. This replaces the current
+cause a stored selector to disappear later. This replaced the former
 `locks.rs::existing_envelope_context_files_at_root` pruning behavior and the equivalent task read
-paths. Missing is not invalid. Freeze the full canonical footprint on the claim and use it through
+paths with the shared non-pruning calculation
+`runtime/task/mod.rs::declared_context_files` [ORB-12490]. Missing is not invalid. Freeze the full canonical footprint on the claim and use it through
 execution and review, including after reservation expiry; current checkout contents cannot shrink
 it. Unclaimed legacy status locks use the same non-pruning canonicalization. A truly empty declared
 surface remains ineligible until an operator supplies context before admission; diagnostics name
-that remedy. Restore previously pruned declarations from authoritative task history where possible,
-or report them for operator repair; do not guess their intended scope.
+that remedy. Restore previously pruned declarations from authoritative task history where possible
+(`application/task/context_repair.rs`, reached by `orbit task lint --restore-pruned`), or report
+them for operator repair; do not guess their intended scope.
 
 V1 has no crew or platform filter in pull. Participating hosts must be able to execute every task
 eligible for the workspace, including its configured crews and required toolchains. This is a

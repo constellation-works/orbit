@@ -609,7 +609,7 @@ impl Commands {
                         TaskArtifactSubcommand::Put(_) => RuntimeNeed::Required,
                     },
                     TaskSubcommand::List(_) | TaskSubcommand::Flow(_) => RuntimeNeed::ReadOnly,
-                    TaskSubcommand::Lint(args) if !args.fix => RuntimeNeed::ReadOnly,
+                    TaskSubcommand::Lint(args) if !args.restore_pruned => RuntimeNeed::ReadOnly,
                     // Every other task verb keeps cwd (or `--workspace`) as its
                     // binding: only a read addressed by a globally unique ID can
                     // be routed from the ID alone.

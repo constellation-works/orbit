@@ -384,7 +384,7 @@ handoff state; completion still requires explicit authorization and verified lan
 ## Declared context survives missing filesystem targets
 
 **Recorded:** 2026-09 · Daniel requested removal of context-file pruning after review of [ORB-12488].
-**Code anchors:** `crates/orbit-core/src/runtime/task/locks.rs::existing_envelope_context_files_at_root`, `crates/orbit-core/src/application/task/paths.rs`
+**Code anchors:** `crates/orbit-core/src/runtime/task/mod.rs::declared_context_files`, `crates/orbit-core/src/runtime/task/locks.rs::TaskLockIndex::declared_lock_surface`, `crates/orbit-core/src/application/task/context_repair.rs` (landed in [ORB-12490], replacing `locks.rs::existing_envelope_context_files_at_root`)
 
 ### Context
 
@@ -402,7 +402,9 @@ context remains a pre-admission diagnostic requiring operator correction, not a 
 
 - New-file work retains its declared conflict protection before creation and after TTL expiry.
 - Cost: obsolete selectors continue holding locks until deliberately corrected; declarations
-  already pruned from stored tasks need history-backed restoration or operator repair.
+  already pruned from stored tasks need history-backed restoration (`orbit task lint
+  --restore-pruned`, which re-declares only what a `context_files_pruned` history entry recorded)
+  or operator repair.
 
 ## Task References
 

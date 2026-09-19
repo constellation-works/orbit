@@ -324,3 +324,37 @@ fn task_context_for_agent_input_truncates_a_single_oversized_comment_body() {
     assert_eq!(context["comments_truncated"], true);
     assert!(context.get("comments_omitted_count").is_none());
 }
+
+/// [ORB-12490] The envelope hands the implementer every declared selector,
+/// including targets the task has not created yet, so the agent's boundary
+/// matches the footprint its locks protect. A selector this run's root cannot
+/// canonicalize is passed through rather than dropped.
+#[test]
+fn task_context_for_agent_input_projects_every_declared_selector() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Creates a module".to_string(),
+            description: "Declares the file it will create.".to_string(),
+            context_files: vec![
+                "file:src/future.rs".to_string(),
+                "symbol:src/future.rs#run:function".to_string(),
+            ],
+            ..Default::default()
+        })
+        .expect("add task");
+
+    let context = runtime
+        .task_context_for_agent_input(&json!({
+            "task_id": task.id.clone(),
+            "workspace_path": "/override/worktree",
+            "repo_root": "/override/repo"
+        }))
+        .expect("build task context")
+        .expect("task context present");
+
+    assert_eq!(
+        context["context_files"],
+        json!(["file:src/future.rs", "symbol:src/future.rs#run:function"])
+    );
+}

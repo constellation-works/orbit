@@ -4,14 +4,14 @@ use std::time::Instant;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::anchor_path;
+use orbit_types::task::{Task, TaskType};
 use serde::{Deserialize, Serialize};
 
 use crate::OrbitRuntime;
+use crate::application::task::DeclaredContextFiles;
 
-use super::paths::{
-    canonicalize_context_files_for_read, context_workspace_root, extract_task_path_mentions,
-    task_path_exists,
-};
+use super::paths::{context_workspace_root, extract_task_path_mentions, task_path_exists};
+use crate::runtime::task::declared_context_files;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskLintReport {
@@ -41,15 +41,15 @@ impl OrbitRuntime {
         let started_at = Instant::now();
         let task = self.get_task(id)?;
         let workspace_root = context_workspace_root(&self.paths().repo_root, None);
-        let canonical_context_files =
-            canonicalize_context_files_for_read(&task.context_files, &workspace_root);
+        let declared = declared_context_files(&task.context_files, &workspace_root);
         let description_paths = extract_task_path_mentions(&task.description);
         let mut findings = Vec::new();
 
-        lint_context_file_paths(&canonical_context_files, &workspace_root, &mut findings);
+        self.lint_context_surface(&task, &declared, &mut findings)?;
+        lint_context_file_paths(&declared, &workspace_root, &mut findings);
         lint_description_paths(&description_paths, &workspace_root, &mut findings);
         lint_context_completeness(
-            &canonical_context_files,
+            &declared.retained,
             &description_paths,
             &workspace_root,
             &mut findings,
@@ -65,22 +65,95 @@ impl OrbitRuntime {
     }
 }
 
+impl OrbitRuntime {
+    /// Report the declarations admission cannot use.
+    ///
+    /// A task that declares nothing has no lock surface to reserve, and one
+    /// whose every selector is unusable is the same refusal with a different
+    /// remedy — both need operator repair *before* the task is admitted,
+    /// because execution may not widen its own scope. Pruning history, when it
+    /// exists, names exactly what the task used to declare, so the diagnostic
+    /// points at the evidence-backed repair rather than asking for a guess
+    /// ([ORB-12490]).
+    fn lint_context_surface(
+        &self,
+        task: &Task,
+        declared: &DeclaredContextFiles,
+        findings: &mut Vec<TaskLintFinding>,
+    ) -> Result<(), OrbitError> {
+        for selector in &declared.invalid {
+            findings.push(TaskLintFinding {
+                severity: TaskLintSeverity::Error,
+                check: "path_validity".to_string(),
+                message: format!(
+                    "context selector `{selector}` is not a valid in-repository selector"
+                ),
+                fix_it: format!(
+                    "Replace `{selector}` through `orbit task update --context` with a canonical `file:`, `dir:`, or `symbol:` selector inside the repository."
+                ),
+            });
+        }
+
+        if !declared.retained.is_empty() {
+            return Ok(());
+        }
+        // A chore that touches nothing in particular is ordinary, so it is
+        // reported at the lower severity — but it is still reported, because
+        // reservation and admission refuse an empty surface whatever the
+        // task's type.
+        let severity = if task.task_type == TaskType::Chore {
+            TaskLintSeverity::Warning
+        } else {
+            TaskLintSeverity::Error
+        };
+
+        // Only an empty surface needs the history read, so the sweep over
+        // every active task does not load history it will not use.
+        let restoration = self.plan_context_file_restore(task.id.as_str())?;
+        let remedy = if restoration.restored.is_empty() {
+            "Declare the files this task will modify with `orbit task update --context` before it is admitted.".to_string()
+        } else {
+            format!(
+                "Task history records {} previously pruned selector(s); restore them with `orbit task lint {} --restore-pruned`, or declare the scope with `orbit task update --context`.",
+                restoration.restored.len(),
+                task.id
+            )
+        };
+        findings.push(TaskLintFinding {
+            severity,
+            check: "context_surface".to_string(),
+            message:
+                "task declares no usable `context_files`; admission refuses an empty lock surface"
+                    .to_string(),
+            fix_it: remedy,
+        });
+        Ok(())
+    }
+}
+
+/// Report declared targets that do not exist in the checkout.
+///
+/// This is a warning, not an error, and never advises removing the selector: a
+/// declaration for a file the task is about to create is valid, holds its lock
+/// before creation, and is exactly what filesystem-existence pruning used to
+/// destroy ([ORB-12490]). What the finding buys is a typo check.
 fn lint_context_file_paths(
-    context_files: &[String],
+    declared: &DeclaredContextFiles,
     workspace_root: &Path,
     findings: &mut Vec<TaskLintFinding>,
 ) {
-    for path in context_files {
+    for path in &declared.retained {
         if task_path_exists(workspace_root, path) {
             continue;
         }
         findings.push(TaskLintFinding {
-            severity: TaskLintSeverity::Error,
-            check: "path_validity".to_string(),
-            message: format!("context file `{path}` does not exist in the task worktree"),
+            severity: TaskLintSeverity::Warning,
+            check: "context_target_missing".to_string(),
+            message: format!(
+                "context file `{path}` does not exist in the task worktree; the declaration is kept and keeps holding its lock"
+            ),
             fix_it: format!(
-                "Remove `{path}` from `context_files` or replace it with an existing path under `{}`.",
-                workspace_root.display()
+                "Confirm the task creates `{path}`. If it is a typo, correct it with `orbit task update --context`; a not-yet-created target needs no change."
             ),
         });
     }
