@@ -17,20 +17,32 @@ use crate::driver::sqlite::task_registry::{
 pub(super) fn store(temp: &TempDir) -> TaskV2Store {
     let registry =
         TaskRegistryStore::open(&task_registry_path(temp.path())).expect("open registry");
-    let repo_dir = temp.path().join("repo");
+    bound_store(&registry, temp, "orbit-test-123456", "repo")
+}
+
+/// A second (third, ...) workspace bound into the same coordination registry,
+/// as two checkouts on one machine are. Only the partition and its checkout
+/// directory differ; task ids stay globally allocated across both.
+pub(super) fn bound_store(
+    registry: &TaskRegistryStore,
+    temp: &TempDir,
+    partition_id: &str,
+    checkout: &str,
+) -> TaskV2Store {
+    let repo_dir = temp.path().join(checkout);
     let orbit_dir = repo_dir.join(".orbit");
     std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
     let binding = registry
         .bind_workspace(BindWorkspaceParams {
-            partition_id: Some("orbit-test-123456".to_string()),
-            slug: "Orbit Test".to_string(),
+            partition_id: Some(partition_id.to_string()),
+            slug: format!("Orbit Test {checkout}"),
             repo_root: repo_dir.clone(),
             workspace_path: repo_dir.clone(),
             orbit_dir: orbit_dir.clone(),
             repo_fingerprint: None,
         })
         .expect("bind workspace");
-    TaskV2Store::new(registry, binding.partition_id)
+    TaskV2Store::new(registry.clone(), binding.partition_id)
 }
 
 pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams {

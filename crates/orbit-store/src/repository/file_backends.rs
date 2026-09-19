@@ -10,9 +10,9 @@ use orbit_types::workflow::ExecutorDef;
 
 use crate::contracts::{
     AtomicTaskMutationOutcome, AtomicTaskMutationParams, ExecutorDefStoreBackend,
-    PolicyDefStoreBackend, TaskArtifactStoreBackend, TaskArtifactUpdateParams, TaskCreateParams,
-    TaskDocumentStoreBackend, TaskDocumentUpdateParams, TaskHistoryStoreBackend,
-    TaskHistoryUpdateParams, TaskStoreBackend,
+    PolicyDefStoreBackend, RegisteredTaskResolution, TaskArtifactStoreBackend,
+    TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentStoreBackend, TaskDocumentUpdateParams,
+    TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskStoreBackend,
 };
 use crate::driver::file::executor_def_store::ExecutorDefFileStore;
 use crate::driver::file::policy_def_store::PolicyDefFileStore;
@@ -69,6 +69,10 @@ impl TaskStoreBackend for TaskV2Store {
         targets: &BTreeSet<String>,
     ) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
         TaskV2Store::task_status_index_for(self, workspace_id, targets)
+    }
+
+    fn registered_task(&self, id: &str) -> Result<RegisteredTaskResolution, OrbitError> {
+        TaskV2Store::registered_task(self, id)
     }
 
     fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError> {

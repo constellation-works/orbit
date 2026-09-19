@@ -198,6 +198,83 @@ impl TaskV2Store {
         }
     }
 
+    /// Resolve `id` through the registry's ownership binding, so a dependency
+    /// owned by another workspace on this machine reads from its owner instead
+    /// of being reported missing because this partition has no bundle for it.
+    ///
+    /// Read-only and authority-preserving. The owner's bundle is read at the
+    /// path the registry registered for it, no binding or index row is
+    /// written, and the owner partition's commit boundary is deliberately not
+    /// settled from here: recovering another workspace's interrupted commit
+    /// would be a write to a workspace this caller does not own, so an
+    /// unreadable owner bundle fails closed as an error instead.
+    pub(crate) fn registered_task(&self, id: &str) -> Result<RegisteredTaskResolution, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        let Some(binding) = self.registry.find_task_binding(id)? else {
+            let known = match orbit_types::task::task_id_prefix(id) {
+                Some(prefix) => self.registry.task_prefix_is_known(prefix)?,
+                None => false,
+            };
+            return Ok(if known {
+                RegisteredTaskResolution::Missing
+            } else {
+                RegisteredTaskResolution::ForeignAuthority
+            });
+        };
+        if binding.partition_id == self.workspace_id {
+            return match self.get_task(id)? {
+                Some(task) => Ok(RegisteredTaskResolution::Resolved(Box::new(task))),
+                None => {
+                    self.registered_bundle_absent(&binding, &self.bundle_store.bundle_path(id)?)
+                }
+            };
+        }
+
+        let owner = TaskBundleStoreV2::new(self.registry.clone(), binding.partition_id.clone());
+        let canonical = owner.bundle_path(id)?;
+        if canonical != binding.canonical_path {
+            return Err(OrbitError::Store(format!(
+                "task '{id}' is bound to workspace '{}' at '{}', which is not its canonical bundle path '{}'; reindex that workspace before reading it as a dependency",
+                binding.partition_id,
+                binding.canonical_path.display(),
+                canonical.display()
+            )));
+        }
+        match owner.read_bundle(id) {
+            Ok(bundle) => self
+                .task_from_bundle(bundle)
+                .map(|task| RegisteredTaskResolution::Resolved(Box::new(task))),
+            Err(OrbitError::NotFound {
+                kind: NotFoundKind::Task,
+                ..
+            }) => self.registered_bundle_absent(&binding, &canonical),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Classify a registered binding whose bundle read found no task.
+    ///
+    /// A bundle read reports an unopenable directory the same way it reports
+    /// an absent one, and the binding says this machine did hold the task. A
+    /// directory that is still there is therefore unreadable rather than
+    /// gone — a distinction a caller has to act on differently, so it is an
+    /// error naming the owner instead of a prerequisite declared missing.
+    fn registered_bundle_absent(
+        &self,
+        binding: &crate::contracts::TaskBundleBinding,
+        bundle_dir: &Path,
+    ) -> Result<RegisteredTaskResolution, OrbitError> {
+        if bundle_dir.try_exists().unwrap_or(false) {
+            return Err(OrbitError::Store(format!(
+                "task '{}' is registered to workspace '{}' but its bundle at '{}' could not be read; check that workspace's permissions or reindex it",
+                binding.task_id,
+                binding.partition_id,
+                bundle_dir.display()
+            )));
+        }
+        Ok(RegisteredTaskResolution::Missing)
+    }
+
     pub(crate) fn search_tasks(&self, query: &str) -> Result<Vec<Task>, OrbitError> {
         self.search_tasks_filtered(query, &[])
     }

@@ -5,6 +5,8 @@ use orbit_types::task::{
     ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
 };
 
+use orbit_store::RegisteredTaskResolution;
+
 use crate::OrbitRuntime;
 
 impl OrbitRuntime {
@@ -13,6 +15,26 @@ impl OrbitRuntime {
             .tasks()
             .get_task(id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))
+    }
+
+    /// Resolve a dependency target through this machine's registered owner.
+    ///
+    /// A dependency is the one task reference that legitimately crosses a
+    /// workspace boundary: task ids are globally unique, and readiness already
+    /// projects statuses across every registered workspace
+    /// ([`Self::task_status_index`]). Reading the dependency's body has to
+    /// follow the same ownership, or preparation reports a prerequisite that
+    /// admission can plainly see as `not found` [ORB-12544].
+    ///
+    /// Selected-task authority is unchanged: this runtime still acts in, and
+    /// writes to, its own workspace only. The resolution never falls back to
+    /// another host, never accepts a caller-supplied owner, and never mutates
+    /// the prerequisite's workspace.
+    pub fn resolve_dependency_task(
+        &self,
+        id: &str,
+    ) -> Result<RegisteredTaskResolution, OrbitError> {
+        self.stores().tasks().registered_task(id)
     }
 
     pub fn get_task_artifacts(&self, id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {

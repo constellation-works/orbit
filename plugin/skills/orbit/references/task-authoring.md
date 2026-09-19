@@ -92,7 +92,12 @@ outside its root.
 ## Behavior-affecting optional fields
 
 - `dependencies: ["<task-id>", ...]` — prerequisites must reach a satisfying
-  status first.
+  status first. Unlike `resolves`, task IDs are global: a prerequisite owned by
+  another workspace registered on this machine is read from its owner, and
+  completing it there satisfies the dependency here. A prerequisite this
+  machine has never registered stays explicitly unverifiable — it is never
+  treated as satisfied from here, and it is never restored or edited from the
+  depending workspace.
 - `relations: [{"type": "resolves", "target": "<friction-id>"}]` — auto-resolves
   that friction when this task reaches `done`, **only in the same workspace**.
   Friction IDs are workspace-local; an unqualified target is never a global

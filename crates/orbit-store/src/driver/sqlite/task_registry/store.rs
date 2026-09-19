@@ -597,6 +597,22 @@ impl TaskRegistryStore {
         known_task_prefixes(&conn)
     }
 
+    /// Whether this registry has ever minted or registered a task id under
+    /// `prefix`.
+    ///
+    /// This is the authority test a cross-workspace dependency read needs: an
+    /// id under a prefix this machine has never issued belongs to another
+    /// host's registry, and no amount of local searching can resolve it.
+    /// Bounded like the write-path check it shares —
+    /// [`task_prefix_is_registered`] — rather than materializing every prefix.
+    pub fn task_prefix_is_known(&self, prefix: &str) -> Result<bool, OrbitError> {
+        let conn = self.read()?;
+        if active_task_prefix(&conn)? == prefix {
+            return Ok(true);
+        }
+        task_prefix_is_registered(&conn, prefix)
+    }
+
     pub fn canonical_task_bundle_path(
         &self,
         partition_id: &str,
