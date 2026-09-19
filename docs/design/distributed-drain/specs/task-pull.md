@@ -80,7 +80,12 @@ from durable owner-side grants; the input does not grant merge rights.
    policy and the executor's declared `caller_review_policy`; neither may differ from `none`.
    These checks also apply to pull receipt replay; the separate read-only receipt lookup below
    is for reconciliation across configuration/upgrades.
-2. Begin the owner store transaction. Look up the receipt by workspace, authenticated machine, and
+2. Begin the owner store transaction. Its substrate is the task/reservation commit boundary
+   [ORB-12528]: `with_admission` covers the readiness reads and `commit_task_transition`
+   publishes the transition, history, reservation, and dependent coordination rows as one
+   durable decision ([design pattern](../../../design-patterns/task_commit_boundary.md)).
+   Receipts and claims are its dependent rows; their schema and replay rules are defined here,
+   not by the boundary. Look up the receipt by workspace, authenticated machine, and
    request ID. An existing ID with different input yields `request_mismatch`; identical input
    returns its original outcome without new admission, history, or reservation.
 3. For a new request, select from current ready tasks in canonical order. Exclude invalid entries

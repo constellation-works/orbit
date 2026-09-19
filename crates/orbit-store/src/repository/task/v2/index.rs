@@ -274,6 +274,10 @@ impl TaskV2Store {
     where
         F: FnOnce() -> Result<T, OrbitError>,
     {
-        self.bundle_store.with_bundle_write_lock(id, op)
+        // Boundary first, bundle lock second, on every path. An admission
+        // section holds the boundary exclusively and then takes bundle locks
+        // inside it, so a caller that acquired them the other way round could
+        // deadlock against it (ORB-12528).
+        self.in_boundary(|| self.bundle_store.with_bundle_write_lock(id, op))
     }
 }

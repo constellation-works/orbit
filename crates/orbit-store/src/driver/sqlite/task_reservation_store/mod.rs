@@ -159,80 +159,7 @@ impl Store {
         params: &TaskReservationReserveParams,
     ) -> Result<TaskReservationReserveResult, OrbitError> {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            let now = crate::now_string();
-            let expired_reservations = expire_reservations_in_scope(
-                tx,
-                &params.workspace_orbit_dir,
-                params.workspace_id.as_deref(),
-                &now,
-                TaskReservationScope::Files,
-            )?;
-            let conflicts = find_reservation_conflicts(
-                tx,
-                &params.workspace_orbit_dir,
-                params.workspace_id.as_deref(),
-                &now,
-                &params.requested_files,
-            )?;
-            if !conflicts.is_empty() {
-                return Ok(TaskReservationReserveResult {
-                    reserved: false,
-                    reservation_id: None,
-                    expires_at: None,
-                    reserved_files: Vec::new(),
-                    conflicts,
-                    expired_reservations,
-                });
-            }
-
-            let reservation_id = unique_row_id("reservation-");
-            let created_at = now;
-            let expires_at =
-                (Utc::now() + Duration::seconds(params.ttl_seconds as i64)).to_rfc3339();
-            let task_ids_json = serialize_string_list(&params.task_ids)?;
-            let files_json = serialize_string_list(&params.requested_files)?;
-
-            tx.tx
-                .execute(
-                    "INSERT INTO task_reservations(
-                        reservation_id,
-                        workspace_orbit_dir,
-                        workspace_id,
-                        task_ids_json,
-                        files_json,
-                        actor,
-                        created_at,
-                        expires_at,
-                        released_at,
-                        owner_run_id,
-                        owner_metadata_json,
-                        release_reason,
-                        release_metadata_json,
-                        scope
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, NULL, NULL, 'files')",
-                    params![
-                        reservation_id,
-                        params.workspace_orbit_dir,
-                        params.workspace_id.as_deref(),
-                        task_ids_json,
-                        files_json,
-                        params.actor,
-                        created_at,
-                        expires_at,
-                        params.owner_run_id.as_deref(),
-                        params.owner_metadata_json.as_deref(),
-                    ],
-                )
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
-
-            Ok(TaskReservationReserveResult {
-                reserved: true,
-                reservation_id: Some(reservation_id),
-                expires_at: Some(expires_at),
-                reserved_files: params.requested_files.clone(),
-                conflicts: Vec::new(),
-                expired_reservations,
-            })
+            reserve_files_in_tx(tx, params)
         })
     }
 
@@ -421,6 +348,93 @@ impl Store {
             })
         })
     }
+}
+
+/// Expire, conflict-check, and insert one file reservation inside a caller's
+/// transaction.
+///
+/// [`Store::reserve_task_reservation`] is this function plus its own
+/// transaction. The task/reservation commit boundary calls it *inside* the
+/// transaction that also decides the commit, so a reservation and the task
+/// transition it authorizes are one durable decision rather than two
+/// independently committed writes.
+pub(super) fn reserve_files_in_tx(
+    tx: &mut crate::StoreTx<'_>,
+    params: &TaskReservationReserveParams,
+) -> Result<TaskReservationReserveResult, OrbitError> {
+    let now = crate::now_string();
+    let expired_reservations = expire_reservations_in_scope(
+        tx,
+        &params.workspace_orbit_dir,
+        params.workspace_id.as_deref(),
+        &now,
+        TaskReservationScope::Files,
+    )?;
+    let conflicts = find_reservation_conflicts(
+        tx,
+        &params.workspace_orbit_dir,
+        params.workspace_id.as_deref(),
+        &now,
+        &params.requested_files,
+    )?;
+    if !conflicts.is_empty() {
+        return Ok(TaskReservationReserveResult {
+            reserved: false,
+            reservation_id: None,
+            expires_at: None,
+            reserved_files: Vec::new(),
+            conflicts,
+            expired_reservations,
+        });
+    }
+
+    let reservation_id = unique_row_id("reservation-");
+    let created_at = now;
+    let expires_at = (Utc::now() + Duration::seconds(params.ttl_seconds as i64)).to_rfc3339();
+    let task_ids_json = serialize_string_list(&params.task_ids)?;
+    let files_json = serialize_string_list(&params.requested_files)?;
+
+    tx.tx
+        .execute(
+            "INSERT INTO task_reservations(
+                reservation_id,
+                workspace_orbit_dir,
+                workspace_id,
+                task_ids_json,
+                files_json,
+                actor,
+                created_at,
+                expires_at,
+                released_at,
+                owner_run_id,
+                owner_metadata_json,
+                release_reason,
+                release_metadata_json,
+                scope
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, NULL, NULL, 'files')",
+            params![
+                reservation_id,
+                params.workspace_orbit_dir,
+                params.workspace_id.as_deref(),
+                task_ids_json,
+                files_json,
+                params.actor,
+                created_at,
+                expires_at,
+                params.owner_run_id.as_deref(),
+                params.owner_metadata_json.as_deref(),
+            ],
+        )
+        .map_err(|error| OrbitError::Store(error.to_string()))?;
+
+    Ok(TaskReservationReserveResult {
+        reserved: true,
+        reservation_id: Some(reservation_id),
+        expires_at: Some(expires_at),
+        reserved_files: params.requested_files.clone(),
+        conflicts: Vec::new(),
+        expired_reservations,
+    })
 }
 
 /// Mark every TTL-expired row in `scope` released, returning what was expired.

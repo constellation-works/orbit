@@ -602,9 +602,16 @@ impl TaskRegistryStore {
         partition_id: &str,
         task_id: &str,
     ) -> Result<PathBuf, OrbitError> {
-        let partition_id = validate_partition_id(partition_id)?;
         validate_orb_task_id(task_id)?;
-        Ok(self.workspaces_dir.join(partition_id).join(task_id))
+        Ok(self.workspace_partition_dir(partition_id)?.join(task_id))
+    }
+
+    /// The directory holding one partition's task bundles. Callers that
+    /// coordinate a whole partition (rather than one bundle) anchor their
+    /// state here.
+    pub fn workspace_partition_dir(&self, partition_id: &str) -> Result<PathBuf, OrbitError> {
+        let partition_id = validate_partition_id(partition_id)?;
+        Ok(self.workspaces_dir.join(partition_id))
     }
 
     pub fn register_task_bundle(

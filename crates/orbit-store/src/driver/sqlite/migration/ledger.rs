@@ -202,12 +202,22 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_invocations_ts_index,
     },
+    // ORB-12528: the durable commit decision that lets one task transition,
+    // its history, a reservation, and dependent coordination rows be
+    // published as a single outcome across the bundle files and this
+    // database. Additive: an older binary ignores both tables.
+    Migration {
+        version: 21,
+        name: "task_commit_journal",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_task_commit_journal,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 20;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 21;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

@@ -6,6 +6,7 @@ impl TaskV2Store {
         id: &str,
     ) -> Result<Option<Vec<TaskComment>>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
+        self.ensure_recovered()?;
         match self.bundle_store.read_bundle(id) {
             Ok(bundle) => Ok(Some(
                 bundle
@@ -31,6 +32,7 @@ impl TaskV2Store {
         id: &str,
     ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
+        self.ensure_recovered()?;
         match self.bundle_store.read_bundle(id) {
             Ok(bundle) => Ok(Some(
                 bundle
