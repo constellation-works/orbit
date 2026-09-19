@@ -86,9 +86,17 @@ or incompatible protocol refuses, including a downgrade to an unprotected build.
 
 `orbit update --preflight --json` is the wrapper-facing admission probe. It
 opens no runtime, migrates no store, downloads nothing, and changes no binary
-or managed resource. It uses OS locks under the **same authoritative global
-root** (normally `~/.orbit/`; managed children retain their supplied registry
-root). Coordination lock files may be created. Exit 0 returns:
+or managed resource. It uses OS locks under the **generation authority**:
+`--root` (then `ORBIT_ROOT`) isolate first-create and participation to that
+data directory; otherwise the host-global root is used (normally `~/.orbit/`;
+managed children retain their supplied registry root). Isolated `HOME=` is the
+other working isolation — it relocates `~/.orbit` itself, which is what
+in-process MCP roundtrip fixtures use. A read-only unpinned `~/.orbit` (the
+agent-executor / Cowork sandbox) therefore cannot block `orbit --root
+<scratch> init` or `--root` / isolated-HOME `--preflight`. Host-binary
+replacement (`orbit update` without those overrides) still admits against the
+host-global root so a live client there continues to refuse. Coordination lock
+files may be created. Exit 0 returns:
 
 ```json
 {"schema_version":1,"admitted":true,"reservation":false,"contract":"executable-generation-v1","global_root":"/home/operator/.orbit"}

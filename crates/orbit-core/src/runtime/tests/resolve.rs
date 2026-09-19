@@ -8,8 +8,8 @@ use tempfile::{tempdir, tempdir_in};
 use orbit_common::{OrbitError, test_env};
 
 use super::super::resolve::{
-    ResolvedOrbitRoots, WorkspaceRootHint, resolve_bootstrap_roots, resolve_initialize_roots,
-    resolve_initialize_roots_with_hint, try_resolve_initialized_roots,
+    ResolvedOrbitRoots, WorkspaceRootHint, resolve_bootstrap_roots, resolve_generation_root,
+    resolve_initialize_roots, resolve_initialize_roots_with_hint, try_resolve_initialized_roots,
 };
 
 #[test]
@@ -311,6 +311,78 @@ fn try_resolve_honors_initialized_root_override() {
         .expect("try_resolve completes without error");
 
     assert_optional_pinned_roots(&resolved, &orbit_root);
+}
+
+#[test]
+fn generation_root_prefers_explicit_root_over_orbit_root_and_home() {
+    let home = tempdir().expect("home tempdir");
+    let env_root = tempdir().expect("env root");
+    let explicit = tempdir().expect("explicit root");
+    let home_var = home.path().to_string_lossy().into_owned();
+    let env_var = env_root.path().to_string_lossy().into_owned();
+    let _env = test_env::scoped([
+        ("HOME", Some(home_var.as_str())),
+        ("ORBIT_ROOT", Some(env_var.as_str())),
+        ("ORBIT_REGISTRY_ROOT", None),
+        ("ORBIT_MANAGED_RUN_CONTEXT", None),
+        ("ORBIT_RUN_ID", None),
+    ]);
+
+    let resolved =
+        resolve_generation_root(Some(explicit.path())).expect("explicit generation root");
+    assert_eq!(resolved, explicit.path());
+}
+
+#[test]
+fn generation_root_uses_orbit_root_when_no_flag_is_supplied() {
+    let home = tempdir().expect("home tempdir");
+    let env_root = tempdir().expect("env root");
+    let home_var = home.path().to_string_lossy().into_owned();
+    let env_var = env_root.path().to_string_lossy().into_owned();
+    let _env = test_env::scoped([
+        ("HOME", Some(home_var.as_str())),
+        ("ORBIT_ROOT", Some(env_var.as_str())),
+        ("ORBIT_REGISTRY_ROOT", None),
+        ("ORBIT_MANAGED_RUN_CONTEXT", None),
+        ("ORBIT_RUN_ID", None),
+    ]);
+
+    let resolved = resolve_generation_root(None).expect("env generation root");
+    assert_eq!(resolved, env_root.path());
+}
+
+#[test]
+fn generation_root_falls_back_to_home_orbit_without_overrides() {
+    let home = tempdir().expect("home tempdir");
+    let home_var = home.path().to_string_lossy().into_owned();
+    let _env = test_env::scoped([
+        ("HOME", Some(home_var.as_str())),
+        ("ORBIT_ROOT", None),
+        ("ORBIT_REGISTRY_ROOT", None),
+        ("ORBIT_MANAGED_RUN_CONTEXT", None),
+        ("ORBIT_RUN_ID", None),
+    ]);
+
+    let resolved = resolve_generation_root(None).expect("home generation root");
+    assert_eq!(resolved, home.path().join(".orbit"));
+}
+
+#[test]
+fn generation_root_uses_managed_registry_when_no_override_is_present() {
+    let home = tempdir().expect("home tempdir");
+    let registry = tempdir().expect("registry");
+    let home_var = home.path().to_string_lossy().into_owned();
+    let registry_var = registry.path().to_string_lossy().into_owned();
+    let _env = test_env::scoped([
+        ("HOME", Some(home_var.as_str())),
+        ("ORBIT_ROOT", None),
+        ("ORBIT_REGISTRY_ROOT", Some(registry_var.as_str())),
+        ("ORBIT_MANAGED_RUN_CONTEXT", Some("1")),
+        ("ORBIT_RUN_ID", Some("jrun-generation-root")),
+    ]);
+
+    let resolved = resolve_generation_root(None).expect("managed generation root");
+    assert_eq!(resolved, registry.path());
 }
 
 #[test]

@@ -63,7 +63,7 @@ impl UpdateCommand {
             .into());
         }
         if self.preflight {
-            let root = orbit_core::runtime::resolve_global_root()?;
+            let root = orbit_core::runtime::resolve_generation_root(root_override)?;
             let _admission = orbit_common::fs::generation::GenerationUpdate::acquire(&root)?;
             return Ok(Payload::detail(
                 serde_json::json!({

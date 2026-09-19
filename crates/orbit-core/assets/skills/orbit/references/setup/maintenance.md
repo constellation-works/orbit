@@ -101,7 +101,9 @@ Use `orbit update --preflight --json` against the configured executable and
 same authority before a wrapper changes the installation. Exit 0 reports
 `schema_version: 1`, `admitted: true`, `reservation: false` and
 `contract: executable-generation-v1`; exit 1 refuses admission on stderr.
-It opens no runtime or stores and may create coordination lock files. It is an
+`--root` or isolated `HOME=` selects that authority (scratch init in a
+read-only `~/.orbit` sandbox); without them, admission is the host-global
+root. It opens no runtime or stores and may create coordination lock files. It is an
 observation, not a reservation. `orbit update` reacquires and holds admission
 through replacement, then pins the candidate through convergence. External
 installers must quiesce clients; a standalone preflight is not race-free.

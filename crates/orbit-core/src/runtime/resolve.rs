@@ -33,6 +33,25 @@ pub fn resolve_global_root() -> Result<PathBuf, OrbitError> {
     orbit_common::fs::path::global_orbit_dir()
 }
 
+/// Authority used for executable-generation admission.
+///
+/// An explicit `--root` or `ORBIT_ROOT` isolates first-create and participation
+/// to that data directory so a read-only unpinned `~/.orbit` cannot block
+/// scratch init. Without those overrides the host-global root is used
+/// (`~/.orbit`, or `ORBIT_REGISTRY_ROOT` in a managed run).
+pub fn resolve_generation_root(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
+    if let Some(root) = root_override {
+        return Ok(root.to_path_buf());
+    }
+    if let Ok(explicit) = std::env::var("ORBIT_ROOT") {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
+    resolve_global_root()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedOrbitRoots {
     /// Shared workspace `.orbit` directory (the main-worktree root).
