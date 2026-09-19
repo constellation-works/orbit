@@ -267,9 +267,33 @@ calls.
 
 ### Auto-drain and operation mode
 
-**Start bounded window** submits `orbit run auto` for the selected duration
-and concurrency. Shipped tasks stay in `review` unless you opt into
-automatic completion.
+The pane reads top to bottom in the order you act: the window controls, the
+slot picture, a summary strip, then task readiness.
+
+**Start … window** submits `orbit run auto` for the selected duration
+(a segmented picker) and concurrency (blank means the runtime default). The
+line beside the button says what the window would admit — the eligible count
+against free slots — and the button label carries the chosen duration.
+Shipped tasks stay in `review` unless you opt into automatic completion.
+
+**Slots** draws one tile per leaf slot. Occupied tiles name the task the run
+carries and its phase; free tiles are dashed. Distributed drain can raise the
+slot count to twenty, so the tiles wrap.
+
+**Task readiness** groups the server's readiness rows by what you can do
+about them:
+
+- **Eligible now** — admitted in listed order when the window starts.
+- **Blocked by a running task** — grouped by the task holding the lock, with
+  the contested files as chips and the holder's slot phase, for both context
+  locks and same-wave deferrals.
+- **Waiting on dependencies** — collapsed to the tasks the chain bottoms out
+  on and the chain laid out by depth; **Show all** expands the full rows.
+- **Other reasons** — every remaining server reason with its evidence, so no
+  row is hidden.
+
+The snapshot is read-only: nothing is reserved or started until you start a
+window, and the counts cover the bounded snapshot, not the workspace.
 
 The completion checkbox is a governed operator action: it marks every task
 the window ships as `done` (`review` → `done`), not only the ones visible at
