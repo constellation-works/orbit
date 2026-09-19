@@ -304,6 +304,32 @@ function isNamedTool(name) {
   return trimmed.length > 0 && trimmed !== "unknown";
 }
 
+function formatFailureRatePct(rate) {
+  return `${((Number(rate) || 0) * 100).toFixed(1)}%`;
+}
+
+function renderToolCallFailureRateCard(stats, window = "24h") {
+  const failed = Number(stats && stats.failed) || 0;
+  const total = Number(stats && stats.total) || 0;
+  const rate = stats && stats.rate != null ? Number(stats.rate) : (total ? failed / total : 0);
+  const card = el("div", { class: "audit-summary-card" });
+  card.appendChild(el("div", {
+    class: "card-title",
+    text: `Tool call failure rate · window ${window}`,
+  }));
+  const body = el("div", { class: "card-body" });
+  body.appendChild(el("div", {
+    class: "tool-call-failure-rate",
+    text: `${formatFailureRatePct(rate)} · ${failed} failed / ${total} tool calls`,
+  }));
+  body.appendChild(el("div", {
+    class: "metric-trend tool-call-failure-rate-note",
+    text: "Raw status=failure over callable tool calls (tool run + tool run-mcp). Distinct from unexpected failure rate.",
+  }));
+  card.appendChild(body);
+  return card;
+}
+
 function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = "24h") {
   const failByTool = new Map();
   for (const f of failuresRows) {
@@ -411,6 +437,31 @@ function renderAuditSummary(data, ctx) {
     window.location.hash = buildAuditHash();
   };
 
+  const windowLabel = data.window || "24h";
+  const title = $("audit-summary-title");
+  if (title) title.textContent = `Audit Summary ${windowLabel}`;
+
+  if (data.tool_call_failure_rate) {
+    addCard(
+      "tool-call-failure-rate",
+      renderToolCallFailureRateCard(data.tool_call_failure_rate, windowLabel),
+      [data.tool_call_failure_rate, windowLabel],
+    );
+  }
+
+  const namedToolFailures = (data.tool_call_failures_by_tool || []).filter((row) => isNamedTool(row.tool));
+  if (namedToolFailures.length) {
+    addCard("tool-call-failures-by-tool", createCard(
+      `Tool call failures by tool · window ${windowLabel}`,
+      renderTable(namedToolFailures, [
+        { key: "tool", label: "tool" },
+        { key: "failed", label: "failed", num: true },
+        { key: "total", label: "total", num: true },
+        { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
+      ], filterByTool),
+    ), [namedToolFailures, windowLabel]);
+  }
+
   const namedRates = (data.failure_rate_by_tool || []).filter((row) => isNamedTool(row.tool));
   const namedFailures = (data.failures_by_tool || []).filter((row) => isNamedTool(row.tool));
   if (namedRates.length) {
@@ -418,8 +469,8 @@ function renderAuditSummary(data, ctx) {
       namedRates,
       namedFailures,
       filterByTool,
-      data.window || "24h",
-    ), [namedRates, namedFailures, data.window || "24h"]);
+      windowLabel,
+    ), [namedRates, namedFailures, windowLabel]);
   }
 
   const categoryOrder = ["unexpected", "expected", "denied", "diagnostic"];
@@ -1030,6 +1081,7 @@ export {
   buildAuditHash,
   setAuditSubtab,
   syncAuditControls,
+  effectiveAuditWindow,
   // refresh entry points
   fetchAndRenderAudit,
   fetchAndRenderPolicy,

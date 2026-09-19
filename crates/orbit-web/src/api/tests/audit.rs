@@ -706,6 +706,212 @@ async fn audit_summary_separates_reliability_from_negative_and_diagnostic_popula
     assert_eq!(unexpected.len(), 1);
     assert_eq!(unexpected[0]["tool"], "orbit.search");
     assert_eq!(unexpected[0]["count"], 1);
+
+    // Raw callable-tool rate includes expected negatives and lists every
+    // failing callable tool; denials sit in the denominator only.
+    assert_eq!(body["tool_call_failure_rate"]["failed"], 3);
+    assert_eq!(body["tool_call_failure_rate"]["total"], 9);
+    assert_eq!(
+        body["tool_call_failure_rate"]["rate"].as_f64(),
+        Some(3.0 / 9.0)
+    );
+    let raw_by_tool = body["tool_call_failures_by_tool"]
+        .as_array()
+        .expect("tool_call_failures_by_tool");
+    let tools: Vec<&str> = raw_by_tool
+        .iter()
+        .map(|row| row["tool"].as_str().expect("tool"))
+        .collect();
+    assert_eq!(
+        tools,
+        vec!["orbit.search", "orbit.task.show", "orbit.task.update"]
+    );
+    assert!(raw_by_tool.iter().all(|row| {
+        row["tool"] != "pipeline.worker.exit" && row["tool"] != "pipeline.run.terminal_conflict"
+    }));
+}
+
+/// ORB-12561: the summary pane needs the raw callable-tool failed/total rate
+/// and a per-tool list of every failing callable surface, reconciling with
+/// `GET /audit` under the same window and status filter.
+#[tokio::test]
+async fn audit_summary_aggregates_raw_tool_call_failure_rate_across_mixed_tools() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+
+    for index in 0..5 {
+        seed_audit_event(
+            &runtime,
+            &format!("exec-search-ok-{index}"),
+            "orbit.search",
+            AuditEventStatus::Success,
+            "actor-one",
+            None,
+        );
+    }
+    for index in 0..2 {
+        seed_audit_event(
+            &runtime,
+            &format!("exec-search-fail-{index}"),
+            "orbit.search",
+            AuditEventStatus::Failure,
+            "actor-one",
+            Some("search backend unavailable"),
+        );
+    }
+    for index in 0..4 {
+        seed_audit_event(
+            &runtime,
+            &format!("exec-update-ok-{index}"),
+            "orbit.task.update",
+            AuditEventStatus::Success,
+            "actor-one",
+            None,
+        );
+    }
+    for index in 0..3 {
+        seed_audit_event(
+            &runtime,
+            &format!("exec-update-fail-{index}"),
+            "orbit.task.update",
+            AuditEventStatus::Failure,
+            "actor-one",
+            Some("not found: task REC-missing"),
+        );
+    }
+    for index in 0..2 {
+        seed_audit_event(
+            &runtime,
+            &format!("exec-show-ok-{index}"),
+            "orbit.task.show",
+            AuditEventStatus::Success,
+            "actor-one",
+            None,
+        );
+    }
+    seed_audit_event(
+        &runtime,
+        "exec-show-fail",
+        "orbit.task.show",
+        AuditEventStatus::Failure,
+        "actor-one",
+        Some("not found: task REC-missing"),
+    );
+    seed_audit_event(
+        &runtime,
+        "exec-add-fail",
+        "orbit.task.add",
+        AuditEventStatus::Failure,
+        "actor-one",
+        Some("could not persist task"),
+    );
+    seed_fourteen_named_diagnostic_rows(&runtime);
+
+    let summary = body_json(request_audit(runtime.clone(), "/audit/summary?since=24h").await).await;
+    let rate = &summary["tool_call_failure_rate"];
+    assert_eq!(rate["failed"], 7, "raw failures across four callable tools");
+    assert_eq!(
+        rate["total"], 18,
+        "successes + failures; diagnostics excluded"
+    );
+    assert_eq!(rate["rate"].as_f64(), Some(7.0 / 18.0));
+
+    let by_tool = summary["tool_call_failures_by_tool"]
+        .as_array()
+        .expect("tool_call_failures_by_tool");
+    let tools: Vec<&str> = by_tool
+        .iter()
+        .map(|row| row["tool"].as_str().expect("tool"))
+        .collect();
+    assert_eq!(
+        tools,
+        vec![
+            "orbit.task.update",
+            "orbit.search",
+            "orbit.task.add",
+            "orbit.task.show",
+        ],
+        "every callable tool with failures must appear, not only unexpected-rate cards"
+    );
+    assert_eq!(by_tool[0]["failed"], 3);
+    assert_eq!(by_tool[0]["total"], 7);
+    assert_eq!(by_tool[1]["failed"], 2);
+    assert_eq!(by_tool[1]["total"], 7);
+    assert_eq!(by_tool[2]["failed"], 1);
+    assert_eq!(by_tool[2]["total"], 1);
+    assert_eq!(by_tool[3]["failed"], 1);
+    assert_eq!(by_tool[3]["total"], 3);
+    assert!(by_tool.iter().all(|row| {
+        row["tool"] != "pipeline.worker.exit" && row["tool"] != "pipeline.run.terminal_conflict"
+    }));
+
+    let unexpected_rates = summary["failure_rate_by_tool"]
+        .as_array()
+        .expect("failure_rate_by_tool");
+    assert_eq!(
+        unexpected_rates.len(),
+        1,
+        "unexpected-rate cards stay sample-size gated"
+    );
+    assert_eq!(unexpected_rates[0]["tool"], "orbit.search");
+
+    let listed_all =
+        body_json(request_audit(runtime.clone(), "/audit?since=24h&limit=200").await).await;
+    let listed_failures =
+        body_json(request_audit(runtime, "/audit?since=24h&status=failure&limit=200").await).await;
+    let all_rows = listed_all.as_array().expect("all events");
+    let failure_rows = listed_failures.as_array().expect("failure events");
+
+    let mut listed_failed = std::collections::BTreeMap::<String, u64>::new();
+    let mut listed_total = std::collections::BTreeMap::<String, u64>::new();
+    for row in all_rows {
+        let Some(tool) = row["tool_name"].as_str() else {
+            continue;
+        };
+        if tool.starts_with("pipeline.") {
+            continue;
+        }
+        *listed_total.entry(tool.to_string()).or_insert(0) += 1;
+    }
+    for row in failure_rows {
+        let Some(tool) = row["tool_name"].as_str() else {
+            continue;
+        };
+        if tool.starts_with("pipeline.") {
+            continue;
+        }
+        *listed_failed.entry(tool.to_string()).or_insert(0) += 1;
+    }
+
+    let summary_failed: u64 = by_tool
+        .iter()
+        .map(|row| row["failed"].as_u64().expect("failed"))
+        .sum();
+    let listed_failed_sum: u64 = listed_failed.values().copied().sum();
+    let listed_total_sum: u64 = listed_total.values().copied().sum();
+    assert_eq!(
+        rate["failed"].as_u64(),
+        Some(listed_failed_sum),
+        "summary failed count must match GET /audit?status=failure"
+    );
+    assert_eq!(
+        rate["total"].as_u64(),
+        Some(listed_total_sum),
+        "summary total must match GET /audit over the same window"
+    );
+    assert_eq!(summary_failed, listed_failed_sum);
+    for row in by_tool {
+        let tool = row["tool"].as_str().expect("tool");
+        assert_eq!(
+            row["failed"].as_u64(),
+            listed_failed.get(tool).copied(),
+            "per-tool failed count for {tool}"
+        );
+        assert_eq!(
+            row["total"].as_u64(),
+            listed_total.get(tool).copied(),
+            "per-tool total for {tool}"
+        );
+    }
 }
 
 /// The header tiles count runs with `COUNT(*)`, so a bad day does not read

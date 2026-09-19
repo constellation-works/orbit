@@ -298,6 +298,11 @@ struct AuditSummaryBundle {
     failures_by_tool: Vec<Value>,
     duration_by_tool: Vec<Value>,
     failure_rate_by_tool: Vec<Value>,
+    /// Raw `status=failure` over callable tool calls (`run` + `run-mcp`).
+    /// Distinct from `failure_rate_by_tool`, which is unexpected-only with a
+    /// successful + unexpected-failed denominator and a sample-size floor.
+    tool_call_failure_rate: Value,
+    tool_call_failures_by_tool: Vec<Value>,
     role_split: Vec<Value>,
     /// Canonical per-actor split [ORB-10888]. Unlike `role_split`, one agent
     /// appears once regardless of the granularity its label was recorded at,
@@ -349,6 +354,8 @@ fn summary_payload(bundle: &AuditSummaryBundle, since: DateTime<Utc>, window: &s
         "failures_by_tool": bundle.failures_by_tool,
         "duration_by_tool": bundle.duration_by_tool,
         "failure_rate_by_tool": bundle.failure_rate_by_tool,
+        "tool_call_failure_rate": bundle.tool_call_failure_rate,
+        "tool_call_failures_by_tool": bundle.tool_call_failures_by_tool,
         "role_split": bundle.role_split,
         "actor_split": bundle.actor_split,
         "attribution_split": bundle.attribution_split,
@@ -466,6 +473,9 @@ fn compute_audit_summary_bundle(
     });
     rate_vec.truncate(8);
 
+    let (tool_call_failure_rate, tool_call_failures_by_tool) =
+        callable_tool_call_failure_stats(&tool_aggs);
+
     let role_vec: Vec<_> = role_aggs
         .iter()
         .map(|r| {
@@ -547,6 +557,8 @@ fn compute_audit_summary_bundle(
         failures_by_tool: failures_vec,
         duration_by_tool: duration_vec,
         failure_rate_by_tool: rate_vec,
+        tool_call_failure_rate,
+        tool_call_failures_by_tool,
         role_split: role_vec,
         actor_split: actor_vec,
         attribution_split: attribution_vec,
@@ -698,4 +710,64 @@ fn count_active_long_runs(
 fn is_named_tool(name: &str) -> bool {
     let trimmed = name.trim();
     !trimmed.is_empty() && trimmed != "unknown"
+}
+
+/// Raw callable-tool failure rate for the audit-summary pane.
+///
+/// Counts `subcommand IN ('run', 'run-mcp')` rows on named, non-diagnostic
+/// surfaces. The numerator is `status = failure` (expected negatives included);
+/// denials stay in the denominator only. Every tool with at least one failure
+/// is listed — unlike unexpected `failure_rate_by_tool`, this is not
+/// sample-size gated and is not truncated.
+fn callable_tool_call_failure_stats(tool_aggs: &[AuditToolAggregate]) -> (Value, Vec<Value>) {
+    let mut failed: i64 = 0;
+    let mut total: i64 = 0;
+    let mut by_tool = Vec::new();
+    for tool in tool_aggs {
+        if !is_named_tool(&tool.tool_name) || is_failure_only_diagnostic_surface(&tool.tool_name) {
+            continue;
+        }
+        let tool_total = tool.mcp_total + tool.cli_total;
+        if tool_total <= 0 {
+            continue;
+        }
+        let tool_failed = tool.mcp_failures + tool.cli_failures;
+        failed += tool_failed;
+        total += tool_total;
+        if tool_failed > 0 {
+            let rate = tool_failed as f64 / tool_total as f64;
+            by_tool.push(json!({
+                "tool": tool.tool_name,
+                "failed": tool_failed,
+                "total": tool_total,
+                "rate": rate,
+            }));
+        }
+    }
+    by_tool.sort_by(|a, b| {
+        b["failed"]
+            .as_i64()
+            .unwrap_or(0)
+            .cmp(&a["failed"].as_i64().unwrap_or(0))
+            .then_with(|| {
+                a["tool"]
+                    .as_str()
+                    .unwrap_or("")
+                    .cmp(b["tool"].as_str().unwrap_or(""))
+            })
+    });
+    let rate = if total > 0 {
+        failed as f64 / total as f64
+    } else {
+        0.0
+    };
+    (
+        json!({
+            "failed": failed,
+            "total": total,
+            "rate": rate,
+            "denominator": "callable tool calls (run + run-mcp)",
+        }),
+        by_tool,
+    )
 }
