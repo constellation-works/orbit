@@ -98,7 +98,7 @@ const COORDINATION_LOCK_LABEL: &str = "task commit boundary";
 /// applied or abandoned.
 const PENDING_MARKER_FILE: &str = ".task-commit-pending";
 const REQUIRED_MARKER_FILE: &str = ".task-commit-required";
-const COMMIT_INTENT_SCHEMA_VERSION: u32 = 1;
+const COMMIT_INTENT_SCHEMA_VERSION: u32 = 2;
 
 static JOURNAL_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -114,6 +114,8 @@ pub(crate) enum CoordinationFault {
     AfterCommit,
     /// Midway through rolling a committed decision onto the bundle.
     DuringApply,
+    /// After evidence documents/comments, before artifact and envelope publication.
+    DuringEvidenceApply,
     /// While abandoning an undecided commit.
     DuringCompensation,
     /// While replaying the journal on the next entry.
@@ -187,6 +189,8 @@ struct TaskCommitIntent {
     events_len: u64,
     events: Vec<TaskEventRowV2>,
     envelope: TaskEnvelopeV2,
+    #[serde(default)]
+    evidence: lifecycle::EvidenceIntent,
 }
 
 /// One task-store partition's durable commit and recovery authority.
@@ -358,7 +362,10 @@ impl TaskCommitBoundary {
         &self,
         params: &TaskCoordinationCommitParams,
     ) -> Result<TaskCoordinationCommitOutcome, OrbitError> {
-        self.with_admission(|| self.commit_locked(params))
+        self.with_admission(|| {
+            self.refuse_unscoped_claim_write(&params.task_id)?;
+            self.commit_locked(params)
+        })
     }
 
     /// Dependent coordination rows published for this partition, by kind.
@@ -442,6 +449,26 @@ impl TaskCommitBoundary {
         )
             -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError>,
     ) -> Result<TaskCoordinationCommitOutcome, OrbitError> {
+        self.commit_locked_effects(
+            params,
+            make_rows,
+            &Default::default(),
+            &Default::default(),
+            None,
+        )
+    }
+
+    fn commit_locked_effects(
+        &self,
+        params: &TaskCoordinationCommitParams,
+        make_rows: &mut impl FnMut(
+            Option<&crate::contracts::TaskReservationReserveResult>,
+        )
+            -> Result<Vec<crate::contracts::TaskCoordinationRow>, OrbitError>,
+        effects: &crate::contracts::ClaimCommitEffects,
+        evidence: &crate::contracts::ClaimEvidence,
+        binding: Option<&crate::contracts::ClaimRun>,
+    ) -> Result<TaskCoordinationCommitOutcome, OrbitError> {
         orbit_types::task::validate_orb_task_id(&params.task_id)?;
         if params.actor.trim().is_empty() {
             return Err(OrbitError::InvalidInput(
@@ -461,7 +488,14 @@ impl TaskCommitBoundary {
                     return Ok(TaskCoordinationCommitOutcome::Stale { current_status });
                 }
 
-                let intent = self.build_intent(&bundle, params)?;
+                let mut intent = self.build_intent(&bundle, params)?;
+                self.prepare_claim_evidence(
+                    &mut intent,
+                    &bundle,
+                    evidence,
+                    binding,
+                    &params.actor,
+                )?;
                 let intent_json = serde_json::to_string(&intent)
                     .map_err(|error| OrbitError::Store(error.to_string()))?;
                 let journal_id = unique_journal_id();
@@ -480,11 +514,12 @@ impl TaskCommitBoundary {
                     return Err(error);
                 }
 
-                let decided = match self.store.commit_task_commit_journal_with_rows(
+                let decided = match self.store.commit_task_commit_journal_effects(
                     &journal_id,
                     params.reservation.as_ref(),
                     &params.rows,
                     make_rows,
+                    effects,
                 ) {
                     Ok(decided) => decided,
                     Err(error) => {
@@ -583,6 +618,7 @@ impl TaskCommitBoundary {
             events_len: self.events_len(&params.task_id)?,
             events,
             envelope,
+            evidence: Default::default(),
         })
     }
 
@@ -595,7 +631,7 @@ impl TaskCommitBoundary {
         journal_id: &str,
         intent: &TaskCommitIntent,
     ) -> Result<(), OrbitError> {
-        if intent.schema_version != COMMIT_INTENT_SCHEMA_VERSION {
+        if !(1..=COMMIT_INTENT_SCHEMA_VERSION).contains(&intent.schema_version) {
             return Err(OrbitError::Store(format!(
                 "task commit journal '{journal_id}' uses unsupported intent schema {}",
                 intent.schema_version
@@ -607,6 +643,7 @@ impl TaskCommitBoundary {
         for event in &intent.events {
             self.bundle_store.append_event(&intent.task_id, event)?;
         }
+        self.apply_claim_evidence(intent)?;
         self.bundle_store
             .rewrite_envelope(&intent.task_id, &intent.envelope)?;
         self.store.finish_task_commit_journal(journal_id)?;
@@ -710,6 +747,7 @@ fn unique_journal_id() -> String {
 }
 
 mod admission;
+mod lifecycle;
 
 #[cfg(test)]
 mod tests;

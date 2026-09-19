@@ -26,6 +26,7 @@ use crate::driver::sqlite::task_registry::{
 };
 
 mod admission;
+mod lifecycle;
 mod recovery;
 mod serialization;
 

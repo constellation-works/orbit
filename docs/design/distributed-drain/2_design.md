@@ -72,7 +72,7 @@ task-link, and artifact-origin fields represent trusted execution provenance; ab
 identity remains unknown and is never inferred from the workspace owner or a hostname.
 
 A caller durably allocates a `request_id` before each intended pull. Its scope is the owner
-workspace and authenticated caller machine. A retry with the same input returns the stored result,
+workspace and runtime execution-machine namespace. A retry with the same input returns the stored result,
 never another task. The drain run ID is context, not an idempotency key: one drain makes many
 legitimate pulls. Store successful `idle` results too; a later poll uses a new request ID. Refusals
 do not create a claim. Request receipts must not be deleted in a way that permits an old ID to
@@ -85,7 +85,7 @@ protocol that rejects retired request namespaces, not a time-based DELETE. Unset
 full receipts. This storage cost is accepted explicitly for v1.
 
 The response includes the task, resolved ship inputs, and a **claim handle**: `claim_id`,
-`reservation_id`, reservation expiry, and authenticated execution machine. A claim identifies
+`reservation_id`, reservation expiry, and runtime execution machine. A claim identifies
 one attempt, including the interval before a leaf run exists. Owner and follower drains use the
 same path. Request receipts and claim state are durable coordination data, not a fleet registry.
 
@@ -179,7 +179,7 @@ below. It does not run merge completion.
 ### 3.1 Attempt ownership and recovery
 
 The owner records each claim as `claimed`, `running`, `handed_off`, `failed`, or `revoked`.
-Only `claimed` and `running` authorize execution writes. The current claim ID, authenticated
+Only `claimed` and `running` authorize execution writes. The current claim ID, trusted runtime
 machine, bound run where applicable, and allowed phase are checked **inside the same transaction
 as every claim-scoped mutation**. Cover task summaries, artifacts, comments, friction creation,
 run binding, failure settlement, promotion, and cleanup. Mutation request IDs deduplicate retries
@@ -209,6 +209,16 @@ transition are atomic. A replayed pull response for that attempt must not reacti
 worker that returns receives `stale_claim` even if a newer attempt has made the task `in-progress`
 again. Its local compute and an already in-flight GitHub write cannot be undone, but its old
 candidate cannot become authoritative task state or pass the owner landing gate.
+
+The internal lifecycle substrate exposes `ClaimInvocation` (non-deserializable trusted runtime
+context), `ClaimMutation`, and read-only `ClaimInspection`. The existing task journal commits claim
+compare-and-set updates, mutation receipts, evidence, task transitions and reservation release.
+Inspection refuses pending journal repair rather than writing as a side effect. The durable merge
+intent guard and `landing_invalidated` state are seams for the later landing consumer. Recovery
+requires explicit operator context and retains prior branch/PR and artifact evidence.
+
+This substrate does not implement generic tool/friction transport propagation. That proof belongs
+to the routing/integration slice; distributed public execution stays unavailable until it passes.
 
 ### 3.2 Durable review and landing handoff
 
@@ -284,7 +294,7 @@ that credentials, network access, or tools remain usable after pull.
 |---|---|
 | Required crews and providers available and authenticated | Resolved workspace/task execution requirements and provider-specific probes |
 | Binary version and orchestration schema match the owner | Owner read-only capability/version response; pull enforces parity again |
-| Workspace identity, key-bound caller identity, and owner authorization match | Federated discovery and the read-only probe below; never call pull as a health check |
+| Workspace identity, SSH owner access, and session capability match | Federated discovery and the read-only probe below; never call pull as a health check |
 | Review policy is `none` on owner and executor | Owner policy captured at admission; executor verifies the same policy before binding |
 | Sandbox and required OS/toolchain capabilities available | Existing doctor checks plus workspace execution prerequisites |
 | Repository readable and credentials configured for push and PR operations | Git transport checks and provider authentication; `gh auth status` alone does not prove Git push permission |
@@ -298,23 +308,22 @@ policy, or toolchain configuration; v1 requires compatible workspace execution s
 
 Add an owner-served read-only probe before enabling pull. Its input is the host-qualified workspace
 selector; its response names the owner/workspace, binary version, distributed-drain protocol schema
-version, effective workspace capabilities, caller machine and identity proof, resolved ship mode,
-and review policy. It creates no receipts, reservations, claims, or tasks. Require destination-bound
-`KeyBound` identity for remote execution; a callers-file row selected by a self-asserted machine ID
-is insufficient. Local owner execution uses trusted local runtime identity. Return explicit
-selector/authorization errors without disclosing another caller's state. A policy/version mismatch
-is observable in the response so a client can diagnose it before admission; pull enforces it again.
+version, effective session capabilities, diagnostic caller machine, resolved ship mode,
+and review policy. It creates no receipts, reservations, claims, or tasks. SSH login establishes
+owner access. There is no destination callers file, forced-command acceptance requirement,
+key-bound proof, or replacement identity registry. Managed callers still cannot acquire operator
+capability by changing tool input or launching a privileged child. Policy/version mismatches are
+observable before admission and rechecked by pull.
 The distributed-drain protocol schema starts at `1` and versions pull, probe, and lifecycle
 request/response shapes; incompatible changes increment it. It is not the scoreboard's
 `ORCHESTRATION_SCHEMA_VERSION`. MCP initialization's binary/protocol metadata alone is insufficient.
 
 ## 5. Transport and authority routing
 
-> **Open, as of [ORB-12564].** This section's `KeyBound` requirement predates the removal of
-> destination-side caller authorization. There is no callers file and no key-bound identity proof;
-> a destination serves the authority the session's argv asks for. Pull cannot be built on the
-> identity model below without first re-deciding it. See
-> [federated-mcp 4_decisions.md](../federated-mcp/4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it).
+> **Authority decision (2026-09-19):** SSH login establishes ownership of the destination.
+> Session agent/operator capabilities and caller-side managed-run privilege restrictions remain.
+> Execution-machine labels provide attribution; trusted invocation context fences a claim and its
+> immutable run. It is not a new destination caller authorization grant.
 
 Followers initiate federated MCP over SSH stdio. The follower's destinations file locates the
 owner, and the SSH login to the owner is what admits the follower at all. SSH connection reuse is a
@@ -335,16 +344,14 @@ mutations: do not forward the entire activity and its local paths as though they
 Worker subprocess tools inherit the persisted owner selector and claim context as well. On an
 owner outage, dependent reads and mutations fail closed; local run diagnostics remain writable.
 
-The destination authenticates machine identity through key-bound SSH identity, not Tier 1
-self-assertion. Host display labels in payloads are diagnostic, not credentials. Revalidate
-authorization for retries. An authorization or version failure after an uncertain request leaves a
-pending admission to reconcile, not permission to mint another request and forget the first. A
-separate read-only receipt lookup (specified with pull) can resolve an uncertain admission after a
-compatible client upgrade without changing the original request's input. It requires current
-authorization and identity proof, but does not reapply ship/review policy or original binary parity.
-It grants no execution authority. If authorization is revoked or the lookup protocol itself is
-incompatible, an authorized owner uses claim inspection and deliberate recovery; do not expose
-receipts to the revoked caller. No inbound follower connection or fleet registry is required.
+The destination serves the session's granted capabilities after SSH access. Payload host labels
+are diagnostic, not credentials. Revalidate session capability and attempt context on retries.
+An uncertain request remains pending until its original receipt is reconciled; it does not permit
+minting a replacement request. Receipt lookup preserves the original namespace and input across
+compatible upgrades without granting execution authority. Worker invocations inspect their own
+receipt namespace; owner operators retain cross-attempt inspection and deliberate recovery access.
+No retired cross-caller ACL restricts operator access. No inbound follower connection or fleet
+registry is required.
 
 ## 6. Execution provenance
 
@@ -358,7 +365,7 @@ dangling reference.
 | Job run | `executed_on { machine_id, host_id }` | the runtime that inserts the run | immutable; steps inherit; nullable so pre-existing rows read as *unknown*, never as "the owner" |
 | Task | `job_run_host` beside `job_run_id` | the pipeline that links the run, via the owner | a pulled task's run lives in the follower's store; without the host the owner's `orbit run show` cannot resolve it |
 | Task history | `pulled_by { machine_id, run_context, claim_id, request_id }` | `orbit.task.pull` | already in the spec |
-| Task artifact | `origin { machine_id, host_id }` | the owner, at put time | over federated MCP the identity comes from the authenticated caller row, not from the payload |
+| Task artifact | `origin { machine_id, host_id }` | the owner, at put time | from trusted runtime invocation context; remote advisory labels alone leave origin unknown |
 | Agent envelope | `ORBIT_MACHINE_ID`, `ORBIT_HOST_ID` | the dispatching runner | advisory, for execution summaries and PR bodies; the store fields above are the truth |
 
 The key is the stable `machine_id`; `host_id` rides along for display and may be renamed. Nothing is
@@ -494,8 +501,8 @@ These are implementation acceptance criteria, not tests reported as passing by t
 | Truly empty legacy task/epic context | Diagnostic with pre-admission repair; no guessed or inherited surface |
 | `none`, `before-pr`, and `after-landing` review policies | Only `none` admits; typed not-required handoff works without reviewed SHAs or a review artifact |
 | Owner-local task without origin | Local candidate handoff and authorized local landing; no PR dispatch or remote credentials required |
-| Remote caller with self-asserted identity and agent capability | Probe reports proof; pull and lifecycle execution writes refuse without key-bound identity |
-| Read-only probe and receipt lookup after binary upgrade | No admission side effects; lookup finds original outcome without rewriting original input; revoked callers remain refused |
+| SSH session and managed worker invocation | Session capability gates operator actions; payload labels cannot replace current claim/run authority |
+| Read-only probe and receipt lookup after binary upgrade | No admission side effects; lookup finds original outcome without rewriting original input; revoked claims cannot acquire execution authority |
 | Approve a review-only handoff twice, or revoke before merge | One durable authorization/start request; revoked or stale candidate cannot land |
 | Idle polling and receipt compaction | One idle request per refill pass; tombstone replay cannot re-admit; unsettled receipt retained; growth metrics visible |
 | PR/local leaves replace auto wrappers in capacity accounting | Configured local ceiling includes actual bound/queued runs and unrepresented admissions exactly once |

@@ -35,8 +35,8 @@ task lock inside an admission section run under the outer acquisition rather tha
 | Step | What happens | What a crash here means |
 |---|---|---|
 | Prepare | Durable pending marker, then a `prepared` journal row carrying the bundle-side intent | Undecided: recovery abandons it; the task is untouched |
-| Decide | **Commit point.** One SQLite transaction inserts the reservation and the coordination rows and flips the row to `committed` | Decided: recovery replays the apply |
-| Apply | Truncate `events.jsonl` to the intent's recorded pre-apply length, append its events, republish `task.yaml`, settle the row `applied`, drop the marker | Still decided: the next entrant replays it again |
+| Decide | **Commit point.** One SQLite transaction inserts reservations/coordination rows, checks and replaces lifecycle rows, releases the settling claim’s reservation, and flips the journal to `committed` | Decided: recovery replays the apply |
+| Apply | Truncate `events.jsonl` to the intent's recorded pre-apply length, append its events, replay summary/comments/artifact bytes and manifest, republish `task.yaml`, settle the row `applied`, drop the marker | Still decided: the next entrant replays it again |
 
 Nothing infers the decision from bundle contents, and nothing tries to un-publish an envelope.
 Because no bundle file is touched before the commit point, a pre-commit failure has nothing to
@@ -91,6 +91,18 @@ a commit under an identity that already exists is refused by the database rather
 duplicated, and `TaskCommitBoundary::coordination_rows` reads them back after recovery settles.
 The boundary stores `payload_json` without interpreting it: receipt schema, claim phases,
 replay semantics, and retention belong to the caller, not here.
+
+Internal claim lifecycle uses the same boundary. `ClaimInvocation` is supplied by trusted
+runtime code, never deserialized from tool input. Current claim, machine, immutable bound run,
+and phase are checked under exclusive serialization; the SQL decision also compares the old
+claim/state payloads before replacing them. Mutation receipts deduplicate exact retries. Recovery
+revokes authority and refuses unresolved external merge intent; it does not infer failure from age
+or reservation expiry. Read-only claim inspection refuses pending repair rather than replaying it.
+
+Journal intent schema 2 includes replayable evidence. Schema 1 remains readable with empty evidence;
+older binaries refuse schema 2. Comment replay records the original log length, artifact replay
+writes the recorded bytes/manifest, and summary replay writes the recorded content. A crash after
+the decision leaves a repair obligation, never a successful partial settlement.
 
 ## Composition and cost
 

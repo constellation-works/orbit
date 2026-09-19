@@ -77,6 +77,12 @@ pub(crate) struct TaskV2Store {
 }
 
 impl TaskV2Store {
+    pub(crate) fn claim_boundary(&self) -> Result<&TaskCommitBoundary, OrbitError> {
+        self.coordination
+            .as_deref()
+            .ok_or_else(|| OrbitError::Store("claim lifecycle unavailable".into()))
+    }
+
     pub(crate) fn new(registry: TaskRegistryStore, workspace_id: String) -> Self {
         Self {
             bundle_store: TaskBundleStoreV2::new(registry.clone(), workspace_id.clone()),

@@ -132,8 +132,8 @@ pub struct TaskCommitJournalRecord {
 pub use orbit_types::task::ExecutionLocation;
 
 /// Authority supplied by the embedding runtime, never deserialized from tool input.
-/// The caller must already have workspace agent authorization. Remote construction
-/// is only for destination-bound key authentication, not claimed machine names.
+/// The caller must already have session agent capability. SSH login establishes owner
+/// access; remote machine labels are attribution, not destination credentials.
 #[derive(Debug, Clone)]
 pub struct AdmissionIdentity {
     location: ExecutionLocation,
@@ -148,7 +148,7 @@ impl AdmissionIdentity {
         }
     }
 
-    pub fn authenticated_key_bound(location: ExecutionLocation) -> Self {
+    pub fn trusted_remote(location: ExecutionLocation) -> Self {
         Self {
             location,
             remote: true,
@@ -268,4 +268,111 @@ pub struct AdmissionStorageUsage {
     /// Logical UTF-8 payload bytes; excludes SQLite page/index overhead.
     pub receipt_bytes: u64,
     pub tombstone_bytes: u64,
+}
+
+/// Immutable leaf identity. Host labels are diagnostic; machine and run fence ownership.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimRun {
+    pub machine_id: String,
+    pub run_id: String,
+}
+
+/// Invocation authority supplied by trusted runtime composition, never tool JSON or env.
+/// SSH establishes owner access; these fields fence attempts, not destination caller ACLs.
+/// The adapter must derive this value from its managed invocation, including when the
+/// tool payload omits task/claim context. Public distributed tools remain disabled until
+/// that propagation is implemented and verified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimInvocation {
+    pub(crate) task_id: String,
+    pub(crate) claim_id: String,
+    pub(crate) machine_id: String,
+    pub(crate) run: Option<ClaimRun>,
+    pub(crate) operator: bool,
+}
+
+impl ClaimInvocation {
+    /// Only trusted runtime code may call this constructor; payload labels confer no rights.
+    pub fn trusted_worker(
+        task_id: String,
+        claim_id: String,
+        machine_id: String,
+        run: Option<ClaimRun>,
+    ) -> Self {
+        Self {
+            task_id,
+            claim_id,
+            machine_id,
+            run,
+            operator: false,
+        }
+    }
+
+    /// The embedding runtime must first enforce operator/supervised recovery capability.
+    pub fn trusted_operator(task_id: String, claim_id: String, actor: String) -> Self {
+        Self {
+            task_id,
+            claim_id,
+            machine_id: actor,
+            run: None,
+            operator: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimEvidence {
+    pub summary: Option<String>,
+    pub comment: Option<String>,
+    pub artifacts: Vec<orbit_types::task::TaskArtifact>,
+}
+
+/// Internal lifecycle operations. Handoff evidence validation belongs to the application
+/// consumer; this boundary enforces ownership, atomicity, and phase, not merge approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClaimMutation {
+    Bind {
+        run: ClaimRun,
+        ship: AdmissionShipContract,
+    },
+    Evidence(ClaimEvidence),
+    Handoff(ClaimEvidence),
+    Fail(ClaimEvidence),
+    Recover {
+        status: TaskStatus,
+        reason: String,
+    },
+    /// Durable guard for the later external merge consumer. Only operators can record
+    /// or reconcile intent; revocation cannot race past an unresolved intent.
+    MergeIntent {
+        intent_id: String,
+        resolved: bool,
+        evidence: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimInspection {
+    pub claim: ExecutionClaim,
+    pub bound_run: Option<ClaimRun>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_event: String,
+    pub age_seconds: Option<i64>,
+    pub unresolved_merge_intent: Option<String>,
+    pub landing_invalidated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimMutationResult {
+    pub claim_id: String,
+    pub phase: ExecutionClaimPhase,
+    pub status: TaskStatus,
+}
+
+/// SQL effects checked and published at the journal's existing commit point.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ClaimCommitEffects {
+    pub replacements: Vec<(TaskCoordinationRow, TaskCoordinationRow)>,
+    pub release_reservation: Option<String>,
 }

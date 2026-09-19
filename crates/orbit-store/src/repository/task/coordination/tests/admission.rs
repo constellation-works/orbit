@@ -1,13 +1,13 @@
 use super::*;
 use crate::contracts::*;
 
-fn identity() -> AdmissionIdentity {
-    AdmissionIdentity::authenticated_key_bound(ExecutionLocation {
+pub(super) fn identity() -> AdmissionIdentity {
+    AdmissionIdentity::trusted_remote(ExecutionLocation {
         machine_id: "machine-a".into(),
         host_id: Some("display".into()),
     })
 }
-fn request(id: &str) -> AdmissionRequest {
+pub(super) fn request(id: &str) -> AdmissionRequest {
     AdmissionRequest {
         request_id: id.into(),
         caller_version: "test".into(),
@@ -28,7 +28,7 @@ fn request(id: &str) -> AdmissionRequest {
         },
     }
 }
-fn pull(fixture: &Coordinated, request: &AdmissionRequest) -> AdmissionLookup {
+pub(super) fn pull(fixture: &Coordinated, request: &AdmissionRequest) -> AdmissionLookup {
     fixture
         .boundary()
         .admit_task(
@@ -40,7 +40,7 @@ fn pull(fixture: &Coordinated, request: &AdmissionRequest) -> AdmissionLookup {
         )
         .expect("pull")
 }
-fn receipt(result: AdmissionLookup) -> AdmissionReceipt {
+pub(super) fn receipt(result: AdmissionLookup) -> AdmissionReceipt {
     match result {
         AdmissionLookup::Found { receipt, .. } => *receipt,
         other => panic!("expected receipt: {other:?}"),
@@ -389,7 +389,7 @@ fn receipt_identity_is_machine_scoped_and_current_phase_is_not_history() {
     let fixture = Coordinated::open(temp.path());
     fixture.create_task("work");
     let original = receipt(pull(&fixture, &request("one")));
-    let other = AdmissionIdentity::authenticated_key_bound(ExecutionLocation {
+    let other = AdmissionIdentity::trusted_remote(ExecutionLocation {
         machine_id: "other-machine".into(),
         host_id: None,
     });

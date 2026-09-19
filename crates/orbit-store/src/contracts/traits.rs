@@ -39,6 +39,19 @@ use crate::contracts::{
 };
 
 pub trait TaskStoreBackend: Send + Sync {
+    /// Internal lifecycle seam; unavailable backends fail closed.
+    fn mutate_execution_claim(
+        &self,
+        _context: Option<&super::ClaimInvocation>,
+        _mutation_id: &str,
+        _mutation: &super::ClaimMutation,
+    ) -> Result<super::ClaimMutationResult, OrbitError> {
+        Err(OrbitError::Store("claim lifecycle unavailable".into()))
+    }
+    fn inspect_execution_claims(&self) -> Result<Vec<super::ClaimInspection>, OrbitError> {
+        Err(OrbitError::Store("claim inspection unavailable".into()))
+    }
+
     /// Select metadata before hydration, retaining all-envelope index validation.
     fn task_candidates(
         &self,

@@ -153,3 +153,25 @@ impl TaskRecordService<'_> {
         Ok(deleted)
     }
 }
+
+impl crate::OrbitRuntime {
+    /// Internal trusted invocation seam. Transport adapters must supply managed context,
+    /// never construct it from tool arguments or advisory environment labels.
+    pub fn mutate_execution_claim(
+        &self,
+        context: Option<&orbit_store::contracts::ClaimInvocation>,
+        mutation_id: &str,
+        mutation: &orbit_store::contracts::ClaimMutation,
+    ) -> Result<orbit_store::contracts::ClaimMutationResult, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.stores()
+            .tasks()
+            .mutate_execution_claim(context, mutation_id, mutation)
+    }
+
+    pub fn inspect_execution_claims(
+        &self,
+    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+        self.stores().tasks().inspect_execution_claims()
+    }
+}

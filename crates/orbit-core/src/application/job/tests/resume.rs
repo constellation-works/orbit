@@ -484,3 +484,125 @@ fn resume_refuses_an_interrupted_run_whose_worker_is_still_alive() {
         .expect("list runs");
     assert_eq!(runs.len(), 1, "a refused resume persists no new run");
 }
+
+#[test]
+fn claimed_leaf_refuses_generic_resume_but_same_run_evidence_retries_work() {
+    use orbit_store::contracts::*;
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    let (_root, runtime, repo, global) = test_runtime();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "claimed leaf".into(),
+            plan: "execute".into(),
+            status: Some(TaskStatus::Backlog),
+            context_files: vec!["file:future.rs".into()],
+            ..Default::default()
+        })
+        .expect("task");
+    let backends = orbit_store::compose::workspace_coordinated_backends(
+        TaskRegistryStore::open(&task_registry_path(&global)).expect("registry"),
+        runtime.workspace_id().expect("workspace"),
+        runtime.stores().host.sqlite.clone(),
+    )
+    .expect("backends");
+    let identity = AdmissionIdentity::trusted_local(ExecutionLocation {
+        machine_id: "machine".into(),
+        host_id: None,
+    });
+    let request = AdmissionRequest {
+        request_id: "pull".into(),
+        caller_version: "test".into(),
+        caller_schema: 1,
+        caller_review_policy: "none".into(),
+        run_context: AdmissionRunContext {
+            run_id: "drain".into(),
+            job_name: "auto".into(),
+            host_id: None,
+        },
+        ship: AdmissionShipContract {
+            mode: "pr".into(),
+            base_branch: "agent-main".into(),
+            landing_branch: "agent-main".into(),
+            review_policy: "none".into(),
+            completion: "review".into(),
+            authorization_reference: None,
+        },
+    };
+    let AdmissionLookup::Found { receipt, .. } = backends
+        .commit_boundary
+        .admit_task(&identity, &request, "test", &repo, &repo.join(".orbit"))
+        .expect("admit")
+    else {
+        panic!("receipt")
+    };
+    let claim = receipt.claim.expect("claim");
+    let leaf = runtime
+        .stores()
+        .jobs()
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"task_id":task.id})),
+            None,
+        )
+        .expect("leaf");
+    let unbound = ClaimInvocation::trusted_worker(
+        task.id.clone(),
+        claim.claim_id.clone(),
+        "machine".into(),
+        None,
+    );
+    let run = ClaimRun {
+        machine_id: "machine".into(),
+        run_id: leaf.run_id.clone(),
+    };
+    runtime
+        .mutate_execution_claim(
+            Some(&unbound),
+            "bind",
+            &ClaimMutation::Bind {
+                run: run.clone(),
+                ship: request.ship,
+            },
+        )
+        .expect("bind");
+    let bound = ClaimInvocation::trusted_worker(
+        task.id.clone(),
+        claim.claim_id.clone(),
+        "machine".into(),
+        Some(run),
+    );
+    let evidence = ClaimMutation::Evidence(ClaimEvidence {
+        comment: Some("same-run step retry".into()),
+        ..Default::default()
+    });
+    assert!(
+        runtime
+            .mutate_execution_claim(None, "no-context", &evidence)
+            .is_err()
+    );
+    let first = runtime
+        .mutate_execution_claim(Some(&bound), "step", &evidence)
+        .expect("step");
+    assert_eq!(
+        runtime
+            .mutate_execution_claim(Some(&bound), "step", &evidence)
+            .expect("retry"),
+        first
+    );
+    runtime
+        .stores()
+        .jobs()
+        .finalize_job_run(&leaf.run_id, JobRunState::Interrupted, Utc::now(), Some(1))
+        .expect("interrupt");
+    let error = match runtime.plan_job_run_resume(&leaf.run_id) {
+        Ok(_) => panic!("resume refused"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("claimed execution"), "{error}");
+    assert_eq!(
+        runtime.get_task(&task.id).expect("task").status,
+        TaskStatus::InProgress
+    );
+}

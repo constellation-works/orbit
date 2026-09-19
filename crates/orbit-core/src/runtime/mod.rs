@@ -180,13 +180,13 @@ impl OrbitRuntime {
         &self,
         session: &orbit_types::tool::ToolSessionContext,
     ) -> Option<orbit_types::task::ExecutionLocation> {
-        if let Some(grant) = &session.remote_caller_grant {
-            return (grant.identity == orbit_types::tool::CallerIdentityProof::KeyBound).then(
-                || orbit_types::task::ExecutionLocation {
-                    machine_id: grant.caller_machine_id.clone(),
-                    host_id: None,
-                },
-            );
+        // Remote caller labels do not identify artifact authorship. Until trusted
+        // claim propagation supplies execution provenance, keep remote origin unknown.
+        if session
+            .transport
+            .is_some_and(|transport| transport != orbit_types::tool::McpTransport::Local)
+        {
+            return None;
         }
         session
             .process_machine_id
