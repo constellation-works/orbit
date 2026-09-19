@@ -3,15 +3,18 @@
 //! everywhere; the bwrap spawn itself is covered by the Linux-only
 //! integration tests.
 
+use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::fs;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use super::{
-    LinuxBwrapPostRunGuard, append_cargo_download_cache_mounts, cargo_home_dir,
-    compile_linux_bwrap_argv, expand_each_rule, expand_rules, probe_bwrap, walk_paths,
+    append_cargo_download_cache_mounts, cargo_home_dir, compile_linux_bwrap_argv, expand_each_rule,
+    expand_rules, probe_bwrap, probe_bwrap_with, walk_paths, BwrapProbeMemo, BwrapProbeOutcome,
+    LinuxBwrapPostRunGuard,
 };
 use orbit_common::OrbitError;
 use orbit_types::policy::ResolvedFsProfile;
@@ -212,14 +215,84 @@ fn compile_reuses_its_walk_for_the_post_run_guard() {
     assert_eq!(direct.take_post_run_guard(), None);
 }
 
-/// The probe is memoised: a second call returns the first outcome. On a host
-/// without the trusted binary the outcome is the deterministic unavailable
-/// message, which is exactly the case a per-dispatch re-probe kept paying for.
+/// The process-level probe is stable across calls. On a host without the
+/// trusted binary the outcome is the deterministic unavailable message, which
+/// is exactly the case a per-dispatch re-probe kept paying for.
 #[test]
 fn probe_bwrap_returns_the_same_outcome_on_repeat() {
     let first = probe_bwrap();
     let second = probe_bwrap();
     assert_eq!(first, second);
+}
+
+fn synthetic_probe(available: bool, detail: &str) -> BwrapProbeOutcome {
+    BwrapProbeOutcome {
+        available,
+        trusted_path: "/usr/bin/bwrap".to_string(),
+        detail: detail.to_string(),
+    }
+}
+
+/// A capability probe that ran and exited non-zero is not remembered, so a
+/// later call re-probes and can report available without restarting.
+#[test]
+fn probe_bwrap_reprobes_after_a_failed_capability_probe() {
+    let settled = OnceLock::new();
+    let calls = Cell::new(0);
+    let failed = synthetic_probe(
+        false,
+        "Bubblewrap capability probe failed: setting up uid map: No space left on device",
+    );
+    let available = synthetic_probe(true, "capability probe succeeded");
+
+    let first = probe_bwrap_with(&settled, || {
+        calls.set(calls.get() + 1);
+        BwrapProbeMemo::Unsettled(failed.clone())
+    });
+    assert_eq!(first, failed);
+    assert_eq!(calls.get(), 1);
+    assert!(
+        settled.get().is_none(),
+        "a failed capability probe must not pin the process memo"
+    );
+
+    let second = probe_bwrap_with(&settled, || {
+        calls.set(calls.get() + 1);
+        BwrapProbeMemo::Settled(available.clone())
+    });
+    assert_eq!(second, available);
+    assert_eq!(calls.get(), 2);
+    assert_eq!(settled.get(), Some(&available));
+}
+
+/// Settled host properties stay cached so dispatch does not re-spawn two
+/// processes per call.
+#[test]
+fn probe_bwrap_memoises_settled_outcomes() {
+    let cases = [
+        synthetic_probe(true, "capability probe succeeded"),
+        synthetic_probe(false, "trusted Bubblewrap not available at /usr/bin/bwrap"),
+        synthetic_probe(
+            false,
+            "Bubblewrap does not support the required --bind-fd object-authority mount",
+        ),
+    ];
+    for expected in cases {
+        let settled = OnceLock::new();
+        let calls = Cell::new(0);
+        let first = probe_bwrap_with(&settled, || {
+            calls.set(calls.get() + 1);
+            BwrapProbeMemo::Settled(expected.clone())
+        });
+        let second = probe_bwrap_with(&settled, || {
+            calls.set(calls.get() + 1);
+            panic!("settled outcome must not re-probe: {}", expected.detail);
+        });
+        assert_eq!(first, expected);
+        assert_eq!(second, expected);
+        assert_eq!(calls.get(), 1, "cached outcome still probed: {expected:?}");
+        assert_eq!(settled.get(), Some(&expected));
+    }
 }
 
 #[test]
