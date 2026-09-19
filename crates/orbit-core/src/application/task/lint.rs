@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::anchor_path;
-use orbit_types::task::{Task, TaskType};
+use orbit_types::task::Task;
 use serde::{Deserialize, Serialize};
 
 use crate::OrbitRuntime;
@@ -66,15 +66,16 @@ impl OrbitRuntime {
 }
 
 impl OrbitRuntime {
-    /// Report the declarations admission cannot use.
+    /// Report the declarations that leave the task without a usable lock
+    /// surface.
     ///
     /// A task that declares nothing has no lock surface to reserve, and one
     /// whose every selector is unusable is the same refusal with a different
-    /// remedy — both need operator repair *before* the task is admitted,
-    /// because execution may not widen its own scope. Pruning history, when it
-    /// exists, names exactly what the task used to declare, so the diagnostic
-    /// points at the evidence-backed repair rather than asking for a guess
-    /// ([ORB-12490]).
+    /// remedy. The legacy v2 dispatch admission path permits an empty surface,
+    /// but an operator task-scope reservation refuses it and distributed pull
+    /// admission will exclude it. Pruning history, when it exists, names
+    /// exactly what the task used to declare, so the diagnostic points at the
+    /// evidence-backed repair rather than asking for a guess ([ORB-12490]).
     fn lint_context_surface(
         &self,
         task: &Task,
@@ -97,24 +98,19 @@ impl OrbitRuntime {
         if !declared.retained.is_empty() {
             return Ok(());
         }
-        // A chore that touches nothing in particular is ordinary, so it is
-        // reported at the lower severity — but it is still reported, because
-        // reservation and admission refuse an empty surface whatever the
-        // task's type.
-        let severity = if task.task_type == TaskType::Chore {
-            TaskLintSeverity::Warning
-        } else {
-            TaskLintSeverity::Error
-        };
+        // This is advisory: legacy v2 admission permits an empty surface, so
+        // no task type is blocked by this lint finding. The operator
+        // reservation and distributed pull paths still need a real surface.
+        let severity = TaskLintSeverity::Warning;
 
         // Only an empty surface needs the history read, so the sweep over
         // every active task does not load history it will not use.
         let restoration = self.plan_context_file_restore(task.id.as_str())?;
         let remedy = if restoration.restored.is_empty() {
-            "Declare the files this task will modify with `orbit task update --context` before it is admitted.".to_string()
+            "Declare the files this task will modify with `orbit task update --context` before claiming an operator task-scope reservation or entering distributed pull admission; legacy v2 admission currently permits an empty surface.".to_string()
         } else {
             format!(
-                "Task history records {} previously pruned selector(s); restore them with `orbit task lint {} --restore-pruned`, or declare the scope with `orbit task update --context`.",
+                "Task history records {} previously pruned selector(s); restore them with `orbit task lint {} --restore-pruned`, or declare the scope with `orbit task update --context` before claiming an operator task-scope reservation or entering distributed pull admission.",
                 restoration.restored.len(),
                 task.id
             )
@@ -122,9 +118,7 @@ impl OrbitRuntime {
         findings.push(TaskLintFinding {
             severity,
             check: "context_surface".to_string(),
-            message:
-                "task declares no usable `context_files`; admission refuses an empty lock surface"
-                    .to_string(),
+            message: "task declares no usable `context_files`; legacy v2 admission permits an empty surface, but operator task-scope reservation refuses it and distributed pull admission will exclude it".to_string(),
             fix_it: remedy,
         });
         Ok(())

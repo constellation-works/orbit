@@ -207,10 +207,11 @@ pub(crate) fn reserve(
 /// An operator claiming a task's surface before starting work almost
 /// certainly wants a real claim: a task with nothing declared should be told
 /// so, not handed a reservation ID that holds nothing ([`Self::Refuse`]). The
-/// v2 dispatch admission gate reserves the same way to decide whether a task
-/// can start, and a task that has not declared any context yet has nothing to
-/// serialize against — admitting it trivially is correct there
-/// ([`Self::Admit`]).
+/// legacy v2 dispatch admission gate uses a compatibility no-op instead: a
+/// task that has not declared any context yet has nothing to serialize
+/// against, so admitting it trivially is correct there ([`Self::Admit`]).
+/// Distributed pull admission must not use that compatibility path: its
+/// ready-queue contract excludes empty surfaces before creating a claim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EmptyTaskSurfacePolicy {
     Refuse,
