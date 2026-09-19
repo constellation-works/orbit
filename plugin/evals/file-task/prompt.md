@@ -5,4 +5,4 @@ max_turns: 20
 allowed_tools: [Read, Glob, Grep, Skill]
 ---
 
-File an Orbit task in the orbit workspace: `orbit_command_exec` currently accepts any absolute cwd, so a worker can run commands outside its worktree. It should be confined to the run's worktree or a registered workspace root, with a refusal error when the cwd is outside. Treat it as a high-priority bug.
+File an Orbit task in the orbit workspace: `orbit_task_artifact_put` accepts a `path` containing `..`, so a worker can write outside the task's artifact directory. It should be confined to the artifact dir with a refusal error when the resolved path escapes it. Treat it as a high-priority bug.
