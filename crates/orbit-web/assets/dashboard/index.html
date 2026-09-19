@@ -30,6 +30,7 @@
           <div class="rail-group">
             <div class="rail-group-label">Work</div>
           <button class="tab" data-tab="tasks" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h9"/></svg><span class="rail-label">Tasks</span><span class="rail-count" id="rail-count-tasks"></span></button>
+          <button class="tab" data-tab="auto-drain" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h12v4H4z"/><path d="M10 8v5"/><path d="M7 13l3 3 3-3"/></svg><span class="rail-label">Auto-drain</span><span class="rail-count" id="rail-count-auto-drain"></span></button>
           </div>
 
           <div class="rail-group">
@@ -337,7 +338,6 @@
       <nav class="subtabs" id="operations-subtabs">
         <button class="subtab active" data-subtab="routines" type="button">Routines</button>
         <button class="subtab" data-subtab="auto-tasks" type="button">Auto-tasks</button>
-        <button class="subtab" data-subtab="auto-drain" type="button">Auto-drain</button>
       </nav>
       <main class="operations-layout" id="operations-routines-main">
         <section class="panel" id="routines-panel">
@@ -370,7 +370,9 @@
           </div>
         </section>
       </main>
-      <main class="operations-layout operations-auto-drain-layout" id="operations-auto-drain-main" hidden>
+    </section>
+    <section class="tab-pane" data-tab="auto-drain">
+      <main class="operations-layout operations-auto-drain-layout" id="operations-auto-drain-main">
         <section class="panel" id="auto-drain-panel">
           <header>
             <span>Bounded Auto-delivery Window</span>

@@ -1,6 +1,13 @@
 // Runs against shipped modules in both the Node DOM harness and Chromium.
 const { setWorkspace } = await import('./common.js');
-const { initOperations, fetchAndRenderOperations } = await import('./operations.js');
+const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderAutoDrainPane } = await import('./operations.js');
+// The Operations tab and the Auto-drain destination refresh separately in the
+// app; the harness drives both so every panel's behaviour is asserted together.
+const fetchAndRenderOperations = async () => {
+  const results = await Promise.allSettled([fetchAndRenderOperationsPane(), fetchAndRenderAutoDrainPane()]);
+  const failed = results.find(result => result.status === 'rejected');
+  if (failed) throw failed.reason;
+};
 const get = id => document.getElementById(id);
 const descendants = node => [node, ...Array.from(node.children || []).flatMap(descendants)];
 const button = (id, label) => descendants(get(id)).find(node => node.textContent === label && node.type === 'button');

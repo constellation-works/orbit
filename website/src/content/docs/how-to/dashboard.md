@@ -110,9 +110,10 @@ The left rail is the section map:
 | Rail | What it shows |
 |---|---|
 | **Tasks** | Backlog and other statuses for the selected workspace (or the aggregate list). |
+| **Auto-drain** | Under Work beside Tasks: the bounded auto-delivery window, with the Operation Mode grant that bounds it. The rail count is the number of tasks eligible now. |
 | **Audit** | Recent events and a 24-hour summary. |
 | **Diagnostics** | Recent runs, metrics, errors, incidents, reliability, and the scoreboard. |
-| **Operations** | Three subtabs: **Routines** (with the host clock), **Auto-tasks**, and **Auto-drain** (with operation-mode grants). |
+| **Operations** | Two subtabs: **Routines** (with the host clock) and **Auto-tasks**. |
 | **Knowledge** | Friction records. |
 
 ### Tasks
@@ -209,10 +210,11 @@ orbit audit list
 
 ## Operations: mint, toggle, clock, drain
 
-Operations has three subtabs: **Routines**, which also holds the host clock
-panel; **Auto-tasks**; and **Auto-drain**, which also holds the Operation Mode
-panel. All of them require a **single active workspace**. In **All workspaces** the panels stay read-only and explain
-why.
+Operations has two subtabs: **Routines**, which also holds the host clock
+panel, and **Auto-tasks**. **Auto-drain** is its own destination under Work
+(`#auto-drain`; the older `#operations/auto-drain` link still resolves) and
+also holds the Operation Mode panel. All of them require a **single active
+workspace**. In **All workspaces** the panels stay read-only and explain why.
 
 ### Routines
 

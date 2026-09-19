@@ -83,11 +83,16 @@ try {
     await page.evaluate(() => {
       document.querySelectorAll('.operation-details').forEach((node) => { node.open = false; });
     });
+    // Auto-drain is a Work destination now (`.tab`), the other two stay
+    // Operations subtabs; all three must stay reachable and unclipped.
     for (const tab of ['routines', 'auto-tasks', 'auto-drain']) {
-      await page.click(`#operations-subtabs .subtab[data-subtab="${tab}"]`);
+      const selector = tab === 'auto-drain'
+        ? '.tab[data-tab="auto-drain"]'
+        : `#operations-subtabs .subtab[data-subtab="${tab}"]`;
+      await page.click(selector);
       await page.waitForTimeout(200);
-      const reachable = await page.evaluate((name) => {
-        const button = document.querySelector(`#operations-subtabs .subtab[data-subtab="${name}"]`);
+      const reachable = await page.evaluate(([name, selector]) => {
+        const button = document.querySelector(selector);
         const panel = document.getElementById(`operations-${name}-main`);
         const workspace = document.getElementById('workspace-select');
         const bounds = (node) => node.getBoundingClientRect();
@@ -107,9 +112,13 @@ try {
           clipped,
           readinessRows,
         };
-      }, tab);
+      }, [tab, selector]);
       if (!reachable.subtab) throw new Error(`${tab} subtab not reachable at ${viewport.name}`);
       if (!reachable.panel) throw new Error(`${tab} panel hidden at ${viewport.name}`);
+      if (tab === 'auto-drain') {
+        const hash = await page.evaluate(() => location.hash);
+        if (hash !== '#auto-drain') throw new Error(`auto-drain did not route to #auto-drain at ${viewport.name}: ${hash}`);
+      }
       if (!reachable.workspace) throw new Error(`workspace selector not reachable at ${viewport.name} / ${tab}`);
       if (reachable.clipped) throw new Error(`Clipped Operations control at ${viewport.name} / ${tab}`);
       if (tab === 'auto-drain' && reachable.readinessRows !== 9) throw new Error(`Auto-drain diagnostics missing at ${viewport.name}: ${reachable.readinessRows}`);
