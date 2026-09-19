@@ -144,14 +144,17 @@ as absent; it never degrades into "fire with defaults".
 
 ### Seeded defaults and ownership
 
-`orbit workspace init` seeds `task_triage.yaml`, `task_pilot.yaml`, `ship_sweep.yaml`,
-`worktree_gc.yaml`, and `ci_failure_sweep.yaml`
+`orbit workspace init` seeds `ci_failure_sweep.yaml`, `dependabot_alert_sweep.yaml`,
+`task_pilot.yaml`, `ship_sweep.yaml`, and `worktree_gc.yaml`
 with a workspace-unique name and `enabled: false`. Nothing else is resolved at seed time, so
 two hosts initializing the same workspace name write byte-identical definitions
 [ORB-12236]. Auto-task definitions are evaluated by the tick directly; there is no seeded
 auto-task scheduler routine. The definition's versioned
 `enabled` field is the opt-in: changing it to `true` deliberately grants that scheduled
 capability in the workspace.
+
+`task_triage.yaml` is a retired prior default. Existing definitions are reconciled through
+the retired-routine path and are not seeded into new workspaces.
 
 Seeded files become workspace-authored immediately. Plain re-init is create-if-missing:
 it adds a newly shipped default or recreates a deleted default, but byte-for-byte preserves

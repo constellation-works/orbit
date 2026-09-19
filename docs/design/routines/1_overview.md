@@ -34,12 +34,15 @@ is host-local and never synced, so each owner checkout is an independent schedul
 > scheduler, validation, and dispatch kernels.
 
 `orbit workspace init` creates the complete default set (`ci_failure_sweep`,
-`dependabot_alert_sweep`, `task_triage`, `task_pilot`, `ship_sweep`, and `worktree_gc`) under
+`dependabot_alert_sweep`, `task_pilot`, `ship_sweep`, and `worktree_gc`) under
 `.orbit/routines/`. Every default is `enabled: false`: scheduled execution is an explicit,
 versioned opt-in made by changing the reviewed definition to `enabled: true`. Re-init
 creates newly introduced missing defaults but never rewrites existing routine files; those
 files belong to the workspace after seeding. A destructive force initialization recreates
 templates from defaults. [ORB-10739]
+
+`task_triage` is a retired prior default. Existing definitions are handled through the
+retired-routine reconciliation path rather than being seeded into new workspaces.
 
 ---
 

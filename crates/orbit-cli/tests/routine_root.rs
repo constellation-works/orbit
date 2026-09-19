@@ -97,18 +97,33 @@ fn routine_list_honors_explicit_root_over_uninitialized_home_and_environment() {
 
     assert_eq!(list["host_id"], "routine-root-host");
     let routines = list["routines"].as_array().expect("routine list array");
-    assert!(
-        routines.len() >= 6,
-        "expected the seeded routines from the custom root: {list}"
+    let expected_prefixes = [
+        "ci-failure-sweep-",
+        "dependabot-alert-sweep-",
+        "ship-sweep-",
+        "task-pilot-",
+        "worktree-gc-",
+    ];
+    assert_eq!(
+        routines.len(),
+        expected_prefixes.len(),
+        "expected exactly the active seeded routines from the custom root: {list}"
     );
-    assert!(
-        routines.iter().any(|routine| {
-            routine["name"]
-                .as_str()
-                .is_some_and(|name| name.starts_with("ci-failure-sweep-"))
-        }),
-        "custom-root routine list omitted ci_failure_sweep: {list}"
-    );
+    for prefix in expected_prefixes {
+        assert!(
+            routines.iter().any(|routine| {
+                routine["name"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with(prefix))
+            }),
+            "custom-root routine list omitted {prefix}: {list}"
+        );
+    }
+    assert!(!routines.iter().any(|routine| {
+        routine["name"]
+            .as_str()
+            .is_some_and(|name| name.starts_with("task-triage-"))
+    }));
     assert_home_empty(&fixture.home);
 }
 
