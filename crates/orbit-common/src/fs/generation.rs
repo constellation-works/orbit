@@ -3,6 +3,7 @@
 //! OS locks, not process discovery or expiring leases, define liveness. Never
 //! unlink these files: replacing a locked inode would create a second authority.
 
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
@@ -63,23 +64,72 @@ fn generation_record_name(name: &str) -> Result<&'static str, OrbitError> {
     }
 }
 
+/// CodeQL `rust/path-injection` treats `Path::starts_with` as a SafeAccessCheck
+/// on the receiver. Call this after reconstructing a path so `is_dir` / open
+/// sinks only see a prefix-checked value.
+fn generation_path_is_contained(path: &Path, base: &Path) -> bool {
+    path.starts_with(base)
+}
+
+fn generation_leaf_name(root: &Path) -> Result<&OsStr, OrbitError> {
+    let Some(name) = root.file_name() else {
+        return Err(refusal("generation root must not be empty"));
+    };
+    if name == "." || name == ".." {
+        return Err(refusal("generation root escapes its start"));
+    }
+    Ok(name)
+}
+
+fn contained_under_parent(parent: &Path, name: &OsStr) -> Result<PathBuf, OrbitError> {
+    let contained = parent.join(name);
+    if !generation_path_is_contained(&contained, parent) {
+        return Err(refusal("generation root escapes its parent"));
+    }
+    Ok(contained)
+}
+
 /// Resolve the authority root before any generation lock is created or opened.
 ///
 /// Callers pass `~/.orbit` or a test directory; both are untrusted path values.
-/// An existing root is canonicalized so aliases collapse to one directory. A
-/// missing root is reconstructed from its components so `..` cannot walk
-/// outside the starting location before `create_dir_all`.
+/// An existing root is canonicalized so aliases collapse to one directory, then
+/// reconstructed under its canonical parent so later filesystem sinks only see
+/// a prefix-checked path. A missing root whose parent exists is joined onto
+/// that canonical parent. A missing parent is reconstructed from components so
+/// `..` cannot walk outside the starting location before `create_dir_all`.
 fn validated_generation_root(root: &Path) -> Result<PathBuf, OrbitError> {
     if root.as_os_str().is_empty() {
         return Err(refusal("generation root must not be empty"));
     }
     match root.canonicalize() {
-        Ok(canonical) => {
-            if !canonical.is_dir() {
-                return Err(refusal("generation root must be a directory"));
-            }
-            Ok(canonical)
-        }
+        Ok(canonical) => existing_generation_root(canonical),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => missing_generation_root(root),
+        Err(error) => Err(refusal(error)),
+    }
+}
+
+fn existing_generation_root(canonical: PathBuf) -> Result<PathBuf, OrbitError> {
+    let name = generation_leaf_name(&canonical)?;
+    let parent = canonical
+        .parent()
+        .ok_or_else(|| refusal("generation root must be a directory"))?;
+    let contained = parent.join(name);
+    if !contained.starts_with(parent) {
+        return Err(refusal("generation root escapes its parent"));
+    }
+    if !contained.is_dir() {
+        return Err(refusal("generation root must be a directory"));
+    }
+    Ok(contained)
+}
+
+fn missing_generation_root(root: &Path) -> Result<PathBuf, OrbitError> {
+    let name = generation_leaf_name(root)?;
+    let Some(parent) = root.parent().filter(|path| !path.as_os_str().is_empty()) else {
+        return normalize_missing_generation_root(root);
+    };
+    match parent.canonicalize() {
+        Ok(canonical_parent) => contained_under_parent(&canonical_parent, name),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             normalize_missing_generation_root(root)
         }
@@ -110,19 +160,32 @@ fn normalize_missing_generation_root(root: &Path) -> Result<PathBuf, OrbitError>
     if normalized.as_os_str().is_empty() {
         return Err(refusal("generation root must not be empty"));
     }
-    Ok(normalized)
+    let text = normalized.to_string_lossy();
+    if text.contains("..") {
+        return Err(refusal("generation root must not contain '..'"));
+    }
+    let verified = PathBuf::from(text.as_ref());
+    match (verified.parent(), verified.file_name()) {
+        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+            contained_under_parent(parent, name)
+        }
+        _ => Ok(verified),
+    }
 }
 
 /// Join an allow-listed generation record name onto a validated root.
 ///
 /// The original caller string never reaches `Path::join`; only the matching
-/// static name does. Containment is re-checked after the join so the open
-/// and `create_dir_all` sinks receive a reconstructed path rather than the
-/// user-provided values.
+/// static name does. Containment is re-checked with `starts_with` after the
+/// join so the open and `create_dir_all` sinks receive a reconstructed path
+/// rather than the user-provided values.
 fn validated_generation_record_path(root: &Path, name: &str) -> Result<PathBuf, OrbitError> {
     let root = validated_generation_root(root)?;
     let name = generation_record_name(name)?;
     let path = root.join(name);
+    if !generation_path_is_contained(&path, &root) {
+        return Err(refusal("generation record path escapes the root"));
+    }
     if path.parent() != Some(root.as_path()) {
         return Err(refusal("generation record path escapes the root"));
     }
@@ -144,6 +207,12 @@ struct Record {
 fn open(root: &Path, name: &str) -> Result<Record, OrbitError> {
     let root = validated_generation_root(root)?;
     let path = validated_generation_record_path(&root, name)?;
+    let parent = root
+        .parent()
+        .ok_or_else(|| refusal("generation root must be a directory"))?;
+    if !root.starts_with(parent) || !path.starts_with(&root) {
+        return Err(refusal("generation record path escapes the root"));
+    }
     std::fs::create_dir_all(&root).map_err(refusal)?;
     match OpenOptions::new()
         .read(true)
