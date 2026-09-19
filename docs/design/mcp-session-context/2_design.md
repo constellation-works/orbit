@@ -4,12 +4,12 @@ type: design
 title: "MCP Session Context — Design"
 owner: codex
 last_updated: 2026-08-30
-last_validated: 2026-08-30
+last_validated: 2026-09-19
 status: Accepted
 feature: mcp-session-context
 doc_role: design
 tags: ["mcp-session-context", "mcp", "workspace", "audit"]
-paths: ["crates/orbit-common/src/types/tool.rs", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/command/tool/**", "crates/orbit-store/src/sqlite/audit_event_store/**"]
+paths: ["crates/orbit-types/src/tool/**", "crates/orbit-mcp/src/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-core/src/adapter/command/**", "crates/orbit-store/src/driver/sqlite/audit_event_store/**"]
 related_features: ["mcp-session-context"]
 related_artifacts: []
 ---
@@ -30,7 +30,7 @@ related_artifacts: []
 | trace_id | MCP adapter | Fresh correlation ID for one tools/call |
 | orchestrator | The server's launch binding | Crew name attributed to tasks the session creates; never an authorization or execution input |
 
-Clients cannot populate trusted fields through initialize metadata or tool JSON. Initialize accepts only the workspace selector under _meta.orbit.workspace, plus the compatibility spelling _meta["orbit.workspace"].
+Clients cannot populate trusted fields through initialize metadata or tool JSON. Initialize accepts a workspace selector under _meta.orbit.workspace (plus the compatibility spelling _meta["orbit.workspace"]) and an untrusted self-reported actor claim; caller/process/transport/correlation fields remain server-owned.
 
 A session may also be bound at launch: `orbit mcp serve --workspace <selector>` seeds the trusted envelope's workspace before any client connects. That binding is decided by whoever wrote the launch configuration, not by the connecting client, but it is still only a selector — it is resolved against the registry on every call and overridden by an explicit per-call workspace.
 
@@ -63,13 +63,13 @@ Process cwd is not an MCP fallback. The server resolves the selector against its
 
 Global tools do not require a workspace selector.
 
-orbit.task.show is the one exception to the precedence above. Task IDs are a machine-global primary key in the coordination task registry, so a call carrying only {id} resolves the owning workspace from that registry and ignores the workspace announced at initialize — the announced workspace is ambient, like cwd, and is the right default for authoring but the wrong one for addressing an ID. A workspace passed in the tool input still wins and still filters: the call binds that workspace, and a task owned elsewhere is not found there. When the registry knows the ID but its owning checkout is unreadable or inactive, the error names that workspace rather than reporting the ID as unknown.
+orbit.task.show and orbit.task.artifact.get are the ID-resolved exceptions to the precedence above. Task IDs are a machine-global primary key in the coordination task registry, so a call carrying only {id} resolves the owning workspace from that registry and ignores the workspace announced at initialize — the announced workspace is ambient, like cwd, and is the right default for authoring but the wrong one for addressing an ID. A workspace passed in the tool input still wins and still filters: the call binds that workspace, and a task owned elsewhere is not found there. When the registry knows the ID but its owning checkout is unreadable or inactive, the error names that workspace rather than reporting the ID as unknown.
 
 ## 4. Adapter and tool surface
 
-OrbitToolServer holds one context for its stdio session. Initialize may replace only the workspace selector. For every tools/call, the adapter clones the session context and mints one fresh trace_id without writing it back.
+OrbitToolServer holds one context for its stdio session. Initialize may replace the workspace selector and the untrusted self-reported actor claim. For every tools/call, the adapter clones the session context and mints one fresh trace_id without writing it back.
 
-tools/list comes from the authoritative host on every request. Each definition carries a ToolSchema and one McpToolScope: Global or WorkspaceRequired. Scope controls only workspace-selector injection and server dispatch; it is not authorization metadata.
+tools/list is derived from the authoritative host and its validated result is cached per session/selector. Each definition carries a ToolSchema and one McpToolScope: Global or WorkspaceRequired. Scope controls only workspace-selector injection and server dispatch; it is not authorization metadata.
 
 Because tools/list is answered per session, the injected selector documents the session the caller is actually in: optional in a bound session, required in an unbound one. Both spellings describe the same server rule; only the obligation on the caller differs.
 

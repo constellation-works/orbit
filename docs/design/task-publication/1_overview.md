@@ -2,7 +2,7 @@
 title: Task Publication — Overview
 owner: codex
 last_updated: 2026-08-30
-last_validated: 2026-08-30
+last_validated: 2026-09-19
 status: Accepted
 feature: task-publication
 doc_role: overview
@@ -18,8 +18,9 @@ related_artifacts: [ORB-11068, ORB-11072, ORB-11073, ORB-11074, ORB-11075, ORB-1
 
 Task publication is a shipped, explicit one-way durability surface: the machine
 that owns a workspace publishes validated task-bundle snapshots to a dedicated
-Git repository, while other machines may inspect or deliberately restore those
-snapshots without becoming competing task authorities. Orbit reports repository
+Git repository, while other machines may inspect those snapshots and the
+declared owner may deliberately restore them without creating a competing task
+authority. Orbit reports repository
 privacy as operator-managed; generic Git cannot verify provider visibility.
 
 V1 deliberately stops short of the retired source-repository orphan-branch and
@@ -29,7 +30,7 @@ routine publishes automatically.
 ## 1. Motivation
 
 Orbit's canonical task bundles live under
-`~/.orbit/tasks/workspaces/<workspace-id>/`. That keeps task mutation and local
+`~/.orbit/tasks/workspaces/<task-workspace-id>/`. That keeps task mutation and local
 execution state under one machine's authority, but it also makes the bundle
 corpus dependent on host backup unless the operator exports it deliberately.
 
@@ -63,8 +64,10 @@ contains no source code and uses an ordinary configured branch.
 
 Machine-local registry state that binds a workspace, source-repository
 fingerprint, publication repository, branch, publication lineage, and declared
-authority. Credentials remain in the operator's Git configuration or credential
-helper.
+authority. The selected runtime keeps the logical workspace identity used for
+publication metadata distinct from the task-registry partition used to
+enumerate bundles. Credentials remain in the operator's Git configuration or
+credential helper.
 
 ### Publication authority
 
