@@ -179,7 +179,10 @@ pub(crate) fn run_sweep_at_with_providers_at(
 ) -> Result<SweepOutcome, OrbitError> {
     // One pass per host at a time: overlapping invocations from a slow prior
     // pass must not double-fire. flock releases on process death, so a
-    // crashed sweep never wedges the next one.
+    // crashed sweep never wedges the next one. `lock_busy` means a pass that
+    // recorded itself as the holder is in flight — not merely that the OS
+    // refused the lock, which a descriptor inherited by a child this process
+    // forked can also do [ORB-12532].
     let lock = orbit_store::try_acquire_routine_sweep_lock(&global_root.join("state"))?;
     let Some(_lock) = lock else {
         return Ok(SweepOutcome {

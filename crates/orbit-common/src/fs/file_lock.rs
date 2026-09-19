@@ -18,6 +18,11 @@ pub const DEFAULT_FILE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_FILE_LOCK_WARN_AFTER: Duration = Duration::from_secs(3);
 const FILE_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
+/// How long a single-shot acquisition waits out a refusal that no holder
+/// claims — see [`try_acquire_exclusive_file_lock`]. Sized for a forked child
+/// to reach `execve` on a loaded host, not for a holder to finish its work.
+const UNCLAIMED_LOCK_GRACE: Duration = Duration::from_secs(2);
+
 /// Deadline and warning policy for one advisory file-lock acquisition.
 #[derive(Debug, Clone, Copy)]
 pub struct FileLockOptions {
@@ -120,7 +125,28 @@ pub fn acquire_exclusive_file_lock(
     acquire_file_lock(lock_file, lock_path, label, options, true)
 }
 
-/// Attempt one exclusive acquisition at the exact `lock_path` without waiting.
+/// Attempt one exclusive acquisition at the exact `lock_path` without queueing
+/// behind a live holder. `Ok(None)` means someone else owns the lock and the
+/// caller should give up rather than wait.
+///
+/// Contention is decided from the holder record an owner writes under the
+/// lock, not from the raw `flock` refusal alone, because in a process that
+/// spawns children the two are not the same thing. A `flock` lock belongs to
+/// the *open file description*, and `fork` duplicates the whole descriptor
+/// table: a child forked by any thread while this lock was held goes on
+/// holding it until its `execve` closes the descriptor. `O_CLOEXEC` bounds
+/// that window but cannot remove it, and on a loaded host the forked child can
+/// take milliseconds to be scheduled. A caller that releases the lock and
+/// immediately re-acquires it is then refused by a descriptor that belongs to
+/// no holder at all (ORB-12532).
+///
+/// A refusal carrying no holder record is exactly that case: the previous
+/// owner cleared its record when it dropped its guard, and a new owner writes
+/// one as soon as it acquires. Such a refusal is waited out for
+/// [`UNCLAIMED_LOCK_GRACE`] and reported as contention only if it outlives it.
+/// A refusal a holder does claim returns `Ok(None)` immediately, so a caller
+/// whose correct response to real contention is "exit" never queues behind a
+/// live pass.
 pub fn try_acquire_exclusive_file_lock(
     lock_path: &Path,
     label: &str,
@@ -134,19 +160,49 @@ pub fn try_acquire_exclusive_file_lock(
     create_private_dir_all(parent).map_err(|error| classify_lock_io(parent, error))?;
 
     let lock_file = open_lock_file(lock_path, label)?;
-    match FileExt::try_lock_exclusive(&lock_file) {
-        Ok(()) => {
-            write_file_lock_holder(&lock_file, label);
-            Ok(Some(FileLockGuard {
-                file: lock_file,
-                clear_holder_on_drop: true,
-            }))
+    let started = Instant::now();
+    loop {
+        match FileExt::try_lock_exclusive(&lock_file) {
+            Ok(()) => {
+                write_file_lock_holder(&lock_file, label);
+                return Ok(Some(FileLockGuard {
+                    file: lock_file,
+                    clear_holder_on_drop: true,
+                }));
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if read_file_lock_holder(lock_path).is_some() {
+                    return Ok(None);
+                }
+                let elapsed = started.elapsed();
+                if elapsed >= UNCLAIMED_LOCK_GRACE {
+                    warn_for_unclaimed_refusal(lock_path, label, elapsed);
+                    return Ok(None);
+                }
+                std::thread::sleep(FILE_LOCK_RETRY_INTERVAL.min(UNCLAIMED_LOCK_GRACE - elapsed));
+            }
+            Err(error) => {
+                return Err(classify_or_wrap_lock_io(lock_path, error, |error| {
+                    format!("lock {label} '{}': {error}", lock_path.display())
+                }));
+            }
         }
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
-        Err(error) => Err(classify_or_wrap_lock_io(lock_path, error, |error| {
-            format!("lock {label} '{}': {error}", lock_path.display())
-        })),
     }
+}
+
+/// One line for a refusal that outlived [`UNCLAIMED_LOCK_GRACE`] without any
+/// holder claiming it: either a descriptor inherited by a child that has still
+/// not exec'd, or a holder that took the lock and never recorded itself. The
+/// caller is about to treat it as contention, so the reason it did must be
+/// attributable from a log.
+fn warn_for_unclaimed_refusal(lock_path: &Path, label: &str, elapsed: Duration) {
+    crate::tracing::warn!(
+        target: "orbit.common.fs.file_lock",
+        lock_path = %lock_path.display(),
+        label,
+        waited_ms = duration_millis(elapsed),
+        "advisory file lock refused with no holder recorded; treating as contention",
+    );
 }
 
 pub(crate) fn acquire_shared_file_lock(
