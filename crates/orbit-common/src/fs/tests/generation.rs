@@ -47,6 +47,21 @@ fn root_with_parent_dir_components_pins_the_resolved_directory() {
 }
 
 #[test]
+fn missing_root_with_parent_final_component_is_refused() {
+    let parent = tempfile::tempdir().expect("parent");
+    let missing = parent.path().join("missing");
+    let via_parent = missing.join("..");
+    let error = match GenerationGuard::acquire(&via_parent, OLD) {
+        Ok(_) => panic!("a missing root ending in '..' should be refused"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("upgrade admission refused"), "{error}");
+    assert!(!parent.path().join(".generation.lock").exists());
+    assert!(!parent.path().join(".generation-admission.lock").exists());
+    assert!(!missing.exists());
+}
+
+#[test]
 fn candidate_pin_excludes_old_generation_through_convergence() {
     let root = tempfile::tempdir().expect("root");
     let old = GenerationGuard::acquire(root.path(), OLD).expect("old");
