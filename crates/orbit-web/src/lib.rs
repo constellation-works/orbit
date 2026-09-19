@@ -36,6 +36,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::Extension;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use clap::Args;
@@ -409,6 +410,20 @@ fn resolve_selector_path(selector: &Path, cwd: Option<&Path>) -> PathBuf {
 /// process still exits on its own instead of relying on systemd's SIGKILL.
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(10);
 
+/// `/healthz` with the same Host/Origin and nosniff layers as `/api`.
+///
+/// The detailed form returns workspace names and the log-sink path, so it
+/// must not skip the DNS-rebinding Host gate that `/api` already has
+/// (ORB-12531). Static dashboard assets stay on the outer router and are
+/// unchanged.
+pub(crate) fn health_router() -> Router<state::DashboardState> {
+    Router::new()
+        .route("/healthz", get(health::healthz))
+        .layer(middleware::from_fn(api::require_localhost_origin))
+        // Outer so Host/Origin 403s and handler bodies both carry nosniff.
+        .layer(middleware::map_response(api::nosniff_json_responses))
+}
+
 /// Build the axum app and block on the tokio runtime until graceful shutdown.
 fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), OrbitError> {
     check_bindable_host(args.host, args.port)?;
@@ -446,7 +461,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         .route("/static/run-detail.js", get(serve_run_detail_js_route))
         .route("/static/operations.js", get(serve_operations_js_route))
         .route("/static/automation.js", get(serve_automation_js_route))
-        .route("/healthz", get(health::healthz))
+        .merge(health_router())
         .nest("/api", api::router())
         .layer(Extension(dashboard_assets))
         .with_state(state);

@@ -433,10 +433,10 @@ where
 ///    `127.0.0.1`, `[::1]`, with an explicit port or the implicit HTTP
 ///    default). Missing or unparsable Host is refused. Browsers omit Origin
 ///    on same-origin GET, so without this gate a rebound hostname can read
-///    every `/api` GET (ORB-12506).
+///    every `/api` GET (ORB-12506) and `/healthz?detailed=true` (ORB-12531).
 /// 2. When Origin is present, or the method is unsafe, Origin must also
 ///    match that Host as a loopback `http` origin (ORB-11613 CSRF).
-async fn require_localhost_origin(request: Request<Body>, next: Next) -> Response {
+pub(crate) async fn require_localhost_origin(request: Request<Body>, next: Next) -> Response {
     let Some(host) = parse_loopback_authority(request.headers().get(header::HOST)) else {
         return forbidden_cross_origin();
     };
@@ -515,9 +515,9 @@ fn localhost_origin_matches_authority(origin: &Url, authority: &Authority) -> bo
     valid_origin && is_approved_loopback_host(origin_host) && same_host && same_port
 }
 
-/// Mark every `/api` response as non-sniffable so a JSON error cannot be
-/// interpreted as an active document.
-async fn nosniff_json_responses(mut response: Response) -> Response {
+/// Mark JSON responses as non-sniffable so an error body cannot be
+/// interpreted as an active document. Applied to `/api` and `/healthz`.
+pub(crate) async fn nosniff_json_responses(mut response: Response) -> Response {
     response.headers_mut().insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
