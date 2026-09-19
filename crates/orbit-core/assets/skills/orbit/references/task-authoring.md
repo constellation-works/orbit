@@ -26,8 +26,12 @@ Every `orbit.task.*` call needs `model` — your agent family. Never use bare
    for automated mint/import and system callers.
 6. **Add assumptions, risks, and rollback notes** to the description when they
    matter.
-7. **Call `orbit.task.add`.** Confirm via the result, or re-fetch with
-   `orbit.task.show`.
+7. **Call `orbit.task.add`.** Confirm creation by requesting a compact
+   field projection (`"fields": ["id"]`) or by extracting `id` with a JSON
+   parser (such as `jq`). **Never truncate the payload with `head` or `cut`** —
+   piping through `head` or `cut` risks truncating the JSON before the `id` field
+   appears, making a successful write look incomplete and leading to accidental
+   duplicate tasks. Confirm via the result, or re-fetch with `orbit.task.show`.
 
 ```bash
 orbit tool run orbit.task.add --input '{
@@ -38,9 +42,29 @@ orbit tool run orbit.task.add --input '{
   "required_tools": ["<exact.canonical.tool>"],
   "workspace": "<selector>", "priority": "<low|medium|high|critical>",
   "complexity": "<low|medium|hard>", "type": "<feature|bug|refactor|chore>",
-  "model": "<agent-family>"
+  "model": "<agent-family>",
+  "fields": ["id"]
 }'
 ```
+
+### Confirming creation and duplicate recovery
+
+- **Confirm with `fields: ["id"]` or a JSON parser, never `head`/`cut`.**
+  Task creation is a durable write with no natural deduplication key. Do not
+  pipe `orbit.task.add` through `head` or `cut` to limit output volume; request
+  a compact projection like `"fields": ["id"]` or parse the output with a JSON
+  parser instead.
+- **List before retrying.** If an add appears to fail, times out, or yields an
+  ambiguous response, list existing tasks (`orbit.task.list` or `orbit task list`)
+  before retrying.
+- **Neutralize duplicates with `status: archived`.** If a duplicate task lands:
+  - Agent-facing deletion (`orbit.task.delete`) and rejection (`orbit.task.reject`)
+    remain inactive (human/admin-only).
+  - Orbit has no `cancelled` status; `orbit.task.update` rejects `status: "cancelled"`.
+  - Neutralize the duplicate using `orbit.task.update` with `status: "archived"`
+    and provide an explanatory `execution_summary` naming the canonical task
+    (for example: `execution_summary: "Duplicate of <canonical-task-id>; archiving duplicate"`).
+
 
 ## `context_files`
 
@@ -76,6 +100,12 @@ outside its root.
 
 - Never edit task files directly; never invent task IDs (`orbit.task.add`
   allocates them).
+- Confirm `orbit.task.add` with `fields: ["id"]` or a JSON parser; never truncate
+  the payload with `head`/`cut`.
+- If an add seems to fail, list with `orbit.task.list` before retrying. Neutralize
+  landed duplicates with `orbit.task.update` `status: "archived"` and an explanatory
+  summary naming the canonical task. Agent-facing `delete` and `reject` are
+  inactive; Orbit has no `cancelled` status.
 - Required: `title`, `description`, `workspace`, `complexity`. Strongly prefer
   `acceptance_criteria`.
 - `complexity` stays assessed for its whole life: an update may move it between
