@@ -184,3 +184,24 @@ pub(crate) fn managed_tool_env_guard(run_id: &str) -> orbit_common::test_env::Sc
         _ => (name, None),
     }))
 }
+
+/// Populate a managed activity envelope with an explicit worker identity and
+/// task-tool grant. The worker identity is trusted because it is supplied by
+/// the synthetic managed envelope, while the task payload remains untrusted.
+pub(crate) fn managed_tool_identity_env_guard(
+    run_id: &str,
+    agent: &str,
+    model: &str,
+) -> orbit_common::test_env::ScopedEnv {
+    let managed_env = TOOL_ENV.into_iter().map(|name| match name {
+        "ORBIT_MANAGED_RUN_CONTEXT" => (name, Some("1")),
+        "ORBIT_RUN_ID" => (name, Some(run_id)),
+        "ORBIT_AGENT_NAME" => (name, Some(agent)),
+        "ORBIT_AGENT_MODEL" => (name, Some(model)),
+        _ => (name, None),
+    });
+    orbit_common::test_env::scoped(managed_env.chain([
+        ("ORBIT_TASK_ACTOR_KIND", Some("agent")),
+        ("ORBIT_ACTIVITY_TOOLS", Some("orbit.task.*")),
+    ]))
+}
