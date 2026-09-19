@@ -121,6 +121,35 @@ clock = healthyClock;
 await fetchAndRenderOperations();
 assert(descendants(get('clock-body')).find(node => String(node.className || '').includes('operation-state')).textContent === 'healthy', 'a healthy clock still renders healthy');
 
+// An unobserved clock (systemd user bus down) must not read as paused or
+// healthy, and must not offer enable/disable as if enabled were false.
+clock = {
+  health: 'unknown',
+  enabled: null,
+  provider: null,
+  configured_cadence_seconds: null,
+  effective_cadence_seconds: null,
+  loaded: null,
+  running: null,
+  schedulable: null,
+  last_tick_at: null,
+  next_tick_at: null,
+  health_issue: 'systemd clock manager is unavailable; Failed to connect to bus: No medium found',
+  error: 'systemd clock manager is unavailable; Failed to connect to bus: No medium found',
+};
+await fetchAndRenderOperations();
+const unknownBadge = descendants(get('clock-body')).find(node => String(node.className || '').includes('operation-state'));
+assert(unknownBadge.textContent === 'unknown', 'an unobserved clock is badged unknown');
+assert(get('clock-body').textContent.includes('service unknown'), 'an unobserved clock is not labeled paused');
+assert(!get('clock-body').textContent.includes('service paused'), 'an unobserved clock does not invent paused authority');
+assert(get('clock-body').textContent.includes('Failed to connect to bus'), 'an unobserved clock names the diagnostic');
+assert(button('clock-body', 'Clock unavailable')?.disabled, 'unknown clock disables service controls');
+assert(!button('clock-body', 'Pause clock') && !button('clock-body', 'Enable clock'), 'unknown clock does not offer pause or enable');
+assert(button('clock-body', 'Apply cadence').disabled, 'unknown clock disables cadence');
+clock = healthyClock;
+await fetchAndRenderOperations();
+assert(descendants(get('clock-body')).find(node => String(node.className || '').includes('operation-state')).textContent === 'healthy', 'restoring a healthy clock still renders healthy');
+
 // The old aggregate authorization bit must not suppress an independently allowed action.
 capabilities.auto_task_toggle = denied;
 capabilities.clock_service = denied;

@@ -97,6 +97,14 @@ function cadenceText(seconds) {
   return `every ${n}s`;
 }
 
+function clockUnavailable(clock) {
+  return clock?.health === "unknown" || (typeof clock?.error === "string" && clock.error.length > 0);
+}
+
+function clockUnavailableReason(clock) {
+  return clock?.health_issue || clock?.error || "Clock state is unavailable; controls are disabled.";
+}
+
 function nextEvaluationText(projection, fallbackAt) {
   const state = projection?.state;
   const at = projection?.at || (state === "disabled" || state === "paused" ? fallbackAt : null);
@@ -129,6 +137,7 @@ function clockTickText(value, clock) {
     }
     return time(value);
   }
+  if (clockUnavailable(clock)) return "Unknown";
   if (!clock.enabled) return "Paused";
   if (clock.schedulable) return "Armed; exact wall-clock time unavailable";
   return "Not scheduled";
@@ -325,12 +334,15 @@ function renderOperations(payload) {
 function clockButton(payload, action, label) {
   const selection = selectionSnapshot();
   const key = `clock:${payload.host_id}`;
-  const reason = controlReason(payload, "clock_service");
+  const unavailable = clockUnavailable(payload.clock);
+  const reason = unavailable
+    ? clockUnavailableReason(payload.clock)
+    : controlReason(payload, "clock_service");
   const button = el("button", { class: "operation-button", text: pendingOperations.has(key) ? "Pending…" : label, title: reason });
   button.type = "button";
   button.disabled = Boolean(reason) || pendingOperations.has(key);
   button.addEventListener("click", () => {
-    if (reason || !selection.current() || pendingOperations.has(key)) return;
+    if (reason || unavailable || !selection.current() || pendingOperations.has(key)) return;
     const verb = action === "enable" ? "Start" : "Stop";
     if (!window.confirm(`${verb} the ${payload.clock.provider} clock on ${payload.host_id}? This does not change any routine definition.`)) return;
     return runOperation({
@@ -352,33 +364,43 @@ function renderClock(payload) {
   const clock = payload.clock;
   const body = $("clock-body");
   body.textContent = "";
-  const reason = controlReason(payload, "clock_cadence");
+  const unavailable = clockUnavailable(clock);
+  const reason = unavailable
+    ? clockUnavailableReason(clock)
+    : controlReason(payload, "clock_cadence");
   const selection = selectionSnapshot();
   const key = `clock:${payload.host_id}`;
+  const serviceLabel = unavailable ? "service unknown" : (clock.enabled ? "service enabled" : "service paused");
+  const cadenceLabel = unavailable ? "Unknown" : cadenceText(clock.configured_cadence_seconds);
+  const effectiveCadenceLabel = unavailable ? "Unknown" : cadenceText(clock.effective_cadence_seconds);
   body.append(
     el("div", { class: "operation-clock-summary" }, [
       el("span", { class: `operation-state ${clock.health}`, text: clock.health }),
-      el("span", { class: "mono", text: clock.provider }),
-      el("span", { text: clock.enabled ? "service enabled" : "service paused" }),
+      el("span", { class: "mono", text: unavailable ? (clock.provider || "unknown") : clock.provider }),
+      el("span", { text: serviceLabel }),
     ]),
     el("div", { class: "operation-row-facts" }, [
-      operationFact("Cadence", cadenceText(clock.configured_cadence_seconds)),
+      operationFact("Cadence", cadenceLabel),
       operationFact("Next tick", clockTickText(clock.next_tick_at, clock)),
     ]),
     operationDetails("clock", [
       el("div", { class: "operation-grid" }, [
-        field("Configured cadence", cadenceText(clock.configured_cadence_seconds)),
-        field("Effective cadence", cadenceText(clock.effective_cadence_seconds)),
-        field("Loaded", clock.loaded ? "Yes" : "No"),
-        field("Running / waiting", clock.running == null ? "Provider does not expose" : clock.running ? "Yes" : "No"),
-        field("Last tick", clock.last_tick_at ? time(clock.last_tick_at) : "Provider does not expose"),
+        field("Configured cadence", cadenceLabel),
+        field("Effective cadence", effectiveCadenceLabel),
+        field("Loaded", unavailable ? "Unknown" : clock.loaded ? "Yes" : "No"),
+        field("Running / waiting", unavailable ? "Unknown" : clock.running == null ? "Provider does not expose" : clock.running ? "Yes" : "No"),
+        field("Last tick", clock.last_tick_at ? time(clock.last_tick_at) : unavailable ? "Unknown" : "Provider does not expose"),
         field("Next expected tick", clockTickText(clock.next_tick_at, clock)),
       ]),
     ]),
   );
   if (clock.health_issue) body.appendChild(el("p", { class: "operation-control-note error", text: clock.health_issue }));
   const actions = el("div", { class: "operation-clock-actions" });
-  actions.appendChild(clockButton(payload, clock.enabled ? "disable" : "enable", clock.enabled ? "Pause clock" : "Enable clock"));
+  actions.appendChild(clockButton(
+    payload,
+    unavailable ? "enable" : (clock.enabled ? "disable" : "enable"),
+    unavailable ? "Clock unavailable" : (clock.enabled ? "Pause clock" : "Enable clock"),
+  ));
   // A cadence the operator picked but has not applied yet outlives this render;
   // it clears once the host reports that value as configured, whoever applied it.
   if (pendingCadenceSeconds === clock.configured_cadence_seconds) pendingCadenceSeconds = null;
@@ -402,7 +424,7 @@ function renderClock(payload) {
     syncApplyState(pendingCadenceSeconds);
   });
   apply.addEventListener("click", () => {
-    if (reason || !selection.current()) return;
+    if (reason || unavailable || !selection.current()) return;
     return runOperation({
       selection, key, feedbackId: "clock-operation-feedback",
       pending: `Changing cadence to ${cadence.value}s…`, failure: "Cadence change failed",

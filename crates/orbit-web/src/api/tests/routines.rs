@@ -12,7 +12,9 @@ use orbit_registry::{NewHostIdentity, ensure_host_identity};
 use tower::ServiceExt;
 
 use super::super::router;
-use super::super::routines::{clock_json, duration_ms, fire_json, fire_ok, next_evaluation_json};
+use super::super::routines::{
+    clock_json, duration_ms, fire_json, fire_ok, next_evaluation_json, unavailable_clock_json,
+};
 use super::test_support::body_json;
 use crate::state::DashboardState;
 
@@ -125,6 +127,7 @@ fn clock_json_keeps_service_state_and_health_distinct() {
     assert_eq!(healthy["enabled"], true);
     assert_eq!(healthy["running"], true);
     assert_eq!(healthy["next_tick_at"], "next");
+    assert!(healthy["error"].is_null());
 
     let missed = clock_json(&ClockStatus {
         configured_cadence_seconds: 300,
@@ -141,6 +144,28 @@ fn clock_json_keeps_service_state_and_health_distinct() {
     assert_eq!(missed["health"], "missed");
     assert_eq!(missed["enabled"], true, "enabled is not health");
     assert_eq!(missed["running"], false);
+    assert!(missed["error"].is_null());
+}
+
+#[test]
+fn unavailable_clock_json_is_unknown_not_paused() {
+    let json = unavailable_clock_json(
+        "execution failed: systemd clock manager is unavailable; fixture transport failure",
+    );
+    assert_eq!(json["health"], "unknown");
+    assert!(json["enabled"].is_null(), "must not invent paused=false");
+    assert!(json["loaded"].is_null());
+    assert!(json["running"].is_null());
+    assert!(json["schedulable"].is_null());
+    assert!(json["configured_cadence_seconds"].is_null());
+    assert_eq!(
+        json["error"],
+        "execution failed: systemd clock manager is unavailable; fixture transport failure"
+    );
+    assert_eq!(json["health_issue"], json["error"]);
+    assert_ne!(json["health"], "paused");
+    assert_ne!(json["health"], "healthy");
+    assert_ne!(json["health"], "missed");
 }
 
 #[test]
@@ -252,12 +277,25 @@ async fn routines_endpoint_preserves_unavailable_clock_manager_error() {
 
     let response = routine_request(state, "/routines", None).await;
 
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
+    assert!(json["error"].is_null() || json.get("error").is_none());
+    assert!(json["generated_at"].is_string());
+    assert!(json["host_id"].is_string());
+    assert_eq!(json["routines"], serde_json::json!([]));
+    assert_eq!(json["load_errors"], serde_json::json!([]));
+    assert_eq!(json["clock"]["health"], "unknown");
+    assert!(
+        json["clock"]["enabled"].is_null(),
+        "unavailable clock must not invent paused=false: {json}"
+    );
+    assert_ne!(json["clock"]["health"], "paused");
+    assert_ne!(json["clock"]["health"], "healthy");
     assert_eq!(
-        json["error"],
+        json["clock"]["error"],
         "execution failed: systemd clock manager is unavailable; fixture transport failure"
     );
+    assert_eq!(json["clock"]["health_issue"], json["clock"]["error"]);
 }
 
 /// Pin the process signals `CallerCapabilities::resolve` reads, for the whole
