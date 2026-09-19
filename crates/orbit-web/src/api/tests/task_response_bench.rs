@@ -16,7 +16,13 @@ use crate::state::{DashboardState, WsEntry};
 async fn request(state: DashboardState, uri: &str) -> usize {
     let response = router()
         .with_state(state)
-        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("host", "localhost:7878")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK, "{uri}");

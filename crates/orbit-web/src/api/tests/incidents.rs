@@ -223,6 +223,7 @@ async fn request(runtime: OrbitRuntime, uri: &str) -> axum::response::Response {
             Request::builder()
                 .method(Method::GET)
                 .uri(uri)
+                .header("host", "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )

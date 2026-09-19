@@ -37,6 +37,7 @@ async fn get_scoreboard(runtime: OrbitRuntime, query: Option<&str>) -> axum::res
             Request::builder()
                 .method(Method::GET)
                 .uri(uri)
+                .header("host", "localhost:7878")
                 .body(Body::empty())
                 .expect("build request"),
         )

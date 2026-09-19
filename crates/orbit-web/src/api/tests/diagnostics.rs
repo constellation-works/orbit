@@ -34,6 +34,7 @@ async fn request_dashboard_errors(runtime: OrbitRuntime) -> Response {
         .oneshot(
             Request::builder()
                 .uri("/api/diagnostics/errors?limit=10")
+                .header("host", "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -255,6 +256,7 @@ async fn diagnostics_errors_prefer_the_newest_agent_stderr_rows() {
         .oneshot(
             Request::builder()
                 .uri("/api/diagnostics/errors?limit=1")
+                .header("host", "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -433,6 +435,7 @@ async fn get_json(runtime: OrbitRuntime, uri: &str) -> serde_json::Value {
         .oneshot(
             Request::builder()
                 .uri(uri)
+                .header("host", "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )

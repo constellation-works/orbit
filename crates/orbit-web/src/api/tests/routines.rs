@@ -186,6 +186,7 @@ async fn routines_endpoint_returns_envelope_for_empty_host() {
             Request::builder()
                 .method(Method::GET)
                 .uri("/routines")
+                .header("host", "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -504,12 +505,11 @@ async fn routine_request(
     uri: &str,
     body: Option<serde_json::Value>,
 ) -> axum::response::Response {
-    let mut request = Request::builder().uri(uri);
+    let mut request = Request::builder().uri(uri).header("host", "localhost:7878");
     let body = if let Some(body) = body {
         request = request
             .method(Method::POST)
             .header("origin", "http://localhost:7878")
-            .header("host", "localhost:7878")
             .header("content-type", "application/json");
         Body::from(body.to_string())
     } else {

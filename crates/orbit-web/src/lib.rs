@@ -546,14 +546,15 @@ async fn drain_with_grace_period(
 
 /// Reject binding the dashboard to anything other than a loopback address.
 ///
-/// SECURITY (ORB-00360): the dashboard has no authentication of its own. The
-/// only request-level check is [`api::require_localhost_origin`], a
-/// browser-CSRF mitigation that inspects the client-supplied `Origin` header
-/// and is trivially spoofable by any non-browser client (curl, a LAN script).
-/// It is NOT an access-control boundary. Binding to a non-loopback address
-/// would expose the full unauthenticated read/write API to the network, so we
-/// refuse. For remote access, bind loopback and front the dashboard with an
-/// authenticated tunnel/reverse proxy (e.g. `ssh -L`).
+/// SECURITY (ORB-00360): the dashboard has no authentication of its own.
+/// Request-level checks in [`api::require_localhost_origin`] mitigate browser
+/// CSRF (`Origin`, ORB-11613) and DNS rebinding (`Host`, ORB-12506). Both
+/// inspect client-supplied headers and are trivially spoofable by any
+/// non-browser client (curl, a LAN script). They are NOT an access-control
+/// boundary. Binding to a non-loopback address would expose the full
+/// unauthenticated read/write API to the network, so we refuse. For remote
+/// access, bind loopback and front the dashboard with an authenticated
+/// tunnel/reverse proxy (e.g. `ssh -L`).
 fn check_bindable_host(host: IpAddr, port: u16) -> Result<(), OrbitError> {
     if host.is_loopback() {
         return Ok(());

@@ -11,7 +11,7 @@
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::uri::Authority;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{HeaderValue, Method, Request, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
@@ -423,16 +423,24 @@ where
     }
 }
 
-/// Browser-CSRF mitigation only — NOT an access-control boundary.
+/// Browser CSRF and DNS-rebinding mitigation — NOT an access-control boundary.
 ///
-/// This rejects cross-origin state-changing requests originating from a
-/// browser on another site. It inspects the client-supplied `Origin` header,
-/// which any non-browser client (curl, a LAN script) can set arbitrarily, so
-/// it provides no authentication and no protection against direct API access.
-/// Network exposure is prevented separately by refusing to bind to a
-/// non-loopback address in `serve()` (ORB-00360); the dashboard itself is
-/// unauthenticated and assumes only local processes can reach it.
+/// Two independent gates, both on client-supplied headers that curl can set
+/// arbitrarily, so this is not authentication and does not replace the
+/// loopback bind in `serve()` (ORB-00360):
+///
+/// 1. `Host` itself must be an approved loopback authority (`localhost`,
+///    `127.0.0.1`, `[::1]`, with an explicit port or the implicit HTTP
+///    default). Missing or unparsable Host is refused. Browsers omit Origin
+///    on same-origin GET, so without this gate a rebound hostname can read
+///    every `/api` GET (ORB-12506).
+/// 2. When Origin is present, or the method is unsafe, Origin must also
+///    match that Host as a loopback `http` origin (ORB-11613 CSRF).
 async fn require_localhost_origin(request: Request<Body>, next: Next) -> Response {
+    let Some(host) = parse_loopback_authority(request.headers().get(header::HOST)) else {
+        return forbidden_cross_origin();
+    };
+
     let unsafe_method = matches!(
         *request.method(),
         Method::POST | Method::PUT | Method::PATCH | Method::DELETE
@@ -441,22 +449,52 @@ async fn require_localhost_origin(request: Request<Body>, next: Next) -> Respons
     let allowed = origin
         .and_then(|origin| origin.to_str().ok())
         .and_then(|origin| Url::parse(origin).ok())
-        .zip(
-            request
-                .headers()
-                .get(header::HOST)
-                .and_then(|host| host.to_str().ok())
-                .and_then(|host| Authority::from_str(host).ok()),
-        )
-        .is_some_and(|(origin, host)| localhost_origin_matches_authority(&origin, &host));
+        .is_some_and(|origin| localhost_origin_matches_authority(&origin, &host));
     if !allowed && (unsafe_method || origin.is_some()) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "cross-origin requests not allowed"})),
-        )
-            .into_response();
+        return forbidden_cross_origin();
     }
     next.run(request).await
+}
+
+fn forbidden_cross_origin() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({"error": "cross-origin requests not allowed"})),
+    )
+        .into_response()
+}
+
+fn parse_loopback_authority(host: Option<&HeaderValue>) -> Option<Authority> {
+    let authority = host
+        .and_then(|host| host.to_str().ok())
+        .and_then(|host| Authority::from_str(host).ok())?;
+    // HTTP Host is name[:port]; userinfo is not a valid Host authority.
+    if authority.as_str().contains('@') {
+        return None;
+    }
+    if !host_port_is_valid(&authority) {
+        return None;
+    }
+    is_approved_loopback_host(authority.host()).then_some(authority)
+}
+
+/// Accept an omitted port (implicit HTTP default) or a numeric `:port`.
+/// `Authority` still parses `localhost:not-a-port` as host `localhost` with
+/// no `port_u16`, so a present but non-numeric suffix must be refused.
+fn host_port_is_valid(authority: &Authority) -> bool {
+    if authority.port_u16().is_some() {
+        return true;
+    }
+    let raw = authority.as_str();
+    if let Some(end) = raw.find(']') {
+        return !raw[end + 1..].starts_with(':');
+    }
+    !raw.contains(':')
+}
+
+fn is_approved_loopback_host(host: &str) -> bool {
+    let host = host.trim_matches(['[', ']']);
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
 }
 
 fn localhost_origin_matches_authority(origin: &Url, authority: &Authority) -> bool {
@@ -473,9 +511,18 @@ fn localhost_origin_matches_authority(origin: &Url, authority: &Authority) -> bo
         && origin.password().is_none()
         && origin.query().is_none()
         && origin.fragment().is_none();
-    let approved_loopback_host = matches!(origin_host, "localhost" | "127.0.0.1" | "::1");
 
-    valid_origin && approved_loopback_host && same_host && same_port
+    valid_origin && is_approved_loopback_host(origin_host) && same_host && same_port
+}
+
+/// Mark every `/api` response as non-sniffable so a JSON error cannot be
+/// interpreted as an active document.
+async fn nosniff_json_responses(mut response: Response) -> Response {
+    response.headers_mut().insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
 }
 
 /// Tell long-lived streaming handlers (currently `/api/log/stream`) to close
@@ -589,6 +636,8 @@ pub(super) fn router() -> Router<crate::state::DashboardState> {
         .route("/diagnostics/denials", get(denials::list_denials))
         .layer(middleware::map_response(json_client_error))
         .layer(middleware::from_fn(require_localhost_origin))
+        // Outer so Host/Origin 403s and handler JSON both carry nosniff.
+        .layer(middleware::map_response(nosniff_json_responses))
 }
 
 #[cfg(test)]

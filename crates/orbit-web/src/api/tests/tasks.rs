@@ -149,6 +149,7 @@ pub(super) async fn request_shared(
             Request::builder()
                 .method(Method::GET)
                 .uri(uri)
+                .header(header::HOST, "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )

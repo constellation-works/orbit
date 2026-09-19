@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::http::{Method, Request, StatusCode, header};
+use axum::http::{HeaderValue, Method, Request, StatusCode, header};
 use chrono::{Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{JobRunState, OrbitRuntime, TaskStatus};
@@ -49,6 +49,7 @@ async fn request_tasks_query(runtime: OrbitRuntime, query: &str) -> Response {
             Request::builder()
                 .method(Method::GET)
                 .uri(uri)
+                .header(header::HOST, "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -130,6 +131,7 @@ async fn task_pages_reach_every_match_and_reject_invalid_or_mismatched_cursors()
             Request::builder()
                 .method(Method::GET)
                 .uri(format!("/tasks/all?{aggregate_query}"))
+                .header(header::HOST, "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -165,6 +167,7 @@ async fn request_job_runs(runtime: OrbitRuntime, query: &str) -> Response {
             Request::builder()
                 .method(Method::GET)
                 .uri(format!("/job-runs?{query}"))
+                .header(header::HOST, "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -200,6 +203,7 @@ async fn request_crews(runtime: OrbitRuntime) -> Response {
             Request::builder()
                 .method(Method::GET)
                 .uri("/crews")
+                .header(header::HOST, "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -522,6 +526,7 @@ async fn extractor_rejections_return_json_errors() {
         .oneshot(
             Request::builder()
                 .uri("/log?limit=abc")
+                .header(header::HOST, "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -818,6 +823,98 @@ async fn require_localhost_origin_preserves_missing_origin_behavior() {
 
     let safe_response = request_tasks(runtime).await;
     assert_eq!(safe_response.status(), StatusCode::OK);
+    assert_eq!(
+        safe_response.headers().get("x-content-type-options"),
+        Some(&HeaderValue::from_static("nosniff"))
+    );
+}
+
+#[tokio::test]
+async fn require_localhost_origin_rejects_forged_host_get_without_origin() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+
+    let response = router()
+        .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/tasks")
+                .header(header::HOST, "attacker.example:7878")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        response.headers().get("x-content-type-options"),
+        Some(&HeaderValue::from_static("nosniff"))
+    );
+    assert_eq!(
+        body_json(response).await["error"],
+        json!("cross-origin requests not allowed")
+    );
+}
+
+#[tokio::test]
+async fn require_localhost_origin_accepts_loopback_host_get_without_origin() {
+    let cases = [
+        "localhost:7878",
+        "127.0.0.1:7878",
+        "[::1]:7878",
+        "localhost",
+        "localhost:80",
+        "127.0.0.1",
+        "[::1]",
+    ];
+
+    for host in cases {
+        let runtime = OrbitRuntime::in_memory().expect("build runtime");
+        let response = router()
+            .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/tasks")
+                    .header(header::HOST, host)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK, "{host}");
+        assert_eq!(
+            response.headers().get("x-content-type-options"),
+            Some(&HeaderValue::from_static("nosniff")),
+            "{host}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn require_localhost_origin_rejects_missing_or_unparsable_host() {
+    let cases: [(Option<&str>, &str); 3] = [
+        (None, "missing host"),
+        (Some("localhost:not-a-port"), "unparsable host"),
+        (Some("user@localhost"), "userinfo host"),
+    ];
+
+    for (host, label) in cases {
+        let runtime = OrbitRuntime::in_memory().expect("build runtime");
+        let mut builder = Request::builder().method(Method::GET).uri("/tasks");
+        if let Some(host) = host {
+            builder = builder.header(header::HOST, host);
+        }
+        let response = router()
+            .with_state(crate::state::DashboardState::single(Arc::new(runtime)))
+            .oneshot(builder.body(Body::empty()).expect("request"))
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{label}");
+    }
 }
 
 #[tokio::test]

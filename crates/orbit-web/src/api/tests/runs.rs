@@ -66,6 +66,7 @@ async fn request_dashboard_run_events_query(
         .oneshot(
             Request::builder()
                 .uri(format!("/api/runs/{encoded_run_id}/events{query}"))
+                .header(header::HOST, "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -88,6 +89,7 @@ async fn request_dashboard_run_logs_query(
         .oneshot(
             Request::builder()
                 .uri(format!("/api/runs/{encoded_run_id}/logs{query}"))
+                .header(header::HOST, "localhost:7878")
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -1130,6 +1132,7 @@ mod auto_drain {
             .oneshot(
                 Request::builder()
                     .uri(format!("/workflows/auto/readiness{query}"))
+                    .header(header::HOST, "localhost:7878")
                     .body(Body::empty())
                     .expect("request"),
             )
