@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use orbit_common::OrbitError;
 use orbit_types::task::MAX_TASK_ARTIFACT_CONTENT_BYTES;
-use orbit_types::tool::{McpCapability, McpTransport, RemoteCallerGrant, ToolSessionContext};
+use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 
 use super::super::artifact_put::*;
 use crate::{OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, Tool, ToolContext};
@@ -214,13 +214,13 @@ fn artifact_put_accepts_file_inside_workspace_root() {
 }
 
 #[test]
-fn remote_agent_session_cannot_attach_mcp_ssh_acceptance_secret() {
+fn remote_agent_session_cannot_attach_a_host_secret_outside_the_workspace() {
     let workspace = tempfile::tempdir().expect("workspace");
     let orbit_home = tempfile::tempdir().expect("orbit home");
-    let acceptance_dir = orbit_home.path().join("mcp-ssh-acceptance");
-    std::fs::create_dir_all(&acceptance_dir).expect("acceptance dir");
-    let secret = acceptance_dir.join("hm_caller.toml");
-    std::fs::write(&secret, "capability = \"secret\"\n").expect("write acceptance secret");
+    let ssh_dir = orbit_home.path().join(".ssh");
+    std::fs::create_dir_all(&ssh_dir).expect("ssh dir");
+    let secret = ssh_dir.join("id_ed25519");
+    std::fs::write(&secret, "PRIVATE KEY\n").expect("write host secret");
 
     let host = RecordingHost::default();
     let ctx = ToolContext {
@@ -229,12 +229,7 @@ fn remote_agent_session_cannot_attach_mcp_ssh_acceptance_secret() {
         session_context: ToolSessionContext {
             transport: Some(McpTransport::SshMcp),
             effective_capabilities: BTreeSet::from([McpCapability::Agent]),
-            remote_caller_grant: Some(RemoteCallerGrant {
-                caller_machine_id: "hm_caller".to_string(),
-                granted_capabilities: BTreeSet::from([McpCapability::Agent]),
-                source: secret.display().to_string(),
-                ..RemoteCallerGrant::default()
-            }),
+            caller_machine_id: Some("hm_caller".to_string()),
             ..ToolSessionContext::default()
         },
         orbit_host: Some(Arc::new(host.clone())),
@@ -247,11 +242,11 @@ fn remote_agent_session_cannot_attach_mcp_ssh_acceptance_secret() {
             json!({
                 "id": "ORB-00001",
                 "source_path": secret,
-                "path": "hm_caller.toml",
+                "path": "id_ed25519",
                 "model": "codex"
             }),
         )
-        .expect_err("remote agent must not attach mcp-ssh-acceptance secrets");
+        .expect_err("remote agent must not attach host secrets outside the workspace");
 
     assert_invalid_input(error);
     assert!(host.call.lock().expect("host call").is_none());

@@ -1,17 +1,21 @@
 ---
 type: design
-summary: "Spec: destination-side caller authorization — the callers file (Tier 1), explicit cooperative host invocation, and key-bound caller identity via an authorized_keys forced command (Tier 2)."
-last_validated: 2026-09-07
-title: Spec — Destination-side caller authorization
+summary: "Superseded spec: destination-side caller authorization — the callers file (Tier 1), explicit cooperative host invocation, and key-bound caller identity via an authorized_keys forced command (Tier 2). Removed in ORB-12564; kept for history."
+last_validated: 2026-09-19
+title: Spec — Destination-side caller authorization (superseded)
 owner: claude
 status: Draft
 feature: federated-mcp
 tags: [federated-mcp, mcp, mcp-bridge, authorization, spec]
 related_features: [federated-mcp, mcp-bridge, host-registry, mcp-session-context]
-related_artifacts: [ORB-11184, ORB-11134, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11017, ORB-11015, ORB-11013, ORB-11012, ORB-11010, ORB-11009, ORB-11008]
+related_artifacts: [ORB-12564, ORB-11184, ORB-11134, ORB-11053, ORB-11052, ORB-11044, ORB-11023, ORB-11017, ORB-11015, ORB-11013, ORB-11012, ORB-11010, ORB-11009, ORB-11008]
 ---
 
-# Spec: Destination-side caller authorization
+# Spec: Destination-side caller authorization (superseded)
+
+> **Superseded by [ORB-12564]** — the standing rule is [An SSH login to a destination is ownership of it](../4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it). Nothing described below is implemented. Destination-side caller authorization — the callers file, the Tier 2 `authorized_keys` forced command, `orbit mcp callers`, `--accept-ssh`, `--caller`, `ORBIT_MCP_SSH_ACCEPTANCE`, and `~/.orbit/mcp-ssh-acceptance/` — was removed. Orbit is a single-user tool: **an SSH login to a destination is ownership of it**, so a destination honors the authority in the argv it was started with, and `--operator` on a federated or remote-proxy client is the operator statement for every destination it opens. The guard that matters is caller-side and lives in `remote_serve_command`: a client running as an agent never propagates operator. A leftover `mcp-callers.toml` or `mcp-ssh-acceptance/` is ignored with one startup warning and an `orbit doctor` suggestion.
+>
+> This document is kept for the reasoning that got here, not as a contract. The same rationale reached the dashboard in [ORB-12563].
 
 The authority an MCP session holds on a destination is **declared by that destination**, not requested by the caller. A remote-originated session's `--operator` argv becomes a *request*; the destination's machine-global callers file is the *ceiling*; the session's effective capabilities are the intersection. **Tier 1 is implemented** [ORB-11052] and so is **Tier 2** [ORB-11053], but they are different guarantees and must not be conflated: Tier 2 is opt-in per destination, and which one answered a given call is recorded, never assumed. This contract governs session authority (`agent` / `operator`) only, and does not touch capability class (`control_plane` / `execute`), which is already destination-derived and specified in [federated-workspace-mcp.md](./federated-workspace-mcp.md).
 

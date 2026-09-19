@@ -72,13 +72,12 @@ What it is not:
 
 - It is **not** a task, and it performs no task transition. It does not commit,
   push, open or merge a pull request, or dispatch further work.
-- It is **not** available to a managed run. A local operator may admit one
-  directly. A remote operator also needs a callers-file row that explicitly
-  enables `agent_invoke` for the resolved workspace. The omitted mode requires
-  a destination-issued key-bound SSH identity; an explicit `cooperative` mode
-  instead trusts the existing same-OS-account SSH operator channel and records
-  its machine ID as self-asserted. Ordinary remote `operator` capability is not
-  enough. Each admission covers one invocation only.
+- It is **not** available to a managed run. Any operator session may admit one,
+  local or arriving over SSH: a remote caller reached this machine through an
+  SSH login that already lets it start any process it likes, so `operator` is
+  the whole test. Start the calling federated or remote-proxy server with
+  `--operator` and the invocation works; a session served as `agent` is
+  refused. Each admission covers one invocation only.
 - It is **not** resumable. A resumed run would carry an admission nobody granted
   now; submit a new invocation instead.
 
@@ -107,12 +106,11 @@ output. A provider that exits zero without terminating its envelope stopped
 mid-turn: the run records `failed`, and the exit code alone is never evidence
 the investigation succeeded.
 
-Remote sessions are additionally capped by the destination's caller policy.
+A session that arrived over SSH is admitted on the same terms as a local one.
 The durable admission and `trusted_host.execution_admitted` event retain the
-destination-resolved caller machine ID, the invocation mode, the actual
-identity proof (`key-bound` or `self-asserted`), the workspace checkout, and
-cwd. See [remote-access.md](setup/remote-access.md). Do not relaunch a server
-with more privileges to work around a denied call.
+forwarded caller machine ID — attribution, not a grant — plus the workspace
+checkout and cwd. See [remote-access.md](setup/remote-access.md). Do not
+relaunch a server with more privileges to work around a denied call.
 
 ## Common MCP arguments
 

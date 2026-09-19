@@ -14,7 +14,7 @@ related_artifacts: [ORB-12488]
 # Glossary: Distributed Drain
 
 Vocabulary for the pull-based multi-host drain. Host-registry roles (`machine_id`, owner checkout,
-replica checkout) and federated-mcp terms (selector, capability, destination, callers file) keep
+replica checkout) and federated-mcp terms (selector, capability, destination, propagated authority) keep
 their existing meanings and are not redefined here.
 
 | Term | Meaning |

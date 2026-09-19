@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 
 use orbit_types::tool::{McpCapability, McpTransport};
 
-use super::super::callers::SessionCapabilityPolicy;
 use super::super::identity::{
     McpSessionAuthority, local_identity, mcp_server_identity, ssh_caller_ip,
 };
@@ -50,7 +49,7 @@ fn remote_context_keeps_identity_and_transport_concepts_separate() {
     let identity = mcp_server_identity(
         root.path(),
         Some("hm_caller".to_string()),
-        &SessionCapabilityPolicy::local(McpSessionAuthority::Agent),
+        McpSessionAuthority::Agent,
     )
     .expect("MCP server identity");
 
@@ -72,12 +71,8 @@ fn remote_context_keeps_identity_and_transport_concepts_separate() {
 fn a_default_server_serves_agent_sessions_only() {
     let root = tempfile::tempdir().expect("global root");
 
-    let identity = mcp_server_identity(
-        root.path(),
-        None,
-        &SessionCapabilityPolicy::local(McpSessionAuthority::Agent),
-    )
-    .expect("MCP server identity");
+    let identity = mcp_server_identity(root.path(), None, McpSessionAuthority::Agent)
+        .expect("MCP server identity");
 
     assert_eq!(
         identity.session_context.effective_capabilities,
@@ -90,15 +85,57 @@ fn a_default_server_serves_agent_sessions_only() {
 fn an_operator_server_grants_the_capability_governed_tools_require() {
     let root = tempfile::tempdir().expect("global root");
 
+    let identity = mcp_server_identity(root.path(), None, McpSessionAuthority::Operator)
+        .expect("MCP server identity");
+
+    assert_eq!(
+        identity.session_context.effective_capabilities,
+        BTreeSet::from([McpCapability::Agent, McpCapability::Operator])
+    );
+}
+
+/// [ORB-12564] A destination honors the authority in the argv it was started
+/// with, whether the bytes arrived locally or over SSH. There is no
+/// intersection step left to downgrade a remote session.
+#[test]
+fn a_remote_originated_session_holds_the_authority_its_argv_asked_for() {
+    let root = tempfile::tempdir().expect("global root");
+
     let identity = mcp_server_identity(
         root.path(),
-        None,
-        &SessionCapabilityPolicy::local(McpSessionAuthority::Operator),
+        Some("hm_caller".to_string()),
+        McpSessionAuthority::Operator,
     )
     .expect("MCP server identity");
 
     assert_eq!(
         identity.session_context.effective_capabilities,
         BTreeSet::from([McpCapability::Agent, McpCapability::Operator])
+    );
+    assert_eq!(
+        identity.session_context.transport,
+        Some(McpTransport::SshMcp)
+    );
+    assert_eq!(
+        identity.session_context.remote_caller_machine_id(),
+        Some("hm_caller"),
+        "the forwarded label stays available as audit attribution"
+    );
+}
+
+/// The forwarded label is the only origination signal, so a local session
+/// never presents one for attribution even though it carries this machine's
+/// own `caller_machine_id`.
+#[test]
+fn a_local_session_forwards_no_remote_caller_label() {
+    let root = tempfile::tempdir().expect("global root");
+
+    let identity =
+        mcp_server_identity(root.path(), None, McpSessionAuthority::Operator).expect("identity");
+
+    assert_eq!(identity.session_context.remote_caller_machine_id(), None);
+    assert_eq!(
+        identity.session_context.transport,
+        Some(McpTransport::Local)
     );
 }

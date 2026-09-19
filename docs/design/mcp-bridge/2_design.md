@@ -69,14 +69,11 @@ with its small machine-local discovery surface rather than redeclaring schemas.
 
 The client starts `orbit mcp serve` and speaks MCP over the process's stdio.
 
-1. The server resolves the global Orbit root and its own process identity. For
-   an SSH-originated session, it also resolves the destination's
-   `~/.orbit/mcp-callers.toml` policy; the caller's requested authority is capped
-   by that grant.
-2. MCP initialization may establish a workspace selector for the session. A
-   forced-command acceptance may additionally bind the remote caller identity
-   to the key sshd authenticated; the ordinary forwarded label remains
-   self-asserted.
+1. The server resolves the global Orbit root, its own process identity, and the
+   session authority its argv asked for. An SSH-originated session is resolved
+   the same way as a local one [ORB-12564]; the forwarded caller label only
+   marks the transport and names the calling machine.
+2. MCP initialization may establish a workspace selector for the session.
 3. Tool discovery returns the canonical composed surface.
 4. For each `tools/call`, the adapter creates a fresh `trace_id` and combines it
    with server-established session context. Audit fields in tool input are not
@@ -117,10 +114,9 @@ host verification, encryption, and access to the remote shell.
 
 The remote `orbit mcp serve` process then follows the local request flow. It also
 marks the session as `ssh-mcp` and reads the first field of `SSH_CONNECTION` as a
-best-effort caller IP. Under the ordinary path the supplied machine label is
-self-asserted audit data and the destination's callers file is the authority
-ceiling. A generated forced-command acceptance can instead provide a key-bound
-caller identity; the observed IP remains audit data.
+best-effort caller IP. The supplied machine label and the observed IP are audit
+data; the session's authority comes from the argv the proxy composed, which
+carries `--operator` when the proxy itself was started with it [ORB-12564].
 
 If SSH cannot start or exits unsuccessfully, the proxy reports that transport
 failure. It does not retry or replay tool calls because it cannot know whether a
@@ -193,36 +189,35 @@ not depend on recognition or outcome.
 | Field | Source | V1 meaning |
 |---|---|---|
 | `trace_id` | MCP adapter, fresh per call | Correlates one invocation |
-| `caller_machine_id` | Local server identity, SSH proxy label, or forced-command caller identity | Audit correlation; a forced-command value is also the identity selected for destination policy |
+| `caller_machine_id` | Local server identity, or the SSH proxy's forwarded label | Audit correlation only |
 | `caller_ip` | First field of `SSH_CONNECTION`, or the accepted peer address | Best-effort network observation |
 | `process_machine_id` | Accepting machine registry | Machine executing the call |
 | `process_host_id` | Accepting machine registry | Host executing the call |
 | `transport` | Accepting server mode | `local` or `ssh-mcp`; a listener session is `local` |
-| `effective_capabilities` | Destination policy intersected with requested session authority | Capabilities Core may enforce for this call |
-| `remote_caller_grant` | Destination callers file, on remote sessions | Grant, scope, and identity proof used to cap the session |
+| `effective_capabilities` | The accepting server's `--operator` argv, resolved once at start | Capabilities Core may enforce for this call |
 
 The adapter prevents caller-supplied tool input from replacing trusted session
-context. A forwarded caller label and caller IP are not credentials; a
-destination-generated forced command can make the caller identity key-bound.
+context. A forwarded caller label and caller IP are not credentials and are not
+read as any part of an authorization decision.
 
 ## 8. Authorization boundary
 
-For direct SSH sessions, the destination resolves `~/.orbit/mcp-callers.toml`.
-The caller's `--operator` flag is only a request; effective session authority is
-the intersection of that request with the destination's row or default grant,
-and workspace narrowing is re-evaluated at the existing governance chokepoint.
-Tier 1 identifies a row from a self-asserted machine label. Tier 2 is optional:
-the destination's generated forced command names the caller next to a key sshd
-authenticated, and Orbit records that key-bound proof. `agent_invoke` is a
-separate, workspace-scoped grant and is not implied by `operator`.
+For direct SSH sessions, the destination serves the authority the argv asks for,
+exactly as it does locally [ORB-12564]. Orbit is a single-user tool and an SSH
+login to a destination is ownership of it: anyone who can start
+`orbit mcp serve --operator` there can equally set `ORBIT_OPERATOR=1` on any
+other command, so a destination-side ceiling would only be a file the caller can
+rewrite. The client decides — a proxy or mux started with `--operator`
+propagates it, and one running as an agent never does. `orbit_agent_invoke` is
+admitted on `operator` like every other governed operation.
 
 Core enforces the resulting capabilities and governed operations after the
 accepting server has resolved the session. A proxy or UI may not grant authority,
 because either can be bypassed by reaching the server directly. The TCP listener
-does not consult the SSH callers file: it authenticates no client and is served
-with agent authority only. Federated destinations apply their own callers-file
-policy independently, in addition to the mux's destination and checkout-class
-checks.
+is the one place that ignores its process's authority and serves `agent` only:
+it authenticates no client, so a socket peer has not demonstrated the SSH login
+the argv rule rests on. Federated destinations additionally enforce the mux's
+destination and checkout-class checks.
 
 ## 9. Separate web transport
 

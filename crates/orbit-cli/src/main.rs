@@ -209,9 +209,8 @@ fn command_rotates_jsonl_on_start(command: &command::Commands) -> bool {
 
 /// Parse argv into the derived CLI plus the two inputs to mode resolution.
 fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
-    let args = command::mcp::normalize_ssh_login_shell_args(std::env::args_os());
     let matches = install_format_arg(command::Cli::command())
-        .try_get_matches_from(args)
+        .try_get_matches_from(std::env::args_os())
         .unwrap_or_else(|err| repair_crew_flag_suggestion(err).exit());
     let requested = requested_format(&matches);
     let legacy = legacy_json(&matches);
@@ -220,10 +219,6 @@ fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
 }
 
 fn main() {
-    // Verify, then reinforce, the kernel state established by the generated
-    // credential-changing Tier 2 launcher. This is deliberately first, but the
-    // pre-userspace boundary is exec itself rather than this Rust call.
-    command::mcp::verify_ssh_acceptance_launch_boundary();
     orbit_common::observability::logging::init_default_subscriber("warn");
     output::pipe::install_handler();
 

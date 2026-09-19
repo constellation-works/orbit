@@ -117,7 +117,6 @@ fn privilege_bearing_orbit_variables_do_not_ride_the_envelope_allowlist() {
     let parent = [
         ("ORBIT_OPERATOR", "1"),
         ("ORBIT_WORKSPACE_CLAIM_TOKEN", "abc123"),
-        ("ORBIT_MCP_SSH_ACCEPTANCE", "x"),
         ("ORBIT_RUN_ID", "r1"),
     ]
     .into_iter()

@@ -174,7 +174,7 @@ fn resolve_source_path(cwd: Option<&Path>, source_path: &str) -> PathBuf {
 /// Absolute paths, relative `..` traversal, and in-workspace symlinks that
 /// resolve outside `ctx.workspace_root` are rejected as `invalid_input` so a
 /// remote `agent` session cannot attach host secrets such as
-/// `~/.orbit/mcp-ssh-acceptance/*.toml`. When a filesystem profile is present,
+/// `~/.ssh/id_ed25519`. When a filesystem profile is present,
 /// `check_resolved` additionally applies deny-read rules to the real path.
 fn confine_source_path(ctx: &ToolContext, source_path: &Path) -> Result<PathBuf, OrbitError> {
     let workspace_root = ctx.workspace_root.as_deref().ok_or_else(|| {

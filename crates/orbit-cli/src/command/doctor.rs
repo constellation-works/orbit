@@ -323,132 +323,47 @@ pub(crate) fn state_directory_permissions_row(runtime: &OrbitRuntime) -> Workspa
     }
 }
 
-/// Whether this machine's MCP caller authorization is in a state an operator
-/// would have chosen [ORB-11053].
+/// Whether this machine still carries retired destination-side MCP caller
+/// authorization files [ORB-12564].
 ///
-/// Two rows, because they are two different gaps. The first is the Tier 1 one:
-/// a machine that serves SSH sessions and has declared nothing about who may
-/// call it. The second is the Tier 2 one: an `operator` grant — the strongest
-/// thing this file can say — resting on a name any caller could type.
-///
-/// Both are warnings, never errors. Tier 2 is opt-in, and a destination that
-/// deliberately runs Tier 1 alone is a documented configuration with a weaker
-/// guarantee, not a broken one. A file that does not *load* is different: it
-/// refuses every remote session, so it fails — and a group- or world-*writable*
-/// ceiling is one of those, because a file anyone can add a row to is not a
-/// ceiling. A file that is readable but not writable beyond its owner is a
-/// third condition on the same row, and a warning: it discloses the machines
-/// this destination trusts without letting a reader raise the grant
-/// [ORB-12450].
+/// One row, and never an error. The files grant and refuse nothing now: an SSH
+/// login to this machine is ownership of it, so a session served over SSH holds
+/// the authority its argv asks for, exactly as a local one does. What is worth
+/// saying is that a ceiling an operator wrote is inert, because the operator
+/// who wrote it has no other way to find out.
 fn caller_authorization_rows() -> Vec<WorkspaceDoctorResult> {
     let Ok(home) = orbit_common::fs::path::home_dir() else {
         return Vec::new();
     };
-    let health = orbit_mcp::inspect_caller_authorization(
-        &home.join(".orbit"),
-        &home.join(".ssh/authorized_keys"),
-    );
-    let file = health.path.display().to_string();
-    let callers = if let Some(defect) = &health.defect {
-        WorkspaceDoctorResult {
-            check_name: "mcp-callers".to_string(),
-            status: WorkspaceDoctorStatus::Error,
-            // The defect already names the file, so the row does not repeat it.
-            message: format!("the MCP callers file does not load: {defect}"),
-            remediation: Some(
-                "Every remote-originated MCP session is refused until this file loads. Fix the \
-                 defect named above — a malformed row, or permissions that let another principal \
-                 write the ceiling — then rerun `orbit mcp callers list`."
-                    .to_string(),
-            ),
-        }
-    } else if health.present && health.readable_beyond_owner {
-        WorkspaceDoctorResult {
-            check_name: "mcp-callers".to_string(),
-            status: WorkspaceDoctorStatus::Warning,
-            message: format!(
-                "{file} declares {} caller(s) but is readable beyond its owner, disclosing the \
-                 machine IDs, labels, and pinned keys this machine trusts",
-                health.row_count
-            ),
-            remediation: Some(format!(
-                "Run `chmod 600 {file}`. Nothing on this machine needs group or world read: the \
-                 destination account owns the file and reads it as itself, even under the setgid \
-                 Tier 2 launcher, which drops its launch group before Orbit opens any state."
-            )),
-        }
-    } else if health.present {
-        WorkspaceDoctorResult {
+    let ignored = orbit_mcp::ignored_caller_authorization_paths(&home.join(".orbit"));
+    if ignored.is_empty() {
+        return vec![WorkspaceDoctorResult {
             check_name: "mcp-callers".to_string(),
             status: WorkspaceDoctorStatus::Ok,
-            message: format!("{file} declares {} caller(s)", health.row_count),
-            remediation: None,
-        }
-    } else if health.serves_ssh {
-        WorkspaceDoctorResult {
-            check_name: "mcp-callers".to_string(),
-            status: WorkspaceDoctorStatus::Warning,
-            message: format!(
-                "this machine accepts SSH logins but has no {file}, so remote-originated MCP \
-                 sessions are served agent capabilities only"
-            ),
-            remediation: Some(
-                "Run `orbit mcp callers init` to declare who may call this machine, then raise a \
-                 row to operator by hand if one should dispatch work here."
-                    .to_string(),
-            ),
-        }
-    } else {
-        WorkspaceDoctorResult {
-            check_name: "mcp-callers".to_string(),
-            status: WorkspaceDoctorStatus::Skipped,
-            message: "this machine accepts no SSH logins, so it serves no remote MCP callers"
+            message: "no retired MCP caller-authorization files; a session served over SSH \
+                      holds the authority its argv asks for"
                 .to_string(),
             remediation: None,
-        }
-    };
-
-    let keys = match (
-        health.defect.is_some(),
-        health.unpinned_operator_callers.as_slice(),
-    ) {
-        (true, _) => WorkspaceDoctorResult {
-            check_name: "mcp-caller-keys".to_string(),
-            status: WorkspaceDoctorStatus::Skipped,
-            message: "the callers file does not load, so its grants cannot be inspected"
-                .to_string(),
-            remediation: None,
-        },
-        (false, []) if health.present => WorkspaceDoctorResult {
-            check_name: "mcp-caller-keys".to_string(),
-            status: WorkspaceDoctorStatus::Ok,
-            message: "every operator grant is bound to an SSH key".to_string(),
-            remediation: None,
-        },
-        (false, []) => WorkspaceDoctorResult {
-            check_name: "mcp-caller-keys".to_string(),
-            status: WorkspaceDoctorStatus::Skipped,
-            message: "no callers file, so no operator grants to bind".to_string(),
-            remediation: None,
-        },
-        (false, unpinned) => WorkspaceDoctorResult {
-            check_name: "mcp-caller-keys".to_string(),
-            status: WorkspaceDoctorStatus::Warning,
-            message: format!(
-                "{file} grants operator to {} with no ssh_key_fingerprint, so the grant rests on \
-                 a machine_id the caller asserts rather than a key it holds",
-                unpinned.join(", ")
-            ),
-            remediation: Some(format!(
-                "Prepare the protected Linux login-shell launcher, then run `orbit mcp callers \
-                 authorize --machine-id {} --key <caller-key>.pub --launcher \
-                 <protected-orbit>`, install the printed authorized_keys line, and add the \
-                 fingerprint it reports to the row.",
-                unpinned.first().map_or("<machine-id>", String::as_str)
-            )),
-        },
-    };
-    vec![callers, keys]
+        }];
+    }
+    let paths = ignored
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    vec![WorkspaceDoctorResult {
+        check_name: "mcp-callers".to_string(),
+        status: WorkspaceDoctorStatus::Warning,
+        message: format!(
+            "left over from destination-side caller authorization and ignored, capping no \
+             remote MCP session: {}",
+            paths.join(", ")
+        ),
+        remediation: Some(format!(
+            "Delete it: `rm -r {}`. To deny a caller, remove its key from \
+             `~/.ssh/authorized_keys` — that is the only boundary this machine ever had.",
+            paths.join(" ")
+        )),
+    }]
 }
 
 /// Whether the OS sweep-clock unit invokes this binary [ORB-12244].

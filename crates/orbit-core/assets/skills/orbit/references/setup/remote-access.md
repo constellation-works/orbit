@@ -1,4 +1,4 @@
-# Remote access, federation, and caller permissions
+# Remote access, federation, and remote authority
 
 Remote access reads or operates the accepting host's live store. It does not
 replicate tasks. First identify the owning host and workspace; see
@@ -47,151 +47,60 @@ precedence. `--root` is not an MCP workspace-routing mechanism.
 
 Bare local `serve` and ordinary `mcp init` are agent-only.
 `workspace init --mcp` deliberately installs a local operator integration.
-On SSH, a request for operator capability is capped by the destination's
-`~/.orbit/mcp-callers.toml`; the caller cannot grant itself that authority.
+
+Over SSH, `--operator` travels. Orbit is a single-user tool and an SSH login to
+a machine is ownership of it: anyone who can run
+`ssh box "orbit mcp serve --operator"` can equally run
+`ssh box "ORBIT_OPERATOR=1 orbit tool run …"`. The destination therefore serves
+the authority in the argv it was started with, the same way it does locally, and
+there is no destination-side callers file, forced command, or per-caller setup:
 
 ```bash
-orbit mcp callers list
-orbit mcp callers check <caller-machine-id>
-orbit mcp callers init
+orbit mcp serve --mode federated --operator
+orbit mcp serve --mode remote <ssh-host> --operator
 ```
 
-`callers list` reports the default and a redacted summary of each configured
-row. It retains policy shape, scope presence, and key-binding state for
-diagnosis, but omits machine IDs, labels, workspace IDs, and key fingerprints
-because CLI output may be captured by log collectors. `callers check` likewise
-redacts identity and workspace values while showing the resolved capabilities
-and trust mode.
+Without `--operator` on the calling side, remote sessions hold `agent`. Orbit
+governs agents, not people: a client running inside a managed run, or with an
+agent envelope in its environment, never propagates operator into a
+destination's argv, whatever the process that launched it held. To deny a
+caller, remove its key from the destination's `~/.ssh/authorized_keys` — that
+is the only boundary the destination ever had.
 
-The file must be the destination account's own private file: Orbit refuses to
-serve any remote session from a callers file that is group- or world-writable
-or owned by another account, because a row is a grant and write access to the
-file is operator capability for whoever has it. `init` creates it `0600`; an
-older file seeded under the ambient umask needs `chmod 600
-~/.orbit/mcp-callers.toml` once. Group and world *read* are not required by
-anything — including the setgid Tier 2 launcher, which reads the file as the
-account that owns it — and `orbit doctor` reports them, since they disclose
-which machines this destination trusts.
+`--remote-caller-machine-id` remains an audit label. It marks the session's
+transport as SSH and names the calling machine in the destination's
+`authorization` audit rows; it authorizes nothing.
 
-`init` seeds known callers with agent grants only. Operator grants are deliberate
-operator edits on the destination. For example:
-
-```toml
-default = "deny"
-
-[[callers]]
-machine_id = "<caller-machine-id>"
-label = "<display-name>"
-capabilities = ["agent", "operator"]
-workspaces = ["<allowed-workspace-id>"]
-```
-
-`default` accepts `agent` or `deny`, never `operator`. A missing callers file
-means agent by default. `workspaces` optionally narrows a row to specific logical
-IDs. Effective permissions are the intersection of the requested capability and
-the destination grant, with ordinary tool policy still enforced. A malformed
-file fails closed. Inspect the check result and session audit evidence when a
-workflow tool is absent or denied; do not treat changing remote argv as a fix.
+A destination upgraded from the older model may still carry
+`~/.orbit/mcp-callers.toml` or `~/.orbit/mcp-ssh-acceptance/`. Both are ignored:
+startup names them once in a warning, `orbit doctor` reports them, and deleting
+them is the whole migration. `orbit mcp callers` no longer exists.
 
 ### Remote host-agent invocation
 
-Remote `orbit_agent_invoke` is a narrower grant than remote operator access.
-The matched caller row must explicitly enable the operation on named
-workspaces and grant operator capability. Omission of `agent_invoke_mode`
-preserves the strict key-bound mode:
+Remote `orbit_agent_invoke` is admitted when the session holds `operator` — the
+same test as a local invocation, because the caller reached this machine through
+an SSH login that already lets it start any process it likes. Start the calling
+federated or remote-proxy server with `--operator` and the invocation works; an
+agent-served session is refused.
 
-```toml
-default = "deny"
+The durable admission and the `trusted_host.execution_admitted` event record
+`caller_machine_id` for attribution. There is no identity proof or trust mode to
+check any more: there is only one.
 
-[[callers]]
-machine_id = "<caller-machine-id>"
-label = "<display-name>"
-capabilities = ["agent", "operator"]
-ssh_key_fingerprint = "SHA256:<caller-public-key-fingerprint>"
-agent_invoke = true
-agent_invoke_workspaces = ["<invocation-workspace-id>"]
-```
+After changing the calling side's authority, close and recreate the MCP
+connection — a live session keeps the authority it was established with.
 
-The destination can instead opt one row into the existing cooperative SSH
-operator channel without Tier-2 infrastructure:
+A minimal smoke is one short, read-only invocation with an explicit destination
+workspace selector, checkout `cwd`, bounded timeout, and the configured crew.
+Ask it to report one harmless fact and explicitly not to modify files or start
+other work, then verify the run reaches a terminal state.
 
-```toml
-default = "deny"
-
-[[callers]]
-machine_id = "<caller-machine-id>"
-label = "<display-name>"
-capabilities = ["agent", "operator"]
-agent_invoke = true
-agent_invoke_mode = "cooperative"
-agent_invoke_workspaces = ["<invocation-workspace-id>"]
-```
-
-This is an explicit destination-owner statement that callers using the same
-SSH OS account cooperate. The machine ID remains self-asserted: any peer able
-to start the same non-interactive SSH operator session can name another row.
-The policy prevents accidental use and limits Orbit's admission to the named
-workspace and one invocation; it does not isolate mutually malicious peers who
-share the account and already control that account's files and processes.
-Never describe a cooperative admission as key-bound.
-
-`agent_invoke_workspaces` is independent from ordinary `workspaces`. When a
-caller already has general operator access, add the operation scope without
-narrowing that access. Leave its existing capabilities and absent `workspaces`
-unchanged, then add only:
-
-```toml
-agent_invoke = true
-agent_invoke_mode = "cooperative"
-agent_invoke_workspaces = ["ws_orbit"]
-```
-
-Omitting `agent_invoke_workspaces` preserves the older behavior where
-`workspaces` is also the invocation scope. Empty, malformed, or unknown scope
-shapes fail closed.
-
-For either mode, install the updated Orbit binary on the destination, review
-and edit `~/.orbit/mcp-callers.toml` there, run `orbit mcp callers check
-<caller-machine-id>`, then close and recreate the calling MCP connection. A
-live session keeps the policy loaded at establishment. For strict mode, first
-generate and install the destination-issued forced command with `orbit mcp
-callers authorize`. To revoke either mode, remove the row or set
-`agent_invoke = false`, then reconnect; the next invocation is denied.
-
-After reconnecting, a minimal smoke is one short, read-only invocation with an
-explicit destination workspace selector, checkout `cwd`, bounded timeout, and
-the configured Luna crew. Ask it to report one harmless fact and explicitly not
-to modify files or start other work. Verify the submission and
-`trusted_host.execution_admitted` event report `agent_invoke_mode = "cooperative"`
-with `caller_identity = "self-asserted"` (or both fields as `key-bound` in
-strict mode), and verify the run reaches a terminal state.
-
-Strict mode is an authenticated caller and accident-resistant admission path;
-neither mode is process isolation. The invoked provider runs outside Orbit's
-filesystem sandbox as the same operating-system user as the destination Orbit
-process and can access everything that user can. Keep the prompt read-only when
-that is the intent; a tool declaration does not confine the provider's own
-shell.
-
-There are two identity strengths. Ordinary SSH proxy identity is a self-asserted
-audit label, suitable for cooperative operators with shell access; it is not
-proof against a caller naming a different machine. Key-bound acceptance uses a
-forced command generated on the destination:
-
-```bash
-orbit mcp callers authorize --machine-id <caller-machine-id> \
-  --key <public-key-path> --launcher <protected-orbit-launcher>
-```
-
-This prints configuration; it does not install it. The protected path requires
-a dedicated Linux login account, a root-managed `AuthorizedKeysFile`, per-key
-environments enabled, and a root-owned mode-2555 setgid Orbit copy configured as
-that account's login shell. The launcher must match the running Orbit binary and
-use a group different from the account's primary group. Follow the installed
-command's help and host administration procedure; an ordinary shell wrapper is
-not equivalent. Refresh the protected launcher after binary upgrades. Do not
-infer verified identity merely from a configured key fingerprint: inspect the
-recorded identity proof.
+Admission is accident resistance, not process isolation. The invoked provider
+runs outside Orbit's filesystem sandbox as the same operating-system user as the
+destination Orbit process and can access everything that user can. Keep the
+prompt read-only when that is the intent; a tool declaration does not confine
+the provider's own shell.
 
 ## Dashboard
 

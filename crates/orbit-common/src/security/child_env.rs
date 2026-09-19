@@ -12,8 +12,8 @@
 //! the documented baseline below, the operator's configured pass list, the
 //! extras a provider declares it requires, and the named `ORBIT_*` execution
 //! envelope below. The `ORBIT_` prefix is *not* a wildcard: privilege-bearing
-//! names in that namespace (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`,
-//! `ORBIT_MCP_SSH_ACCEPTANCE`) must not reach an untrusted child.
+//! names in that namespace (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`)
+//! must not reach an untrusted child.
 //! Credential-name and value-shape heuristics are deliberately *not*
 //! consulted — they cannot classify names an operator's environment actually
 //! uses, and treating them as a gate is what let the bypass exist.

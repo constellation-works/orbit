@@ -65,11 +65,14 @@ the claim into authoritative store transactions and drops the epic branch of the
 the resident-orchestrator folder is part of the proposed retirement, not an already completed step.
 See [resident-orchestrator 2_design.md §4](../resident-orchestrator/2_design.md#4-workspace-drain-workspace_auto_pipeline).
 
-### Federated MCP and the callers file
+### Federated MCP and remote authority
 
-The `control_plane` / `execute` split, host-qualified selectors, fail-closed routing, and
-destination-side caller authorization are all specified and partly live. Pull uses that surface
-and adds no transport. Core runtime reads, claim-scoped mutations, and
+The `control_plane` / `execute` split, host-qualified selectors, and fail-closed routing are
+specified and live. Destination-side caller authorization is **not**: it shipped and was removed in
+[ORB-12564], because an SSH login to a destination is ownership of it. A destination now serves the
+authority the session's argv asks for, so the `KeyBound` identity this design's §5 requires has no
+implementation behind it and that requirement needs re-deciding before pull is built. Pull uses the
+federated surface and adds no transport. Core runtime reads, claim-scoped mutations, and
 subprocess context still need explicit routing; MCP federation alone does not wire them together.
 
 ### Work-stealing schedulers
@@ -100,7 +103,7 @@ CI, and landing before adding placement policy or automatic recovery.
 **Orbit-internal**
 
 - [federated-mcp specs/federated-workspace-mcp.md](../federated-mcp/specs/federated-workspace-mcp.md)
-- [federated-mcp specs/caller-authorization.md](../federated-mcp/specs/caller-authorization.md)
+- [federated-mcp 4_decisions.md — An SSH login to a destination is ownership of it](../federated-mcp/4_decisions.md#an-ssh-login-to-a-destination-is-ownership-of-it) (supersedes the withdrawn [specs/caller-authorization.md](../federated-mcp/specs/caller-authorization.md))
 - [host-registry 3_vision.md](../host-registry/3_vision.md) — "checkoutless operations" gate
 - [resident-orchestrator 2_design.md](../resident-orchestrator/2_design.md)
 - [runbooks/build-budget.md](../../runbooks/build-budget.md)

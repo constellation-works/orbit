@@ -20,10 +20,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::{ToolEntryPoint, execute_global_in_process_tool_dispatch};
 use orbit_core::runtime::{HostLifetime, resolve_global_root};
 use orbit_mcp::federated;
-use orbit_mcp::{
-    ListenerExposure, McpHost, McpListener, McpSessionAuthority, SessionCapabilityPolicy,
-    SshAcceptance,
-};
+use orbit_mcp::{ListenerExposure, McpHost, McpListener, McpSessionAuthority};
 use orbit_types::tool::{McpToolDefinition, McpToolScope, ToolSessionContext};
 use orbit_types::workspace::{Workspace, WorkspaceCheckout};
 use serde_json::Value;
@@ -43,30 +40,23 @@ pub(crate) const ID_RESOLVED_WORKSPACE_TOOLS: &[&str] =
 
 /// Serve one stdio MCP session.
 ///
-/// This is the only entry point whose authority is resolved against the
-/// destination's callers file: it is the one an SSH caller reaches, and
-/// therefore the one whose `--operator` is a request rather than a statement
-/// [ORB-11052]. `acceptance` is how this machine's own argv describes the
-/// session's arrival — a forced command it wrote itself, or nothing, in which
-/// case the destination falls back to observing its environment [ORB-11053].
+/// This is the entry point an SSH caller reaches, and its `--operator` is a
+/// statement there exactly as it is locally: the caller composed that argv over
+/// an SSH login to this machine, which is ownership of it, so there is no
+/// second authorization for the destination to make [ORB-12564]. A leftover
+/// file from the retired destination-side model is named once and ignored.
 pub(super) fn serve_mcp_stdio(
     remote_caller_machine_id: Option<String>,
     authority: McpSessionAuthority,
     bound_workspace: Option<String>,
-    acceptance: SshAcceptance,
     bound_orchestrator: Option<String>,
 ) -> Result<(), OrbitError> {
     let global_root = resolve_global_root()?;
-    let policy = orbit_mcp::mcp_serve_session_policy(
-        &global_root,
-        remote_caller_machine_id.as_deref(),
-        authority,
-        &acceptance,
-    )?;
+    orbit_mcp::warn_ignored_caller_authorization(&global_root);
     let (host, session_context) = compose_server(
         global_root,
         remote_caller_machine_id,
-        policy,
+        authority,
         bound_workspace,
         bound_orchestrator,
     )?;
@@ -83,20 +73,17 @@ pub(super) fn serve_mcp_stdio(
 /// local-only configuration.
 pub(super) fn serve_mcp_federated_stdio(
     bound_orchestrator: Option<String>,
+    authority: McpSessionAuthority,
 ) -> Result<(), OrbitError> {
     let global_root = resolve_global_root()?;
     let remotes = federated::load_destinations(&federated::destinations_path(&global_root))?;
     // The mux is a client to each remote, and identifies itself with the same
-    // audit label the v1 proxy forwards. Local calls reuse this process's
-    // identity and authority rather than opening SSH. Being a client is also
-    // why it composes a local policy: each destination caps the mux
-    // independently with its own callers file, and the mux is not a
-    // destination for its own request [ORB-11052].
-    let mut identity = orbit_mcp::mcp_server_identity(
-        &global_root,
-        None,
-        &SessionCapabilityPolicy::local(McpSessionAuthority::Agent),
-    )?;
+    // audit label the v1 proxy forwards. `authority` is one statement serving
+    // two roles: the local host stamps it on the sessions it answers directly,
+    // and the SSH probe asks each destination for the same thing in its argv
+    // [ORB-12564]. Local and remote workspaces therefore behave alike in one
+    // namespace, which is the whole point of the mux.
+    let mut identity = orbit_mcp::mcp_server_identity(&global_root, None, authority)?;
     // The mux binds no workspace, but it does carry one attribution default.
     // Local destinations read it from this context; remote ones are told in
     // their own argv, because a routed SSH session forwards no context
@@ -112,7 +99,6 @@ pub(super) fn serve_mcp_federated_stdio(
         global_root,
         identity.process_machine_id.clone(),
         identity.process_host_id.clone(),
-        SessionCapabilityPolicy::local(McpSessionAuthority::Agent),
     ));
     // Two budgets, not one: the probe timeout bounds the round trips that
     // decide where a call goes, while the routed `tools/call` is stamped
@@ -128,6 +114,7 @@ pub(super) fn serve_mcp_federated_stdio(
             federated::DEFAULT_PROBE_TIMEOUT,
             federated::DEFAULT_ROUTED_DELIVERY_TIMEOUT,
             bound_orchestrator,
+            authority,
         )),
     );
     let host: Arc<dyn McpHost> = Arc::new(federated::FederatedMcpHost::new(
@@ -161,17 +148,12 @@ pub(super) fn serve_mcp_listener(
     // For the same reason it binds no workspace: a socket is shared by
     // whoever can reach it, so each session names its own workspace.
     //
-    // A callers file is a statement about SSH callers this machine serves
-    // directly; a socket peer is not one of those, so the listener composes a
-    // local policy and its hardcoded agent authority is unchanged.
+    // This reasoning is unchanged by argv-propagated remote authority: SSH
+    // authenticates the caller before Orbit runs, and a socket authenticates
+    // nobody at all [ORB-12564].
     let global_root = resolve_global_root()?;
-    let (host, session_context) = compose_server(
-        global_root,
-        None,
-        SessionCapabilityPolicy::local(McpSessionAuthority::Agent),
-        None,
-        None,
-    )?;
+    let (host, session_context) =
+        compose_server(global_root, None, McpSessionAuthority::Agent, None, None)?;
     block_on_server(async move {
         let listener = McpListener::bind(addr, exposure, host, session_context).await?;
         tracing::info!(address = %listener.local_addr()?, "orbit mcp listener bound");
@@ -195,19 +177,18 @@ pub(super) fn serve_mcp_listener(
 fn compose_server(
     global_root: PathBuf,
     remote_caller_machine_id: Option<String>,
-    policy: SessionCapabilityPolicy,
+    authority: McpSessionAuthority,
     bound_workspace: Option<String>,
     bound_orchestrator: Option<String>,
 ) -> Result<(Arc<dyn McpHost>, ToolSessionContext), OrbitError> {
     let mut identity =
-        orbit_mcp::mcp_server_identity(&global_root, remote_caller_machine_id, &policy)?;
+        orbit_mcp::mcp_server_identity(&global_root, remote_caller_machine_id, authority)?;
     identity.session_context.workspace = normalized_selector(bound_workspace);
     identity.session_context.orchestrator = normalized_selector(bound_orchestrator);
     let host = Arc::new(ServerMcpHost::new(
         global_root,
         identity.process_machine_id,
         identity.process_host_id,
-        policy,
     ));
     Ok((host, identity.session_context))
 }
@@ -356,25 +337,16 @@ struct ServerMcpHost {
     global_root: PathBuf,
     process_machine_id: String,
     process_host_id: String,
-    /// What this session may do here, kept for the per-call re-evaluation a
-    /// `workspaces` narrowing needs [ORB-11052].
-    session_policy: SessionCapabilityPolicy,
     /// Runtimes this long-lived host has already opened.
     workspace_runtimes: WorkspaceRuntimeCache,
 }
 
 impl ServerMcpHost {
-    fn new(
-        global_root: PathBuf,
-        process_machine_id: String,
-        process_host_id: String,
-        session_policy: SessionCapabilityPolicy,
-    ) -> Self {
+    fn new(global_root: PathBuf, process_machine_id: String, process_host_id: String) -> Self {
         Self {
             global_root,
             process_machine_id,
             process_host_id,
-            session_policy,
             workspace_runtimes: WorkspaceRuntimeCache::default(),
         }
     }
@@ -537,12 +509,6 @@ impl ServerMcpHost {
         context.workspace = Some(repo_root.clone());
         context.process_machine_id = Some(self.process_machine_id.clone());
         context.process_host_id = Some(self.process_host_id.clone());
-        // The destination now knows which registered workspace this call lands
-        // in, which is the only point a `workspaces` narrowing can be decided
-        // against. A local session's policy holds no grant and re-stamps the
-        // same capabilities it was established with [ORB-11052].
-        self.session_policy
-            .stamp(&mut context, Some(&selected.workspace.id));
 
         if let Some(object) = input.as_object_mut()
             && object.contains_key("workspace")

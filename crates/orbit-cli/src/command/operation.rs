@@ -969,7 +969,6 @@ impl Commands {
                     McpSubcommand::Remove(_) => "remove",
                     McpSubcommand::Serve(_) => "serve",
                     McpSubcommand::Listen(_) => "listen",
-                    McpSubcommand::Callers(_) => "callers",
                 };
                 CommandOperation::new(
                     RuntimeNeed::Forbidden,
@@ -1089,9 +1088,6 @@ fn dispatch_mcp(command: Commands, context: DispatchContext<'_>) -> CommandOut {
         }) => args.execute_without_runtime(context.root_override),
         Commands::Mcp(McpCommand {
             command: McpSubcommand::Listen(args),
-        }) => args.execute_without_runtime(context.root_override),
-        Commands::Mcp(McpCommand {
-            command: McpSubcommand::Callers(args),
         }) => args.execute_without_runtime(context.root_override),
         _ => dispatch_mismatch("Mcp"),
     }

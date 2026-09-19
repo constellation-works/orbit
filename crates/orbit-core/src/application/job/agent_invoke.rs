@@ -179,26 +179,14 @@ impl OrbitRuntime {
             .filter(|value| !value.is_empty())
             .map_or_else(|| self.actor_label().to_string(), ToOwned::to_owned);
         let actor = authorizer
-            .remote_caller
-            .as_ref()
-            .map(|grant| grant.caller_machine_id.clone())
+            .remote_caller_machine_id
+            .clone()
             .unwrap_or(requested_actor);
 
         let admission = TrustedHostAdmission {
             authorized_by: actor.clone(),
             authorizer_provenance: authorizer.provenance.to_string(),
-            caller_machine_id: authorizer
-                .remote_caller
-                .as_ref()
-                .map(|grant| grant.caller_machine_id.clone()),
-            caller_identity: authorizer
-                .remote_caller
-                .as_ref()
-                .map(|grant| grant.identity),
-            agent_invoke_mode: authorizer
-                .remote_caller
-                .as_ref()
-                .and_then(|grant| grant.agent_invoke_mode),
+            caller_machine_id: authorizer.remote_caller_machine_id,
             authorized_at: Utc::now().to_rfc3339(),
             workspace_path: self.paths().repo_root.display().to_string(),
             cwd: cwd.display().to_string(),

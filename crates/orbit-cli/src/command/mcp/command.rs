@@ -1,146 +1,13 @@
-#[cfg(target_os = "linux")]
-use std::ffi::OsStr;
-use std::ffi::OsString;
 use std::path::Path;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::{Args, Subcommand, ValueEnum};
 use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_mcp::{McpSessionAuthority, RemoteProxyArgs, SshAcceptance};
+use orbit_mcp::{McpSessionAuthority, RemoteProxyArgs};
 
 use crate::command::{CommandOut, CommandOutput, Execute};
 
-use super::callers::CallersArgs;
 use super::listen::ListenArgs;
 use super::setup::{InitArgs, RemoveArgs};
-
-/// True only when Linux reported that `execve` itself entered a protected
-/// credential-transition state and Orbit reinforced it before CLI parsing.
-/// A public flag cannot set this bit.
-static SSH_ACCEPTANCE_LAUNCH_VERIFIED: AtomicBool = AtomicBool::new(false);
-static SSH_ACCEPTANCE_LOGIN_SHELL_VERIFIED: AtomicBool = AtomicBool::new(false);
-static SSH_ACCEPTANCE_TOKEN: OnceLock<String> = OnceLock::new();
-
-/// Verify the kernel boundary around an sshd-provided acceptance bearer.
-///
-/// The generated Tier 2 account must use a setgid Orbit copy, whose group
-/// differs from the login account's real group, as its login shell. Linux
-/// applies its secure-exec dumpability policy as part of that `execve`, before
-/// the dynamic loader or Rust startup can expose the initial environment
-/// through `/proc`. This first Rust operation verifies the inherited state,
-/// permanently drops the otherwise privilege-free launch group, and selects
-/// the strict non-dumpable value as defense in depth. It does not claim to
-/// protect an ordinary, initially dumpable process retroactively.
-pub(crate) fn verify_ssh_acceptance_launch_boundary() {
-    #[cfg(target_os = "linux")]
-    {
-        let Some(token) = std::env::var(orbit_mcp::SSH_ACCEPTANCE_ENV).ok() else {
-            return;
-        };
-        // Safety: these prctl operations read or set one process-local integer
-        // attribute and do not dereference any pointers.
-        let inherited_dumpable = unsafe { libc::prctl(libc::PR_GET_DUMPABLE) };
-        // Safety: credential getters have no pointers or side effects.
-        let (same_user, real_group, effective_group) = unsafe {
-            (
-                libc::getuid() == libc::geteuid(),
-                libc::getgid(),
-                libc::getegid(),
-            )
-        };
-        let credential_transition = same_user && real_group != effective_group;
-        // Linux uses 0 or the administrator-selected suid_dumpable value 2 for
-        // a protected credential-changing exec. Value 1 is the ordinary
-        // same-UID-readable state reproduced by ORB-11184.
-        let protected_at_exec = credential_transition && matches!(inherited_dumpable, 0 | 2);
-        // Safety: the real group is one of this process's existing group IDs;
-        // setting all three IDs to it permanently discards the setgid launch
-        // credential before Orbit opens or creates any task data.
-        let launch_group_dropped =
-            unsafe { libc::setresgid(real_group, real_group, real_group) } == 0;
-        // Safety: see above. Zero is the strict kernel-defined non-dumpable state.
-        let reinforced = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0) } == 0;
-        let verified = protected_at_exec && launch_group_dropped && reinforced;
-        SSH_ACCEPTANCE_LAUNCH_VERIFIED.store(verified, Ordering::Release);
-        if verified {
-            let _ = SSH_ACCEPTANCE_TOKEN.set(token);
-        }
-        // Safety: this is the first operation in single-threaded process
-        // startup. Removing the inherited value here prevents later command
-        // children from receiving the reusable bearer.
-        unsafe { std::env::remove_var(orbit_mcp::SSH_ACCEPTANCE_ENV) };
-    }
-}
-
-/// Adapt sshd's login-shell invocation into Orbit's ordinary CLI argv.
-///
-/// OpenSSH always invokes a forced command as `<login-shell> -c <command>`.
-/// The protected Orbit copy must itself be that login shell, or an ordinary
-/// shell would receive the bearer before the setgid exec. Only the exact shape
-/// emitted by `callers authorize` is adapted; every other `-c` invocation is
-/// left for clap to refuse.
-pub(crate) fn normalize_ssh_login_shell_args(
-    args: impl IntoIterator<Item = OsString>,
-) -> Vec<OsString> {
-    let args = args.into_iter().collect::<Vec<_>>();
-    #[cfg(target_os = "linux")]
-    {
-        if SSH_ACCEPTANCE_TOKEN.get().is_none() || args.len() != 3 || args[1] != OsStr::new("-c") {
-            return args;
-        }
-        let Some(command) = args[2].to_str() else {
-            return args;
-        };
-        let fields = command.split_ascii_whitespace().collect::<Vec<_>>();
-        if fields.len() != 7
-            || fields[1..4] != ["mcp", "serve", "--accept-ssh"]
-            || fields[4] != "--caller"
-            || fields[6] != "--operator"
-        {
-            return args;
-        }
-        let Ok(current_exe) = std::env::current_exe().and_then(std::fs::canonicalize) else {
-            return args;
-        };
-        let Ok(command_exe) = std::fs::canonicalize(fields[0]) else {
-            return args;
-        };
-        if current_exe != command_exe {
-            return args;
-        }
-        SSH_ACCEPTANCE_LOGIN_SHELL_VERIFIED.store(true, Ordering::Release);
-        let mut normalized = Vec::with_capacity(fields.len());
-        normalized.push(args[0].clone());
-        normalized.extend(fields[1..].iter().map(OsString::from));
-        normalized
-    }
-    #[cfg(not(target_os = "linux"))]
-    args
-}
-
-/// Read the Tier 2 bearer only after verifying that the kernel hid the initial
-/// process metadata before any userspace startup ran.
-fn protected_ssh_acceptance_token() -> Result<String, OrbitError> {
-    if !SSH_ACCEPTANCE_LAUNCH_VERIFIED.load(Ordering::Acquire)
-        || !SSH_ACCEPTANCE_LOGIN_SHELL_VERIFIED.load(Ordering::Acquire)
-    {
-        return Err(OrbitError::UnauthorizedCaller(
-            "SSH MCP acceptance did not enter through the generated Linux setgid login-shell \
-             boundary; install a fresh protected launcher as the dedicated account's shell and \
-             regenerate the authorized_keys line with `orbit mcp callers authorize --launcher \
-             <path>`"
-                .to_string(),
-        ));
-    }
-    SSH_ACCEPTANCE_TOKEN.get().cloned().ok_or_else(|| {
-        OrbitError::UnauthorizedCaller(
-            "SSH MCP acceptance was not supplied by sshd; regenerate and install the \
-             authorized_keys line with `orbit mcp callers authorize --launcher <path>`"
-                .to_string(),
-        )
-    })
-}
 
 #[derive(Args)]
 #[command(
@@ -184,13 +51,6 @@ pub enum McpSubcommand {
     /// is. The socket authenticates no client, so it binds loopback unless a
     /// wider bind is asked for explicitly.
     Listen(ListenArgs),
-    /// Inspect and seed which callers this machine serves, and as what
-    ///
-    /// On an SSH destination the caller writes the remote argv, so the
-    /// authority a remote session asks for is a request. `~/.orbit/mcp-callers.toml`
-    /// is this machine's answer, and a remote session holds the intersection
-    /// of the two. Local sessions are unaffected.
-    Callers(CallersArgs),
 }
 
 impl Execute for McpSubcommand {
@@ -204,7 +64,6 @@ impl Execute for McpSubcommand {
             Self::Remove(args) => args.execute_without_runtime(None),
             Self::Serve(args) => args.execute_without_runtime(None),
             Self::Listen(args) => args.execute_without_runtime(None),
-            Self::Callers(args) => args.execute_without_runtime(None),
         }
     }
 }
@@ -256,36 +115,13 @@ pub struct ServeArgs {
     /// ignored on the MCP surface, so an operator shell cannot grant operator
     /// authority to an agent's server by accident.
     ///
-    /// On a session that arrived over SSH this is a *request*, not a grant.
-    /// The machine serving it caps the session at what its
-    /// `~/.orbit/mcp-callers.toml` grants the calling machine, so a caller
-    /// cannot serve itself operator authority on someone else's host. See
-    /// `orbit mcp callers check`.
-    #[arg(long, conflicts_with = "mode")]
+    /// With `--mode remote` or `--mode federated` it is also the operator
+    /// statement for every SSH destination this client opens: Orbit is a
+    /// single-user tool and an SSH login to a machine is ownership of it, so
+    /// the destination serves the authority this argv asks for. A client that
+    /// is itself running as an agent never propagates it.
+    #[arg(long)]
     pub operator: bool,
-    /// Treat this session as SSH-originated after validating the destination
-    /// capability carried across the generated Linux setgid login-shell boundary.
-    ///
-    /// Meaningful only inside the forced command printed by `orbit mcp callers
-    /// authorize`. The bearer is deliberately not an argument value: the
-    /// generated key entry supplies it through an environment option to a
-    /// credential-changing executable that the kernel protects at exec.
-    #[arg(long, hide = true, conflicts_with = "mode")]
-    pub accept_ssh: bool,
-    /// The calling machine's identity, as this machine wrote it beside the
-    /// authenticating key.
-    ///
-    /// Honored only together with `--accept-ssh`, because only there is it
-    /// this machine's own statement rather than a string a caller could type.
-    /// It selects the `~/.orbit/mcp-callers.toml` row that caps the session,
-    /// and unlike a forwarded audit label it is backed by the key sshd checked.
-    #[arg(
-        long,
-        value_name = "MACHINE_ID",
-        requires = "accept_ssh",
-        conflicts_with = "mode"
-    )]
-    pub caller: Option<String>,
     /// Bind this server's sessions to a registered workspace: a workspace
     /// name, a logical workspace ID (`ws_*`), or an absolute registered
     /// checkout path.
@@ -346,6 +182,7 @@ impl ServeArgs {
                 orbit_mcp::serve_mcp_remote_proxy(RemoteProxyArgs {
                     ssh_host,
                     orchestrator: self.orchestrator,
+                    authority: requested_authority(self.operator),
                 })?
             }
             Some(ServeMode::Federated) => {
@@ -356,32 +193,29 @@ impl ServeArgs {
                          `~/.orbit/mcp-destinations.toml`"
                     )));
                 }
-                super::server::serve_mcp_federated_stdio(self.orchestrator)?
+                super::server::serve_mcp_federated_stdio(
+                    self.orchestrator,
+                    requested_authority(self.operator),
+                )?
             }
             None => super::server::serve_mcp_stdio(
                 self.remote_caller_machine_id,
-                if self.operator {
-                    McpSessionAuthority::Operator
-                } else {
-                    McpSessionAuthority::Agent
-                },
+                requested_authority(self.operator),
                 self.workspace
                     .or_else(orbit_core::runtime::managed_workspace_selector_from_env),
-                // `--caller` is unreachable without `--accept-ssh`, so the
-                // "honored only under a forced command" rule is carried by the
-                // type the server receives rather than re-checked downstream.
-                if self.accept_ssh {
-                    SshAcceptance::ForcedCommand {
-                        caller: self.caller,
-                        acceptance_token: protected_ssh_acceptance_token()?,
-                    }
-                } else {
-                    SshAcceptance::Environment
-                },
                 self.orchestrator,
             )?,
         }
         Ok(CommandOutput::Silent)
+    }
+}
+
+/// The authority a `serve` invocation asks for, local or remote.
+fn requested_authority(operator: bool) -> McpSessionAuthority {
+    if operator {
+        McpSessionAuthority::Operator
+    } else {
+        McpSessionAuthority::Agent
     }
 }
 

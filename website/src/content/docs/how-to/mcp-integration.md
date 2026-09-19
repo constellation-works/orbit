@@ -94,10 +94,22 @@ availability is the availability of the selected destination. Task reads are
 owner-only, so `orbit_task_list` and `orbit_task_show` must use the owner
 selector. A replica selector returns `capability_refused`.
 
-Over SSH, `--operator` is a request, not a grant: the serving host answers from
-its `~/.orbit/mcp-callers.toml`, and a remote session holds the intersection of
-what it asked for and what that file allows. Inspect the file with
-`orbit mcp callers list`, or test one caller with `orbit mcp callers check`.
+`--operator` travels. Orbit is a single-user tool and an SSH login to a machine
+is ownership of it, so a client started with `--operator` composes an operator
+argv for every destination it opens, and each destination serves the session
+that authority — the same way it would a local one. No file, forced command, or
+per-destination setup is involved:
+
+```bash
+orbit mcp serve --mode federated --operator
+orbit mcp serve --mode remote <ssh-host> --operator
+```
+
+Without `--operator` the remote sessions hold `agent`. A client that is itself
+running as an agent — inside a managed run, or with an agent envelope in its
+environment — never propagates operator, whatever the process that launched it
+held. To deny a caller entirely, remove its key from the destination's
+`~/.ssh/authorized_keys`.
 
 ## Serve
 
@@ -143,11 +155,6 @@ task:
 orbit mcp serve --mode remote <ssh-host> --orchestrator <crew>
 orbit mcp serve --mode federated --orchestrator <crew>
 ```
-
-A destination whose `authorized_keys` pins a forced command composes its own
-argv, so its configuration wins there — the same rule that already applies to
-the authority a remote session asks for, which the serving host caps through
-`orbit mcp callers`.
 
 Treat the flag as configuration, not as evidence of which model is answering a
 given call: an MCP connection commonly outlives a model switch on the client

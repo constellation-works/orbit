@@ -42,9 +42,9 @@ fn the_orchestrator_default_is_independent_of_operator_authority() {
 
 #[test]
 fn the_orchestrator_default_is_forwarded_by_the_client_modes() {
-    // Unlike `--operator` and `--workspace`, which describe the server this
-    // process is, attribution travels to whichever server actually creates the
-    // task — so it is accepted alongside every mode.
+    // Unlike `--workspace`, which describes the server this process is,
+    // attribution travels to whichever server actually creates the task — so
+    // it is accepted alongside every mode.
     let remote = parse(&["serve", "--mode", "remote", "box", "--orchestrator", "hub"]);
     assert_eq!(remote.mode, Some(ServeMode::Remote));
     assert_eq!(remote.orchestrator.as_deref(), Some("hub"));
@@ -60,4 +60,35 @@ fn the_orchestrator_default_takes_a_crew_name() {
         ServeCli::try_parse_from(["serve", "--orchestrator"]).is_err(),
         "`--orchestrator` must require a crew name rather than acting as a flag"
     );
+}
+
+/// [ORB-12564] `--operator` is accepted on both client modes, where it is the
+/// operator statement for every SSH destination the client opens. It used to
+/// conflict with `--mode`, which is what made operator-over-SSH need a
+/// destination-side grant.
+#[test]
+fn operator_authority_is_accepted_on_the_client_modes() {
+    let federated = parse(&["serve", "--mode", "federated", "--operator"]);
+    assert_eq!(federated.mode, Some(ServeMode::Federated));
+    assert!(federated.operator);
+
+    let remote = parse(&["serve", "--mode", "remote", "box", "--operator"]);
+    assert_eq!(remote.mode, Some(ServeMode::Remote));
+    assert!(remote.operator);
+}
+
+/// The retired Tier 2 argv must not be quietly accepted: a caller that still
+/// sends it gets a parse error rather than a session it did not ask for.
+#[test]
+fn the_retired_forced_command_flags_are_gone() {
+    for argv in [
+        vec!["serve", "--accept-ssh"],
+        vec!["serve", "--caller", "hm_caller"],
+        vec!["serve", "--caller-key-fingerprint", "SHA256:x"],
+    ] {
+        assert!(
+            ServeCli::try_parse_from(argv.clone()).is_err(),
+            "{argv:?} must no longer parse"
+        );
+    }
 }

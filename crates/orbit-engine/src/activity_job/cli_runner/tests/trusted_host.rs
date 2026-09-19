@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_agent::loop_engine::audit::AuditSink;
-use orbit_types::tool::{CallerIdentityProof, RemoteAgentInvokeMode};
 use orbit_types::workflow::activity_job::{
     TRUSTED_HOST_ADMISSION_KEY, TrustedHostAdmission, V2AuditEventKind,
 };
@@ -23,10 +22,8 @@ use super::test_support::{RecordingSink, TestHost, test_agent_loop_spec, write_e
 fn admission() -> TrustedHostAdmission {
     TrustedHostAdmission {
         authorized_by: "hm_mac".to_string(),
-        authorizer_provenance: "remote-grant".to_string(),
+        authorizer_provenance: "session".to_string(),
         caller_machine_id: Some("hm_mac".to_string()),
-        caller_identity: Some(CallerIdentityProof::KeyBound),
-        agent_invoke_mode: Some(RemoteAgentInvokeMode::KeyBound),
         authorized_at: "2026-09-06T00:00:00Z".to_string(),
         workspace_path: "/checkout".to_string(),
         cwd: "/checkout".to_string(),
@@ -90,8 +87,6 @@ fn an_admitted_invocation_runs_without_a_sandbox_and_records_its_authorizer() {
                 authorized_by,
                 authorizer_provenance,
                 caller_machine_id,
-                caller_identity,
-                agent_invoke_mode,
                 cwd,
                 ..
             } => Some((
@@ -99,8 +94,6 @@ fn an_admitted_invocation_runs_without_a_sandbox_and_records_its_authorizer() {
                 authorized_by.clone(),
                 authorizer_provenance.clone(),
                 caller_machine_id.clone(),
-                *caller_identity,
-                *agent_invoke_mode,
                 cwd.clone(),
             )),
             _ => None,
@@ -108,11 +101,9 @@ fn an_admitted_invocation_runs_without_a_sandbox_and_records_its_authorizer() {
         .expect("an unsandboxed invocation must announce itself in the run trail");
     assert_eq!(admitted.0, "agent_invoke");
     assert_eq!(admitted.1, "hm_mac");
-    assert_eq!(admitted.2, "remote-grant");
+    assert_eq!(admitted.2, "session");
     assert_eq!(admitted.3.as_deref(), Some("hm_mac"));
-    assert_eq!(admitted.4, Some(CallerIdentityProof::KeyBound));
-    assert_eq!(admitted.5, Some(RemoteAgentInvokeMode::KeyBound));
-    assert_eq!(admitted.6, "/checkout");
+    assert_eq!(admitted.4, "/checkout");
 
     // The absence of a sandbox is stated, not left to be inferred from a
     // missing field, so a reader can tell it apart from an executor that never
@@ -135,45 +126,48 @@ fn an_admitted_invocation_runs_without_a_sandbox_and_records_its_authorizer() {
     );
 }
 
+/// [ORB-12564] A local operator admission names no caller machine, and the
+/// trail has to keep that apart from a remote one rather than backfilling this
+/// machine's own identity into the field.
 #[test]
-fn a_cooperative_admission_is_audited_as_self_asserted_not_key_bound() {
+fn a_local_admission_records_no_remote_caller() {
     let temp = tempdir().expect("tempdir");
     let host = TestHost::with_command(echoing_provider(temp.path()));
     let mut spec = test_agent_loop_spec(Duration::from_secs(10));
     spec.trusted_host_execution = true;
-    let (audit, _sink) = writer("job-trusted-cooperative");
+    let (audit, _sink) = writer("job-trusted-local");
     let mut input = admitted_input();
-    input[TRUSTED_HOST_ADMISSION_KEY]["caller_identity"] =
-        serde_json::json!(CallerIdentityProof::SelfAsserted);
-    input[TRUSTED_HOST_ADMISSION_KEY]["agent_invoke_mode"] =
-        serde_json::json!(RemoteAgentInvokeMode::Cooperative);
+    input[TRUSTED_HOST_ADMISSION_KEY]["authorized_by"] = serde_json::json!("human:daniel");
+    input[TRUSTED_HOST_ADMISSION_KEY]["authorizer_provenance"] =
+        serde_json::json!("interactive-terminal");
+    input[TRUSTED_HOST_ADMISSION_KEY]["caller_machine_id"] = serde_json::Value::Null;
 
     run_cli_backend(
         &host,
         &spec,
         "agent_invoke",
-        "job-trusted-cooperative",
+        "job-trusted-local",
         audit.clone(),
         &input,
         None,
     )
-    .expect("cooperative admission runs");
+    .expect("local admission runs");
 
     let events = audit.events_snapshot().expect("events snapshot");
-    let (identity, mode) = events
+    let (authorized_by, caller_machine_id) = events
         .iter()
         .find_map(|event| match &event.kind {
             V2AuditEventKind::TrustedHostExecutionAdmitted {
-                caller_identity,
-                agent_invoke_mode,
+                authorized_by,
+                caller_machine_id,
                 ..
-            } => Some((*caller_identity, *agent_invoke_mode)),
+            } => Some((authorized_by.clone(), caller_machine_id.clone())),
             _ => None,
         })
         .expect("trusted-host admission event");
 
-    assert_eq!(identity, Some(CallerIdentityProof::SelfAsserted));
-    assert_eq!(mode, Some(RemoteAgentInvokeMode::Cooperative));
+    assert_eq!(authorized_by, "human:daniel");
+    assert_eq!(caller_machine_id, None);
 }
 
 /// The dangerous combination: the asset claims the mode, nothing admitted it.
