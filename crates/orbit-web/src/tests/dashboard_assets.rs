@@ -3033,6 +3033,11 @@ fn dashboard_reliability_separates_all_four_failure_populations() {
         "classification",
         "raw events",
         "affected runs",
+        "Tool call failure rate · window",
+        "failed / ${total} tool calls",
+        "Tool call failures by tool · window",
+        "tool_call_failures_by_tool",
+        "Distinct from unexpected failure rate",
     ] {
         assert!(
             audit.contains(needle),
@@ -3042,6 +3047,12 @@ fn dashboard_reliability_separates_all_four_failure_populations() {
     assert!(
         !audit.contains("} else if (namedFailures.length)"),
         "failure-only populations must not fall back to a synthetic tool-rate card"
+    );
+    let app = include_str!("../../assets/dashboard/app.js");
+    assert!(
+        app.contains("/api/audit/summary?since=${encodeURIComponent(since)}")
+            && app.contains("effectiveAuditWindow()"),
+        "audit summary must fetch the selected events window, not a hardcoded 24h"
     );
     assert!(
         diagnostics.contains(
@@ -3078,6 +3089,58 @@ fn dashboard_reliability_separates_all_four_failure_populations() {
             && css[responsive_at..]
                 .contains(".tool-health-grid { grid-template-columns: minmax(0, 1fr); }"),
         "four category labels and rate cards must remain scannable at narrow viewport widths"
+    );
+}
+
+/// ORB-12561: the Audit Summary pane shows the raw callable-tool failed/total
+/// rate and lists every failing tool, not only the unexpected-rate card.
+#[test]
+fn dashboard_audit_summary_renders_aggregate_and_every_failing_tool() {
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(tag = "") { this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; }
+  appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this[name] = String(value); }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  get classList() { return { add: () => {}, toggle: () => {} }; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node()), byId.get(id));
+globalThis.document = { getElementById: get, createElement: (tag) => new Node(tag), createTextNode: (text) => Object.assign(new Node(), { textContent: text }) };
+globalThis.window = { location: new URL("http://dashboard.test/#audit"), addEventListener: () => {} };
+
+const { renderAuditSummary } = await import("./audit.js");
+renderAuditSummary({
+  window: "24h",
+  tool_call_failure_rate: { failed: 7, total: 18, rate: 7 / 18 },
+  tool_call_failures_by_tool: [
+    { tool: "orbit.task.update", failed: 3, total: 7, rate: 3 / 7 },
+    { tool: "orbit.search", failed: 2, total: 7, rate: 2 / 7 },
+    { tool: "orbit.task.add", failed: 1, total: 1, rate: 1 },
+    { tool: "orbit.task.show", failed: 1, total: 3, rate: 1 / 3 },
+  ],
+  failure_rate_by_tool: [
+    { tool: "orbit.search", rate: 2 / 7, failures: 2, successes: 5, total: 7 },
+  ],
+}, { fmtDuration: (value) => String(value) });
+
+const body = get("audit-summary-body").textContent;
+if (!body.includes("38.9%") || !body.includes("7 failed / 18 tool calls")) {
+  throw new Error(`aggregate tool call failure rate missing: ${body}`);
+}
+for (const tool of ["orbit.task.update", "orbit.search", "orbit.task.add", "orbit.task.show"]) {
+  if (!body.includes(tool)) throw new Error(`per-tool list omitted ${tool}: ${body}`);
+}
+if (!body.includes("Unexpected Failure Rate")) {
+  throw new Error("unexpected-rate card must remain distinct from the raw rate");
+}
+if (get("audit-summary-title").textContent !== "Audit Summary 24h") {
+  throw new Error(`summary title was ${get("audit-summary-title").textContent}`);
+}
+"#,
     );
 }
 

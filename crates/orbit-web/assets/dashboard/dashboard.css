@@ -3617,6 +3617,17 @@
         font-size: 11px;
         color: var(--fg-dim);
       }
+      .tool-call-failure-rate {
+        font: 12px var(--font-mono);
+        color: var(--fg);
+        padding: 12px 12px 4px;
+      }
+      .tool-call-failure-rate-note {
+        padding: 0 12px 12px;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--fg-dim);
+      }
       .lifecycle-failure-card .card-title { text-transform: none; }
       .lifecycle-failure-counts {
         font: 12px var(--font-mono); color: var(--fg); overflow-wrap: anywhere; margin-bottom: 6px;
