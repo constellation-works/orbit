@@ -1271,6 +1271,12 @@ impl FailureCluster {
                     vec![CoverageAnchor::new("run_id", run_id)],
                 ));
             }
+            // A bare SHA identifies a commit, not a failure: any open task
+            // that quotes the current branch head (a code-scanning sweep, a
+            // dependabot sweep, a review brief) would otherwise suppress every
+            // CI failure on that head until it closes. Pairing the SHA with
+            // the generated workflow / failing-job labels keeps the match to
+            // tasks that actually describe this failure on this commit.
             for sha in [
                 value_string(run, "event_reported_head_sha"),
                 value_string(run, "current_ref_head_sha"),
@@ -1279,7 +1285,11 @@ impl FailureCluster {
                 if !sha.is_empty() && seen.insert(("head_sha", sha.clone())) {
                     fingerprints.push(CoverageFingerprint::new(
                         "ci_failure_head_sha",
-                        vec![CoverageAnchor::new("head_sha", sha)],
+                        vec![
+                            CoverageAnchor::new("head_sha", sha),
+                            CoverageAnchor::new("workflow", format!("workflow {}", self.workflow)),
+                            CoverageAnchor::new("job", format!("failing job {}", self.job)),
+                        ],
                     ));
                 }
             }

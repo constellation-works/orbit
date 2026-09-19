@@ -739,6 +739,52 @@ fn a_closed_task_does_not_suppress_a_recurrence() {
 }
 
 #[test]
+fn an_open_task_merely_citing_the_head_commit_does_not_suppress_a_ci_failure() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    // A code-scanning sweep runs minutes before the CI sweep on the same head,
+    // so its per-alert ledger routinely quotes the current branch head. That is
+    // a commit reference, not a description of this failure.
+    runtime
+        .add_task(TaskAddParams {
+            title: "[code-scanning-sweep] rust/path-injection in fs/generation.rs".to_string(),
+            description: format!(
+                "Alert 41 — `rust/path-injection`, analyzed commit {HEAD} on `agent-main`."
+            ),
+            acceptance_criteria: vec![
+                "The alert is resolved or dismissed with a reason.".to_string(),
+            ],
+            priority: TaskPriority::Medium,
+            task_type: Some(TaskType::Bug),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .expect("seed the open code-scanning task");
+
+    let log = "ci	Coverage (informational)	2026-08-30T01:00:00Z test update::tests::channel::system_inventory ... FAILED
+ci	Coverage (informational)	2026-08-30T01:00:01Z error: Text file busy (os error 26)
+";
+    let filed = file(
+        &runtime,
+        json!({"ci_evidence": snapshot(vec![failure(
+            10,
+            "ci",
+            "Coverage (informational)",
+            "cargo llvm-cov",
+            log,
+            CHECKOUT,
+        )])}),
+    );
+
+    assert_eq!(
+        filed["skipped_existing"].as_array().map(Vec::len),
+        Some(0),
+        "a bare commit reference is not coverage: {:?}",
+        filed["skipped_existing"]
+    );
+    assert_eq!(filed["filed_count"], json!(1));
+}
+
+#[test]
 fn a_listed_but_uninvestigated_failure_is_not_filed_as_an_evidence_free_task() {
     let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
     let mut uninvestigated = failure(10, "ci", "build", "cargo build", "", CHECKOUT);
