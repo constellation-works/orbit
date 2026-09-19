@@ -63,6 +63,9 @@ impl UpdateCommand {
             .into());
         }
         if self.preflight {
+            // Same `resolve_generation_root` `UpdateEnvironment::from_process` uses
+            // for exclusive admission, so a green preflight names the file the
+            // following `orbit update` will lock.
             let root = orbit_core::runtime::resolve_generation_root(root_override)?;
             let _admission = orbit_common::fs::generation::GenerationUpdate::acquire(&root)?;
             return Ok(Payload::detail(

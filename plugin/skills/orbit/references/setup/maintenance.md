@@ -101,13 +101,16 @@ Use `orbit update --preflight --json` against the configured executable and
 same authority before a wrapper changes the installation. Exit 0 reports
 `schema_version: 1`, `admitted: true`, `reservation: false` and
 `contract: executable-generation-v1`; exit 1 refuses admission on stderr.
-`--root` or isolated `HOME=` selects that authority (scratch init in a
-read-only `~/.orbit` sandbox); without them, admission is the host-global
-root. It opens no runtime or stores and may create coordination lock files. It is an
-observation, not a reservation. `orbit update` reacquires and holds admission
-through replacement, then pins the candidate through convergence. External
-installers must quiesce clients; a standalone preflight is not race-free.
-`orbit update --check` checks releases, not running-client compatibility.
+`--root`, then `ORBIT_ROOT`, otherwise isolated `HOME=` / the host-global
+root selects that authority (scratch init in a read-only `~/.orbit`
+sandbox). `orbit update` admits against the same resolved path for that
+invocation; a green preflight is not evidence for an update that would
+consult a different root. It opens no runtime or stores and may create
+coordination lock files. It is an observation, not a reservation. `orbit
+update` reacquires and holds admission through replacement, then pins the
+candidate through convergence. External installers must quiesce clients; a
+standalone preflight is not race-free. `orbit update --check` checks
+releases, not running-client compatibility.
 
 Participating CLI/MCP processes pin their executable generation for their entire
 lifetime. An update refuses while any is live, and a different executable cannot

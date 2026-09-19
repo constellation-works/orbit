@@ -720,6 +720,50 @@ fn a_fresh_fixture_install_directory_holds_only_the_executable() {
 }
 
 #[test]
+fn live_client_on_overridden_root_refuses_update_while_host_global_is_quiet() {
+    use orbit_common::fs::generation::GenerationGuard;
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+    let mut environment = fixture.environment();
+    let override_root = environment
+        .global_root
+        .parent()
+        .expect("fixture root")
+        .join("override-root");
+    std::fs::create_dir_all(&override_root).expect("override generation root");
+    environment.global_root = override_root.clone();
+    let _client = GenerationGuard::for_process(&override_root).expect("live client on override");
+    let before = std::fs::read(&fixture.executable).expect("installed bytes");
+    let error = run_update(&environment, &request()).expect_err("override pin must refuse");
+    assert!(error.to_string().contains("upgrade admission refused"));
+    assert_eq!(
+        std::fs::read(&fixture.executable).expect("installed bytes"),
+        before
+    );
+    assert!(fixture.invocations().is_empty());
+}
+
+#[test]
+fn host_global_pin_does_not_block_update_that_admits_against_an_override() {
+    use orbit_common::fs::generation::GenerationGuard;
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+    let mut environment = fixture.environment();
+    let host_global = environment.global_root.clone();
+    std::fs::create_dir_all(&host_global).expect("host-global generation root");
+    let override_root = host_global
+        .parent()
+        .expect("fixture root")
+        .join("override-root");
+    std::fs::create_dir_all(&override_root).expect("override generation root");
+    environment.global_root = override_root;
+    let _host_client = GenerationGuard::for_process(&host_global).expect("live host-global pin");
+    let report = run_update(&environment, &request()).expect("override authority is distinct");
+    assert_eq!(report.outcome, UpdateOutcome::Updated);
+    assert_eq!(fixture.installed_reports(), "orbit 0.19.0");
+}
+
+#[test]
 fn live_generation_refuses_before_installation_or_candidate_execution() {
     use orbit_common::fs::generation::GenerationGuard;
     for behavior in [
