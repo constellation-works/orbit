@@ -219,6 +219,52 @@ fn restore_keeps_logical_identity_but_writes_to_the_runtime_task_partition() {
 }
 
 #[test]
+fn coordinated_partition_markers_do_not_block_empty_destination_restore() {
+    let fixture = fixture(AttachmentPolicyKind::Include);
+    let registry = fixture.registry();
+    let partition = registry.workspaces_dir().join(WORKSPACE);
+    fs::create_dir_all(&partition).unwrap();
+    fs::write(
+        partition.join(".task-commit-required"),
+        b"\"journal.sqlite\"",
+    )
+    .unwrap();
+    fs::write(partition.join(".task-commit-pending"), b"journal-1").unwrap();
+    fs::write(partition.join(".task-commit.lock"), b"").unwrap();
+
+    let outcome = restore_publication(
+        &registry,
+        fixture.request(PublicationRestoreMode::EmptyDestination),
+    )
+    .unwrap();
+
+    assert_eq!(outcome.restored_task_ids, ["ORB-00001", "ORB-00007"]);
+    assert!(partition.join(".task-commit-required").is_file());
+}
+
+#[test]
+fn unbound_canonical_leftover_still_blocks_empty_destination_restore() {
+    let fixture = fixture(AttachmentPolicyKind::Include);
+    let registry = fixture.registry();
+    let leftover = registry
+        .canonical_task_bundle_path(WORKSPACE, "ORB-00099")
+        .unwrap();
+    fs::create_dir_all(&leftover).unwrap();
+
+    let error = restore_publication(
+        &registry,
+        fixture.request(PublicationRestoreMode::EmptyDestination),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("not an empty restore destination"),
+        "{error}"
+    );
+    assert!(registry.tasks_for_workspace(WORKSPACE).unwrap().is_empty());
+}
+
+#[test]
 fn identical_retry_is_explicit_and_does_not_duplicate_or_advance() {
     let fixture = fixture(AttachmentPolicyKind::Include);
     let registry = fixture.registry();
