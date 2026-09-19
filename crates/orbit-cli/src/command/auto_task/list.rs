@@ -34,7 +34,7 @@ impl Execute for AutoTaskListArgs {
         use crate::output::table::{Column, Table};
         let mut table = Table::new(vec![
             Column::new("NAME").fixed(),
-            Column::new("STATE").fixed(),
+            Column::new("STATE").fixed().filtered(true),
             Column::new("SCHEDULE").fixed(),
             Column::new("TITLE"),
         ])
