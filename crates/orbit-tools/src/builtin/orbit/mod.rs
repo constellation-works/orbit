@@ -2,6 +2,7 @@ pub mod agent;
 pub mod auto_task;
 pub mod command;
 pub mod docs;
+pub mod drain;
 pub mod friction;
 pub mod operation;
 pub mod operation_mode;
@@ -45,6 +46,21 @@ pub fn register(registry: &mut ToolRegistry) {
     registry.register_inactive(auto_task::show::OrbitAutoTaskShowTool);
     registry.register_inactive(auto_task::update::OrbitAutoTaskUpdateTool);
     registry.register_inactive(auto_task::toggle::OrbitAutoTaskToggleTool);
+    // The distributed drain's read-only half. The probe and receipt lookup are
+    // advertised because a follower must reach them over federated MCP before
+    // it can enable pull at all; claim inspection stays an operator surface
+    // beside the other coordination-hold tools. No mutating distributed entry
+    // point is registered: `orbit-core`'s distributed gate refuses them, and
+    // registering one would be how an incomplete feature turns itself on.
+    registry.register_mcp(
+        drain::probe::OrbitDrainProbeTool,
+        McpToolScope::WorkspaceRequired,
+    );
+    registry.register_mcp(
+        drain::receipt_lookup::OrbitDrainReceiptLookupTool,
+        McpToolScope::WorkspaceRequired,
+    );
+    registry.register_inactive(drain::claims::OrbitDrainClaimsTool);
     registry.register_inactive(docs::OrbitDocsListTool);
     registry.register_inactive(docs::OrbitDocsShowTool);
     registry.register_inactive(docs::OrbitDocsAddTool);

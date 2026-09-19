@@ -181,6 +181,45 @@ pub struct AdmissionShipContract {
     pub authorization_reference: Option<String>,
 }
 
+/// Wire-protocol version of pull, probe, and lifecycle request/response shapes.
+///
+/// It versions the distributed-drain protocol alone, not the scoreboard's
+/// `ORCHESTRATION_SCHEMA_VERSION` and not MCP's own initialize metadata.
+/// Incompatible request/response changes increment it.
+pub const DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA: u32 = 1;
+
+/// Receipt-lookup schema, versioned independently of admission so a client
+/// upgraded to the owner's binary can reconcile an old request without
+/// rewriting the input that request was made with.
+pub const ADMISSION_RECEIPT_LOOKUP_SCHEMA: u32 = 1;
+
+/// Ordered pre-admission refusal classes, in the order a caller sees them.
+///
+/// Selector resolution and session capability are decided by the calling
+/// surface before this ladder, because only that surface knows which workspace
+/// was addressed and which capabilities the session holds. Everything below is
+/// store-owned and shared by admission and the read-only preflight, so a probe
+/// cannot report a verdict admission would not reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmissionRefusal {
+    InvalidInput,
+    VersionMismatch,
+    ShipModeUnsupported,
+    ReviewPolicyUnsupported,
+}
+
+impl AdmissionRefusal {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidInput => "invalid_input",
+            Self::VersionMismatch => "version_mismatch",
+            Self::ShipModeUnsupported => "ship_mode_unsupported",
+            Self::ReviewPolicyUnsupported => "review_policy_unsupported",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdmissionRequest {
     pub request_id: String,

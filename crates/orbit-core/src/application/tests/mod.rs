@@ -1,4 +1,5 @@
 mod artifact_health;
+mod distributed;
 mod epic_retirement;
 mod executor;
 mod job_pipeline;

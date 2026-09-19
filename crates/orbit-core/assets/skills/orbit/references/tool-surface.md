@@ -41,6 +41,7 @@ records in a second store merely to get past a connection error.
 | Auto-tasks | `orbit_auto_task_list/mint` | Definition add/show/update/toggle are CLI operations; do not assume they are advertised over MCP |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
 | Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; asynchronous, returns a run ID |
+| Distributed drain preflight | `orbit_drain_probe`, `orbit_drain_receipt_lookup` (owner-served, read only) | `orbit tool run orbit.drain.claims` lists execution claims for an operator. The pull surface itself does not exist yet: these report what an admission *would* do and reconcile a past request; they create no claim and grant no execution authority |
 | Setup and maintenance | Discover any server extensions; do not guess | config, doctor, semantic, docs, audit, GC, policy, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
 
 Provider/gateway prefixes are transport wrappers around these names. A connected

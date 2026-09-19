@@ -51,6 +51,15 @@ pub trait TaskStoreBackend: Send + Sync {
     fn inspect_execution_claims(&self) -> Result<Vec<super::ClaimInspection>, OrbitError> {
         Err(OrbitError::Store("claim inspection unavailable".into()))
     }
+    /// Read-only receipt reconciliation. Creates no receipt, binds no run, and
+    /// grants no execution authority; the caller authorizes the identity.
+    fn lookup_admission(
+        &self,
+        _identity: &super::AdmissionIdentity,
+        _request_id: &str,
+    ) -> Result<super::AdmissionLookup, OrbitError> {
+        Err(OrbitError::Store("admission lookup unavailable".into()))
+    }
 
     /// Select metadata before hydration, retaining all-envelope index validation.
     fn task_candidates(

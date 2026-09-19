@@ -264,6 +264,62 @@
   {
     "active": true,
     "builtin": true,
+    "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner machine, binary version, distributed-drain protocol schema, the capabilities this session holds, the diagnostic caller machine, the owner-resolved ship configuration, and the review policy. Declaring `caller_version`, `caller_schema`, or `caller_review_policy` also reports the first refusal an admission would raise, in the order admission applies it. It creates no request receipt, reservation, claim, or task transition, and it is never a health check for admission itself.",
+    "enabled": true,
+    "name": "orbit.drain.probe",
+    "parameters": [
+      {
+        "description": "Optional. The calling binary's version. When supplied, the response reports whether it matches this owner instead of leaving the caller to compare.",
+        "name": "caller_version",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Optional. The caller's distributed-drain wire-protocol schema version. This is not the MCP protocol revision and not the orchestration schema version.",
+        "name": "caller_schema",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "description": "Optional. The executor's effective review policy. Only `none` is supported in v1; `before-pr` and `after-landing` are reported as refusals rather than silently downgraded.",
+        "name": "caller_review_policy",
+        "param_type": "string",
+        "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
+    "description": "Read-only reconciliation of one distributed-drain admission request, served by the workspace owner. Returns the original receipt and the current claim phase (`found`), a non-reusable tombstone (`expired`), or `not_found`. It creates no receipt, binds no run, and grants no execution authority: a receipt is historical evidence, and `not_found` is not proof that an earlier request cannot still arrive, so it never licenses a replacement request under a new ID.",
+    "enabled": true,
+    "name": "orbit.drain.receipt.lookup",
+    "parameters": [
+      {
+        "description": "The durable request ID the original admission was made with. It is read verbatim; the stored receipt is never rewritten to match the caller's current binary.",
+        "name": "request_id",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "description": "Optional receipt namespace: the machine the original request was made from. Defaults to this session's own machine. Naming another machine is cross-attempt inspection and requires operator capability.",
+        "name": "machine_id",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "description": "Optional lookup protocol version; defaults to 1. Versioned independently of admission, so an upgraded client can reconcile an old request. An incompatible version is refused — reconcile through owner claim inspection instead of minting a replacement request.",
+        "name": "lookup_schema",
+        "param_type": "integer",
+        "required": false
+      }
+    ],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
     "description": "Append a friction report",
     "enabled": true,
     "name": "orbit.friction.add",

@@ -18,6 +18,8 @@ const ADVERTISED_TOOL_CLASSES: &[(&str, McpToolClass)] = &[
     ("orbit.command.exec", McpToolClass::Execute),
     ("orbit.crew.list", McpToolClass::Unclassified),
     ("orbit.agent.invoke", McpToolClass::Execute),
+    ("orbit.drain.probe", McpToolClass::ControlPlane),
+    ("orbit.drain.receipt.lookup", McpToolClass::ControlPlane),
     ("orbit.friction.add", McpToolClass::ControlPlane),
     ("orbit.friction.list", McpToolClass::ControlPlane),
     ("orbit.friction.update", McpToolClass::ControlPlane),
@@ -59,6 +61,23 @@ fn the_locked_mapping_covers_exactly_the_advertised_surface() {
         .collect::<std::collections::BTreeSet<_>>();
 
     assert_eq!(advertised, locked);
+}
+
+/// A replica answers for its own checkout, so it must not answer an owner
+/// question about receipts, claims, or the ship contract admission resolves
+/// [ORB-12495].
+#[test]
+fn a_replica_refuses_the_distributed_drain_read_only_surface() {
+    let held = CapabilityClasses::new(false, true);
+
+    for tool in ["orbit.drain.probe", "orbit.drain.receipt.lookup"] {
+        let error = ensure_tool_class_held(tool, held).expect_err("replica refuses");
+        assert!(
+            matches!(error, OrbitError::CapabilityRefused(_)),
+            "{tool}: {error}"
+        );
+        assert!(error.to_string().contains("control_plane"), "{tool}");
+    }
 }
 
 #[test]

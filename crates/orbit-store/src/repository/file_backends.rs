@@ -34,6 +34,14 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         self.claim_boundary()?.inspect_execution_claims()
     }
+    fn lookup_admission(
+        &self,
+        identity: &crate::contracts::AdmissionIdentity,
+        request_id: &str,
+    ) -> Result<crate::contracts::AdmissionLookup, OrbitError> {
+        self.claim_boundary()?
+            .lookup_admission(identity, request_id)
+    }
 
     fn create_task_idempotent(
         &self,

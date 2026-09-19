@@ -556,3 +556,90 @@ fn valid_part_of_legacy_active_footprint_still_protects_missing_files() {
     assert!(result.claim.is_none());
     assert_eq!(result.deferred_conflicts[0].task_id, candidate.id);
 }
+
+/// The ladder is ordered, and a probe reading it sees the same verdict an
+/// admission would reach [ORB-12495]. Each case below is wrong in *two* ways
+/// at once, so the assertion pins which refusal comes first rather than merely
+/// that something was refused.
+#[test]
+fn pre_admission_refusals_are_ordered_and_create_nothing() {
+    let temp = TempDir::new().expect("temp");
+    let fixture = Coordinated::open(temp.path());
+    let task = fixture.create_task("candidate");
+
+    let mut shapeless = request("ordered");
+    shapeless.run_context.run_id = "  ".into();
+    shapeless.caller_version = "other".into();
+    assert_eq!(
+        crate::admission_refusal(&identity(), &shapeless, "test"),
+        Some(AdmissionRefusal::InvalidInput)
+    );
+
+    let mut stale_binary = request("ordered");
+    stale_binary.caller_version = "other".into();
+    stale_binary.ship.mode = "local".into();
+    assert_eq!(
+        crate::admission_refusal(&identity(), &stale_binary, "test"),
+        Some(AdmissionRefusal::VersionMismatch)
+    );
+
+    // A remote caller cannot take a local-mode workspace, and that is decided
+    // before the policy comparison below it.
+    let mut remote_local = request("ordered");
+    remote_local.ship.mode = "local".into();
+    remote_local.caller_review_policy = "before-pr".into();
+    assert_eq!(
+        crate::admission_refusal(&identity(), &remote_local, "test"),
+        Some(AdmissionRefusal::ShipModeUnsupported)
+    );
+
+    // Non-`none` policies are rejected by name on either endpoint; neither is
+    // downgraded to `none`.
+    for (owner, executor) in [
+        ("none", "before-pr"),
+        ("none", "after-landing"),
+        ("before-pr", "none"),
+    ] {
+        let mut policy = request("ordered");
+        policy.ship.review_policy = owner.into();
+        policy.caller_review_policy = executor.into();
+        assert_eq!(
+            crate::admission_refusal(&identity(), &policy, "test"),
+            Some(AdmissionRefusal::ReviewPolicyUnsupported),
+            "{owner}/{executor}"
+        );
+        assert!(
+            fixture
+                .boundary()
+                .admit_task(
+                    &identity(),
+                    &policy,
+                    "test",
+                    temp.path(),
+                    &fixture.orbit_dir,
+                )
+                .expect_err("refused")
+                .to_string()
+                .contains("review_policy_unsupported")
+        );
+    }
+
+    // Every refusal above ran before the transaction: no claim, no reservation,
+    // no receipt to replay, and the candidate is still in the backlog.
+    assert!(
+        fixture
+            .boundary()
+            .execution_claims()
+            .expect("claims")
+            .is_empty()
+    );
+    assert!(fixture.active_reservations().is_empty());
+    assert_eq!(
+        fixture
+            .boundary()
+            .lookup_admission(&identity(), "ordered")
+            .expect("lookup"),
+        AdmissionLookup::NotFound
+    );
+    assert_eq!(fixture.task(&task.id).status, TaskStatus::Backlog);
+}

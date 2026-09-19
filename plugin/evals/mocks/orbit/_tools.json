@@ -152,6 +152,61 @@
       }
     },
     {
+      "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner machine, binary version, distributed-drain protocol schema, the capabilities this session holds, the diagnostic caller machine, the owner-resolved ship configuration, and the review policy. Declaring `caller_version`, `caller_schema`, or `caller_review_policy` also reports the first refusal an admission would raise, in the order admission applies it. It creates no request receipt, reservation, claim, or task transition, and it is never a health check for admission itself.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "caller_review_policy": {
+            "description": "Optional. The executor's effective review policy. Only `none` is supported in v1; `before-pr` and `after-landing` are reported as refusals rather than silently downgraded.",
+            "type": "string"
+          },
+          "caller_schema": {
+            "description": "Optional. The caller's distributed-drain wire-protocol schema version. This is not the MCP protocol revision and not the orchestration schema version.",
+            "type": "integer"
+          },
+          "caller_version": {
+            "description": "Optional. The calling binary's version. When supplied, the response reports whether it matches this owner instead of leaving the caller to compare.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace \u2014 by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "name": "orbit_drain_probe"
+    },
+    {
+      "description": "Read-only reconciliation of one distributed-drain admission request, served by the workspace owner. Returns the original receipt and the current claim phase (`found`), a non-reusable tombstone (`expired`), or `not_found`. It creates no receipt, binds no run, and grants no execution authority: a receipt is historical evidence, and `not_found` is not proof that an earlier request cannot still arrive, so it never licenses a replacement request under a new ID.",
+      "inputSchema": {
+        "additionalProperties": true,
+        "properties": {
+          "lookup_schema": {
+            "description": "Optional lookup protocol version; defaults to 1. Versioned independently of admission, so an upgraded client can reconcile an old request. An incompatible version is refused \u2014 reconcile through owner claim inspection instead of minting a replacement request.",
+            "type": "integer"
+          },
+          "machine_id": {
+            "description": "Optional receipt namespace: the machine the original request was made from. Defaults to this session's own machine. Naming another machine is cross-attempt inspection and requires operator capability.",
+            "type": "string"
+          },
+          "request_id": {
+            "description": "The durable request ID the original admission was made with. It is read verbatim; the stored receipt is never rewritten to match the caller's current binary.",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace \u2014 by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "type": "object"
+      },
+      "name": "orbit_drain_receipt_lookup"
+    },
+    {
       "name": "orbit_friction_add",
       "description": "Append a friction report",
       "inputSchema": {
@@ -571,7 +626,7 @@
             "type": "string"
           },
           "workspace": {
-            "description": "Optional explicit workspace filter. `id` is resolved globally by default; when supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed — a valid workspace that does not own the task returns not-found.",
+            "description": "Optional explicit workspace filter. `id` is resolved globally by default; when supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed \u2014 a valid workspace that does not own the task returns not-found.",
             "type": "string"
           }
         },
@@ -862,7 +917,7 @@
             "type": "string"
           },
           "note": {
-            "description": "Optional lifecycle note for the guarded approval (proposed → backlog) or start (pickup → in-progress) transition; rejected on any other update",
+            "description": "Optional lifecycle note for the guarded approval (proposed \u2192 backlog) or start (pickup \u2192 in-progress) transition; rejected on any other update",
             "type": "string"
           },
           "orchestrator": {
