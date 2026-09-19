@@ -63,18 +63,31 @@ impl TaskCommitBoundary {
                         "claim inspection unavailable until pending commit is recovered",
                     ));
                 }
-                let claims = self
-                    .store
-                    .task_coordination_rows(&self.workspace_id, CLAIM)?;
-                claims
-                    .iter()
-                    .map(|r| {
-                        let claim = decode(&r.payload_json)?;
-                        self.claim_state(claim)
-                    })
-                    .collect()
+                self.claim_states_locked()
             })
         })
+    }
+
+    /// [ORB-12575] The ordinary-participant counterpart of
+    /// [`Self::inspect_execution_claims`]: the same claim states, read inside
+    /// the boundary so an interrupted commit is replayed first exactly as every
+    /// other runtime read does. Live commands that merely consult claims (job
+    /// resume) take this route; `orbit doctor` keeps the non-repairing read.
+    pub fn resolve_execution_claims(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
+        self.enter_ordinary(|| self.claim_states_locked())
+    }
+
+    /// Caller holds the boundary and has already settled or excluded a
+    /// pending commit.
+    fn claim_states_locked(&self) -> Result<Vec<ClaimInspection>, OrbitError> {
+        self.store
+            .task_coordination_rows(&self.workspace_id, CLAIM)?
+            .iter()
+            .map(|r| {
+                let claim = decode(&r.payload_json)?;
+                self.claim_state(claim)
+            })
+            .collect()
     }
 
     fn claim_state(&self, claim: ExecutionClaim) -> Result<ClaimInspection, OrbitError> {

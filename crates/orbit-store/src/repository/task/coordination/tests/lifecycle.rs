@@ -462,3 +462,37 @@ fn inspection_refuses_pending_repair_without_recovering_it() {
         ExecutionClaimPhase::Failed
     );
 }
+
+/// [ORB-12575] The ordinary-participant read settles the interrupted commit
+/// itself and then reports the same claim states inspection would, while the
+/// non-repairing inspection keeps refusing until then.
+#[test]
+fn resolution_recovers_pending_commit_where_inspection_refuses() {
+    let tmp = TempDir::new().expect("temp");
+    let f = Coordinated::open(tmp.path());
+    let c = claim(&f);
+    inject_coordination_faults(&[CoordinationFault::AfterCommit]);
+    assert!(
+        f.boundary()
+            .mutate_execution_claim(
+                Some(&worker(&c, false)),
+                "fail",
+                &ClaimMutation::Fail(evidence())
+            )
+            .is_err()
+    );
+    assert!(f.boundary().pending_marker_exists());
+    assert!(f.boundary().inspect_execution_claims().is_err());
+    assert!(f.boundary().pending_marker_exists());
+
+    let resolved = f
+        .boundary()
+        .resolve_execution_claims()
+        .expect("resolution replays the journal");
+    assert!(!f.boundary().pending_marker_exists());
+    assert_eq!(resolved[0].claim.phase, ExecutionClaimPhase::Failed);
+    let inspected = f.boundary().inspect_execution_claims().expect("inspect");
+    assert_eq!(inspected.len(), 1);
+    assert_eq!(inspected[0].claim, resolved[0].claim);
+    assert_eq!(inspected[0].last_event, resolved[0].last_event);
+}

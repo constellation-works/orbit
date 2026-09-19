@@ -174,4 +174,12 @@ impl crate::OrbitRuntime {
     ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
         self.stores().tasks().inspect_execution_claims()
     }
+
+    /// Repairing counterpart of [`Self::inspect_execution_claims`] for live
+    /// commands: an interrupted coordination commit is recovered first.
+    pub fn resolve_execution_claims(
+        &self,
+    ) -> Result<Vec<orbit_store::contracts::ClaimInspection>, OrbitError> {
+        self.stores().tasks().resolve_execution_claims()
+    }
 }
