@@ -265,8 +265,23 @@ The internal API is `TaskStoreBackend::mutate_execution_claim` with non-deserial
 scoped to immutable claim and mutation ID, compare the complete input, and replay their original
 outcome without changing a newer attempt. `inspect_execution_claims` reports provenance, phase,
 age, expiry, last event, unresolved intent and landing invalidation; it does not repair journals.
-The internal handoff operation enforces transactional ownership and review transition; the later
-handoff consumer must validate the full candidate/base and completion contract before calling it.
+The internal typed handoff operation validates exact claim/run/repository/delivery/candidate/base
+identity against trusted owner observations and digest-pinned owner validation artifacts. Its
+journal decision includes review transition, closed execution phase, reservation release and, for
+an applicable completion grant, immutable authorization plus a pending landing-start request.
+Explicit operator review-state approval creates the same authorization/outbox pair idempotently;
+agent capability cannot approve. Revocation cancels pending authority atomically, and unresolved
+merge intent must first reconcile. The merge-intent write rechecks current evidence and authority,
+including grant revocation within the SQLite transaction. Historical receipt replay does not grant
+new execution or landing permission. The summary-only legacy handoff variant refuses new writes.
+
+`OrbitRuntime::accept_task_handoff`, `approve_task_handoff`, `revoke_task_handoff`,
+`accepted_task_handoff` and `landing_start_requests` are internal owner-domain seams, not registered
+distributed tools. Trusted observations must come from provider/Git state and owner validation
+policy. No-diff observations additionally require the existing already-landed Git checks; their
+report shape, scope projection, criteria and log requirements are shared with the local verifier.
+The durable pending outbox survives restart without an active drain or sweep; dispatch and actual
+external merge reconciliation belong to the dependent consumer slice.
 Generic tool/friction omitted-context fencing and transport propagation remain integration work;
 public distributed entry points must stay disabled until that proof passes.
 

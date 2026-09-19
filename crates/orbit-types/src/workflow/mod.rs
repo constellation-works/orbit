@@ -5,6 +5,7 @@ mod auto_task;
 mod child_dispatch;
 mod error;
 mod executor_def;
+pub mod handoff;
 mod job;
 pub mod operation;
 mod review;

@@ -747,6 +747,7 @@ fn unique_journal_id() -> String {
 }
 
 mod admission;
+mod handoff;
 mod lifecycle;
 
 pub use admission::admission_refusal;

@@ -8,8 +8,10 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::{anchor_path, overlaps};
 use orbit_types::task::{Task, TaskArtifact};
-use orbit_types::workflow::{ReviewValidation, ValidationOutcome, ValidationRole};
-use serde::{Deserialize, Serialize};
+use orbit_types::workflow::handoff::{
+    AlreadyLandedEvidence as Evidence, already_landed_scope as scope,
+};
+use orbit_types::workflow::{ValidationOutcome, ValidationRole};
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
@@ -19,30 +21,6 @@ use super::super::git::{git_output, git_output_paths, git_success};
 use super::pinned_object_id;
 
 const ARTIFACT: &str = "already-landed.json";
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Evidence {
-    schema_version: u32,
-    task_id: String,
-    run_id: String,
-    tested_head: String,
-    covering_commit: String,
-    covering_task_id: String,
-    scope: Value,
-    required_commands: Vec<String>,
-    validation: Vec<Check>,
-    /// One concrete explanation per current acceptance criterion, in order.
-    criteria_evidence: Vec<String>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Check {
-    #[serde(flatten)]
-    validation: ReviewValidation,
-    log_artifact: String,
-}
 
 /// Recheck the same contract at commit, promotion, and completion. Returning
 /// the complete evidence in each step's ordinary checkpoint preserves exactly
@@ -204,21 +182,6 @@ pub(in crate::executor::automation::vcs) fn verify_handoff<H: RuntimeHost + ?Siz
         ));
     }
     Ok(())
-}
-
-fn scope(task: &Task, comments: &[orbit_types::task::TaskComment]) -> Value {
-    json!({
-        "title": task.title,
-        "description": task.description,
-        "acceptance_criteria": task.acceptance_criteria,
-        "plan": task.plan,
-        "context_files": task.context_files,
-        "tags": task.tags,
-        "relations": task.relations,
-        "required_tools": task.required_tools,
-        "type": task.task_type,
-        "comments": comments,
-    })
 }
 
 fn ensure_validation_run<H: RuntimeHost + ?Sized>(

@@ -156,3 +156,193 @@ fn no_parent_can_assemble_a_local_child_under_before_pr() {
         "{error}"
     );
 }
+
+#[test]
+fn owner_domain_accepts_typed_handoff_but_only_operator_can_approve() {
+    use crate::adapter::tool_host::test_support::{create_context_task, test_runtime};
+    use orbit_store::TaskCommitBoundary;
+    use orbit_store::contracts::*;
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    use orbit_types::task::{TaskArtifact, TaskStatus};
+    use orbit_types::workflow::{automation::SourceRevision, handoff::*};
+    use sha2::{Digest, Sha256};
+
+    let (_root, runtime, repo) = test_runtime();
+    let task = create_context_task(&runtime, &repo, TaskStatus::Backlog, &["src/a.rs"]);
+    let workspace_id = runtime.workspace_id().expect("workspace");
+    let boundary = TaskCommitBoundary::new(
+        runtime.sqlite_store().expect("store"),
+        TaskRegistryStore::open(&task_registry_path(&runtime.global_root())).expect("registry"),
+        workspace_id.clone(),
+    )
+    .expect("boundary");
+    let ship = AdmissionShipContract {
+        mode: "pr".into(),
+        base_branch: "agent-main".into(),
+        landing_branch: "agent-main".into(),
+        review_policy: "none".into(),
+        completion: "review".into(),
+        authorization_reference: None,
+    };
+    let admission = boundary
+        .admit_task(
+            &AdmissionIdentity::trusted_remote(ExecutionLocation {
+                machine_id: "follower".into(),
+                host_id: None,
+            }),
+            &AdmissionRequest {
+                request_id: "pull".into(),
+                caller_version: "test".into(),
+                caller_schema: 1,
+                caller_review_policy: "none".into(),
+                run_context: AdmissionRunContext {
+                    run_id: "drain".into(),
+                    job_name: "auto".into(),
+                    host_id: None,
+                },
+                ship: ship.clone(),
+            },
+            "test",
+            &repo,
+            &runtime.data_root(),
+        )
+        .expect("admission");
+    let AdmissionLookup::Found { receipt, .. } = admission else {
+        panic!("receipt")
+    };
+    let claim = receipt.claim.expect("claim");
+    let context = ClaimInvocation::trusted_worker(
+        task.id.clone(),
+        claim.claim_id.clone(),
+        "follower".into(),
+        None,
+    );
+    let run = ClaimRun {
+        machine_id: "follower".into(),
+        run_id: "leaf".into(),
+    };
+    runtime
+        .mutate_execution_claim(
+            Some(&context),
+            "bind",
+            &ClaimMutation::Bind {
+                run: run.clone(),
+                ship,
+            },
+        )
+        .expect("bind");
+    let context = ClaimInvocation::trusted_worker(
+        task.id.clone(),
+        claim.claim_id.clone(),
+        "follower".into(),
+        Some(run),
+    );
+    let candidate = HandoffCandidate {
+        repository: "owner/repository".into(),
+        source_branch: "attempt/leaf".into(),
+        base_branch: "agent-main".into(),
+        landing_branch: "agent-main".into(),
+        candidate: SourceRevision {
+            commit: "a".repeat(40),
+            tree: "b".repeat(40),
+        },
+        base: SourceRevision {
+            commit: "c".repeat(40),
+            tree: "d".repeat(40),
+        },
+        delivery: HandoffDelivery::PullRequest { number: 1 },
+    };
+    let log = HandoffValidationLog {
+        schema_version: 1,
+        workspace_id: workspace_id.clone(),
+        task_id: task.id.clone(),
+        claim_id: claim.claim_id.clone(),
+        machine_id: "follower".into(),
+        run_id: "leaf".into(),
+        candidate: candidate.clone(),
+        tested_head: candidate.candidate.commit.clone(),
+        command: "make ci".into(),
+        exit_code: 0,
+        output: "captured successful checks".into(),
+    };
+    let content = serde_json::to_vec(&log).expect("log");
+    let reference = HandoffArtifactRef {
+        path: "checks.json".into(),
+        sha256: format!("{:x}", Sha256::digest(&content)),
+    };
+    runtime
+        .mutate_execution_claim(
+            Some(&context),
+            "evidence",
+            &ClaimMutation::Evidence(ClaimEvidence {
+                artifacts: vec![TaskArtifact {
+                    path: reference.path.clone(),
+                    content,
+                    media_type: "application/json".into(),
+                    created_by: None,
+                }],
+                ..Default::default()
+            }),
+        )
+        .expect("owner artifact");
+    let handoff = TaskHandoff {
+        schema_version: 1,
+        workspace_id,
+        task_id: task.id.clone(),
+        claim_id: claim.claim_id.clone(),
+        machine_id: "follower".into(),
+        run_id: "leaf".into(),
+        candidate: candidate.clone(),
+        review: HandoffReview {
+            policy: ReviewTiming::None,
+            disposition: HandoffReviewDisposition::NotRequired,
+        },
+        execution_summary: "Outcome: success\nValidated exact candidate".into(),
+        validation: vec![reference],
+    };
+    let observation = HandoffObservation {
+        candidate: candidate.clone(),
+        required_commands: vec!["make ci".into()],
+    };
+    runtime
+        .accept_task_handoff(&context, "handoff", handoff, observation.clone())
+        .expect("accept");
+    assert!(runtime.landing_start_requests().expect("outbox").is_empty());
+    let accepted = runtime
+        .accepted_task_handoff(&claim.claim_id)
+        .expect("accepted");
+    assert!(
+        runtime
+            .approve_task_handoff(
+                &context,
+                "approve",
+                accepted.handoff_id.clone(),
+                candidate.clone(),
+                observation.clone()
+            )
+            .is_err()
+    );
+    let operator =
+        ClaimInvocation::trusted_operator(task.id.clone(), claim.claim_id, "owner".into());
+    runtime
+        .approve_task_handoff(
+            &operator,
+            "approve",
+            accepted.handoff_id.clone(),
+            candidate,
+            observation,
+        )
+        .expect("operator approval");
+    assert_eq!(runtime.landing_start_requests().expect("outbox").len(), 1);
+    runtime
+        .revoke_task_handoff(&operator, "revoke", accepted.handoff_id, "withdraw".into())
+        .expect("revoke");
+    assert_eq!(
+        runtime.landing_start_requests().expect("outbox")[0].state,
+        LandingStartState::Revoked
+    );
+    assert_eq!(
+        runtime.get_task(&task.id).expect("task").status,
+        TaskStatus::Review
+    );
+}

@@ -20,16 +20,20 @@ const CLAIM: &str = "distributed-execution-claim-v1";
 const STATE: &str = "distributed-claim-lifecycle-v1";
 const RECEIPT: &str = "distributed-claim-mutation-v1";
 
-fn invalid(message: &str) -> OrbitError {
+pub(super) fn invalid(message: &str) -> OrbitError {
     OrbitError::InvalidInput(message.into())
 }
-fn encode<T: Serialize>(value: &T) -> Result<String, OrbitError> {
+pub(super) fn encode<T: Serialize>(value: &T) -> Result<String, OrbitError> {
     serde_json::to_string(value).map_err(|e| OrbitError::Store(e.to_string()))
 }
-fn decode<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, OrbitError> {
+pub(super) fn decode<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, OrbitError> {
     serde_json::from_str(value).map_err(|e| OrbitError::Store(e.to_string()))
 }
-fn row<T: Serialize>(kind: &str, id: &str, value: &T) -> Result<TaskCoordinationRow, OrbitError> {
+pub(super) fn row<T: Serialize>(
+    kind: &str,
+    id: &str,
+    value: &T,
+) -> Result<TaskCoordinationRow, OrbitError> {
     Ok(TaskCoordinationRow {
         kind: kind.into(),
         row_id: id.into(),
@@ -172,6 +176,18 @@ impl TaskCommitBoundary {
             if receipt.input != input {
                 return Err(invalid("mutation_mismatch"));
             }
+            // A persisted send intent is uncertainty, never permission to send again.
+            // The landing consumer must reconcile external state, including after a
+            // later revocation or a changed candidate. Do not replay launch authority.
+            if matches!(
+                mutation,
+                ClaimMutation::MergeIntent {
+                    resolved: false,
+                    ..
+                }
+            ) {
+                return Err(invalid("merge intent replay requires reconciliation"));
+            }
             // Binding is also a launch gate. Never replay historical launch permission
             // after handoff, failure, or revocation; other receipts are advisory outcomes.
             if let ClaimMutation::Bind { run, .. } = mutation {
@@ -266,6 +282,7 @@ impl TaskCommitBoundary {
         let mut evidence = ClaimEvidence::default();
         let mut binding = None;
         let mut release = false;
+        let mut handoff_effects = ClaimCommitEffects::default();
         match mutation {
             ClaimMutation::Bind { run, ship } => {
                 if auth.operator
@@ -298,9 +315,47 @@ impl TaskCommitBoundary {
                 state.claim.phase = ExecutionClaimPhase::Running;
                 state.last_event = "claim_bound".into();
             }
-            ClaimMutation::Evidence(value)
-            | ClaimMutation::Handoff(value)
-            | ClaimMutation::Fail(value) => {
+            ClaimMutation::Handoff(_) => return Err(invalid("typed handoff required")),
+            ClaimMutation::AcceptHandoff(handoff) => {
+                self.accept_typed_handoff(
+                    auth,
+                    &state,
+                    handoff,
+                    &mut params,
+                    &mut handoff_effects,
+                )?;
+                evidence.summary = Some(handoff.execution_summary.clone());
+                state.claim.phase = ExecutionClaimPhase::HandedOff;
+                params.status = Some(TaskStatus::Review);
+                release = true;
+                state.last_event = "claim_handed_off".into();
+            }
+            ClaimMutation::ApproveHandoff {
+                handoff_id,
+                candidate,
+            } => {
+                self.approve_typed_handoff(auth, &state, handoff_id, candidate, &mut params)?;
+                state.last_event = "handoff_approved".into();
+            }
+            ClaimMutation::RevokeHandoff { handoff_id, reason } => {
+                if !auth.operator
+                    || claim.phase != ExecutionClaimPhase::HandedOff
+                    || reason.trim().is_empty()
+                {
+                    return Err(invalid("operator handoff revocation requires a reason"));
+                }
+                if state.unresolved_merge_intent.is_some() {
+                    return Err(invalid("unresolved external merge intent"));
+                }
+                if self.accepted_handoff(&auth.claim_id)?.handoff_id != *handoff_id {
+                    return Err(invalid("handoff identity mismatch"));
+                }
+                self.revoke_handoff_authority(auth, reason, &mut params, &mut handoff_effects)?;
+                state.landing_invalidated = true;
+                state.last_event = "handoff_revoked".into();
+                params.status_note = Some(reason.clone());
+            }
+            ClaimMutation::Evidence(value) | ClaimMutation::Fail(value) => {
                 if auth.operator
                     || !matches!(
                         claim.phase,
@@ -311,17 +366,7 @@ impl TaskCommitBoundary {
                 }
                 evidence = value.clone();
                 state.last_event = "claim_evidence".into();
-                if matches!(mutation, ClaimMutation::Handoff(_)) {
-                    if claim.phase != ExecutionClaimPhase::Running
-                        || value.summary.as_deref().is_none_or(|s| s.trim().is_empty())
-                    {
-                        return Err(invalid("handoff requires a running claim and evidence"));
-                    }
-                    state.claim.phase = ExecutionClaimPhase::HandedOff;
-                    params.status = Some(TaskStatus::Review);
-                    release = true;
-                    state.last_event = "claim_handed_off".into();
-                } else if matches!(mutation, ClaimMutation::Fail(_)) {
+                if matches!(mutation, ClaimMutation::Fail(_)) {
                     if value.summary.as_deref().is_none_or(|s| s.trim().is_empty()) {
                         return Err(invalid("failure settlement requires evidence"));
                     }
@@ -346,6 +391,7 @@ impl TaskCommitBoundary {
                         "recovery requires a reason and blocked or backlog target",
                     ));
                 }
+                self.revoke_handoff_authority(auth, reason, &mut params, &mut handoff_effects)?;
                 state.claim.phase = ExecutionClaimPhase::Revoked;
                 state.landing_invalidated = true;
                 params.status = Some(*status);
@@ -376,6 +422,7 @@ impl TaskCommitBoundary {
                     if state.unresolved_merge_intent.is_some() {
                         return Err(invalid("merge intent already unresolved"));
                     }
+                    self.check_handoff_landing(auth, &state, &mut handoff_effects)?;
                     state.unresolved_merge_intent = Some(intent_id.clone());
                 }
                 params.status_note = Some(encode(&(intent_id, resolved, proof))?);
@@ -400,9 +447,13 @@ impl TaskCommitBoundary {
         )?);
         let new_state = row(STATE, &claim.claim_id, &state)?;
         let mut effects = ClaimCommitEffects {
-            replacements: vec![(old, row(CLAIM, &claim.claim_id, &state.claim)?)],
+            replacements: handoff_effects.replacements,
+            completion_grant: handoff_effects.completion_grant,
             release_reservation: release.then_some(claim.reservation_id),
         };
+        effects
+            .replacements
+            .push((old, row(CLAIM, &claim.claim_id, &state.claim)?));
         if let Some(old_state) = old_state {
             effects.replacements.push((old_state, new_state));
         } else {

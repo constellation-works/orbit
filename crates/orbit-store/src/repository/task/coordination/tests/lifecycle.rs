@@ -290,20 +290,37 @@ fn unresolved_merge_intent_blocks_recovery_and_inspection_writes_nothing() {
     let f = Coordinated::open(tmp.path());
     let c = claim(&f);
     bind(&f, &c);
+    let handoff = super::handoff::handoff(&f, &c);
+    let context = worker(&c, true).with_handoff_observation(super::handoff::observation(&handoff));
     f.boundary()
         .mutate_execution_claim(
-            Some(&worker(&c, true)),
+            Some(&context),
             "handoff",
-            &ClaimMutation::Handoff(evidence()),
+            &ClaimMutation::AcceptHandoff(handoff.clone()),
         )
         .expect("handoff");
+    let accepted = f
+        .boundary()
+        .accepted_handoff(&c.claim_id)
+        .expect("accepted");
+    let owner = operator(&c).with_handoff_observation(super::handoff::observation(&handoff));
+    f.boundary()
+        .mutate_execution_claim(
+            Some(&owner),
+            "approve",
+            &ClaimMutation::ApproveHandoff {
+                handoff_id: accepted.handoff_id,
+                candidate: handoff.candidate,
+            },
+        )
+        .expect("approval");
     let intent = ClaimMutation::MergeIntent {
         intent_id: "external".into(),
         resolved: false,
         evidence: "pinned PR/head/base".into(),
     };
     f.boundary()
-        .mutate_execution_claim(Some(&operator(&c)), "intent", &intent)
+        .mutate_execution_claim(Some(&owner), "intent", &intent)
         .expect("intent");
     let history = f.history(&c.task_id);
     let recovery = ClaimMutation::Recover {
@@ -350,7 +367,7 @@ fn unresolved_merge_intent_blocks_recovery_and_inspection_writes_nothing() {
     assert!(f.boundary().inspect_execution_claims().expect("inspect")[0].landing_invalidated);
     assert_eq!(
         f.task(&c.task_id).execution_summary,
-        evidence().summary.expect("summary")
+        handoff.execution_summary
     );
 }
 
