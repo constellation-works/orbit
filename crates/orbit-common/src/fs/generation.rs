@@ -5,9 +5,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
-#[cfg(target_os = "linux")]
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -43,6 +41,9 @@ pub struct GenerationUpdate {
 const QUIESCE: &str = "Quiesce the existing Orbit processes through their owning clients, \
      then retry. Do not delete admission files or replay a mutation whose reply was lost";
 
+const ADMISSION_LOCK: &str = ".generation-admission.lock";
+const GENERATION_LOCK: &str = ".generation.lock";
+
 fn refusal(detail: impl std::fmt::Display) -> OrbitError {
     refused(detail, QUIESCE)
 }
@@ -52,6 +53,80 @@ fn refused(detail: impl std::fmt::Display, remedy: &str) -> OrbitError {
         "upgrade admission refused: {detail}; leave the installation and stores unchanged. \
          {remedy}"
     ))
+}
+
+fn generation_record_name(name: &str) -> Result<&'static str, OrbitError> {
+    match name {
+        ADMISSION_LOCK => Ok(ADMISSION_LOCK),
+        GENERATION_LOCK => Ok(GENERATION_LOCK),
+        _ => Err(refusal("invalid generation record name")),
+    }
+}
+
+/// Resolve the authority root before any generation lock is created or opened.
+///
+/// Callers pass `~/.orbit` or a test directory; both are untrusted path values.
+/// An existing root is canonicalized so aliases collapse to one directory. A
+/// missing root is reconstructed from its components so `..` cannot walk
+/// outside the starting location before `create_dir_all`.
+fn validated_generation_root(root: &Path) -> Result<PathBuf, OrbitError> {
+    if root.as_os_str().is_empty() {
+        return Err(refusal("generation root must not be empty"));
+    }
+    match root.canonicalize() {
+        Ok(canonical) => {
+            if !canonical.is_dir() {
+                return Err(refusal("generation root must be a directory"));
+            }
+            Ok(canonical)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            normalize_missing_generation_root(root)
+        }
+        Err(error) => Err(refusal(error)),
+    }
+}
+
+fn normalize_missing_generation_root(root: &Path) -> Result<PathBuf, OrbitError> {
+    let mut normalized = PathBuf::new();
+    for component in root.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    normalized.pop();
+                } else {
+                    return Err(refusal("generation root escapes its start"));
+                }
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err(refusal("generation root must not be empty"));
+    }
+    Ok(normalized)
+}
+
+/// Join an allow-listed generation record name onto a validated root.
+///
+/// The original caller string never reaches `Path::join`; only the matching
+/// static name does. Containment is re-checked after the join so the open
+/// and `create_dir_all` sinks receive a reconstructed path rather than the
+/// user-provided values.
+fn validated_generation_record_path(root: &Path, name: &str) -> Result<PathBuf, OrbitError> {
+    let root = validated_generation_root(root)?;
+    let name = generation_record_name(name)?;
+    let path = root.join(name);
+    if path.parent() != Some(root.as_path()) {
+        return Err(refusal("generation record path escapes the root"));
+    }
+    Ok(path)
 }
 
 /// An admission file and whether this process may rewrite its bytes.
@@ -67,8 +142,9 @@ struct Record {
 }
 
 fn open(root: &Path, name: &str) -> Result<Record, OrbitError> {
-    std::fs::create_dir_all(root).map_err(refusal)?;
-    let path = root.join(name);
+    let root = validated_generation_root(root)?;
+    let path = validated_generation_record_path(&root, name)?;
+    std::fs::create_dir_all(&root).map_err(refusal)?;
     match OpenOptions::new()
         .read(true)
         .write(true)
@@ -93,7 +169,7 @@ fn open(root: &Path, name: &str) -> Result<Record, OrbitError> {
 
 fn admission(root: &Path) -> Result<File, OrbitError> {
     // Admission is held by lock alone, so a read-only descriptor serves.
-    let file = open(root, ".generation-admission.lock")?.file;
+    let file = open(root, ADMISSION_LOCK)?.file;
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         match FileExt::try_lock_exclusive(&file) {
@@ -170,7 +246,7 @@ impl GenerationGuard {
     /// with respect to other participants (flock conversion alone is not atomic).
     pub fn acquire(root: &Path, digest: &str) -> Result<Self, OrbitError> {
         let admission = admission(root)?;
-        let mut generation = open(root, ".generation.lock")?;
+        let mut generation = open(root, GENERATION_LOCK)?;
         FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
         if read_generation(&mut generation.file)? == digest {
             return Ok(Self {
@@ -192,7 +268,7 @@ impl GenerationUpdate {
     /// Refuse before installation/resource/store writes if any process is live.
     pub fn acquire(root: &Path) -> Result<Self, OrbitError> {
         let admission = admission(root)?;
-        let mut generation = open(root, ".generation.lock")?;
+        let mut generation = open(root, GENERATION_LOCK)?;
         FileExt::try_lock_exclusive(&generation.file)
             .map_err(|_| refusal("Orbit clients or commands are still running"))?;
         read_generation(&mut generation.file)?;

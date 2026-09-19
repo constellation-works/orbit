@@ -4,6 +4,49 @@ const OLD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const NEW: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 #[test]
+fn missing_root_is_created_on_first_pin() {
+    let parent = tempfile::tempdir().expect("parent");
+    let root = parent.path().join("missing");
+    drop(GenerationGuard::acquire(&root, OLD).expect("first pin creates the root"));
+    assert!(root.is_dir());
+    assert_eq!(
+        std::fs::read_to_string(root.join(".generation.lock")).expect("record"),
+        format!("1:{OLD}\n")
+    );
+    assert!(root.join(".generation-admission.lock").exists());
+}
+
+#[test]
+fn file_root_is_refused_without_creating_lock_files() {
+    let parent = tempfile::tempdir().expect("parent");
+    let root = parent.path().join("not-a-directory");
+    std::fs::write(&root, b"file").expect("file root");
+    let error = match GenerationGuard::acquire(&root, OLD) {
+        Ok(_) => panic!("a file root should be refused"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("generation root must be a directory"),
+        "{error}"
+    );
+    assert!(!parent.path().join(".generation.lock").exists());
+    assert!(!parent.path().join(".generation-admission.lock").exists());
+}
+
+#[test]
+fn root_with_parent_dir_components_pins_the_resolved_directory() {
+    let parent = tempfile::tempdir().expect("parent");
+    let root = parent.path().join("nested");
+    std::fs::create_dir(&root).expect("nested");
+    let via_parent = parent.path().join("nested").join("..").join("nested");
+    drop(GenerationGuard::acquire(&via_parent, OLD).expect("resolved nested root"));
+    assert_eq!(
+        std::fs::read_to_string(root.join(".generation.lock")).expect("record"),
+        format!("1:{OLD}\n")
+    );
+}
+
+#[test]
 fn candidate_pin_excludes_old_generation_through_convergence() {
     let root = tempfile::tempdir().expect("root");
     let old = GenerationGuard::acquire(root.path(), OLD).expect("old");

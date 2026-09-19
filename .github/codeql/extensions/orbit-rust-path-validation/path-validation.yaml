@@ -159,6 +159,18 @@ extensions:
           "path-injection",
           "manual",
         ]
+      - [
+          "orbit_common::fs::generation::validated_generation_root",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "path-injection",
+          "manual",
+        ]
+      - [
+          "orbit_common::fs::generation::validated_generation_record_path",
+          "ReturnValue.Field[core::result::Result::Ok(0)]",
+          "path-injection",
+          "manual",
+        ]
   - addsTo:
       pack: codeql/rust-all
       extensible: barrierGuardModel
