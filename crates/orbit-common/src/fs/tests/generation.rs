@@ -355,3 +355,111 @@ fn shared_child() {
     std::io::stdout().flush().expect("flush");
     let _ = std::io::stdin().read(&mut [0u8; 1]);
 }
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_missing_root_creates_lock_files_under_exact_byte_path() {
+    use std::os::unix::ffi::OsStrExt;
+    let parent = tempfile::tempdir().expect("parent");
+    let invalid_bytes = b"non_utf8_\xff_dir";
+    let non_utf8_parent = parent
+        .path()
+        .join(std::ffi::OsStr::from_bytes(invalid_bytes));
+    let root = non_utf8_parent.join("sub");
+    drop(GenerationGuard::acquire(&root, OLD).expect("pin non-utf8 missing root"));
+    assert!(root.is_dir());
+    assert_eq!(
+        std::fs::read_to_string(root.join(".generation.lock")).expect("record"),
+        format!("1:{OLD}\n")
+    );
+    assert!(root.join(".generation-admission.lock").exists());
+
+    let entries: Vec<_> = std::fs::read_dir(parent.path())
+        .expect("read parent")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].as_bytes(), invalid_bytes);
+}
+
+#[cfg(unix)]
+#[test]
+fn distinct_non_utf8_roots_do_not_share_authority() {
+    use std::os::unix::ffi::OsStrExt;
+    let parent = tempfile::tempdir().expect("parent");
+    let root1 = parent
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"non_utf8_\xff_dir"))
+        .join("sub");
+    let root2 = parent
+        .path()
+        .join(std::ffi::OsStr::from_bytes(b"non_utf8_\xfe_dir"))
+        .join("sub");
+
+    let guard1 = GenerationGuard::acquire(&root1, OLD).expect("pin root1");
+    let guard2 = GenerationGuard::acquire(&root2, NEW).expect("pin root2 independently");
+
+    assert!(root1.is_dir());
+    assert!(root2.is_dir());
+    assert_ne!(root1, root2);
+    assert_eq!(
+        std::fs::read_to_string(root1.join(".generation.lock")).expect("record root1"),
+        format!("1:{OLD}\n")
+    );
+    assert_eq!(
+        std::fs::read_to_string(root2.join(".generation.lock")).expect("record root2"),
+        format!("1:{NEW}\n")
+    );
+    drop(guard1);
+    drop(guard2);
+}
+
+#[test]
+fn missing_root_with_double_dot_component_is_accepted_consistently() {
+    let parent = tempfile::tempdir().expect("parent");
+    let missing_root = parent.path().join("..data").join("sub");
+    drop(GenerationGuard::acquire(&missing_root, OLD).expect("pin missing root with ..data"));
+    assert!(missing_root.is_dir());
+    assert_eq!(
+        std::fs::read_to_string(missing_root.join(".generation.lock")).expect("record"),
+        format!("1:{OLD}\n")
+    );
+    assert!(missing_root.join(".generation-admission.lock").exists());
+
+    let missing_root2 = parent.path().join("orbit..v2").join("sub");
+    drop(GenerationGuard::acquire(&missing_root2, OLD).expect("pin missing root with orbit..v2"));
+    assert!(missing_root2.is_dir());
+
+    let parent2 = tempfile::tempdir().expect("parent2");
+    let existing_parent = parent2.path().join("..data");
+    std::fs::create_dir(&existing_parent).expect("create existing parent");
+    let existing_parent_root = existing_parent.join("sub");
+    drop(
+        GenerationGuard::acquire(&existing_parent_root, OLD)
+            .expect("pin existing parent root with ..data"),
+    );
+    assert!(existing_parent_root.is_dir());
+}
+
+#[test]
+fn missing_root_escaping_start_with_parent_dir_component_is_refused() {
+    let parent = tempfile::tempdir().expect("parent");
+    let escaping_root = parent
+        .path()
+        .join("missing")
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("escape");
+    let error = match GenerationGuard::acquire(&escaping_root, OLD) {
+        Ok(_) => panic!("an escaping root should be refused"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("generation root escapes its start")
+            || error.contains("upgrade admission refused"),
+        "{error}"
+    );
+    assert!(!parent.path().join(".generation.lock").exists());
+    assert!(!parent.path().join(".generation-admission.lock").exists());
+}

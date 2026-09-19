@@ -160,16 +160,11 @@ fn normalize_missing_generation_root(root: &Path) -> Result<PathBuf, OrbitError>
     if normalized.as_os_str().is_empty() {
         return Err(refusal("generation root must not be empty"));
     }
-    let text = normalized.to_string_lossy();
-    if text.contains("..") {
-        return Err(refusal("generation root must not contain '..'"));
-    }
-    let verified = PathBuf::from(text.as_ref());
-    match (verified.parent(), verified.file_name()) {
+    match (normalized.parent(), normalized.file_name()) {
         (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
             contained_under_parent(parent, name)
         }
-        _ => Ok(verified),
+        _ => Ok(normalized),
     }
 }
 
