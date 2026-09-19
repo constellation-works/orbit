@@ -4666,11 +4666,144 @@
       .operation-clock-summary { justify-content: flex-start; flex-wrap: wrap; margin-bottom: 14px; overflow-wrap: anywhere; }
       .operation-cadence { min-width: 0; max-width: 100%; }
       .operation-clock-actions { justify-content: flex-start; flex-wrap: wrap; margin-top: 14px; }
-      .auto-drain-readiness { min-width: 0; margin-top: 16px; }
+      /* Auto-drain pane. Controls first, then the slot picture, then the
+         readiness rows grouped by what an operator can do about them. A
+         waiting row is a normal state, not an alarm, so it never uses the
+         failure color; only the holder / root it depends on is emphasised. */
+      .operation-button.primary {
+        background: var(--accent); border-color: var(--accent); color: var(--bg);
+        font-weight: 600; min-height: 34px; padding: 6px 14px;
+      }
+      .operation-button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--bg); }
+      .operation-state.waiting { color: var(--fg-dim); border-color: var(--border); }
+      .auto-drain-controls, .auto-drain-slots, .auto-drain-group {
+        min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 6px;
+        background: var(--bg-elev);
+      }
+      .auto-drain-controls { display: flex; flex-direction: column; gap: 12px; }
+      .auto-drain-controls-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+      .auto-drain-controls-fields { display: flex; flex-wrap: wrap; gap: 14px 28px; min-width: 0; }
+      .auto-drain-control { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+      .auto-drain-control .operation-field-label { margin: 0; }
+      .auto-drain-control-note { max-width: 320px; color: var(--fg-dim); font: 10px/1.5 var(--font-sans); }
+      .auto-drain-segment {
+        display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border);
+        border-radius: 6px; background: var(--bg); width: fit-content;
+      }
+      .auto-drain-segment-option {
+        min-height: 26px; padding: 0 12px; border: 0; border-radius: 4px; background: transparent;
+        color: var(--fg-dim); font: 11px var(--font-mono); cursor: pointer;
+      }
+      .auto-drain-segment-option:hover { color: var(--fg); }
+      .auto-drain-segment-option.selected { background: var(--border); color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg-mute); }
+      .auto-drain-concurrency { width: 200px; }
+      .auto-drain-complete { display: flex; align-items: center; gap: 8px; min-height: 30px; color: var(--fg); font: 11px var(--font-sans); cursor: pointer; }
+      .auto-drain-complete input { margin: 0; accent-color: var(--accent); }
+      .auto-drain-muted { color: var(--fg-dim); }
+      .auto-drain-controls-action { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex: 0 0 auto; }
+      .auto-drain-outcome { color: var(--fg-dim); font: 11px/1.6 var(--font-sans); text-align: right; }
+      .auto-drain-outcome strong { color: var(--fg); font-weight: 500; }
+      .auto-drain-snapshot-note {
+        margin: 0; padding-top: 12px; border-top: 1px solid var(--hair);
+        color: var(--fg-dim); font: 11px/1.5 var(--font-sans);
+      }
+      .auto-drain-last-run { display: block; margin: 10px 0 0; }
+      .auto-drain-slots { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+      .auto-drain-slots-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+      .auto-drain-slots-title { display: flex; align-items: baseline; gap: 10px; }
+      .auto-drain-slots-title .operation-field-label { margin: 0; }
+      .auto-drain-slots-count { color: var(--fg); font-size: 12px; }
+      /* Slots run up to twenty with distributed drain; auto-fill wraps them
+         into rows instead of squeezing a fixed column count. */
+      .auto-drain-slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+      .auto-drain-slot {
+        display: flex; flex-direction: column; gap: 3px; min-width: 0; min-height: 44px;
+        padding: 8px 10px; border: 1px solid var(--border); border-radius: 5px; box-sizing: border-box;
+      }
+      .auto-drain-slot.free { justify-content: center; border-style: dashed; color: var(--fg-dim); font: 11px var(--font-sans); }
+      .auto-drain-slot.occupied { background: rgba(6, 182, 212, 0.08); border-color: rgba(6, 182, 212, 0.45); }
+      .auto-drain-slot.occupied.lock_waiting { background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.45); }
+      .auto-drain-slot.occupied.post_implementation { background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.45); }
+      .auto-drain-slot.occupied.unknown { background: transparent; border-color: var(--fg-mute); }
+      .auto-drain-slot-tasks { display: flex; flex-wrap: wrap; gap: 4px 8px; min-width: 0; font: 12px var(--font-mono); }
+      .auto-drain-slot-phase { color: var(--state-running); font-size: 10px; }
+      .auto-drain-slot.lock_waiting .auto-drain-slot-phase { color: var(--priority-medium); }
+      .auto-drain-slot.post_implementation .auto-drain-slot-phase { color: var(--state-success); }
+      .auto-drain-slot.unknown .auto-drain-slot-phase { color: var(--fg-dim); }
+      .auto-drain-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+      .auto-drain-stat {
+        display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 12px;
+        border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elev);
+      }
+      .auto-drain-stat .operation-field-label { margin: 0; }
+      .auto-drain-stat.eligible { border-left: 3px solid var(--state-success); }
+      .auto-drain-stat.locked { border-left: 3px solid var(--priority-medium); }
+      .auto-drain-stat.dependency { border-left: 3px solid var(--fg-dim); }
+      .auto-drain-stat-value { color: var(--fg); font-size: 20px; line-height: 1.2; }
+      .auto-drain-stat-note { color: var(--fg-dim); font: 10px/1.4 var(--font-sans); overflow-wrap: anywhere; }
+      .auto-drain-readiness { display: flex; flex-direction: column; gap: 10px; min-width: 0; margin-top: 16px; }
       .auto-drain-readiness-title {
-        margin: 0 0 8px; color: var(--fg); font: 12px var(--font-sans);
+        margin: 0; color: var(--fg); font: 12px var(--font-sans);
         text-transform: uppercase; letter-spacing: .08em;
       }
+      .auto-drain-group { padding: 0; overflow: hidden; }
+      .auto-drain-group-head {
+        display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+        padding: 10px 14px; border-bottom: 1px solid var(--hair);
+      }
+      .auto-drain-group:has(> .auto-drain-group-head:last-child) .auto-drain-group-head { border-bottom: 0; }
+      .auto-drain-group-title { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--fg); font: 12px var(--font-sans); }
+      .auto-drain-group-title strong { font-weight: 600; }
+      .auto-drain-group-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-dim); flex: 0 0 auto; }
+      .auto-drain-group-dot.eligible { background: var(--state-success); }
+      .auto-drain-group-dot.locked { background: var(--priority-medium); }
+      .auto-drain-group-count, .auto-drain-group-hint { color: var(--fg-dim); font-size: 11px; }
+      .auto-drain-group-hint { font-family: var(--font-sans); }
+      .auto-drain-group-body { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; }
+      .auto-drain-group-toggle {
+        display: inline-flex; align-items: center; min-height: 26px; padding: 0 10px;
+        border: 1px solid var(--border); border-radius: 4px; background: transparent;
+        color: var(--fg-dim); font: 11px var(--font-sans); cursor: pointer;
+      }
+      .auto-drain-group-toggle:hover { border-color: var(--accent); color: var(--accent); }
+      .auto-drain-group-rows { padding-top: 4px; }
+      .auto-drain-group-rows[hidden] { display: none; }
+      .auto-drain-rows { margin: 0; padding: 0; list-style: none; min-width: 0; }
+      .auto-drain-row {
+        display: grid; align-items: center; gap: 6px 12px; min-width: 0;
+        padding: 9px 14px; border-bottom: 1px solid var(--hair); font: 11px var(--font-mono);
+      }
+      .auto-drain-row:last-child { border-bottom: 0; }
+      .auto-drain-row-eligible { grid-template-columns: 24px minmax(120px, auto) minmax(0, 1fr) auto; }
+      .auto-drain-row-locked { grid-template-columns: minmax(120px, auto) auto minmax(0, 1fr); align-items: start; }
+      .auto-drain-row-index { color: var(--fg-mute); }
+      .auto-drain-row-label { color: var(--fg); font-family: var(--font-sans); }
+      .auto-drain-row-reason { color: var(--fg-dim); font-size: 10px; }
+      .auto-drain-row-reason.eligible { color: var(--state-success); }
+      .auto-drain-row-detail { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+      .auto-drain-row-note { color: var(--fg-dim); font: 10px/1.5 var(--font-sans); overflow-wrap: anywhere; }
+      .auto-drain-holder {
+        display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 14px;
+        background: var(--bg); border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair);
+        color: var(--fg-dim); font: 11px var(--font-sans);
+      }
+      .auto-drain-holder-phase { font-size: 10px; color: var(--fg-dim); }
+      .auto-drain-holder-phase.running { color: var(--state-running); }
+      .auto-drain-chips { display: flex; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
+      .auto-drain-chip {
+        max-width: 100%; padding: 2px 7px; border: 1px solid var(--border); border-radius: 3px;
+        color: var(--fg); font-size: 10px; overflow-wrap: anywhere; cursor: default;
+      }
+      .auto-drain-chips-more { display: contents; }
+      .auto-drain-chips-more > summary { list-style: none; border-style: dashed; color: var(--accent); cursor: pointer; }
+      .auto-drain-chips-more > summary::-webkit-details-marker { display: none; }
+      .auto-drain-chain-lead { margin: 0; color: var(--fg); font: 11px/1.6 var(--font-sans); overflow-wrap: anywhere; }
+      .auto-drain-chain-why { color: var(--fg-dim); }
+      .auto-drain-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font: 10px var(--font-mono); color: var(--fg-dim); }
+      .auto-drain-chain-node { display: inline-flex; flex-wrap: wrap; gap: 0 2px; padding: 3px 7px; border: 1px solid var(--border); border-radius: 3px; }
+      .auto-drain-chain-node.root { border-color: var(--priority-medium); }
+      .auto-drain-chain-node.root .auto-drain-reference { color: var(--priority-medium); }
+      .auto-drain-chain-sep { color: var(--fg-mute); }
       .auto-drain-task-list { min-width: 0; margin: 0; padding: 0; list-style: none; }
       .auto-drain-task { min-width: 0; }
       .auto-drain-task-head {
@@ -4705,6 +4838,11 @@
         .operation-mint-warning { overflow-wrap: anywhere; }
         .auto-drain-task-head, .auto-drain-evidence-row { grid-template-columns: minmax(0, 1fr); }
         .auto-drain-task-head .operation-state { justify-self: start; }
+        .auto-drain-controls-row { flex-direction: column; }
+        .auto-drain-controls-action { align-items: flex-start; }
+        .auto-drain-outcome { text-align: left; }
+        .auto-drain-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .auto-drain-row-eligible, .auto-drain-row-locked { grid-template-columns: minmax(0, 1fr); }
       }
       @media (max-width: 600px) {
         .operations-layout { display: block; padding: 8px; }
@@ -4714,6 +4852,8 @@
         .operation-card-title > div, .operation-identity { align-items: flex-start; flex-direction: column; }
         .operation-clock-actions, .operation-card-actions { align-items: stretch; }
         .operation-clock-actions > *, .operation-card-actions > * { flex: 1 1 100%; }
+        .auto-drain-summary { grid-template-columns: 1fr; }
+        .auto-drain-concurrency { width: 100%; }
       }
 
       /* ORB-10871: grouped failure incidents (Diagnostics → Incidents).

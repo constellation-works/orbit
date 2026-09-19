@@ -826,6 +826,53 @@ fn dashboard_auto_drain_action_is_bounded_governed_and_guarded() {
         operations.contains("autoDrainReadinessList(payload, workspace)"),
         "the panel must render every server-provided readiness row"
     );
+    // Readiness rows are grouped by what the operator can do about them, and
+    // every row still lands in exactly one group: eligible, lock-blocked,
+    // dependency-waiting, or the catch-all so an unfamiliar server reason
+    // is never dropped.
+    assert!(
+        operations.contains("groups.eligible.push(task)")
+            && operations.contains("groups.locked.push(task)")
+            && operations.contains("groups.dependency.push(task)")
+            && operations.contains("groups.other.push(task)")
+            && operations.contains("autoDrainOtherGroup(groups.other, workspace)"),
+        "every readiness row must land in one of the four groups"
+    );
+    assert!(
+        operations.contains("conflict?.locking_task_id || conflict?.blocking_task_id"),
+        "lock-blocked rows must group by holder for both context locks and same-wave deferrals"
+    );
+    assert!(
+        operations.contains("autoDrainDependencyRoots(tasks, allTasks)")
+            && operations.contains("autoDrainDependencyDepths(tasks)"),
+        "dependency-waiting rows must name the chain roots and lay the chain out by depth"
+    );
+    // The window controls sit above the rows and say what the window would
+    // admit; occupied slots name the task and phase per run.
+    assert!(
+        operations.contains("body.appendChild(autoDrainControls(payload, counts));")
+            && operations.contains("body.appendChild(autoDrainSlots(capacity, workspace));"),
+        "controls and the slot picture must precede the readiness rows"
+    );
+    assert!(
+        operations.contains(r#"segment.setAttribute("aria-label", "Window duration");"#)
+            && operations.contains(r#"option.setAttribute("aria-pressed""#),
+        "the duration picker must be a labelled, pressed-state segmented control"
+    );
+    assert!(
+        operations.contains("occupancy.runs") && operations.contains("run?.task_ids"),
+        "slot tiles must come from the server's per-run occupancy, not be inferred"
+    );
+    assert!(
+        css.contains(".auto-drain-slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }"),
+        "slot tiles must wrap for up to twenty distributed-drain slots"
+    );
+    assert!(
+        css.contains(
+            ".operation-state.waiting { color: var(--fg-dim); border-color: var(--border); }"
+        ) && operations.contains(r#"eligible ? "enabled" : "waiting""#),
+        "a waiting row is a normal state and must not borrow the failure color"
+    );
     assert!(
         operations.contains("task.task_id")
             && operations.contains("task.reason")
