@@ -16,7 +16,10 @@ use orbit_store::contracts::{
 };
 use orbit_store::maintenance::task_registry::read_workspace_config_optional;
 use orbit_tools::ReservationOwnerContext;
-use orbit_types::task::{Task, TaskEnvelopeV2, TaskRelationType, TaskStatus};
+use orbit_types::task::{
+    EpicHierarchyNode, Task, TaskEnvelopeV2, TaskRelationType, TaskStatus,
+    inherited_only_epic_roots,
+};
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 
@@ -212,6 +215,10 @@ pub(crate) fn reserve(
 /// against, so admitting it trivially is correct there ([`Self::Admit`]).
 /// Distributed pull admission must not use that compatibility path: its
 /// ready-queue contract excludes empty surfaces before creating a claim.
+///
+/// Neither value reaches an inherited-only `epic` root: that refusal is decided
+/// ahead of this policy, because the surface such a root is missing is one its
+/// descendants used to supply rather than one nobody in the family ever had.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EmptyTaskSurfacePolicy {
     Refuse,
@@ -251,6 +258,18 @@ pub(crate) fn reserve_with_index(
             // declares a surface, so an unknown task id is still reported as
             // not-found rather than folded into this refusal.
             let requested_files = requested_task_files_indexed(index, task_ids, repo_root)?;
+            // Ahead of the policy branch, and so refused on every entry point:
+            // an `epic`-tagged root that declared nothing of its own no longer
+            // inherits the descendant surface it relied on, and the
+            // compatibility no-op that admits an ordinary undeclared task would
+            // otherwise hand exactly the task defined as taken on *whole* a
+            // reservation holding nothing.
+            if let Some(task_id) = task_ids
+                .iter()
+                .find(|task_id| index.is_inherited_only_epic_root(task_id))
+            {
+                return Err(inherited_only_epic_root_error(task_id));
+            }
             if empty_task_surface_policy == EmptyTaskSurfacePolicy::Refuse {
                 if task_ids
                     .iter()
@@ -516,6 +535,12 @@ pub(crate) fn lock_context_files_for_task(task: &Task, workspace_root: &Path) ->
 /// then reuses it.
 pub(crate) struct TaskLockIndex {
     tasks: BTreeMap<String, TaskEnvelopeV2>,
+    /// The inherited-only `epic` roots in the whole workspace, decided while
+    /// every envelope was still in hand. The retained `tasks` deliberately keep
+    /// only active, requested, and ancestor envelopes, which is not enough to
+    /// see a root's *descendants* — so the rule is answered once at load rather
+    /// than re-read per reservation.
+    inherited_only_epic_root_ids: BTreeSet<String>,
 }
 
 impl TaskLockIndex {
@@ -552,11 +577,25 @@ impl TaskLockIndex {
             retain_task_ancestors(&task_id, &all_tasks, &mut retained_ids);
         }
 
+        let inherited_only_epic_root_ids =
+            inherited_only_epic_roots(all_tasks.values().map(|task| EpicHierarchyNode {
+                id: task.id.as_str(),
+                parent_id: envelope_parent_id(task),
+                tags: &task.tags,
+                declares_context: !task.context_files.is_empty(),
+            }))
+            .into_keys()
+            .map(ToOwned::to_owned)
+            .collect::<BTreeSet<_>>();
+
         let tasks = all_tasks
             .into_iter()
             .filter(|(task_id, _)| retained_ids.contains(task_id))
             .collect::<BTreeMap<_, _>>();
-        Self { tasks }
+        Self {
+            tasks,
+            inherited_only_epic_root_ids,
+        }
     }
 
     pub(crate) fn get(&self, task_id: &str) -> Option<&TaskEnvelopeV2> {
@@ -646,6 +685,13 @@ impl TaskLockIndex {
         self.tasks
             .get(task_id)
             .is_some_and(|task| !task.context_files.is_empty())
+    }
+
+    /// Whether `task_id` is one of the workspace's inherited-only `epic` roots:
+    /// tagged, declaring nothing of its own, with descendants that do declare
+    /// context ([`inherited_only_epic_roots`]).
+    pub(crate) fn is_inherited_only_epic_root(&self, task_id: &str) -> bool {
+        self.inherited_only_epic_root_ids.contains(task_id)
     }
 }
 
@@ -896,6 +942,17 @@ fn no_lock_surface_error(task_ids: &[String]) -> OrbitError {
          nothing would be locked. Add context with `orbit task update --context`, or reserve \
          explicit selectors with `--file` instead",
         task_ids.join(", ")
+    ))
+}
+
+/// The refusal an inherited-only `epic` root gets, naming both repairs the
+/// design admits: declare the root's own surface, or retire the root.
+fn inherited_only_epic_root_error(task_id: &str) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "task {task_id} carries the `epic` size tag and declares no `context_files` of its own, \
+         while its descendants do; a root no longer inherits its descendants' surface, so \
+         reserving it would hold nothing while that work runs beside it. Declare its own surface \
+         with `orbit task update --context`, or retire the root"
     ))
 }
 

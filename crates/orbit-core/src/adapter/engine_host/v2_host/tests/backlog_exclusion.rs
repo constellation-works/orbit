@@ -1,6 +1,8 @@
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::task::{Task, TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{
+    EPIC_TAG, NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskPriority, TaskStatus, TaskType,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -42,6 +44,134 @@ fn output_task_ids(output: &Value) -> Vec<String> {
                 .to_string()
         })
         .collect()
+}
+
+fn tag(runtime: &OrbitRuntime, task_id: &str, tags: &[&str]) {
+    runtime
+        .update_task(
+            task_id,
+            TaskUpdateParams {
+                tags: Some(tags.iter().map(|tag| (*tag).to_string()).collect()),
+                ..Default::default()
+            },
+        )
+        .expect("tag task");
+}
+
+/// [ORB-12539] Retiring epic execution took the descendant-union footprint with
+/// it, so a root that declared nothing of its own would be dispatched holding
+/// no reservation while the child whose file that union covered runs beside it
+/// in the same wave. Admission withholds the root, keeps the child, and says
+/// what to repair — on the automatic drain and on an explicit ship override
+/// alike, since neither may reserve nothing.
+#[test]
+fn automatic_admission_withholds_an_inherited_only_epic_root_and_keeps_its_child() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "src/one.rs");
+    let root = seed_list_backlog_task(
+        &runtime,
+        "Large task taken on whole",
+        TaskStatus::Backlog,
+        TaskPriority::High,
+        TaskType::Feature,
+        None,
+        vec![],
+    );
+    tag(&runtime, &root.id, &[EPIC_TAG]);
+    let child = seed_list_backlog_task(
+        &runtime,
+        "Child of the large task",
+        TaskStatus::Backlog,
+        TaskPriority::High,
+        TaskType::Chore,
+        Some(root.id.clone()),
+        vec!["file:src/one.rs"],
+    );
+
+    let output = list_backlog_tasks(&runtime, json!({}));
+
+    assert_eq!(output_task_ids(&output), vec![child.id.clone()]);
+    let excluded = excluded_entry(&output, &root.id);
+    assert_eq!(excluded["reason"], "inherited_only_epic_root");
+    let detail = excluded["detail"].as_str().expect("repair detail");
+    assert!(detail.contains("`epic` size tag"), "{detail}");
+    assert!(detail.contains("retire the root"), "{detail}");
+    assert!(
+        detail.contains(&child.id),
+        "the detail names the descendant an operator repairs the root from: {detail}"
+    );
+
+    let explicit = list_backlog_tasks(
+        &runtime,
+        json!({ "task_ids": [root.id.clone(), child.id.clone()] }),
+    );
+
+    assert_eq!(output_task_ids(&explicit), vec![child.id.clone()]);
+    let explicitly_excluded = excluded_entry(&explicit, &root.id);
+    assert_eq!(explicitly_excluded["reason"], "inherited_only_epic_root");
+    assert!(
+        explicitly_excluded["detail"]
+            .as_str()
+            .expect("repair detail")
+            .contains(&child.id),
+        "the override reports the same repair as the drain"
+    );
+}
+
+/// The withholding is scoped to the inherited footprint the size tag used to
+/// carry: a tagged root that declares its own surface is an ordinary leaf, and
+/// an ordinary task that declares nothing — including a `no-diff-expected`
+/// chore, whose durable result lives outside the repository — is untouched.
+#[test]
+fn admission_withholds_only_the_epic_root_that_declares_no_surface_of_its_own() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "src/root.rs");
+    let declared_root = seed_list_backlog_task(
+        &runtime,
+        "Large task that declares its own surface",
+        TaskStatus::Backlog,
+        TaskPriority::High,
+        TaskType::Feature,
+        None,
+        vec!["file:src/root.rs"],
+    );
+    tag(&runtime, &declared_root.id, &[EPIC_TAG]);
+    seed_list_backlog_task(
+        &runtime,
+        "Child of the declared root",
+        TaskStatus::Backlog,
+        TaskPriority::Medium,
+        TaskType::Chore,
+        Some(declared_root.id.clone()),
+        vec!["file:src/child.rs"],
+    );
+    let undeclared_chore = seed_list_backlog_task(
+        &runtime,
+        "Ordinary chore declaring nothing",
+        TaskStatus::Backlog,
+        TaskPriority::Medium,
+        TaskType::Chore,
+        None,
+        vec![],
+    );
+    let no_diff_chore = seed_list_backlog_task(
+        &runtime,
+        "Operational chore with no repository diff",
+        TaskStatus::Backlog,
+        TaskPriority::Low,
+        TaskType::Chore,
+        None,
+        vec![],
+    );
+    tag(&runtime, &no_diff_chore.id, &[NO_DIFF_EXPECTED_TAG]);
+
+    let output = list_backlog_tasks(&runtime, json!({}));
+
+    let admitted = output_task_ids(&output);
+    assert!(admitted.contains(&declared_root.id), "{admitted:?}");
+    assert!(admitted.contains(&undeclared_chore.id), "{admitted:?}");
+    assert!(admitted.contains(&no_diff_chore.id), "{admitted:?}");
+    assert_eq!(output["excluded"], json!([]));
 }
 
 #[test]

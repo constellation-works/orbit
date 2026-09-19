@@ -239,6 +239,63 @@ fn a_wave_is_pairwise_nonconflicting_across_shared_directories() {
     );
 }
 
+/// [ORB-12539] The same-wave reproducer. Before this rule, the root's empty
+/// footprint produced zero conflicts, so `select_admissions` put the root and
+/// the child in one wave with the root contributing nothing to the wave index —
+/// two detached runs, one of them free to edit the other's file. The snapshot
+/// now withholds the root before selection sees it, and the child still runs.
+#[test]
+fn an_inherited_only_epic_root_never_joins_its_child_in_a_wave() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "src/one.rs");
+    let tagged_root = seed_list_backlog_task(
+        &runtime,
+        "Large task taken on whole",
+        TaskStatus::Backlog,
+        TaskPriority::High,
+        TaskType::Feature,
+        None,
+        vec![],
+    );
+    runtime
+        .update_task(
+            &tagged_root.id,
+            TaskUpdateParams {
+                tags: Some(vec!["epic".to_string()]),
+                ..Default::default()
+            },
+        )
+        .expect("tag root");
+    let child = seed_list_backlog_task(
+        &runtime,
+        "Child of the large task",
+        TaskStatus::Backlog,
+        TaskPriority::High,
+        TaskType::Chore,
+        Some(tagged_root.id.clone()),
+        vec!["file:src/one.rs"],
+    );
+
+    let candidates = ordered_candidates(&runtime);
+    assert_eq!(
+        candidates,
+        vec![child.id.clone()],
+        "the snapshot withholds the root before selection can admit it"
+    );
+
+    let lookup = task_lookup(&runtime);
+    let holders = AdmissionHolders::new(
+        &lock_holders(&runtime),
+        &BTreeSet::new(),
+        &lookup,
+        &repo_root,
+    );
+    let selection = select_admissions(&candidates, &lookup, &repo_root, &holders, 5);
+
+    assert_eq!(selection.selected, vec![child.id]);
+    assert!(selection.deferred.is_empty());
+}
+
 /// [ORB-12491] A parent covers only what it declares. A leaf that overlaps a
 /// *child's* file is deferred by that child's claim, not by the root's — and a
 /// leaf that overlaps nothing the claimed root declared is admitted.

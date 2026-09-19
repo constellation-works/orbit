@@ -1,8 +1,12 @@
 //! Epic-retirement safety check [ORB-12491].
 //!
 //! Epic execution is gone: there is no `epic_pipeline`, no `epic_orchestrator`,
-//! no descendant-union footprint, and no special admission for an `epic`-tagged
-//! root. What a workspace written by an older binary may still hold is *state*
+//! no descendant-union footprint, and no epic-shaped admission — an
+//! `epic`-tagged root is an ordinary leaf reserving what it declares. The one
+//! case admission still withholds is the root that declared nothing while its
+//! descendants did, which is [`orbit_types::task::inherited_only_epic_roots`]
+//! and is the same population this module reports. What a workspace written by
+//! an older binary may still hold is *state*
 //! from that machinery — a run that never reached a terminal row, a reservation
 //! a drain never released, a landing whose outcome nobody can read off the
 //! store. Deleting such a store's epic records, or admitting those tasks as
@@ -13,8 +17,9 @@
 //! and reservations, never on the root's task status — a root already in
 //! `review` can still have a live `complete_pr` step, so a status-only check is
 //! insufficient. It also reports the roots whose only context came from their
-//! children, which admission no longer inherits, and the historical runs whose
-//! worktrees GC must still be able to find.
+//! children — which admission no longer inherits, and therefore withholds
+//! until an operator repairs them — and the historical runs whose worktrees GC
+//! must still be able to find.
 //!
 //! [`assess_epic_retirement`] is a pure function over a snapshot so the rule is
 //! testable without a store; [`OrbitRuntime::epic_retirement_readiness`] is the
@@ -24,16 +29,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ActiveTaskReservation, JobRunQuery};
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{
+    EpicHierarchyNode, Task, TaskStatus, has_epic_tag, inherited_only_epic_roots,
+};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::runtime::task::locks::{workspace_orbit_dir, workspace_task_reservation_id};
-
-/// The size-hint tag. It survives retirement and no longer changes admission.
-pub const EPIC_TAG: &str = "epic";
 
 /// The retired job. Its stored runs are the migration's primary evidence.
 pub const RETIRED_EPIC_JOB_ID: &str = "epic_pipeline";
@@ -72,8 +76,10 @@ pub struct EpicRetirementBlocker {
 
 /// An `epic`-tagged root that declared no context of its own and relied on the
 /// union its descendants supplied. Nothing inherits now, so such a root
-/// reserves nothing and `reserve_locks` refuses it: it needs operator-supplied
-/// own context, or deliberate retirement. Reported, never rewritten.
+/// reserves nothing: admission withholds it and `reserve_locks` refuses it
+/// (both through [`orbit_types::task::inherited_only_epic_roots`], which
+/// decides this population once), and it needs operator-supplied own context
+/// or deliberate retirement. Reported here, never rewritten.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InheritedOnlyRoot {
     pub task_id: String,
@@ -285,7 +291,7 @@ impl OrbitRuntime {
 }
 
 fn is_epic_tagged(task: &Task) -> bool {
-    task.tags.iter().any(|tag| tag == EPIC_TAG)
+    has_epic_tag(&task.tags)
 }
 
 /// Every `epic`-tagged root plus every descendant of one, by ID.
@@ -317,37 +323,18 @@ fn epic_root_of<'a>(task: &Task, by_id: &BTreeMap<&'a str, &'a Task>) -> Option<
 }
 
 fn inherited_only_roots(by_id: &BTreeMap<&str, &Task>) -> Vec<InheritedOnlyRoot> {
-    let mut roots: BTreeMap<&str, Vec<String>> = by_id
-        .iter()
-        .filter(|(_, task)| is_epic_tagged(task) && task.context_files.is_empty())
-        .map(|(task_id, _)| (*task_id, Vec::new()))
-        .collect();
-    if roots.is_empty() {
-        return Vec::new();
-    }
-    for task in by_id.values() {
-        if task.context_files.is_empty() {
-            continue;
-        }
-        if let Some(root_id) = epic_root_of(task, by_id)
-            && let Some(descendants) = roots.get_mut(root_id)
-        {
-            descendants.push(task.id.clone());
-        }
-    }
-    roots
+    inherited_only_epic_roots(by_id.values().map(|task| EpicHierarchyNode::from(*task)))
         .into_iter()
-        .filter(|(_, descendants)| !descendants.is_empty())
-        .map(|(task_id, mut descendants_with_context)| {
-            descendants_with_context.sort();
-            InheritedOnlyRoot {
-                task_id: task_id.to_string(),
-                status: by_id
-                    .get(task_id)
-                    .map(|task| task.status.to_string())
-                    .unwrap_or_default(),
-                descendants_with_context,
-            }
+        .map(|(task_id, descendants_with_context)| InheritedOnlyRoot {
+            task_id: task_id.to_string(),
+            status: by_id
+                .get(task_id)
+                .map(|task| task.status.to_string())
+                .unwrap_or_default(),
+            descendants_with_context: descendants_with_context
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect(),
         })
         .collect()
 }
