@@ -11,7 +11,8 @@ use orbit_core::OrbitError;
 
 use super::super::DEFAULT_DASHBOARD_PORT;
 use super::super::connect::{
-    ConnectArgs, reject_root_override, remote_serve_command, select_local_port, tunnel_spec,
+    ConnectArgs, attached_without_operator_notice, parse_controls_authorized, reject_root_override,
+    remote_serve_command, select_local_port, tunnel_spec,
 };
 
 /// Minimal args builder so each test states only what it cares about.
@@ -23,6 +24,7 @@ fn args(host: &str, remote_port: u16, workspace: Option<&str>) -> ConnectArgs {
         workspace: workspace.map(str::to_string),
         global: false,
         no_open: false,
+        no_operator: false,
     }
 }
 
@@ -131,7 +133,10 @@ fn tunnel_spec_forwards_the_requested_ports_and_remote_command() {
     assert_eq!(spec.ssh_host, "user@host");
     assert_eq!(spec.local_port, 7000);
     assert_eq!(spec.remote_port, 9000);
-    assert_eq!(spec.remote_command, "orbit web serve --no-open --port 9000");
+    assert_eq!(
+        spec.remote_command,
+        "orbit web serve --no-open --operator --port 9000"
+    );
     assert_eq!(spec.remote_description, "orbit web serve");
     assert!(
         spec.readiness_target.contains("localhost:7000/healthz"),
@@ -147,4 +152,49 @@ fn tunnel_spec_waits_longer_for_a_spawned_server_than_for_an_attach_probe() {
     // make spawn flaky.
     let spec = tunnel_spec(&args("box", 7878, None), 7878);
     assert!(spec.ready_timeout > spec.attach_timeout);
+}
+
+#[test]
+fn remote_command_passes_operator_by_default() {
+    let cmd = remote_serve_command(&args("box", 7878, None));
+    assert!(
+        cmd.contains(" --operator "),
+        "connect must spawn with --operator by default: {cmd}"
+    );
+    assert!(!cmd.contains("--no-operator"), "{cmd}");
+}
+
+#[test]
+fn remote_command_omits_operator_when_no_operator_is_set() {
+    let mut cfg = args("box", 9000, Some("/srv/ws"));
+    cfg.no_operator = true;
+    cfg.global = true;
+    let cmd = remote_serve_command(&cfg);
+    assert_eq!(
+        cmd, "orbit web serve --no-open --port 9000 --global --workspace '/srv/ws'",
+        " --no-operator must restore the previous remote command: {cmd}"
+    );
+}
+
+#[test]
+fn attached_notice_only_when_controls_are_unauthorized() {
+    let notice = attached_without_operator_notice(Some(false)).expect("notice");
+    assert!(notice.contains("orbit web serve --operator"), "{notice}");
+    assert!(notice.contains("cannot upgrade it in place"), "{notice}");
+    assert!(attached_without_operator_notice(Some(true)).is_none());
+    assert!(attached_without_operator_notice(None).is_none());
+}
+
+#[test]
+fn parse_controls_authorized_reads_the_routines_flag() {
+    assert_eq!(
+        parse_controls_authorized(r#"{"controls_authorized":false}"#),
+        Some(false)
+    );
+    assert_eq!(
+        parse_controls_authorized(r#"{"controls_authorized":true}"#),
+        Some(true)
+    );
+    assert_eq!(parse_controls_authorized("not json"), None);
+    assert_eq!(parse_controls_authorized("{}"), None);
 }

@@ -144,7 +144,7 @@ See [Schedule Recurring Work](../../how-to/recurring-work/).
 | `orbit mcp serve` | Serve the MCP tool surface over stdio. `--operator` serves operator authority; `--orchestrator <crew>` sets the orchestrator attribution recorded on tasks the session creates, and grants nothing. |
 | `orbit mcp listen [ADDR]` | Serve the same surface on a TCP socket. Binds `127.0.0.1:7879` unless `--allow-non-loopback` is passed. |
 | `orbit mcp callers` | Inspect and seed which callers this machine serves, and as what. |
-| `orbit web serve` | Serve the Orbit dashboard. Serves the registry under the resolved root, so `orbit --root <ROOT> web serve` exposes only `<ROOT>`'s workspaces. `--workspace <SELECTOR>` preselects one of them. |
-| `orbit web connect` | Open a remote workspace's dashboard over an SSH tunnel. `--workspace <SELECTOR>` preselects the remote workspace; it takes no `--root`. |
+| `orbit web serve` | Serve the Orbit dashboard. Serves the registry under the resolved root, so `orbit --root <ROOT> web serve` exposes only `<ROOT>`'s workspaces. `--workspace <SELECTOR>` preselects one of them. `--operator` grants Operations controls without a TTY or `ORBIT_OPERATOR`. |
+| `orbit web connect` | Open a remote workspace's dashboard over an SSH tunnel. `--workspace <SELECTOR>` preselects the remote workspace; it takes no `--root`. Spawns the remote server with `--operator` by default; `--no-operator` restores read-only Operations. |
 
 See [Use the Dashboard](../../how-to/dashboard/) for connection, workspace scope, Operations controls, and authorization. See [Set Up MCP](../../how-to/mcp-integration/) for the agent tool surface.

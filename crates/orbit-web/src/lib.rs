@@ -257,6 +257,11 @@ pub struct ServeArgs {
     /// chooses which registry is served.
     #[arg(long, value_name = "SELECTOR")]
     pub workspace: Option<String>,
+
+    /// Grant operator capability for Operations controls without a TTY or
+    /// ORBIT_OPERATOR. `orbit web connect` passes this by default.
+    #[arg(long)]
+    pub operator: bool,
 }
 
 /// Boot the dashboard for a single, already-built runtime and block until
@@ -265,6 +270,7 @@ pub struct ServeArgs {
 /// callers that already hold an `OrbitRuntime` and want it embedded directly.
 pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> {
     let state = state::DashboardState::single(Arc::new(runtime.clone()));
+    state.set_operator_session(args.operator);
     run_server(&args, state)
 }
 
@@ -285,6 +291,7 @@ pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> 
 /// dropdown opens on is a separate question, answered by `--workspace`.
 pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(), OrbitError> {
     let state = build_state(root_override, args.workspace.as_deref())?;
+    state.set_operator_session(args.operator);
     run_server(&args, state)
 }
 

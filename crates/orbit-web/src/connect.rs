@@ -21,7 +21,7 @@
 //! Unlike [`crate::serve`], this command reads no local `.orbit/` state: the
 //! workspace lives on the remote, so it needs no [`orbit_core::OrbitRuntime`].
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::time::Duration;
@@ -79,6 +79,12 @@ pub struct ConnectArgs {
     /// Do not open the dashboard URL in a browser once the tunnel is ready.
     #[arg(long)]
     pub no_open: bool,
+
+    /// Spawn the remote dashboard without operator capability. Operations
+    /// controls stay read-only. The default is to pass `--operator` because
+    /// the SSH login is the operator act.
+    #[arg(long)]
+    pub no_operator: bool,
 }
 
 /// Establish the tunnel — attaching to an already-running remote dashboard
@@ -104,9 +110,16 @@ pub fn connect(args: ConnectArgs, root_override: Option<&Path>) -> Result<(), Or
     #[allow(clippy::print_stdout)]
     {
         match origin {
-            TunnelOrigin::Attached => println!(
-                "Attached to already-running remote dashboard: {url}  (Ctrl-C to disconnect)"
-            ),
+            TunnelOrigin::Attached => {
+                println!(
+                    "Attached to already-running remote dashboard: {url}  (Ctrl-C to disconnect)"
+                );
+                if let Some(notice) =
+                    attached_without_operator_notice(routines_controls_authorized(local_port))
+                {
+                    println!("{notice}");
+                }
+            }
             TunnelOrigin::Spawned => {
                 println!("Dashboard tunnel ready: {url}  (Ctrl-C to disconnect)")
             }
@@ -165,7 +178,8 @@ pub(crate) fn select_local_port(preferred: Option<u16>) -> Result<u16, OrbitErro
 }
 
 /// The remote shell command line:
-/// `orbit web serve --no-open --port N [--global] [--workspace S]`.
+/// `orbit web serve --no-open --operator --port N [--global] [--workspace S]`.
+/// `--operator` is omitted when `--no-operator` was passed.
 ///
 /// `ssh` concatenates trailing args with spaces and re-parses them via the
 /// remote shell, so any value that could contain spaces (`--workspace`) is
@@ -176,7 +190,11 @@ pub(crate) fn select_local_port(preferred: Option<u16>) -> Result<u16, OrbitErro
 /// command), so sending a workspace path there would serve an empty registry
 /// instead of preselecting that workspace.
 pub(crate) fn remote_serve_command(cfg: &ConnectArgs) -> String {
-    let mut cmd = format!("orbit web serve --no-open --port {}", cfg.remote_port);
+    let mut cmd = "orbit web serve --no-open".to_string();
+    if !cfg.no_operator {
+        cmd.push_str(" --operator");
+    }
+    cmd.push_str(&format!(" --port {}", cfg.remote_port));
     if cfg.global {
         cmd.push_str(" --global");
     }
@@ -185,6 +203,57 @@ pub(crate) fn remote_serve_command(cfg: &ConnectArgs) -> String {
         cmd.push_str(&quote_posix_arg(workspace));
     }
     cmd
+}
+
+/// Notice printed when this invocation attached to a pre-existing remote that
+/// is not an operator session. The remote was not started here, so it cannot
+/// be upgraded in place.
+pub(crate) fn attached_without_operator_notice(
+    controls_authorized: Option<bool>,
+) -> Option<&'static str> {
+    match controls_authorized {
+        Some(false) => Some(
+            "This remote dashboard is already running without operator capability. \
+             Operations controls stay read-only; this invocation cannot upgrade it in place. \
+             Restart the remote process with `orbit web serve --operator`, or stop it and \
+             reconnect so this command can spawn one.",
+        ),
+        _ => None,
+    }
+}
+
+/// `controls_authorized` from a `/api/routines` JSON body, if present.
+pub(crate) fn parse_controls_authorized(body: &str) -> Option<bool> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()?
+        .get("controls_authorized")?
+        .as_bool()
+}
+
+/// Best-effort `GET /api/routines` over the forwarded local port. Used only
+/// to decide whether an attached remote already has operator capability.
+fn routines_controls_authorized(local_port: u16) -> Option<bool> {
+    parse_controls_authorized(&http_get_ok_body(local_port, "/api/routines")?)
+}
+
+/// `GET path` over the forwarded local port. Returns the response body only
+/// on a `200` status line.
+fn http_get_ok_body(local_port: u16, path: &str) -> Option<String> {
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, local_port));
+    let mut stream = TcpStream::connect_timeout(&addr, PROBE_TIMEOUT).ok()?;
+    let _ = stream.set_read_timeout(Some(PROBE_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(PROBE_TIMEOUT));
+    let request = format!("GET {path} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut response = String::new();
+    BufReader::new(stream).read_to_string(&mut response).ok()?;
+    let (headers, body) = response.split_once("\r\n\r\n")?;
+    let status_line = headers.lines().next().unwrap_or_default();
+    if status_line.starts_with("HTTP/1.") && status_line.contains(" 200 ") {
+        Some(body.to_string())
+    } else {
+        None
+    }
 }
 
 /// Best-effort `GET /healthz` over the forwarded local port. Returns `true`

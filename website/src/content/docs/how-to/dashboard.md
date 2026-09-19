@@ -27,6 +27,7 @@ process try to open a browser. Useful flags:
 ```bash
 orbit web serve --port 8080 --no-open
 orbit web serve --workspace orbit --no-open
+orbit web serve --operator --no-open
 orbit --root /path/to/orbit-root web serve --no-open
 ```
 
@@ -48,6 +49,7 @@ access path; use [`orbit web connect`](#open-it-over-ssh) instead.
 orbit web connect my-server
 orbit web connect my-server --remote-port 7878 --port 9000
 orbit web connect my-server --workspace orbit
+orbit web connect my-server --no-operator
 ```
 
 `ssh-host` is anything `ssh` accepts: a hostname, `user@host`, or a
@@ -56,8 +58,9 @@ orbit web connect my-server --workspace orbit
 1. Forwards a local loopback port to the remote dashboard port (default
    `7878`).
 2. Reuses a remote `orbit web serve` that already answers `/healthz`, or
-   starts `orbit web serve --no-open --port <remote-port>` and owns that
-   process.
+   starts `orbit web serve --no-open --operator --port <remote-port>` and
+   owns that process. Pass `--no-operator` to spawn the previous read-only
+   Operations surface instead.
 3. Prints `http://localhost:<local-port>` and, unless `--no-open` is set,
    opens a browser.
 4. On Ctrl-C, tears down only the SSH process this invocation started. A
@@ -66,6 +69,12 @@ orbit web connect my-server --workspace orbit
 
 If local `7878` is busy and you did not pass `--port`, connect picks a free
 ephemeral port. An explicit `--port` that is already bound fails instead.
+
+When connect **attaches** to a remote server that is already running without
+operator capability, it prints a notice and leaves that process as-is: it
+cannot upgrade a server it did not start. Restart the remote with
+`orbit web serve --operator`, or stop it and reconnect so this command can
+spawn one.
 
 `orbit web connect` does not accept `--root`. That flag used to name a remote
 workspace; it now means a local data directory, which this command does not
@@ -325,9 +334,15 @@ Two independent gates still apply:
 2. **Operator capability** for Operations controls (routine/auto-task
    toggle, mint, clock, auto-drain completion, grant stop/revoke). The
    server resolves the same capability vocabulary as the CLI. A local
-   interactive terminal counts as an operator session. A non-interactive
-   process (a service unit, a script) does not, unless it is started with
-   `ORBIT_OPERATOR=1`. That override is recorded in the audit trail.
+   interactive terminal counts as an operator session. `orbit web serve
+   --operator` grants the same capability without a TTY or
+   `ORBIT_OPERATOR`. `orbit web connect` passes `--operator` by default:
+   Orbit is a single-user tool, and the SSH login is the operator act.
+   `ORBIT_OPERATOR=1` remains the escape hatch for a non-interactive
+   process that is not started with `--operator`; that override is
+   recorded in the audit trail. Pass `orbit web connect --no-operator`
+   for a read-only remote Operations surface. MCP is unchanged:
+   `orbit mcp serve --operator` is still the only operator path there.
 
 When a control is unauthorized, it is **disabled** and the card states
 `Controls require an authorized operator session.` A click that still
@@ -348,7 +363,7 @@ ship, workspace claim held).
 | `orbit web connect does not accept --root` | Pass `--workspace <SELECTOR>`. |
 | Connect waits then fails readiness | SSH must work non-interactively to that host, and `orbit` must be on the remote `PATH`. The remote process has about 30 seconds to answer `/healthz`. |
 | Workspace selector missing | Only one servable workspace is registered; the UI has nothing to switch. |
-| Enable / Mint now / clock buttons disabled | Select one active workspace. If the note mentions an authorized operator session, start `orbit web serve` from an interactive terminal or with `ORBIT_OPERATOR=1`. |
+| Enable / Mint now / clock buttons disabled | Select one active workspace. If the note mentions an authorized operator session, start `orbit web serve --operator` (or `orbit web connect`, which does that by default). A local interactive terminal still counts. `ORBIT_OPERATOR=1` remains the env override. Connecting to a pre-existing non-operator remote cannot upgrade it in place. |
 | Mint created a second open task | Expected: manual mint ignores dedupe. The card's **Open duplicate** field says so before you confirm. |
 | Ship returns 409 `ship_run_in_flight` | That task already has a non-terminal ship run. Open the named `run_id`. |
 | 409 `workspace_claim_held` | Another operator holds the workspace claim. Wait for expiry or inspect the holder; do not retry in a loop. |

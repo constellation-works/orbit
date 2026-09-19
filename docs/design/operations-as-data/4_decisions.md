@@ -1,8 +1,8 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-08-16
-last_validated: 2026-09-10
+last_updated: 2026-09-19
+last_validated: 2026-09-19
 status: Accepted
 feature: operations-as-data
 doc_role: decisions
@@ -11,7 +11,7 @@ summary: Decision log for the operations-as-data registry — the split spec/han
 tags: [operations-as-data, architecture, adr-0209]
 paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/authorization.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/tests/authorization.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-10453, ORB-10478]
+related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563]
 ---
 
 # Operations as Data — Decisions
@@ -29,6 +29,7 @@ the ratchet.
 - **[Freeze the pre-migration surface as fixtures before migrating](#freeze-the-pre-migration-surface-as-fixtures-before-migrating) — Freeze the pre-migration surface as fixtures before migrating** — Accepted.
 - **[Capability chokepoint for destructive operations outside MCP](#capability-chokepoint-for-destructive-operations-outside-mcp) — Capability chokepoint for destructive operations outside MCP** — Accepted.
 - **[MCP advertisement is placement; the capability chokepoint is permission](#mcp-advertisement-is-placement-the-capability-chokepoint-is-permission) — MCP advertisement is placement; the capability chokepoint is permission** — Accepted.
+- **[Dashboard `web connect` grants operator by default](#dashboard-web-connect-grants-operator-by-default) — Dashboard `web connect` grants operator by default** — Accepted.
 
 ## Split spec/handler table joined by a typed verb enum
 
@@ -229,6 +230,34 @@ The gap the earlier entry named has therefore closed by deletion, not by a fix: 
 - Cost: adding a governed tool now requires one more line — its placement — in the guardrail table. That is the intended friction: the line is where the advertise-or-not decision gets made explicitly.
 - An MCP session's capabilities are decided once, when its server process starts, and the process environment is never consulted per call: `orbit mcp serve` grants `agent`, `orbit mcp serve --operator` grants `agent` and `operator`, and `ORBIT_OPERATOR` in the server's environment grants nothing on this surface ([ORB-10927]). The flag is the only operator path over MCP — the deliberate act has to be in the argv the operator wrote, because an environment variable is inherited by whatever server an agent happens to launch. `orbit mcp listen` is agent-only for the stronger version of the same reason: the socket authenticates no client, so a listener started with operator authority would serve it to every accepted connection.
 - Because the MCP chokepoint discards the process envelope by design, its denial names the remedy that surface actually has (`orbit mcp serve --operator`, or the CLI) rather than the `ORBIT_OPERATOR` override that is inert there. That is `CapabilityResolution` in `orbit_common::governance::authorization`: one enum on the envelope, carried into the denial, changing the remedy sentence and nothing about the decision.
+
+## Dashboard `web connect` grants operator by default
+
+**Recorded:** 2026-09-19 · [ORB-12563] · **Implemented** in [ORB-12563]
+**Paths:** `crates/orbit-web/src/connect.rs`, `crates/orbit-web/src/lib.rs`, `crates/orbit-web/src/api/routines.rs`
+
+### Context
+
+[Capability chokepoint for destructive operations outside MCP](#capability-chokepoint-for-destructive-operations-outside-mcp) resolved caller capabilities in strict precedence, with an interactive TTY as the positive human signal and `ORBIT_OPERATOR=1` as the explicit escape hatch. `orbit web connect` spawns the remote dashboard as `ssh <host> "orbit web serve --no-open --port N [...]"`: that process has no TTY and no `ORBIT_OPERATOR`, so Operations controls (routine toggle, mint, clock, auto-drain, grants) rendered disabled. The session banner told the user to restart with `ORBIT_OPERATOR=1 orbit web serve`, which the connecting machine cannot do — `connect` owns the remote process. The same dashboard already exposes task ship / approve / reject / archive and run cancel / resume / replay, so withholding Operations bought no protection.
+
+The MCP surface is a different case and is not reopened here: `orbit mcp serve --operator` remains the only operator path over MCP, because an environment variable is inherited by whatever server an agent happens to launch, and `orbit mcp listen` authenticates no client.
+
+### Decision
+
+1. **Orbit is a single-user tool; the dashboard is not shared across users.** The person running `orbit web connect` over their own authenticated SSH session *is* the operator — the SSH login is the deliberate act.
+
+2. **`orbit web serve --operator` stamps operator onto the dashboard session envelope** regardless of TTY or `ORBIT_OPERATOR`. Session grants win, matching the existing capability-precedence entry. `ORBIT_OPERATOR=1` remains the escape hatch when the flag is absent.
+
+3. **`orbit web connect` passes `--operator` by default.** `remote_serve_command` emits `orbit web serve --no-open --operator --port N [...]`. `--no-operator` restores the previous read-only Operations surface. Attaching to a pre-existing non-operator remote prints a notice; that process cannot be upgraded in place.
+
+4. **MCP is unchanged.** `orbit mcp serve --operator` / `orbit mcp listen` keep the reasoning in the capability-precedence entry. The workspace-scope gate (aggregate view / inactive workspaces stay read-only) is unchanged. Operator grants still emit the existing `authorization` audit rows.
+
+### Consequences
+
+- A remote dashboard opened with `orbit web connect` has Operations controls enabled without an on-box detour.
+- A caller that wants a read-only remote must say so (`--no-operator`).
+- A pre-existing `orbit web serve` without `--operator` stays read-only until it is restarted; connect says so instead of leaving the user to discover disabled buttons.
+- Local `orbit web serve` without a TTY still needs `--operator` or `ORBIT_OPERATOR=1`; the new default applies to `connect`, not to a headless local serve.
 
 ## Task References
 
