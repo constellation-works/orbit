@@ -30,8 +30,8 @@ second control plane.
 The owner maintains one ordered queue per workspace. Membership and order are the owner's
 existing readiness rules, not new ones:
 
-- **Members:** `backlog` tasks whose every dependency is terminal-successful (`done`), excluding
-  epic roots and every descendant of an epic root.
+- **Members:** `backlog` tasks whose every dependency is terminal-successful (`done`). Tags do not
+  affect membership; `epic` is a size hint for crew selection, not a queue class.
 - **Order:** the order `orbit run readiness` and `classify_workspace_auto_tasks` already produce —
   priority, then age, with the same tag-driven adjustments those paths apply today.
 - **Maintenance:** the queue is a projection of the store, recomputed whenever a task's status,
@@ -65,8 +65,8 @@ more than one task calls again.
 ## Pop
 
 1. Walk the ready queue from the head.
-2. Skip an entry whose effective lock footprint (`lock_context_files_for_task`, epic unions
-   included) overlaps a lock held by an `in-progress` or `review` task or an active reservation.
+2. Skip an entry whose lock footprint (its own canonicalized `context_files`) overlaps a lock
+   held by an `in-progress` or `review` task or an active reservation.
    Each skip is recorded in `deferred_conflicts` with the blocking task ids and the overlapping
    selectors.
 3. Refuse, rather than skip, an entry whose `blocked_by` target is archived, rejected, or dangling,
@@ -109,7 +109,7 @@ Ordered; the first that applies is returned.
 
 - A task is returned by at most one successful pull, ever, unless it returns to `backlog` through
   an ordinary status transition.
-- Pull never returns an epic root, an epic descendant, or a task with an unsatisfied dependency.
+- Pull never returns a task with an unsatisfied dependency.
 - Pull never returns a task out of queue order except by skipping a conflicting entry.
 - Pull writes nothing on `idle` or on a refusal.
 - Pull does not create a run, a worktree, or a branch. Those are the caller's.

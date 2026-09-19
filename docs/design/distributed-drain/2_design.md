@@ -7,7 +7,7 @@ status: Draft
 feature: distributed-drain
 doc_role: design
 type: design
-summary: One owner store, N pulling followers — the ready queue, the pull tool, the pull-mode drain, the pulled leaf pipeline, follower preconditions, transport, and what breaks.
+summary: One owner store, N pulling followers — the ready queue, the pull tool, the pull-mode drain, the pulled leaf pipeline, follower preconditions, transport, execution provenance, the epic and triage retirements, and what breaks.
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, resident-orchestrator, activity-job, policy-sandbox]
@@ -20,9 +20,9 @@ related_artifacts: [ORB-12488]
 > names the existing code it extends so the implementation tasks can be filed against real anchors.
 
 This doc covers the v1 shape: one owner checkout, any number of replica checkouts on other hosts,
-each replica running the drain in pull mode against the owner. It deliberately leaves to
-[3_vision.md](./3_vision.md): epic drains on followers, a cloud-offloaded owner store, weighted
-placement, and follower-side merge.
+each replica running the drain in pull mode against the owner, and the two pieces of existing
+machinery the shape retires. It deliberately leaves to [3_vision.md](./3_vision.md): a
+cloud-offloaded owner store, crew auto-assignment, and follower-side merge.
 
 ## 1. Roles: one owner, N followers
 
@@ -45,8 +45,8 @@ runbook step, not a code path.
 ## 2. The ready queue and `orbit.task.pull`
 
 The owner keeps one **ready queue** per workspace: the `backlog` tasks whose dependencies are all
-`done`, minus epic roots and their descendants, in the order the owner's readiness rules already
-produce (priority, then age, with the tag adjustments `orbit run readiness` applies today). It is
+`done`, in the order the owner's readiness rules already produce (priority, then age, with the tag
+adjustments `orbit run readiness` applies today). It is
 a projection of the store, recomputed when a task's status, priority, dependencies, tags, or parent
 change, and it is the only place order is decided. Dependency order in particular lives here and
 nowhere else: a follower never evaluates readiness, so it cannot disagree with the owner about it.
@@ -54,9 +54,9 @@ nowhere else: a follower never evaluates readiness, so it cannot disagree with t
 `orbit.task.pull` is one new `control_plane`-class tool on the owner that pops that queue. Its
 contract is [specs/task-pull.md](./specs/task-pull.md); the mechanism is:
 
-1. Walk the queue from the head. Skip an entry whose effective lock footprint
-   (`lock_context_files_for_task`, epic unions included) overlaps a lock held by an `in-progress`
-   or `review` task or an active reservation; record each skip in `deferred_conflicts`.
+1. Walk the queue from the head. Skip an entry whose lock footprint (its own `context_files`,
+   canonicalized) overlaps a lock held by an `in-progress` or `review` task or an active
+   reservation; record each skip in `deferred_conflicts`.
 2. The first entry that passes is the answer. In **one store transaction**: reserve its footprint
    (what `reserve_locks` does in `task_gate_pipeline`, same TTL, same `blocked_by` refusal), set
    `backlog → in-progress`, and append a history entry naming the caller machine and its drain run.
@@ -76,9 +76,8 @@ prediction role for readiness reporting, but admission on every host — owner i
 through pull, so there is one admission code path and the "live wrapper run is the claim record"
 special case retires. A task that is `in-progress` with a held lock is carried; nothing else is.
 
-Epic roots are never queued. `epic_pipeline` stays owner-only in v1 because it owns one stable
-worktree per epic and drains children sequentially into it, which does not split across hosts.
-Leaves that overlap an active epic's reservation are skipped by the same footprint check.
+There is no epic path. A task tagged `epic` is an ordinary queue entry whose footprint is its own
+`context_files`; the tag is a size hint for crew selection, nothing more ([§7](#7-retirements)).
 
 Crew is not a queue input. A pulled task carries its own `crew` when one was set; otherwise the
 follower resolves crew as it does today. Auto-assigning crews by complexity, and any crew-aware
@@ -92,7 +91,7 @@ pulling that would follow from it, is deferred to [3_vision.md](./3_vision.md#1-
 `orbit.task.pull` on the owner once per free slot (`max_active_leaf_runs − live leaf runs on this
 host`), stopping early on the first `idle`, instead of classifying locally. Everything downstream — detached `invoke_detached`, the drain
 window, `poll_sleep_seconds` / `idle_sleep_seconds`, `orbit run concurrency --set`, `--stop` — is
-unchanged. `start_epic` is skipped in pull mode.
+unchanged. The `start_epic` step is removed outright ([§7](#7-retirements)), not skipped.
 
 Each pulled task is dispatched to `task_auto_pipeline` as today, with one difference: the child
 gate is skipped. `task_gate_pipeline` exists to wait for a lock window and reserve it; pull already
@@ -160,7 +159,65 @@ inferred from hostname, cwd, SSH target, or audit label, per the host-registry r
 inspection ([3_vision.md](./3_vision.md#1-open-questions)) is what eventually reads these fields
 across hosts; until then they make single-host records honest and cross-host references resolvable.
 
-## 7. Concerns & Honest Limitations
+## 7. Retirements
+
+Two existing mechanisms do not survive contact with a second host, and neither earned its keep on
+one. Both are removed as part of this feature, not deferred.
+
+### 7.1 Epic machinery
+
+The epic distinction — a root that owns one stable worktree and branch, drains its children into
+it sequentially, reserves the union of its descendants' `context_files`, is excluded from leaf
+admission, and is finished by a dedicated `epic_orchestrator` — was a way to give one large body
+of work a single review artifact. In practice it fragmented the drain: one epic pinned a slot for
+its whole life, its reservation shadowed unrelated leaves, and none of it splits across hosts.
+
+What is removed:
+
+| Piece | Anchor |
+|---|---|
+| `epic_pipeline` job and its `list_epic_descendants` / drain loop / finisher steps | `crates/orbit-core/assets/jobs/epic_pipeline.yaml` |
+| `epic_orchestrator` activity | `crates/orbit-core/assets/activities/` |
+| `start_epic` step and `has_epic` / `epic_task_id` / `active_epic_run_id` outputs | `workspace_auto_pipeline.yaml`, `classify_workspace_auto_tasks.yaml` |
+| Epic-tag exclusion from leaf admission and the refusal to ship an `epic`-tagged root | `list_backlog_tasks`, `classify_workspace_auto_tasks`, ship admission |
+| Descendant-union footprint for `epic`-tagged roots | `crates/orbit-core/src/runtime/task/locks.rs::lock_context_files_for_task` — the `tags.contains("epic")` branch |
+| Epic-worktree retention rule in `worktree_gc` | `worktree_gc_pipeline.yaml` |
+| `docs/design/resident-orchestrator/` | moves to `docs/design/_archive/` with a supersession pointer to this folder |
+
+What stays:
+
+- **Parent/child task relations.** Hierarchy is still useful for reading a backlog; it just no
+  longer changes admission. A child is a leaf like any other, ordered by its own priority, age, and
+  dependencies.
+- **The `epic` tag**, redefined: a size hint meaning *one large task a top-tier crew takes on
+  whole*. Crew selection reads it (today by hand; later through auto-assignment, where `epic`
+  routes to the pools `fable` / `astra` serve). Admission ignores it.
+- **`workspace_auto_pipeline`'s drain window, slot refill, and detached leaves** — the parts of
+  the resident-orchestrator work that were actually about throughput.
+
+Migration: no epic root may be `in-progress` when the change lands. Drain or park active epics
+first; the removal refuses to start otherwise. Existing `epic`-tagged tasks keep their tag and
+their children and simply become queue entries.
+
+### 7.2 Failed-run triage
+
+`task_triage_pipeline` and its seeded `task_triage` routine list blocked tasks whose `job_run_id`
+points at a failed run in the local store, have an agent classify the failure, and re-backlog the
+"environmental" ones. Under followers the run a task is blocked on may live on another host, so
+the owner's triage either skips it or diagnoses the wrong thing, and an automatic re-backlog would
+hide exactly the host-specific failures the operator needs to see.
+
+What is removed: `task_triage_pipeline.yaml`, `routines/task_triage.yaml` (shipped `enabled:
+false`), the `list_triage_candidates` / `triage_failed_runs` / `apply_dispositions` activities,
+the triage recursion guard in `application/automation/incidents.rs`, the seed entry in
+`application/routine.rs`, and the references in `CONFIG.md`, operation-mode, automation-triggers,
+and the orbit-orchestrate recovery reference.
+
+What replaces it: nothing automatic. A failed run parks its task in `blocked` with the failure and
+`job_run_host` attached; a human or the orchestrate skill reads it. Re-backlogging is a deliberate
+transition, made by whoever looked.
+
+## 8. Concerns & Honest Limitations
 
 - **A dead follower leaves a stale `in-progress` task.** There is no lease, so nothing on the owner
   notices that the host carrying a task went away. This is the same failure a crashed local run
@@ -178,8 +235,10 @@ across hosts; until then they make single-host records honest and cross-host ref
   on the owner, run and steps on the follower). `orbit run` inspection on the owner does not show
   follower runs; `job_run_host` says where to look, but nothing follows the pointer yet. A federated
   run-inspection surface is future work.
-- **No epics on followers.** An epic ties up one owner slot for its whole life. Follower capacity
-  helps only for loose leaves.
+- **Large tasks are large.** With the epic path gone, a huge `epic`-tagged task is one leaf that
+  holds one slot and one reservation for as long as it takes. That is honest, but a follower that
+  pulls it may hold its files for hours; nothing in the queue prefers to hand big tasks to the
+  fastest host.
 - **Friction and auto-tasks from follower runs.** Anything a follower run would mint locally is
   refused by the replica guard. V1 routes friction through the owner like other writes; auto-task
   minting on followers is out of scope.

@@ -86,8 +86,8 @@ every time, on every host.
 
 ### Decision
 
-The owner maintains one ordered ready queue per workspace (dependencies satisfied, epics excluded,
-priority/age/tag order). `orbit.task.pull` pops the first conflict-free entry, one task per call,
+The owner maintains one ordered ready queue per workspace (dependencies satisfied, priority/age/tag
+order). `orbit.task.pull` pops the first conflict-free entry, one task per call,
 with no count, no capacity declaration, and no crew filter. A follower that wants more calls again.
 
 ### Consequences
@@ -169,6 +169,58 @@ nullable; absent means unknown.
 - Provenance cannot be spoofed by a follower payload.
 - Cost: one schema bump across run, task, and artifact records, and every existing row reads as
   unknown until a run touches it.
+
+## Epic is a tag, not a pipeline
+
+**Recorded:** 2026-09 · [ORB-12488]
+**Code anchors:** `crates/orbit-core/src/runtime/task/locks.rs::lock_context_files_for_task`, `crates/orbit-core/assets/jobs/epic_pipeline.yaml`, `crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml`
+
+### Context
+
+The epic path gave one large body of work a single worktree, a sequential child drain, a
+descendant-union reservation, and its own finisher agent. It pinned a drain slot for the epic's
+life, shadowed unrelated leaves through the union reservation, needed its own admission exclusions
+in two activities, and cannot run anywhere but the owner. A second host made the cost visible; the
+benefit — one review artifact — was never worth it against a task a strong crew can take whole.
+
+### Decision
+
+Remove the epic pipeline, orchestrator, reservation union, admission exclusions, and GC rule. Keep
+parent/child relations as plain hierarchy. Keep `epic` as a tag meaning *one large task for a
+top-tier crew*, read by crew selection and ignored by admission.
+
+### Consequences
+
+- One admission path, one footprint rule (a task's own `context_files`), one leaf pipeline.
+- Large work is one leaf; its size shows up as slot time, not as special machinery.
+- `docs/design/resident-orchestrator/` is archived; its drain-window and slot-refill work lives on
+  in `workspace_auto_pipeline`.
+- Cost: a big task no longer gets a stable, reattachable worktree across runs; a crash mid-epic
+  restarts from the branch, like any other leaf.
+
+## Blocked tasks wait for a reader, not a classifier
+
+**Recorded:** 2026-09 · [ORB-12488]
+**Code anchors:** `crates/orbit-core/assets/jobs/task_triage_pipeline.yaml`, `crates/orbit-core/src/application/automation/incidents.rs`
+
+### Context
+
+Failed-run triage had an agent classify each failed run and re-backlog the environmental ones. It
+reads the run from the local store, so a task blocked by a follower's failure is invisible or
+misread on the owner. Its value was saving a human a look; its risk was hiding host-specific
+failures behind an automatic retry.
+
+### Decision
+
+Remove the triage pipeline, routine, activities, and recursion guard. A failed run parks its task
+in `blocked` with the failure and `job_run_host`; re-backlogging is a human or orchestrate-skill
+transition.
+
+### Consequences
+
+- No LLM call runs unattended against failure output.
+- Environmental failures accumulate in `blocked` until someone looks.
+- Cost: the 30-second-read diagnosis triage attached is gone; the reader gets the raw failure.
 
 ## Task References
 

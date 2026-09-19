@@ -10,7 +10,7 @@ type: design
 summary: Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner.
 tags: [distributed-drain, multi-host, pull, federated-mcp, resident-orchestrator]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-core/src/application/automation/ownership.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-mcp/**"]
-related_features: [distributed-drain, federated-mcp, host-registry, resident-orchestrator, activity-job, state-compatibility, task-migration]
+related_features: [distributed-drain, federated-mcp, host-registry, resident-orchestrator, activity-job, state-compatibility, task-migration, automation-triggers]
 related_artifacts: [ORB-12488]
 ---
 
@@ -59,12 +59,11 @@ coordination store, task locks, the drain clock, and every `control_plane` tool.
 host-registry.
 
 **Follower.** A replica checkout of the same workspace on another host, running the drain loop in
-**pull mode**. It holds `execute` only. It never mints tasks, never reserves locks locally, and
-never runs an epic. Its coordination writes travel to the owner over federated MCP.
+**pull mode**. It holds `execute` only. It never mints tasks and never reserves locks locally. Its
+coordination writes travel to the owner over federated MCP.
 
 **Ready queue.** The owner-maintained ordered list of `backlog` tasks whose dependencies are
-satisfied, excluding epic roots and their descendants, in the priority/age/tag order the owner's
-readiness rules already produce. A projection of the store, recomputed on task changes; the only
+satisfied, in the priority/age/tag order the owner's readiness rules already produce. A projection of the store, recomputed on task changes; the only
 place order is decided.
 
 **Pull.** `orbit.task.pull`: pop the first ready-queue entry whose lock footprint overlaps no held
@@ -73,6 +72,9 @@ pulled task is indistinguishable in the store from a task the owner's own drain 
 
 **Slot.** One unit of a host's build capacity: `max_active_leaf_runs` minus the live leaf runs on
 that host. A host pulls once per free slot. Capacity stays on the host; the owner never learns it.
+
+**Epic (tag).** A size hint on a task: one large piece of work a top-tier crew takes on whole. It
+no longer names a pipeline, a worktree, a reservation class, or an admission rule.
 
 **Landing.** What a follower does with a finished branch: push, open the PR, promote the task to
 `review` through the owner. Merging (`pr_complete`) stays with the owner's existing ship sweep.
@@ -88,12 +90,16 @@ that host. A host pulls once per free slot. Capacity stays on the host; the owne
 | Pulled leaf pipeline skips the gate | [task_pr_pipeline.yaml](../../../crates/orbit-core/assets/jobs/task_pr_pipeline.yaml) | — | to file |
 | Replica coordination writes route to the owner | [crates/orbit-cmd/src/registry_runtime.rs](../../../crates/orbit-cmd/src/registry_runtime.rs), [crates/orbit-mcp](../../../crates/orbit-mcp) | — | to file |
 | Execution provenance on runs, tasks, artifacts | [2_design.md §6](./2_design.md#6-execution-provenance) | — | to file |
+| Retire epic machinery; `epic` becomes a tag | [2_design.md §7.1](./2_design.md#71-epic-machinery) | — | to file |
+| Retire failed-run triage | [2_design.md §7.2](./2_design.md#72-failed-run-triage) | — | to file |
 | Follower preconditions: auth probe, version parity | [2_design.md §4](./2_design.md#4-follower-preconditions) | — | to file |
 | Followers pull; the owner never places | [4_decisions.md](./4_decisions.md#followers-pull-the-owner-never-places) | [ORB-12488] | recorded |
 | `in-progress` plus a held lock is the claim | [4_decisions.md](./4_decisions.md#in-progress-plus-a-held-task-lock-is-the-claim) | [ORB-12488] | recorded |
 | Order lives in one owner queue; pull takes one | [4_decisions.md](./4_decisions.md#order-lives-in-one-owner-queue-and-a-pull-takes-one-task) | [ORB-12488] | recorded |
 | Validation runs where the work ran | [4_decisions.md](./4_decisions.md#validation-runs-where-the-work-ran-the-owner-only-lands) | [ORB-12488] | recorded |
 | Owner is the always-on host | [4_decisions.md](./4_decisions.md#the-owner-is-the-always-on-host-that-followers-can-reach) | [ORB-12488] | recorded |
+| Epic is a tag, not a pipeline | [4_decisions.md](./4_decisions.md#epic-is-a-tag-not-a-pipeline) | [ORB-12488] | recorded |
+| Blocked tasks wait for a reader, not a classifier | [4_decisions.md](./4_decisions.md#blocked-tasks-wait-for-a-reader-not-a-classifier) | [ORB-12488] | recorded |
 
 ## Task References
 
