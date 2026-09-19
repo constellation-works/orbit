@@ -1,4 +1,4 @@
-# Orbit — The engineering framework for your AI coding agents
+# Orbit — Your agent files the work. Orbit ships it. You review the pull request.
 
 <p align="center">
   <img src="docs/assets/orbit-dashboard-hero.gif" alt="Orbit dashboard: task backlog, agent execution, and live audit log" width="600" />
@@ -8,11 +8,42 @@
   <em>The Orbit dashboard (<code>orbit web serve</code>) — task backlog, live audit log, per-agent scoreboard.</em>
 </p>
 
-**Orbit gives AI coding work a durable, reviewable path at throughput, so rigor and parallel execution stop trading against each other. Every change gets a durable task, every tool call and provider exchange gets a structured audit, dispatch is conflict-aware, and continuous review sweeps file confirmed findings back into the backlog — local-first.**
+**Say what you want in the coding agent you already use. Over MCP it files a task with acceptance criteria, Orbit runs it in an isolated worktree with the task's file scope reserved and a gated pipeline, and a pull request comes back for you to review. Every tool call, provider exchange, and task transition lands in a joined audit record. Local-first, driving the provider CLI you already have.**
 
-You drive Claude Code, Codex, Grok Build, or Gemini CLI against real code, often in parallel. Agents make it easy to skip the disciplines that keep code maintainable, and six months later nobody can reconstruct why an agent wrote a given line. Orbit makes those disciplines cheap: tasks before edits, every tool call in a structured audit log, parallel runs sandboxed into worktrees with file-level locks, and your own design docs retrievable by the agents doing the work.
+You drive Claude Code, Codex, Grok Build, or Gemini CLI against real code, often in parallel. Agents make it easy to skip the disciplines that keep code maintainable, and six months later nobody can reconstruct why an agent wrote a given line. Orbit makes those disciplines cheap without making you the clerk: the agent files the task before it edits, every tool call goes into a structured audit log, parallel runs are sandboxed into worktrees with file-level locks, and your own design docs are retrievable by the agents doing the work.
 
-When PR mode is selected — the safe fallback when no workspace ship mode is configured — `orbit run ship` opens a pull request and stops with the task in `review` and the PR unmerged. `--mode local` instead commits and fast-forwards the configured local base in an isolated worktree; its optional push is part of delivery, not a review gate. A separate, explicitly authorized `--complete` run can carry delivery through the mode's guarded completion steps and move the task to `done`. Scheduled `code-review`, `qa-sweep`, and `security-review` passes can then read the landed window and file every confirmed finding back into the backlog as an ordinary task. Every commit carries its task ID, so the history stays reconstructable.
+---
+
+## What a session looks like
+
+Two commands set Orbit up. After that you talk to your agent, and Orbit does the filing, isolation, and delivery.
+
+```
+$ orbit init                                 # global state in ~/.orbit
+$ cd my-repo && orbit workspace init --mcp   # .orbit/ here; operator-authorized MCP server
+                                             # registered with your installed agent CLIs
+
+You:    The fsProfile lookup is undocumented. Get that fixed.
+Agent:  Filing it as a task with acceptance criteria.
+        orbit.task.add → ORB-1042 · proposed
+        Filed. Approve it into the backlog and ship?
+You:    Yes.
+Agent:  orbit.task.update   → ORB-1042 · proposed → backlog
+        orbit.workflow.ship → run jrun-… · file scope reserved · worktree isolated
+        Shipping. The run is asynchronous; I'll check on it.
+        orbit.workflow.run.show → plan · execute · review settled · PR opened · ORB-1042 · review
+        Pull request open. The diff and the merge are yours.
+
+$ orbit task update ORB-1042 --approve       # after you merge the PR: review → done
+```
+
+Illustrative session, not captured output. Tool names are real; identifiers are placeholders and arguments are omitted.
+
+Three things to notice:
+
+- **The agent asks before the work starts.** `orbit.task.add` lands the task in `proposed`. Moving it to `backlog` is the approval, a separate governed write that accepts nothing but a note. No agent session can skip it.
+- **The run stops at a pull request.** `orbit.workflow.ship` is review-only: it opens or updates a PR and leaves the task in `review` with the PR unmerged. Orbit and GitHub stay separate: approving the task never merges the PR, and merging the PR never completes the task.
+- **Every step is on the record.** `orbit task show ORB-1042` reconstructs the prompt, plan, execution trace, and review thread months later, and every commit carries its task ID.
 
 ---
 
@@ -20,7 +51,7 @@ When PR mode is selected — the safe fallback when no workspace ship mode is co
 
 - **Durable, intent-tracked task layer.** Lifecycle (`proposed → backlog → in-progress → review → done`) survives sessions and branches; every commit carries the `task_id`, so `orbit task show` reconstructs prompt, plan, execution trace, and review threads months later. → [docs/design/task-artifacts/](docs/design/task-artifacts/)
 - **Structured audit log.** Every tool call, provider exchange, and task transition is a queryable, append-only event with agent identity attached. → [docs/design/auditability/](docs/design/auditability/)
-- **Conflict-aware parallel execution.** `orbit run ship` gives each run its own git worktree and reserves task `context_files` as locks before fanning out, rejecting overlapping reservations up front instead of producing merge conflicts later. → [docs/design/activity-job/](docs/design/activity-job/)
+- **Conflict-aware parallel execution.** Each run gets its own git worktree and reserves the task's `context_files` as locks before fanning out, rejecting overlapping reservations up front instead of producing merge conflicts later. → [docs/design/activity-job/](docs/design/activity-job/)
 - **Continuous review after delivery.** Shipped `code-review`, `qa-sweep`, and `security-review` auto-tasks read the window since their last cursor, verify findings against live code, and file confirmed ones as tasks with `file:line` evidence. A clean window is a successful no-op. → [docs/design/auto-tasks/](docs/design/auto-tasks/)
 - **Sandboxed-by-default execution.** Dispatched agent CLIs run under `sandbox-exec` on macOS and Bubblewrap on Linux; the Linux boundary enforces writes only, leaving host reads and network open. Unsupported platforms keep the in-process filesystem guards. → [docs/design/policy-sandbox/](docs/design/policy-sandbox/)
 - **A searchable docs corpus — your conventions, not Orbit's.** Register the markdown you already write with `orbit docs add`; agents retrieve it by concept via `orbit search --kind doc`, with `--hybrid` adding embedding recall. → [docs/design/orbit-docs/](docs/design/orbit-docs/)
@@ -34,7 +65,7 @@ Everything is incremental: the task layer and audit log work on day one; the doc
 
 ## Quick Start
 
-**Prerequisites:** at least one supported agent CLI (for example, Claude Code, Codex, Grok Build, or Gemini CLI), authenticated. `orbit run ship` uses the workspace's configured ship mode, falling back to `pr`; PR mode needs `gh` authenticated, while `--mode local` delivers to the local base instead of opening a pull request. On Linux, complete the [Linux sandbox runbook](docs/runbooks/linux-sandbox.md) after `orbit init`.
+**Prerequisites:** at least one supported agent CLI (for example, Claude Code, Codex, Grok Build, or Gemini CLI), authenticated. The default ship mode is `pr`, which needs `gh` authenticated; `--ship-mode local` at workspace init delivers to the local base instead of opening a pull request. On Linux, complete the [Linux sandbox runbook](docs/runbooks/linux-sandbox.md) after `orbit init`.
 
 ```bash
 curl -sSf https://raw.githubusercontent.com/constellation-works/orbit/main/install.sh | sh
@@ -42,42 +73,37 @@ curl -sSf https://raw.githubusercontent.com/constellation-works/orbit/main/insta
 
 orbit init                                 # global state (~/.orbit)
 cd <repo> && orbit workspace init --mcp    # workspace state + operator-authorized MCP integration
-
-TASK_ID=$(orbit task add --title "..." --description "..." \
-  --acceptance-criteria "..." --complexity medium --workspace .)
-orbit task update "$TASK_ID" --status backlog   # approve into the backlog
-
-orbit run ship "$TASK_ID"                  # one explicitly selected task; returns immediately with a durable run ID
-orbit run show <RUN_ID>                     # inspect that asynchronous run's progress and outcome
-orbit task show "$TASK_ID"                 # inspect the task state and evidence
-
-# After the single-task path, drain a bounded window of the backlog:
-orbit run auto --for 2h --concurrency 10   # conflict-aware parallel drain; omit --complete for review handoff
-orbit run show <RUN_ID>                    # inspect the drain and its child runs
-orbit web serve                            # dashboard over every registered workspace
-orbit web connect my-server                # ...or a remote workspace over an SSH tunnel
 ```
 
-`orbit run ship "$TASK_ID"` and `orbit run auto` are asynchronous: they print a
-durable run ID and return before the eventual outcome is known. Start with one
-selected task, then inspect it with `orbit run show` and `orbit task show` before
-scaling up to a bounded multi-task drain.
+Then open your agent inside the repo and say what you want, for example "the fsProfile lookup is undocumented, get that fixed". The agent files the task over MCP, asks you to approve it, ships it, and reports the pull request. Your side of the loop is reviewing that PR, then `orbit task update "$TASK_ID" --approve` to move the task from `review` to `done`.
 
-By default, successful work reaches `review`. In PR mode, the run opens or
-updates a pull request and leaves it unmerged. In local mode, it commits and
-fast-forwards the configured local base in the isolated worktree instead of
-opening a pull request; an optional push is controlled by the workflow. Use
-`--complete` only when you explicitly authorize that submitted run to finish
-delivery and move its tasks to `done`; for example, `orbit run ship
-"$TASK_ID" --complete` or `orbit run auto --for 2h --concurrency 10
---complete`. The latter is blanket authorization for every task admitted
-during the whole drain window.
+Inspect anything the agent tells you with `orbit task show "$TASK_ID"`, `orbit run show "$RUN_ID"`, or the dashboard (`orbit web serve`; `orbit web connect my-server` for a remote workspace over SSH). Full command reference: `orbit --help` and [orbit-cli.com](https://orbit-cli.com). Crews (which provider-model runs a task) and the base branch: [docs/CONFIG.md](docs/CONFIG.md).
 
-For advanced continuous review, enable the shipped `code-review`, `qa-sweep`,
-and `security-review` auto-tasks. They inspect landed windows and file confirmed
-findings back into the backlog; they do not grant completion authority.
+<details>
+<summary><strong>The same loop by hand</strong> (click to expand)</summary>
 
-Or ask your agent: "create an orbit task to refactor the authentication logic in …". Full command reference: `orbit --help` and [orbit-cli.com](https://orbit-cli.com). Crews (which provider-model runs a task) and the base branch: [docs/CONFIG.md](docs/CONFIG.md).
+Every MCP tool has a CLI twin, so you can drive the loop without an agent session, or check what one did.
+
+```bash
+TASK_ID=$(orbit task add --title "..." --description "..." \
+  --acceptance-criteria "..." --complexity medium --workspace .)
+orbit task update "$TASK_ID" --approve     # proposed → backlog
+orbit run ship "$TASK_ID"                  # returns immediately with a durable run ID
+orbit run show <RUN_ID>                    # progress and outcome
+orbit task show "$TASK_ID"                 # task state and evidence
+orbit task update "$TASK_ID" --approve     # after the PR is merged: review → done
+```
+
+</details>
+
+### When you are not in the loop
+
+Agents and auto-tasks keep filing work; these are the ways it gets shipped without you at the keyboard. Every `orbit run` command is asynchronous: it prints a durable run ID and returns before the outcome is known. Finishing delivery is always a separate, explicit authorization: `--complete` on the command, or the `complete` right on a grant. No workspace setting, environment variable, or routine turns it on by itself.
+
+- **A bounded drain.** `orbit run auto --for 4h --concurrency 8` ships the backlog conflict-aware until the window closes; `--for` only stops new work from starting. Check first with `orbit run readiness`, which reserves and submits nothing.
+- **A scoped grant.** `orbit operation enable --task "$IDS" --for 2h --right prepare,promote` then `orbit run auto --grant "$GRANT_ID"`: a finite task set, at most 50 tasks and 24 hours. Only a grant carrying the `complete` right finishes delivery; `--complete` is refused alongside `--grant`.
+- **Finishing delivery.** `orbit run ship "$TASK_ID" --complete` merges the PR as soon as GitHub allows it and moves the task to `done` once the merge is verified. `orbit run auto --for 2h --complete` is blanket authorization for every task admitted during the whole window. Neither approves `proposed` work into the backlog.
+- **Continuous review.** Enable the shipped `code-review`, `qa-sweep`, and `security-review` auto-tasks. They inspect landed windows and file confirmed findings back into the backlog; they do not grant completion authority.
 
 ### Agent plugins
 
