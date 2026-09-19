@@ -105,6 +105,14 @@ commands against ambient authority in a managed worker. See
 [`crates/orbit-cli/tests/ambient_authority_isolation.rs`](crates/orbit-cli/tests/ambient_authority_isolation.rs)
 for the regression coverage.
 
+Live `bwrap` spawn is not available from inside an agent-executor or job-run
+worktree. The outer sandbox blocks nested `unshare(CLONE_NEWUSER)`, so even
+`bwrap --ro-bind / / --tmpfs /tmp --dev /dev -- echo works` fails with
+`No permissions to create new namespace`. Treat that denial as nested-sandbox
+environment, not a missing AppArmor profile or a product defect. Replay live
+spawn checks (`spawn_under_linux_bwrap`, `--run-ignored`) on the owning Linux
+host. Do not disable `linux-bwrap` or try to make bwrap nest from a fixture.
+
 ## Toolchain (MSRV)
 
 Orbit's minimum supported Rust version is declared as `rust-version` in the

@@ -83,6 +83,16 @@ the exact test binary plus the command above. Record that outcome as **not run**
 and have an operator rerun the printed command on the owning Linux host after
 fixing the namespace prerequisite. A capability denial is never a passing skip.
 
+A `bwrap: No permissions to create new namespace` failure inside an
+agent-executor or job-run worktree is nested-sandbox environment, not a missing
+AppArmor profile. The outer containment blocks nested `unshare(CLONE_NEWUSER)`
+even when `/proc/sys/kernel/unprivileged_userns_clone` is `1` and `unshare -U`
+succeeds; that is distinct from the host UID-map error this runbook remediates.
+Do not disable `linux-bwrap` or try to make bwrap nest. Live bwrap spawn checks
+(`spawn_under_linux_bwrap`, the recovery regression above, and ignored
+live-spawn tests) belong on the owning Linux host: replay them there with
+`--run-ignored` or operator replay, and record a nested denial as **not run**.
+
 ## If the probe still fails
 
 Do not disable `kernel.apparmor_restrict_unprivileged_userns` globally and do not enable
