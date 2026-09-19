@@ -106,7 +106,7 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 | Execution provenance on runs, tasks, artifacts | [2_design.md §6](./2_design.md#6-execution-provenance) | — | to file |
 | Retire epic machinery; `epic` becomes a tag | [2_design.md §7.1](./2_design.md#71-epic-machinery) | — | to file |
 | Retain ship sweep and adapt all entry points to claim admission | [2_design.md §7.3](./2_design.md#73-ship-sweep) | — | to file |
-| Retire failed-run triage | [2_design.md §7.2](./2_design.md#72-failed-run-triage) | — | to file |
+| Retire failed-run triage | [2_design.md §7.2](./2_design.md#72-failed-run-triage) | [ORB-12492] | filed |
 | Read-only identity/capability/version probe and receipt reconciliation | [2_design.md §4](./2_design.md#4-follower-preconditions) | — | to file |
 | Followers pull; the owner never places | [4_decisions.md](./4_decisions.md#followers-pull-the-owner-never-places) | [ORB-12488] | recorded |
 | Requests identify admissions and claims identify attempts | [4_decisions.md](./4_decisions.md#requests-identify-admissions-and-claims-identify-attempts) | [ORB-12488] | recorded |
@@ -119,5 +119,6 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 ## Task References
 
 - [ORB-12488] — authored this design folder for the pull-based multi-host drain.
+- [ORB-12492] — retired terminal failed-run triage (§7.2).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

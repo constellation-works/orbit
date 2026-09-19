@@ -145,7 +145,8 @@ fn system_crew_options(detected: &DetectedAgents) -> Vec<CrewSeed> {
 
 fn format_system_crew_options(options: &[CrewSeed]) -> String {
     let mut lines = vec![
-        "Choose the cheap-tier agent for the system crew (recovery, triage, qa-sweep):".to_string(),
+        "Choose the cheap-tier agent for the system crew (recovery, task pilot, qa-sweep):"
+            .to_string(),
         String::new(),
     ];
     for (index, option) in options.iter().enumerate() {

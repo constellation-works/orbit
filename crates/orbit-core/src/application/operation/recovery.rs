@@ -1,10 +1,9 @@
 //! Aggregate recovery budgets and the privileged-action rechecks for admitted
 //! work [ORB-11332].
 //!
-//! One ledger per task spans engine step-recovery hooks, resumed runs, and
-//! terminal-run triage: an episode is reserved *before* a recovery worker is
-//! dispatched, its wall time is settled afterwards, and nesting or requeueing
-//! never resets the count. Runs without a captured admission keep the
+//! One ledger per task spans engine step-recovery hooks and resumed runs: an
+//! episode is reserved *before* a recovery worker is dispatched, its wall time
+//! is settled afterwards, and nesting or requeueing never resets the count. Runs without a captured admission keep the
 //! pre-existing unbounded behavior. Completion of admitted work is rechecked
 //! against the grant at the guarded `review -> done` transition, so a hard
 //! revocation stops it even after the window expired.
@@ -26,14 +25,6 @@ use crate::OrbitRuntime;
 
 /// History event recorded when a task's aggregate allowance is spent.
 pub(crate) const RECOVERY_EXHAUSTED_EVENT: &str = "recovery_budget_exhausted";
-
-/// The reservation triage made for one candidate under a grant.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TriageReservation {
-    pub episode: Option<u32>,
-    /// Set when the allowance is spent; the candidate is an escalation.
-    pub exhausted: Option<&'static str>,
-}
 
 /// The tasks a run carries, from its persisted input.
 fn run_task_ids(run: &JobRun) -> Vec<String> {
@@ -388,7 +379,7 @@ impl OrbitRuntime {
         }
         let note = format!(
             "operation-mode recovery allowance spent ({reason}): {episodes_consumed}/{} episodes, \
-             {consumed_seconds}/{} seconds across step recovery and triage; latest run {run_id}. \
+             {consumed_seconds}/{} seconds across step recovery; latest run {run_id}. \
              Escalated for a decision; automation will not retry this lineage.",
             budget.episodes, budget.seconds
         );
@@ -485,74 +476,4 @@ fn open_episode(ledger: &RecoveryLedger, run_id: &str, step_id: Option<&str>) ->
                 && episode.elapsed_seconds.is_none()
         })
         .map(|episode| episode.index)
-}
-
-/// Reserve (or reuse) a triage episode for a blocked task whose failed run
-/// was admitted under a grant. `None` for unbound runs.
-pub(crate) fn triage_recovery_reservation(
-    runtime: &OrbitRuntime,
-    task_id: &str,
-    run: &JobRun,
-) -> Result<Option<TriageReservation>, OrbitError> {
-    let Some(admission) = run
-        .input
-        .as_ref()
-        .map(OperationAdmission::from_run_input)
-        .transpose()
-        .map_err(OrbitError::InvalidInput)?
-        .flatten()
-    else {
-        return Ok(None);
-    };
-    let bound_run = JobRun {
-        input: Some(json!({ "task_ids": [task_id] })),
-        ..run.clone()
-    };
-    Ok(Some(
-        match runtime.reserve_recovery(&bound_run, &admission, RecoveryEpisodeKind::Triage, None)? {
-            StepRecoveryAdmission::Reserved { episode } => TriageReservation {
-                episode: Some(episode),
-                exhausted: None,
-            },
-            StepRecoveryAdmission::Allowed => TriageReservation {
-                episode: None,
-                exhausted: None,
-            },
-            StepRecoveryAdmission::Denied { reason } => TriageReservation {
-                episode: None,
-                exhausted: Some(if reason == "recovery_minutes_exhausted" {
-                    "recovery_minutes_exhausted"
-                } else if reason == "grant_revoked" {
-                    "grant_revoked"
-                } else {
-                    "recovery_episodes_exhausted"
-                }),
-            },
-        },
-    ))
-}
-
-/// Settle a triage episode once dispositions are applied.
-pub(crate) fn settle_triage_episode(
-    runtime: &OrbitRuntime,
-    task_id: &str,
-    run_id: &str,
-) -> Result<(), OrbitError> {
-    let workspace_id = runtime.workspace_id()?;
-    let store = runtime.operation_store()?;
-    let Some(ledger) = store.operation_recovery_ledger(&workspace_id, task_id)? else {
-        return Ok(());
-    };
-    let now = Utc::now();
-    let Some(episode) = ledger.episodes.iter().find(|episode| {
-        episode.run_id == run_id && episode.step_id.is_none() && episode.elapsed_seconds.is_none()
-    }) else {
-        return Ok(());
-    };
-    let elapsed_seconds = (now - episode.reserved_at)
-        .num_seconds()
-        .try_into()
-        .unwrap_or(0);
-    store.operation_recovery_settle(&workspace_id, task_id, episode.index, elapsed_seconds, now)?;
-    Ok(())
 }

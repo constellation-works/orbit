@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: Proposed bounded state-driven triggers for routines and auto-tasks with durable work identity and honest coverage.
 tags: [automation-triggers, routines, auto-tasks, scheduling]
-paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/adapter/engine_host/v2_host/task_pilot/**", "crates/orbit-core/src/adapter/engine_host/v2_host/triage.rs"]
+paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/adapter/engine_host/v2_host/task_pilot/**"]
 related_features: [routines, auto-tasks, operation-mode]
 related_artifacts: [ORB-11315, ORB-11295, ORB-11314, ORB-11316]
 ---
@@ -17,7 +17,9 @@ related_artifacts: [ORB-11315, ORB-11295, ORB-11314, ORB-11316]
 # Automation Triggers — Overview
 
 Delivery triggers are implemented in [ORB-11330]; state preparation and failure
-triage are implemented in [ORB-11331]. The shared `orbit-automation` domain uses
+triage are implemented in [ORB-11331]. Terminal failed-run triage has since been
+retired ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)):
+the `execution_failed` trigger kind still parses but has no shipped target job. The shared `orbit-automation` domain uses
 the existing sweep clock, Core action adapters and Store checkpoints. See
 [Operations](5_operations.md) for accepted configuration and limits. The broader
 batching and mode design below retains future intent; no live definition is

@@ -85,9 +85,9 @@ pub struct GrantLimits {
     pub leaf_ceiling: u32,
     /// Due interval for automatic preparation of in-scope tasks, in seconds.
     pub preparation_due_seconds: u64,
-    /// Recovery episodes allowed per task across step hooks and triage.
+    /// Recovery episodes allowed per task across step hooks.
     pub recovery_episodes_per_task: u32,
-    /// Recovery wall time allowed per task across step hooks and triage.
+    /// Recovery wall time allowed per task across step hooks.
     pub recovery_minutes_per_task: u32,
 }
 
@@ -281,7 +281,9 @@ impl OperationAdmission {
 pub enum RecoveryEpisodeKind {
     /// An engine step recovery hook.
     StepRecovery,
-    /// A terminal-run triage diagnosis and its resulting requeue.
+    /// A terminal-run triage diagnosis and its resulting requeue. Terminal
+    /// failed-run triage is retired; the variant is kept so ledgers written
+    /// before the retirement still deserialize.
     Triage,
 }
 
@@ -304,8 +306,8 @@ pub struct RecoveryEpisode {
     pub elapsed_seconds: Option<u64>,
 }
 
-/// Aggregate recovery consumption for one task across step hooks, resumed
-/// runs, and triage. Nesting or requeueing never resets it.
+/// Aggregate recovery consumption for one task across step hooks and resumed
+/// runs. Nesting or requeueing never resets it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecoveryLedger {
     /// The task whose lineage this ledger covers.

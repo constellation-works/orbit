@@ -584,13 +584,14 @@ fn one_tick_fires_a_routine_and_auto_task_and_isolates_another_workspace_error()
     );
 }
 
-/// Criterion: a clock tick over a workspace still carrying a retired default
-/// prints no load error. Before [DANI-10392] this row was a load error on
+/// Criterion: a clock tick over a workspace still carrying any retired default
+/// prints no load error. Before [DANI-10392] such a row was a load error on
 /// every pass, so `orbit sweep` and `orbit routine list` spammed it in every
-/// upgraded workspace. It is a non-noteworthy `retired` report row instead,
-/// and it never dispatches.
+/// upgraded workspace. Each is a non-noteworthy `retired` report row instead,
+/// and none of them dispatches — including `task_triage`, whose job this Orbit
+/// no longer ships.
 #[test]
-fn tick_reports_a_retired_default_as_skipped_rather_than_a_load_error() {
+fn tick_reports_every_retired_default_as_skipped_rather_than_a_load_error() {
     let _tz = orbit_common::test_env::unset(["TZ"]);
     let root = tempfile::tempdir().expect("root");
     let global = root.path().join("global");
@@ -599,20 +600,28 @@ fn tick_reports_a_retired_default_as_skipped_rather_than_a_load_error() {
     std::fs::create_dir_all(global.join("resources/jobs")).expect("global jobs dir");
     std::fs::write(global.join("resources/jobs/noop.yaml"), NOOP_JOB).expect("job");
     // Exactly what an earlier release seeded, opted in and with the retired
-    // `hosts:` key dropped; this Orbit ships no such job. The bytes come from
-    // the shipped retired template so the file really is one `orbit workspace
-    // sync` retires — which is what the advice below promises [DANI-10502].
-    let seeded = RETIRED_ROUTINE_FILES
+    // `hosts:` key dropped; this Orbit ships none of these jobs. The bytes come
+    // from the shipped retired templates so each file really is one `orbit
+    // workspace sync` retires — which is what the advice below promises
+    // [DANI-10502].
+    assert!(
+        RETIRED_ROUTINE_FILES
+            .iter()
+            .any(|(stem, _)| *stem == "task_triage"),
+        "the retired triage default must ship as a provenance shape"
+    );
+    let expected_names = RETIRED_ROUTINE_FILES
         .iter()
-        .find(|(stem, _)| *stem == "auto_task_scheduler")
-        .map(|(_, template)| {
-            template
-                .replace("__ORBIT_ROUTINE_NAME__", "auto-task-scheduler-upgraded")
-                .replace("enabled: false", "enabled: true")
+        .map(|(stem, template)| {
+            let routine = format!("{}-upgraded", stem.replace('_', "-"));
+            let seeded = template
+                .replace("__ORBIT_ROUTINE_NAME__", &routine)
+                .replace("enabled: false", "enabled: true");
+            std::fs::write(orbit_dir.join(format!("routines/{stem}.yaml")), seeded)
+                .expect("retired routine");
+            routine
         })
-        .expect("the retired scheduler ships as a provenance shape");
-    std::fs::write(orbit_dir.join("routines/auto_task_scheduler.yaml"), seeded)
-        .expect("retired routine");
+        .collect::<Vec<_>>();
     let runtime = crate::OrbitRuntime::from_roots(&global, &orbit_dir).expect("runtime");
     let provider = FixedWorkspaces {
         entries: vec![(workspace("ws-upgraded", "upgraded"), runtime.clone())],
@@ -638,24 +647,26 @@ fn tick_reports_a_retired_default_as_skipped_rather_than_a_load_error() {
             .map(|error| error.message.as_str())
             .collect::<Vec<_>>()
     );
-    let row = outcome
-        .reports
-        .iter()
-        .find(|report| report.routine == "auto-task-scheduler-upgraded")
-        .expect("the retired definition is reported");
-    assert_eq!(row.action, "retired");
-    assert_eq!(row.source, "upgraded");
-    assert!(
-        row.run_id.is_none(),
-        "a retired definition never dispatches"
-    );
-    assert!(
-        row.reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("orbit workspace sync")),
-        "{:?}",
-        row.reason
-    );
+    for name in &expected_names {
+        let row = outcome
+            .reports
+            .iter()
+            .find(|report| &report.routine == name)
+            .unwrap_or_else(|| panic!("the retired definition {name} is reported"));
+        assert_eq!(row.action, "retired");
+        assert_eq!(row.source, "upgraded");
+        assert!(
+            row.run_id.is_none(),
+            "a retired definition never dispatches"
+        );
+        assert!(
+            row.reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("orbit workspace sync")),
+            "{:?}",
+            row.reason
+        );
+    }
     assert!(
         runtime
             .list_job_runs(JobRunListParams::default())

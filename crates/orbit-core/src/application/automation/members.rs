@@ -342,7 +342,7 @@ impl MemberHost for Host<'_> {
         ])?;
 
         let origin = if self.trigger.kind == StateTriggerKind::ExecutionFailed {
-            "triage"
+            "execution_failure"
         } else {
             "preparation"
         };

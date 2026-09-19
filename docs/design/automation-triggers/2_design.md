@@ -328,6 +328,17 @@ separate grant; populated selectors or a successful wrapper are insufficient.
 
 ## 7. Triage incidents, cancellation, and recursion
 
+> **Retired.** Terminal failed-run triage — the `task_triage_pipeline` this
+> section's `execution_failed` trigger fires — is gone
+> ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)).
+> A failed run parks its task in `blocked` with the failure attached and waits
+> for a reader; re-backlogging is a deliberate human transition. The
+> `execution_failed` trigger kind and its incident semantics remain in the code
+> for persisted state, but they have no shipped target job, so an existing
+> definition loads as retired and fires nothing. The recursion guard described
+> below is removed with the pipeline that made it necessary. The rest of this
+> section records the contract as authored.
+
 Observe the transition into **settled execution failure after applicable retry
 exhaustion**, not every failed step. Engine retry/recovery and authorized resumes
 remain the owners of recovery. A durable episode records attempts consumed,
@@ -471,8 +482,11 @@ validation permission is a readiness blocker rather than a complexity or
 priority inference. The low/medium/hard examples in the activity contract are
 deterministic policy fixtures, not a claim about live-model accuracy.
 
+The triage routine below is retired (see the note in §7); it is kept as the
+authored example of a state trigger's shape, not as a definition to write.
+
 ```yaml
-# Proposed routine: one diagnosis per settled causal incident.
+# Retired routine: one diagnosis per settled causal incident.
 schemaVersion: 2
 name: task_triage
 enabled: false

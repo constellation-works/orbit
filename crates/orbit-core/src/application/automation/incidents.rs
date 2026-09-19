@@ -43,17 +43,6 @@ pub(crate) fn failure_coupled(
     }))
 }
 
-/// A run created by triage; diagnosing one again would recurse on itself.
-fn is_diagnostic_origin(run: &JobRun) -> bool {
-    run.job_id == "task_triage_pipeline"
-        || run
-            .input
-            .as_ref()
-            .and_then(|input| input.get("automation_origin"))
-            .and_then(Value::as_str)
-            == Some("triage")
-}
-
 /// Walk retry links to the run that started the episode, under a fixed budget.
 fn root(
     runtime: &OrbitRuntime,
@@ -105,7 +94,6 @@ struct Diagnosis {
     failure: bool,
     recovery_settled: bool,
     coupled: bool,
-    diagnostic_origin: bool,
     cancelled: bool,
     evidence: Value,
 }
@@ -119,7 +107,6 @@ impl Diagnosis {
             failure: self.failure,
             recovery_settled: !require_settled || self.recovery_settled,
             current_failure_coupling: self.coupled,
-            diagnostic_origin: self.diagnostic_origin,
             cancellation: self.cancelled,
         }
     }
@@ -143,7 +130,6 @@ fn diagnose(
     let failed = matches!(run.state, JobRunState::Failed | JobRunState::Timeout);
 
     let mut path_settled = true;
-    let mut diagnostic_origin = is_diagnostic_origin(&run);
     let mut episode = root(runtime, &run, session)?;
 
     // A blocking dispatch with a typed terminal child result is explicit
@@ -157,7 +143,6 @@ fn diagnose(
 
         let liveness = session.probe_liveness(&run);
         path_settled &= run.state.is_terminal() && liveness == RunOwnerLiveness::Stopped;
-        diagnostic_origin |= is_diagnostic_origin(&run);
 
         let state = session.run_state(runtime, &run.run_id)?;
         session.note_run(&run, liveness, &state);
@@ -257,18 +242,10 @@ fn diagnose(
         failure: failed && matches!(run.state, JobRunState::Failed | JobRunState::Timeout),
         recovery_settled: path_settled && settled && descendants_settled,
         coupled,
-        diagnostic_origin,
         cancelled: cancelled || run.state == JobRunState::Cancelled,
         evidence: json!({"episode":episode,"cause_run_id":run.run_id,"coupled_run_id":run_id,
         "task_revision":task.updated_at, "task_id":task.id}),
     })
-}
-
-/// Hydrate at most 1,000 blocked task envelopes to find the complete current
-/// cohort, including tasks coupled to different wrappers of the same cause.
-/// An incomplete inventory never certifies partial incident coverage.
-pub(crate) fn members(runtime: &OrbitRuntime) -> Result<IncidentMembers, AutomationError> {
-    IncidentSession::new().inventory(runtime)
 }
 
 /// Bounded reuse of incident inventory work for one `Host` evaluation.

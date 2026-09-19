@@ -242,7 +242,7 @@ impl RoutineDefinition {
                 || self.policy.overlap != OverlapPolicy::Forbid
                 || self.target.job_name() != state.job_name()
             {
-                return Err(WorkflowError::Invalid("state routines require their pilot/triage target, overlap forbid and exactly one trigger".into()));
+                return Err(WorkflowError::Invalid("state routines require their trigger kind's target job, overlap forbid and exactly one trigger".into()));
             }
         }
         if let Some(delivery) = &self.trigger.deliveries_landed {

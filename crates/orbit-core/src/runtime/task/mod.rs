@@ -11,7 +11,6 @@ mod reservation_cleanup;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use block_on_run_failure::{failed_run_error_context, is_workflow_failure_state};
 pub use reservation_cleanup::StaleTaskReservation;
 
 pub(crate) fn canonicalize_context_files_for_read(

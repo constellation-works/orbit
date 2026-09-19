@@ -128,7 +128,7 @@ choice_enum! {
 choice_enum! {
     /// Whether bounded recovery is scheduled automatically inside a grant.
     RecoveryPreference, "operation.recovery", {
-        /// Existing configured step recovery and explicitly enabled triage only.
+        /// Existing configured step recovery only.
         Existing => "existing",
         /// In-grant incidents are scheduled promptly, within the aggregate budget.
         Scheduled => "scheduled",

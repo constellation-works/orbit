@@ -58,7 +58,7 @@ fn sha256(content: &str) -> String {
 fn a_workspace_seeded_with_host_pins_refreshes_onto_the_host_free_bytes() {
     let root = tempdir().expect("create tempdir");
     let (global, workspace) = initialized_roots(root.path());
-    let routine = workspace.join("routines/task_triage.yaml");
+    let routine = workspace.join("routines/dependabot_alert_sweep.yaml");
 
     // Reconstruct what the previous release wrote: the same document plus the
     // host pin it rendered, recorded in the manifest under a hosts binding.
@@ -71,8 +71,8 @@ fn a_workspace_seeded_with_host_pins_refreshes_onto_the_host_free_bytes() {
     let mut manifest: Value =
         serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read manifest"))
             .expect("parse manifest");
-    manifest["assets"]["task_triage"] = Value::from(sha256(&pinned));
-    let provenance = &mut manifest["routineProvenance"]["task_triage"];
+    manifest["assets"]["dependabot_alert_sweep"] = Value::from(sha256(&pinned));
+    let provenance = &mut manifest["routineProvenance"]["dependabot_alert_sweep"];
     provenance["templateDigest"] = Value::from("digest-of-the-host-pinned-template");
     provenance["renderedDigest"] = Value::from(sha256(&pinned));
     provenance["binding"]["hosts"] = Value::from(vec!["host-a"]);
@@ -95,20 +95,21 @@ fn a_workspace_seeded_with_host_pins_refreshes_onto_the_host_free_bytes() {
     .expect("sync the upgraded workspace");
 
     assert!(applied.actions.iter().any(|action| {
-        action.name == "task_triage" && action.outcome == ManagedArtifactOutcome::Refreshed
+        action.name == "dependabot_alert_sweep"
+            && action.outcome == ManagedArtifactOutcome::Refreshed
     }));
     assert!(
         !applied
             .actions
             .iter()
-            .any(|action| action.name == "task_triage"
+            .any(|action| action.name == "dependabot_alert_sweep"
                 && action.outcome == ManagedArtifactOutcome::Preserved),
     );
     let refreshed = std::fs::read_to_string(&routine).expect("read refreshed routine");
     assert!(!refreshed.contains("hosts:"), "{refreshed}");
     let definition = orbit_common::protocol::yaml::parse_routine_yaml(&refreshed)
         .expect("refreshed routine parses");
-    assert_eq!(definition.name, "task-triage-alpha");
+    assert_eq!(definition.name, "dependabot-alert-sweep-alpha");
     assert!(!definition.has_legacy_host_pin());
 
     // Converged: a second sync is a no-op.
@@ -131,7 +132,7 @@ fn a_workspace_seeded_with_host_pins_refreshes_onto_the_host_free_bytes() {
 fn binding_drift_does_not_claim_template_drift_or_rewrite_routines() {
     let root = tempdir().expect("create tempdir");
     let (global, workspace) = initialized_roots(root.path());
-    let routine = workspace.join("routines/task_triage.yaml");
+    let routine = workspace.join("routines/dependabot_alert_sweep.yaml");
     let before_routine = std::fs::read(&routine).expect("read routine");
     let before_manifest = std::fs::read(routine_manifest(&workspace)).expect("read manifest");
 
@@ -178,10 +179,10 @@ fn legacy_routine_manifest_check_is_read_only_and_apply_migrates_only_exact_inst
     // An edit to a field the shipped template owns. Lifecycle settings
     // (`enabled`, the retired `hosts:` key) are deliberately *not* local
     // edits [DANI-10392], so the fixture changes the cadence instead.
-    let modified = workspace.join("routines/task_triage.yaml");
+    let modified = workspace.join("routines/dependabot_alert_sweep.yaml");
     let edited = std::fs::read_to_string(&modified)
         .expect("read routine")
-        .replace(r#"cron: "15 * * * *""#, r#"cron: "*/5 * * * *""#);
+        .replace(r#"cron: "25 3 * * *""#, r#"cron: "*/5 * * * *""#);
     assert!(
         edited.contains(r#"cron: "*/5 * * * *""#),
         "fixture must change a template-owned field"
@@ -228,7 +229,7 @@ fn legacy_routine_manifest_check_is_read_only_and_apply_migrates_only_exact_inst
     let provenance = migrated["routineProvenance"]
         .as_object()
         .expect("routine provenance");
-    assert!(!provenance.contains_key("task_triage"));
+    assert!(!provenance.contains_key("dependabot_alert_sweep"));
     let entry = &provenance["worktree_gc"];
     assert!(entry["templateDigest"].as_str().is_some());
     assert!(entry["renderedDigest"].as_str().is_some());
@@ -247,7 +248,7 @@ fn real_template_refresh_uses_recorded_binding_and_second_run_is_a_no_op() {
     let mut manifest: Value =
         serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read manifest"))
             .expect("parse manifest");
-    manifest["routineProvenance"]["task_triage"]["templateDigest"] =
+    manifest["routineProvenance"]["dependabot_alert_sweep"]["templateDigest"] =
         Value::String("digest-from-previous-shipped-template".to_string());
     std::fs::write(
         &manifest_path,
@@ -267,14 +268,15 @@ fn real_template_refresh_uses_recorded_binding_and_second_run_is_a_no_op() {
     )
     .expect("refresh true template drift");
     assert!(applied.actions.iter().any(|action| {
-        action.name == "task_triage" && action.outcome == ManagedArtifactOutcome::Refreshed
+        action.name == "dependabot_alert_sweep"
+            && action.outcome == ManagedArtifactOutcome::Refreshed
     }));
     let routine = orbit_common::protocol::yaml::parse_routine_yaml(
-        &std::fs::read_to_string(workspace.join("routines/task_triage.yaml"))
+        &std::fs::read_to_string(workspace.join("routines/dependabot_alert_sweep.yaml"))
             .expect("read refreshed routine"),
     )
     .expect("parse refreshed routine");
-    assert_eq!(routine.name, "task-triage-alpha");
+    assert_eq!(routine.name, "dependabot-alert-sweep-alpha");
 
     let before = std::fs::read(&manifest_path).expect("snapshot converged manifest");
     let second = reconcile_workspace_managed_artifacts(
@@ -302,7 +304,7 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
     let (global, workspace) = initialized_roots(root.path());
     let manifest_path = routine_manifest(&workspace);
     std::fs::remove_file(&manifest_path).expect("drop the pre-provenance routine manifest");
-    let customized = workspace.join("routines/task_triage.yaml");
+    let customized = workspace.join("routines/dependabot_alert_sweep.yaml");
     let edited = std::fs::read_to_string(&customized)
         .expect("read seeded routine")
         .replace("enabled: false", "enabled: true");
@@ -340,7 +342,8 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
         action.kind == "routine" && action.outcome == ManagedArtifactOutcome::Preserved
     }));
     assert!(applied.actions.iter().any(|action| {
-        action.name == "task_triage" && action.outcome == ManagedArtifactOutcome::Migrated
+        action.name == "dependabot_alert_sweep"
+            && action.outcome == ManagedArtifactOutcome::Migrated
     }));
     assert_eq!(
         std::fs::read_to_string(&customized).expect("reread routine"),
@@ -350,13 +353,13 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
     let mut manifest: Value =
         serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read manifest"))
             .expect("parse adopted manifest");
-    let entry = &manifest["routineProvenance"]["task_triage"];
+    let entry = &manifest["routineProvenance"]["dependabot_alert_sweep"];
     assert_eq!(entry["renderedDigest"], Value::from(sha256(&edited)));
-    assert_eq!(entry["binding"]["name"], "task-triage-alpha");
+    assert_eq!(entry["binding"]["name"], "dependabot-alert-sweep-alpha");
 
     // Provenance now exists, so a later shipped-template change reconciles
     // rather than repeating a collision report forever.
-    manifest["routineProvenance"]["task_triage"]["templateDigest"] =
+    manifest["routineProvenance"]["dependabot_alert_sweep"]["templateDigest"] =
         Value::String("digest-from-previous-shipped-template".to_string());
     std::fs::write(
         &manifest_path,
@@ -375,7 +378,8 @@ fn manifestless_customized_routines_are_adopted_and_stay_reconcilable() {
     )
     .expect("refresh the adopted routine");
     assert!(refreshed.actions.iter().any(|action| {
-        action.name == "task_triage" && action.outcome == ManagedArtifactOutcome::Refreshed
+        action.name == "dependabot_alert_sweep"
+            && action.outcome == ManagedArtifactOutcome::Refreshed
     }));
 }
 

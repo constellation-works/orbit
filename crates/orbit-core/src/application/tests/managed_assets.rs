@@ -627,8 +627,9 @@ mod artifacts {
         let modified = "retired_routine";
         let clean_body = std::fs::read_to_string(auto_tasks_dir.join("qa-sweep.yaml"))
             .expect("read a seeded auto-task to reuse as retired content");
-        let modified_body = std::fs::read_to_string(routines_dir.join("task_triage.yaml"))
-            .expect("read a seeded routine");
+        let modified_body =
+            std::fs::read_to_string(routines_dir.join("dependabot_alert_sweep.yaml"))
+                .expect("read a seeded routine");
 
         // Both look exactly like assets a previous release seeded.
         add_managed_manifest_entry(&auto_tasks_dir, clean, &clean_body);

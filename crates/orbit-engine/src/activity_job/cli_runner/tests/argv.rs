@@ -38,9 +38,6 @@ use crate::activity_job::ResolvedSandbox;
 const TASK_PILOT_ACTIVITY: &str =
     include_str!("../../../../../orbit-core/assets/activities/task_pilot.yaml");
 #[cfg(target_os = "linux")]
-const TRIAGE_FAILED_RUNS_ACTIVITY: &str =
-    include_str!("../../../../../orbit-core/assets/activities/triage_failed_runs.yaml");
-#[cfg(target_os = "linux")]
 const DEFAULT_POLICY: &str = include_str!("../../../../../orbit-core/assets/policies/default.yaml");
 
 #[test]
@@ -207,22 +204,22 @@ fn task_pilot_reviewer_profile_starts_direct_linux_invocation_with_env_denies() 
     );
 }
 
-/// [ORB-11257] Triage is launched against the primary checkout. It must select
-/// `reviewer` so default dotenv glob denials compile for a direct Bubblewrap
-/// invocation, while source edits stay denied and write-capable profiles still
-/// fail closed.
+/// [ORB-11257] A read-only direct activity is launched against the primary
+/// checkout. It must select `reviewer` so default dotenv glob denials compile
+/// for a direct Bubblewrap invocation, while source edits stay denied and
+/// write-capable profiles still fail closed.
 #[cfg(target_os = "linux")]
 #[test]
-fn triage_reviewer_profile_starts_direct_linux_invocation_and_protects_env_paths() {
-    let activity = load_activity_asset(TRIAGE_FAILED_RUNS_ACTIVITY).expect("parse triage activity");
+fn reviewer_profile_starts_direct_linux_invocation_and_protects_env_paths() {
+    let activity = load_activity_asset(TASK_PILOT_ACTIVITY).expect("parse task-pilot activity");
     let profile_name = activity
         .spec
         .fs_profile
         .as_deref()
-        .expect("triage must select an explicit fsProfile");
+        .expect("a direct read-only activity must select an explicit fsProfile");
     assert_eq!(profile_name, "reviewer");
     let ActivityV2Spec::AgentLoop(agent) = &activity.spec.spec else {
-        panic!("triage must remain an agent-loop activity");
+        panic!("task-pilot must remain an agent-loop activity");
     };
     assert!(
         agent
@@ -238,7 +235,7 @@ fn triage_reviewer_profile_starts_direct_linux_invocation_and_protects_env_paths
     }));
 
     let resource =
-        parse_policy_resource(DEFAULT_POLICY, "default triage policy").expect("parse policy");
+        parse_policy_resource(DEFAULT_POLICY, "default reviewer policy").expect("parse policy");
     assert_eq!(resource.kind, ResourceKind::Policy);
     assert_eq!(
         resource
@@ -299,7 +296,7 @@ fn triage_reviewer_profile_starts_direct_linux_invocation_and_protects_env_paths
         runtime_write_authority: Vec::new(),
     };
     let argv = try_audit_argv_for_dispatch("/bin/true", &[], Some(&sandbox), Some(&workspace))
-        .expect("direct triage Bubblewrap plan must compile");
+        .expect("direct reviewer Bubblewrap plan must compile");
     assert_eq!(
         argv.first().map(String::as_str),
         Some(bwrap_program_for_audit())
@@ -338,16 +335,16 @@ fn triage_reviewer_profile_starts_direct_linux_invocation_and_protects_env_paths
         Some(&workspace),
         false,
     )
-    .expect("compile triage Bubblewrap invocation");
+    .expect("compile reviewer Bubblewrap invocation");
     assert!(
         !plan.args.iter().any(|arg| arg == "--bind"),
-        "triage reviewer profile must not gain a writable bind: {:?}",
+        "reviewer profile must not gain a writable bind: {:?}",
         plan.args
     );
 
     let guard = LinuxBwrapPostRunGuard::capture(&effective)
         .expect("capture")
-        .expect("triage reviewer profile still carries non-subtree dotenv denies");
+        .expect("reviewer profile still carries non-subtree dotenv denies");
     assert_eq!(
         std::fs::read_to_string(&existing_env).expect("read existing protected path"),
         "secret"
@@ -372,8 +369,13 @@ fn triage_reviewer_profile_starts_direct_linux_invocation_and_protects_env_paths
         stdout: Stdio::null(),
         stderr: Stdio::null(),
     })
-    .expect("start direct triage Bubblewrap invocation");
-    assert!(child.wait().expect("wait for triage invocation").success());
+    .expect("start direct reviewer Bubblewrap invocation");
+    assert!(
+        child
+            .wait()
+            .expect("wait for reviewer invocation")
+            .success()
+    );
     assert_eq!(
         std::fs::read_to_string(&existing_env).expect("read existing protected path"),
         "secret"

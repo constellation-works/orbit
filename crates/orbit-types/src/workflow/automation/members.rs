@@ -9,6 +9,9 @@ use std::collections::BTreeMap;
 #[serde(rename_all = "snake_case")]
 pub enum StateTriggerKind {
     PreparationEligible,
+    /// Retained so persisted member state and existing definitions still
+    /// deserialize; its target job is retired, so no new work dispatches
+    /// through it.
     ExecutionFailed,
 }
 
@@ -46,6 +49,12 @@ impl StateTrigger {
         Ok(())
     }
 
+    /// The job a definition of this kind must target.
+    ///
+    /// `ExecutionFailed` still names `task_triage_pipeline`, which this Orbit
+    /// no longer ships: terminal failed-run triage is retired, so an existing
+    /// definition keeps validating and is skipped as retired by the routine
+    /// loader (`RETIRED_ROUTINE_JOBS`) instead of failing on every clock tick.
     pub fn job_name(&self) -> &'static str {
         match self.kind {
             StateTriggerKind::PreparationEligible => "task_pilot_pipeline",

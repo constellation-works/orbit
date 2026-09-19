@@ -13,7 +13,6 @@ so you do not have to remember job IDs.
 | [`orbit run ship`](#orbit-run-ship) | Ship selected tasks, or the ready backlog, through the gated pipeline. |
 | [`orbit run auto`](#orbit-run-auto) | Drain the backlog for a time window, several tasks at a time. |
 | [`orbit run readiness`](#orbit-run-readiness) | Explain why backlog tasks can or cannot start. |
-| [`orbit run triage`](#orbit-run-triage) | Re-backlog tasks blocked by environmental run failures. |
 | [`orbit run task-pilot`](#orbit-run-task-pilot) | Preflight proposed/backlog tasks and persist validated selectors. |
 | [`orbit run ship-sweep`](#orbit-run-ship-sweep) | Dispatch ship runs across every opted-in workspace. |
 | [`orbit run job`](#direct-job-execution) | Run any job definition directly. |
@@ -79,20 +78,6 @@ orbit run readiness
 orbit run readiness "$TASK_ID" "$SECOND_TASK_ID"
 orbit run readiness --concurrency 8 --json
 ```
-
-## `orbit run triage`
-
-Scan tasks that a failed job run left `blocked`, and re-backlog the ones whose
-failure was environmental:
-
-```bash
-orbit run triage
-orbit run triage "$TASK_ID"
-```
-
-Tasks a human blocked by hand are never touched, and a non-environmental
-diagnosis stays blocked for an operator decision. An empty candidate set is a
-clean no-op.
 
 ## `orbit run task-pilot`
 

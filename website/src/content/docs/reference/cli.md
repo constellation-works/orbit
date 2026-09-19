@@ -48,7 +48,6 @@ before the subcommand.
 | `orbit run auto --stop` | Stop new admissions for this workspace's active auto coordinator. Already admitted workers keep running — this is not cancellation. |
 | `orbit run ship --complete` / `orbit run auto --complete` | Additionally authorize that run to finish delivery and move the tasks it ships from `review` to `done`. Off by default. |
 | `orbit run readiness [task_id ...]` | Read-only explanation of why backlog tasks can or cannot start. `--concurrency`, `--allow-crew`, `--limit`. |
-| `orbit run triage [task_id ...]` | Re-backlog tasks blocked by environmental run failures. |
 | `orbit run task-pilot [task_id ...]` | Preflight proposed/backlog tasks and persist validated selectors. Omit IDs for automatic discovery. `--base-branch`, `--max-tasks`, `--max-partition-size`, `--wait`, `--json`. |
 | `orbit run ship-sweep` | Dispatch ship runs in every workspace with `[workflow] auto_ship = true`. `--dry-run`. |
 | `orbit run job <job_id>` | Run any job by ID or YAML path. `--input key=value`, `--wait`. |

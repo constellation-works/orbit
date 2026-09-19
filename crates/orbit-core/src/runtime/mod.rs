@@ -71,7 +71,6 @@ pub use resolve::{is_global_orbit_root, resolve_global_root, try_resolve_initial
 // the one partition id no registry claims [ORB-12119].
 pub use builder::UNBOUND_DATA_DIR_PARTITION_ID;
 pub use run_input::managed_workspace_selector_from_env;
-pub(crate) use task::{failed_run_error_context, is_workflow_failure_state};
 
 #[cfg(test)]
 pub(crate) type AfterLockedStateReadHook = Arc<dyn Fn(&orbit_types::task::Task) + Send + Sync>;

@@ -389,12 +389,6 @@ impl Commands {
                         Some("ship-sweep"),
                         RuntimeNeed::Forbidden,
                     ),
-                    RunSubcommand::Triage(_) => (
-                        "triage",
-                        Some("workflow"),
-                        Some("triage"),
-                        RuntimeNeed::Required,
-                    ),
                     RunSubcommand::TaskPilot(_) => (
                         "task-pilot",
                         Some("workflow"),

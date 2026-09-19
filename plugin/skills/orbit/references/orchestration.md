@@ -31,7 +31,6 @@ orbit run readiness                        # explain current auto-drain eligibil
 orbit run readiness TASK-123 --json        # explain selected task IDs as JSON
 orbit run ship <task-id> --complete  # ... and also carry it through to `done`
 orbit run ship-sweep --dry-run      # what every registered workspace would ship
-orbit run triage                    # diagnose tasks blocked by failed runs
 ```
 
 `ship` with no IDs discovers ready backlog work itself. `--mode` defaults to the
@@ -216,17 +215,17 @@ over at the iteration ceiling fail the run closed rather than silently passing.
 
 `orbit run auto` picks up one epic per window alongside loose leaves.
 
-## Triage
+## Failed runs
+
+A failed run parks its task in `blocked` with the failure attached. Nothing
+classifies or re-backlogs it for you: read the run, decide whether the cause was
+environmental or real, and make the transition yourself.
 
 ```bash
-orbit run triage                    # every blocked task attributable to a failed run
-orbit run triage <task-id> ...      # narrow the scan
+orbit task list --status blocked
+orbit run show <run-id> --json
+orbit task update <task-id> --status backlog   # only once you know a rerun can succeed
 ```
-
-Triage separates environmental casualties — a transient lock, a provider timeout,
-a sandbox denial — from real failures. The former are re-backlogged; the latter
-stay blocked with a diagnosis attached. Running it on a schedule is what keeps a
-failed run from quietly parking a task forever. → [automation.md](setup/automation.md)
 
 ## Multi-operator workspaces
 

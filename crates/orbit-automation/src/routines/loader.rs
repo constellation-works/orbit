@@ -28,10 +28,17 @@ pub const LOCAL_ROUTINES_SUBDIR: &str = "local";
 /// retires it, not a broken definition worth an error on every clock tick.
 /// A job of the same name that the source workspace still defines itself
 /// resolves through the catalog first and is never treated as retired.
-pub const RETIRED_ROUTINE_JOBS: &[(&str, &str)] = &[(
-    "auto_task_scheduler_pipeline",
-    "auto-task definitions are evaluated directly by every clock tick",
-)];
+pub const RETIRED_ROUTINE_JOBS: &[(&str, &str)] = &[
+    (
+        "auto_task_scheduler_pipeline",
+        "auto-task definitions are evaluated directly by every clock tick",
+    ),
+    (
+        "task_triage_pipeline",
+        "a failed run leaves its task blocked with the failure attached; re-backlogging is a \
+         deliberate human transition",
+    ),
+];
 
 /// Why a routine targeting `job` is retired, when that job is one a prior
 /// release shipped and this one dropped.

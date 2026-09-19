@@ -7,7 +7,7 @@
 //!
 //! - `__ORBIT_ROUTINE_NAME__` — routine names must be unique across all
 //!   routine sources on a host, so the seeded name carries the registered
-//!   workspace name as a suffix (`task-triage-<workspace-name>`) to keep two
+//!   workspace name as a suffix (`task-pilot-<workspace-name>`) to keep two
 //!   seeded source workspaces from colliding fail-closed. The suffix comes
 //!   from the workspace name the operator registered, never from the checkout
 //!   directory: two checkouts whose directories share a basename would
@@ -61,10 +61,6 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/routines/dependabot_alert_sweep.yaml"),
     ),
     (
-        "task_triage",
-        include_str!("../../assets/routines/task_triage.yaml"),
-    ),
-    (
         "task_pilot",
         include_str!("../../assets/routines/task_pilot.yaml"),
     ),
@@ -86,10 +82,16 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
 ///
 /// Retiring a default: move its template here and add its target job to
 /// `RETIRED_ROUTINE_JOBS` in the same change.
-pub(crate) const RETIRED_ROUTINE_FILES: &[(&str, &str)] = &[(
-    "auto_task_scheduler",
-    include_str!("../../assets/routines/retired/auto_task_scheduler.yaml"),
-)];
+pub(crate) const RETIRED_ROUTINE_FILES: &[(&str, &str)] = &[
+    (
+        "auto_task_scheduler",
+        include_str!("../../assets/routines/retired/auto_task_scheduler.yaml"),
+    ),
+    (
+        "task_triage",
+        include_str!("../../assets/routines/retired/task_triage.yaml"),
+    ),
+];
 
 /// Earlier shapes of routines this Orbit still ships: every template whose
 /// template-owned fields differed from the current one. A workspace seeded by
@@ -1105,7 +1107,6 @@ mod tests {
         for (stem, target) in [
             ("ci_failure_sweep", "ci_failure_sweep_pipeline"),
             ("dependabot_alert_sweep", "dependabot_alert_sweep_pipeline"),
-            ("task_triage", "task_triage_pipeline"),
             ("task_pilot", "task_pilot_pipeline"),
             ("ship_sweep", "workspace_ship_pipeline"),
             ("worktree_gc", "worktree_gc_pipeline"),
@@ -1122,13 +1123,8 @@ mod tests {
             assert!(!definition.enabled);
         }
 
-        // Cadence: every 40 minutes — deliberately sparser than the
-        // ~20-minute ship sweep, and parseable by the scheduler.
-        let triage = std::fs::read_to_string(routines_dir.join("task_triage.yaml"))
-            .expect("read triage routine");
-        let triage = parse_routine_yaml(&triage).expect("triage routine parses");
-        assert_eq!(triage.trigger.cron, "15 * * * *");
-        parse_cron(&triage.trigger.cron).expect("seeded cron parses");
+        // Terminal failed-run triage is retired: no default seeds its job.
+        assert!(!routines_dir.join("task_triage.yaml").exists());
 
         // Task-pilot may run up to ten five-task partitions in two waves,
         // each agent bounded to 30 minutes. Its 90-minute timeout covers
@@ -1170,7 +1166,7 @@ mod tests {
         let sweep = parse_routine_yaml(&sweep).expect("CI-failure sweep routine parses");
         assert!(!sweep.enabled);
         assert_eq!(sweep.trigger.cron, "5 * * * *");
-        assert_ne!(sweep.trigger.cron, triage.trigger.cron);
+        assert_ne!(sweep.trigger.cron, gc.trigger.cron);
         assert_eq!(
             sweep.trigger.missed_run,
             orbit_types::workflow::MissedRunPolicy::Skip
@@ -1223,7 +1219,7 @@ mod tests {
         let routines_dir = root.path().join("routines");
         seed_default_routines(&routines_dir, "workspace", false).expect("first seed");
 
-        let existing = routines_dir.join("task_triage.yaml");
+        let existing = routines_dir.join("ci_failure_sweep.yaml");
         let original = std::fs::read(&existing).expect("read existing routine bytes");
         let missing = routines_dir.join("task_pilot.yaml");
         std::fs::remove_file(&missing).expect("remove newly introduced routine");
@@ -1347,7 +1343,7 @@ mod tests {
         let manifest_path = routines_dir.join(MANAGED_ASSET_MANIFEST_FILE);
         std::fs::remove_file(&manifest_path).expect("drop the manifest to predate provenance");
 
-        let customized = routines_dir.join("task_triage.yaml");
+        let customized = routines_dir.join("ci_failure_sweep.yaml");
         let edited = std::fs::read_to_string(&customized)
             .expect("read seeded routine")
             .replace("enabled: false", "enabled: true");
@@ -1373,7 +1369,7 @@ mod tests {
             adopted.actions
         );
         assert!(adopted.actions.iter().any(|action| {
-            action.name == "task_triage" && action.outcome == ManagedAssetOutcome::Migrated
+            action.name == "ci_failure_sweep" && action.outcome == ManagedAssetOutcome::Migrated
         }));
         assert_eq!(
             std::fs::read_to_string(&customized).expect("reread routine"),
@@ -1387,10 +1383,10 @@ mod tests {
                 .expect("adoption records a manifest");
         let provenance = manifest
             .routine_provenance
-            .get("task_triage")
+            .get("ci_failure_sweep")
             .expect("the customized routine gains provenance");
         assert_eq!(provenance.rendered_digest, sha256_hex(edited.as_bytes()));
-        assert_eq!(provenance.binding.name, "task-triage-workspace");
+        assert_eq!(provenance.binding.name, "ci-failure-sweep-workspace");
 
         // Provenance now owns the file, so convergence is a no-op instead of
         // repeating the same complaint on every run.
@@ -1399,7 +1395,7 @@ mod tests {
         assert!(second.warnings.is_empty());
         assert_eq!(second.refreshed, 0);
         assert!(second.actions.iter().any(|action| {
-            action.name == "task_triage" && action.outcome == ManagedAssetOutcome::Unchanged
+            action.name == "ci_failure_sweep" && action.outcome == ManagedAssetOutcome::Unchanged
         }));
     }
 
@@ -1416,18 +1412,18 @@ mod tests {
             load_managed_asset_manifest(&manifest_path, "routine", ManagedAssetLayout::YamlStem)
                 .expect("load manifest")
                 .expect("seeding records a manifest");
-        manifest.assets.remove("task_triage");
-        manifest.routine_provenance.remove("task_triage");
+        manifest.assets.remove("ci_failure_sweep");
+        manifest.routine_provenance.remove("ci_failure_sweep");
         std::fs::write(
             &manifest_path,
             encode_managed_asset_manifest(&manifest).expect("encode manifest"),
         )
         .expect("write a manifest that never claimed this name");
 
-        let user_authored = routines_dir.join("task_triage.yaml");
+        let user_authored = routines_dir.join("ci_failure_sweep.yaml");
         let content = std::fs::read_to_string(&user_authored)
             .expect("read routine")
-            .replace("task-triage-workspace", "my-own-triage");
+            .replace("ci-failure-sweep-workspace", "my-own-sweep");
         std::fs::write(&user_authored, &content).expect("write a user-authored routine");
 
         let reconciled = seed_default_routines(&routines_dir, "workspace", false)
@@ -1441,7 +1437,7 @@ mod tests {
             reconciled.warnings
         );
         assert!(reconciled.actions.iter().any(|action| {
-            action.name == "task_triage" && action.outcome == ManagedAssetOutcome::Preserved
+            action.name == "ci_failure_sweep" && action.outcome == ManagedAssetOutcome::Preserved
         }));
         assert_eq!(
             std::fs::read_to_string(&user_authored).expect("reread routine"),
@@ -1457,7 +1453,7 @@ mod tests {
         let root = tempdir().expect("create tempdir");
         let routines_dir = root.path().join("routines");
         std::fs::create_dir_all(&routines_dir).expect("create routines dir");
-        let path = routines_dir.join("task_triage.yaml");
+        let path = routines_dir.join("ci_failure_sweep.yaml");
         std::fs::write(
             &path,
             "not: a routine

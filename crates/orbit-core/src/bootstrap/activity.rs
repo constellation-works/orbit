@@ -95,7 +95,6 @@ backend = "cli"
                 ("codex", "gpt-5.6-luna".to_string()),
             ),
             ("task_pilot", ("codex", "gpt-5.6-luna".to_string())),
-            ("triage_failed_runs", ("codex", "gpt-5.6-luna".to_string())),
         ]);
         let mut actual = BTreeMap::new();
 
@@ -110,10 +109,7 @@ backend = "cli"
             // crew literally, so none of them depend on a family-specific
             // `[crews]` entry existing on the machine that runs it.
             let activity_input = match *name {
-                "task_pilot"
-                | "step_failure_recovery"
-                | "pr_conflict_recovery"
-                | "triage_failed_runs" => {
+                "task_pilot" | "step_failure_recovery" | "pr_conflict_recovery" => {
                     inject_system_crew_input(&runtime, &json!({ "system_crew": true }))
                         .expect("inject configured system crew")
                 }
@@ -149,9 +145,7 @@ backend = "cli"
             ("pr_promote", "pr_promote"),
             ("task_complete", "task_complete"),
             ("release_locks", "release_locks"),
-            ("list_triage_candidates", "list_triage_candidates"),
             ("scan_unresolved_work", "scan_unresolved_work"),
-            ("apply_triage_dispositions", "apply_triage_dispositions"),
             ("worktree_gc", "worktree_gc"),
         ] {
             let yaml = std::fs::read_to_string(activities_dir.join(format!("{name}.yaml")))
@@ -430,7 +424,7 @@ backend = "cli"
 
     #[test]
     fn agent_response_contract_matches_durable_handoff_shape() {
-        for (name, required) in [("agent_implement", false), ("triage_failed_runs", true)] {
+        for (name, required) in [("agent_implement", false), ("task_pilot", true)] {
             let (_, yaml) = DEFAULT_ACTIVITY_FILES
                 .iter()
                 .find(|(candidate, _)| *candidate == name)
@@ -684,76 +678,6 @@ backend = "cli"
             !guard.spec.description.contains("`status: succeeded`"),
             "guard description must not keep the stale succeeded token"
         );
-    }
-
-    /// [ORB-10129] The triage agent's hard bounds are structural: its tool
-    /// allowlist must exclude every write/dispatch surface (code edits,
-    /// commits/pushes/merges, PR approval, pipeline invocation, task
-    /// lifecycle writes), `proc_allowed_programs` must not include `git`,
-    /// and `on_denial: terminate` must be set so a denied tool kills the
-    /// run (termination semantics proven by
-    /// `replay_denial_terminate_surfaces_structural_tool_denied` in
-    /// orbit-engine).
-    #[test]
-    fn triage_agent_allowlist_makes_write_surfaces_structurally_impossible() {
-        let (_, yaml) = DEFAULT_ACTIVITY_FILES
-            .iter()
-            .find(|(name, _)| *name == "triage_failed_runs")
-            .expect("triage agent activity is seeded");
-        let workspace_yaml =
-            include_str!("../../../../.orbit/resources/activities/triage_failed_runs.yaml");
-        assert_eq!(
-            *yaml, workspace_yaml,
-            "shipped and workspace triage resources must remain byte-identical"
-        );
-        let asset = load_activity_asset(yaml).expect("parse triage agent activity");
-        assert_eq!(
-            asset.spec.fs_profile.as_deref(),
-            Some("reviewer"),
-            "direct triage must not inherit unrestricted workspace writes"
-        );
-        match asset.spec.spec {
-            ActivityV2Spec::AgentLoop(spec) => {
-                assert!(!yaml.contains("\n  role:"));
-                assert_eq!(spec.on_denial, OnDenial::Terminate);
-                for denied in [
-                    // code edits
-                    "fs.write",
-                    "fs.patch",
-                    "fs.create",
-                    "fs.move",
-                    "fs.copy",
-                    // pipeline / job dispatch
-                    "orbit.pipeline.invoke",
-                    "orbit.pipeline.wait",
-                    // task lifecycle writes
-                    "orbit.task.update",
-                    "orbit.task.reject",
-                    "orbit.task.add",
-                    "orbit.task.delete",
-                    "orbit.task.locks.reserve",
-                    "orbit.task.locks.release",
-                ] {
-                    assert!(
-                        !tool_allowed(denied, &spec.tools),
-                        "triage agent must not be able to call `{denied}`"
-                    );
-                }
-                for allowed in ["orbit.task.show", "orbit.friction.add", "proc.spawn"] {
-                    assert!(
-                        tool_allowed(allowed, &spec.tools),
-                        "triage agent should be able to call `{allowed}`"
-                    );
-                }
-                // No `git` subprocess: commits/pushes/merges stay impossible
-                // even through proc.spawn.
-                assert_eq!(
-                    spec.proc_allowed_programs.as_deref(),
-                    Some(&["rg".to_string()][..])
-                );
-            }
-            _ => panic!("expected agent_loop activity"),
-        }
     }
 
     #[test]

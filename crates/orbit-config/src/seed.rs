@@ -249,8 +249,8 @@ fn render_crews(seed: &ConfigSeed) -> Result<String, OrbitError> {
     Ok(rendered)
 }
 
-/// Seed the bounded system lane: step-failure recovery, failed-run triage, and
-/// the read-only task pilot. That work is high-volume and low-judgment, so this
+/// Seed the bounded system lane: step-failure recovery, PR conflict recovery,
+/// and the read-only task pilot. That work is high-volume and low-judgment, so this
 /// picks the cheapest tier each family offers rather than the family's default
 /// model — seeding a mid-tier crew here multiplies the cost of every unattended
 /// sweep for no gain.

@@ -11,16 +11,13 @@ pub struct IncidentFacts {
     pub failure: bool,
     pub recovery_settled: bool,
     pub current_failure_coupling: bool,
-    pub diagnostic_origin: bool,
     pub cancellation: bool,
 }
 
 /// Diagnose only when the incident is a settled, still-coupled execution failure;
 /// every other shape withholds with the reason that made it undiagnosable.
 pub fn incident_key(facts: &IncidentFacts) -> Result<String, AutomationError> {
-    let withheld = if facts.diagnostic_origin {
-        Some("diagnostic_recursion")
-    } else if facts.cancellation {
+    let withheld = if facts.cancellation {
         Some("cancellation_withheld")
     } else if !facts.failure {
         Some("not_execution_failure")

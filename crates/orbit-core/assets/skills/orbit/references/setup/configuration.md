@@ -48,7 +48,7 @@ assuming a value.
 |---|---|
 | `workflow.base_branch` | Default base branch for ship workflows. Set this first — it decides where PRs land. |
 | `workflow.default_crew` | Crew for any task that doesn't declare one. |
-| `workflow.system_crew` | Crew for Orbit's own bounded activities (failure recovery, triage). |
+| `workflow.system_crew` | Crew for Orbit's own bounded activities (failure recovery, task pilot). |
 | `workflow.auto_ship` | Opt-in for unattended ship dispatch via the scheduler. |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
 | `execution.env.pass` | Environment variable names allow-listed into agent subprocesses. |

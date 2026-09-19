@@ -1066,7 +1066,7 @@ fn workspace_init_seeds_disabled_routines_and_reinit_preserves_authored_files() 
 
     let routines_dir = workspace.path().join(".orbit/routines");
     for (stem, target) in [
-        ("task_triage", "task_triage_pipeline"),
+        ("task_pilot", "task_pilot_pipeline"),
         ("ship_sweep", "workspace_ship_pipeline"),
     ] {
         let yaml = std::fs::read_to_string(routines_dir.join(format!("{stem}.yaml")))
@@ -1095,8 +1095,7 @@ policy:
 "#;
     std::fs::write(routines_dir.join("ship_sweep.yaml"), authored_ship)
         .expect("author ship routine");
-    std::fs::remove_file(routines_dir.join("task_triage.yaml"))
-        .expect("remove one default routine");
+    std::fs::remove_file(routines_dir.join("task_pilot.yaml")).expect("remove one default routine");
 
     init(true)
         .execute_without_runtime(None)
@@ -1108,7 +1107,7 @@ policy:
         authored_ship,
         "plain re-init must preserve workspace-authored routine bytes"
     );
-    let recreated = std::fs::read_to_string(routines_dir.join("task_triage.yaml"))
+    let recreated = std::fs::read_to_string(routines_dir.join("task_pilot.yaml"))
         .expect("missing default recreated");
     assert!(
         !parse_routine_yaml(&recreated)
