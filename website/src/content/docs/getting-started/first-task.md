@@ -78,9 +78,12 @@ orbit task show "$TASK_ID"
 orbit task lint "$TASK_ID"
 ```
 
-`orbit task lint` is the quality check: it flags stale paths and vague
-acceptance criteria before an agent wastes a run on them. `orbit task lint
-"$TASK_ID" --fix` drops `context_files` entries whose paths no longer exist.
+`orbit task lint` is the quality check: it flags unusable or missing context
+declarations and vague acceptance criteria before an agent wastes a run on
+them. A declared file that does not exist yet is kept — that is scope for work
+the task will create — so the lint reports it without removing it. `orbit task
+lint "$TASK_ID" --restore-pruned` re-declares `context_files` entries that an
+earlier prune recorded in task history.
 
 ## Approve it into the backlog
 

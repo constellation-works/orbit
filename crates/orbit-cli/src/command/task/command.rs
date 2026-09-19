@@ -37,7 +37,7 @@ Tasks:
   artifact     Manage task artifact files
 
 Health:
-  lint         Lint tasks for stale paths and vague acceptance criteria
+  lint         Lint tasks for context-file and acceptance-criteria problems
   flow         Show filed-vs-closed rates over time — is the backlog draining?
   locks        Inspect, reserve, and release the file locks that gate dispatch
 
@@ -93,7 +93,7 @@ pub enum TaskSubcommand {
     Show(TaskShowArgs),
     /// Manage task artifact files
     Artifact(TaskArtifactCommand),
-    /// Lint tasks for stale paths and vague acceptance criteria; `--fix` prunes stale context files
+    /// Lint tasks for context-file and acceptance-criteria problems; `--restore-pruned` re-declares recorded selectors
     Lint(TaskLintArgs),
     /// Show filed-vs-closed rates over time — whether the backlog is draining
     Flow(TaskFlowArgs),

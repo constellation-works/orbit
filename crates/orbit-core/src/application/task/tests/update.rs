@@ -464,7 +464,7 @@ fn concurrent_explicit_edit_preserves_the_newer_status() {
 
 /// An explicit replacement through the core path keeps draft/future
 /// selectors; missing targets are refused on the operator surfaces (CLI `task
-/// update`, `orbit.task.update`) and pruned at read time.
+/// update`, `orbit.task.update`) behind `--allow-missing-context`.
 #[test]
 fn task_update_keeps_context_selectors_that_do_not_exist_yet() {
     let (root, runtime) = test_runtime();
@@ -499,6 +499,58 @@ fn task_update_keeps_context_selectors_that_do_not_exist_yet() {
             "file:src/lib.rs".to_string(),
             "file:src/future.rs".to_string()
         ]
+    );
+}
+
+/// [ORB-12490] An edit that does not touch `context_files` must leave the
+/// declaration exactly as stored. The read path used to re-canonicalize and
+/// prune here, so an unrelated title change silently deleted the selector for
+/// a file the task had not created yet — and with it the lock that protected
+/// the file from a concurrent task.
+#[test]
+fn task_update_preserves_missing_context_selectors_on_unrelated_edits() {
+    let (root, runtime) = test_runtime();
+    let repo_dir = root.path().join("repo");
+    std::fs::create_dir_all(repo_dir.join("src")).expect("create src");
+    std::fs::write(repo_dir.join("src/lib.rs"), b"pub fn run() {}\n").expect("write lib.rs");
+
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Creates a file".to_string(),
+            context_files: vec![
+                "file:src/lib.rs".to_string(),
+                "file:src/future.rs".to_string(),
+                "symbol:src/future.rs#run:function".to_string(),
+            ],
+            ..Default::default()
+        })
+        .expect("add task succeeds");
+
+    let updated = runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                title: Some("Still creates a file".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("an unrelated edit succeeds");
+
+    assert_eq!(
+        updated.context_files,
+        vec![
+            "file:src/lib.rs".to_string(),
+            "file:src/future.rs".to_string(),
+            "symbol:src/future.rs#run:function".to_string(),
+        ]
+    );
+    assert!(
+        runtime
+            .get_task_history(&task.id)
+            .expect("read history")
+            .iter()
+            .all(|entry| entry.event != "context_files_pruned"),
+        "no pruning event may be recorded"
     );
 }
 

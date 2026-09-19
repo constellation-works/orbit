@@ -35,7 +35,7 @@ fn runtime_free_command_set_is_derived_from_operations() {
     let runtime_required: &[&[&str]] = &[
         &["orbit", "migrate", "--confirm"],
         &["orbit", "run", "history"],
-        &["orbit", "task", "lint", "--fix"],
+        &["orbit", "task", "lint", "--restore-pruned"],
     ];
     for args in runtime_required {
         assert_eq!(

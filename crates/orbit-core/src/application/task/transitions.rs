@@ -14,7 +14,6 @@ use super::helpers::{
 };
 use super::lifecycle::{ensure_task_has_execution_plan, in_progress_transition_requires_plan};
 use super::params::TaskUpdateParams;
-use super::paths::context_files_pruned_history_entry;
 
 const RELATION_RESOLVES: &str = "resolves";
 /// [ORB-10470] Status event recorded when a resumed run restores its own
@@ -394,12 +393,6 @@ impl OrbitRuntime {
                 start_body_field_edits(field_edits.clone(), plan.clone()),
             )?;
             let start_edits = validated.params;
-            let context_history = (!validated.dropped_context_files.is_empty()).then(|| {
-                context_files_pruned_history_entry(
-                    effective_label.as_str(),
-                    &validated.dropped_context_files,
-                )
-            });
             let resolved_crew_override = if field_edits.crew.is_some() {
                 start_edits.crew.clone().flatten()
             } else {
@@ -490,7 +483,6 @@ impl OrbitRuntime {
                             .then(|| note.clone())
                             .flatten(),
                         append_comments: append_comments.clone(),
-                        append_history: context_history.clone().into_iter().collect(),
                         artifact_owner_run_id: artifact_owner.clone(),
                         expected_status: Some(vec![if approved_from_proposed {
                             TaskStatus::Backlog

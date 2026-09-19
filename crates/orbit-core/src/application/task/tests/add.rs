@@ -130,7 +130,10 @@ fn task_context_selector_round_trips_from_repository_root() {
             .collect::<Vec<_>>(),
         [&task.id]
     );
-    assert!(runtime.dry_run_prune_context_files(&task).is_empty());
+    assert_eq!(
+        runtime.declared_context_surface(&task).retained,
+        ["file:docs/readme.md"]
+    );
 
     let updated = runtime
         .update_task(

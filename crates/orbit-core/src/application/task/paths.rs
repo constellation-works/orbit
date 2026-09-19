@@ -18,17 +18,55 @@ pub(crate) fn context_workspace_root(repo_root: &Path, workspace_path: Option<&s
         .unwrap_or_else(|| repo_root.to_path_buf())
 }
 
-pub(super) fn context_files_pruned_history_entry(
+/// History event written by the retired filesystem-existence pruning path.
+///
+/// Nothing emits it any more — a declared selector whose target is missing is
+/// kept ([ORB-12490]) — but stored histories still carry these entries, and
+/// they are the only authoritative record of what a task declared before its
+/// scope was pruned. `context_repair` reads them so a restoration cites
+/// evidence instead of inventing scope.
+pub(super) const CONTEXT_FILES_PRUNED_EVENT: &str = "context_files_pruned";
+
+/// History event written when pruned declarations are restored from
+/// [`CONTEXT_FILES_PRUNED_EVENT`] evidence.
+pub(super) const CONTEXT_FILES_RESTORED_EVENT: &str = "context_files_restored";
+
+/// Prefix and suffix of a [`CONTEXT_FILES_PRUNED_EVENT`] note, which is
+/// `dropped: <selector>, <selector> (selector anchor not found in workspace)`.
+const PRUNED_NOTE_PREFIX: &str = "dropped: ";
+const PRUNED_NOTE_SUFFIX: &str = " (selector anchor not found in workspace)";
+
+/// Recover the selectors one pruning history entry recorded as dropped.
+///
+/// A note that does not match the recorded shape yields nothing: an
+/// unparseable entry is missing evidence, and guessing at its contents is the
+/// scope invention this repair path exists to avoid.
+pub(super) fn pruned_selectors_from_note(note: &str) -> Vec<String> {
+    let Some(listed) = note.trim().strip_prefix(PRUNED_NOTE_PREFIX) else {
+        return Vec::new();
+    };
+    listed
+        .strip_suffix(PRUNED_NOTE_SUFFIX)
+        .unwrap_or(listed)
+        .split(',')
+        .map(str::trim)
+        .filter(|selector| !selector.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Build the history entry recording an explicit, evidence-backed restoration.
+pub(super) fn context_files_restored_history_entry(
     actor: &str,
-    dropped: &[String],
+    restored: &[String],
 ) -> TaskHistoryEntry {
     TaskHistoryEntry {
         at: Utc::now(),
         by: actor.to_string(),
-        event: "context_files_pruned".to_string(),
+        event: CONTEXT_FILES_RESTORED_EVENT.to_string(),
         note: Some(format!(
-            "dropped: {} (selector anchor not found in workspace)",
-            dropped.join(", ")
+            "restored: {} (recorded by an earlier `{CONTEXT_FILES_PRUNED_EVENT}` entry)",
+            restored.join(", ")
         )),
         from_status: None,
         to_status: None,
@@ -40,8 +78,8 @@ pub(super) fn context_files_pruned_history_entry(
 ///
 /// The core write path stays permissive on purpose: task-pilot apply,
 /// automation seeding, and runtime host updates legitimately record targets the
-/// task is about to create, and read paths prune what is missing. Operator
-/// surfaces guard typos separately through
+/// task is about to create, and no read path drops a declaration for a missing
+/// target ([ORB-12490]). Operator surfaces guard typos separately through
 /// [`OrbitRuntime::ensure_context_selectors_exist`].
 pub(crate) fn normalize_context_files_for_write(
     candidates: Vec<String>,

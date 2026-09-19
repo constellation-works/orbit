@@ -1,5 +1,4 @@
 use orbit_common::OrbitError;
-use orbit_common::fs::task_io::prune_missing_context_files;
 use orbit_engine::TaskActivityUpdate;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
@@ -17,8 +16,7 @@ use super::helpers::{
 use super::lifecycle::{FORCED_STATUS_EVENT, ensure_status_change_allowed};
 use super::params::TaskUpdateParams;
 use super::paths::{
-    canonicalize_context_files_for_read, context_files_pruned_history_entry,
-    context_workspace_root, normalize_context_files_for_write,
+    canonicalize_context_files_for_read, context_workspace_root, normalize_context_files_for_write,
 };
 
 /// Which lifecycle rules a status change on this write must satisfy
@@ -52,7 +50,6 @@ struct TaskUpdateContext {
 
 pub(super) struct ValidatedTaskFieldEdits {
     pub(super) params: TaskUpdateParams,
-    pub(super) dropped_context_files: Vec<String>,
 }
 
 impl OrbitRuntime {
@@ -267,9 +264,9 @@ impl OrbitRuntime {
         {
             ensure_status_change_allowed(self, &task, &params, target)?;
         }
-        let validated = self.validate_and_normalize_task_field_edits(id, &task, params)?;
-        params = validated.params;
-        let dropped_context_files = validated.dropped_context_files;
+        params = self
+            .validate_and_normalize_task_field_edits(id, &task, params)?
+            .params;
 
         let actor = self.actor().clone();
         let attribution = assemble_task_attribution(
@@ -310,14 +307,7 @@ impl OrbitRuntime {
             .map(|value| value.as_deref())
             .filter(|replacement| task.source_task_id() != *replacement);
 
-        let mut append_history: Vec<TaskHistoryEntry> = if dropped_context_files.is_empty() {
-            Vec::new()
-        } else {
-            vec![context_files_pruned_history_entry(
-                effective_label.as_str(),
-                &dropped_context_files,
-            )]
-        };
+        let mut append_history: Vec<TaskHistoryEntry> = Vec::new();
         if let Some(replacement) = source_task_id_replacement {
             // ORB-10311: record the explicit previous and replacement source
             // ids (with a clear marker for the unset case) so the change is
@@ -382,22 +372,25 @@ impl OrbitRuntime {
         task: &Task,
         mut params: TaskUpdateParams,
     ) -> Result<ValidatedTaskFieldEdits, OrbitError> {
-        let prune_root = context_workspace_root(&self.paths().repo_root, None);
-        let dropped_context_files = if let Some(candidates) = params.context_files.take() {
-            let normalized = normalize_context_files_for_write(candidates, &prune_root)?;
-            // An explicit replacement preserves draft/future selectors; pruning stays read-time.
-            params.context_files = Some(normalized);
-            Vec::new()
+        let context_root = context_workspace_root(&self.paths().repo_root, None);
+        if let Some(candidates) = params.context_files.take() {
+            params.context_files = Some(normalize_context_files_for_write(
+                candidates,
+                &context_root,
+            )?);
         } else {
-            let normalized = canonicalize_context_files_for_read(&task.context_files, &prune_root);
-            if normalized != task.context_files {
-                let (kept, dropped) = prune_missing_context_files(&prune_root, normalized);
-                params.context_files = Some(kept);
-                dropped
-            } else {
-                Vec::new()
+            // An unrelated edit re-canonicalizes what is already stored and
+            // writes the result back only when every declaration survived and
+            // the canonical form differs. It never drops one: a selector whose
+            // target does not exist is scope the task still owns, and losing
+            // it here would silently shrink the footprint its locks protect.
+            // A selector that cannot be canonicalized at all is left stored
+            // verbatim for `orbit task lint` to report [ORB-12490].
+            let canonical = canonicalize_context_files_for_read(&task.context_files, &context_root);
+            if canonical.len() == task.context_files.len() && canonical != task.context_files {
+                params.context_files = Some(canonical);
             }
-        };
+        }
         if let Some(dependencies) = params.dependencies.take() {
             let normalized_dependencies = normalize_task_dependencies(dependencies)?;
             validate_task_dependencies_with(Some(id), &normalized_dependencies, |dep_id| {
@@ -435,9 +428,6 @@ impl OrbitRuntime {
             self.ensure_resolves_are_workspace_local(&preview)?;
         }
 
-        Ok(ValidatedTaskFieldEdits {
-            params,
-            dropped_context_files,
-        })
+        Ok(ValidatedTaskFieldEdits { params })
     }
 }

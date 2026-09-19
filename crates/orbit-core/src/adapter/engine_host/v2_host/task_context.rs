@@ -1,12 +1,13 @@
 use std::path::Path;
 
-use orbit_common::fs::task_io::prune_missing_context_files;
 use orbit_engine::{DispatchError, WORKFLOW_RUN_FAILED_EVENT};
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
 use serde_json::Value;
 
+use orbit_common::fs::selector::canonical_selector_in_workspace;
+
 use crate::OrbitRuntime;
-use crate::application::task::{canonicalize_context_files_for_read, context_workspace_root};
+use crate::application::task::context_workspace_root;
 use crate::runtime::run_input::singular_task_id_from_input;
 
 /// Ceiling on the number of comments surfaced to an implementing agent.
@@ -109,11 +110,22 @@ fn agent_task_context_json(
         .get("repo_root")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    let prune_root = context_workspace_root(fallback_repo_root, workspace_path.as_deref());
-    let canonical_context_files =
-        canonicalize_context_files_for_read(&task.context_files, &prune_root);
-    let (kept_context_files, _dropped) =
-        prune_missing_context_files(&prune_root, canonical_context_files);
+    // The envelope carries the task's full declared footprint: a selector for
+    // a file the task is about to create is scope the implementer needs, and
+    // dropping it here would hand the agent a narrower boundary than the one
+    // its locks and reservations protect [ORB-12490]. A selector that cannot
+    // be canonicalized against this run's root — an unreadable worktree path,
+    // or a declaration written against another checkout — is passed through
+    // verbatim for the same reason; the envelope reports scope, it does not
+    // decide it.
+    let context_root = context_workspace_root(fallback_repo_root, workspace_path.as_deref());
+    let context_files = task
+        .context_files
+        .iter()
+        .map(|entry| {
+            canonical_selector_in_workspace(entry, &context_root).unwrap_or_else(|_| entry.clone())
+        })
+        .collect::<Vec<_>>();
 
     // `json!` with a braced literal always yields `Value::Object`; the fallback
     // arm keeps this total so the agent context never panics on a malformed
@@ -126,7 +138,7 @@ fn agent_task_context_json(
         "description": task.description.clone(),
         "acceptance_criteria": task.acceptance_criteria.clone(),
         "plan": task.plan.clone(),
-        "context_files": kept_context_files,
+        "context_files": context_files,
         "tags": task.tags.clone(),
         "required_tools": task.required_tools.clone(),
         "external_refs": task.external_refs.clone(),

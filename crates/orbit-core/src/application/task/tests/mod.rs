@@ -2,7 +2,9 @@
 
 mod add;
 mod contention;
+mod context_repair;
 mod lifecycle;
+mod lint;
 mod params;
 mod paths;
 mod records;

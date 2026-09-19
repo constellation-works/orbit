@@ -182,13 +182,32 @@ fn lock_administration_lives_under_task() {
 }
 
 #[test]
-fn task_lint_accepts_sweep_and_fix_forms() {
+fn task_lint_accepts_sweep_and_restore_forms() {
     Cli::try_parse_from(["orbit", "task", "lint"]).expect("bare lint sweeps");
-    Cli::try_parse_from(["orbit", "task", "lint", "--fix"]).expect("lint --fix sweeps");
-    Cli::try_parse_from(["orbit", "task", "lint", "--write"]).expect("--write aliases --fix");
-    Cli::try_parse_from(["orbit", "task", "lint", "ORB-00001", "--fix"]).expect("lint <id> --fix");
-    Cli::try_parse_from(["orbit", "task", "lint", "--fix", "--status", "review"])
-        .expect("sweep accepts --status");
+    Cli::try_parse_from(["orbit", "task", "lint", "--restore-pruned"])
+        .expect("lint --restore-pruned sweeps");
+    Cli::try_parse_from(["orbit", "task", "lint", "ORB-00001", "--restore-pruned"])
+        .expect("lint <id> --restore-pruned");
+    Cli::try_parse_from([
+        "orbit",
+        "task",
+        "lint",
+        "--restore-pruned",
+        "--status",
+        "review",
+    ])
+    .expect("sweep accepts --status");
+
+    // [ORB-12490] The scope-destroying prune is retired, not renamed.
+    for retired in [
+        ["orbit", "task", "lint", "--fix"],
+        ["orbit", "task", "lint", "--write"],
+    ] {
+        match Cli::try_parse_from(retired) {
+            Ok(_) => panic!("{retired:?} must no longer parse"),
+            Err(err) => assert_eq!(err.kind(), ErrorKind::UnknownArgument),
+        }
+    }
 
     let err =
         match Cli::try_parse_from(["orbit", "task", "lint", "ORB-00001", "--status", "review"]) {

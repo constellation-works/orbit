@@ -159,8 +159,11 @@ fn task_locks_reserve_adapter_surfaces_new_validation_errors() {
     assert!(symbol.contains("selectors are not supported for task locks"));
 }
 
+/// [ORB-12490] A declaration for a file the task has not created yet is the
+/// scope it owns: the lock surface canonicalizes it and keeps it, instead of
+/// pruning it against the current checkout.
 #[test]
-fn requested_task_files_prune_missing_context_entries() {
+fn requested_task_files_retain_missing_context_entries() {
     let _env = unmanaged_tool_env_guard();
     let (_root, runtime, repo_root) = test_runtime();
     std::fs::create_dir_all(repo_root.join("docs/design")).expect("create docs dir");
@@ -170,7 +173,11 @@ fn requested_task_files_prune_missing_context_entries() {
         &runtime,
         &repo_root,
         TaskStatus::Backlog,
-        &["docs/design/groundhog.md", "docs/design/missing.md"],
+        &[
+            "docs/design/groundhog.md",
+            "docs/design/missing.md",
+            "symbol:docs/design/missing.md#Missing:section",
+        ],
     );
 
     let index = TaskLockIndex::load(&runtime, std::slice::from_ref(&task.id))
@@ -178,7 +185,48 @@ fn requested_task_files_prune_missing_context_entries() {
     let requested =
         requested_task_files_indexed(&index, &[task.id], runtime.paths().repo_root.as_path())
             .expect("collect requested task files");
-    assert_eq!(requested, vec!["file:docs/design/groundhog.md".to_string()]);
+    assert_eq!(
+        requested,
+        vec![
+            "file:docs/design/groundhog.md".to_string(),
+            "file:docs/design/missing.md".to_string(),
+            "symbol:docs/design/missing.md#Missing:section".to_string(),
+        ]
+    );
+}
+
+/// A selector that escapes the repository is still refused: dropping
+/// filesystem-existence pruning does not drop boundary validation.
+#[test]
+fn lock_surface_reports_out_of_workspace_selectors_as_invalid() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+
+    let task = create_context_task(
+        &runtime,
+        &repo_root,
+        TaskStatus::Backlog,
+        &["file:../escape.rs"],
+    );
+
+    let index = TaskLockIndex::load(&runtime, std::slice::from_ref(&task.id))
+        .expect("index task envelopes");
+    let envelope = index.get(&task.id).expect("indexed envelope");
+    let surface = index.declared_lock_surface(envelope, runtime.paths().repo_root.as_path());
+    assert!(surface.retained.is_empty(), "{surface:?}");
+    assert_eq!(surface.invalid, vec!["file:../escape.rs".to_string()]);
+
+    let message = invalid_input_message(run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [task.id.clone()],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    ));
+    assert!(message.contains("no usable context surface"), "{message}");
+    assert!(message.contains("file:../escape.rs"), "{message}");
 }
 
 #[test]
@@ -247,8 +295,11 @@ fn active_epic_root_holds_union_of_descendant_context_files() {
     );
 }
 
+/// [ORB-12490] A holder's declared-but-absent target keeps conflicting:
+/// two tasks that both intend to create the same file must not be admitted
+/// concurrently just because neither has created it yet.
 #[test]
-fn task_lock_conflicts_ignore_missing_held_context_entries() {
+fn task_lock_conflicts_include_missing_held_context_entries() {
     let _env = unmanaged_tool_env_guard();
     let (_root, runtime, repo_root) = test_runtime();
     std::fs::create_dir_all(repo_root.join("src")).expect("create src dir");
@@ -273,11 +324,18 @@ fn task_lock_conflicts_ignore_missing_held_context_entries() {
 
     assert_eq!(
         conflicts,
-        vec![TaskLockConflict {
-            file: "src/lib.rs".to_string(),
-            held_by: TaskLockHolder::Task,
-            held_by_id: holder.id,
-        }]
+        vec![
+            TaskLockConflict {
+                file: "docs/design/groundhog.md".to_string(),
+                held_by: TaskLockHolder::Task,
+                held_by_id: holder.id.clone(),
+            },
+            TaskLockConflict {
+                file: "src/lib.rs".to_string(),
+                held_by: TaskLockHolder::Task,
+                held_by_id: holder.id,
+            },
+        ]
     );
 }
 
@@ -345,11 +403,10 @@ fn task_scope_reserve_refuses_a_task_with_no_context_surface() {
 }
 
 /// A declared selector for a not-yet-created file is a different situation
-/// than declaring nothing at all: the domain already tolerates it elsewhere
-/// (pruned from the lock surface), so a task-scope reservation must still
-/// admit it rather than folding it into the "no context surface" refusal.
+/// than declaring nothing at all, and [ORB-12490] makes it a real claim: the
+/// reservation holds the declared selector rather than an empty surface.
 #[test]
-fn task_scope_reserve_still_admits_a_task_whose_declared_file_does_not_exist_yet() {
+fn task_scope_reserve_holds_a_declared_file_that_does_not_exist_yet() {
     let _env = unmanaged_tool_env_guard();
     let (_root, runtime, repo_root) = test_runtime();
 
@@ -371,7 +428,81 @@ fn task_scope_reserve_still_admits_a_task_whose_declared_file_does_not_exist_yet
     )
     .expect("a declared-but-not-yet-created file must still reserve");
     assert_eq!(reserved["reserved"], true);
-    assert_eq!(reserved["reserved_files"], json!([]));
+    assert_eq!(
+        reserved["reserved_files"],
+        json!(["file:docs/design/missing.md"])
+    );
+}
+
+/// [ORB-12490] The reservation TTL is not the lock: once the reservation is
+/// gone, an `in-progress` task's status-derived lock still protects the full
+/// declared footprint — including the file it has not created yet — and a
+/// competing admission for that file is still refused.
+#[test]
+fn status_lock_survives_reservation_release_for_a_missing_declared_file() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+
+    let holder = create_context_task(
+        &runtime,
+        &repo_root,
+        TaskStatus::InProgress,
+        &["docs/design/missing.md"],
+    );
+    let rival = create_context_task(
+        &runtime,
+        &repo_root,
+        TaskStatus::Backlog,
+        &["docs/design/missing.md"],
+    );
+
+    let reserved = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [holder.id.clone()],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("reserve the holder's declared surface");
+    let reservation_id = reserved["reservation_id"]
+        .as_str()
+        .expect("reservation id")
+        .to_string();
+
+    // Releasing stands in for expiry: both leave the task's status-derived
+    // lock as the only holder of the footprint.
+    let released = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.release",
+        json!({
+            "reservation_id": reservation_id,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("release the reservation");
+    assert_eq!(released["released"], true);
+
+    let denied = run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({
+            "task_ids": [rival.id.clone()],
+            "ttl_seconds": 3600,
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL,
+        }),
+    )
+    .expect("an overlapping reservation is answered, not errored");
+    assert_eq!(denied["reserved"], false, "{denied}");
+    assert_eq!(
+        denied["conflicts"],
+        json!([{
+            "file": "file:docs/design/missing.md",
+            "held_by": "task",
+            "held_by_id": holder.id,
+        }])
+    );
 }
 
 #[test]

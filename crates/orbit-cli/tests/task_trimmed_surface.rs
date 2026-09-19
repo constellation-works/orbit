@@ -2,10 +2,11 @@
 // Tests use unwrap/expect to keep fixture setup readable.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-//! End-to-end coverage for the task surface after ORB-10428:
-//! direct audited status classification through `update --status` and
-//! `prune-context` folded into `lint --fix`. Lock administration lives under
-//! `task locks` (`list`/`release`).
+//! End-to-end coverage for the task surface after ORB-10428: direct audited
+//! status classification through `update --status`, and `orbit task lint` —
+//! which reports context that needs repair and, with `--restore-pruned`,
+//! re-declares what an earlier prune recorded ([ORB-12490]). Lock
+//! administration lives under `task locks` (`list`/`release`).
 
 use std::fs;
 use std::path::Path;
@@ -343,13 +344,16 @@ fn locks_list_projects_files_held_by_active_tasks() {
     assert!(stdout.contains("file:held.rs"), "{stdout}");
 }
 
+/// [ORB-12490] The sweep that dropped selectors whose target had disappeared
+/// is retired: a declaration for a file that does not exist is the scope the
+/// task owns, and the lint now reports it without touching it.
 #[test]
-fn lint_fix_sweep_drops_stale_context_entries() {
+fn lint_sweep_keeps_declared_context_when_its_target_disappears() {
     let workspace = TestWorkspace::new();
     fs::write(workspace.work.join("real.rs"), "// real\n").expect("write real file");
     fs::write(workspace.work.join("ghost.rs"), "// ghost\n").expect("write ghost file");
 
-    let id = workspace.add_task("Has stale context");
+    let id = workspace.add_task("Has a disappearing target");
     workspace.run(
         &[
             "task",
@@ -362,28 +366,82 @@ fn lint_fix_sweep_drops_stale_context_entries() {
     );
     fs::remove_file(workspace.work.join("ghost.rs")).expect("remove ghost file");
 
-    // Dry run first: reports the stale entry without writing.
+    let sweep = workspace.run(&["task", "lint", "--json"], "lint sweep");
+    let sweep: Value = serde_json::from_slice(&sweep.stdout).expect("sweep JSON");
+    assert_eq!(sweep["dry_run"], json!(true));
+    assert_eq!(sweep["tasks_needing_repair"], json!(0));
+
+    // An unrelated edit does not shrink the declaration either.
+    workspace.run(
+        &["task", "update", &id, "--title", "Still has one"],
+        "unrelated edit",
+    );
+    let task = workspace.task_json(&["task", "show", &id, "--json"]);
+    assert_eq!(
+        task["context_files"],
+        json!(["file:real.rs", "file:ghost.rs"])
+    );
+
+    let single = workspace.task_json(&["task", "lint", &id, "--json"]);
+    let missing = single["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .find(|finding| finding["check"] == json!("context_target_missing"))
+        .expect("a missing-target warning");
+    assert_eq!(missing["severity"], json!("warning"));
+    assert!(
+        missing["message"]
+            .as_str()
+            .expect("message")
+            .contains("file:ghost.rs"),
+        "{missing}"
+    );
+}
+
+/// [ORB-12490] A task that declares nothing is reported for operator repair
+/// and never handed a guessed scope — not even by `--restore-pruned`, which
+/// restores only what task history recorded. (Restoration from recorded
+/// evidence is covered at its owning boundary in
+/// `orbit-core::application::task::tests::context_repair`.)
+#[test]
+fn lint_reports_an_empty_declaration_and_restores_no_guessed_scope() {
+    let workspace = TestWorkspace::new();
+    let id = workspace.add_task("Never declared anything");
+
     let dry = workspace.run(&["task", "lint", "--json"], "lint sweep dry run");
     let dry: Value = serde_json::from_slice(&dry.stdout).expect("dry-run JSON");
     assert_eq!(dry["dry_run"], json!(true));
-    assert_eq!(dry["total_dropped"], json!(1));
-    assert_eq!(dry["tasks_written"], json!(0));
+    assert_eq!(dry["total_restorable"], json!(0));
+    let entry = dry["tasks"]
+        .as_array()
+        .expect("swept tasks")
+        .iter()
+        .find(|entry| entry["id"] == json!(id))
+        .expect("the task with no declaration");
+    assert_eq!(entry["empty_surface"], json!(true));
+    assert_eq!(entry["restorable"], json!([]));
 
-    // Apply.
-    let fixed = workspace.run(&["task", "lint", "--fix", "--json"], "lint sweep fix");
-    let fixed: Value = serde_json::from_slice(&fixed.stdout).expect("fix JSON");
-    assert_eq!(fixed["dry_run"], json!(false));
-    assert_eq!(fixed["total_dropped"], json!(1));
-    assert_eq!(fixed["tasks_written"], json!(1));
-    assert_eq!(fixed["tasks"][0]["dropped"], json!(["file:ghost.rs"]));
+    let applied = workspace.run(
+        &["task", "lint", "--restore-pruned", "--json"],
+        "lint sweep restore",
+    );
+    let applied: Value = serde_json::from_slice(&applied.stdout).expect("restore JSON");
+    assert_eq!(applied["tasks_written"], json!(0));
+    assert_eq!(
+        workspace.task_json(&["task", "show", &id, "--json"])["context_files"],
+        json!([])
+    );
 
-    let task = workspace.task_json(&["task", "show", &id, "--json"]);
-    assert_eq!(task["context_files"], json!(["file:real.rs"]));
-
-    // Idempotent: nothing left to prune.
-    let again = workspace.run(&["task", "lint", "--fix", "--json"], "lint sweep again");
-    let again: Value = serde_json::from_slice(&again.stdout).expect("second fix JSON");
-    assert_eq!(again["total_dropped"], json!(0));
+    let single = workspace.task_json(&["task", "lint", &id, "--json"]);
+    assert!(
+        single["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding["check"] == json!("context_surface")),
+        "{single}"
+    );
 }
 
 #[test]
