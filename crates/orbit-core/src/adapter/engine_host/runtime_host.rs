@@ -36,6 +36,23 @@ use crate::runtime::engine::paths::{codex_workspace_write_writable_dirs, current
 use crate::runtime::recovery_authority::RecoveryAuthority;
 
 impl RuntimeHost for OrbitRuntime {
+    fn register_worker_pid_namespace(&self, pid: u32) -> Result<(), OrbitError> {
+        #[cfg(target_os = "linux")]
+        if let Some(binding) = self.worker_invocation() {
+            RecoveryAuthority::open(&self.global_root())?.bind_worker_namespace(pid, binding)?;
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = pid;
+        Ok(())
+    }
+
+    fn register_worker_process(&self, pid: u32) -> Result<(), OrbitError> {
+        OrbitRuntime::register_worker_process(self, pid)
+    }
+
+    fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
+        OrbitRuntime::worker_invocation(self).cloned()
+    }
     fn record_direct_landing_intent(
         &self,
         request: &orbit_types::workflow::automation::DirectLandingRequest,
@@ -178,6 +195,18 @@ impl RuntimeHost for OrbitRuntime {
         task_id: &str,
         update: TaskActivityUpdate,
     ) -> Result<Task, OrbitError> {
+        if self.worker_invocation().is_some() {
+            self.route_worker_tool("orbit.task.update", serde_json::json!({
+                "id": task_id,
+                "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
+                    status: Some(update.status), expected_status: Some(update.expected_status),
+                    status_note: update.note,
+                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment: update.comment, artifacts: vec![]},
+                    ..Default::default()
+                }
+            }), Default::default())?;
+            return self.get_task(task_id);
+        }
         OrbitRuntime::update_task_from_activity(self, task_id, update)
     }
 
@@ -234,6 +263,35 @@ impl RuntimeHost for OrbitRuntime {
         task_id: &str,
         update: TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
+        if let Some(binding) = self.worker_invocation() {
+            if update
+                .job_run_id
+                .as_ref()
+                .is_some_and(|run| run != &binding.bound_run_id)
+            {
+                return Err(OrbitError::PolicyDenied(
+                    "worker run binding mismatch".into(),
+                ));
+            }
+            let comment = (!update.append_comments.is_empty()).then(|| {
+                update
+                    .append_comments
+                    .iter()
+                    .map(|comment| comment.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+            self.route_worker_tool("orbit.task.update", serde_json::json!({
+                "id": task_id,
+                "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
+                    status: update.status, plan: update.plan, context_files: update.context_files,
+                    external_refs: update.external_refs, status_note: update.status_note,
+                    evidence: orbit_store::contracts::ClaimEvidence {summary: update.execution_summary, comment, artifacts: vec![]},
+                    ..Default::default()
+                }
+            }), Default::default())?;
+            return Ok(());
+        }
         apply_locked_task_automation_update(self, task_id, update)
     }
 

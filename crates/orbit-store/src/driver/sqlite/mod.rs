@@ -17,3 +17,5 @@ pub(crate) mod operation;
 pub(crate) mod review;
 #[cfg(test)]
 pub(crate) mod tests;
+
+pub(crate) mod friction_write;

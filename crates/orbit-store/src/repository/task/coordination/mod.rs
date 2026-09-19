@@ -495,6 +495,7 @@ impl TaskCommitBoundary {
                     evidence,
                     binding,
                     &params.actor,
+                    effects,
                 )?;
                 let intent_json = serde_json::to_string(&intent)
                     .map_err(|error| OrbitError::Store(error.to_string()))?;

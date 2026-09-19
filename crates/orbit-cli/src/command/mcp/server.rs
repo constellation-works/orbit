@@ -90,6 +90,15 @@ pub(super) fn serve_mcp_federated_stdio(
     // [ORB-11313].
     let bound_orchestrator = normalized_selector(bound_orchestrator);
     identity.session_context.orchestrator = bound_orchestrator.clone();
+    identity.session_context.worker_invocation =
+        OrbitRuntime::current_worker_invocation(&global_root)?;
+    if let Some(binding) = &identity.session_context.worker_invocation {
+        identity.session_context.workspace = Some(binding.owner_destination.clone());
+        identity
+            .session_context
+            .effective_capabilities
+            .remove(&orbit_types::tool::McpCapability::Operator);
+    }
     let destinations = federated::federated_membership(
         identity.process_machine_id.clone(),
         identity.process_host_id.clone(),
@@ -183,6 +192,14 @@ fn compose_server(
 ) -> Result<(Arc<dyn McpHost>, ToolSessionContext), OrbitError> {
     let mut identity =
         orbit_mcp::mcp_server_identity(&global_root, remote_caller_machine_id, authority)?;
+    identity.session_context.worker_invocation =
+        OrbitRuntime::current_worker_invocation(&global_root)?;
+    if identity.session_context.worker_invocation.is_some() {
+        identity
+            .session_context
+            .effective_capabilities
+            .remove(&orbit_types::tool::McpCapability::Operator);
+    }
     identity.session_context.workspace = normalized_selector(bound_workspace);
     identity.session_context.orchestrator = normalized_selector(bound_orchestrator);
     let host = Arc::new(ServerMcpHost::new(
@@ -497,6 +514,58 @@ impl ServerMcpHost {
         mut input: Value,
         mut context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
+        if let Some(binding) = &context.worker_invocation
+            && binding.execution.machine_id == self.process_machine_id
+            && binding.owner_machine_id != self.process_machine_id
+            && (name.starts_with("orbit.task.") || name.starts_with("orbit.friction."))
+        {
+            let routed_name = if name == "orbit.task.artifact.put" {
+                let cwd = std::env::current_dir()?;
+                input = orbit_cmd::prepare_remote_task_artifact_put(input, Some(&cwd), Some(&cwd))?;
+                name
+            } else {
+                name
+            };
+            if let Some(object) = input.as_object_mut() {
+                if object.get("workspace").is_some_and(|value| {
+                    value.as_str() != Some(&binding.owner_destination)
+                        && value.as_str() != Some(&binding.owner_workspace_id)
+                        && !value.as_str().is_some_and(|selector| {
+                            std::env::current_dir().ok().is_some_and(|cwd| {
+                                std::fs::canonicalize(selector).is_ok_and(|path| path == cwd)
+                            })
+                        })
+                }) {
+                    return Err(OrbitError::PolicyDenied(
+                        "worker workspace binding mismatch".into(),
+                    ));
+                }
+                object.insert(
+                    "workspace".into(),
+                    Value::String(binding.owner_destination.clone()),
+                );
+            }
+            let remotes =
+                federated::load_destinations(&federated::destinations_path(&self.global_root))?;
+            let destinations = federated::federated_membership(
+                self.process_machine_id.clone(),
+                self.process_host_id.clone(),
+                remotes,
+            );
+            context.workspace = Some(binding.owner_destination.clone());
+            let probe = federated::SshDestinationProbe::new(
+                self.process_machine_id.clone(),
+                federated::DEFAULT_PROBE_TIMEOUT,
+                federated::DEFAULT_ROUTED_DELIVERY_TIMEOUT,
+                context.orchestrator.clone(),
+                McpSessionAuthority::Agent,
+            );
+            return federated::FederatedMcpHost::new(destinations, Arc::new(probe)).call_tool(
+                routed_name,
+                input,
+                context,
+            );
+        }
         let (runtime, selected) = match self.resolve_workspace_runtime(name, &input, &context) {
             Ok(resolved) => resolved,
             Err(error) => {

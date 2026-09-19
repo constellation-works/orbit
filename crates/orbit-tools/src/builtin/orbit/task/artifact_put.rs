@@ -54,7 +54,8 @@ impl Tool for OrbitTaskArtifactPutTool {
         // canonical tool name. The hub accepts that shape only on ssh-mcp;
         // local/model calls must continue to supply a real source_path.
         if input.get("artifacts").is_some() {
-            if ctx.session_context.transport != Some(orbit_types::tool::McpTransport::SshMcp)
+            if (ctx.session_context.transport != Some(orbit_types::tool::McpTransport::SshMcp)
+                && ctx.session_context.worker_invocation.is_none())
                 || input.get("source_path").is_some()
                 || input.get("sourcePath").is_some()
                 || input.get("source-path").is_some()

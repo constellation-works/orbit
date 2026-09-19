@@ -37,6 +37,12 @@ pub(super) fn dispatch(
     input: Value,
     model: Option<String>,
 ) -> Result<Value, OrbitError> {
+    if matches!(
+        verb,
+        FrictionVerb::Add | FrictionVerb::Update | FrictionVerb::Resolve
+    ) {
+        runtime.ensure_coordination_task_write_permitted()?;
+    }
     match verb {
         FrictionVerb::Add => add(runtime, input, model),
         FrictionVerb::List => list(runtime, input),
@@ -49,28 +55,34 @@ pub(super) fn dispatch(
 }
 
 fn add(runtime: &OrbitRuntime, input: Value, model: Option<String>) -> Result<Value, OrbitError> {
-    let body = required_string(&input, &["body", "description"], "body")?;
-    let title = optional_raw_string(&input, "title")?
+    let stored = crate::runtime::friction::store_for(runtime)?.add(add_params(&input, model)?)?;
+    record_to_json(stored)
+}
+
+pub(super) fn add_params(
+    input: &Value,
+    model: Option<String>,
+) -> Result<FrictionAddParams, OrbitError> {
+    let body = required_string(input, &["body", "description"], "body")?;
+    let title = optional_raw_string(input, "title")?
         .map(|raw| normalize_title(&raw))
         .transpose()?;
-    let tags = optional_csv_or_string_list_alias(&input, &["tags", "tag"])?.unwrap_or_default();
-    let during_task =
-        optional_string(&input, "during_task")?.or(optional_string(&input, "task_id")?);
+    let tags = optional_csv_or_string_list_alias(input, &["tags", "tag"])?.unwrap_or_default();
+    let during_task = optional_string(input, "during_task")?.or(optional_string(input, "task_id")?);
     let model = model
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             OrbitError::InvalidInput("orbit.friction.add requires `model`".to_string())
         })?;
-    let stored = crate::runtime::friction::store_for(runtime)?.add(FrictionAddParams {
+    Ok(FrictionAddParams {
         model,
         title,
         body,
         tags,
         during_task,
         created_at: Utc::now(),
-    })?;
-    record_to_json(stored)
+    })
 }
 
 fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
@@ -272,7 +284,7 @@ fn optional_usize(input: &Value, field: &str) -> Result<Option<usize>, OrbitErro
     Ok(Some(n as usize))
 }
 
-fn record_to_json(stored: StoredFrictionRecord) -> Result<Value, OrbitError> {
+pub(super) fn record_to_json(stored: StoredFrictionRecord) -> Result<Value, OrbitError> {
     let mut value = serde_json::to_value(&stored.record)
         .map_err(|error| OrbitError::Store(format!("serialize friction record: {error}")))?;
     if let Some(object) = value.as_object_mut() {

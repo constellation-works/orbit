@@ -70,6 +70,17 @@ pub const TIMEOUT_LONG_MS: u64 = 60_000;
 
 pub use registry::{ToolRegistry, canonical_builtin_mcp_tool_definitions};
 
+/// Owner transport injected by composition. Implementations verify the
+/// destination identity and never substitute an execution-host store.
+pub trait OwnerCoordinator: Send + Sync {
+    fn call(
+        &self,
+        name: &str,
+        input: Value,
+        session: orbit_types::tool::ToolSessionContext,
+    ) -> Result<Value, OrbitError>;
+}
+
 /// Materialize a task artifact before a spoke sends the coordination request
 /// to its hub. The returned value contains artifact bytes but no source path.
 ///

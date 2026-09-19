@@ -369,6 +369,19 @@ pub struct ClaimEvidence {
     pub artifacts: Vec<orbit_types::task::TaskArtifact>,
 }
 
+/// Worker-owned documents and coordination metadata. Lifecycle transitions
+/// remain governed by the claim state machine, including typed review handoff.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimWorkerUpdate {
+    pub evidence: ClaimEvidence,
+    pub plan: Option<String>,
+    pub context_files: Option<Vec<String>>,
+    pub external_refs: Vec<orbit_types::task::ExternalRef>,
+    pub status: Option<TaskStatus>,
+    pub expected_status: Option<TaskStatus>,
+    pub status_note: Option<String>,
+}
+
 /// Internal lifecycle operations. Typed handoffs validate owner observations and durable
 /// evidence inside the ownership/phase boundary. Approval records completion authority;
 /// no operation here executes an external merge.
@@ -379,6 +392,9 @@ pub enum ClaimMutation {
         ship: AdmissionShipContract,
     },
     Evidence(ClaimEvidence),
+    Update(ClaimWorkerUpdate),
+    /// Friction allocation and publication share the claim's commit transaction.
+    Friction(super::FrictionAddParams),
     /// Legacy serialized shape retained for reading only; new writes are refused.
     Handoff(ClaimEvidence),
     AcceptHandoff(orbit_types::workflow::handoff::TaskHandoff),
@@ -421,6 +437,8 @@ pub struct ClaimMutationResult {
     pub claim_id: String,
     pub phase: ExecutionClaimPhase,
     pub status: TaskStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub friction: Option<orbit_types::record::FrictionRecord>,
 }
 
 /// SQL effects checked and published at the journal's existing commit point.
@@ -429,6 +447,9 @@ pub(crate) struct ClaimCommitEffects {
     pub replacements: Vec<(TaskCoordinationRow, TaskCoordinationRow)>,
     pub release_reservation: Option<String>,
     pub completion_grant: Option<(String, String)>,
+    pub friction: Option<(super::FrictionAddParams, String)>,
+    pub execution_origin: Option<ExecutionLocation>,
+    pub worker_update: Option<ClaimWorkerUpdate>,
 }
 
 /// Owner observations from Git/provider identity and repository validation policy.

@@ -131,6 +131,15 @@ impl FederatedMcpHost {
         // form, or any other non-host-qualified token is unknown_selector, even
         // when initialize injected the v1 local default.
         let parsed = HostQualifiedSelector::from_str(token)?;
+        if let Some(binding) = &session_context.worker_invocation {
+            binding.validate().map_err(OrbitError::InvalidInput)?;
+            if token != binding.owner_destination || parsed.machine_id() != binding.owner_machine_id
+            {
+                return Err(OrbitError::PolicyDenied(
+                    "worker owner selector mismatch".into(),
+                ));
+            }
+        }
         let destination = self
             .destinations
             .iter()
@@ -139,7 +148,7 @@ impl FederatedMcpHost {
 
         let mut session = self
             .probe
-            .open_route(destination)
+            .open_worker_route(destination, &session_context)
             .map_err(|error| delivery_unreachable(destination, error))?;
         let snapshot = session
             .snapshot()
@@ -217,6 +226,22 @@ impl crate::McpHost for FederatedMcpHost {
 
     fn federated_workspace_selectors(&self) -> bool {
         true
+    }
+}
+
+impl orbit_tools::OwnerCoordinator for FederatedMcpHost {
+    fn call(
+        &self,
+        name: &str,
+        input: Value,
+        session: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        if session.worker_invocation.is_none() {
+            return Err(OrbitError::PolicyDenied(
+                "owner route requires worker binding".into(),
+            ));
+        }
+        self.route_workspace_call(name, input, session)
     }
 }
 

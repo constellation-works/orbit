@@ -54,3 +54,8 @@ pub mod prelude {
     pub use crate::doctor::DoctorCommands;
     pub use crate::migrate::MigrateCommands;
 }
+
+mod worker_coordination;
+
+/// Materialize executor-local artifact bytes before an owner coordination call.
+pub use orbit_tools::prepare_remote_task_artifact_put;

@@ -120,6 +120,27 @@ pub struct ReviewLandingRequest {
 /// Deterministic actions, task/run persistence, environment resolution, agent
 /// dispatch, and audit/checkpoint hooks all cross this boundary exactly once.
 pub trait RuntimeHost: Send + Sync {
+    fn register_worker_pid_namespace(&self, _pid: u32) -> Result<(), OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Err(OrbitError::Execution(
+                "worker namespace authority unavailable".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Err(OrbitError::Execution(
+                "worker process authority unavailable".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
+        None
+    }
     /// Optional observation hook; execution-only test hosts need no scheduler store.
     fn record_direct_landing_intent(
         &self,

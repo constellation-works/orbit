@@ -217,7 +217,7 @@ Inspection refuses pending journal repair rather than writing as a side effect. 
 intent guard and `landing_invalidated` state are seams for the later landing consumer. Recovery
 requires explicit operator context and retains prior branch/PR and artifact evidence.
 
-This substrate does not implement generic tool/friction transport propagation. That proof belongs
+The lifecycle substrate is now used by generic tool/friction transport propagation. Integrated proof belongs
 to the routing/integration slice; distributed public execution stays unavailable until it passes.
 
 ### 3.2 Durable review and landing handoff
@@ -381,11 +381,35 @@ or reconciliation contract before step recovery retries it.
 | Review policy | `none` only in v1; typed not-required disposition and validation evidence live on owner |
 | Completion authority, landing intent, merge verification, task completion | Owner |
 
-Add the routed task-read and coordination-write seam to `RuntimeHost` and associated artifact and
-review operations. An activity such as `pr_promote` mixes local Git/worktree checks with owner
-mutations: do not forward the entire activity and its local paths as though they exist remotely.
-Worker subprocess tools inherit the persisted owner selector and claim context as well. On an
-owner outage, dependent reads and mutations fail closed; local run diagnostics remain writable.
+`WorkerInvocation` carries the owner destination/workspace, task, claim, execution location and
+immutable bound run. Runtime composition installs it; ordinary `ToolSessionContext` JSON cannot
+set it. Core routes task/dependency reads and task/friction writes through `OwnerCoordinator`.
+The command layer composes the existing federated SSH or in-process transport; neither transport
+falls back to a follower task store. Owner identity and workspace are checked again at dispatch.
+SSH initialization carries the binding separately from tool arguments. Bound sessions and their
+proxies lose operator capability. SSH access remains the access grant; the owner claim transaction
+separately validates execution machine, bound run, current claim and phase.
+
+Detached workers and provider subprocesses recover their invocation from the protected host
+recovery-authority database, keyed by kernel process identity. Linux PID-namespace children also
+use the namespace init identity; editable environment labels and job-input records cannot create
+or replace a binding. A required managed child refuses startup when its binding is unavailable.
+Step retries register new processes against the same bound run. Unsupported process-identity
+platforms fail closed for claimed workers. This is attempt context, not a destination caller registry.
+
+Activities retain executor-local Git/worktree checks. Their task activity/automation writes alone
+cross the owner seam, with runtime run identity checked before dispatch. Generic updates cannot
+promote to review or complete a task: review still requires the typed owner handoff boundary.
+Source-file artifacts are materialized on the executor before routing path-free payloads. Local
+run/step diagnostics remain on the execution host even when the owner is unavailable.
+
+Generic evidence, document updates and friction creation enter the claim commit boundary. Friction
+allocation, publication, claim comparison and mutation receipt share one SQLite commit decision;
+there is no check-then-write append to a separate friction store. Omitted `during_task` uses the
+bound task, and conflicting task/claim/run arguments refuse. Canonical mutation digests deduplicate
+identical retries (friction wall-clock timestamps are excluded). Claim footprint changes require
+recovery and readmission. Task run links and artifact manifests use the claim's runtime-derived
+execution location; legacy absent locations remain unknown. No remote run is imported locally.
 
 The destination serves the session's granted capabilities after SSH access. Payload host labels
 are diagnostic, not credentials. Revalidate session capability and attempt context on retries.

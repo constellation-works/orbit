@@ -63,6 +63,11 @@ impl OrbitRuntime {
         let Some(operation) = governed_tool(tool_name) else {
             return Ok(());
         };
+        let capability_enforcement = if session_context.worker_invocation.is_some() {
+            CapabilityEnforcement::McpSessionOnly
+        } else {
+            capability_enforcement
+        };
         let envelope = match capability_enforcement {
             CapabilityEnforcement::Enforce => CallerEnvelope::from_process_env(session_context),
             CapabilityEnforcement::McpSessionOnly => CallerEnvelope::mcp_session(session_context),

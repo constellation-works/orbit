@@ -454,34 +454,7 @@ fn validate_workspace_id(workspace_id: &str) -> Result<(), OrbitError> {
     Ok(())
 }
 
-pub(crate) fn normalize_and_validate_tags(
-    raw_tags: Vec<String>,
-    taxonomy: &BTreeSet<String>,
-) -> Result<Vec<String>, OrbitError> {
-    let mut tags = BTreeSet::new();
-    for raw in raw_tags {
-        let value = raw.trim().to_ascii_lowercase();
-        if !value.is_empty() {
-            tags.insert(value);
-        }
-    }
-    if tags.is_empty() {
-        tags.insert("other".to_string());
-    }
-    let invalid = tags
-        .iter()
-        .filter(|tag| !taxonomy.contains(*tag))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !invalid.is_empty() {
-        return Err(OrbitError::InvalidInput(format!(
-            "unknown friction tag(s): {}. valid tags: {}",
-            invalid.join(", "),
-            taxonomy.iter().cloned().collect::<Vec<_>>().join(", ")
-        )));
-    }
-    Ok(tags.into_iter().collect())
-}
+use crate::contracts::normalize_friction_tags as normalize_and_validate_tags;
 
 fn completed_tasks_by_family(tasks: &[Task]) -> BTreeMap<String, u64> {
     let mut counts = BTreeMap::new();

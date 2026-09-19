@@ -391,3 +391,46 @@ fn mixed_routing_keeps_remote_calls_on_the_ssh_probe() {
     assert_eq!(remote_log.calls().len(), 1);
     assert_eq!(remote_log.calls()[0].machine_id, REPLICA_MACHINE);
 }
+
+#[test]
+fn worker_context_survives_local_route_without_operator_elevation() {
+    let (host, inner) = recording_local_mux();
+    let binding = orbit_types::tool::WorkerInvocation {
+        owner_machine_id: OWNER_MACHINE.into(),
+        owner_workspace_id: "ws_orbit".into(),
+        owner_destination: format!("{OWNER_MACHINE}/ws_orbit"),
+        task_id: "task".into(),
+        claim_id: "claim".into(),
+        execution: orbit_types::task::ExecutionLocation {
+            machine_id: REPLICA_MACHINE.into(),
+            host_id: None,
+        },
+        bound_run_id: "immutable-leaf".into(),
+    };
+    let session = ToolSessionContext {
+        workspace: Some(binding.owner_destination.clone()),
+        worker_invocation: Some(binding.clone()),
+        effective_capabilities: [McpCapability::Agent, McpCapability::Operator].into(),
+        ..Default::default()
+    };
+    host.call_tool("orbit.task.show", json!({"id":"task"}), session.clone())
+        .expect("route");
+    let calls = inner.calls.lock().expect("calls");
+    assert_eq!(calls[0].2.worker_invocation.as_ref(), Some(&binding));
+    assert!(
+        !calls[0]
+            .2
+            .effective_capabilities
+            .contains(&McpCapability::Operator)
+    );
+    drop(calls);
+    assert!(
+        host.call_tool(
+            "orbit.task.show",
+            json!({"id":"task", "workspace": format!("{REPLICA_MACHINE}/ws_orbit")}),
+            session
+        )
+        .is_err()
+    );
+    assert_eq!(inner.calls.lock().expect("calls").len(), 1);
+}

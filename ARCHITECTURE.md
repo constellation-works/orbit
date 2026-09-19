@@ -10,6 +10,8 @@ flowchart LR
   CLI --> Registry["orbit-registry"]
   CLI --> MCP["orbit-mcp"]
   CLI --> Web["orbit-web"]
+  Cmd --> MCP
+  Cmd --> Tools
   Cmd --> Core
   Cmd --> Config
   Cmd --> Engine
@@ -256,3 +258,9 @@ parent-authorized admission path. Older binaries ignore both tables.
 | Run Traces      | WorkspaceOnly      | Per-repo activity/job JSONL and blob artifacts   |
 | Global Defaults Stamp | GlobalOnly   | `<global root>/resources/.orbit-global-defaults.json` names the embedded default set last reconciled into that root, so a warm runtime open skips re-reading and re-hashing the managed catalogs |
 | ADR/Learning IDs | Shared allocator + worktree-local bodies | ID rows live in shared `.orbit/state/semantic.db`; body files live in the current worktree so they can be staged with code |
+
+Managed worker composition in `orbit-cmd` uses `orbit-mcp` owner transports and the
+`orbit-tools::OwnerCoordinator` seam. Core retains execution-host stores and filesystem
+work; only coordination requests cross this injected transport. Process invocation
+bindings live in the existing protected runtime authority store, outside leaf write
+grants; they are attempt provenance, not a destination caller registry.

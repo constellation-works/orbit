@@ -425,6 +425,9 @@ pub fn run_cli_backend(
         child_env.retain(|(key, _)| key != "ORBIT_ROOT");
     }
     child_env.extend(dispatch_env);
+    if host.worker_invocation().is_some() {
+        child_env.push(("ORBIT_WORKER_CONTEXT_REQUIRED".into(), "1".into()));
+    }
     // [ORB-10496] Record the provider child's PID the moment it exists. Emitted
     // through the same writer, so it is persisted (and therefore readable by
     // `orbit run show` / the run-status API) while the invocation is still
@@ -452,6 +455,22 @@ pub fn run_cli_backend(
         &provider,
     )
     .and_then(|mut spawned| {
+        let registered = host
+            .register_worker_process(spawned.child.id())
+            .and_then(|()| {
+                if sandbox.is_some_and(|sandbox| {
+                    sandbox.kind == orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap
+                }) {
+                    host.register_worker_pid_namespace(spawned.child.id())
+                } else {
+                    Ok(())
+                }
+            });
+        if let Err(error) = registered {
+            let _ = spawned.child.kill();
+            let _ = spawned.child.wait();
+            return Err(super::spawn::SpawnError::permanent(error.to_string()));
+        }
         linux_post_run_guard = spawned.take_linux_post_run_guard();
         spawn_with_timeout(SpawnWithTimeoutRequest {
             program: &resolved_program,

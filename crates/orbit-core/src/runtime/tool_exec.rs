@@ -64,6 +64,29 @@ impl OrbitRuntime {
             )));
         }
 
+        if self.worker_invocation().is_some()
+            && super::worker_coordination::is_coordination_tool(name)
+        {
+            let input = if name == "orbit.task.artifact.put" {
+                orbit_tools::prepare_remote_task_artifact_put(
+                    input,
+                    tool_context.cwd.as_deref().map(Path::new),
+                    tool_context.workspace_root.as_deref(),
+                )?
+            } else {
+                input
+            };
+            return self.route_worker_tool(name, input, tool_context.session_context);
+        }
+
+        if ((name == "orbit.task.show" && input.get("_worker_read").is_some())
+            || (name == "orbit.task.update" && input.get("_worker_update").is_some()))
+            && let Some(output) =
+                self.execute_worker_projection(name, &input, &tool_context.session_context)?
+        {
+            return Ok(output);
+        }
+
         let output = match self
             .tool_registry()
             .execute(name, &tool_context, input)
