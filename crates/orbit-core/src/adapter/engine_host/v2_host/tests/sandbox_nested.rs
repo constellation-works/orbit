@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 #[cfg(target_os = "macos")]
+use orbit_common::fs::generation::{GenerationGuard, executable_generation};
+#[cfg(target_os = "macos")]
 use orbit_engine::RuntimeHost;
 #[cfg(target_os = "macos")]
 use orbit_exec::{
@@ -294,6 +296,16 @@ fn managed_nested_orbit_dispatches_from_linked_worktree_under_sandbox() {
         "DANI-10056 missing-requirements behavior must remain denied for ordinary tasks"
     );
 
+    // A managed host and its nested children are the same installed executable,
+    // so the global record names that generation and a sandboxed child joins it
+    // through a read-only descriptor. This test process is a different
+    // executable, and building the runtime above pinned *its* digest into the
+    // shared record; left there, the child would face a foreign generation it
+    // cannot take over under a global root it may not write. [ORB-12553]
+    let host_generation = executable_generation(&orbit_bin).expect("installed orbit generation");
+    let _host_pin = GenerationGuard::acquire(&global, &host_generation)
+        .expect("pin the installed generation the way a managed host does");
+
     let child_home_str = child_home.to_string_lossy().into_owned();
     let orbit_bin_str = orbit_bin.to_string_lossy().into_owned();
     let env = managed_nested_env(
@@ -337,6 +349,11 @@ fn managed_nested_orbit_dispatches_from_linked_worktree_under_sandbox() {
                 .and_then(Value::as_str)
                 .is_some_and(|detail| !detail.is_empty()),
         "github.auth.status must return its structured capability result: {capability}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(global.join(".generation.lock")).expect("generation record"),
+        format!("1:{host_generation}\n"),
+        "a sandboxed child must join the host generation, never rewrite the record"
     );
     assert!(
         !stdout.contains("policy_denied") && !stderr.contains("policy_denied"),

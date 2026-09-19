@@ -89,6 +89,13 @@ jobs:
       - name: Run orbit-core sandbox tests
         run: cargo test --no-fail-fast -p orbit-core --locked sandbox
 
+      # [ORB-12553] Generation admission turns on Darwin descriptor and flock
+      # behavior: a sandboxed child joins the recorded generation through a
+      # read-only descriptor and must refuse, not write, a takeover it cannot
+      # record. Linux alone cannot evidence that.
+      - name: Run executable-generation admission tests
+        run: cargo test --no-fail-fast -p orbit-common --locked fs::tests::generation
+
       # Linux cannot exercise Darwin's libproc zombie/group semantics. Keep
       # these filters aligned with the owner/liveness path triggers above.
       - name: Run process identity and job-run owner tests
