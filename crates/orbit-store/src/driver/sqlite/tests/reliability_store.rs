@@ -30,6 +30,7 @@ fn insert_run(
     created: DateTime<Utc>,
 ) {
     let run = JobRun {
+        executed_on: None,
         run_id: run_id.to_string(),
         job_id: job_id.to_string(),
         attempt: 1,

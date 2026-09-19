@@ -236,6 +236,7 @@ fn orchestration_trailer_never_allows_a_recorded_value_to_add_a_new_trailer_line
 fn task_with_type(task_type: TaskType, title: &str) -> Task {
     let now = Utc::now();
     Task {
+        job_run_host: None,
         id: "ORB-00107".to_string(),
         title: title.to_string(),
         description: String::new(),

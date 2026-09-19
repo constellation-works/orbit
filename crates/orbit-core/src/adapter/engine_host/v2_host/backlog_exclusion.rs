@@ -5,9 +5,8 @@ use std::path::Path;
 use orbit_common::fs::overlap_index::OverlapIndex;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    EpicHierarchyNode, NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskPriority,
-    TaskReferenceIndex, TaskStatus, TaskType, has_epic_tag, inherited_only_epic_roots,
-    task_dependencies_ready_with_index,
+    EpicHierarchyNode, NO_DIFF_EXPECTED_TAG, Task, TaskComplexity, TaskReferenceIndex, TaskStatus,
+    has_epic_tag, inherited_only_epic_roots, task_dependencies_ready_with_index,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -512,33 +511,8 @@ fn clears_complexity_gate(task: &Task) -> bool {
 /// first, then corrective work, then priority, age, and the task ID as the
 /// total tie-breaker.
 pub(super) fn sort_tasks_for_automatic_dispatch<T: Borrow<Task>>(tasks: &mut [T]) {
-    let dispatch_band = |task: &Task| {
-        if task.priority == TaskPriority::Critical {
-            0
-        } else if task.task_type == TaskType::Bug
-            || task
-                .tags
-                .iter()
-                .any(|tag| matches!(tag.as_str(), "code-review" | "security-review"))
-        {
-            1
-        } else {
-            2
-        }
-    };
-    let priority_rank = |priority: TaskPriority| match priority {
-        TaskPriority::Critical => 0,
-        TaskPriority::High => 1,
-        TaskPriority::Medium => 2,
-        TaskPriority::Low => 3,
-    };
     tasks.sort_by(|left, right| {
-        let (left, right) = (left.borrow(), right.borrow());
-        dispatch_band(left)
-            .cmp(&dispatch_band(right))
-            .then(priority_rank(left.priority).cmp(&priority_rank(right.priority)))
-            .then(left.created_at.cmp(&right.created_at))
-            .then(left.id.cmp(&right.id))
+        orbit_types::task::automatic_dispatch_cmp(left.borrow(), right.borrow())
     });
 }
 

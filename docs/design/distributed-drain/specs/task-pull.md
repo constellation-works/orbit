@@ -16,7 +16,9 @@ related_artifacts: [ORB-12488]
 `orbit.task.pull` creates at most one claim for an intended admission. The owner selects the first
 ready, valid, conflict-free task in its canonical order and atomically records the reservation,
 attempt identity, `in-progress` transition, history, and request receipt. Retries replay the same
-receipt. All contracts below are proposed v1 behavior, not existing implementation guarantees.
+receipt. The internal store foundation now implements admission receipts, claims, replay,
+and compaction. The public tool and companion lifecycle operations remain unavailable;
+contracts for those entry points below are still proposed v1 behavior.
 
 ## Why This Exists
 
@@ -226,3 +228,19 @@ substitute for these tests.
 
 claude authored the initial contract under [ORB-12488]; codex revised it after design review,
 2026-09-18. The feature remains Draft.
+
+## Internal storage accounting
+
+`TaskCommitBoundary::admission_storage_usage` reports full-receipt and permanent-tombstone
+counts and logical UTF-8 payload bytes. SQLite page and index overhead is additional. An
+idle receipt can compact immediately; a claim in claimed, running, or handed-off phase
+retains its full receipt. At a 30-second poll, one idle drain leaves 2,880 request identities
+per day even after compaction. No age-based tombstone deletion is supported.
+
+Execution provenance is optional on persisted records for backward reading. Run origin is
+captured from the trusted runtime backend at insertion and is not updated by run upserts.
+The shared run JSON projection exposes `executed_on`, and task show exposes
+`job_run_host`; both use null when historical identity is unknown.
+Artifact origin is supplied separately from artifact bytes and actor attribution. Task run
+location must accompany a trusted run binding; changing a legacy/unqualified link does not
+infer a location from a matching local run ID.

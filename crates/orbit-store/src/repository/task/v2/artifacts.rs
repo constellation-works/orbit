@@ -165,6 +165,7 @@ impl TaskV2Store {
                 by_path.insert(
                     path.clone(),
                     ArtifactManifestFileV2 {
+                        origin: fields.origin.clone(),
                         path: path.clone(),
                         blob,
                         sha256: format!("{:x}", Sha256::digest(&artifact.content)),

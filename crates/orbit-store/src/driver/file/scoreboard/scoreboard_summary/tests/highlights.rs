@@ -16,6 +16,7 @@ fn task_at(
     tags: &[&str],
 ) -> Task {
     Task {
+        job_run_host: None,
         id: id.to_string(),
         title: format!("title {id}"),
         description: String::new(),

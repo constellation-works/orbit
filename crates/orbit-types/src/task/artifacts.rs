@@ -93,6 +93,8 @@ pub struct TaskEnvelopeV2 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_run_host: Option<crate::task::ExecutionLocation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
     /// Named crew responsible for task orchestration, distinct from execution crew.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -343,6 +345,9 @@ impl ArtifactManifestV2 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactManifestFileV2 {
+    /// Authenticated or trusted put-time origin, never an actor-label inference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::task::ExecutionLocation>,
     pub path: String,
     pub blob: String,
     /// Lowercase hex SHA-256 digest; writers should format bytes with `{:x}`.

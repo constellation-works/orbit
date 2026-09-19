@@ -44,6 +44,7 @@ pub(super) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStat
         "relations": resolve_task_relations(task, status_by_id),
         "source_task_id": task.source_task_id(),
         "job_run_id": task.job_run_id,
+        "job_run_host": task.job_run_host,
         "crew": task.crew,
         "orchestrator": task.orchestrator,
         "created_at": task.created_at.to_rfc3339(),

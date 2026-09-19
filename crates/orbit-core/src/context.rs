@@ -497,6 +497,13 @@ impl OrbitContext {
         &self.paths
     }
 
+    pub(crate) fn set_execution_location(
+        &mut self,
+        location: Option<orbit_types::task::ExecutionLocation>,
+    ) {
+        self.stores.job_run = self.stores.job_run.with_execution_location(location);
+    }
+
     pub(crate) fn stores(&self) -> &OrbitStores {
         &self.stores
     }

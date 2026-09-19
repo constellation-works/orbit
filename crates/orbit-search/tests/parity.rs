@@ -17,6 +17,7 @@ use serde_json::json;
 
 fn fixture_task(id: &str) -> Task {
     Task {
+        job_run_host: None,
         id: id.to_string(),
         title: "Index this".to_string(),
         description: "Task description".to_string(),

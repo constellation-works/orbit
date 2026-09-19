@@ -168,13 +168,6 @@ pub fn audit_event_store_sqlite(store: Store) -> Arc<dyn AuditEventStoreBackend>
     Arc::new(SqliteAuditEventStoreBackend { store })
 }
 
-pub fn task_reservation_store_sqlite(store: Store) -> Arc<dyn TaskReservationStoreBackend> {
-    Arc::new(SqliteTaskReservationStoreBackend {
-        store,
-        coordination: None,
-    })
-}
-
 /// One workspace's task backends, reservation store, and the commit boundary
 /// they share.
 ///
@@ -195,8 +188,7 @@ pub struct CoordinatedWorkspaceBackends {
 /// Compose one workspace's task and reservation persistence over a shared
 /// durable commit boundary (ORB-12528).
 ///
-/// The difference from [`workspace_task_backends`] plus
-/// [`task_reservation_store_sqlite`] is serialization and recovery, not
+/// The difference from legacy uncoordinated task composition is serialization and recovery, not
 /// storage layout: bundles, registry rows, and reservation rows are unchanged,
 /// and every existing API behaves as before. What is added is that ordinary
 /// task and reservation mutations run inside the boundary, reads settle an
@@ -229,7 +221,7 @@ pub fn workspace_coordinated_backends(
         },
         reservation: Arc::new(SqliteTaskReservationStoreBackend {
             store,
-            coordination: Some(Arc::clone(&commit_boundary)),
+            coordination: Arc::clone(&commit_boundary),
         }),
         commit_boundary,
     })

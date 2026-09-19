@@ -94,6 +94,8 @@ fn fresh_db_applies_baseline_and_records_ledger() {
     assert!(!applied[19].applied_at.is_empty());
     assert_eq!(applied[20].version, 21);
     assert_eq!(applied[20].name, "task_commit_journal");
+    assert_eq!(applied[21].version, 22);
+    assert_eq!(applied[21].name, "execution_provenance");
     assert!(!applied[20].applied_at.is_empty());
 }
 
@@ -279,6 +281,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0021".to_string(),
                 "task_commit_journal".to_string()
             ),
+            (
+                "migration.v0022".to_string(),
+                "execution_provenance".to_string()
+            ),
         ]
     );
 }
@@ -290,8 +296,8 @@ fn refuses_db_from_a_newer_binary() {
 
     conn.execute(
         "INSERT INTO schema_meta(key, value, updated_at)
-        VALUES ('migration.v0022', 'from-the-future', '2099-01-01T00:00:00Z')",
-        [],
+        VALUES (?1, 'from-the-future', '2099-01-01T00:00:00Z')",
+        [format!("migration.v{:04}", SUPPORTED_SCHEMA_VERSION + 1)],
     )
     .expect("record future migration");
 
@@ -520,7 +526,7 @@ fn store_reopens_database_at_shipped_schema_v4_and_applies_through_latest() {
     );
     assert_eq!(
         applied.last().map(|migration| migration.name.as_str()),
-        Some("task_commit_journal")
+        Some("execution_provenance")
     );
     let connection = store.connection();
     let conn = connection.lock().expect("connection");

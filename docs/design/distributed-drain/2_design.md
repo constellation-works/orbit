@@ -63,10 +63,13 @@ task/reservation commit boundary publishes a task transition, its history, a res
 dependent coordination rows as one durable decision, and gives ordinary task and reservation
 mutations the serialization an admission decision holds
 ([docs/design-patterns/task_commit_boundary.md](../../design-patterns/task_commit_boundary.md)).
-It is composed explicitly (`compose::workspace_coordinated_backends`) and carries no pull,
-claim, or receipt semantics — ordering, request receipts, claim phases, provenance, and replay
-remain this section's work, and the runtime still composes the uncoordinated backends until
-that lifecycle slice lands.
+All runtime constructors now use `compose::workspace_coordinated_backends`. The internal
+owner admission API builds immutable receipts and frozen claims on that journal and shares
+its canonical ordering with readiness reporting. A host admission lock also serializes
+cross-workspace dependency checks. Public distributed entry points remain unavailable until
+claim binding, routed mutations, settlement, and handoff integration land. Nullable run,
+task-link, and artifact-origin fields represent trusted execution provenance; absent historical
+identity remains unknown and is never inferred from the workspace owner or a hostname.
 
 A caller durably allocates a `request_id` before each intended pull. Its scope is the owner
 workspace and authenticated caller machine. A retry with the same input returns the stored result,

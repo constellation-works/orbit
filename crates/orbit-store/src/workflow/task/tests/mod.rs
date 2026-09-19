@@ -232,6 +232,7 @@ fn make_bundle(id: &str, title: &str, relations: Vec<TaskRelation>) -> TaskBundl
     let now = Utc.with_ymd_and_hms(2026, 6, 1, 9, 0, 0).unwrap();
     TaskBundleV2 {
         envelope: TaskEnvelopeV2 {
+            job_run_host: None,
             schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
             id: id.to_string(),
             title: title.to_string(),
@@ -1005,6 +1006,7 @@ fn seed_artifact_blob(
     }
     fs::write(&blob_path, bytes).expect("write blob");
     ArtifactManifestFileV2 {
+        origin: None,
         path: path.to_string(),
         blob,
         sha256: format!("{:x}", Sha256::digest(bytes)),

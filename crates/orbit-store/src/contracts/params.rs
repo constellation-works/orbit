@@ -72,6 +72,8 @@ pub struct TaskDocumentUpdateParams {
     pub pr_status: Option<Option<String>>,
     pub source_task_id: Option<Option<String>>,
     pub job_run_id: Option<Option<String>>,
+    /// Trusted link location supplied with the run binding, never tool input.
+    pub job_run_host: Option<Option<orbit_types::task::ExecutionLocation>>,
     pub crew: Option<Option<String>>,
     pub orchestrator: Option<Option<String>>,
 }
@@ -121,6 +123,8 @@ pub enum AtomicTaskMutationOutcome {
 
 #[derive(Debug, Default, Clone)]
 pub struct TaskArtifactUpdateParams {
+    /// Owner-supplied authenticated put identity. Legacy/unknown remains None.
+    pub origin: Option<orbit_types::task::ExecutionLocation>,
     pub actor: String,
     /// Trusted executor context supplied by Core, never parsed from tool input.
     pub owner_run_id: Option<String>,

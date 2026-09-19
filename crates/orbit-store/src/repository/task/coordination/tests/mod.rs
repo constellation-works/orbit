@@ -25,6 +25,7 @@ use crate::driver::sqlite::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, task_registry_path,
 };
 
+mod admission;
 mod recovery;
 mod serialization;
 

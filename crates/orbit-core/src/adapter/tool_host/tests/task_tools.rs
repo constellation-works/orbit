@@ -1754,6 +1754,7 @@ fn task_update_start_preserves_artifact_owner_run_id() {
         Some("codex".to_string()),
         Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
         Some(owner()),
+        None,
     )
     .expect("ordinary update stores owned artifact");
     super::super::task_tools::update(
@@ -1762,6 +1763,7 @@ fn task_update_start_preserves_artifact_owner_run_id() {
         Some("codex".to_string()),
         Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
         Some(owner()),
+        None,
     )
     .expect("start update stores owned artifact");
 
@@ -4452,4 +4454,40 @@ mod artifact_get {
             "expected a task not-found, got {error}"
         );
     }
+}
+
+#[test]
+fn artifact_provenance_uses_verified_session_identity_only() {
+    use orbit_types::tool::{CallerIdentityProof, RemoteCallerGrant};
+    let (_root, runtime, _workspace) = test_runtime();
+    let mut session = ToolSessionContext {
+        process_machine_id: Some("local-process".into()),
+        caller_machine_id: Some("claimed-machine".into()),
+        caller_host_id: Some("claimed-host".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        runtime
+            .artifact_origin(&session)
+            .expect("local identity")
+            .machine_id,
+        "local-process"
+    );
+    session.remote_caller_grant = Some(RemoteCallerGrant {
+        caller_machine_id: "remote-machine".into(),
+        granted_capabilities: Default::default(),
+        source: "test".into(),
+        identity: CallerIdentityProof::default(),
+        agent_invoke: false,
+        agent_invoke_mode: None,
+    });
+    assert!(runtime.artifact_origin(&session).is_none());
+    session
+        .remote_caller_grant
+        .as_mut()
+        .expect("grant")
+        .identity = CallerIdentityProof::KeyBound;
+    let location = runtime.artifact_origin(&session).expect("authenticated");
+    assert_eq!(location.machine_id, "remote-machine");
+    assert_eq!(location.host_id, None);
 }

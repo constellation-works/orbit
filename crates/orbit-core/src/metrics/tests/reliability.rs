@@ -384,6 +384,7 @@ spec:
     fn seed_run(runtime: &OrbitRuntime, run_id: &str, state: JobRunState) {
         let now = Utc::now();
         let run = JobRun {
+            executed_on: None,
             run_id: run_id.to_string(),
             job_id: JOB.to_string(),
             attempt: 1,

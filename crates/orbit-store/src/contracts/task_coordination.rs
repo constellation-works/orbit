@@ -128,3 +128,144 @@ pub struct TaskCommitJournalRecord {
     pub intent_json: String,
     pub reservation_id: Option<String>,
 }
+
+pub use orbit_types::task::ExecutionLocation;
+
+/// Authority supplied by the embedding runtime, never deserialized from tool input.
+/// The caller must already have workspace agent authorization. Remote construction
+/// is only for destination-bound key authentication, not claimed machine names.
+#[derive(Debug, Clone)]
+pub struct AdmissionIdentity {
+    location: ExecutionLocation,
+    remote: bool,
+}
+
+impl AdmissionIdentity {
+    pub fn trusted_local(location: ExecutionLocation) -> Self {
+        Self {
+            location,
+            remote: false,
+        }
+    }
+
+    pub fn authenticated_key_bound(location: ExecutionLocation) -> Self {
+        Self {
+            location,
+            remote: true,
+        }
+    }
+
+    pub fn location(&self) -> &ExecutionLocation {
+        &self.location
+    }
+    pub fn is_remote(&self) -> bool {
+        self.remote
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionRunContext {
+    pub run_id: String,
+    pub job_name: String,
+    pub host_id: Option<String>,
+}
+
+/// Owner-resolved configuration, included in immutable retry comparison.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionShipContract {
+    pub mode: String,
+    pub base_branch: String,
+    pub landing_branch: String,
+    pub review_policy: String,
+    pub completion: String,
+    pub authorization_reference: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionRequest {
+    pub request_id: String,
+    pub caller_version: String,
+    pub caller_schema: u32,
+    pub caller_review_policy: String,
+    pub run_context: AdmissionRunContext,
+    pub ship: AdmissionShipContract,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionClaimPhase {
+    Claimed,
+    Running,
+    HandedOff,
+    Failed,
+    Revoked,
+}
+
+impl ExecutionClaimPhase {
+    pub fn protects_footprint(self) -> bool {
+        matches!(self, Self::Claimed | Self::Running | Self::HandedOff)
+    }
+    pub fn is_unsettled(self) -> bool {
+        matches!(self, Self::Claimed | Self::Running | Self::HandedOff)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionClaim {
+    pub claim_id: String,
+    pub task_id: String,
+    pub request_id: String,
+    pub executed_on: ExecutionLocation,
+    pub run_context: AdmissionRunContext,
+    pub footprint: Vec<String>,
+    pub reservation_id: String,
+    pub reservation_expires_at: String,
+    pub phase: ExecutionClaimPhase,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionDiagnostic {
+    pub task_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionTaskSummary {
+    pub id: String,
+    pub title: String,
+    pub complexity: Option<orbit_types::task::TaskComplexity>,
+    pub crew: Option<String>,
+    pub context_files: Vec<String>,
+}
+
+/// Original response, immutable even when the current claim moves on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionReceipt {
+    pub schema_version: u32,
+    pub request: AdmissionRequest,
+    pub machine_id: String,
+    pub claim: Option<ExecutionClaim>,
+    pub task: Option<AdmissionTaskSummary>,
+    pub invalid_candidates: Vec<AdmissionDiagnostic>,
+    pub deferred_conflicts: Vec<AdmissionDiagnostic>,
+    pub queue_depth: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdmissionLookup {
+    Found {
+        receipt: Box<AdmissionReceipt>,
+        current_claim: Option<Box<ExecutionClaim>>,
+    },
+    Expired,
+    NotFound,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdmissionStorageUsage {
+    pub receipts: u64,
+    pub tombstones: u64,
+    /// Logical UTF-8 payload bytes; excludes SQLite page/index overhead.
+    pub receipt_bytes: u64,
+    pub tombstone_bytes: u64,
+}

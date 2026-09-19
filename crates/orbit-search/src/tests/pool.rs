@@ -29,6 +29,7 @@ fn counting_pool() -> (EmbedderPool, Arc<AtomicUsize>) {
 
 fn task(id: &str, title: &str) -> Task {
     Task {
+        job_run_host: None,
         id: id.to_string(),
         title: title.to_string(),
         description: "Reused embedder coverage".to_string(),

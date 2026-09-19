@@ -27,6 +27,9 @@ impl TaskV2Store {
                 "task actor must not be empty".to_string(),
             ));
         }
+        if let Some(boundary) = &self.coordination {
+            boundary.guard_ordinary_footprint(params.status, &params.context_files)?;
+        }
         let relations = relations_from_create_params(&params)?;
         self.registry
             .validate_new_task_relation_targets(&self.workspace_id, &relations)?;
@@ -59,6 +62,7 @@ impl TaskV2Store {
             .collect();
         let bundle = TaskBundleV2 {
             envelope: orbit_types::task::TaskEnvelopeV2 {
+                job_run_host: None,
                 schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
                 id: id.clone(),
                 title: params.title,
@@ -319,6 +323,11 @@ impl TaskV2Store {
 
     pub(crate) fn delete_task(&self, id: &str) -> Result<bool, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
-        self.in_boundary(|| self.bundle_store.delete_bundle(id))
+        self.in_boundary(|| {
+            if let Some(boundary) = &self.coordination {
+                boundary.refuse_unscoped_claim_write(id)?;
+            }
+            self.bundle_store.delete_bundle(id)
+        })
     }
 }

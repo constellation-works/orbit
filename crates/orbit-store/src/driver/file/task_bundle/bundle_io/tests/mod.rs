@@ -335,6 +335,7 @@ fn read_bundle_rejects_manifest_entry_with_missing_artifact_file() {
     let manifest = ArtifactManifestV2 {
         schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
         files: vec![ArtifactManifestFileV2 {
+            origin: None,
             path: "result.txt".to_string(),
             blob: blob.clone(),
             sha256: format!("{:x}", Sha256::digest(b"hello")),
@@ -374,6 +375,7 @@ fn lightweight_read_skips_tampered_artifact_bytes_that_strict_read_rejects() {
     let manifest = ArtifactManifestV2 {
         schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
         files: vec![ArtifactManifestFileV2 {
+            origin: None,
             path: "result.txt".to_string(),
             blob: blob.clone(),
             sha256: format!("{:x}", Sha256::digest(b"hello")),

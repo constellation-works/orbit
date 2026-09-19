@@ -132,6 +132,7 @@ fn indexed_lexical_task_search_still_matches_comments_refs_and_artifact_paths() 
         .upsert_task_artifacts(
             &id,
             orbit_store::TaskArtifactUpdateParams {
+                origin: None,
                 actor: "test".to_string(),
                 owner_run_id: None,
                 upsert_artifacts: vec![orbit_types::task::TaskArtifact::from_text(

@@ -5,11 +5,11 @@ use orbit_policy::PolicyEngine;
 use orbit_search::{EmbedWorker, EmbedderPool, SemanticIndex};
 use orbit_store::Store;
 use orbit_store::compose::{
-    WorkspaceTaskBackends, audit_event_store_sqlite, automation_store, coordination_task_backends,
+    CoordinatedWorkspaceBackends, audit_event_store_sqlite, automation_store,
     global_executor_def_store, global_policy_def_store, invocation_store_from_store,
-    layered_policy_def_store, operation_store, review_store, task_reservation_store_sqlite,
-    tool_store_sqlite, v2_audit_store_from_store, workspace_job_run_store,
-    workspace_policy_def_store, workspace_task_backends,
+    layered_policy_def_store, operation_store, review_store, tool_store_sqlite,
+    v2_audit_store_from_store, workspace_coordinated_backends, workspace_job_run_store,
+    workspace_policy_def_store,
 };
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, WorkspaceConfig, read_workspace_config_optional,
@@ -71,7 +71,9 @@ pub(crate) fn build_context_from_roots(
         global_root.to_path_buf(),
     );
 
-    let task_backends = build_v2_task_backends(global_root, &paths, binding)?;
+    let coordinated = build_v2_task_backends(global_root, &paths, binding, store.clone())?;
+    let task_backends = coordinated.task;
+    let task_reservation_store = coordinated.reservation;
     let configured = read_workspace_config_optional(&paths.orbit_dir)?;
     let workspace_id = if is_explicit_data_dir(global_root, &paths.orbit_dir) {
         binding
@@ -141,7 +143,6 @@ pub(crate) fn build_context_from_roots(
     // under the workspace state directory.
     let tool_store = tool_store_sqlite(store.clone());
     let audit_event_store = audit_event_store_sqlite(store.clone());
-    let task_reservation_store = task_reservation_store_sqlite(store.clone());
     let host_store = OrbitHostStore {
         sqlite: store.clone(),
         automation: automation_store(store.clone())?,
@@ -254,7 +255,8 @@ fn build_v2_task_backends(
     global_root: &Path,
     paths: &WorkspacePaths,
     runtime_binding: Option<&WorkspaceRuntimeBinding>,
-) -> Result<WorkspaceTaskBackends, OrbitError> {
+    store: Store,
+) -> Result<CoordinatedWorkspaceBackends, OrbitError> {
     let registry = TaskRegistryStore::open(&task_registry_path(global_root))?;
     let config = read_workspace_config_optional(&paths.orbit_dir)?;
     // Several registered repositories may intentionally share one explicit
@@ -267,10 +269,11 @@ fn build_v2_task_backends(
         && let Some(binding) = runtime_binding
     {
         ensure_explicit_root_task_binding(&registry, paths, binding)?;
-        return Ok(coordination_task_backends(
+        return workspace_coordinated_backends(
             registry,
             binding.logical_workspace_id.clone(),
-        ));
+            store,
+        );
     }
     let partition_id_hint = runtime_binding.map(|binding| binding.task_partition_id.as_str());
     // An explicit `--root` data directory is not a checkout. Binding
@@ -282,7 +285,7 @@ fn build_v2_task_backends(
             .as_ref()
             .map(|config| config.workspace_id.clone())
             .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
-        return Ok(coordination_task_backends(registry, partition_id));
+        return workspace_coordinated_backends(registry, partition_id, store);
     }
     let configured_partition_id = config.as_ref().map(|config| config.workspace_id.as_str());
     if let (Some(hint), Some(configured)) = (partition_id_hint, configured_partition_id)
@@ -348,7 +351,7 @@ fn build_v2_task_backends(
         }
     }
 
-    Ok(workspace_task_backends(registry, binding.partition_id))
+    workspace_coordinated_backends(registry, binding.partition_id, store)
 }
 
 /// Recreate the selected checkout's task-registry binding after its index was

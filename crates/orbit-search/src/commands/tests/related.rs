@@ -53,6 +53,7 @@ fn vector_for(text: &str) -> Vec<f32> {
 
 fn task(id: &str, title: &str, description: &str) -> Task {
     Task {
+        job_run_host: None,
         id: id.to_string(),
         title: title.to_string(),
         description: description.to_string(),

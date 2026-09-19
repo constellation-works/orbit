@@ -677,6 +677,7 @@ fn orphaned_running_run_is_reported() {
     let workspace_id = runtime.workspace_id().expect("workspace id");
     let now = Utc::now();
     let run = JobRun {
+        executed_on: None,
         run_id: "run-orphan".to_string(),
         job_id: "demo".to_string(),
         attempt: 1,
@@ -724,6 +725,7 @@ fn orphaned_pending_run_is_reported() {
     let workspace_id = runtime.workspace_id().expect("workspace id");
     let created_at = Utc::now() - chrono::Duration::days(4);
     let run = JobRun {
+        executed_on: None,
         run_id: "run-pending-orphan".to_string(),
         job_id: "task_gate_pipeline".to_string(),
         attempt: 1,
@@ -777,6 +779,7 @@ fn fresh_pending_run_is_not_reported_as_orphan() {
     let workspace_id = runtime.workspace_id().expect("workspace id");
     let now = Utc::now();
     let run = JobRun {
+        executed_on: None,
         run_id: "run-pending-fresh".to_string(),
         job_id: "task_gate_pipeline".to_string(),
         attempt: 1,

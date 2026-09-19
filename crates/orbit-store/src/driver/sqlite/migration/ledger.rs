@@ -212,12 +212,18 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_task_commit_journal,
     },
+    Migration {
+        version: 22,
+        name: "execution_provenance",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_execution_provenance,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 21;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 22;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

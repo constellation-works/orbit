@@ -16,6 +16,7 @@ fn at(minute: u32) -> DateTime<Utc> {
 
 fn run_with_steps(run_id: &str, state: JobRunState, created: DateTime<Utc>, steps: u32) -> JobRun {
     JobRun {
+        executed_on: None,
         run_id: run_id.to_string(),
         job_id: "task_pr_pipeline".to_string(),
         attempt: 1,

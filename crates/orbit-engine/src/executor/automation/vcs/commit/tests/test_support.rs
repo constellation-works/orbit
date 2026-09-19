@@ -71,6 +71,7 @@ impl CommitTestHost {
     ) -> Self {
         let now = Utc::now();
         self.job_runs.lock().unwrap().push(JobRun {
+            executed_on: None,
             run_id: run_id.to_string(),
             job_id: state.job_id.clone(),
             attempt: 1,
@@ -372,6 +373,7 @@ fn git_command_snapshot(repo: &Path, args: &[&str]) -> CommandSnapshot {
 pub fn task_with_file(id: &str, title: &str, path: &str, implemented_by: &str) -> Task {
     let now = Utc::now();
     Task {
+        job_run_host: None,
         id: id.to_string(),
         title: title.to_string(),
         description: String::new(),

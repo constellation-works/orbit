@@ -14,6 +14,7 @@ use super::super::projection::{
 fn test_run(state: JobRunState) -> JobRun {
     let now = Utc::now();
     JobRun {
+        executed_on: None,
         run_id: "jrun-projection".to_string(),
         job_id: "task_auto_pipeline".to_string(),
         attempt: 1,
@@ -188,5 +189,20 @@ fn projection_separates_requested_resolved_and_actual_activity_identity() {
     assert_eq!(
         value["activity_provenance"][2]["actual_status"],
         "not_started"
+    );
+}
+
+#[test]
+fn run_projection_exposes_recorded_location_without_input_inference() {
+    let mut run = test_run(JobRunState::Running);
+    run.input = Some(json!({"executed_on": {"machine_id": "forged"}}));
+    assert_eq!(job_run_to_json(&run, None)["executed_on"], Value::Null);
+    run.executed_on = Some(orbit_types::task::ExecutionLocation {
+        machine_id: "trusted-machine".into(),
+        host_id: None,
+    });
+    assert_eq!(
+        job_run_to_json(&run, None)["executed_on"]["machine_id"],
+        "trusted-machine"
     );
 }

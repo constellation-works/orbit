@@ -76,6 +76,7 @@ fn run_owner_equivalence_pairs_pid_with_its_start_time_token() {
 
     let now = Utc::now();
     let mut run = JobRun {
+        executed_on: None,
         run_id: "jrun-owner".to_string(),
         job_id: "job-owner".to_string(),
         attempt: 1,
@@ -95,6 +96,10 @@ fn run_owner_equivalence_pairs_pid_with_its_start_time_token() {
         steps: Vec::new(),
     };
 
+    let legacy = serde_json::to_value(&run).expect("legacy shape");
+    assert!(legacy.get("executed_on").is_none());
+    let loaded: JobRun = serde_json::from_value(legacy).expect("legacy run");
+    assert_eq!(loaded.executed_on, None);
     assert!(run.is_owned_by(4242, Some("v1:99")));
     assert!(
         !run.is_owned_by(4242, Some("v1:100")),

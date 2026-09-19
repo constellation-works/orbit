@@ -348,6 +348,7 @@ mod tests {
         .expect("write event");
 
         let run = JobRun {
+            executed_on: None,
             run_id: "run-1".to_string(),
             job_id: "job-a".to_string(),
             attempt: 1,
@@ -424,6 +425,7 @@ mod tests {
         let orbit = temp.path().join(".orbit");
 
         let valid_run = JobRun {
+            executed_on: None,
             run_id: "run-good".to_string(),
             job_id: "job-a".to_string(),
             attempt: 1,

@@ -109,6 +109,7 @@ fn bounded_integrity_is_selected_only_but_direct_unbounded_and_fallback_reads_ar
             .upsert_task_artifacts(
                 &old.id,
                 &TaskArtifactUpdateParams {
+                    origin: None,
                     owner_run_id: None,
                     actor: "codex".to_string(),
                     upsert_artifacts: vec![TaskArtifact {
@@ -395,6 +396,7 @@ fn upsert_proof(store: &TaskV2Store, id: &str, content: &[u8]) {
         .upsert_task_artifacts(
             id,
             &TaskArtifactUpdateParams {
+                origin: None,
                 owner_run_id: None,
                 actor: "codex".to_string(),
                 upsert_artifacts: vec![TaskArtifact {

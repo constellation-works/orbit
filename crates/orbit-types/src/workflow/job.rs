@@ -559,6 +559,9 @@ pub struct KnowledgeRunMetrics {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobRun {
+    /// Immutable runtime identity at insertion; pre-existing rows remain unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executed_on: Option<crate::task::ExecutionLocation>,
     pub run_id: OrbitId,
     pub job_id: OrbitId,
     pub attempt: u32,
