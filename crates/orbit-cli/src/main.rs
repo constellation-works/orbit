@@ -243,6 +243,24 @@ fn main() {
         progress_allowed = sink.progress_allowed(),
         "resolved output sink"
     );
+    // Update owns exclusive admission and pins its candidate before convergence.
+    // Every other command pins the exact running inode before any bootstrap.
+    // This also covers all MCP transports, managed workers and automatic migrations.
+    let inspection =
+        matches!(&cli.command, command::Commands::Migrate(command) if !command.confirm);
+    let _generation = if matches!(&cli.command, command::Commands::Update(_)) || inspection {
+        None
+    } else {
+        match orbit_core::runtime::resolve_global_root()
+            .and_then(|root| orbit_common::fs::generation::GenerationGuard::for_process(&root))
+        {
+            Ok(guard) => Some(guard),
+            Err(error) => {
+                print_error(&error, &sink, None);
+                std::process::exit(1);
+            }
+        }
+    };
     let root_override = cli.root.clone();
     let workspace_selector = cli.workspace.clone();
     let actor = ActorIdentity::from_env();

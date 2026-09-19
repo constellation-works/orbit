@@ -32,6 +32,10 @@ impl OrbitRuntime {
         roots: OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
     ) -> Result<Self, OrbitError> {
+        // Library consumers must also refuse before bootstrap can migrate or
+        // reconcile resources under a participating persistent CLI/MCP client.
+        let _generation =
+            orbit_common::fs::generation::GenerationGuard::for_process(&roots.global_root)?;
         ensure_orbit_root_initialized(&roots.global_root, &roots.shared_root)?;
         build_runtime(
             &roots.global_root,
@@ -222,6 +226,7 @@ fn build_runtime(
     reconcile_stale_runs: bool,
     host_lifetime: HostLifetime,
 ) -> Result<OrbitRuntime, OrbitError> {
+    let _generation = orbit_common::fs::generation::GenerationGuard::for_process(global_root)?;
     let layout_report = match orbit_store::workflow::layout::upgrade_workspace_layout(shared_root) {
         Ok(report) => report,
         Err(error) if error.is_readonly_or_access_failure() => {

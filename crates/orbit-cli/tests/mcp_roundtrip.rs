@@ -5852,3 +5852,6 @@ fn runtime_opens(log_path: &Path) -> usize {
         .filter(|line| line.contains("opened a workspace runtime"))
         .count()
 }
+
+#[path = "mcp_roundtrip/upgrade.rs"]
+mod upgrade;

@@ -68,6 +68,8 @@ pub struct UpdateRequest {
 /// build one directly so the whole flow runs against fixtures without touching
 /// a real installation.
 pub struct UpdateEnvironment {
+    /// Authoritative host root for cross-process upgrade admission.
+    pub global_root: PathBuf,
     /// The executable to replace.
     pub executable: PathBuf,
     /// Process snapshot of the running binary's version (`CARGO_PKG_VERSION`
@@ -117,6 +119,7 @@ impl UpdateEnvironment {
                 },
             );
         Ok(Self {
+            global_root: orbit_core::runtime::resolve_global_root()?,
             install_channel: InstallChannel::detect_with_homebrew_ownership(
                 &executable,
                 channel::managed_install_dir().as_deref(),
@@ -260,6 +263,8 @@ pub fn run_update(
         return Err(OrbitError::InvalidInput(remediation));
     }
 
+    let admission =
+        orbit_common::fs::generation::GenerationUpdate::acquire(&environment.global_root)?;
     let install_dir = environment.executable.parent().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
             "'{}' has no parent directory",
@@ -296,6 +301,9 @@ pub fn run_update(
     if target == current {
         // Not a no-op: re-running `orbit update` at the installed version is
         // the documented way to finish a run whose convergence failed.
+        converge::require_admission_contract(&executable)?;
+        let digest = orbit_common::fs::generation::executable_generation(&executable)?;
+        let _generation = admission.pin(&digest)?;
         return Ok(finish(
             environment,
             &executable,
@@ -315,10 +323,12 @@ pub fn run_update(
     report.archive_sha256 = Some(staged.archive_sha256.clone());
     report.signing_key_id = Some(staged.signing_key_id.clone());
 
+    converge::require_admission_contract(staged.path())?;
     if target < current {
         assert_downgrade_is_compatible(environment, staged.path(), &current, &target)?;
     }
 
+    let digest = orbit_common::fs::generation::executable_generation(staged.path())?;
     let backup = backup_path(&executable);
     staged.commit(&executable, &backup)?;
     report.replaced = true;
@@ -346,6 +356,16 @@ pub fn run_update(
         }
     }
 
+    let _generation = match admission.pin(&digest) {
+        Ok(guard) => guard,
+        Err(error) => {
+            report.outcome = UpdateOutcome::NeedsRecovery;
+            report.recovery = Some(format!(
+                "The executable was replaced but candidate admission failed: {error}. No convergence was attempted."
+            ));
+            return Ok(report);
+        }
+    };
     Ok(finish(
         environment,
         &executable,
@@ -510,9 +530,9 @@ fn recovery_text(report: &UpdateReport, failed: &[&str], root_argument: Option<&
 /// Refuse a downgrade the target release cannot actually open.
 ///
 /// Asks the *staged* binary — before it is installed — whether it can read
-/// this workspace. `migrate --dry-run` exits zero only when its own ledgers
-/// already match the workspace, which for an older binary is exactly the
-/// condition that makes the downgrade safe.
+/// this workspace for writes. A zero exit code also permits additive-newer
+/// read-only inspections, so require the structured current/supported versions
+/// and explicit up-to-date result instead of treating success as compatibility.
 fn assert_downgrade_is_compatible(
     environment: &UpdateEnvironment,
     staged: &Path,
@@ -522,20 +542,14 @@ fn assert_downgrade_is_compatible(
     let Some(workspace) = environment.workspace.as_ref() else {
         return Ok(());
     };
-    let probe = run_step(
-        staged,
-        &workspace.cwd,
-        workspace.root_argument.as_deref(),
-        &["migrate", "--dry-run"],
-    );
-    if !probe.failed() {
+    if converge::probe_writable_state(staged, &workspace.cwd, workspace.root_argument.as_deref())? {
         return Ok(());
     }
     Err(OrbitError::Execution(format!(
-        "orbit {target} cannot open this workspace's state, which orbit {current} has already \
-         migrated; nothing was replaced. Downgrade the workspace first, or restore a `.orbit/` \
-         backup taken before the upgrade. The staged {target} reported: {}",
-        probe.detail.as_deref().unwrap_or("no diagnostic")
+        "orbit {target} cannot open this workspace's state for audited writes, which orbit {current} \
+         has already migrated, or did not provide a supported compatibility report; nothing was \
+         replaced. Restore a compatible backup before downgrading. Read-only inspection success \
+         is insufficient for an MCP authority"
     )))
 }
 
