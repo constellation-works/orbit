@@ -1079,7 +1079,9 @@ fn missing_shipped_activity_default_is_an_error_not_healthy() {
 }
 
 /// [ORB-12109] A task-store partition whose workspace is still registered on
-/// this host is healthy, not an orphan.
+/// this host is healthy, not an orphan. Coordinated composition also activates
+/// a claimed partition for the fixture checkout, so the host scans two
+/// partitions and both must stay claimed.
 #[test]
 fn registered_task_store_partition_is_not_an_orphan() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -1092,7 +1094,12 @@ fn registered_task_store_partition_is_not_an_orphan() {
     let row = status_of(&results, "orphan-task-stores");
     assert_eq!(row.status, WorkspaceDoctorStatus::Ok, "{row:?}");
     assert!(
-        row.message.contains("1 task-store partition"),
+        row.message.contains("2 task-store partition"),
+        "{}",
+        row.message
+    );
+    assert!(
+        row.message.contains("all claimed by a workspace binding"),
         "{}",
         row.message
     );

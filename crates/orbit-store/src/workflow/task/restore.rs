@@ -1,5 +1,6 @@
 //! Fail-closed, same-authority recovery from a validated task publication.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -248,16 +249,28 @@ fn assert_destination_pairing(
 }
 
 fn canonical_destination_has_entries(workspace_root: &Path) -> Result<bool, OrbitError> {
-    let mut entries = match fs::read_dir(workspace_root) {
+    let entries = match fs::read_dir(workspace_root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(OrbitError::from_write_io(workspace_root, error)),
     };
-    entries
-        .next()
-        .transpose()
-        .map(|entry| entry.is_some())
-        .map_err(|error| OrbitError::from_write_io(workspace_root, error))
+    for entry in entries {
+        let entry = entry.map_err(|error| OrbitError::from_write_io(workspace_root, error))?;
+        if partition_infrastructure_name(&entry.file_name()) {
+            continue;
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Coordinated composition writes markers and lock files into an otherwise
+/// empty partition (`.task-commit-required`, `.task-commit-pending`,
+/// `.task-commit.lock`). Restore staging uses a `.orbit-publication-restore-`
+/// prefix. EmptyDestination means "no leftover canonical task content", not
+/// "the directory is byte-empty".
+fn partition_infrastructure_name(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|value| value.starts_with('.'))
 }
 
 fn stage_bundle(root: &Path, published: &ValidatedPublicationBundle) -> Result<(), OrbitError> {
