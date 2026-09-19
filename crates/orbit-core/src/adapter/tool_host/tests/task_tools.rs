@@ -15,7 +15,8 @@ use serde_json::{Value, json};
 
 use super::super::json::task_to_json;
 use super::super::test_support::{
-    create_task, create_task_with_crew, invalid_input_message, run_tool_as_operator, test_runtime,
+    create_task, create_task_with_crew, invalid_input_message, managed_tool_identity_env_guard,
+    run_tool_as_operator, test_runtime, unmanaged_tool_env_guard,
 };
 use crate::adapter::command::ToolEntryPoint;
 
@@ -1228,6 +1229,7 @@ fn task_update_in_progress_outcome_does_not_depend_on_extra_fields() {
 /// attributed to the supplied agent family, as the worker path does.
 #[test]
 fn task_update_start_from_proposed_chains_history_edges_and_attributes_plan() {
+    let _env = unmanaged_tool_env_guard();
     let (_root, runtime, _repo_root) = test_runtime();
     let proposed = runtime
         .add_task(crate::application::task::TaskAddParams {
@@ -1296,6 +1298,42 @@ fn task_update_start_from_proposed_chains_history_edges_and_attributes_plan() {
         ],
         "history must replay as proposed → backlog → in_progress: {started}"
     );
+}
+
+/// A managed worker identity outranks a model string carried in the task
+/// payload. This fixture mirrors the engine envelope without changing the
+/// production precedence rule.
+#[test]
+fn task_update_start_uses_managed_worker_identity_over_payload_model() {
+    let _env = managed_tool_identity_env_guard(
+        "jrun-test-managed-task-provenance",
+        "codex",
+        orbit_common::test_fixtures::TEST_CODEX_MODEL,
+    );
+    let (_root, runtime, _repo_root) = test_runtime();
+    let proposed = runtime
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Managed provenance start".to_string(),
+            description: "The worker identity must win over payload data.".to_string(),
+            ..Default::default()
+        })
+        .expect("add proposed task without a plan");
+
+    let started = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": proposed.id,
+                "status": "in-progress",
+                "plan": "Preserve trusted worker attribution.",
+                "model": "claude",
+            }),
+            None,
+            None,
+        )
+        .expect("managed proposed start succeeds");
+
+    assert_eq!(started["planned_by"].as_str(), Some("codex"), "{started}");
 }
 
 /// The start write only infers `planned_by`; an existing planner and an
