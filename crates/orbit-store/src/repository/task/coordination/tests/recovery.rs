@@ -186,6 +186,17 @@ fn a_failed_compensation_keeps_the_partition_closed_until_recovery_succeeds() {
         "{write_error}"
     );
 
+    inject_coordination_faults(&[CoordinationFault::DuringRecovery]);
+    let show_error = coordinated
+        .backends
+        .reservation
+        .show_workspace_claim(&coordinated.orbit_dir.to_string_lossy(), Some(PARTITION_ID))
+        .expect_err("a mutating claim show must fail closed too");
+    assert!(
+        show_error.to_string().contains("DuringRecovery"),
+        "{show_error}"
+    );
+
     // With no injected failure the next entry settles the undecided row and
     // the partition is open again, at its pre-commit state.
     assert_eq!(coordinated.task(&task.id).status, TaskStatus::Backlog);

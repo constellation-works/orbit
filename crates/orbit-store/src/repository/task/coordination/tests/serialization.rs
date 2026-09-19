@@ -107,6 +107,53 @@ fn ordinary_writes_from_another_store_instance_wait_for_an_admission_section() {
 }
 
 #[test]
+fn show_workspace_claim_waits_for_an_admission_section() {
+    let temp = TempDir::new().expect("tempdir");
+    let _setup = Coordinated::open(temp.path());
+    let entered = AtomicBool::new(false);
+    let release = AtomicBool::new(false);
+    let finished = AtomicBool::new(false);
+
+    std::thread::scope(|scope| {
+        let holder = scope.spawn(|| {
+            let held = Coordinated::open(temp.path());
+            held.boundary()
+                .with_admission(|| {
+                    entered.store(true, Ordering::SeqCst);
+                    let deadline = Instant::now() + Duration::from_secs(20);
+                    while !release.load(Ordering::SeqCst) && Instant::now() < deadline {
+                        std::thread::sleep(POLL);
+                    }
+                    Ok(())
+                })
+                .expect("admission section");
+        });
+        let writer = scope.spawn(|| {
+            wait_for(&entered, "the admission section to start");
+            let other = Coordinated::open(temp.path());
+            other
+                .backends
+                .reservation
+                .show_workspace_claim(&other.orbit_dir.to_string_lossy(), Some(PARTITION_ID))
+                .expect("show workspace claim");
+            finished.store(true, Ordering::SeqCst);
+        });
+
+        wait_for(&entered, "the admission section to start");
+        std::thread::sleep(HOLD);
+        assert!(
+            !finished.load(Ordering::SeqCst),
+            "show_workspace_claim must not expire claims underneath an admission section"
+        );
+        release.store(true, Ordering::SeqCst);
+        holder.join().expect("holder thread");
+        writer.join().expect("writer thread");
+    });
+
+    assert!(finished.load(Ordering::SeqCst));
+}
+
+#[test]
 fn nested_task_and_reservation_writes_inside_an_admission_section_do_not_deadlock() {
     let temp = TempDir::new().expect("tempdir");
     let coordinated = Coordinated::open(temp.path());

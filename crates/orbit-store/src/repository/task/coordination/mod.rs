@@ -54,6 +54,18 @@
 //! observes a committed reservation whose task transition has not landed. A
 //! compensation or replay that fails leaves the marker in place and returns
 //! the error: the partition stays closed until recovery succeeds.
+//!
+//! # Who takes the boundary
+//!
+//! Coordinated task mutations enter through `TaskV2Store::in_boundary` or
+//! `TaskV2Store::with_task_lock` (boundary first, then the bundle lock).
+//! Coordinated reservation mutations enter through
+//! `SqliteTaskReservationStoreBackend::in_boundary`, including methods that
+//! look like getters but lazily mark expired rows released
+//! (`list_active_task_reservations`, `show_workspace_claim`). The one
+//! deliberate exception is `inspect_active_task_reservations`: it is a true
+//! read (it does not expire rows) so `orbit doctor` stays strictly
+//! read-only, and it therefore stays outside the boundary.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

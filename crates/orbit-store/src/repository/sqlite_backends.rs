@@ -294,8 +294,11 @@ impl TaskReservationStoreBackend for SqliteTaskReservationStoreBackend {
         workspace_orbit_dir: &str,
         workspace_id: Option<&str>,
     ) -> Result<WorkspaceClaimStatusResult, OrbitError> {
-        self.store
-            .show_workspace_claim(workspace_orbit_dir, workspace_id)
+        // Showing marks expired claims released, so it is a mutation.
+        self.in_boundary(|| {
+            self.store
+                .show_workspace_claim(workspace_orbit_dir, workspace_id)
+        })
     }
 
     fn check_workspace_claim(
