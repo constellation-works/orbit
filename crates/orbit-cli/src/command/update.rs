@@ -40,6 +40,12 @@ pub struct UpdateCommand {
     /// open this workspace's state
     #[arg(long)]
     pub allow_downgrade: bool,
+    /// Describe the executable admission protocol without opening state
+    #[arg(long, conflicts_with_all = ["check", "version", "allow_downgrade", "preflight"])]
+    pub contract: bool,
+    /// Check whether running Orbit processes prevent an upgrade, without opening stores
+    #[arg(long, conflicts_with_all = ["check", "version", "allow_downgrade"])]
+    pub preflight: bool,
     /// Emit machine-readable JSON instead of the report.
     #[arg(long)]
     pub json: bool,
@@ -48,6 +54,28 @@ pub struct UpdateCommand {
 impl UpdateCommand {
     /// Run the update and render its report.
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
+        if self.contract {
+            return Ok(Payload::detail(
+                serde_json::json!({"schema_version": 1,
+                    "contract": orbit_common::fs::generation::GENERATION_CONTRACT}),
+                orbit_common::fs::generation::GENERATION_CONTRACT,
+            )
+            .into());
+        }
+        if self.preflight {
+            let root = orbit_core::runtime::resolve_global_root()?;
+            let _admission = orbit_common::fs::generation::GenerationUpdate::acquire(&root)?;
+            return Ok(Payload::detail(
+                serde_json::json!({
+                    "schema_version": 1,
+                    "admitted": true,
+                    "reservation": false,
+                    "global_root": root,
+                    "contract": orbit_common::fs::generation::GENERATION_CONTRACT
+                }),
+                "Upgrade admission available. This observation does not reserve admission; use orbit update for guarded replacement.",
+            ).into());
+        }
         let environment = UpdateEnvironment::from_process(root_override)?;
         let report = run_update(
             &environment,

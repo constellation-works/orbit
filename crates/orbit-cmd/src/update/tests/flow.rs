@@ -259,7 +259,7 @@ fn an_incompatible_downgrade_is_caught_before_the_binary_is_replaced() {
     assert_eq!(
         fixture.invocations(),
         vec![format!(
-            "0.18.0: --root {} migrate --dry-run",
+            "0.18.0: --root {} migrate --dry-run --json",
             root_a.display()
         )]
     );
@@ -302,7 +302,7 @@ fn an_incompatible_prerelease_downgrade_runs_the_compatibility_preflight() {
     assert_eq!(fixture.installed_reports(), "orbit 0.19.0-rc.10");
     assert_eq!(
         fixture.invocations(),
-        vec![fixture.invocation("0.19.0-rc.2", "migrate --dry-run")]
+        vec![fixture.invocation("0.19.0-rc.2", "migrate --dry-run --json")]
     );
 }
 
@@ -632,7 +632,7 @@ fn a_stale_permitted_downgrade_still_preflights_the_workspace() {
         fixture
             .invocations()
             .iter()
-            .any(|line| line == &fixture.invocation("0.18.0", "migrate --dry-run")),
+            .any(|line| line == &fixture.invocation("0.18.0", "migrate --dry-run --json")),
         "{:?}",
         fixture.invocations()
     );
@@ -717,4 +717,62 @@ fn a_fresh_fixture_install_directory_holds_only_the_executable() {
 
     assert_eq!(fixture.install_dir_entries(), vec!["orbit".to_string()]);
     assert!(Path::new(&fixture.executable).exists());
+}
+
+#[test]
+fn live_generation_refuses_before_installation_or_candidate_execution() {
+    use orbit_common::fs::generation::GenerationGuard;
+    for behavior in [
+        FakeBinary::Healthy,
+        FakeBinary::MigrationFails,
+        FakeBinary::VersionMismatch,
+    ] {
+        let fixture = Fixture::new("0.18.0");
+        fixture.publish("0.19.0", behavior);
+        let environment = fixture.environment();
+        let _client = GenerationGuard::for_process(&environment.global_root).expect("live client");
+        let before = std::fs::read(&fixture.executable).expect("installed bytes");
+        let error = run_update(&environment, &request()).expect_err("live clients refuse");
+        assert!(error.to_string().contains("upgrade admission refused"));
+        assert_eq!(
+            std::fs::read(&fixture.executable).expect("installed bytes"),
+            before
+        );
+        assert!(fixture.invocations().is_empty());
+        assert_eq!(fixture.install_dir_entries(), vec!["orbit".to_string()]);
+    }
+}
+
+#[test]
+fn successful_read_only_inspection_cannot_authorize_a_downgrade() {
+    let fixture = Fixture::new("0.19.0");
+    fixture.publish("0.18.0", FakeBinary::ReadOnlyStore);
+    let mut requested = request();
+    requested.allow_downgrade = true;
+    let before = std::fs::read(&fixture.executable).expect("old executable");
+    let error =
+        run_update(&fixture.environment(), &requested).expect_err("read-only candidate refused");
+    assert!(error.to_string().contains("Read-only inspection success"));
+    assert_eq!(
+        std::fs::read(&fixture.executable).expect("old executable"),
+        before
+    );
+}
+
+#[test]
+fn a_replacement_without_admission_protocol_is_refused_before_installation() {
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::NoAdmissionContract);
+    let before = std::fs::read(&fixture.executable).expect("installed executable");
+    let error = run_update(&fixture.environment(), &request()).expect_err("unprotected candidate");
+    assert!(
+        error
+            .to_string()
+            .contains("does not support executable generation admission")
+    );
+    assert_eq!(
+        std::fs::read(&fixture.executable).expect("installed executable"),
+        before
+    );
+    assert!(fixture.invocations().is_empty());
 }

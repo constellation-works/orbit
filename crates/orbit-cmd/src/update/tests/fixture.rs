@@ -94,6 +94,10 @@ pub enum FakeBinary {
     VersionMismatch,
     /// Fails `migrate --confirm`, as a binary that cannot migrate would.
     MigrationFails,
+    /// Inspection succeeds but the older candidate can only read the store.
+    ReadOnlyStore,
+    /// Candidate cannot coordinate with protected clients.
+    NoAdmissionContract,
     /// Fails `workspace sync` after migrating cleanly.
     SyncFails,
 }
@@ -207,6 +211,7 @@ impl Fixture {
 
     fn environment_with_workspace(&self, workspace_cwd: Option<PathBuf>) -> UpdateEnvironment {
         UpdateEnvironment {
+            global_root: self._root.path().join("global"),
             install_channel: InstallChannel::Managed {
                 install_dir: self.executable.parent().expect("bin dir").to_path_buf(),
             },
@@ -339,6 +344,7 @@ fn sign(message: &[u8]) -> Vec<u8> {
 /// every other invocation so a test can assert the convergence order.
 fn script(version: &str, log: &Path, behavior: FakeBinary) -> Vec<u8> {
     let failure = match behavior {
+        FakeBinary::ReadOnlyStore | FakeBinary::NoAdmissionContract => "",
         FakeBinary::MigrationFails => {
             "if [ \"$1\" = migrate ]; then echo 'migration failed: pending layout v9' >&2; exit 1; fi\n"
         }
@@ -347,14 +353,26 @@ fn script(version: &str, log: &Path, behavior: FakeBinary) -> Vec<u8> {
         }
         FakeBinary::Healthy | FakeBinary::VersionMismatch => "",
     };
+    let contract = if behavior == FakeBinary::NoAdmissionContract {
+        "{}"
+    } else {
+        r#"{"schema_version":1,"contract":"executable-generation-v1"}"#
+    };
+    let inspection = if behavior == FakeBinary::ReadOnlyStore {
+        r#"{"up_to_date":false,"schema":{"current":21,"supported":20},"layout":{"current":3,"supported":3},"forward_compatible":{"read_only":true}}"#
+    } else {
+        r#"{"up_to_date":true,"schema":{"current":21,"supported":21},"layout":{"current":3,"supported":3},"forward_compatible":{"read_only":false}}"#
+    };
     format!(
         "#!/bin/sh\n\
          if [ \"$1\" = --version ]; then echo 'orbit {version}'; exit 0; fi\n\
+         if [ \"$1\" = update ] && [ \"$2\" = --contract ]; then echo '{contract}'; exit 0; fi\n\
          all_args=\"$*\"\n\
          if [ \"$1\" = --root ]; then shift 2; fi\n\
          echo \"{version}: $all_args\" >> '{log}'\n\
          if [ \"$1\" = clock ]; then echo '{CLOCK_REPAIR_REPORT}'; fi\n\
-         {failure}exit 0\n",
+         {failure}if [ \"$1\" = migrate ] && [ \"$2\" = --dry-run ]; then echo '{inspection}'; fi\n\
+         exit 0\n",
         log = log.display()
     )
     .into_bytes()

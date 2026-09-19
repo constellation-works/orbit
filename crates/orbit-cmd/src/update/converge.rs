@@ -224,3 +224,56 @@ fn truncate(value: &str) -> String {
         None => trimmed.to_string(),
     }
 }
+
+/// Require a candidate's explicit writable compatibility report. A successful
+/// additive-newer read-only inspection is not a safe downgrade.
+pub(super) fn probe_writable_state(
+    executable: &Path,
+    cwd: &Path,
+    root_argument: Option<&Path>,
+) -> Result<bool, OrbitError> {
+    let mut command = Command::new(executable);
+    if let Some(root) = root_argument {
+        command.arg("--root").arg(root);
+    }
+    let output = run_process(
+        command
+            .current_dir(cwd)
+            .args(["migrate", "--dry-run", "--json"]),
+    )
+    .map_err(|error| OrbitError::Execution(format!("candidate inspection: {error}")))?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let Ok(report) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
+        return Ok(false);
+    };
+    Ok(report["up_to_date"] == true
+        && report["forward_compatible"]["read_only"] == false
+        && ["schema", "layout"].iter().all(|name| {
+            let component = &report[*name];
+            matches!((component["current"].as_u64(), component["supported"].as_u64()),
+                (Some(current), Some(supported)) if current == supported)
+        }))
+}
+
+/// A trusted release must implement admission before it can replace a protected
+/// installation. Older or unrecognized candidates fail before any installation.
+pub(super) fn require_admission_contract(executable: &Path) -> Result<(), OrbitError> {
+    let output = run_process(Command::new(executable).args(["update", "--contract", "--json"]))
+        .map_err(|error| {
+            OrbitError::Execution(format!("candidate admission contract unavailable: {error}"))
+        })?;
+    let report = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
+    if output.status.success()
+        && report.is_some_and(|report| {
+            report["schema_version"] == 1
+                && report["contract"] == orbit_common::fs::generation::GENERATION_CONTRACT
+        })
+    {
+        return Ok(());
+    }
+    Err(OrbitError::Execution(
+        "replacement does not support executable generation admission; nothing was replaced".into(),
+    ))
+}

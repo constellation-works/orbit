@@ -91,6 +91,38 @@ Sync updates managed files, not workspace ownership or task publication. The
 plugin skill bundle updates through its plugin distribution; global skill
 symlinks and a plugin installation are distinct delivery paths.
 
+## Persistent MCP clients during upgrades
+
+`orbit update --contract --json` describes candidate protocol support without
+opening state. The updater requires this protocol before replacing an executable;
+a missing/incompatible candidate is refused, including pre-fix downgrades.
+
+Use `orbit update --preflight --json` against the configured executable and
+same authority before a wrapper changes the installation. Exit 0 reports
+`schema_version: 1`, `admitted: true`, `reservation: false` and
+`contract: executable-generation-v1`; exit 1 refuses admission on stderr.
+It opens no runtime or stores and may create coordination lock files. It is an
+observation, not a reservation. `orbit update` reacquires and holds admission
+through replacement, then pins the candidate through convergence. External
+installers must quiesce clients; a standalone preflight is not race-free.
+`orbit update --check` checks releases, not running-client compatibility.
+
+Participating CLI/MCP processes pin their executable generation for their entire
+lifetime. An update refuses while any is live, and a different executable cannot
+auto-migrate underneath them. This covers stdio/operator, TCP listener,
+federated local, destination SSH and managed processes without changing their
+authority. Quiesce via the owning client/operator and retry; Orbit does not kill
+sessions, hand off connections, reclaim claims or replay mutations. For a lost
+reply, inspect the durable operation/audit before any retry. Never delete the
+root's `.generation.lock` or `.generation-admission.lock` to force admission.
+
+Existing pre-fix processes do not hold these locks: the first installation needs
+explicit quiescence and reconnection to the same configured authority. A desktop
+restart alone does not prove an unmanaged backend exited. No shadow stores or
+ad-hoc MCP servers are part of this contract. Additive-newer compatibility permits
+some unaudited CLI reads; MCP tool calls, including workspace discovery, require
+durable audit writes and cannot use that read-only fallback.
+
 ## Database and layout upgrades
 
 ```bash

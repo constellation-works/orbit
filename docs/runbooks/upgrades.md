@@ -5,7 +5,7 @@ tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434]
-last_validated: 2026-09-13
+last_validated: 2026-09-19
 ---
 
 # Upgrade Orbit Safely
@@ -34,7 +34,8 @@ orbit update --json               # machine-readable report
    sequence instead — uninstall the legacy formula, then install the canonical one — because the
    two conflict rather than coexisting; a canonical-only install gets the ordinary qualified
    upgrade.
-3. Take an exclusive lock in the install directory, so two updates cannot interleave.
+3. Acquire host generation admission, refusing while any participating Orbit process is live,
+   then take the exclusive install-directory lock so two updates cannot interleave.
 4. Re-read the installed binary's version under that lock, and on Linux resolve a replaced
    running inode (`/path/to/orbit (deleted)`) back to the live install path. Equal, newer,
    and older installed versions are decided from that evidence — a writer that started on
@@ -76,6 +77,71 @@ Everything before the swap fails with nothing changed. After the swap the comman
 reports success on an incomplete upgrade: it exits `4` with `outcome: needs_recovery` and
 names the step that failed.
 
+### Persistent MCP clients and upgrade admission
+
+`orbit update --contract --json` reports protocol support without opening state:
+`{"schema_version":1,"contract":"executable-generation-v1"}`. The supported
+updater requires this response from a candidate before installation; a missing
+or incompatible protocol refuses, including a downgrade to an unprotected build.
+
+`orbit update --preflight --json` is the wrapper-facing admission probe. It
+opens no runtime, migrates no store, downloads nothing, and changes no binary
+or managed resource. It uses OS locks under the **same authoritative global
+root** (normally `~/.orbit/`; managed children retain their supplied registry
+root). Coordination lock files may be created. Exit 0 returns:
+
+```json
+{"schema_version":1,"admitted":true,"reservation":false,"contract":"executable-generation-v1","global_root":"/home/operator/.orbit"}
+```
+
+Exit 1 with `upgrade admission refused` on stderr means stop before installation.
+`--json` emits the CLI's normal JSON error envelope on stderr. This is an
+observation, **not a reservation**. Constellation's wrapper should call it using
+the configured executable, user, environment and authority, without an ad-hoc
+MCP server or alternate store. Use `orbit update` for replacement through the
+supported installer: it acquires admission again and retains it across staging
+and replacement. `--check` only checks release availability and is not this probe.
+External installers do not hold Orbit's admission across their file operations;
+they must quiesce clients before replacement. A preflight alone does not make an
+external installer race-free.
+
+Every participating CLI process pins its executable generation before runtime
+bootstrap and retains that pin until exit. This includes ordinary/ operator MCP
+stdio, the TCP listener, the local part of a federated mux, destination-side SSH
+servers, and managed workers. The proxy does not grant authority at its
+remote destination; that destination admits its own process. All existing
+workspace selection, operator/agent capability, remote caller and managed-run
+checks still run. Admission grants none of those permissions.
+
+The policy is deliberately conservative: any live process prevents ordinary
+`orbit update`, even an update with the same schema or version. Different
+executable generations cannot open runtimes concurrently against that authority,
+so launching a newly installed executable cannot silently auto-migrate underneath
+an older participating MCP process. The updater changes its exclusive pin to the
+candidate generation before convergence children start. An old pinned executable
+cannot enter that gap. Identical executable copies share admission; version
+strings alone are not compatibility evidence. On Linux, the digest comes from
+`/proc/self/exe`, including a deleted running inode. On macOS the native Mach-O
+image UUID must match the loaded image before the opened descriptor is hashed;
+a replaced path or unsupported image format refuses admission.
+
+Refusal leaves the connected client and its in-flight calls running. There is
+no server handoff, connection replacement, mutation retry or blind replay. If a
+mutation committed but its reply was lost, inspect the durable task/audit through
+the same authority before deciding what to do next. Quiesce through the process's
+owning client/operator, then retry the update. Orbit does not kill sessions,
+change identities or reclaim claims. OS locks release on exit/crash; never unlink
+`.generation.lock` or `.generation-admission.lock` to force admission. Keep these
+files in the authoritative root and out of lock-file garbage collection.
+
+**Bootstrap limitation:** processes from before this fix do not participate.
+Before the first protected upgrade, explicitly quiesce every pre-fix backend
+(including unmanaged or pinned executables), install the fix, and reconnect using
+the same configured authority. Restarting a desktop window is not evidence that
+its backend exited. The protocol cannot retroactively protect a pre-fix process,
+an external writer, or a process using another authority root. Normal schema and
+layout compatibility checks remain in force; admission is not a downgrade waiver.
+
 ### Recovery and resumption
 
 Re-running `orbit update` is the resume. At the installed version it skips the replacement and
@@ -102,8 +168,9 @@ dispatched agents inherit the replacement build.
 A release older than the **currently installed** binary — re-read under the update lock, not
 the version the running process started with — is refused unless `--allow-downgrade` is passed.
 Even then, the staged older binary must be able to open this workspace's state — `orbit update`
-runs its `migrate --dry-run` *before* replacing anything and aborts, with that binary's own
-diagnostic, when it cannot.
+runs its `migrate --dry-run --json` *before* replacing anything and requires an
+explicit up-to-date report with matching current/supported layout and schema versions.
+Missing reports and additive-newer read-only success both refuse replacement.
 
 ### Release mirrors
 
@@ -252,7 +319,15 @@ version it stamps — `state/layout.compat` for the layout, the `migration.compa
 paths. The contract is described in
 [docs/design/state-compatibility](../design/state-compatibility/2_design.md).
 
-### Additive-newer: read-only, not refused
+### Additive-newer: unaudited CLI reads
+
+Generation admission may first refuse a different executable while a participating
+process is live. Once admitted, reader compatibility applies independently.
+MCP `tools/call` is **not** an unaudited read: even `orbit.workspace.list` must
+write its durable audit event. An old process with a read-only newer store is
+therefore not a usable MCP authority, even when `orbit task show` works at the CLI.
+Do not use successful CLI reads or candidate-vs-store checks as proof of MCP
+continuity.
 
 When nothing breaking sits above the binary's supported version, the workspace opens
 **read-only**. `orbit task list`, `orbit task show`, `orbit run history`, and
