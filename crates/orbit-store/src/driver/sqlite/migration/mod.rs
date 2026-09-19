@@ -1324,11 +1324,6 @@ fn apply_job_runs_created_index(conn: &Connection) -> Result<(), OrbitError> {
     .map_err(|error| OrbitError::Store(error.to_string()))
 }
 
-/// v20 `invocations_ts_index`: cover the accounting window filters and the
-/// newest-first invocation listing on `invocations(ts, id)`.
-///
-/// Guarded like v19: `ensure_invocation_schema_v1` declares the same index
-/// for a database whose `invocations` table is created or upgraded at open.
 /// v21 `task_commit_journal` (ORB-12528).
 ///
 /// `task_commit_journal` holds one row per intended publication of a task
@@ -1377,6 +1372,11 @@ fn apply_task_commit_journal(conn: &Connection) -> Result<(), OrbitError> {
     .map_err(|error| OrbitError::Store(error.to_string()))
 }
 
+/// v20 `invocations_ts_index`: cover the accounting window filters and the
+/// newest-first invocation listing on `invocations(ts, id)`.
+///
+/// Guarded like v19: `ensure_invocation_schema_v1` declares the same index
+/// for a database whose `invocations` table is created or upgraded at open.
 fn apply_invocations_ts_index(conn: &Connection) -> Result<(), OrbitError> {
     if !table_has_column(conn, "invocations", "ts")? {
         return Ok(());
