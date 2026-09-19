@@ -24,7 +24,10 @@ large provider logs. Keep those logs for targeted failure diagnosis.
 
 ## Search, then author
 
-Search open and closed tasks before creating work. Use `orbit_search` with
+Search open and closed tasks before creating work. Orchestrated filings come
+from findings — sweeps, CI, review, curation — not from a human who already
+knows the backlog, so this step is mandatory here even though the interactive
+`orbit` skill relaxes it for direct instructions. Use `orbit_search` with
 `kind: "task"`, `all: true`, the explicit workspace, and concrete problem
 terms; inspect likely matches and their merge evidence. Search descriptions,
 not a new task ID that has no embedding yet.

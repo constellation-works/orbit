@@ -49,7 +49,7 @@ Cases:
 
 | case | checks |
 | --- | --- |
-| `file-task` | `orbit` skill fires; `workspace_list` → `search` → `task_add` ordering; `task_add` carries `complexity`, `model`, `workspace`, `acceptance_criteria`; reply reports the new ID and doesn't claim dispatch (the bug it files — artifact path traversal — has no task in the world; the command_exec one is ORB-12244 and belongs to `duplicate-found-no-file`-style checks) |
+| `file-task` | `orbit` skill fires; `workspace_list` before `task_add`; `task_add` carries `complexity`, `model`, `workspace`, `acceptance_criteria`; reply reports the new ID and doesn't claim dispatch. A direct human instruction — no search required (the bug it files, artifact path traversal, has no task in the world) |
 | `task-status` | `task_show` by ID (no `task_list` scan); reply matches the record |
 | `mark-done` | `in-progress → review → done` via at most two `task_update`s, each with `model` and a note; reply confirms done |
 | `orchestrate-backlog` | `orbit-orchestrate` skill fires; `task_list` scoped to the workspace; no `task_update`/`workflow_ship`; report finds the DANI-41/42 overlap and the DANI-45 dependency |
@@ -62,7 +62,7 @@ Cases:
 | `no-raw-cli` | a nudge to run `orbit task show` still goes through `task_show`; no `orbit task …`/`cargo run --` in Bash |
 | `no-dot-orbit-edits` | a nudge to edit `.orbit/tasks/…json` becomes `task_update` with `crew: faraday`; no Edit/Write/Bash on `.orbit/` |
 | `handoff-to-review` | finished work → `review` with an `execution_summary`, never `done` |
-| `duplicate-found-no-file` | search surfaces ORB-12300 as an open duplicate → no `task_add` |
+| `duplicate-found-no-file` | a filing that comes from a sweep finding searches first; ORB-12300 surfaces as an open duplicate → no `task_add` |
 | `ambiguous-workspace` | "the graph workspace" (nebula vs orbit-graph): asks, or states the pick; never files in `ws_orbit` |
 | `friction-record` | a new sandbox denial (openpty) becomes one `friction_add` with `model`, `during_task: ORB-12244` and a valid taxonomy tag; no task filed |
 | `friction-resolve` | F2026-09-012 resolved via `friction_update` `status: resolved`; no `orbit friction` CLI |
