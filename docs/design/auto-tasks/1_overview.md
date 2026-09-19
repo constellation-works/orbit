@@ -110,8 +110,8 @@ Orbit's own checkout also carries extra `.orbit/auto_tasks/` files that are
 **not** embedded defaults. They may be enabled, name a family-specific crew, or
 encode this repository's branches and gates. Re-init preserves them:
 
-- `doc-duties`, `model-price-audit`, `release-prep`, and this repository's
-  enabled copies of catalog names such as `code-review` and
+- `doc-duties`, `model-price-audit`, `release-prep`, `skill-validation`, and
+  this repository's enabled copies of catalog names such as `code-review` and
   `security-review`.
 
 ## Task References

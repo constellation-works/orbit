@@ -1,0 +1,75 @@
+schemaVersion: 1
+name: skill-validation
+description: Weekly review of the shipped Orbit skills for drift against the code
+enabled: true
+schedule:
+  cron: 0 7 * * 3
+template:
+  title: Skill validation — review the shipped Orbit skills for drift
+  description: |
+    Weekly review of the shipped Orbit skills against the current code. Each run inventories the canonical skill files, checks them for internal consistency and staleness, reports or fills agent-facing gaps, and records what was checked. A clean review that finds no drift is a successful no-op — do not invent work to justify the run.
+
+    ## Inventory
+
+    Canonical skill root: `crates/orbit-core/assets/skills/`. Review every file under `crates/orbit-core/assets/skills/*/` (`SKILL.md` and `references/**`).
+
+    `plugin/skills/` is derived from that root. Never edit `plugin/skills/` directly. After any canonical edit, run `scripts/sync-plugin-skills.sh`.
+
+    ## Three passes, in this order
+
+    1. **Consistency (skill-internal).** Every relative link in `SKILL.md` and `references/*.md` must resolve. Every reference file listed in the router table must exist, and every existing reference file must be listed. The router's summaries must match what each reference actually covers. The same rule stated in two places (lifecycle table, `required_tools` immutability, `model` field) must say the same thing in both.
+
+    2. **Staleness (skill vs. code).** Verify each factual claim with a command. Correct what has drifted. Named verification commands:
+       - registered tool names: `orbit tool list` and the MCP `tools/list`
+       - CLI subcommands and flags: `orbit <cmd> --help`
+       - `orbit config` keys: the config schema
+       - seeded auto-task and routine lists: `crates/orbit-core/assets/auto_tasks/` and `crates/orbit-core/assets/routines/`
+       - lifecycle transitions: the status-transition table in code
+       - version claims: `Cargo.toml`
+
+    3. **Gaps.** Identify agent-facing surfaces (tools, subcommands, config keys, seeded definitions) that exist in code but the skill never mentions. Fill a gap only when the surface is agent-facing and its behavior is verifiable from the repo; otherwise report it. Do not add new reference files or restructure the router without a stated reason in the execution summary.
+
+    ## The rule that makes this scheme worth anything
+
+    **Only stamp or fix what you actually verified.** Skills have no `last_validated` frontmatter — do not introduce one. If you could not verify a claim — the ground truth is not observable from this repo — leave the claim unchanged and report it. A plausible wrong fact is worse than an obviously old one.
+
+    A clean review is a successful no-op.
+
+    ## Constraints
+
+    Keep assets project-agnostic: no person names, task/ADR/friction ids under `crates/*/assets/**`. Fix only genuinely broken markdown; no prose reflow. Do not touch `.orbit/adrs/**`, `CHANGELOG.md`, `docs/**`, or generated state.
+
+    Deduplicate against existing open tasks tagged `skill-validation` before filing anything new.
+
+    ## Validate
+
+    After canonical edits, run `scripts/sync-plugin-skills.sh`. Then `scripts/validate-agent-plugin.sh` and `scripts/validate-codex-plugin.sh` must pass. `make ci-fast` must pass (includes `plugin_skill_symlinks_resolve_to_assets`).
+
+    ## Reporting
+
+    Persist the durable `execution_summary` (not only shell output). It must list: every file checked; each correction with the verification command behind it; each claim left unverified and why; each gap reported but not filled.
+  acceptance_criteria:
+  - The durable execution_summary lists every file checked under crates/orbit-core/assets/skills/*/ (SKILL.md and references/**).
+  - Relative links in SKILL.md and references/*.md resolve; every reference listed in each skill router table exists and every existing reference file is listed.
+  - Each correction in the execution_summary names its verification command (orbit tool list, MCP tools/list, orbit <cmd> --help, config schema, crates/orbit-core/assets/auto_tasks/, crates/orbit-core/assets/routines/, the status-transition table in code, or Cargo.toml).
+  - Claims whose ground truth is not observable were left unchanged and listed in the execution_summary.
+  - Gaps reported but not filled are listed in the execution_summary; no new reference file or router restructure was added without a stated reason in the execution_summary.
+  - plugin/skills/ was not edited directly; after any canonical edit, scripts/sync-plugin-skills.sh was run.
+  - scripts/validate-agent-plugin.sh, scripts/validate-codex-plugin.sh, and make ci-fast pass.
+  - No file under .orbit/adrs/, CHANGELOG.md, docs/**, or generated state was modified.
+  - A clean review is a successful no-op; the execution_summary still lists files checked, unverified claims, and unfilled gaps.
+  - Assets under crates/*/assets/** stay project-agnostic (no person names, task/ADR/friction ids).
+  task_type: chore
+  tags:
+  - skill-validation
+  - skills
+  - staleness
+  priority: medium
+  complexity: medium
+  crew: luna
+  status: backlog
+dedupe: skip_if_open
+created_by: grok
+created_at: 2026-09-19T18:20:21.836367095+00:00
+updated_by: grok
+updated_at: 2026-09-19T18:20:21.836367095+00:00
