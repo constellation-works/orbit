@@ -1,6 +1,6 @@
 ---
 type: design
-summary: "Spec: orbit.task.pull — pop the next conflict-free task from the owner-maintained ready queue"
+summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
 last_validated: 2026-09-18
 title: Spec — orbit.task.pull
 owner: claude
@@ -13,109 +13,161 @@ related_artifacts: [ORB-12488]
 
 # Spec: `orbit.task.pull`
 
-`orbit.task.pull` hands the caller **one** task: the first entry of the owner's ready queue whose
-lock footprint overlaps no held task lock, with that footprint reserved and the task moved to
-`in-progress` in the same store transaction. Two concurrent callers are never handed the same
-task. The queue's order is decided by the owner alone; the caller neither filters nor reorders it.
+`orbit.task.pull` creates at most one claim for an intended admission. The owner selects the first
+ready, valid, conflict-free task in its canonical order and atomically records the reservation,
+attempt identity, `in-progress` transition, history, and request receipt. Retries replay the same
+receipt. All contracts below are proposed v1 behavior, not existing implementation guarantees.
 
 ## Why This Exists
 
-Without an owner-side queue, every host would recompute dependency readiness and priority order
-from its own view of the backlog and race the others on admission. One queue, one pop, one
-transaction is the smallest contract under which a second host can take work without becoming a
-second control plane.
+One authoritative admission transaction lets multiple executing hosts share work without
+independently scheduling it. Durable request identity handles lost responses; claim identity
+separates an execution attempt from later retries of the same task. Neither requires tracking
+host capacity, heartbeats, or automatic reassignment.
 
 ## The ready queue
 
-The owner maintains one ordered queue per workspace. Membership and order are the owner's
-existing readiness rules, not new ones:
+The queue is a logical owner-side query, not a required maintained table:
 
-- **Members:** `backlog` tasks whose every dependency is terminal-successful (`done`). Tags do not
-  affect membership; `epic` is a size hint for crew selection, not a queue class.
-- **Order:** the order `orbit run readiness` and `classify_workspace_auto_tasks` already produce —
-  priority, then age, with the same tag-driven adjustments those paths apply today.
-- **Maintenance:** the queue is a projection of the store, recomputed whenever a task's status,
-  priority, dependencies, tags, or parent change. It is not a separately editable table; an
-  operator changes the order by changing the tasks.
+- **Members:** `backlog` tasks whose every dependency is `done`. After epic retirement, the `epic`
+  tag and parent/child hierarchy introduce no special admission path. Sequencing uses dependencies.
+- **Order:** the canonical automatic-dispatch comparator, including corrective tag bands, priority,
+  age, and task-ID tie-breaker. Readiness reporting and admission share it.
+- **Validation:** selection, dependency checks, current status, canonicalized own `context_files`,
+  and conflicts are checked within the admission transaction. Cached projections cannot authorize
+  admission. Ordinary task and reservation mutations must participate in the same serialization.
+- **Invalid entries:** dangling/rejected/archived dependencies or invalid/empty lock surfaces are
+  excluded with diagnostics. They do not prevent unrelated valid work from being admitted.
 
-Crew is not a queue input in v1. A pulled task carries its own `crew` field if one was set; crew
-selection for tasks without one is the follower's ordinary resolution, and auto-assignment by
-complexity is future work alongside any crew-aware pulling
-([3_vision.md](../3_vision.md#1-open-questions)).
+V1 has no caller-selected crew or platform filter. Each participant must meet all workspace
+execution requirements and resolve configured crews equivalently. This is a v1 restriction;
+future owner-evaluated eligibility can preserve the same ordering authority.
 
 ## Class and routing
 
-- Tool class: `control_plane`. A replica destination refuses it with `capability_refused`; only the
-  owner checkout serves it.
-- Callers reach it through federated MCP with the host-qualified selector. A caller must hold the
-  `agent` capability for the workspace in the owner's callers file. `agent_invoke` is not required.
+Only the owner serves this `control_plane` tool. A caller must have the workspace's `agent`
+capability. `agent_invoke` is not needed because execution starts locally. Workspace selection
+uses the host-qualified selector; authenticated caller identity supplies `machine_id`, never a
+payload assertion. Owner-local drains use the same logical admission contract.
 
 ## Input
 
 | Field | Type | Meaning |
 |---|---|---|
-| `workspace` | selector | host-qualified `hm_<owner>/ws_*`; required |
-| `caller_version` | string | Orbit binary version of the caller |
-| `caller_schema` | integer | caller's `ORCHESTRATION_SCHEMA_VERSION` |
-| `run_context` | object | `run_id`, `job_name`, `host_id` of the caller's drain run, stamped onto the task history entry |
+| `workspace` | selector | Host-qualified owner/workspace selector |
+| `request_id` | string | Durable unique ID for one intended admission; reused unchanged after uncertainty |
+| `caller_version` | string | Caller binary version |
+| `caller_schema` | integer | Caller orchestration schema version |
+| `run_context` | object | Calling drain's `run_id`, `job_name`, and diagnostic `host_id` |
 
-There is no count, no slot declaration, no crew filter, and no scan bound. A caller that wants
-more than one task calls again.
+The caller persists the request before sending it. One drain run uses many request IDs. There is
+no count, slot declaration, crew filter, or caller scan bound. Completion authorization is resolved
+from durable owner-side grants; the input does not grant merge rights.
 
-## Pop
+## Idempotency and admission
 
-1. Walk the ready queue from the head.
-2. Skip an entry whose lock footprint (its own canonicalized `context_files`) overlaps a lock
-   held by an `in-progress` or `review` task or an active reservation.
-   Each skip is recorded in `deferred_conflicts` with the blocking task ids and the overlapping
-   selectors.
-3. Refuse, rather than skip, an entry whose `blocked_by` target is archived, rejected, or dangling,
-   with the same diagnostic `reserve_locks` emits today; such an entry should not be in the queue,
-   and the refusal surfaces the inconsistency.
-4. The first entry that passes is the result. In **one store transaction**: reserve its footprint
-   with the gate TTL default, set `backlog → in-progress`, and append a history entry recording
-   `pulled_by` with the caller `machine_id` and `run_context`.
-5. An exhausted queue, or a queue whose every entry conflicts, returns `idle`.
+1. Validate selector, current caller authorization, version/schema, and required input. Refuse a
+   remote caller for a local-only ship workspace. These checks also apply to receipt replay.
+2. Begin the owner store transaction. Look up the receipt by workspace, authenticated machine, and
+   request ID. An existing ID with different input yields `request_mismatch`; identical input
+   returns its original outcome without new admission, history, or reservation.
+3. For a new request, select from current ready tasks in canonical order. Exclude invalid entries
+   and report diagnostics. Skip candidates conflicting with status-derived locks of `in-progress`
+   or `review` tasks or active reservations; record `deferred_conflicts`.
+4. For the first valid non-conflicting task, allocate an immutable claim ID. Reserve its own
+   canonical footprint with the gate TTL default, record its execution machine and drain context,
+   transition `backlog → in-progress`, append history, and persist the response receipt atomically.
+   No local leaf run, branch, or worktree is created by this transaction.
+5. If none is eligible, persist an `idle` receipt with diagnostics. This changes receipt state but
+   creates no task transition, claim, or reservation. A later poll must use a new request ID.
 
-Serialization is the store's existing cross-process transaction; concurrent pops observe each
-other's commits and never admit an overlapping footprint.
+The receipt stores owner-resolved ship configuration as of admission. Replays do not silently
+change the execution contract. Exact request retries may return the same task repeatedly; only
+one admission occurred. Full receipts may be compacted to non-reusable tombstones, in which case
+replay returns `request_expired`, never a new task. Unsettled claims retain their receipts.
+
+A receipt is historical evidence, not current execution authority. Replay includes current claim
+phase separately. A revoked or settled claim is never reactivated; local launch requires an
+idempotent owner-side binding check and execution mutations require the current claim.
 
 ## Output
 
 | Field | Meaning |
 |---|---|
-| `task` | the pulled task summary (id, title, complexity, crew, context selectors), absent when `idle` |
-| `ship` | owner-resolved ship inputs: `mode`, `base_branch`, `landing_branch`, `completion` |
-| `deferred_conflicts[]` | skipped queue entries with reasons |
-| `idle` | true when nothing was pulled |
-| `queue_depth` | entries remaining in the queue after this pop, for the follower's sleep choice |
+| `request_id` | ID of the admission request |
+| `task` | Task summary: ID, title, complexity, crew, context selectors; absent for idle |
+| `claim` | `claim_id`, `reservation_id`, `reservation_expires_at`, authenticated execution machine; absent for idle |
+| `claim_state` | Current phase at response time, separate from the stored admission receipt |
+| `ship` | Owner-resolved mode, base/landing branches, completion policy and optional durable authorization reference |
+| `deferred_conflicts[]` | Conflict exclusions with blocking tasks/reservations and selectors |
+| `invalid_candidates[]` | Invalid dependency or lock-surface exclusions with reasons |
+| `idle` | No claim created by this request |
+| `queue_depth` | Remaining ready entries at original admission, diagnostic only |
+
+Task contents needed for execution are read from the owner; the summary is not a replica store.
+Queue depth and returned claim state are snapshots, not authorization for later writes.
 
 ## Refusals
 
-Ordered; the first that applies is returned.
+Authorization and compatibility are checked before reading/replaying caller receipts. The remaining
+checks run in the order described above.
 
 | Error | When |
 |---|---|
-| `unknown_selector` | selector is not host-qualified |
-| `capability_refused` | destination is not the owner checkout, or the caller lacks `agent` on the workspace |
-| `version_mismatch` | `caller_version` or `caller_schema` differs from the owner's |
-| `invalid_input` | missing `run_context` |
-| `ship_mode_unsupported` | workspace `ship_mode` is `local` and the caller is not the owner |
-| `queue_inconsistent` | the head entry's `blocked_by` target can never reach `done` (step 3) |
+| `unknown_selector` | Selector cannot resolve to the named owner workspace |
+| `capability_refused` | Destination is a replica or caller lacks required authority |
+| `version_mismatch` | Caller binary/schema differs from owner |
+| `invalid_input` | Required request or drain context is missing or malformed |
+| `ship_mode_unsupported` | A remote caller targets a local-only ship workspace |
+| `request_mismatch` | Existing request ID is reused with different input |
+| `request_expired` | An old request is represented only by a non-reusable tombstone |
 
-`idle` is a success, not a refusal.
+An atomic commit failure returns no successful admission response; the caller retries the same
+request because transport uncertainty cannot establish whether the transaction committed.
+`idle` is success. Invalid tasks are diagnostics, not a queue-wide refusal.
+
+## Claim lifecycle contract
+
+The companion lifecycle mutations must exist before pull is enabled. Their public tool names and
+store schema are implementation choices; their atomic behavior is required:
+
+| Operation | Required owner behavior |
+|---|---|
+| Bind execution | Validate claim and machine; bind one host-qualified leaf run idempotently; move `claimed → running` |
+| Execution mutation | Check current claim, machine/run, and phase within the write transaction; deduplicate repeated mutation IDs |
+| Accept handoff | Persist evidence and completion-authority reference, promote to review, close execution writes, release only this reservation atomically |
+| Fail/cancel | Persist failure evidence, block the task, invalidate execution authority, release only this reservation atomically |
+| Deliberate recovery | Reconcile any uncertain landing intent; revoke old claim, invalidate pending handoff, release reservation, and apply an authorized task transition atomically |
+
+`stale_claim` rejects obsolete attempt mutations even when the task has since returned to
+`in-progress`. Replay of a previously committed mutation may return its recorded outcome without
+performing it again. All worker write routes carry claim context; generic task tools cannot bypass
+these checks. Status/run/footprint edits affecting an active claim must preserve it or use recovery.
+
+The reservation TTL is not a claim lease. Expiry does not authorize another worker, revoke a
+claim, or remove status-derived task locks. Manual inspection/recovery is required when no worker
+settles the claim. See [2_design.md §3.1](../2_design.md#31-attempt-ownership-and-recovery).
 
 ## Invariants
 
-- A task is returned by at most one successful pull, ever, unless it returns to `backlog` through
-  an ordinary status transition.
-- Pull never returns a task with an unsatisfied dependency.
-- Pull never returns a task out of queue order except by skipping a conflicting entry.
-- Pull writes nothing on `idle` or on a refusal.
-- Pull does not create a run, a worktree, or a branch. Those are the caller's.
-- The owner's own drain admits through pull. No other path moves a backlog task to `in-progress`
-  on behalf of a drain.
+- At most one current execution claim exists per task, and a request ID never creates two claims.
+- Transactional admission never admits an unsatisfied dependency or overlapping protected footprint.
+- The owner alone orders work; only invalid or conflicting candidates are skipped in v1.
+- A refusal creates no claim. Idle persists only its receipt and diagnostics.
+- The execution machine is authenticated; host labels are not authority.
+- Reassignment invalidates former attempt writes and landing authority before a new admission.
+- Reservation cleanup can affect only the reservation associated with the settling claim.
+- Owner and follower drains use the same admission boundary; legacy local admission cannot bypass it.
+- Pull and task promotion do not grant merge authority.
+
+## Required failure coverage
+
+Implement the [validation matrix](../2_design.md#8-required-validation-scenarios), including lost
+pull responses, concurrent mutations, duplicate local dispatch, reassignment with a returning
+worker, settlement during partitions, and merge-intent reconciliation. Contract review is not a
+substitute for these tests.
 
 ## Agent Signature
 
-claude, 2026-09-18, [ORB-12488].
+claude authored the initial contract under [ORB-12488]; codex revised it after design review,
+2026-09-18. The feature remains Draft.

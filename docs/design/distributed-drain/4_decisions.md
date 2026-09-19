@@ -7,7 +7,7 @@ status: Draft
 feature: distributed-drain
 doc_role: decisions
 type: design
-summary: Why followers pull instead of being assigned, why in-progress plus a held lock is the whole claim, why validation runs where the work ran, and why the always-on host owns the store.
+summary: Pull-based admission, durable request and attempt identity, owner ordering, explicit landing authority, and the epic, triage, and ship-sweep retirements.
 tags: [distributed-drain, multi-host, decisions]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/src/runtime/task/locks.rs"]
 related_features: [distributed-drain, federated-mcp, host-registry, resident-orchestrator]
@@ -32,18 +32,21 @@ table, which is the fleet control plane host-registry's vision explicitly forbid
 ### Decision
 
 A host with a free slot asks the owner for work. The owner answers from its backlog and records
-nothing about the asker beyond the ordinary task fields. Capacity is declared by the caller per
-call; liveness is never tracked. A follower that disappears simply stops asking.
+the authenticated execution machine on each claim. Capacity stays local; it is not declared per
+call. There is no liveness protocol. A follower that disappears stops taking new work; existing
+claims remain until settlement or deliberate recovery.
 
 ### Consequences
 
 - The owner has no worker table, no placement logic, and no host-specific configuration beyond the
   callers-file row that authorizes the caller.
 - Joining or leaving the drain is a follower-side action.
-- Cost: the owner cannot notice a dead follower. Stale `in-progress` tasks surface only through the
-  reservation TTL and the unresolved-work scan, at that cadence.
+- Cost: the owner cannot distinguish a dead follower from an unreachable one. Operators must
+  inspect claim/run evidence and explicitly reclaim work; TTL expiry is not proof of death.
 
 ## `in-progress` plus a held task lock is the claim
+
+**Superseded by:** [Requests identify admissions and claims identify attempts](#requests-identify-admissions-and-claims-identify-attempts). The original rationale below is retained as history.
 
 **Recorded:** 2026-09 · [ORB-12488]
 **Code anchors:** `crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml`, `crates/orbit-core/src/runtime/task/locks.rs::lock_context_files_for_task`
@@ -74,6 +77,8 @@ nothing else as carried.
 
 ## Order lives in one owner queue, and a pull takes one task
 
+**Superseded by:** [Owner ordering does not require a materialized queue](#owner-ordering-does-not-require-a-materialized-queue). The original rationale below is retained as history.
+
 **Recorded:** 2026-09 · [ORB-12488]
 
 ### Context
@@ -101,6 +106,8 @@ with no count, no capacity declaration, and no crew filter. A follower that want
   head conflicts is re-walked by every caller until the head clears.
 
 ## Validation runs where the work ran; the owner only lands
+
+**Superseded by:** [Landing consumes durable evidence and explicit completion authority](#landing-consumes-durable-evidence-and-explicit-completion-authority). The original rationale below is retained as history.
 
 **Recorded:** 2026-09 · [ORB-12488]
 
@@ -221,6 +228,107 @@ transition.
 - No LLM call runs unattended against failure output.
 - Environmental failures accumulate in `blocked` until someone looks.
 - Cost: the 30-second-read diagnosis triage attached is gone; the reader gets the raw failure.
+
+## Requests identify admissions and claims identify attempts
+
+**Recorded:** 2026-09 · design-review revision of the contract authored by [ORB-12488].
+**Code anchors:** `crates/orbit-core/src/runtime/task/locks.rs`, `crates/orbit-engine/src/executor/automation/vcs/handoff.rs::load_handoff_context`
+
+### Context
+
+Status and a reservation prevent some duplicate admission, but a lost response can strand a claim
+and a returning worker can encounter the same task status under a replacement attempt. Existing
+run ownership checks are valuable but must be carried across hosts and checked inside mutations.
+
+### Decision
+
+Give every intended pull a durable request ID and every admitted attempt a distinct claim ID.
+Record the request receipt with admission. Bind the claim to an authenticated execution machine
+and one leaf run. Check it atomically on worker mutations and revoke it before reassignment.
+No heartbeat or automatic reclamation is introduced. Age and TTL support inspection only.
+
+### Consequences
+
+- Retries can recover the original admission without consuming another task.
+- Stale workers cannot overwrite a replacement's authoritative evidence or release its reservation.
+- Cost: receipts, claim phases, owner write fencing, and explicit recovery become required v1
+  storage/API work. Reclamation remains a human or supervised orchestrator responsibility.
+
+## Owner ordering does not require a materialized queue
+
+**Recorded:** 2026-09 · design-review revision of the contract authored by [ORB-12488].
+**Code anchors:** `crates/orbit-core/src/adapter/engine_host/v2_host/backlog_exclusion.rs::sort_tasks_for_automatic_dispatch`
+
+### Context
+
+The earlier contract coupled centralized priority to a maintained queue projection and treated
+per-request readiness evaluation as a second scheduler. An authoritative query on the owner has
+one scheduler too, without a second consistency boundary for cache invalidation.
+
+### Decision
+
+Use a logical ordered query and revalidate within admission. A projection is optional optimization.
+Pull takes one task. V1 participants must execute every eligible workspace task; future eligibility
+filters may remain owner-evaluated without transferring priority authority to callers.
+
+### Consequences
+
+- One ordering/comparison contract serves readiness reporting and actual admission.
+- Invalid entries yield diagnostics without blocking unrelated work.
+- Cost: transactional selection can scan a conflicting prefix repeatedly. If measured contention
+  warrants caching or bounded internal scans, preserve exact readiness and ordering semantics.
+
+## Landing consumes durable evidence and explicit completion authority
+
+**Recorded:** 2026-09 · design-review revision of the contract authored by [ORB-12488].
+**Code anchors:** `crates/orbit-core/assets/jobs/workspace_ship_pipeline.yaml`, `crates/orbit-engine/src/executor/automation/vcs/pr/complete.rs`
+
+### Context
+
+The existing ship sweep starts backlog execution; it does not complete arbitrary review tasks.
+The existing completion action also depends on an execution run and local worktree. Treating
+follower promotion as a complete handoff would leave delivery stuck or lose its evidence gates.
+
+### Decision
+
+Validate where execution happens, then submit a durable candidate and review evidence to a new
+owner-side landing consumer. Admission and review promotion never grant merge rights. Completion
+requires a recorded authorization and pinned delivery evidence. Persist external merge intent and
+reconcile uncertain outcomes before task reassignment or completion. Conflicts require a newly
+validated repair, not an owner-side unvalidated rebase.
+
+### Consequences
+
+- The owner can land a candidate without resolving follower-local paths or rebuilding its code.
+- Review-only delivery remains distinct from authorized merge and verified completion.
+- Cost: a handoff store/consumer and adaptation of existing completion checks are required. Failed
+  landing can hold a review lock until repair or explicit recovery, limiting throughput.
+
+## Explicit drains replace the unused ship sweep
+
+**Recorded:** 2026-09 · Daniel requested retirement during revision of the design authored by [ORB-12488].
+**Code anchors:** `crates/orbit-core/assets/routines/ship_sweep.yaml`, `crates/orbit-core/assets/jobs/workspace_ship_pipeline.yaml`, `crates/orbit-core/src/application/routine.rs`
+
+### Context
+
+The scheduled ship sweep exists to start a workspace backlog drain. Daniel has never used it and
+has no intended use for it. Keeping it disabled would still retain its wrapper, seeded workspace
+configuration, documentation, and migration burden alongside explicit drain invocation.
+
+### Decision
+
+Remove the ship-sweep routine, its seed, and the `workspace_ship_pipeline` wrapper. Keep explicit
+owner/follower drain commands. Authorized landing is driven by durable requests for accepted
+handoffs, with restart recovery; it must not depend on or recreate a scheduled backlog sweep.
+The generic scheduler and unrelated routines remain.
+
+### Consequences
+
+- There is one explicit way to start the workspace drain, with local or pull execution mode.
+- Landing can complete authorized work even when no drain is running.
+- Cost: operators who configured ship-sweep instances must remove or retarget them and reconcile
+  active wrappers during migration. The built-in periodic backlog-start feature is no longer
+  available; this change installs no replacement schedule.
 
 ## Task References
 
