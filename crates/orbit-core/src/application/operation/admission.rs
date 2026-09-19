@@ -23,8 +23,6 @@ use crate::application::workflow::{AUTO_WORKFLOW_ALIAS, find_workflow};
 
 /// The leaf job whose live runs count against the leaf ceiling.
 const LEAF_JOB_NAME: &str = "task_auto_pipeline";
-/// The epic job; its root task is scope-checked but not counted as a leaf.
-const EPIC_JOB_NAME: &str = "epic_pipeline";
 
 /// One request to start a drain window under a grant.
 #[derive(Debug, Clone)]
@@ -189,21 +187,16 @@ pub(crate) fn child_admission_authority(
     };
 
     let is_leaf = job_name == LEAF_JOB_NAME;
-    let task_id = if is_leaf {
-        child_input
-            .get("task_ids")
-            .and_then(Value::as_array)
-            .and_then(|ids| ids.first())
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-    } else if job_name == EPIC_JOB_NAME {
-        child_input
-            .get("epic_task_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-    } else {
-        None
-    };
+    let task_id = is_leaf
+        .then(|| {
+            child_input
+                .get("task_ids")
+                .and_then(Value::as_array)
+                .and_then(|ids| ids.first())
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .flatten();
     // A live operator adjustment on the coordinator narrows the captured
     // ceiling but can never widen it past the grant.
     let leaf_ceiling = is_leaf.then(|| {

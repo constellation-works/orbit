@@ -6,12 +6,11 @@ spec:
   type: deterministic
   description: >
     Read-only workspace drain scan. Returns tasks in
-    `proposed` / `backlog` / `blocked`, job-runs in `failed` / `timeout`
-    (excluding `epic_pipeline` itself), and unresolved `check_later`
-    session-log ids. Empty is success. Optional `fail_if_nonempty`
-    fails the step when the set is still non-empty so a workspace
-    drain can fail closed after its iteration cap. `epic_pipeline`
-    no longer uses this activity as its completion gate.
+    `proposed` / `backlog` / `blocked`, job-runs in `failed` / `timeout`,
+    and unresolved `check_later` session-log ids. Empty is success.
+    Optional `fail_if_nonempty` fails the step when the set is still
+    non-empty so a workspace drain can fail closed after its iteration
+    cap.
   input_schema_json:
     type: object
     properties:

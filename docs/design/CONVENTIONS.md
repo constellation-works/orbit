@@ -229,7 +229,7 @@ Retired features stay listed with their `_archive/` path as a historical record.
 | Policy & Sandboxing | [docs/design/policy-sandbox/](./policy-sandbox/) | claude |
 | Project Learnings | [docs/design/project-learnings/](./project-learnings/) | claude |
 | Remote Access | [docs/design/remote-access/](./remote-access/) | claude |
-| Resident Orchestrator | [docs/design/resident-orchestrator/](./resident-orchestrator/) | codex |
+| Resident Orchestrator (archived) | [docs/design/_archive/resident-orchestrator/](./_archive/resident-orchestrator/) | codex |
 | Routines | [docs/design/routines/](./routines/) | claude |
 | Task Artifacts | [docs/design/task-artifacts/](./task-artifacts/) | codex |
 | Task Publication | [docs/design/task-publication/](./task-publication/) | codex |

@@ -1449,61 +1449,45 @@ fn ship_submission_refuses_a_missing_explicit_task_before_persisting_a_run() {
     );
 }
 
+/// [ORB-12491] An `epic`-tagged root is shippable like any other task: the tag
+/// is a size hint, and there is no supervisor pipeline to route it to.
 #[test]
-fn ship_submission_refuses_an_epic_root_but_allows_its_child() {
+fn ship_submission_admits_a_tagged_root_and_its_child_alike() {
     let (_root, runtime) = test_runtime();
-    let epic = runtime
+    let tagged_root = runtime
         .add_task(TaskAddParams {
-            title: "Epic root".to_string(),
-            description: "Supervisor-owned fixture".to_string(),
+            title: "Tagged root".to_string(),
+            description: "Large-task fixture".to_string(),
             tags: vec!["epic".to_string()],
             ..Default::default()
         })
-        .expect("create epic root");
+        .expect("create tagged root");
     let child = runtime
         .add_task(TaskAddParams {
-            parent_id: Some(epic.id.clone()),
-            title: "Epic child".to_string(),
+            parent_id: Some(tagged_root.id.clone()),
+            title: "Child".to_string(),
             description: "Leaf fixture".to_string(),
             ..Default::default()
         })
-        .expect("create epic child");
+        .expect("create child");
 
-    let error = runtime
-        .submit_ship_run(
-            ShipMode::Local,
-            Some("main"),
-            std::slice::from_ref(&epic.id),
-            CompletionPolicy::Review,
-            &[],
-            Some("test"),
-            None,
-        )
-        .expect_err("epic root must be refused before dispatch");
-    assert!(matches!(error, OrbitError::InvalidInput(message) if message.contains("epic root")));
-    assert!(
-        runtime
-            .list_job_runs(JobRunListParams::default())
-            .expect("list job runs")
-            .is_empty(),
-        "root refusal must happen before pipeline persistence"
-    );
-
-    let child_error = runtime
-        .submit_ship_run(
-            ShipMode::Local,
-            Some("main"),
-            std::slice::from_ref(&child.id),
-            CompletionPolicy::Review,
-            &[],
-            Some("test"),
-            None,
-        )
-        .expect_err("fixture intentionally has no deployed job asset");
-    assert!(
-        matches!(child_error, OrbitError::NotFound { .. }),
-        "epic child must pass leaf admission and reach job lookup: {child_error:?}"
-    );
+    for task_id in [&tagged_root.id, &child.id] {
+        let error = runtime
+            .submit_ship_run(
+                ShipMode::Local,
+                Some("main"),
+                std::slice::from_ref(task_id),
+                CompletionPolicy::Review,
+                &[],
+                Some("test"),
+                None,
+            )
+            .expect_err("fixture intentionally has no deployed job asset");
+        assert!(
+            matches!(error, OrbitError::NotFound { .. }),
+            "{task_id} must pass leaf admission and reach job lookup: {error:?}"
+        );
+    }
 }
 
 #[test]

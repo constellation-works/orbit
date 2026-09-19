@@ -704,8 +704,8 @@ fn a_detached_child_is_recorded_as_non_blocking() {
         .expect("read state")
         .expect("state");
     state.record_child_dispatch(ChildDispatch::submitted(
-        "jrun-child-epic".to_string(),
-        "epic_pipeline".to_string(),
+        "jrun-child-leaf".to_string(),
+        "task_auto_pipeline".to_string(),
         "invoke_detached".to_string(),
         false,
         false,

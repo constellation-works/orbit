@@ -37,9 +37,9 @@ orbit run ship-sweep --dry-run      # what every registered workspace would ship
 workspace's registered ship mode (`pr` unless set otherwise), and `--base`
 defaults to `workflow.base_branch`.
 
-`run auto` drains loose leaf tasks plus one epic for a bounded window. The window
-bounds only the *start* of new work — a task already shipping when it expires
-still finishes.
+`run auto` drains backlog leaf tasks for a bounded window. The window bounds
+only the *start* of new work — a task already shipping when it expires still
+finishes.
 
 It keeps `--concurrency` tasks in flight (5 by default) and re-lists the whole
 backlog every pass, so a slot is refilled as soon as its own task finishes and a
@@ -76,8 +76,8 @@ for an auto drain it is opt-in and scoped to that run's window:
 
 - Names must be crews this workspace configures. An unknown or empty one fails
   the command; nothing is dispatched, and no configuration is written.
-- Scope is the run and everything it admits: the leaf and epic pipelines it
-  starts inherit the same restriction, and the check runs again at each activity
+- Scope is the run and everything it admits: the leaf pipelines it starts
+  inherit the same restriction, and the check runs again at each activity
   against the crew that was *actually* resolved — including an activity that
   names `workflow.system_crew` — so an excluded provider cannot be reached
   through an alias. Matching is by effective configured identity, so a differently
@@ -101,9 +101,9 @@ run ID. They do not claim the eventual outcome.
 `orbit run readiness` is the diagnostic counterpart to auto-drain. It reads a
 bounded snapshot of the explicit workspace and reports each selected backlog
 task as ready or waiting, naming unmet dependency IDs/statuses, context-lock
-holders, epic management, live child-run claims, capacity saturation, and — with
-`--allow-crew` — crew exclusion. It
-never creates a run, reconciles stale runs, reserves files, or mutates a task.
+holders, live child-run claims, capacity saturation, and — with `--allow-crew`
+— crew exclusion. It never creates a run, reconciles stale runs, reserves
+files, or mutates a task.
 Its answer can change immediately after the snapshot, so `eligible` means
 "would be admitted by this snapshot", never a guarantee that work will start.
 
@@ -206,14 +206,17 @@ pilot only for tasks that remain empty after reviewing the recorded outcomes.
   `orbit task locks release <reservation_id>` — never by editing the store. The
   signature to match first is in [common-failures.md](common-failures.md).
 
-## Epics
+## Large tasks and hierarchy
 
-An epic is a parent task with descendants. `epic_pipeline` gives the whole family
-one stable worktree and branch, landing unfinished descendants against it rather
-than opening a worktree per child. Completion is epic-scoped: descendants left
-over at the iteration ceiling fail the run closed rather than silently passing.
+Parent/child relations describe a backlog; they do not order execution. Every
+task is admitted as a leaf on its own declared `context_files`, by its own
+priority, age, and dependencies — a parent inherits nothing from its children
+and reserves nothing on their behalf. To sequence work, declare dependencies.
 
-`orbit run auto` picks up one epic per window alongside loose leaves.
+The `epic` tag is a size hint: *one large task a top-tier crew takes on whole*.
+Crew selection reads it; admission ignores it. A root that used to rely on its
+children's context declares none of its own, so it reserves nothing and
+`reserve_locks` refuses it — give it real `context_files` or retire it.
 
 ## Failed runs
 

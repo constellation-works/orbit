@@ -90,7 +90,7 @@ impl Execute for RunCommand {
 
 #[derive(Subcommand)]
 pub enum RunSubcommand {
-    /// Drain the workspace backlog for a window (loose leaves, plus one epic)
+    /// Drain the workspace backlog for a window
     Auto(auto::AutoCommand),
     /// Ship backlog or explicitly selected tasks through the gated task pipeline
     Ship(ship::ShipCommand),

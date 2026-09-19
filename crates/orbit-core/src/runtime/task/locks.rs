@@ -35,10 +35,9 @@ pub(crate) fn list(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
     emit_expired_reservation_events(runtime, &reservation_result.expired_reservations)?;
 
     // Expand each task's lock surface once and reuse it for both projections
-    // below. The expansion canonicalizes every declared selector and, for an
-    // epic root, unions the surface of every descendant — so computing it per
-    // projection doubled the work and the descendant walk for a listing that
-    // has a single answer.
+    // below. The expansion canonicalizes every declared selector, so computing
+    // it per projection doubled the work for a listing that has a single
+    // answer.
     let repo_root = runtime.paths().repo_root.as_path();
     let locked_surfaces = TaskLockIndex::load(runtime, &[])?.into_active_lock_surfaces(repo_root);
 
@@ -497,63 +496,25 @@ pub(crate) fn workspace_task_reservation_id(
 
 /// Return the effective lock surface for one task.
 ///
-/// An active epic root owns the union of every descendant's declared files so
-/// conflict admission can keep unrelated work moving while excluding only
-/// leaves that overlap the epic's actual family.
-pub(crate) fn lock_context_files_for_task(
-    task: &Task,
-    task_lookup: &BTreeMap<String, Task>,
-    workspace_root: &Path,
-) -> Vec<String> {
-    let mut files = declared_context_files(&task.context_files, workspace_root)
+/// Every task — leaf, child, or `epic`-tagged root — reserves exactly what it
+/// declares. Hierarchy is metadata: a parent never inherits a child's
+/// footprint, so conflict admission excludes only the work that genuinely
+/// overlaps [ORB-12491].
+pub(crate) fn lock_context_files_for_task(task: &Task, workspace_root: &Path) -> Vec<String> {
+    declared_context_files(&task.context_files, workspace_root)
         .retained
         .into_iter()
-        .collect::<BTreeSet<_>>();
-    if task.tags.iter().any(|tag| tag == "epic") {
-        for candidate in task_lookup.values() {
-            if task_is_descendant_of(candidate, &task.id, task_lookup) {
-                files.extend(
-                    declared_context_files(&candidate.context_files, workspace_root).retained,
-                );
-            }
-        }
-    }
-    files.into_iter().collect()
-}
-
-fn task_is_descendant_of(
-    task: &Task,
-    ancestor_id: &str,
-    task_lookup: &BTreeMap<String, Task>,
-) -> bool {
-    let mut visited = BTreeSet::from([task.id.clone()]);
-    let mut next_parent_id = task.parent_id();
-    for _ in 0..32 {
-        let Some(parent_id) = next_parent_id else {
-            return false;
-        };
-        if parent_id == ancestor_id {
-            return true;
-        }
-        if !visited.insert(parent_id.to_string()) {
-            return false;
-        }
-        let Some(parent) = task_lookup.get(parent_id) else {
-            return false;
-        };
-        next_parent_id = parent.parent_id();
-    }
-    false
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// Envelope metadata indexed for lock-surface expansion: active tasks,
-/// explicitly requested tasks, their ancestors, and the descendants of any
-/// active or requested epic root. One operation builds it once without
-/// hydrating task bodies or sidecars; repeated surface expansion then reuses
-/// the precomputed epic families.
+/// explicitly requested tasks, and their ancestors. One operation builds it
+/// once without hydrating task bodies or sidecars; repeated surface expansion
+/// then reuses it.
 pub(crate) struct TaskLockIndex {
     tasks: BTreeMap<String, TaskEnvelopeV2>,
-    epic_descendants: BTreeMap<String, Vec<String>>,
 }
 
 impl TaskLockIndex {
@@ -583,46 +544,18 @@ impl TaskLockIndex {
             .collect::<BTreeSet<_>>();
         let mut retained_ids = seed_ids.clone();
 
-        // Parent envelopes are needed to recognize epic ancestors and preserve
-        // the same guarded family walk as the bundle-backed implementation.
+        // Parent envelopes are kept so hierarchy stays readable from the index
+        // under the same guarded walk the bundle-backed implementation used.
+        // They do not widen anyone's lock surface [ORB-12491].
         for task_id in retained_ids.clone() {
             retain_task_ancestors(&task_id, &all_tasks, &mut retained_ids);
-        }
-
-        // An active or explicitly requested epic owns all descendant surfaces,
-        // including inactive descendants. Keep only those families rather than
-        // retaining every envelope in the lock index.
-        let epic_roots = seed_ids
-            .iter()
-            .filter_map(|task_id| all_tasks.get(task_id.as_str()))
-            .filter(|task| task.tags.iter().any(|tag| tag == "epic"))
-            .map(|task| task.id.clone())
-            .collect::<Vec<_>>();
-        for epic_id in epic_roots {
-            for task in all_tasks.values() {
-                if task_is_envelope_descendant_of(task, &epic_id, &all_tasks) {
-                    retained_ids.insert(task.id.clone());
-                }
-            }
         }
 
         let tasks = all_tasks
             .into_iter()
             .filter(|(task_id, _)| retained_ids.contains(task_id))
             .collect::<BTreeMap<_, _>>();
-        let mut epic_descendants: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for task in tasks.values() {
-            for epic_id in epic_envelope_ancestor_ids(task, &tasks) {
-                epic_descendants
-                    .entry(epic_id)
-                    .or_default()
-                    .push(task.id.clone());
-            }
-        }
-        Self {
-            tasks,
-            epic_descendants,
-        }
+        Self { tasks }
     }
 
     pub(crate) fn get(&self, task_id: &str) -> Option<&TaskEnvelopeV2> {
@@ -665,7 +598,7 @@ impl TaskLockIndex {
             .collect()
     }
 
-    /// [`lock_context_files_for_task`] over the precomputed epic families.
+    /// [`lock_context_files_for_task`] over indexed envelopes.
     pub(crate) fn lock_context_files(
         &self,
         task: &TaskEnvelopeV2,
@@ -686,20 +619,6 @@ impl TaskLockIndex {
         workspace_root: &Path,
     ) -> DeclaredContextFiles {
         let mut declared = declared_context_files(&task.context_files, workspace_root);
-        if task.tags.iter().any(|tag| tag == "epic") {
-            for descendant in self
-                .epic_descendants
-                .get(&task.id)
-                .into_iter()
-                .flatten()
-                .filter_map(|id| self.tasks.get(id))
-            {
-                let descendant_surface =
-                    declared_context_files(&descendant.context_files, workspace_root);
-                declared.retained.extend(descendant_surface.retained);
-                declared.invalid.extend(descendant_surface.invalid);
-            }
-        }
         declared.retained = declared
             .retained
             .into_iter()
@@ -715,30 +634,17 @@ impl TaskLockIndex {
         declared
     }
 
-    /// Whether `task_id` (or, for an epic root, any descendant) has declared
-    /// any `context_files` entries at all.
+    /// Whether `task_id` has declared any `context_files` entries at all.
     ///
     /// A selector for a file the task has not created yet is a declaration
     /// like any other and reaches [`Self::lock_context_files`] intact, so this
     /// answers the narrower question a task-scope reservation refuses on:
-    /// nothing declared at all.
+    /// nothing declared at all. A root inherits nothing from its children, so
+    /// an empty root declares no surface [ORB-12491].
     pub(crate) fn declares_context_surface(&self, task_id: &str) -> bool {
-        let Some(task) = self.tasks.get(task_id) else {
-            return false;
-        };
-        if !task.context_files.is_empty() {
-            return true;
-        }
-        if task.tags.iter().any(|tag| tag == "epic") {
-            return self
-                .epic_descendants
-                .get(&task.id)
-                .into_iter()
-                .flatten()
-                .filter_map(|id| self.tasks.get(id))
-                .any(|descendant| !descendant.context_files.is_empty());
-        }
-        false
+        self.tasks
+            .get(task_id)
+            .is_some_and(|task| !task.context_files.is_empty())
     }
 }
 
@@ -769,58 +675,6 @@ fn retain_task_ancestors(
         retained_ids.insert(parent.id.clone());
         next_parent_id = envelope_parent_id(parent);
     }
-}
-
-fn task_is_envelope_descendant_of(
-    task: &TaskEnvelopeV2,
-    ancestor_id: &str,
-    task_lookup: &BTreeMap<String, TaskEnvelopeV2>,
-) -> bool {
-    let mut visited = BTreeSet::from([task.id.clone()]);
-    let mut next_parent_id = envelope_parent_id(task);
-    for _ in 0..32 {
-        let Some(parent_id) = next_parent_id else {
-            return false;
-        };
-        if parent_id == ancestor_id {
-            return true;
-        }
-        if !visited.insert(parent_id.to_string()) {
-            return false;
-        }
-        let Some(parent) = task_lookup.get(parent_id) else {
-            return false;
-        };
-        next_parent_id = envelope_parent_id(parent);
-    }
-    false
-}
-
-/// Every epic-tagged ancestor on `task`'s parent chain, under the same hop
-/// and cycle guards as [`task_is_descendant_of`].
-fn epic_envelope_ancestor_ids(
-    task: &TaskEnvelopeV2,
-    task_lookup: &BTreeMap<String, TaskEnvelopeV2>,
-) -> Vec<String> {
-    let mut epics = Vec::new();
-    let mut visited = BTreeSet::from([task.id.clone()]);
-    let mut next_parent_id = envelope_parent_id(task);
-    for _ in 0..32 {
-        let Some(parent_id) = next_parent_id else {
-            break;
-        };
-        if !visited.insert(parent_id.to_string()) {
-            break;
-        }
-        let Some(parent) = task_lookup.get(parent_id) else {
-            break;
-        };
-        if parent.tags.iter().any(|tag| tag == "epic") {
-            epics.push(parent.id.clone());
-        }
-        next_parent_id = envelope_parent_id(parent);
-    }
-    epics
 }
 
 pub(crate) fn requested_task_files_indexed(

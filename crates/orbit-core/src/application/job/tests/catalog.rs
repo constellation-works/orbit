@@ -673,7 +673,6 @@ fn auto_drain_dispatch_chain_declares_and_forwards_the_crew_allowlist() {
         ("workspace_auto_pipeline", true),
         ("task_auto_pipeline", true),
         ("task_gate_pipeline", true),
-        ("epic_pipeline", true),
         // Chain termini: the agent activities in these jobs resolve their crew
         // against this run input, which is where the gate reads it.
         ("task_local_pipeline", false),
@@ -1595,13 +1594,7 @@ fn workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches() {
         .collect::<Vec<_>>();
     assert_eq!(
         body_ids,
-        vec![
-            "admissible",
-            "ship_leaves",
-            "start_epic",
-            "window",
-            "idle_wait",
-        ],
+        vec!["admissible", "ship_leaves", "window", "idle_wait"]
     );
 
     // Re-listing inside the loop is what lets a task that entered `backlog`
@@ -1625,9 +1618,9 @@ fn workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches() {
     );
     assert_eq!(fan_out.max_workers, 5);
     assert_eq!(fan_in.collect.as_deref(), Some("leaf_dispatches"));
-    // Detached, like the epic: waiting on the whole fan-out held every other
-    // slot closed for as long as its slowest member ran. The classifier caps
-    // the dispatches at the free slots instead, and the loop tops them up.
+    // Detached: waiting on the whole fan-out held every other slot closed for
+    // as long as its slowest member ran. The classifier caps the dispatches at
+    // the free slots instead, and the loop tops them up.
     let JobV2StepBody::TargetRef(ship_target) = &fan_out.worker.body else {
         panic!("each leaf must be dispatched by an activity");
     };
@@ -1643,23 +1636,11 @@ fn workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches() {
     assert!(!definition_body.contains("pipeline_success_guard"));
     assert!(!definition_body.contains("record_leaf_outcomes"));
 
-    // The epic must NOT be waited on: blocking on a multi-hour epic would
-    // consume the window and starve the conflict-free leaves behind it.
-    let epic = &drain.steps[2];
-    assert_eq!(
-        epic.when.as_deref(),
-        Some("{{ steps.admissible.output.has_epic }} == true")
-    );
-    let JobV2StepBody::TargetRef(epic_target) = &epic.body else {
-        panic!("epic step must dispatch detached");
-    };
-    assert_eq!(epic_target.target, "activity:invoke_detached");
-    assert_eq!(
-        epic_target.default_input.as_ref().expect("epic input")["job_name"],
-        "epic_pipeline"
-    );
+    // [ORB-12491] Nothing supervises a family any more: the drain has exactly
+    // one dispatch shape, and every task reaches it as a leaf.
+    assert!(!definition_body.contains("epic"));
 
-    let JobV2StepBody::TargetRef(window) = &drain.steps[3].body else {
+    let JobV2StepBody::TargetRef(window) = &drain.steps[2].body else {
         panic!("window step must use the deterministic activity");
     };
     assert_eq!(window.target, "activity:drain_window");
@@ -1671,7 +1652,7 @@ fn workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches() {
     // Sleeping only when idle keeps a busy window re-listing immediately, and
     // an expired one from paying a final sleep it will not use.
     assert_eq!(
-        drain.steps[4].when.as_deref(),
+        drain.steps[3].when.as_deref(),
         Some(
             "{{ steps.admissible.output.idle }} == true && \
              {{ steps.window.output.expired }} == false"
@@ -1679,7 +1660,7 @@ fn workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches() {
     );
     // The classifier picks the wait, so a saturated drain refills a freed slot
     // in seconds while an empty workspace still waits the long idle.
-    let JobV2StepBody::TargetRef(idle_wait) = &drain.steps[4].body else {
+    let JobV2StepBody::TargetRef(idle_wait) = &drain.steps[3].body else {
         panic!("idle wait must use the deterministic activity");
     };
     assert_eq!(
@@ -1687,7 +1668,7 @@ fn workspace_auto_pipeline_is_single_flight_and_conditionally_dispatches() {
         "{{ steps.admissible.output.sleep_seconds }}"
     );
     // The four-way `ship`/`hold`/`epic`/`empty` decision is gone; the loop
-    // reads an admissible set instead.
+    // reads an admissible set instead [ORB-10819].
     let definition = yaml_without_comments(yaml);
     assert!(!definition.contains("decision"));
     assert!(!definition.contains("hold"));
@@ -1811,7 +1792,6 @@ fn task_shipment_jobs_resolve_default_recovery_activity() {
 #[test]
 fn orchestration_jobs_do_not_enable_generic_recovery() {
     for job_name in [
-        "epic_pipeline",
         "task_auto_pipeline",
         "task_gate_pipeline",
         "workspace_ship_pipeline",
@@ -1829,268 +1809,6 @@ fn orchestration_jobs_do_not_enable_generic_recovery() {
             "default job {job_name} should not generically recover child orchestration"
         );
     }
-}
-
-#[test]
-fn epic_pipeline_opens_one_stable_worktree_and_drains_children_serially() {
-    let yaml = DEFAULT_JOB_FILES
-        .iter()
-        .find_map(|(name, yaml)| (*name == "epic_pipeline").then_some(*yaml))
-        .expect("epic pipeline exists");
-    let asset = load_job_asset(yaml).expect("epic pipeline parses");
-    assert_eq!(asset.spec.max_active_runs, 1);
-    // ORB-11187 added the two authorized PR completion steps; ORB-11333 added
-    // the three before-PR review gate steps.
-    assert_eq!(asset.spec.steps.len(), 18);
-    let root_step_ids = asset
-        .spec
-        .steps
-        .iter()
-        .map(|step| step.id.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        root_step_ids,
-        [
-            "resolve_ship_input",
-            "worktree",
-            "assemble",
-            "require_empty",
-            "commit_delivery",
-            "prepare_branch",
-            "sync_base",
-            "review_gate_admit",
-            "review",
-            "review_gate_settle",
-            "push",
-            "pr_open",
-            "promote_pr",
-            "promote_pr_no_diff",
-            // ORB-11187: authorized PR completion, between the review handoff
-            // and the local-mode delivery steps.
-            "complete_pr",
-            "complete_pr_no_diff",
-            "merge",
-            "mark_done",
-        ]
-    );
-
-    let JobV2StepBody::TargetRef(worktree) = &asset.spec.steps[1].body else {
-        panic!("epic pipeline must set up its worktree before draining children");
-    };
-    assert_eq!(worktree.target, "activity:worktree_setup");
-    let worktree_input = worktree.default_input.as_ref().expect("worktree input");
-    assert_eq!(worktree_input["run_id"], "epic-{{ input.epic_task_id }}");
-    assert_eq!(worktree_input["branch_prefix"], "epic");
-    assert_eq!(worktree_input["base_sync"], "remote");
-
-    let JobV2StepBody::Loop { loop_ } = &asset.spec.steps[2].body else {
-        panic!("epic pipeline must assemble descendants and the finisher in one loop");
-    };
-    assert_eq!(loop_.max_iterations, 8);
-    assert_eq!(
-        loop_.break_when.as_deref(),
-        Some("{{ steps.remaining.output.empty }} == true")
-    );
-    assert_eq!(loop_.steps.len(), 5);
-
-    let JobV2StepBody::Target(descendants) = &loop_.steps[0].body else {
-        panic!("assemble loop must list descendants deterministically");
-    };
-    let ActivityV2Spec::Deterministic(descendants) = &descendants.spec else {
-        panic!("epic descendant listing must be deterministic");
-    };
-    assert_eq!(descendants.action, "list_epic_descendants");
-
-    let JobV2StepBody::Loop { loop_: drain } = &loop_.steps[1].body else {
-        panic!("assemble loop must drain descendants through a sequential loop");
-    };
-    assert_eq!(
-        drain.items.as_deref(),
-        Some("{{ steps.descendants.output.task_ids }}")
-    );
-    assert_eq!(drain.max_iterations, 256);
-    assert_eq!(drain.steps.len(), 2);
-    let JobV2StepBody::TargetRef(land_child) = &drain.steps[0].body else {
-        panic!("first drain body must invoke one child pipeline");
-    };
-    assert_eq!(land_child.target, "activity:invoke_and_wait");
-    let child_input = &land_child.default_input.as_ref().expect("child input")["run_input"];
-    assert_eq!(
-        child_input["base_branch"],
-        "{{ steps.worktree.output.head_ref }}"
-    );
-    assert_eq!(child_input["base_sync"], "local");
-    assert_eq!(child_input["auto_push"], false);
-    assert_eq!(child_input["terminal_status"], "done");
-    assert_eq!(
-        child_input["landing_branch"],
-        "{{ steps.resolve_ship_input.output.base_branch }}"
-    );
-
-    let JobV2StepBody::TargetRef(finish) = &loop_.steps[2].body else {
-        panic!("assemble loop must invoke the epic finisher");
-    };
-    assert_eq!(finish.target, "activity:epic_orchestrator");
-    let finish_input = finish.default_input.as_ref().expect("finish input");
-    assert_eq!(finish_input["task_id"], "{{ input.epic_task_id }}");
-    for field in ["workspace_path", "repo_root"] {
-        assert_eq!(
-            finish_input[field], "{{ steps.worktree.output.workspace_path }}",
-            "epic finisher must pin {field} to the assigned epic worktree"
-        );
-    }
-
-    let commit_finish = &loop_.steps[3];
-    assert_eq!(commit_finish.id, "commit_finish");
-    assert_eq!(
-        commit_finish.when.as_deref(),
-        Some("{{ steps.descendants.output.empty }} == true")
-    );
-    let JobV2StepBody::TargetRef(commit_finish) = &commit_finish.body else {
-        panic!("empty-descendant finish must commit through git_commit");
-    };
-    assert_eq!(commit_finish.target, "activity:git_commit");
-    let commit_input = commit_finish.default_input.as_ref().expect("commit input");
-    assert_eq!(
-        commit_input["workspace_path"],
-        "{{ steps.worktree.output.workspace_path }}"
-    );
-    assert_eq!(
-        commit_input["base_sha"],
-        "{{ steps.worktree.output.base_sha }}"
-    );
-
-    let JobV2StepBody::Target(remaining) = &loop_.steps[4].body else {
-        panic!("assemble loop must re-list descendants after the finisher");
-    };
-    let ActivityV2Spec::Deterministic(remaining) = &remaining.spec else {
-        panic!("remaining descendant listing must be deterministic");
-    };
-    assert_eq!(remaining.action, "list_epic_descendants");
-
-    let require_empty = &asset.spec.steps[3];
-    assert_eq!(require_empty.id, "require_empty");
-    let JobV2StepBody::Target(require_empty_step) = &require_empty.body else {
-        panic!("post-loop gate must list descendants deterministically");
-    };
-    let ActivityV2Spec::Deterministic(require_empty_spec) = &require_empty_step.spec else {
-        panic!("post-loop descendant gate must be deterministic");
-    };
-    assert_eq!(require_empty_spec.action, "list_epic_descendants");
-    assert_eq!(
-        require_empty_step
-            .default_input
-            .as_ref()
-            .expect("require_empty input")["fail_if_nonempty"],
-        true
-    );
-
-    let commit_delivery = &asset.spec.steps[4];
-    let JobV2StepBody::TargetRef(commit_delivery) = &commit_delivery.body else {
-        panic!("delivery commit must reference git_commit");
-    };
-    assert_eq!(commit_delivery.target, "activity:git_commit");
-    let commit_input = commit_delivery
-        .default_input
-        .as_ref()
-        .expect("commit_delivery input");
-    assert_eq!(commit_input["allow_empty"], true);
-    assert_eq!(commit_input["allow_moved_head"], true);
-    assert_eq!(
-        commit_input["workspace_path"],
-        "{{ steps.worktree.output.workspace_path }}"
-    );
-
-    let pr_when = Some(
-        "{{ steps.resolve_ship_input.output.mode }} == pr && {{ steps.commit_delivery.output.skipped_no_diff_expected }} != true",
-    );
-    // ORB-11333: the three review-gate steps sit between sync_base and push
-    // and run unconditionally, so only the PR handoff steps carry `pr_when`.
-    for (index, id) in [
-        ("prepare_branch", 5),
-        ("sync_base", 6),
-        ("push", 10),
-        ("pr_open", 11),
-        ("promote_pr", 12),
-    ]
-    .into_iter()
-    .map(|(id, index)| (index, id))
-    {
-        let step = &asset.spec.steps[index];
-        assert_eq!(step.id, id);
-        assert_eq!(step.when.as_deref(), pr_when);
-        let JobV2StepBody::TargetRef(target) = &step.body else {
-            panic!("{id} must be an activity reference");
-        };
-        assert!(
-            !target.target.contains("task_pr_pipeline"),
-            "delivery must compose activities, not invoke task_pr_pipeline"
-        );
-        if let Some(input) = target.default_input.as_ref() {
-            if let Some(workspace_path) = input.get("workspace_path") {
-                assert_eq!(
-                    workspace_path, "{{ steps.worktree.output.workspace_path }}",
-                    "{id} must reuse the epic worktree"
-                );
-            }
-            assert!(
-                input.get("job_name") != Some(&json!("task_pr_pipeline")),
-                "{id} must not dispatch task_pr_pipeline"
-            );
-        }
-    }
-
-    let promote_no_diff = &asset.spec.steps[13];
-    assert_eq!(
-        promote_no_diff.when.as_deref(),
-        Some(
-            "{{ steps.resolve_ship_input.output.mode }} == pr && {{ steps.commit_delivery.output.skipped_no_diff_expected }} == true"
-        )
-    );
-    let JobV2StepBody::TargetRef(promote_no_diff) = &promote_no_diff.body else {
-        panic!("no-diff PR path must update the epic root");
-    };
-    assert_eq!(promote_no_diff.target, "activity:update_task");
-    assert_eq!(
-        promote_no_diff
-            .default_input
-            .as_ref()
-            .expect("no-diff input")["status"],
-        "review"
-    );
-
-    let merge = &asset.spec.steps[16];
-    assert_eq!(
-        merge.when.as_deref(),
-        Some("{{ steps.resolve_ship_input.output.mode }} == local")
-    );
-    let JobV2StepBody::TargetRef(merge) = &merge.body else {
-        panic!("local delivery must merge the epic branch");
-    };
-    assert_eq!(merge.target, "activity:git_merge");
-    let merge_input = merge.default_input.as_ref().expect("merge input");
-    assert_eq!(
-        merge_input["workspace_path"],
-        "{{ steps.worktree.output.workspace_path }}"
-    );
-    assert_eq!(
-        merge_input["base"],
-        "{{ steps.resolve_ship_input.output.base_branch }}"
-    );
-
-    let mark_done = &asset.spec.steps[17];
-    assert_eq!(
-        mark_done.when.as_deref(),
-        Some("{{ steps.resolve_ship_input.output.mode }} == local")
-    );
-    let JobV2StepBody::TargetRef(mark_done) = &mark_done.body else {
-        panic!("local delivery must mark the epic done");
-    };
-    assert_eq!(mark_done.target, "activity:update_task");
-    assert_eq!(
-        mark_done.default_input.as_ref().expect("mark_done input")["status"],
-        "done"
-    );
 }
 
 fn collect_agent_loop_step_ids<'a>(
@@ -2528,7 +2246,6 @@ fn completion_policy_defaults_to_review_and_propagates_across_job_boundaries() {
         "task_gate_pipeline",
         "task_local_pipeline",
         "task_pr_pipeline",
-        "epic_pipeline",
     ] {
         assert_eq!(
             job(name).default_input.as_ref().expect("default input")["completion"],
@@ -2537,9 +2254,9 @@ fn completion_policy_defaults_to_review_and_propagates_across_job_boundaries() {
         );
     }
 
-    // workspace auto -> task auto (detached leaves) and -> epic. Both are read
-    // from `input`, not from a step output captured once, so every drain
-    // iteration forwards the same authorization to newly discovered work.
+    // workspace auto -> task auto (detached leaves). Read from `input`, not
+    // from a step output captured once, so every drain iteration forwards the
+    // same authorization to newly discovered work.
     let workspace_auto = job("workspace_auto_pipeline");
     let drain = workspace_auto
         .steps
@@ -2564,19 +2281,6 @@ fn completion_policy_defaults_to_review_and_propagates_across_job_boundaries() {
         leaf_invoke.default_input.as_ref().expect("leaf input")["run_input"]["completion"],
         "{{ input.completion }}",
         "detached leaves must inherit the drain's completion authorization"
-    );
-
-    let start_epic = loop_
-        .steps
-        .iter()
-        .find(|step| step.id == "start_epic")
-        .expect("start_epic step");
-    let JobV2StepBody::TargetRef(start_epic) = &start_epic.body else {
-        panic!("start_epic must reference invoke_detached");
-    };
-    assert_eq!(
-        start_epic.default_input.as_ref().expect("epic input")["run_input"]["completion"],
-        "{{ input.completion }}"
     );
 
     // task auto -> gate.
@@ -2669,88 +2373,59 @@ fn local_pipeline_completes_tasks_only_after_merge_and_push() {
 /// authorization, and routes no-diff work down a path that needs no PR.
 #[test]
 fn pr_pipelines_complete_only_when_authorized_and_handle_no_diff_without_a_pr() {
-    for job_name in ["task_pr_pipeline", "epic_pipeline"] {
-        let yaml = DEFAULT_JOB_FILES
-            .iter()
-            .find_map(|(name, yaml)| (*name == job_name).then_some(*yaml))
-            .unwrap_or_else(|| panic!("default job {job_name} exists"));
-        let asset =
-            load_job_asset(yaml).unwrap_or_else(|error| panic!("parse {job_name}: {error}"));
+    let job_name = "task_pr_pipeline";
+    let yaml = DEFAULT_JOB_FILES
+        .iter()
+        .find_map(|(name, yaml)| (*name == job_name).then_some(*yaml))
+        .unwrap_or_else(|| panic!("default job {job_name} exists"));
+    let asset = load_job_asset(yaml).unwrap_or_else(|error| panic!("parse {job_name}: {error}"));
 
-        let no_diff_id = if job_name == "task_pr_pipeline" {
-            "complete_no_diff"
-        } else {
-            "complete_pr_no_diff"
-        };
+    let no_diff_id = "complete_no_diff";
 
-        let complete = asset
-            .spec
-            .steps
-            .iter()
-            .find(|step| step.id == "complete_pr")
-            .unwrap_or_else(|| panic!("{job_name} has a complete_pr step"));
-        let when = complete.when.as_deref().unwrap_or_default();
-        assert!(
-            when.contains("{{ input.completion }} == done"),
-            "{job_name} completion must be gated on the authorization: {when}"
-        );
-        let JobV2StepBody::TargetRef(complete) = &complete.body else {
-            panic!("{job_name} complete_pr must reference pr_complete");
-        };
-        assert_eq!(complete.target, "activity:pr_complete");
+    let complete = asset
+        .spec
+        .steps
+        .iter()
+        .find(|step| step.id == "complete_pr")
+        .unwrap_or_else(|| panic!("{job_name} has a complete_pr step"));
+    let when = complete.when.as_deref().unwrap_or_default();
+    assert!(
+        when.contains("{{ input.completion }} == done"),
+        "{job_name} completion must be gated on the authorization: {when}"
+    );
+    let JobV2StepBody::TargetRef(complete) = &complete.body else {
+        panic!("{job_name} complete_pr must reference pr_complete");
+    };
+    assert_eq!(complete.target, "activity:pr_complete");
 
-        let no_diff = asset
-            .spec
-            .steps
-            .iter()
-            .find(|step| step.id == no_diff_id)
-            .unwrap_or_else(|| panic!("{job_name} has a {no_diff_id} step"));
-        let when = no_diff.when.as_deref().unwrap_or_default();
-        assert!(
-            when.contains("{{ input.completion }} == done"),
-            "{job_name} no-diff completion must be gated on the authorization: {when}"
-        );
+    let no_diff = asset
+        .spec
+        .steps
+        .iter()
+        .find(|step| step.id == no_diff_id)
+        .unwrap_or_else(|| panic!("{job_name} has a {no_diff_id} step"));
+    let when = no_diff.when.as_deref().unwrap_or_default();
+    assert!(
+        when.contains("{{ input.completion }} == done"),
+        "{job_name} no-diff completion must be gated on the authorization: {when}"
+    );
 
-        // task_pr_pipeline's `skipped_no_diff_expected` is tag-derived (its
-        // `commit` step passes no `allow_empty`), so its no-diff completion
-        // still asserts the tag through `pr_complete`, exactly like
-        // `pr_promote`'s equivalent guard. epic_pipeline's `commit_delivery`
-        // passes `allow_empty: true` unconditionally, so the same signal does
-        // NOT imply the tag there; it must route through the tag-agnostic
-        // `task_complete` instead, matching `promote_pr_no_diff` routing
-        // around `pr_promote`'s guard on the same branch.
-        if job_name == "task_pr_pipeline" {
-            let JobV2StepBody::TargetRef(no_diff) = &no_diff.body else {
-                panic!("{job_name} {no_diff_id} must reference pr_complete");
-            };
-            assert_eq!(no_diff.target, "activity:pr_complete");
-            let input = no_diff.default_input.as_ref().expect("no-diff input");
-            assert_eq!(input["no_diff_expected"], true);
-            assert_eq!(
-                input["already_landed_checkpoint"],
-                "{{ steps.commit.output }}"
-            );
-            assert!(
-                input.get("pr_number").is_none(),
-                "{job_name} no-diff completion must not require a nonexistent PR"
-            );
-        } else {
-            let JobV2StepBody::TargetRef(no_diff) = &no_diff.body else {
-                panic!("{job_name} {no_diff_id} must reference task_complete");
-            };
-            assert_eq!(
-                no_diff.target, "activity:task_complete",
-                "epic no-diff completion must not carry pr_complete's tag guard"
-            );
-            let input = no_diff.default_input.as_ref().expect("no-diff input");
-            assert!(
-                input.get("no_diff_expected").is_none(),
-                "task_complete has no tag guard to gate"
-            );
-            assert!(
-                input.get("pr_number").is_none(),
-                "{job_name} no-diff completion must not require a nonexistent PR"
-            );
-        }
-    }
+    // `skipped_no_diff_expected` is tag-derived here (the `commit` step
+    // passes no `allow_empty`), so no-diff completion still asserts the
+    // tag through `pr_complete`, exactly like `pr_promote`'s equivalent
+    // guard.
+    let JobV2StepBody::TargetRef(no_diff) = &no_diff.body else {
+        panic!("{job_name} {no_diff_id} must reference pr_complete");
+    };
+    assert_eq!(no_diff.target, "activity:pr_complete");
+    let input = no_diff.default_input.as_ref().expect("no-diff input");
+    assert_eq!(input["no_diff_expected"], true);
+    assert_eq!(
+        input["already_landed_checkpoint"],
+        "{{ steps.commit.output }}"
+    );
+    assert!(
+        input.get("pr_number").is_none(),
+        "{job_name} no-diff completion must not require a nonexistent PR"
+    );
 }

@@ -376,9 +376,9 @@ pub(crate) fn inject_run_id(input: &Value, run_id: &str) -> Value {
         return input.clone();
     };
     if map.contains_key("run_id") {
-        // An explicit `run_id` is a worktree identity token (epic pipelines
-        // pin `epic-<task-id>`). The admitted job still owns execution
-        // authority; expose it as `job_run_id` when the caller did not.
+        // An explicit `run_id` is a worktree identity token, not a run
+        // record. The admitted job still owns execution authority; expose it
+        // as `job_run_id` when the caller did not.
         if map.contains_key("job_run_id") {
             return input.clone();
         }

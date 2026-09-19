@@ -138,7 +138,7 @@ one run:
 - **Validated up front.** Every name must be a crew this workspace configures.
   An unknown or empty one fails the command before anything is dispatched. No
   configuration file is written or changed.
-- **Inherited by the whole run.** The leaf and epic pipelines the drain starts
+- **Inherited by the whole run.** The leaf pipelines the drain starts
   carry the same restriction, and it is re-checked at every activity against
   the crew that actually resolved, including one that uses
   `[workflow] system_crew`. The comparison is by effective provider and model,

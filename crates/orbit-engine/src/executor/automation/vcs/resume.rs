@@ -406,7 +406,7 @@ fn ensure_run_is_resumable_owner<H: RuntimeHost + ?Sized>(
 
 /// Re-authenticate the evidence carried into `git_commit` against the source
 /// run's immutable state. This is deliberately separate from the ordinary
-/// moved-HEAD escape hatch used by epic child merges.
+/// moved-HEAD escape hatch used by stacked local merges.
 pub(super) fn commit_head_matches_failure_handoff<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,

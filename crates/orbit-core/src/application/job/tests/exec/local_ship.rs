@@ -80,7 +80,7 @@ fn init_remoteless_repo(repo_root: &Path) {
 
 /// Executes the real `task_local_pipeline` for the gate's `dispatch_child`
 /// step, with the engine's own VCS and task activities scripted the way the
-/// epic pipeline tests script them. The pipeline wiring under test — the
+/// the PR pipeline tests script them. The pipeline wiring under test — the
 /// gate's `auto_push` threading and the leaf's `push` condition — stays
 /// untouched.
 struct LocalShipHost<'a> {

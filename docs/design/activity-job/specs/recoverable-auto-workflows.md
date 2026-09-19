@@ -15,9 +15,8 @@ This document specifies a planned opt-in durability mode for automatic workflow 
 orbit run auto --recover [--for <duration>]
 ```
 
-The initial scope is `workspace_auto_pipeline` and its loose task leaves. The recovery primitive
-is deliberately reusable by `epic_pipeline`, but adopting it for epic descendants is a separate
-change. Without `--recover`, the current fail-fast behavior remains unchanged.
+The initial scope is `workspace_auto_pipeline` and its backlog task leaves. Without `--recover`,
+the current fail-fast behavior remains unchanged.
 
 `--recover` is not a promise that every task will become `done`. It is a promise that every task
 admitted by the auto run will be carried as far as workspace delivery policy permits and will not

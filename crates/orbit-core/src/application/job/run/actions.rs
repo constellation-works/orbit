@@ -372,7 +372,8 @@ impl OrbitRuntime {
     /// parent's wait was that child's only consumer, so leaving it running
     /// would produce work nobody joins and no operator expects. A child
     /// dispatched *detached* does not: it was submitted precisely to outlive
-    /// the parent's step (`workspace_auto_pipeline` starts an epic that way),
+    /// the parent's step (`workspace_auto_pipeline` starts its leaves that
+    /// way),
     /// and its own drain re-observes it. The dispatch record carries which
     /// shape it was, so the rule is decided by how the child was dispatched
     /// rather than by whoever happens to be cancelling.

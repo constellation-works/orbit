@@ -950,10 +950,10 @@ fn workspace_retired_backend_warns_artifacts_activities_with_repair_command() {
         .join("resources")
         .join("activities");
     fs::create_dir_all(&activities).expect("create workspace activities");
-    let path = activities.join("epic_orchestrator.yaml");
+    let path = activities.join("workspace_finisher.yaml");
     fs::write(
         &path,
-        "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: epic_orchestrator\nspec:\n  type: agent_loop\n  description: fixture\n  instruction: do the work\n  backend: http\n",
+        "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: workspace_finisher\nspec:\n  type: agent_loop\n  description: fixture\n  instruction: do the work\n  backend: http\n",
     )
     .expect("write retired backend activity");
 
@@ -961,7 +961,7 @@ fn workspace_retired_backend_warns_artifacts_activities_with_repair_command() {
     let row = status_of(&results, "artifacts-activities");
     assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
     assert!(
-        row.message.contains("epic_orchestrator.yaml"),
+        row.message.contains("workspace_finisher.yaml"),
         "{}",
         row.message
     );

@@ -325,32 +325,32 @@ fn random_sampling_rejects_biased_ticket_and_propagates_entropy_failure() {
 }
 
 #[test]
-fn epic_descendants_draw_independently_and_system_jobs_keep_their_crew() {
+fn children_draw_independently_and_system_jobs_keep_their_crew() {
     let (_root, runtime, _, _) = test_runtime_with_workspace_config("");
     let parent = coordinator(
         &runtime,
         json!({"medium_complexity_crews": ["grok", "terra"]}),
     );
     let root = task(&runtime, TaskComplexity::Medium, None);
-    let mut epic = json!({"epic_task_id": root.id});
+    let mut leaf = json!({"task_ids": [root.id]});
     runtime
         .install_auto_crew_admission(
-            "epic_pipeline",
-            &mut epic,
+            "task_auto_pipeline",
+            &mut leaf,
             Some(&parent),
             false,
             &mut || Ok(0),
         )
-        .expect("epic admission");
-    assert_eq!(epic["crew"], "grok");
-    let epic_run = persist(&runtime, "epic_pipeline", epic);
+        .expect("leaf admission");
+    assert_eq!(leaf["crew"], "grok");
+    let leaf_run = persist(&runtime, "task_auto_pipeline", leaf);
     let descendant = task(&runtime, TaskComplexity::Medium, None);
     let mut child = json!({"task_ids": [descendant.id]});
     runtime
         .install_auto_crew_admission(
             "task_local_pipeline",
             &mut child,
-            Some(&epic_run),
+            Some(&leaf_run),
             false,
             &mut || Ok(1),
         )
@@ -363,7 +363,7 @@ fn epic_descendants_draw_independently_and_system_jobs_keep_their_crew() {
         .install_auto_crew_admission(
             "task_pilot_pipeline",
             &mut system,
-            Some(&epic_run),
+            Some(&leaf_run),
             false,
             &mut no_draw,
         )

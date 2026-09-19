@@ -3,28 +3,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
-use orbit_types::task::{
-    Task, TaskStatus, task_dependencies_ready_with_index, unmet_task_dependencies_with_index,
-};
+use orbit_types::task::{TaskStatus, unmet_task_dependencies_with_index};
 use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit, OperationAdmission};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::CapturedCrewPools;
 use crate::application::operation::{admission_state, live_admission, promote_within_grant};
 
 use crate::runtime::engine::crew::CrewAllowlist;
 
 use super::auto_admission::{AdmissionHolders, select_admissions};
 use super::backlog_exclusion::{
-    BacklogSnapshot, BacklogTaskExclusionReason, EpicFamilyMembership, allowlist_from_input,
-    backlog_snapshot, epic_family_membership, sort_tasks_for_automatic_dispatch,
+    BacklogTaskExclusionReason, allowlist_from_input, backlog_snapshot,
+    sort_tasks_for_automatic_dispatch,
 };
 use super::leaf_occupancy::{occupancy_json, read_leaf_occupancy};
-
-/// The job that supervises one epic root. `classify_workspace_auto_tasks`
-/// reads its live runs to decide whether another root may start.
-const EPIC_JOB_NAME: &str = "epic_pipeline";
 
 /// The job that ships loose leaves. Its live runs are read for two things at
 /// once: how many slots are occupied, and which backlog tasks are already
@@ -50,8 +43,7 @@ const DEFAULT_MAX_ACTIVE_LEAF_RUNS: u64 = 5;
 const DEFAULT_POLL_SLEEP_SECONDS: u64 = 30;
 
 /// Wait before re-listing when nothing is admissible at all. Long, because the
-/// only things that can change are a task arriving or the detached epic
-/// finishing.
+/// only thing that can change is a task arriving or a live child finishing.
 const DEFAULT_IDLE_SLEEP_SECONDS: u64 = 60;
 
 const MAX_READINESS_LIMIT: usize = 500;
@@ -69,10 +61,9 @@ const MAX_DRAIN_WINDOW_SECONDS: f64 = 86_400.0;
 /// The admissible work for one drain iteration [ORB-10819].
 ///
 /// This answers "what may start right now", not "what is the one action for
-/// this tick". Loose leaves and an epic root are independent answers: a
-/// conflict-free chore ships in the same iteration that an epic is running,
-/// because an `in-progress` epic root already reserves the union of its
-/// descendants' `context_files` (ORB-10816) and `backlog_snapshot` drops
+/// this tick". Every answer is an ordinary leaf: a conflict-free chore ships in
+/// the same iteration that a large task is running, because the active task
+/// reserves its own declared `context_files` and `backlog_snapshot` drops
 /// exactly the leaves that overlap it. That reservation is why the former
 /// `hold` decision is gone — a blanket freeze excluded conflict-free work the
 /// lock surface had no reason to exclude.
@@ -207,31 +198,12 @@ pub(super) fn classify_workspace_auto_tasks(
         .map(|task_id| json!({ "task_ids": [task_id] }))
         .collect();
 
-    let active_epic = active_epic_run(runtime, action)?;
-    // One epic at a time. `epic_pipeline` declares `max_active_runs: 1`,
-    // so offering a second root would not run it — it would queue a
-    // `pending` run behind the live one, and the drain loop would mint a
-    // fresh one every iteration. Keying on the run rather than on the
-    // root's status also closes the window between a detached submit and
-    // the child's `worktree_setup` moving that root to `in-progress`.
-    // [ORB-11283] A stopped drain offers no new epic either.
-    let epic_task_id = if admissions_stopped || !operation_open || active_epic.is_some() {
-        None
-    } else {
-        next_admissible_epic_root(runtime, &snapshot, allowlist.as_ref(), &pools).filter(|root| {
-            operation
-                .as_ref()
-                .is_none_or(|operation| operation.scope.contains(root))
-        })
-    };
-
     let has_leaves = !loose_task_dispatches.is_empty();
-    let has_epic = epic_task_id.is_some();
     // Idle means "this iteration started nothing", which is not the same as
     // "there is nothing to do": a saturated drain with a full backlog behind
     // it is idle in this sense and waits the short poll, while a genuinely
     // empty workspace waits the long one.
-    let idle = !has_leaves && !has_epic;
+    let idle = !has_leaves;
     let sleep_seconds = if pending.is_empty() {
         idle_sleep_seconds
     } else {
@@ -242,8 +214,6 @@ pub(super) fn classify_workspace_auto_tasks(
         "loose_task_ids": admitted,
         "loose_task_dispatches": loose_task_dispatches,
         "has_leaves": has_leaves,
-        "epic_task_id": epic_task_id,
-        "has_epic": has_epic,
         "idle": idle,
         "sleep_seconds": sleep_seconds,
         "pending_backlog": pending.len(),
@@ -262,8 +232,6 @@ pub(super) fn classify_workspace_auto_tasks(
         "worker_limit": worker_limit,
         "admissions_stopped": admissions_stopped,
         "admissions_stop": admissions_stop,
-        "active_epic_run_id": active_epic.as_ref().map(|epic| epic.run_id.clone()),
-        "active_epic_task_id": active_epic.and_then(|epic| epic.task_id),
         "operation": operation.map(|operation| operation.report),
     }))
 }
@@ -370,7 +338,6 @@ pub fn explain_workspace_auto_readiness(
     )
     .map_err(|error| OrbitError::Execution(format!("read readiness snapshot: {error}")))?;
     let live_leaves = read_live_leaf_runs(runtime)?;
-    let active_epic = read_active_epic_run(runtime)?;
     let claimed_by_task =
         live_leaves
             .iter()
@@ -465,12 +432,6 @@ pub fn explain_workspace_auto_readiness(
         .iter()
         .map(|excluded| (excluded.id.as_str(), excluded))
         .collect::<BTreeMap<_, _>>();
-    let next_epic = if active_epic.is_none() && !admissions_stopped {
-        next_admissible_epic_root(runtime, &snapshot, allowlist.as_ref(), &pools)
-    } else {
-        None
-    };
-
     let selected_ids = if task_ids.is_empty() {
         let mut backlog = snapshot
             .task_lookup
@@ -548,26 +509,6 @@ pub fn explain_workspace_auto_readiness(
                         object.insert("reason".to_string(), Value::String("crew_not_allowed".to_string()));
                         object.insert("crew".to_string(), json!(excluded.crew));
                         object.insert("allowed_crews".to_string(), json!(allowlist.as_ref().map(CrewAllowlist::names)));
-                    }
-                    BacklogTaskExclusionReason::EpicChild => {
-                        object.insert("reason".to_string(), Value::String("epic_managed".to_string()));
-                    }
-                    BacklogTaskExclusionReason::EpicRoot => {
-                        if admissions_stopped {
-                            object.insert(
-                                "reason".to_string(),
-                                Value::String("admissions_stopped".to_string()),
-                            );
-                        } else if active_epic.is_some() {
-                            object.insert("reason".to_string(), Value::String("epic_run_active".to_string()));
-                            object.insert("epic_run_id".to_string(), json!(active_epic.as_ref().map(|run| &run.run_id)));
-                        } else if next_epic.as_deref() == Some(task.id.as_str()) {
-                            object.insert("eligible".to_string(), Value::Bool(true));
-                            object.insert("reason".to_string(), Value::String("ready_as_epic".to_string()));
-                        } else {
-                            object.insert("reason".to_string(), Value::String("queued_behind_epic".to_string()));
-                            object.insert("next_epic_task_id".to_string(), json!(next_epic));
-                        }
                     }
                     BacklogTaskExclusionReason::ContextLockConflict
                     | BacklogTaskExclusionReason::GroupMemberConflict => {
@@ -846,11 +787,10 @@ struct LiveLeafRun {
 }
 
 fn live_leaf_runs(runtime: &OrbitRuntime, action: &str) -> Result<Vec<LiveLeafRun>, DispatchError> {
-    // Reconcile first, for the same reason the epic gate does: one orphaned
-    // `running` row — a worker killed by a reboot or an OOM — would occupy a
-    // slot forever. Unlike the epic gate, that failure degrades rather than
-    // stops: the drain keeps shipping at a quietly lower parallelism, which is
-    // exactly the kind of thing nobody notices.
+    // Reconcile first: one orphaned `running` row — a worker killed by a
+    // reboot or an OOM — would occupy a slot forever, and the drain would keep
+    // shipping at a quietly lower parallelism, which is exactly the kind of
+    // thing nobody notices.
     runtime
         .reconcile_stale_job_runs(Some(LEAF_JOB_NAME))
         .map_err(|err| {
@@ -888,86 +828,6 @@ fn read_live_leaf_runs(runtime: &OrbitRuntime) -> Result<Vec<LiveLeafRun>, Orbit
                 .unwrap_or_default(),
         })
         .collect())
-}
-
-/// A live `epic_pipeline` run, if one is already supervising a root.
-struct ActiveEpicRun {
-    run_id: String,
-    task_id: Option<String>,
-}
-
-fn active_epic_run(
-    runtime: &OrbitRuntime,
-    action: &str,
-) -> Result<Option<ActiveEpicRun>, DispatchError> {
-    // Reconcile first, exactly as the submit path does before it counts
-    // active runs. Without this, one orphaned `running` row — a worker killed
-    // by a reboot or an OOM — would read as a live epic forever and silently
-    // stop every epic dispatch in the workspace. That failure would be
-    // invisible: the drain keeps succeeding, it just never starts an epic.
-    runtime
-        .reconcile_stale_job_runs(Some(EPIC_JOB_NAME))
-        .map_err(|err| DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("reconcile stale {EPIC_JOB_NAME} runs: {err}"),
-        })?;
-    read_active_epic_run(runtime).map_err(|error| DispatchError::DeterministicActionFailed {
-        action: action.to_string(),
-        message: format!("list live {EPIC_JOB_NAME} runs: {error}"),
-    })
-}
-
-fn read_active_epic_run(runtime: &OrbitRuntime) -> Result<Option<ActiveEpicRun>, OrbitError> {
-    let runs = runtime
-        .stores()
-        .jobs()
-        .list_pending_or_running_job_runs(EPIC_JOB_NAME)?;
-    Ok(runs.into_iter().next().map(|run| ActiveEpicRun {
-        task_id: run
-            .input
-            .as_ref()
-            .and_then(|input| input.get("epic_task_id"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
-        run_id: run.run_id,
-    }))
-}
-
-/// The highest-priority `backlog` epic root whose dependencies are satisfied
-/// and whose effective crew this run's window permits [ORB-11242].
-///
-/// Reads the snapshot the caller already holds: the epic decision and the
-/// leaf wave then describe the same population, and the tick does not list
-/// the store or project statuses a second time.
-fn next_admissible_epic_root(
-    runtime: &OrbitRuntime,
-    snapshot: &BacklogSnapshot,
-    allowlist: Option<&CrewAllowlist>,
-    pools: &CapturedCrewPools,
-) -> Option<String> {
-    let mut backlog_epics = snapshot
-        .task_lookup
-        .values()
-        .filter(|task| {
-            task.status == TaskStatus::Backlog
-                && epic_family_membership(task, &snapshot.task_lookup)
-                    == Some(EpicFamilyMembership::Root)
-                && task_dependencies_ready_with_index(
-                    task,
-                    &snapshot.status_by_id,
-                    &snapshot.reference_index,
-                )
-                && allowlist.is_none_or(|allowlist| {
-                    runtime
-                        .auto_task_crew_eligibility(task, pools, allowlist)
-                        .is_ok()
-                })
-        })
-        .collect::<Vec<_>>();
-    sort_tasks_for_automatic_dispatch(&mut backlog_epics);
-    backlog_epics.first().map(|epic| epic.id.clone())
 }
 
 /// Open or re-read a drain window [ORB-10819].
@@ -1105,158 +965,4 @@ fn action_failed(action: &str, message: String) -> DispatchError {
         action: action.to_string(),
         message,
     }
-}
-
-pub(super) fn list_epic_descendants(
-    runtime: &OrbitRuntime,
-    action: &str,
-    input: &Value,
-) -> Result<Value, DispatchError> {
-    let epic_task_id = input
-        .get("epic_task_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: "missing `epic_task_id`".to_string(),
-        })?;
-    let task_lookup = runtime
-        .stores()
-        .tasks()
-        .list_tasks()
-        .map_err(|error| DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("list tasks: {error}"),
-        })?
-        .into_iter()
-        .map(|task| (task.id.clone(), task))
-        .collect::<BTreeMap<_, _>>();
-    let epic =
-        task_lookup
-            .get(epic_task_id)
-            .ok_or_else(|| DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("epic task `{epic_task_id}` was not found"),
-            })?;
-    if !epic.tags.iter().any(|tag| tag == "epic") {
-        return Err(DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!("task `{epic_task_id}` is not tagged `epic`"),
-        });
-    }
-
-    let remaining = task_lookup
-        .values()
-        .filter(|task| {
-            is_descendant_of(task, epic_task_id, &task_lookup)
-                && !matches!(
-                    task.status,
-                    TaskStatus::Done | TaskStatus::Rejected | TaskStatus::Archived
-                )
-        })
-        .map(|task| (task.id.as_str(), task))
-        .collect::<BTreeMap<&str, &Task>>();
-
-    // Standard in-degree Kahn: compute each task's dependency edges once, then
-    // drain ready ids wave by wave instead of rescanning every remaining task
-    // (and reallocating its dependency list) on every pass.
-    let mut in_degree = remaining
-        .keys()
-        .map(|&id| (id, 0usize))
-        .collect::<BTreeMap<&str, usize>>();
-    let mut dependents = BTreeMap::<&str, Vec<&str>>::new();
-    for (&id, &task) in &remaining {
-        for dependency_id in task.dependencies() {
-            if let Some((&blocker_id, _)) = remaining.get_key_value(dependency_id.as_str()) {
-                *in_degree.entry(id).or_insert(0) += 1;
-                dependents.entry(blocker_id).or_default().push(id);
-            }
-        }
-    }
-
-    let mut ordered = Vec::with_capacity(remaining.len());
-    let mut wave = in_degree
-        .iter()
-        .filter(|(_, degree)| **degree == 0)
-        .map(|(&id, _)| id)
-        .collect::<Vec<&str>>();
-
-    while !wave.is_empty() {
-        let mut ready = wave.iter().map(|&id| remaining[id]).collect::<Vec<_>>();
-        sort_tasks_for_automatic_dispatch(&mut ready);
-        let mut next_wave = Vec::new();
-        for task in ready {
-            if let Some(dependent_ids) = dependents.get(task.id.as_str()) {
-                for &dependent_id in dependent_ids {
-                    let degree = in_degree.entry(dependent_id).or_insert(0);
-                    *degree = degree.saturating_sub(1);
-                    if *degree == 0 {
-                        next_wave.push(dependent_id);
-                    }
-                }
-            }
-            ordered.push(task.id.clone());
-        }
-        wave = next_wave;
-    }
-
-    if ordered.len() != remaining.len() {
-        let ordered_ids = ordered.iter().map(String::as_str).collect::<BTreeSet<_>>();
-        let stuck = remaining
-            .keys()
-            .copied()
-            .filter(|id| !ordered_ids.contains(id))
-            .collect::<Vec<_>>();
-        return Err(DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!(
-                "epic `{epic_task_id}` has a dependency cycle among unfinished descendants: {}",
-                stuck.join(", ")
-            ),
-        });
-    }
-
-    let empty = ordered.is_empty();
-    let fail_if_nonempty = input
-        .get("fail_if_nonempty")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if fail_if_nonempty && !empty {
-        return Err(DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: format!(
-                "epic descendants remain after drain: tasks=[{}]",
-                ordered.join(", ")
-            ),
-        });
-    }
-
-    Ok(json!({
-        "epic_task_id": epic_task_id,
-        "task_count": ordered.len(),
-        "task_ids": ordered,
-        "empty": empty,
-    }))
-}
-
-fn is_descendant_of(task: &Task, ancestor_id: &str, task_lookup: &BTreeMap<String, Task>) -> bool {
-    let mut visited = BTreeSet::from([task.id.clone()]);
-    let mut next_parent_id = task.parent_id();
-    for _ in 0..32 {
-        let Some(parent_id) = next_parent_id else {
-            return false;
-        };
-        if parent_id == ancestor_id {
-            return true;
-        }
-        if !visited.insert(parent_id.to_string()) {
-            return false;
-        }
-        let Some(parent) = task_lookup.get(parent_id) else {
-            return false;
-        };
-        next_parent_id = parent.parent_id();
-    }
-    false
 }

@@ -184,8 +184,7 @@ fn merge_with_rebase_retry(
 
 /// Locate the linked worktree that already has `base` checked out. Git refuses
 /// to check the same branch out in the primary checkout, so stacked local
-/// pipelines must merge directly in the owning worktree (the epic worktree in
-/// particular).
+/// pipelines must merge directly in the owning worktree.
 pub(super) fn checkout_holding_branch(
     repo_root: &Path,
     base: &str,

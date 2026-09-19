@@ -694,6 +694,7 @@ pub mod artifact_health;
 pub mod audit_event;
 pub mod auto_tasks;
 pub(crate) mod docs;
+pub mod epic_retirement;
 pub(crate) mod executor;
 pub mod gc;
 pub mod job;

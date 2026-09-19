@@ -97,8 +97,8 @@ const DEFAULT_CONTENTION_LIMIT: usize = 10;
                   two tasks inside one group are often compatible and merely linked through\n\
                   a third.\n\n\
                   Surfaces are the ones conflict admission reserves: declared selectors,\n\
-                  pruned of paths that no longer exist, unioned across descendants for an\n\
-                  epic root. A task declaring nothing locks nothing and is counted apart."
+                  pruned of paths that no longer exist. A task declaring nothing locks\n\
+                  nothing and is counted apart."
 )]
 pub struct LocksContentionArgs {
     /// Maximum hotspot rows to show. Default 10.

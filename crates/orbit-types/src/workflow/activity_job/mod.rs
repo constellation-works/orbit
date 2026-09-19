@@ -38,7 +38,6 @@ macro_rules! deterministic_action_catalog {
                 InvokeAndWait => "invoke_and_wait",
                 InvokeDetached => "invoke_detached",
                 ListBacklogTasks => "list_backlog_tasks",
-                ListEpicDescendants => "list_epic_descendants",
                 OrbitToolCall => "orbit_tool_call",
                 PipelineSuccessGuard => "pipeline_success_guard",
                 PrepareTaskPilot => "prepare_task_pilot",

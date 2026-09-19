@@ -16,10 +16,9 @@
 //!
 //! Footprints come from `lock_context_files_for_task` and are compared under
 //! `workspace_relative_paths_overlap`'s semantics through an `OverlapIndex`,
-//! so canonical file/directory/symbol normalization and an epic root's
-//! descendant coverage are the same semantics the gate will enforce later —
-//! answered as a prefix lookup per requested selector rather than a pass over
-//! every held one. Nothing here reserves anything: the wave is a prediction,
+//! so canonical file/directory/symbol normalization is the same semantics the
+//! gate will enforce later — answered as a prefix lookup per requested
+//! selector rather than a pass over every held one. Nothing here reserves anything: the wave is a prediction,
 //! and `reserve_locks` stays authoritative for the race.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -165,7 +164,7 @@ impl AdmissionHolders {
             if matches!(task.status, TaskStatus::InProgress | TaskStatus::Review) {
                 continue;
             }
-            for selector in lock_context_files_for_task(task, task_lookup, workspace_root) {
+            for selector in lock_context_files_for_task(task, workspace_root) {
                 claimed.entry(selector).or_default().push(task.id.clone());
             }
         }
@@ -219,7 +218,7 @@ fn index_holders(holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<Vec<St
 /// candidate order among compatible tasks.
 ///
 /// `ordered_candidates` is the caller's priority/age order, already filtered for
-/// dependencies, crew, epic membership, live claims, and grant scope. This
+/// dependencies, crew, live claims, and grant scope. This
 /// function adds exactly one rule: a candidate joins the wave only if nothing
 /// it would touch is already spoken for.
 pub(super) fn select_admissions(
@@ -247,7 +246,7 @@ pub(super) fn select_admissions(
             continue;
         };
 
-        let footprint = lock_context_files_for_task(task, task_lookup, workspace_root);
+        let footprint = lock_context_files_for_task(task, workspace_root);
         let mut conflicts = Vec::new();
         for requested_selector in &footprint {
             conflicts.extend(holders.conflicts_for(requested_selector));

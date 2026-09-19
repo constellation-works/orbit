@@ -46,10 +46,6 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/file_dependabot_alert_tasks.yaml"),
     ),
     (
-        "epic_orchestrator",
-        include_str!("../../assets/activities/epic_orchestrator.yaml"),
-    ),
-    (
         "agent_invoke",
         include_str!("../../assets/activities/agent_invoke.yaml"),
     ),

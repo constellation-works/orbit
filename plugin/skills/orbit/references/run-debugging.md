@@ -132,7 +132,7 @@ evidence. Treat `checkout_identity.state: incomplete`, `missing`, or
 - **Git/branch failure:** `git_push`, `pr_open`, `git_merge`, freshness checks, rebase, or conflicts failed after implementation.
 - **Provider/tooling failure:** provider command failed before useful work, model unavailable, timeout, sandbox denial, tool surface mismatch.
 - **Recovery failure:** the original step failed and `step_failure_recovery` also failed — report both, keep the original step as primary unless recovery caused additional damage.
-- **Parent orchestration failure:** a child run failed and a gate/auto/epic parent is still running or waiting — identify both run ids.
+- **Parent orchestration failure:** a child run failed and a gate/auto parent is still running or waiting — identify both run ids.
 
 ## Operator Agent Invocations
 
@@ -178,14 +178,14 @@ Check status/history, plan/execution_summary, comments, workspace_path, external
 
 ## Check Parent And Child Runs
 
-Parent gate/auto/epic runs can fail because a child failed, and children can keep working after a parent reports a gate failure:
+Parent gate/auto runs can fail because a child failed, and children can keep working after a parent reports a gate failure:
 
 ```bash
 rg -n '<run_id>|<task_id>' .orbit/state/job-runs .orbit/state/audit/v2_loop
 orbit run history --json
 ```
 
-Look for `input.task_ids` overlap between candidate runs, parent events that invoke/wait on another `jrun-*`, child run ids named in gate/auto/epic/`invoke_and_wait` step output, and parent runs still `pending`/`running` after a child failed. Report the run owning the first real failure as primary, then name parent/child fallout separately.
+Look for `input.task_ids` overlap between candidate runs, parent events that invoke/wait on another `jrun-*`, child run ids named in gate/auto/`invoke_and_wait` step output, and parent runs still `pending`/`running` after a child failed. Report the run owning the first real failure as primary, then name parent/child fallout separately.
 
 ## Check Git State For Workflow Failures
 

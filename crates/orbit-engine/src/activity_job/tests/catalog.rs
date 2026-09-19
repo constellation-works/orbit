@@ -95,10 +95,10 @@ fn agent_loop_yaml(name: &str, extra_spec_line: &str) -> String {
 fn catalog_load_and_shared_loader_reject_retired_http_backend() {
     let root = tempdir().expect("create tempdir");
     let dir = root.path().join("activities");
-    let path = dir.join("epic_orchestrator.yaml");
+    let path = dir.join("workspace_finisher.yaml");
     write(
         &path,
-        &agent_loop_yaml("epic_orchestrator", "  backend: http\n"),
+        &agent_loop_yaml("workspace_finisher", "  backend: http\n"),
     );
 
     let mut catalog = V2ActivityCatalog::new();
@@ -106,7 +106,7 @@ fn catalog_load_and_shared_loader_reject_retired_http_backend() {
         .load_dir_skipping_retired(&dir)
         .expect_err("retired backend must fail catalog construction");
     let load_text = load_err.to_string();
-    assert!(load_text.contains("epic_orchestrator.yaml"), "{load_text}");
+    assert!(load_text.contains("workspace_finisher.yaml"), "{load_text}");
     assert!(load_text.contains("backend: http"), "{load_text}");
     assert!(
         load_text.contains("schemaVersion 2 parse failed"),

@@ -224,7 +224,7 @@ before downgrading.
 Review timing is captured once per delivery run and never re-read. Every
 submission in the delivery family (`workspace_auto_pipeline`,
 `task_auto_pipeline`, `task_gate_pipeline`, `task_pr_pipeline`,
-`epic_pipeline`, `task_local_pipeline`) carries a versioned `review`
+`task_local_pipeline`) carries a versioned `review`
 snapshot in its immutable input: timing and its source, the configured
 reviewer crew and its source, the lineage budget, and the policy version. A
 parent-authorized child inherits its parent's snapshot exactly; a grant-bound
@@ -233,16 +233,13 @@ from the workspace preferences at that moment. Ordinary input naming the
 reserved `review` key is refused, and a resume keeps its persisted input, so
 rolling a preference back to `none` never weakens a gate that is already
 active and switching to `before-pr` never gates a run already admitted.
-`before-pr` is refused at submission for ordinary `task_local_pipeline`
-delivery. A parent-authorized `epic_pipeline` child may still assemble
-locally onto the epic branch: it inherits the captured snapshot unchanged,
-and the epic's own before-PR gate remains mandatory on the combined
-candidate. Caller-shaped input cannot claim that assembly exemption. The
-epic pipeline itself refuses `before-pr` when its route resolves to local.
+`before-pr` is refused at submission for `task_local_pipeline` delivery,
+with no exemption: epic assembly was the one caller that gated a combined
+candidate later, and it is retired [ORB-12491].
 
 ### The gate
 
-`task_pr_pipeline` and `epic_pipeline` run three steps after the final base
+`task_pr_pipeline` runs three steps after the final base
 synchronization and before push/PR creation: `review_gate_admit`,
 `review` (`agent_review_repair`), and `review_gate_settle`. Under `none`,
 `after-landing`, or a checked no-diff exemption the gate reports

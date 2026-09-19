@@ -495,6 +495,9 @@ fn setup_and_gc_derive_the_same_worktree_path() {
     );
 }
 
+/// [ORB-12491] `epic_pipeline` is retired, but its stored runs are not: GC
+/// re-derives worktree identity from run input, so the historical decoding must
+/// keep resolving to the directory that run's `worktree_setup` created.
 #[test]
 fn stored_epic_pipeline_input_matches_worktree_setup_path() {
     let temp = tempdir().unwrap();
@@ -519,6 +522,7 @@ fn stored_epic_pipeline_input_matches_worktree_setup_path() {
     );
 }
 
+/// [ORB-12491] The sweep must still reap what a retired epic run left behind.
 #[test]
 fn epic_pipeline_worktree_is_collected_from_stored_run_input() {
     let temp = tempdir().unwrap();

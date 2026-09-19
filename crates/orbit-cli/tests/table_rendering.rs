@@ -63,7 +63,7 @@ fn job_show_json_contains_no_human_step_rows() {
     let workspace = TestWorkspace::new();
 
     let json = workspace.run(
-        &["job", "show", "epic_pipeline", "--format", "json"],
+        &["job", "show", "task_pr_pipeline", "--format", "json"],
         "job show JSON",
     );
     let document: Value = serde_json::from_slice(&json.stdout).expect("job show JSON");
@@ -74,7 +74,10 @@ fn job_show_json_contains_no_human_step_rows() {
         String::from_utf8_lossy(&json.stdout)
     );
 
-    let human = workspace.run(&["job", "show", "epic_pipeline"], "job show human output");
+    let human = workspace.run(
+        &["job", "show", "task_pr_pipeline"],
+        "job show human output",
+    );
     let human_stdout = String::from_utf8_lossy(&human.stdout);
     assert!(human_stdout.contains("Steps:"), "{human_stdout}");
     assert!(human_stdout.contains("ID:"), "{human_stdout}");

@@ -128,16 +128,6 @@ impl OrbitRuntime {
         Ok((vec![self.effective_task_crew(task)?], "default".to_string()))
     }
 
-    pub(crate) fn auto_task_crew_eligibility(
-        &self,
-        task: &Task,
-        pools: &CapturedCrewPools,
-        allowlist: &CrewAllowlist,
-    ) -> Result<(), OrbitError> {
-        let (crews, source) = self.auto_task_crew_candidates(task, pools, None)?;
-        permitted_candidates(crews, &source, Some(allowlist)).map(|_| ())
-    }
-
     /// Called before the existing durable insert. Resume input already contains
     /// the chosen crew; neither resume nor same-task child admission rerolls it.
     /// Randomness is injectable at this application boundary for deterministic
@@ -162,7 +152,6 @@ impl OrbitRuntime {
                 | "task_gate_pipeline"
                 | "task_local_pipeline"
                 | "task_pr_pipeline"
-                | "epic_pipeline"
         ) {
             return Ok(());
         }
@@ -247,12 +236,7 @@ fn pools_from_input(input: &Value) -> Result<CapturedCrewPools, OrbitError> {
 }
 
 fn auto_task_id(input: &Value) -> Option<&str> {
-    singular_task_id_from_input(input).or_else(|| {
-        input
-            .get("epic_task_id")
-            .and_then(Value::as_str)
-            .and_then(non_empty)
-    })
+    singular_task_id_from_input(input)
 }
 
 fn permitted_candidates(
