@@ -277,8 +277,10 @@ printf '%s\n' '{"id":0,"result":{"model_id":"fake","dim":0,"max_input_tokens":0,
     permissions.set_mode(0o700);
     fs::set_permissions(&script, permissions).expect("make stale companion executable");
 
+    let home_path = temp.path().to_string_lossy().into_owned();
     let script_path = script.to_string_lossy().into_owned();
     let _env = orbit_common::test_env::scoped([
+        ("HOME", Some(home_path.as_str())),
         ("ORBIT_SEARCH_COMPANION", Some(script_path.as_str())),
         ("ORBIT_SEARCH_COMPANION_ALLOW_UNSAFE", Some("1")),
     ]);
