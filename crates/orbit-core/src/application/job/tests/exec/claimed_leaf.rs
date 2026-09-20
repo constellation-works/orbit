@@ -93,6 +93,28 @@ fn init_published_repo(repo_root: &Path, origin: &Path) {
     git_in(repo_root, &["push", "-u", "origin", BASE_BRANCH]);
 }
 
+/// Push a new commit to `origin/<BASE_BRANCH>` from a throwaway clone, leaving
+/// the executor checkout's local base ref where it was. That is the ordinary
+/// remote-sync state: local `agent-main` lags `origin/agent-main`.
+fn advance_origin_base(origin: &Path) -> String {
+    let temp = tempfile::tempdir().expect("origin seed");
+    let seed = temp.path().join("seed");
+    git_in(
+        temp.path(),
+        &["clone", &origin.to_string_lossy(), &seed.to_string_lossy()],
+    );
+    git_in(&seed, &["config", "user.name", "Orbit Test"]);
+    git_in(
+        &seed,
+        &["config", "user.email", "orbit-test@example.invalid"],
+    );
+    std::fs::write(seed.join("src/advance.txt"), "// origin moved\n").expect("advance file");
+    git_in(&seed, &["add", "."]);
+    git_in(&seed, &["commit", "-m", "advance origin base"]);
+    git_in(&seed, &["push", "origin", BASE_BRANCH]);
+    git_stdout(&seed, &["rev-parse", "HEAD"])
+}
+
 /// Replace the seeded agent loop with a deterministic local command, so the
 /// fixture exercises the whole delivery tail on the real claimed-leaf host
 /// rather than a scripted stand-in. Only the implementation step is replaced:
@@ -1150,6 +1172,81 @@ fn a_published_pr_claim_hands_off_a_pull_request_without_merging() {
         error.to_string().contains("distributed") || error.to_string().contains("not this machine"),
         "{error}"
     );
+}
+
+/// [ORB-12642] A remote-sync claimed leaf must observe `origin/<base>` when
+/// the executor's local base ref lags the remote tip — the ordinary state of
+/// a working checkout, and the case that made `claim_validate` refuse its
+/// own `sync_base` checkpoint.
+#[test]
+fn a_published_pr_claim_observes_the_remote_base_when_local_lags() {
+    if isolated_claimed_test(
+        "application::job::tests::exec::claimed_leaf::a_published_pr_claim_observes_the_remote_base_when_local_lags",
+    ) {
+        return;
+    }
+    let (root, runtime, repo_root, _global) = publishing_runtime();
+    let local_base = git_stdout(&repo_root, &["rev-parse", BASE_BRANCH]);
+    let remote_tip = advance_origin_base(&root.path().join("origin.git"));
+    assert_ne!(
+        remote_tip, local_base,
+        "the fixture must leave the local base behind origin"
+    );
+    assert_eq!(
+        git_stdout(&repo_root, &["rev-parse", BASE_BRANCH]),
+        local_base,
+        "advancing origin must not move the local base ref"
+    );
+
+    let task_id = seed_claimable_task(&runtime);
+    let drain = drain_run(&runtime);
+    let destination = destination(&runtime, MACHINE);
+    let template = admission_request(&runtime, &drain, "pr");
+    let peer = OwnerPullPeer { runtime: &runtime };
+    let launcher = InProcessLauncher {
+        real: LeafPullLauncher { runtime: &runtime },
+        runtime: &runtime,
+        repo_root: repo_root.clone(),
+        job_name: "task_claimed_pr_pipeline",
+        launched: RefCell::new(Vec::new()),
+        outcome: RefCell::new(None),
+    };
+    let jobs = runtime.stores().jobs();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    let admitted = drain.refill(&destination, &template, 1);
+    assert_eq!(
+        launcher.outcome.borrow().clone(),
+        Some(Ok(true)),
+        "the claimed PR pipeline must not refuse a lagging local base"
+    );
+    let error = admitted.expect_err("owner acceptance of a published PR is not implemented yet");
+    assert!(
+        error.to_string().contains("not part of this slice"),
+        "{error}"
+    );
+
+    let record = jobs.local_pull_admissions().expect("records").remove(0);
+    let Some(ClaimMutation::AcceptHandoff(handoff)) = record.settlement.clone() else {
+        panic!("a claimed PR leaf settles with a typed handoff: {record:?}");
+    };
+    assert_eq!(
+        handoff.candidate.base.commit, remote_tip,
+        "remote-sync observation must pin the origin tip the candidate was synchronized onto"
+    );
+    assert_ne!(
+        handoff.candidate.base.commit, local_base,
+        "a lagging local base must not be recorded as the observed base"
+    );
+    assert_eq!(
+        git_stdout(&repo_root, &["rev-parse", BASE_BRANCH]),
+        local_base,
+        "the leaf must not have fast-forwarded the local base ref"
+    );
+    assert_eq!(handoff.task_id, task_id);
 }
 
 /// Records nothing and fails the launch, so the fixture can inspect a queued

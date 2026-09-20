@@ -17,6 +17,12 @@ spec:
     properties:
       workspace_path:
         type: string
+      # The run's sync mode (`local` or `remote`). Observation resolves the
+      # base through the same mapping as worktree setup / pr_prepare, so a
+      # remote-sync claim reads `origin/<base>` rather than a lagging local
+      # `refs/heads/<base>`.
+      base_sync:
+        type: string
       # The immutable base the worktree was created at. Supplied so a
       # disagreement with the observed base branch tip stops the run.
       base_sha:

@@ -17,6 +17,9 @@ spec:
     properties:
       workspace_path:
         type: string
+      # Same mapping as `claim_validate`: remote sync observes `origin/<base>`.
+      base_sync:
+        type: string
       base_sha:
         type: string
       # Same shape as `claim_validate`: `pr_open` emits a JSON string.

@@ -1,11 +1,16 @@
 //! Pure helpers of the claimed-leaf handoff steps. Execution-level behavior is
 //! covered by the owner-local claimed fixture in orbit-core.
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+
 use crate::context::ClaimExecutionContext;
 use orbit_types::workflow::handoff::HandoffDelivery;
 use serde_json::json;
+use tempfile::tempdir;
 
 use super::super::claim::{
-    MAX_CAPTURED_OUTPUT_BYTES, capture, delivery, pull_request_number, slug,
+    MAX_CAPTURED_OUTPUT_BYTES, capture, delivery, observe_candidate, pull_request_number, slug,
 };
 
 fn claim_context(ship_mode: &str) -> ClaimExecutionContext {
@@ -100,4 +105,139 @@ fn local_mode_delivery_ignores_pull_request() {
         delivery(&context, &json!({})).expect("local without the field"),
         HandoffDelivery::LocalCandidate
     );
+}
+
+/// [ORB-12642] Remote-sync observation must read `origin/<base>`, not a
+/// lagging local `refs/heads/<base>`. Before the fix this recorded the local
+/// tip, so a claimed PR leaf refused its own `sync_base` checkpoint.
+#[test]
+fn remote_sync_observation_reads_origin_base_when_local_lags() {
+    let fixture = LaggingBaseFixture::new();
+    let observed = observe_candidate(
+        &fixture.local,
+        Some("candidate"),
+        "agent-main",
+        "agent-main",
+        HandoffDelivery::PullRequest { number: 1 },
+        "ws",
+        "remote",
+    )
+    .expect("remote-sync observation");
+    assert_eq!(observed.base.commit, fixture.remote_tip);
+    assert_ne!(observed.base.commit, fixture.local_tip);
+    assert_eq!(observed.base_branch, "agent-main");
+    assert_eq!(observed.candidate.commit, fixture.candidate_tip);
+}
+
+/// [ORB-12642] Owner-local observation keeps reading the local ref even when
+/// a remote-tracking ref is ahead of it.
+#[test]
+fn local_sync_observation_keeps_the_local_base_when_origin_is_ahead() {
+    let fixture = LaggingBaseFixture::new();
+    let observed = observe_candidate(
+        &fixture.local,
+        Some("candidate"),
+        "agent-main",
+        "agent-main",
+        HandoffDelivery::LocalCandidate,
+        "ws",
+        "local",
+    )
+    .expect("local-sync observation");
+    assert_eq!(observed.base.commit, fixture.local_tip);
+    assert_ne!(observed.base.commit, fixture.remote_tip);
+}
+
+struct LaggingBaseFixture {
+    _temp: tempfile::TempDir,
+    local: std::path::PathBuf,
+    local_tip: String,
+    remote_tip: String,
+    candidate_tip: String,
+}
+
+impl LaggingBaseFixture {
+    fn new() -> Self {
+        let temp = tempdir().unwrap();
+        let remote = temp.path().join("remote.git");
+        let seed = temp.path().join("seed");
+        let local = temp.path().join("local");
+
+        git(temp.path(), &["init", "--bare", remote.to_str().unwrap()]);
+        init_repo(&seed, "agent-main");
+        let local_tip = commit_file(&seed, "base.txt", "v1");
+        git(
+            &seed,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        git(&seed, &["push", "-u", "origin", "agent-main"]);
+        git(
+            temp.path(),
+            &[
+                "clone",
+                "--branch",
+                "agent-main",
+                remote.to_str().unwrap(),
+                local.to_str().unwrap(),
+            ],
+        );
+        git(&local, &["config", "user.name", "Orbit Test"]);
+        git(&local, &["config", "user.email", "orbit-test@example.com"]);
+
+        let remote_tip = commit_file(&seed, "base.txt", "v2");
+        git(&seed, &["push", "origin", "agent-main"]);
+
+        // Fetch so the candidate can be created on the remote tip, but leave
+        // the local `agent-main` branch where the clone put it.
+        git(&local, &["fetch", "origin", "agent-main"]);
+        git(
+            &local,
+            &["checkout", "-b", "candidate", "origin/agent-main"],
+        );
+        let candidate_tip = commit_file(&local, "work.txt", "claimed");
+
+        assert_eq!(git(&local, &["rev-parse", "agent-main"]), local_tip);
+        assert_eq!(git(&local, &["rev-parse", "origin/agent-main"]), remote_tip);
+        assert_ne!(local_tip, remote_tip);
+
+        Self {
+            _temp: temp,
+            local,
+            local_tip,
+            remote_tip,
+            candidate_tip,
+        }
+    }
+}
+
+fn init_repo(path: &Path, branch: &str) {
+    fs::create_dir_all(path).unwrap();
+    git(path, &["init"]);
+    git(path, &["checkout", "-b", branch]);
+    git(path, &["config", "user.name", "Orbit Test"]);
+    git(path, &["config", "user.email", "orbit-test@example.com"]);
+}
+
+fn commit_file(repo: &Path, file_name: &str, contents: &str) -> String {
+    fs::write(repo.join(file_name), contents).unwrap();
+    git(repo, &["add", file_name]);
+    git(repo, &["commit", "-m", &format!("write {file_name}")]);
+    git(repo, &["rev-parse", "HEAD"])
+}
+
+fn git(current_dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(current_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {} failed in {}:\nstdout: {}\nstderr: {}",
+        args.join(" "),
+        current_dir.display(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
 }

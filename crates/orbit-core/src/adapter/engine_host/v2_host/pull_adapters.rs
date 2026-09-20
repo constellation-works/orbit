@@ -137,6 +137,10 @@ impl OwnerPullPeer<'_> {
             &handoff.candidate.landing_branch,
             HandoffDelivery::LocalCandidate,
             &handoff.workspace_id,
+            // Owner-local settlement is the only observation this adapter
+            // performs; it has no origin to fetch and must keep reading the
+            // local base the candidate was synchronized onto.
+            "local",
         )?;
         let required_commands = self
             .runtime
