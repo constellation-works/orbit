@@ -3,7 +3,9 @@ use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::FrictionStoreBackend;
 use orbit_types::identity::is_valid_friction_id;
 use orbit_types::record::OrbitEvent;
-use orbit_types::task::{Task, TaskRelationType, TaskStatus, unmet_task_dependencies};
+use orbit_types::task::{
+    Task, TaskHistoryEntry, TaskRelationType, TaskStatus, unmet_task_dependencies,
+};
 
 use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use crate::OrbitRuntime;
@@ -19,6 +21,12 @@ const RELATION_RESOLVES: &str = "resolves";
 /// [ORB-10470] Status event recorded when a resumed run restores its own
 /// lineage's coupling to a task (re-admission and/or batch re-claim).
 const RESUME_READMITTED_EVENT: &str = "resume_readmitted";
+
+fn task_has_explicit_crew(task: &Task) -> bool {
+    task.crew
+        .as_deref()
+        .is_some_and(|crew| !crew.trim().is_empty())
+}
 
 #[derive(Default)]
 struct StartTaskOptions {
@@ -557,10 +565,13 @@ impl OrbitRuntime {
         [TaskStatus::Backlog, TaskStatus::InProgress]
     }
 
+    /// Workflow admission that can stamp the run's drawn crew onto a crew-less
+    /// task in the same write as the `in-progress` transition [ORB-12678].
     pub(crate) fn admit_task_for_workflow_as_system(
         &self,
         id: &str,
         workflow: &str,
+        job_run_id: Option<&str>,
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let workflow = workflow.trim();
@@ -575,7 +586,28 @@ impl OrbitRuntime {
             return Ok(task);
         }
 
+        let stamp = match job_run_id {
+            Some(run_id) if !task_has_explicit_crew(&task) => self
+                .dispatched_crew_stamp(run_id, id)?
+                .filter(|stamp| stamp.source != "task.crew"),
+            _ => None,
+        };
         let note = Some(format!("workflow admission: {workflow}"));
+        let append_history: Vec<TaskHistoryEntry> = stamp
+            .as_ref()
+            .map(|stamp| TaskHistoryEntry {
+                at: Utc::now(),
+                by: SYSTEM_ACTOR_LABEL.to_string(),
+                event: "crew_stamped".to_string(),
+                note: Some(format!(
+                    "stamped crew `{}` from {}; retries reuse this crew unless it is cleared",
+                    stamp.crew, stamp.source
+                )),
+                from_status: None,
+                to_status: None,
+            })
+            .into_iter()
+            .collect();
         // [ORB-11305] The predicate above read the status; this write re-checks
         // it under the store's per-task lock. Without the compare-and-set a
         // withdrawal landing in that gap would be overwritten by a `backlog`
@@ -588,8 +620,10 @@ impl OrbitRuntime {
                     status_event: Some("started".to_string()),
                     status_note: note.clone(),
                     expected_status: Some(Self::workflow_admissible_statuses().to_vec()),
+                    append_history: append_history.clone(),
                     ..StoreTaskUpdateParams::from(TaskUpdateParams {
                         status: Some(TaskStatus::InProgress),
+                        crew: stamp.as_ref().map(|stamp| Some(stamp.crew.clone())),
                         ..Default::default()
                     })
                 },

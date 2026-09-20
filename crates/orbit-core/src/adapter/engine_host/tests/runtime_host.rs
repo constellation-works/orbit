@@ -387,7 +387,7 @@ fn worktree_setup_admits_backlog_and_refuses_withdrawn_statuses() {
     // Re-running the same setup over an already-admitted task is the retry
     // path and must stay a no-op rather than a second start.
     let admitted_again = runtime
-        .admit_task_for_workflow_as_system(&backlog.id, "worktree_setup")
+        .admit_task_for_workflow_as_system(&backlog.id, "worktree_setup", None)
         .expect("idempotent workflow admission");
     assert_eq!(admitted_again.status, TaskStatus::InProgress);
 

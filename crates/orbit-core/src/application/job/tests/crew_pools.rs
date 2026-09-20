@@ -803,3 +803,143 @@ fn a_legacy_named_pool_resumes_inherits_and_draws_uniformly() {
         );
     }
 }
+
+fn persist_and_record(runtime: &OrbitRuntime, job: &str, input: Value) -> String {
+    let run_id = persist(runtime, job, input.clone());
+    runtime
+        .record_run_crew_from_input(&run_id, &input)
+        .expect("record resolved crew");
+    run_id
+}
+
+fn start_from_run(runtime: &OrbitRuntime, task: &Task, run_id: &str) -> Task {
+    runtime
+        .admit_task_for_workflow_as_system(&task.id, "worktree_setup", Some(run_id))
+        .expect("admit dispatched task")
+}
+
+fn crew_stamped_note(runtime: &OrbitRuntime, task_id: &str) -> Option<String> {
+    runtime
+        .get_task_history(task_id)
+        .expect("history")
+        .into_iter()
+        .find(|entry| entry.event == "crew_stamped")
+        .and_then(|entry| entry.note)
+}
+
+/// [ORB-12678] A crew-less task admitted through a complexity pool ends
+/// in-progress with `task.crew` equal to the run's resolved crew and a history
+/// entry naming `pool:<complexity>`.
+#[test]
+fn crew_less_pool_admission_stamps_task_crew_at_in_progress() {
+    let (_root, runtime, _, _) = test_runtime_with_workspace_config(
+        r#"
+[workflow]
+low_complexity_crews = ["luna"]
+medium_complexity_crews = ["grok"]
+hard_complexity_crews = ["sol"]
+"#,
+    );
+    let parent = coordinator(&runtime, json!({}));
+    for (complexity, crew) in [
+        (TaskComplexity::Low, "luna"),
+        (TaskComplexity::Medium, "grok"),
+        (TaskComplexity::Hard, "sol"),
+    ] {
+        let admitted = task(&runtime, complexity, None);
+        let input = admit(&runtime, &parent, &admitted, 0);
+        assert_eq!(
+            runtime.get_task(&admitted.id).expect("pre-start").crew,
+            None,
+            "drawing a pool member must not rewrite the task before start"
+        );
+        let run_id = persist_and_record(&runtime, "task_auto_pipeline", input);
+        let started = start_from_run(&runtime, &admitted, &run_id);
+        let run = runtime
+            .get_job_run_backend(&run_id)
+            .expect("run")
+            .expect("run exists");
+        assert_eq!(started.status, TaskStatus::InProgress);
+        assert_eq!(started.crew.as_deref(), Some(crew));
+        assert_eq!(started.crew, run.resolved_crew);
+        let note = crew_stamped_note(&runtime, &admitted.id).expect("stamp history");
+        assert!(
+            note.contains(&format!("from pool:{complexity}")),
+            "{complexity}: {note}"
+        );
+        assert!(
+            note.contains("retries reuse this crew unless it is cleared"),
+            "{complexity}: {note}"
+        );
+    }
+}
+
+/// [ORB-12678] An explicit `task.crew` is never overwritten, and a system job
+/// without `crew_selection` does not stamp.
+#[test]
+fn explicit_task_crew_and_system_jobs_are_not_stamped() {
+    let (_root, runtime, _, _) = test_runtime_with_workspace_config(
+        "[workflow]\nmedium_complexity_crews = [\"grok\", \"terra\"]\n",
+    );
+    let parent = coordinator(&runtime, json!({}));
+    let assigned = task(&runtime, TaskComplexity::Medium, Some("astra"));
+    let mut input = json!({"task_ids": [assigned.id]});
+    runtime
+        .install_auto_crew_admission(
+            "task_auto_pipeline",
+            &mut input,
+            Some(&parent),
+            false,
+            &mut no_draw,
+        )
+        .expect("manual assignment");
+    let run_id = persist_and_record(&runtime, "task_auto_pipeline", input);
+    let started = start_from_run(&runtime, &assigned, &run_id);
+    assert_eq!(started.status, TaskStatus::InProgress);
+    assert_eq!(started.crew.as_deref(), Some("astra"));
+    assert_eq!(crew_stamped_note(&runtime, &assigned.id), None);
+
+    let unassigned = task(&runtime, TaskComplexity::Medium, None);
+    let system_run = persist(
+        &runtime,
+        "task_pilot_pipeline",
+        json!({"task_ids": [unassigned.id], "crew": "astra"}),
+    );
+    let still_crew_less = start_from_run(&runtime, &unassigned, &system_run);
+    assert_eq!(still_crew_less.status, TaskStatus::InProgress);
+    assert_eq!(still_crew_less.crew, None);
+    assert_eq!(crew_stamped_note(&runtime, &unassigned.id), None);
+}
+
+/// [ORB-12678] A crew-less task that falls through to the default chain is
+/// stamped with source `default`; an explicit run-input crew is stamped with
+/// source `explicit`.
+#[test]
+fn default_and_explicit_run_crew_stamps_name_their_source() {
+    let (_root, runtime, _, _) = test_runtime_with_workspace_config("");
+    let parent = coordinator(&runtime, json!({}));
+    let fallback = task(&runtime, TaskComplexity::Unassessed, None);
+    let drawn = admit(&runtime, &parent, &fallback, 0);
+    let run_id = persist_and_record(&runtime, "task_auto_pipeline", drawn);
+    let started = start_from_run(&runtime, &fallback, &run_id);
+    assert_eq!(started.crew.as_deref(), Some("opus"));
+    let note = crew_stamped_note(&runtime, &fallback.id).expect("default stamp");
+    assert!(note.contains("from default"), "{note}");
+
+    let overridden = task(&runtime, TaskComplexity::Medium, None);
+    let mut explicit = json!({"task_ids": [overridden.id], "crew": "luna"});
+    runtime
+        .install_auto_crew_admission(
+            "task_auto_pipeline",
+            &mut explicit,
+            Some(&parent),
+            false,
+            &mut no_draw,
+        )
+        .expect("explicit run crew");
+    let run_id = persist_and_record(&runtime, "task_auto_pipeline", explicit);
+    let started = start_from_run(&runtime, &overridden, &run_id);
+    assert_eq!(started.crew.as_deref(), Some("luna"));
+    let note = crew_stamped_note(&runtime, &overridden.id).expect("explicit stamp");
+    assert!(note.contains("from explicit"), "{note}");
+}

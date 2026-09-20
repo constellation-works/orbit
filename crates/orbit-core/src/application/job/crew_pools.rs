@@ -41,6 +41,13 @@ const COMPLEXITIES: [TaskComplexity; 4] = [
     TaskComplexity::XHard,
 ];
 
+/// Drawn crew to persist onto a crew-less task at the in-progress transition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DispatchedCrewStamp {
+    pub(crate) crew: String,
+    pub(crate) source: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CapturedCrewPool {
     /// Weighted members. A pool captured before weights existed is a plain
@@ -296,6 +303,23 @@ impl OrbitRuntime {
         input["crew"] = json!(selected.crew.name);
         Ok(())
     }
+
+    /// The crew `install_auto_crew_admission` froze for `task_id`, if this run
+    /// went through the pool seam. Missing runs, system jobs, and selections
+    /// for a different task yield `None`.
+    pub(crate) fn dispatched_crew_stamp(
+        &self,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<Option<DispatchedCrewStamp>, OrbitError> {
+        let Some(run) = self.get_job_run_backend(run_id)? else {
+            return Ok(None);
+        };
+        Ok(dispatched_crew_stamp_from_input(
+            run.input.as_ref().unwrap_or(&Value::Null),
+            task_id,
+        ))
+    }
 }
 
 fn pools_from_input(input: &Value) -> Result<CapturedCrewPools, OrbitError> {
@@ -311,6 +335,50 @@ fn pools_from_input(input: &Value) -> Result<CapturedCrewPools, OrbitError> {
 
 fn auto_task_id(input: &Value) -> Option<&str> {
     singular_task_id_from_input(input)
+}
+
+fn dispatched_crew_stamp_from_input(input: &Value, task_id: &str) -> Option<DispatchedCrewStamp> {
+    let selection = input.get(SELECTION_KEY)?;
+    if selection.get("task_id").and_then(Value::as_str) != Some(task_id) {
+        return None;
+    }
+    let crew = selection
+        .get("crew")
+        .and_then(Value::as_str)
+        .and_then(non_empty)?
+        .to_string();
+    Some(DispatchedCrewStamp {
+        crew,
+        source: crew_stamp_source(selection),
+    })
+}
+
+/// History provenance for a stamped crew: `explicit`, `task.crew`, `default`,
+/// or `pool:<complexity>`. Pool sources are stored on the run as
+/// `workflow.*_complexity_crews` / `run_input.*_complexity_crews`.
+fn crew_stamp_source(selection: &Value) -> String {
+    let raw = selection
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("default");
+    match raw {
+        "explicit" | "task.crew" | "default" => raw.to_string(),
+        other => {
+            if let Some(complexity) = selection
+                .get("complexity")
+                .and_then(Value::as_str)
+                .and_then(non_empty)
+            {
+                format!("pool:{complexity}")
+            } else {
+                COMPLEXITIES
+                    .into_iter()
+                    .find(|complexity| other.contains(&format!("{complexity}_complexity_crews")))
+                    .map(|complexity| format!("pool:{complexity}"))
+                    .unwrap_or_else(|| other.to_string())
+            }
+        }
+    }
 }
 
 fn sole_candidate(crew: Crew) -> CrewCandidate {

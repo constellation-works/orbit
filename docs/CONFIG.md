@@ -1035,8 +1035,17 @@ existed is stored as plain names and still resumes, each name weighing one
 ticket. Same-task pipeline children
 and retries/resumes retain the admitted selection even if configuration or
 the task assignment changes later. Different tasks, including a parent and its
-children, receive independent draws at their own admission. No choice rewrites
-`task.crew`; a newly admitted run outside the retry lineage can select again.
+children, receive independent draws at their own admission.
+
+When a **crew-less** task is dispatched and transitions to `in-progress`, Orbit
+stamps the drawn crew onto `task.crew` in the same durable update as the status
+change. A `crew_stamped` history entry names the source as `pool:<complexity>`,
+`default`, or `explicit`, and records that a retry or re-queue reuses this crew
+unless an operator clears it with `--crew ""`. An existing explicit `task.crew`
+is never overwritten. System, review, and preparation jobs that do not carry a
+task are unaffected. A backlog task that has never dispatched may still project
+`default_crew`; once it has run, every read surface (task list, task show, MCP)
+sees the stamped crew through ordinary explicit-crew precedence.
 
 #### Capping what the task pilot may assign
 
@@ -1072,7 +1081,7 @@ Three equivalent surfaces:
 | Surface | How |
 |---|---|
 | **Web dashboard** | The crew dropdown on each task card (the chevron next to `default: <crew>` in [`orbit web serve`](../README.md#quick-start)) — selecting a crew calls `orbit.task.update` under the hood. |
-| **CLI** | `orbit task add --crew <name> …` at creation, or `orbit task update <id> --crew <name>` later. Pass `--crew ""` to `task update` to clear the field. `task update` is the only surface that persists the choice — a per-run crew override validates the name and logs it without writing `task.crew`, so later `orbit run ship` dispatch does not see it. |
+| **CLI** | `orbit task add --crew <name> …` at creation, or `orbit task update <id> --crew <name>` later. Pass `--crew ""` to `task update` to clear the field. Dispatching a crew-less task also persists the drawn crew at the in-progress transition (including a one-off run `--crew` override, recorded as source `explicit`). Clearing with `--crew ""` restores pool or default routing for a later admission. |
 | **MCP / agent** | `orbit.task.add` and `orbit.task.update` accept a `crew` parameter; an empty string on update clears it. Useful when an agent is filing or amending tasks programmatically. |
 
 The dropdown label `default: codex` in the dashboard means *the task has no `crew` set* and will inherit `[workflow].default_crew`. Picking a named crew writes it onto the task and the label updates accordingly.

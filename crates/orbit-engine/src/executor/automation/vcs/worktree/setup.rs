@@ -128,7 +128,11 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     let workspace_path_str = worktree_path.to_string_lossy().to_string();
 
     for task_id in task_ids {
-        host.admit_task_for_workflow(task_id, "worktree_setup")?;
+        host.admit_task_for_workflow_from_run(
+            task_id,
+            "worktree_setup",
+            Some(job_run_id.as_str()),
+        )?;
         host.apply_task_automation_update(
             task_id,
             TaskAutomationUpdate {
