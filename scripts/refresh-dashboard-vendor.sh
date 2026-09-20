@@ -56,7 +56,25 @@ for asset in manifest["assets"]:
         env=env,
         text=True,
     )
-    filename = json.loads(packed)[-1]["filename"]
+    packed_json = json.loads(packed)
+    # npm <12 emits a list of pack records; npm 12+ emits {name: record}.
+    if isinstance(packed_json, list):
+        records = packed_json
+    elif isinstance(packed_json, dict) and "filename" in packed_json:
+        records = [packed_json]
+    elif isinstance(packed_json, dict):
+        records = [
+            value
+            for value in packed_json.values()
+            if isinstance(value, dict) and "filename" in value
+        ]
+    else:
+        records = []
+    if not records:
+        raise SystemExit(
+            f"refresh-dashboard-vendor: npm pack {spec} JSON missing filename"
+        )
+    filename = records[-1]["filename"]
     tarball = work / filename
     extract = work / f"extract-{npm_package}"
     extract.mkdir()
