@@ -735,3 +735,20 @@ fn exists_on_disk_and_explicit_value_for_missing_and_present_keys() {
         None
     );
 }
+
+/// [ORB-12619] `orbit config set` must not mint a crew the pool grammar
+/// cannot express either, so the colon is refused on the key as well.
+#[test]
+fn set_rejects_a_colon_in_a_crew_name_before_mutating_document() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+
+    let error = store
+        .set_value("crews.gpt-5:codex.model", "gpt-5.5")
+        .expect_err("a colon-named crew key must be rejected")
+        .to_string();
+    assert!(error.contains("gpt-5:codex"), "{error}");
+    assert!(error.contains("workflow.*_complexity_crews"), "{error}");
+    assert!(!path.exists(), "a rejected key must not write the config");
+}

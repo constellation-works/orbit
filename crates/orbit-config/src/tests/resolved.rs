@@ -1025,3 +1025,43 @@ fn pilot_max_complexity_defaults_to_hard_and_admits_only_assessed_tiers() {
         );
     }
 }
+
+/// [ORB-12619] `workflow.*_complexity_crews` reads `:` as the weight
+/// separator, so a colon-named crew could be defined but never pooled — every
+/// command then failed with a malformed-weight error. The name is refused
+/// where the crew is defined instead, for every pool tier alike.
+#[test]
+fn colon_named_crews_are_refused_at_definition_not_at_every_pool() {
+    const CREW: &str = r#"[crews."gpt-5:codex"]
+model = "gpt-5.5"
+provider = "codex"
+"#;
+
+    let error = load_config(CREW).expect_err("a colon-named crew must not be admitted");
+    let message = error.to_string();
+    assert!(message.contains("[crews]"), "message: {message}");
+    assert!(message.contains("gpt-5:codex"), "message: {message}");
+    assert!(
+        message.contains("workflow.*_complexity_crews"),
+        "message: {message}"
+    );
+
+    for tier in ["low", "medium", "hard", "xhard"] {
+        let body = format!(
+            "{CREW}\n[workflow]\ndefault_crew = \"gpt-5:codex\"\n{tier}_complexity_crews = [\"gpt-5:codex\"]\n"
+        );
+        let error = load_config(&body)
+            .err()
+            .unwrap_or_else(|| panic!("{tier} pool must refuse the crew name"))
+            .to_string();
+        assert!(error.contains("[crews]"), "{tier}: {error}");
+        assert!(
+            error.contains("workflow.*_complexity_crews"),
+            "{tier}: {error}"
+        );
+        assert!(
+            !error.contains("must weigh a non-negative whole number"),
+            "{tier} must fail at the crew definition, not as a malformed weight: {error}"
+        );
+    }
+}

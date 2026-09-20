@@ -8,7 +8,7 @@ use orbit_types::task::TaskComplexity;
 use serde::{Deserialize, Serialize};
 
 /// Separates a pool entry's crew name from its relative draw weight.
-const WEIGHT_SEPARATOR: char = ':';
+pub(crate) const WEIGHT_SEPARATOR: char = ':';
 /// Every member of a bare pool carries one ticket, so the draw is uniform.
 const BARE_WEIGHT: u32 = 1;
 
@@ -212,6 +212,25 @@ fn parse_entry<'a>(raw: &'a str, setting: &str) -> Result<(&'a str, Option<u32>)
         return Err(OrbitError::InvalidInput(empty_name_message(setting)));
     }
     Ok((name, weight))
+}
+
+/// Refuse a crew name the pool grammar cannot express.
+///
+/// [`parse_entry`] reads every colon as a weight separator and has no quoting
+/// form, so a crew named with one could be defined but never pooled: the
+/// pool would fail as a malformed weight on every later command. `[crews.*]`
+/// admission and `crews.<name>.<field>` keys run this check so the refusal
+/// lands where the crew is defined and names the grammar that reserves the
+/// character. `context` prefixes the message with the surface being admitted.
+pub(crate) fn reject_unpoolable_crew_name(name: &str, context: &str) -> Result<(), OrbitError> {
+    if name.contains(WEIGHT_SEPARATOR) {
+        return Err(OrbitError::InvalidInput(format!(
+            "{context}: crew name '{name}' must not contain '{WEIGHT_SEPARATOR}'; \
+             workflow.*_complexity_crews entries are written 'name' or 'name:weight', so the \
+             pool grammar reserves that separator"
+        )));
+    }
+    Ok(())
 }
 
 fn empty_name_message(setting: &str) -> String {
