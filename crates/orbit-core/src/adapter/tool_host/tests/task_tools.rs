@@ -2070,10 +2070,11 @@ fn session_orchestrator_default_is_resolved_against_the_target_workspace_crews()
     )
     .expect("a configured session orchestrator is accepted");
     assert_eq!(added.get("orchestrator"), Some(&json!("sol")));
-    assert_eq!(
+    assert_ne!(
         added.get("crew"),
-        Some(&json!(null)),
-        "attribution must not select an execution crew"
+        Some(&json!("sol")),
+        "attribution must not select an execution crew; [ORB-12717] creation \
+         assigns one from the pools or the default instead"
     );
 
     let rejected = add_with_session(

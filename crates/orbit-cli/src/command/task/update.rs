@@ -59,7 +59,7 @@ pub struct TaskUpdateArgs {
     /// Job run ID to associate with the task (empty string clears)
     #[arg(long)]
     pub job_run_id: Option<String>,
-    /// Named crew to use when running this task (empty string clears)
+    /// Named crew to use when running this task (empty string draws a fresh one)
     #[arg(long)]
     pub crew: Option<String>,
     /// Named crew responsible for orchestration attribution (empty string clears)

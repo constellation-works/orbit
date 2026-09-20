@@ -65,7 +65,8 @@ pub struct TaskAddArgs {
     /// For bug tasks: the originating task whose implementation introduced the defect
     #[arg(long = "source-task")]
     pub source_task: Option<String>,
-    /// Named crew to use when running this task
+    /// Named crew to use when running this task (default: drawn from the
+    /// complexity pool, else the configured default crew)
     #[arg(long)]
     pub crew: Option<String>,
     /// Named crew responsible for orchestration attribution

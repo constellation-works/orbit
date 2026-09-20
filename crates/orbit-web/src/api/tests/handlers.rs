@@ -492,15 +492,18 @@ async fn tasks_with_stale_explicit_crew_fall_back_to_default_projection() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+/// [ORB-12717] Clearing the crew is "no crew supplied": the dropdown's null
+/// replaces a stale name with a fresh draw — here the workspace default, since
+/// no pool covers this task's complexity — rather than emptying the field.
 #[tokio::test]
-async fn patch_task_crew_null_clears_stale_explicit_crew_to_default() {
+async fn patch_task_crew_null_redraws_over_a_stale_explicit_crew() {
     let (_root, runtime, task_id) = runtime_with_stale_task_crew();
 
     let response = patch_task_body(runtime, &task_id, r#"{"crew":null}"#.to_string()).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let task = body_json(response).await;
-    assert_eq!(task["crew"], json!(null));
+    assert_eq!(task["crew"], json!("beta"));
     assert_eq!(task["resolved_crew"], json!("beta"));
     assert_eq!(task["crew_model"], json!("codex-beta"));
 }

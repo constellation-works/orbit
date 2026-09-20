@@ -1008,7 +1008,9 @@ orbit config show
 For task admission — by a drain or by an ordinary ship — the order is an
 explicit run-input `crew`, an explicit task crew, the matching nonempty
 complexity pool, then the existing
-default crew resolution chain. Low, medium, hard and xhard are the task
+default crew resolution chain. Since a task now carries a crew from creation,
+the pool arm of that order is the fallback for records created before that
+behaviour existed. Low, medium, hard and xhard are the task
 complexity values; unset or `unassessed` complexity uses the default chain. An
 omitted pool inherits configuration; an absent or empty effective pool uses the
 default chain. `medium_complexity_crews = []` disables that configured pool;
@@ -1047,15 +1049,28 @@ and retries/resumes retain the admitted selection even if configuration or
 the task assignment changes later. Different tasks, including a parent and its
 children, receive independent draws at their own admission.
 
-When a **crew-less** task is dispatched and transitions to `in-progress`, Orbit
-stamps the drawn crew onto `task.crew` in the same durable update as the status
-change. A `crew_stamped` history entry names the source as `pool:<complexity>`,
-`default`, or `explicit`, and records that a retry or re-queue reuses this crew
-unless an operator clears it with `--crew ""`. An existing explicit `task.crew`
-is never overwritten. System, review, and preparation jobs that do not carry a
-task are unaffected. A backlog task that has never dispatched may still project
-`default_crew`; once it has run, every read surface (task list, task show, MCP)
-sees the stamped crew through ordinary explicit-crew precedence.
+**Crew is fixed when the task is created.** A task created without a `crew` —
+by `orbit task add`, `orbit.task.add`, an auto-task mint whose template names
+no crew, or an import — draws one from the pool for its complexity, falling
+back to `default_crew`, and stores it in `task.crew` as part of the create.
+A `crew_assigned` history entry names the source: `explicit` for a crew the
+caller supplied (stored exactly as given), `pool:<complexity>` for a draw, or
+`default`. A workspace that configures no crew at all leaves the field unset.
+
+No status transition ever changes `task.crew`: approving, starting, blocking,
+retrying, re-queuing and completing all leave it byte-identical, and dispatch
+only reads it. The one post-creation re-route is
+[`task update --crew ""`](#setting-taskcrew), which is treated as "no crew
+supplied" and draws again for the task's complexity, with its own
+`crew_assigned` entry. Changing `--complexity` alone does not re-route —
+clear the crew when a re-draw is what you want.
+
+The pools are therefore consulted at creation (and on clear), not at dispatch.
+Admission still routes a crew-less task through them as a fallback for tasks
+created before this behaviour existed, but writes nothing back to the record;
+a run-window `--allow-crew` allowlist is checked against `task.crew`.
+`task.crew` is authoritative for every read surface (task list, task show,
+MCP, dashboard).
 
 #### Capping what the task pilot may assign
 
@@ -1091,10 +1106,10 @@ Three equivalent surfaces:
 | Surface | How |
 |---|---|
 | **Web dashboard** | The crew dropdown on each task card (the chevron next to `default: <crew>` in [`orbit web serve`](../README.md#quick-start)) — selecting a crew calls `orbit.task.update` under the hood. |
-| **CLI** | `orbit task add --crew <name> …` at creation, or `orbit task update <id> --crew <name>` later. Pass `--crew ""` to `task update` to clear the field. Dispatching a crew-less task also persists the drawn crew at the in-progress transition (including a one-off run `--crew` override, recorded as source `explicit`). Clearing with `--crew ""` restores pool or default routing for a later admission. |
-| **MCP / agent** | `orbit.task.add` and `orbit.task.update` accept a `crew` parameter; an empty string on update clears it. Useful when an agent is filing or amending tasks programmatically. |
+| **CLI** | `orbit task add --crew <name> …` at creation, or `orbit task update <id> --crew <name>` later. Omitting `--crew` at creation is not "no crew": the pools (then `default_crew`) assign one on the spot. Passing `--crew ""` to `task update` re-draws for the task's current complexity rather than leaving the field empty. |
+| **MCP / agent** | `orbit.task.add` and `orbit.task.update` accept a `crew` parameter; an empty string on update asks for a fresh draw the same way the CLI does. Useful when an agent is filing or amending tasks programmatically. |
 
-The dropdown label `default: codex` in the dashboard means *the task has no `crew` set* and will inherit `[workflow].default_crew`. Picking a named crew writes it onto the task and the label updates accordingly.
+The dropdown label `default: codex` in the dashboard means *the task has no `crew` set* and will inherit `[workflow].default_crew`. Tasks created since crew assignment moved to creation time carry their own crew, so the label names it; the fallback label survives for older records and for workspaces that configure no crew. Picking a named crew writes it onto the task and the label updates accordingly.
 
 ### What "ran" vs what "was selected"
 

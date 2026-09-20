@@ -1,6 +1,9 @@
-//! Capture pool policy on the admitting pipeline and freeze each task's
-//! selection in its run input. Descendant pipelines inherit the same task
-//! choice.
+//! Draw a task's crew from the complexity pools when it is created
+//! [ORB-12717], and capture pool policy on the admitting pipeline so each
+//! task's selection is frozen in its run input. Descendant pipelines inherit
+//! the same task choice; a task created without a crew before assignment moved
+//! to creation time is still routed through the pools at admission, which
+//! reads the record and never writes it.
 
 use std::collections::BTreeMap;
 
@@ -41,9 +44,10 @@ const COMPLEXITIES: [TaskComplexity; 4] = [
     TaskComplexity::XHard,
 ];
 
-/// Drawn crew to persist onto a crew-less task at the in-progress transition.
+/// Crew chosen for a task at creation, with the provenance its history entry
+/// records: `explicit`, `pool:<complexity>`, or `default` [ORB-12717].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DispatchedCrewStamp {
+pub(crate) struct CreationCrewAssignment {
     pub(crate) crew: String,
     pub(crate) source: String,
 }
@@ -158,30 +162,86 @@ impl OrbitRuntime {
                 .to_string(),
             ));
         }
-        if let Some(complexity) = task.complexity
-            && let Some(pool) = pools.get(complexity.as_str())
-            && !pool.crews.is_empty()
-        {
-            let entries = canonical_crew_pool_entries(
-                &pool.crews,
-                self.context.settings().crews(),
-                &pool.source,
-            )?;
-            let crews = entries
-                .iter()
-                .map(|entry| {
-                    Ok(CrewCandidate {
-                        crew: self.resolve_crew_for_task(Some(&entry.name), None)?,
-                        weight: entry.weight,
-                    })
-                })
-                .collect::<Result<Vec<_>, OrbitError>>()?;
-            return Ok((crews, pool.source.clone()));
+        if let Some(drawn) = self.complexity_pool_candidates(task.complexity, pools)? {
+            return Ok(drawn);
         }
         Ok((
             vec![sole_candidate(self.effective_task_crew(task)?)],
             "default".to_string(),
         ))
+    }
+
+    /// The pool members configured for `complexity`, with the provenance the
+    /// pool was captured from. `None` when no pool covers the complexity, which
+    /// is what sends both callers to the default chain.
+    fn complexity_pool_candidates(
+        &self,
+        complexity: Option<TaskComplexity>,
+        pools: &CapturedCrewPools,
+    ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
+        let Some(pool) = complexity
+            .and_then(|complexity| pools.get(complexity.as_str()))
+            .filter(|pool| !pool.crews.is_empty())
+        else {
+            return Ok(None);
+        };
+        let entries = canonical_crew_pool_entries(
+            &pool.crews,
+            self.context.settings().crews(),
+            &pool.source,
+        )?;
+        let crews = entries
+            .iter()
+            .map(|entry| {
+                Ok(CrewCandidate {
+                    crew: self.resolve_crew_for_task(Some(&entry.name), None)?,
+                    weight: entry.weight,
+                })
+            })
+            .collect::<Result<Vec<_>, OrbitError>>()?;
+        Ok(Some((crews, pool.source.clone())))
+    }
+
+    /// Decide the crew a task is created with [ORB-12717].
+    ///
+    /// Creation is the only place a crew-less task is routed through the
+    /// complexity pools — a status transition never revisits the choice — and
+    /// `task update --crew ""` re-enters here for the task's current
+    /// complexity. An explicit crew is kept exactly as the caller wrote it.
+    /// `None` means this workspace can name no crew at all, so the field stays
+    /// unset and dispatch resolves one from configuration as it always has.
+    pub(crate) fn creation_crew_assignment(
+        &self,
+        complexity: Option<TaskComplexity>,
+        explicit: Option<&str>,
+        random: &mut impl FnMut() -> Result<u64, OrbitError>,
+    ) -> Result<Option<CreationCrewAssignment>, OrbitError> {
+        if let Some(explicit) = explicit.and_then(non_empty) {
+            return Ok(Some(CreationCrewAssignment {
+                crew: explicit.to_string(),
+                source: "explicit".to_string(),
+            }));
+        }
+        let pools = self.capture_auto_crew_pools(&Value::Null)?;
+        if let Some(complexity) = complexity
+            && let Some((candidates, _)) =
+                self.complexity_pool_candidates(Some(complexity), &pools)?
+        {
+            let source = format!("pool:{complexity}");
+            let candidates = permitted_candidates(candidates, &source, None)?;
+            let selected = weighted_draw(&candidates, &source, random)?;
+            return Ok(Some(CreationCrewAssignment {
+                crew: selected.crew.name.clone(),
+                source,
+            }));
+        }
+        if self.context.settings().default_crew().is_none() {
+            return Ok(None);
+        }
+        Ok(Some(CreationCrewAssignment {
+            crew: self.resolve_crew_for_task(None, None)?.name,
+            source: "default".to_string(),
+        }))
     }
 
     /// Called before the existing durable insert. Resume input already contains
@@ -303,23 +363,6 @@ impl OrbitRuntime {
         input["crew"] = json!(selected.crew.name);
         Ok(())
     }
-
-    /// The crew `install_auto_crew_admission` froze for `task_id`, if this run
-    /// went through the pool seam. Missing runs, system jobs, and selections
-    /// for a different task yield `None`.
-    pub(crate) fn dispatched_crew_stamp(
-        &self,
-        run_id: &str,
-        task_id: &str,
-    ) -> Result<Option<DispatchedCrewStamp>, OrbitError> {
-        let Some(run) = self.get_job_run_backend(run_id)? else {
-            return Ok(None);
-        };
-        Ok(dispatched_crew_stamp_from_input(
-            run.input.as_ref().unwrap_or(&Value::Null),
-            task_id,
-        ))
-    }
 }
 
 fn pools_from_input(input: &Value) -> Result<CapturedCrewPools, OrbitError> {
@@ -335,50 +378,6 @@ fn pools_from_input(input: &Value) -> Result<CapturedCrewPools, OrbitError> {
 
 fn auto_task_id(input: &Value) -> Option<&str> {
     singular_task_id_from_input(input)
-}
-
-fn dispatched_crew_stamp_from_input(input: &Value, task_id: &str) -> Option<DispatchedCrewStamp> {
-    let selection = input.get(SELECTION_KEY)?;
-    if selection.get("task_id").and_then(Value::as_str) != Some(task_id) {
-        return None;
-    }
-    let crew = selection
-        .get("crew")
-        .and_then(Value::as_str)
-        .and_then(non_empty)?
-        .to_string();
-    Some(DispatchedCrewStamp {
-        crew,
-        source: crew_stamp_source(selection),
-    })
-}
-
-/// History provenance for a stamped crew: `explicit`, `task.crew`, `default`,
-/// or `pool:<complexity>`. Pool sources are stored on the run as
-/// `workflow.*_complexity_crews` / `run_input.*_complexity_crews`.
-fn crew_stamp_source(selection: &Value) -> String {
-    let raw = selection
-        .get("source")
-        .and_then(Value::as_str)
-        .unwrap_or("default");
-    match raw {
-        "explicit" | "task.crew" | "default" => raw.to_string(),
-        other => {
-            if let Some(complexity) = selection
-                .get("complexity")
-                .and_then(Value::as_str)
-                .and_then(non_empty)
-            {
-                format!("pool:{complexity}")
-            } else {
-                COMPLEXITIES
-                    .into_iter()
-                    .find(|complexity| other.contains(&format!("{complexity}_complexity_crews")))
-                    .map(|complexity| format!("pool:{complexity}"))
-                    .unwrap_or_else(|| other.to_string())
-            }
-        }
-    }
 }
 
 fn sole_candidate(crew: Crew) -> CrewCandidate {

@@ -8,10 +8,11 @@ use orbit_types::task::{
 
 use super::TaskRecordUpdateParams;
 use crate::OrbitRuntime;
+use crate::application::job::crew_pools::{CreationCrewAssignment, random_crew_ticket};
 
 use super::helpers::{
     SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution, build_task_comments,
-    describe_optional_field_value,
+    crew_assigned_history, describe_optional_field_value,
 };
 use super::lifecycle::{FORCED_STATUS_EVENT, ensure_status_change_allowed};
 use super::params::TaskUpdateParams;
@@ -50,6 +51,9 @@ struct TaskUpdateContext {
 
 pub(super) struct ValidatedTaskFieldEdits {
     pub(super) params: TaskUpdateParams,
+    /// Set when this write cleared the crew and the pools chose a replacement;
+    /// the caller records the provenance in task history [ORB-12717].
+    pub(super) crew_assignment: Option<CreationCrewAssignment>,
 }
 
 impl OrbitRuntime {
@@ -264,9 +268,9 @@ impl OrbitRuntime {
         {
             ensure_status_change_allowed(self, &task, &params, target)?;
         }
-        params = self
-            .validate_and_normalize_task_field_edits(id, &task, params)?
-            .params;
+        let validated = self.validate_and_normalize_task_field_edits(id, &task, params)?;
+        let crew_assignment = validated.crew_assignment;
+        params = validated.params;
 
         let actor = self.actor().clone();
         let attribution = assemble_task_attribution(
@@ -308,6 +312,9 @@ impl OrbitRuntime {
             .filter(|replacement| task.source_task_id() != *replacement);
 
         let mut append_history: Vec<TaskHistoryEntry> = Vec::new();
+        if let Some(assignment) = &crew_assignment {
+            append_history.push(crew_assigned_history(assignment));
+        }
         if let Some(replacement) = source_task_id_replacement {
             // ORB-10311: record the explicit previous and replacement source
             // ids (with a clear marker for the unset case) so the change is
@@ -408,8 +415,23 @@ impl OrbitRuntime {
         if let Some(tags) = params.tags.take() {
             params.tags = Some(normalize_task_tags(tags));
         }
+        // [ORB-12717] Clearing the crew is "no crew supplied", so the pools
+        // decide again for the complexity this write leaves the task with —
+        // a re-queue after a provider failure lands on a fresh draw instead of
+        // on nothing. Editing the complexity alone never re-routes.
+        let mut crew_assignment = None;
         if let Some(crew) = &mut params.crew {
             *crew = self.canonical_crew_name(crew.as_deref())?;
+            if crew.is_none() {
+                crew_assignment = self.creation_crew_assignment(
+                    params.complexity.or(task.complexity),
+                    None,
+                    &mut random_crew_ticket,
+                )?;
+                *crew = crew_assignment
+                    .as_ref()
+                    .map(|assignment| assignment.crew.clone());
+            }
         }
         if let Some(orchestrator) = &mut params.orchestrator {
             *orchestrator = self.canonical_crew_name(orchestrator.as_deref())?;
@@ -428,6 +450,9 @@ impl OrbitRuntime {
             self.ensure_resolves_are_workspace_local(&preview)?;
         }
 
-        Ok(ValidatedTaskFieldEdits { params })
+        Ok(ValidatedTaskFieldEdits {
+            params,
+            crew_assignment,
+        })
     }
 }
