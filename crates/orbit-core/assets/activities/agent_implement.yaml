@@ -157,16 +157,17 @@ spec:
         when cheap and accurate.
 
         If implementation already landed and the checkout is clean, do not
-        manufacture a change. A same-task retry may attach
-        `already-landed.json` through `orbit.task.artifact.put` only with
-        schema_version 1, task_id, run_id, tested_head, covering_commit,
-        covering_task_id, scope (title, description, acceptance_criteria,
-        plan, context_files, tags, relations, required_tools, type, comments),
-        required_commands, criteria_evidence, and validation. Attach each
-        validation log as JSON with run_id, tested_head, command, exit_code,
-        and captured output. Never relabel old checks; missing, failed, or
-        unavailable checks cannot use this path. The pipeline verifies exact
-        HEAD, clean state, task identity, scope, ancestry, and logs.
+        manufacture a change. A retry may attach `already-landed.json`
+        through `orbit.task.artifact.put` only with schema_version 1, task_id,
+        run_id, tested_head, covering_commit, covering_task_id (this task, or
+        a sibling whose commit already covers this HEAD), scope (title,
+        description, acceptance_criteria, plan, context_files, tags,
+        relations, required_tools, type, comments), required_commands,
+        criteria_evidence, and validation. Attach each validation log as JSON
+        with run_id, tested_head, command, exit_code, and captured output.
+        Never relabel old checks; missing, failed, or unavailable checks
+        cannot use this path. The pipeline verifies exact HEAD, clean state,
+        task identity, covering marker, scope, ancestry, and logs.
 
         Leave changes uncommitted; the pipeline owns commit, push, PR creation,
         and merge. Temporary evidence or scratch files must remain outside the

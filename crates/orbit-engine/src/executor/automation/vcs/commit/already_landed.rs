@@ -1,6 +1,9 @@
 //! Conservative revalidation of a task's existing delivery. The worker's
 //! structured report is a claim; Git identity, scope, and captured checks must
 //! agree before the pipeline can skip creating a new delivery.
+//!
+//! `covering_task_id` names this task (same-task retry) or a sibling whose
+//! covering commit already landed the required change on the pinned HEAD.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -38,10 +41,10 @@ pub(in crate::executor::automation::vcs) fn verify<H: RuntimeHost + ?Sized>(
         .map_err(|error| refused(format!("invalid {ARTIFACT}: {error}")))?;
     if evidence.schema_version != 1
         || evidence.task_id != task.id
-        || evidence.covering_task_id != task.id
+        || evidence.covering_task_id.trim().is_empty()
     {
         return Err(refused(
-            "evidence must identify this task and its own covering delivery; cross-task coverage requires reconciliation",
+            "evidence must identify this task and a covering delivery",
         ));
     }
     if evidence.scope != scope(task, &host.get_task_comments(&task.id)?) {
@@ -78,7 +81,7 @@ pub(in crate::executor::automation::vcs) fn verify<H: RuntimeHost + ?Sized>(
         ))
     })?;
     let message = git_output(workspace, &["show", "-s", "--format=%B", &covering])?;
-    if !delivery_markers(&message).contains(&format!("[{}]", task.id)) {
+    if !delivery_markers(&message).contains(&format!("[{}]", evidence.covering_task_id)) {
         return Err(refused(
             "covering commit has no matching task delivery marker",
         ));
