@@ -405,32 +405,95 @@ fn empty_stage_failure_leaves_the_index_as_found() {
 }
 
 #[test]
-fn no_diff_expected_task_skips_the_phase_even_when_its_base_is_unreachable() {
-    // ADR-0219's carve-out applies before a changed-HEAD failure so a
-    // side-effect-only task remains skippable without Git reconciliation.
+fn no_diff_expected_skips_only_when_head_still_matches_the_pin() {
     let temp = initialized_git_repo();
     let workspace = temp.path();
     let base_sha = git_output(workspace, &["rev-parse", "HEAD"]).expect("read checkpoint");
-
-    git_success(workspace, &["checkout", "--orphan", "unrelated"])
-        .expect("start unrelated history");
-    git_success(workspace, &["rm", "-rf", "--cached", "."]).expect("clear orphan index");
-    fs::write(workspace.join("unrelated.txt"), "unrelated root\n").unwrap();
-    let head_before = commit_all(workspace, "unrelated root commit");
+    git_success(workspace, &["checkout", "-b", "orbit/T1"]).expect("create task branch");
 
     let mut task = task_with_file("T1", "QA validation", "src/missing.txt", "sonnet");
     task.tags.push(NO_DIFF_EXPECTED_TAG.to_string());
     let host = CommitTestHost::new(vec![task], workspace.to_path_buf());
 
     let result = git_commit(&host, &batch_input(workspace, &base_sha))
-        .expect("a side-effect-only task skips the phase");
+        .expect("a clean tagged run skips the commit phase");
 
     assert_eq!(result["skipped_no_diff_expected"], json!(true));
     assert_eq!(result["decision"], "skipped_no_diff_expected");
     assert_eq!(
         git_output(workspace, &["rev-parse", "HEAD"]).expect("read head after"),
-        head_before,
+        base_sha,
         "the skip creates no commit"
+    );
+}
+
+#[test]
+fn no_diff_expected_moved_head_with_committed_work_is_already_committed() {
+    // ORB-12683: the tag must not skip before inspecting the tree. A run that
+    // already committed its corrections has a moved HEAD and a clean worktree;
+    // that is `already_committed`, so delivery still runs.
+    let temp = initialized_git_repo();
+    let workspace = temp.path();
+    let base_sha = git_output(workspace, &["rev-parse", "HEAD"]).expect("read checkpoint");
+    git_success(workspace, &["checkout", "-b", "orbit/T1"]).expect("create task branch");
+    fs::write(workspace.join("skill.md"), "corrected skill\n").unwrap();
+    let head_after_agent = commit_all(workspace, "[T1] correct skill drift");
+
+    let mut task = task_with_file("T1", "Skill validation", "skill.md", "sonnet");
+    task.tags.push(NO_DIFF_EXPECTED_TAG.to_string());
+    let host = CommitTestHost::new(vec![task], workspace.to_path_buf());
+
+    let result = git_commit(&host, &batch_input(workspace, &base_sha))
+        .expect("tagged moved HEAD with committed work is already_committed");
+
+    assert_eq!(result["skipped_no_diff_expected"], json!(false));
+    assert_eq!(result["decision"], "already_committed");
+    assert_eq!(result["committed"], json!(false));
+    assert_eq!(result["base_sha"], base_sha);
+    assert_eq!(
+        git_output(workspace, &["rev-parse", "HEAD"]).expect("read head after"),
+        head_after_agent,
+        "already-committed work stays at the agent's commit"
+    );
+}
+
+#[test]
+fn no_diff_expected_moved_head_commits_leftover_work() {
+    // ORB-12683: tagged + moved HEAD + non-empty tree must not return
+    // skipped_no_diff_expected and silently drop leftover corrections.
+    let temp = initialized_git_repo();
+    let workspace = temp.path();
+    let base_sha = git_output(workspace, &["rev-parse", "HEAD"]).expect("read checkpoint");
+    git_success(workspace, &["checkout", "-b", "orbit/T1"]).expect("create task branch");
+    fs::write(workspace.join("skill.md"), "first correction\n").unwrap();
+    commit_all(workspace, "[T1] first skill correction");
+    fs::write(workspace.join("plugin.md"), "leftover derived skill\n").unwrap();
+    git_success(workspace, &["add", "--", "plugin.md"]).unwrap();
+
+    let mut task = task_with_file("T1", "Skill validation", "plugin.md", "sonnet");
+    task.tags.push(NO_DIFF_EXPECTED_TAG.to_string());
+    let host = CommitTestHost::new(vec![task], workspace.to_path_buf());
+
+    let result = git_commit(&host, &batch_input(workspace, &base_sha))
+        .expect("leftover tagged work is committed instead of skipped");
+
+    assert_eq!(result["committed"], json!(true));
+    assert_eq!(result["skipped_no_diff_expected"], json!(false));
+    assert_eq!(result["decision"], "performed");
+    assert_eq!(result["base_sha"], base_sha);
+    let committed_head = result["commit_sha"].as_str().expect("workflow commit SHA");
+    assert_eq!(
+        git_output(workspace, &["rev-parse", "HEAD"]).expect("read head after"),
+        committed_head
+    );
+    assert_eq!(
+        git_output(workspace, &["status", "--porcelain"]).expect("status after commit"),
+        "",
+        "leftover derived skill is in the commit, not left unstaged"
+    );
+    assert!(
+        workspace.join("plugin.md").exists(),
+        "leftover derived skill remains after commit"
     );
 }
 
