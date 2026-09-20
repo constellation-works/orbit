@@ -42,10 +42,9 @@ use crate::context::{
 
 use super::super::ci::bounded_u64;
 use super::super::input::input_string_field;
-use super::git::{fetch_remote_base, git_command_success, git_output, git_success};
+use super::git::{fetch_remote_base, git_command_success, git_output};
 use super::operations;
 use super::pr::{DeliveryPin, PrMergeState, classify_pr_state, resolve_merge_capabilities};
-use super::review_gate::revision;
 use super::worktree::{checkout_holding_branch, ensure_clean_checkout};
 
 /// Budget for waiting out required checks on a pull request before the attempt
@@ -619,30 +618,17 @@ fn observe_candidate(
     })
 }
 
-/// Resolve one accepted revision in the owner checkout, fetching it first when
-/// the object is only on the remote. A tree that disagrees with the accepted
-/// identity means the commit is not the one that was validated.
+/// Resolve one accepted revision in the owner checkout.
+///
+/// The rule itself is shared with handoff acceptance [ORB-12500], so the
+/// owner cannot read a candidate one way when it accepts the work and a
+/// different way when it lands it.
 fn observe_revision(
     workspace: &Path,
     accepted: &SourceRevision,
     label: &str,
 ) -> Result<SourceRevision, OrbitError> {
-    if revision(workspace, &accepted.commit).is_err() {
-        let _ = git_success(workspace, &["fetch", "--quiet", "origin", &accepted.commit]);
-    }
-    let observed = revision(workspace, &accepted.commit).map_err(|error| {
-        OrbitError::Execution(format!(
-            "handoff_land: {label} commit {} is not readable in the owner checkout: {error}",
-            accepted.commit
-        ))
-    })?;
-    if observed.tree != accepted.tree {
-        return Err(OrbitError::Execution(format!(
-            "handoff_land: {label} commit {} has tree {} but the accepted handoff recorded {}",
-            accepted.commit, observed.tree, accepted.tree
-        )));
-    }
-    Ok(observed)
+    super::claim::observe_accepted_revision(workspace, accepted, label, "handoff_land")
 }
 
 /// The ref a delivery actually lands on: `origin/<branch>` for published work

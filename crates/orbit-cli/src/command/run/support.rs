@@ -5,8 +5,6 @@ use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Payload};
 
-pub(super) const TASK_AUTO_PIPELINE_JOB: &str = "task_auto_pipeline";
-
 #[derive(Clone)]
 pub(crate) struct WorkflowDispatchResult {
     pub workflow_alias: &'static str,

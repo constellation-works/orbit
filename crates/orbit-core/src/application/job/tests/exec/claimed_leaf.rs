@@ -444,14 +444,14 @@ fn owner_local_claim_executes_validates_and_hands_off_without_merging() {
     );
 }
 
-/// [ORB-12616] The owner observes a published pull request before it accepts
-/// one, and this slice does not implement that observation. The boundary is
-/// pinned here so the gap is an explicit refusal — leaving the settlement
-/// durable and retryable — rather than an acceptance on the worker's word.
+/// [ORB-12500] The owner observes a published pull request before it accepts
+/// one, so a handoff naming a candidate the provider does not report is
+/// refused — leaving the settlement durable and retryable rather than
+/// promoting anything on the worker's word.
 #[test]
-fn owner_side_acceptance_of_a_published_pull_request_is_refused_for_now() {
+fn a_published_handoff_the_provider_does_not_confirm_is_refused() {
     if isolated_claimed_test(
-        "application::job::tests::exec::claimed_leaf::owner_side_acceptance_of_a_published_pull_request_is_refused_for_now",
+        "application::job::tests::exec::claimed_leaf::a_published_handoff_the_provider_does_not_confirm_is_refused",
     ) {
         return;
     }
@@ -506,17 +506,26 @@ fn owner_side_acceptance_of_a_published_pull_request_is_refused_for_now() {
             validation: Vec::new(),
         },
     ));
+    // No pull request was ever opened for this fixture, so the owner's
+    // provider lookup cannot confirm the delivery the handoff claims.
     let error = peer
         .settle(&record)
-        .expect_err("a pull-request delivery is not observable by this owner yet");
-    assert!(
-        error.to_string().contains("not part of this slice"),
-        "{error}"
-    );
+        .expect_err("the owner accepts only a delivery it can read for itself");
     assert_ne!(
         runtime.get_task(&task_id).expect("task").status,
         TaskStatus::Review,
         "a refused observation promotes nothing"
+    );
+    assert!(
+        runtime.accepted_task_handoff(&claim.claim_id).is_err(),
+        "a refused observation records no accepted handoff: {error}"
+    );
+    // And the refusal names what the owner could not confirm, rather than
+    // failing somewhere downstream of an acceptance it should never have made.
+    let message = error.to_string();
+    assert!(
+        message.contains("#7") && message.contains("attempt"),
+        "the refusal names the pull request and the identity that disagreed: {message}"
     );
 }
 
@@ -1092,20 +1101,17 @@ fn a_published_pr_claim_hands_off_a_pull_request_without_merging() {
         peer: &peer,
         launcher: &launcher,
     };
-    // The settlement is the one thing this slice cannot complete: accepting a
-    // *published* pull request needs an owner-side provider observation that
-    // is not implemented yet, so the refill ends on that refusal with the
-    // handoff already durable. The run itself must have succeeded.
-    let admitted = drain.refill(&destination, &template, 1);
+    // [ORB-12500] The owner now reads the published pull request for itself,
+    // so the whole lifecycle completes: execute, publish, validate, hand off,
+    // and settle into `review` without merging anything.
+    let admitted = drain
+        .refill(&destination, &template, 1)
+        .expect("one published-PR admission settles end to end");
+    assert_eq!(admitted, 1);
     assert_eq!(
         launcher.outcome.borrow().clone(),
         Some(Ok(true)),
         "the claimed PR pipeline must run to its handoff"
-    );
-    let error = admitted.expect_err("owner acceptance of a published PR is not implemented yet");
-    assert!(
-        error.to_string().contains("not part of this slice"),
-        "{error}"
     );
     let leaf = launcher.launched.borrow()[0].clone();
     assert_eq!(
@@ -1115,11 +1121,7 @@ fn a_published_pr_claim_hands_off_a_pull_request_without_merging() {
 
     // The handoff is durable, typed, and names the published pull request.
     let record = jobs.local_pull_admissions().expect("records").remove(0);
-    assert_eq!(
-        record.phase,
-        LocalPullPhase::Settling,
-        "a handoff the owner cannot accept yet stays pending, not lost"
-    );
+    assert_eq!(record.phase, LocalPullPhase::Settled);
     let Some(ClaimMutation::AcceptHandoff(handoff)) = record.settlement.clone() else {
         panic!("a claimed PR leaf settles with a typed handoff: {record:?}");
     };
@@ -1150,14 +1152,33 @@ fn a_published_pr_claim_hands_off_a_pull_request_without_merging() {
         local_base,
         "the published branch is the candidate's; the base on origin never moved"
     );
-    assert_ne!(
+    assert_eq!(
         runtime.get_task(&task_id).expect("task").status,
-        TaskStatus::Done,
-        "a claimed leaf never completes its own task"
+        TaskStatus::Review,
+        "an accepted published handoff promotes to review, never to done"
     );
     assert!(
         runtime.landing_start_requests().expect("outbox").is_empty(),
         "handing off is not authorizing a landing"
+    );
+    // The owner's own observation is what it accepted: the candidate and base
+    // it resolved in its checkout, and the branches the provider reported.
+    let claim_id = record
+        .receipt
+        .as_ref()
+        .and_then(|receipt| receipt.claim.as_ref())
+        .expect("claim")
+        .claim_id
+        .clone();
+    let accepted = runtime
+        .accepted_task_handoff(&claim_id)
+        .expect("owner accepted the typed pull-request handoff");
+    assert_eq!(accepted.handoff.candidate, handoff.candidate);
+    assert_eq!(
+        accepted.handoff.candidate.delivery,
+        HandoffDelivery::PullRequest {
+            number: FIXTURE_PR_NUMBER
+        }
     );
 
     // And a genuine follower destination is refused rather than served.
@@ -1217,16 +1238,14 @@ fn a_published_pr_claim_observes_the_remote_base_when_local_lags() {
         peer: &peer,
         launcher: &launcher,
     };
-    let admitted = drain.refill(&destination, &template, 1);
+    let admitted = drain
+        .refill(&destination, &template, 1)
+        .expect("a lagging local base still settles end to end");
+    assert_eq!(admitted, 1);
     assert_eq!(
         launcher.outcome.borrow().clone(),
         Some(Ok(true)),
         "the claimed PR pipeline must not refuse a lagging local base"
-    );
-    let error = admitted.expect_err("owner acceptance of a published PR is not implemented yet");
-    assert!(
-        error.to_string().contains("not part of this slice"),
-        "{error}"
     );
 
     let record = jobs.local_pull_admissions().expect("records").remove(0);
@@ -1258,8 +1277,14 @@ impl PullLauncher for RefusingLauncher {
     }
 }
 
-/// A `gh` that serves exactly the three calls `pr_open` makes, and fails
-/// loudly on anything else.
+/// A `gh` that serves the calls `pr_open` and the owner's acceptance
+/// observation make, and fails loudly on anything else.
+///
+/// It is not a canned response: `pr create` records the head and base it was
+/// asked for, and `pr view` answers from that record plus the real `git`
+/// object the head branch points at. That is what lets the owner's
+/// observation be a genuine check — a fixture reporting a made-up
+/// `headRefOid` would pass the pin without proving anything.
 ///
 /// Installed ahead of the real one for every isolated child, so a fixture can
 /// never quietly reach a live GitHub account — and a step that starts calling
@@ -1272,13 +1297,31 @@ fn install_fixture_gh(bin: &Path) {
     std::fs::create_dir_all(bin).expect("fixture bin");
     let script = format!(
         r#"#!/bin/sh
+state="$HOME/.orbit-fixture-gh-pr"
 case "$1 $2" in
   "pr list") printf '[]
 ' ;;
-  "pr create") printf '{url}
+  "pr create")
+    head=""
+    base=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --head) head="$2"; shift 2 ;;
+        --base) base="$2"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    printf '%s
+%s
+' "$head" "$base" > "$state"
+    printf '{url}
 ' ;;
-  "pr view") printf '{{"number":{FIXTURE_PR_NUMBER},"title":"fixture","body":"fixture","headRefName":"fixture","files":[],"commits":[],"url":"{url}"}}
-' ;;
+  "pr view")
+    head=$(sed -n 1p "$state" 2>/dev/null)
+    base=$(sed -n 2p "$state" 2>/dev/null)
+    oid=$(git rev-parse --verify "$head" 2>/dev/null)
+    printf '{{"number":{FIXTURE_PR_NUMBER},"title":"fixture","body":"fixture","headRefName":"%s","headRefOid":"%s","baseRefName":"%s","state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","files":[],"commits":[],"url":"{url}"}}
+' "$head" "$oid" "$base" ;;
   *) echo "fixture gh does not implement: $*" >&2; exit 1 ;;
 esac
 "#

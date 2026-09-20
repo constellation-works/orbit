@@ -19,12 +19,21 @@
 //!
 //! # What this module does not do
 //!
-//! Nothing here creates an admission receipt, a claim, a reservation, or a task
-//! transition, and nothing here grants execution authority. The mutating
-//! distributed entry points — pull, run binding, settlement, handoff,
-//! completion approval — stay unavailable behind
-//! [`ensure_distributed_mutation_available`] until the lifecycle integration
-//! slice wires trusted claim context through the routed transport.
+//! Nothing in the read-only surface creates an admission receipt, a claim, a
+//! reservation, or a task transition, and nothing here grants execution
+//! authority. The mutating distributed entry points — pull, run binding,
+//! settlement, handoff, completion approval — stay unavailable behind
+//! [`ensure_distributed_mutation_available`] until the routed peer and the
+//! tools that carry them exist.
+//!
+//! # The retained entry points
+//!
+//! This module also owns [`OrbitRuntime::drain_entry_admission`] [ORB-12500]:
+//! the one decision an explicit ship, an explicit owner drain and the
+//! independent registry-driven ship sweep all take before they dispatch
+//! anything. It is here rather than beside any one of them because its whole
+//! purpose is that none of the three keeps a private idea of what the host is
+//! already doing.
 //!
 //! [design §4.1]: ../../../../docs/design/distributed-drain/2_design.md
 //! [spec]: ../../../../docs/design/distributed-drain/specs/task-pull.md
@@ -461,4 +470,217 @@ fn lookup_guidance(outcome: &str) -> &'static str {
 
 fn json_error(error: serde_json::Error) -> OrbitError {
     OrbitError::Store(error.to_string())
+}
+
+/// A retained entry point that admits workspace delivery work [ORB-12500].
+///
+/// Every one of these existed before the distributed drain and keeps its own
+/// surface, schedule and enablement. What they no longer keep is a private
+/// idea of what the host is already doing: they all ask
+/// [`OrbitRuntime::drain_entry_admission`], which reads one occupancy, one
+/// claim ledger and one destination-authority rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrainEntryPoint {
+    /// `orbit run auto`, and the seeded `ship_sweep` routine and
+    /// `workspace_ship_pipeline` wrapper that invoke the drain beneath it.
+    OwnerDrain,
+    /// `orbit run ship`, `orbit.workflow.ship`, and the dashboard endpoint —
+    /// the explicit shipment surfaces, with or without named tasks.
+    ExplicitShip,
+    /// The independent registry-driven `orbit run ship-sweep` CLI, which
+    /// dispatches per workspace without a workspace runtime of its own.
+    ShipSweep,
+}
+
+impl DrainEntryPoint {
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            DrainEntryPoint::OwnerDrain => "orbit.workflow.auto",
+            DrainEntryPoint::ExplicitShip => "orbit.workflow.ship",
+            DrainEntryPoint::ShipSweep => "orbit.run.ship-sweep",
+        }
+    }
+}
+
+/// Why a retained entry point may not admit right now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DrainEntryRefusal {
+    /// This checkout is a replica. Owner coordination work — backlog
+    /// selection, reservation, claim settlement — belongs to the owner, and a
+    /// replica executes through pull instead.
+    Replica { owner_machine_id: String },
+    /// Every local drain slot is taken, counting legacy wrappers, claimed
+    /// leaves and pending admissions no run represents yet, from the one
+    /// reading the pull allocator commits against.
+    Saturated { occupied: usize },
+    /// A live claim already protects this task's frozen footprint. The
+    /// remedy is the claim's own lifecycle — settlement or deliberate
+    /// recovery — never a second admission.
+    Claimed {
+        task_id: String,
+        claim_id: String,
+        machine_id: String,
+    },
+}
+
+impl DrainEntryRefusal {
+    /// A stable code a scheduler can branch on, matching the shapes the sweep
+    /// already reports.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            DrainEntryRefusal::Replica { .. } => "replica_checkout",
+            DrainEntryRefusal::Saturated { .. } => "ship_in_flight",
+            DrainEntryRefusal::Claimed { .. } => "claimed_by_execution_claim",
+        }
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> String {
+        match self {
+            DrainEntryRefusal::Replica { owner_machine_id } => format!(
+                "this checkout is a replica of machine '{owner_machine_id}'; owner-only \
+                 coordination work is refused here and a replica executes through pull"
+            ),
+            DrainEntryRefusal::Saturated { occupied } => format!(
+                "{occupied} drain slot(s) are already occupied by live leaves or pending \
+                 admissions; this entry point stands down rather than admitting beside them"
+            ),
+            DrainEntryRefusal::Claimed {
+                task_id,
+                claim_id,
+                machine_id,
+            } => format!(
+                "task '{task_id}' is held by execution claim '{claim_id}' on machine \
+                 '{machine_id}'; it settles or is deliberately recovered, never admitted twice"
+            ),
+        }
+    }
+}
+
+/// One shared admission decision, whatever surface asked for it.
+#[derive(Debug, Clone)]
+pub struct DrainEntryAdmission {
+    pub entry_point: DrainEntryPoint,
+    /// The single capacity reading legacy dispatch and pull both allocate
+    /// against.
+    pub occupancy: orbit_store::contracts::DrainLeafOccupancy,
+    /// The owner's effective review policy. v1 admits only `none` through the
+    /// claim contract, which is why it is reported on every decision rather
+    /// than left for each surface to look up.
+    pub review_policy: String,
+    /// Whether the claim contract would admit this workspace at all — the
+    /// same ordered ladder `orbit.task.pull` applies, so a preflight and a
+    /// retained entry cannot disagree about it.
+    pub claim_admission_refusal: Option<String>,
+    pub refusal: Option<DrainEntryRefusal>,
+}
+
+impl DrainEntryAdmission {
+    /// Turn a refusal into an error, for a surface that has no "stood down"
+    /// outcome of its own.
+    pub fn into_result(self) -> Result<Self, OrbitError> {
+        match &self.refusal {
+            None => Ok(self),
+            Some(DrainEntryRefusal::Replica { .. }) => {
+                Err(OrbitError::CapabilityRefused(self.refusal_reason()))
+            }
+            Some(_) => Err(OrbitError::PolicyDenied(self.refusal_reason())),
+        }
+    }
+
+    fn refusal_reason(&self) -> String {
+        self.refusal
+            .as_ref()
+            .map(DrainEntryRefusal::reason)
+            .unwrap_or_default()
+    }
+}
+
+impl crate::OrbitRuntime {
+    /// The shared admission decision every retained entry point makes.
+    ///
+    /// `saturation_stands_down` is what separates an unattended sweep from an
+    /// operator's explicit invocation: a sweep that finds the host busy skips
+    /// that workspace, while `orbit run ship` is a deliberate act whose own
+    /// leaf definition already bounds it. Neither may bypass the claim ledger
+    /// or serve owner coordination from a replica.
+    pub fn drain_entry_admission(
+        &self,
+        entry_point: DrainEntryPoint,
+        task_ids: &[String],
+        saturation_stands_down: bool,
+    ) -> Result<DrainEntryAdmission, OrbitError> {
+        let ship = self.owner_ship_contract();
+        let occupancy = self.stores().jobs().drain_leaf_occupancy()?;
+        let mut decision = DrainEntryAdmission {
+            entry_point,
+            occupancy,
+            review_policy: ship.review_policy.clone(),
+            claim_admission_refusal: self.claim_contract_refusal(&ship),
+            refusal: None,
+        };
+        if let Some(owner_machine_id) = self.coordination_write_owner() {
+            decision.refusal = Some(DrainEntryRefusal::Replica {
+                owner_machine_id: owner_machine_id.to_string(),
+            });
+            return Ok(decision);
+        }
+        // The claim ledger is consulted before capacity: "this exact task is
+        // already being executed" is the more actionable of the two, and a
+        // saturated host would otherwise mask it.
+        if !task_ids.is_empty() {
+            let claims = self.inspect_execution_claims()?;
+            if let Some(claim) = claims
+                .iter()
+                .map(|inspection| &inspection.claim)
+                .find(|claim| {
+                    claim.phase.protects_footprint()
+                        && task_ids.iter().any(|task_id| task_id == &claim.task_id)
+                })
+            {
+                decision.refusal = Some(DrainEntryRefusal::Claimed {
+                    task_id: claim.task_id.clone(),
+                    claim_id: claim.claim_id.clone(),
+                    machine_id: claim.executed_on.machine_id.clone(),
+                });
+                return Ok(decision);
+            }
+        }
+        if saturation_stands_down && decision.occupancy.occupied > 0 {
+            decision.refusal = Some(DrainEntryRefusal::Saturated {
+                occupied: decision.occupancy.occupied,
+            });
+        }
+        Ok(decision)
+    }
+
+    /// Whether the claim contract would admit this workspace, by the spec's
+    /// own ordered ladder. Reported rather than raised: a workspace whose
+    /// review policy is not `none` still ships through its legacy leaf, and
+    /// saying so is what keeps the two facts from being confused.
+    fn claim_contract_refusal(&self, ship: &AdmissionShipContract) -> Option<String> {
+        let identity = AdmissionIdentity::trusted_local(ExecutionLocation {
+            machine_id: self
+                .automation_machine_identity()
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| "local".to_string()),
+            host_id: None,
+        });
+        let request = AdmissionRequest {
+            request_id: "entry-point".to_string(),
+            caller_version: owner_binary_version().to_string(),
+            caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+            caller_review_policy: ship.review_policy.clone(),
+            run_context: AdmissionRunContext {
+                run_id: "entry-point".to_string(),
+                job_name: "entry-point".to_string(),
+                host_id: None,
+            },
+            ship: ship.clone(),
+        };
+        orbit_store::admission_refusal(&identity, &request, owner_binary_version())
+            .map(|refusal| refusal.as_str().to_string())
+    }
 }

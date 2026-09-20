@@ -8,7 +8,7 @@ status: Draft
 feature: distributed-drain
 tags: [distributed-drain, pull, queue, spec]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488, ORB-12616]
+related_artifacts: [ORB-12488, ORB-12616, ORB-12500]
 ---
 
 # Spec: `orbit.task.pull`
@@ -243,7 +243,8 @@ substitute for these tests.
 claude authored the initial contract under [ORB-12488]; codex revised it after design review,
 2026-09-18; claude reconciled it with the authorization decision and the shipped read-only surface
 under [ORB-12495], 2026-09-19; claude recorded the executable owner-local claimed leaf under
-[ORB-12616], 2026-09-20. The feature remains Draft.
+[ORB-12616], 2026-09-20; claude recorded the owner's published-delivery acceptance and the retained
+entry points' shared admission decision under [ORB-12500], 2026-09-20. The feature remains Draft.
 
 ## Internal storage accounting
 
@@ -365,9 +366,18 @@ the task as a digest-pinned artifact. The typed handoff is written as the
 claim's durable pending settlement before any owner call, so a disconnect
 leaves one immutable settlement to retry.
 
-Not yet delivered: owner-side acceptance of a *published pull request*
-delivery, which needs an independent provider observation, and therefore the
-follower-PR executable scenario. That settlement is refused explicitly and left
-durable for a later attempt rather than accepted on the executor's word. A
-follower destination still fails on the public mutation gate. See the
-caller-side implementation status in design §3.
+[ORB-12500] delivered the owner's acceptance of a *published pull request*:
+the owner reads the pull request from the provider, pins the reported head
+branch, base branch and head commit against the submitted candidate, refuses a
+closed-without-merge or self-contradictory state, and resolves the candidate
+and base objects in its own checkout under the same tree-identity and ancestry
+rules the executor applied. Accepted revisions go through one shared rule that
+handoff acceptance and the landing attempt both call. Already-landed delivery
+keeps its refusal: no-diff work carries its own typed report through the
+existing verifier.
+
+Not yet delivered: the routed follower peer — a `PullPeer` speaking this
+protocol over the federated SSH transport — and the mutating distributed entry
+points as registered tools. A follower destination therefore still fails on the
+public mutation gate, and `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` remains
+false. See the caller-side implementation status in design §3.

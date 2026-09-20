@@ -1545,6 +1545,15 @@ fn workspace_ship_pipeline_waits_for_workspace_auto_sequencer() {
     assert!(!definition.contains("auto_ship"));
     assert!(!definition.contains("ship-sweep"));
     assert!(!definition.contains("type: shell"));
+
+    // [ORB-12500] A schedule is not an authorization. The wrapper the seeded
+    // `ship_sweep` routine fires passes no completion at all, so the drain
+    // beneath it runs under its own `completion: review` default and the work
+    // it admits stops at review for a separate, explicit approval.
+    assert!(
+        !definition.contains("completion"),
+        "the scheduled wrapper must not carry completion authority: {definition}"
+    );
 }
 
 /// A job asset's YAML with whole-line comments removed, for assertions about
