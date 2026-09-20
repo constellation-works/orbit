@@ -136,7 +136,7 @@ fn repository_definitions_all_parse() {
             "name must match file stem for {stem}"
         );
         let expected = match stem {
-            "release-prep" => TaskComplexity::Low,
+            "release-prep" | "test-layout-sweep" => TaskComplexity::Low,
             "code-review" | "doc-duties" | "friction-curation" | "model-price-audit"
             | "qa-sweep" | "skill-validation" => TaskComplexity::Medium,
             "ci-failure-remediation"
