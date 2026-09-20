@@ -2429,3 +2429,137 @@ fn pr_pipelines_complete_only_when_authorized_and_handle_no_diff_without_a_pr() 
         "{job_name} no-diff completion must not require a nonexistent PR"
     );
 }
+
+/// [ORB-12616] The claimed leaves are handoff-only by construction.
+///
+/// Their whole safety argument is negative — no merge, no completion, no
+/// reservation of a footprint the owner already froze — so the definitions
+/// are asserted for what they must *not* contain, not only for their phases.
+#[test]
+fn claimed_leaf_definitions_stop_at_the_typed_handoff() {
+    let catalog = default_activity_catalog();
+    for job_name in ["task_claimed_local_pipeline", "task_claimed_pr_pipeline"] {
+        let yaml = DEFAULT_JOB_FILES
+            .iter()
+            .find_map(|(name, yaml)| (*name == job_name).then_some(*yaml))
+            .unwrap_or_else(|| panic!("default job {job_name} exists"));
+        let mut asset = load_job_asset(yaml)
+            .unwrap_or_else(|err| panic!("default job {job_name} should parse: {err}"));
+        // Read the declared references first: resolution replaces them with
+        // inlined activity bodies.
+        let mut targets = Vec::new();
+        collect_step_targets(&asset.spec.steps, &mut targets);
+        resolve_job_target_refs(&mut asset.spec, &catalog)
+            .unwrap_or_else(|err| panic!("default job {job_name} refs resolve: {err}"));
+        for forbidden in [
+            "activity:git_merge",
+            "activity:pr_complete",
+            "activity:task_complete",
+            "activity:reserve_locks",
+            "activity:release_locks",
+            "activity:list_backlog_tasks",
+            "activity:update_task",
+        ] {
+            assert!(
+                !targets.iter().any(|target| target == forbidden),
+                "{job_name} must not contain {forbidden}: {targets:?}"
+            );
+        }
+        assert_eq!(
+            targets.last().map(String::as_str),
+            Some("activity:claim_handoff"),
+            "{job_name} must terminate at the typed handoff"
+        );
+        assert!(
+            targets
+                .iter()
+                .any(|target| target == "activity:claim_validate"),
+            "{job_name} must capture required validation before its handoff"
+        );
+
+        // Completion is not merely unset: a claimed leaf has no input that
+        // could ask for it, so no caller can thread one in.
+        let default_input = asset.spec.default_input.clone().unwrap_or_default();
+        assert!(
+            default_input.get("completion").is_none(),
+            "{job_name} must expose no completion authority input"
+        );
+        assert!(
+            default_input.get("auto_push").is_none(),
+            "{job_name} must not expose an ad-hoc publication switch"
+        );
+    }
+
+    // The owner-local leaf additionally publishes nothing at all.
+    let yaml = DEFAULT_JOB_FILES
+        .iter()
+        .find_map(|(name, yaml)| (*name == "task_claimed_local_pipeline").then_some(*yaml))
+        .expect("claimed local job exists");
+    let asset = load_job_asset(yaml).expect("claimed local job parses");
+    let mut targets = Vec::new();
+    collect_step_targets(&asset.spec.steps, &mut targets);
+    for forbidden in [
+        "activity:git_push",
+        "activity:pr_open",
+        "activity:pr_prepare",
+    ] {
+        assert!(
+            !targets.iter().any(|target| target == forbidden),
+            "an owner-local claim needs no origin, yet the definition has {forbidden}"
+        );
+    }
+}
+
+fn collect_step_targets(steps: &[JobV2Step], out: &mut Vec<String>) {
+    for step in steps {
+        match &step.body {
+            JobV2StepBody::TargetRef(target) => out.push(target.target.clone()),
+            JobV2StepBody::Loop { loop_ } => collect_step_targets(&loop_.steps, out),
+            JobV2StepBody::Parallel { parallel } => collect_step_targets(&parallel.branches, out),
+            JobV2StepBody::FanOut { fan_out, .. } => {
+                collect_step_targets(std::slice::from_ref(&fan_out.worker), out)
+            }
+            JobV2StepBody::Target(_) => {}
+        }
+    }
+}
+
+/// [ORB-12616] The public ship surfaces cannot reach a claimed leaf.
+///
+/// The gate renders its child job name from `input.mode`, so the guarantee is
+/// really about which modes a public submission can express: every accepted
+/// mode names a legacy leaf, and the claimed names are not modes at all.
+/// `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` stays false alongside it, so
+/// even the internal seams remain unreachable from a configured surface.
+#[test]
+fn public_ship_input_cannot_name_a_claimed_leaf() {
+    use orbit_types::workflow::ShipMode;
+
+    for mode in [ShipMode::Pr, ShipMode::Local] {
+        let input = crate::application::workflow::build_ship_input(
+            mode,
+            "agent-main",
+            &[],
+            crate::application::workflow::CompletionPolicy::Review,
+            &[],
+        )
+        .expect("public ship input");
+        let rendered = format!("task_{}_pipeline", input["mode"].as_str().expect("mode"));
+        assert!(
+            !rendered.starts_with("task_claimed_"),
+            "public mode '{}' renders the claimed leaf '{rendered}'",
+            input["mode"]
+        );
+    }
+    for claimed in ["claimed_local", "claimed_pr", "task_claimed_local_pipeline"] {
+        assert!(
+            ShipMode::parse(claimed).is_err(),
+            "'{claimed}' must not be an admissible public ship mode"
+        );
+    }
+    assert!(
+        crate::application::distributed::ensure_distributed_mutation_available("orbit.task.pull")
+            .is_err(),
+        "the distributed mutation entry points stay closed in this slice"
+    );
+}

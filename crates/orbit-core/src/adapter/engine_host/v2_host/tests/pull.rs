@@ -176,7 +176,7 @@ fn pull_lost_request_and_binding_responses_recover_the_same_leaf() {
     assert_eq!(peer.binds.borrow().len(), 1);
     assert_eq!(launcher.launches.get(), 1);
     assert_eq!(
-        jobs.list_job_runs("task_local_pipeline")
+        jobs.list_job_runs("task_claimed_local_pipeline")
             .expect("leaves")
             .len(),
         1
@@ -350,6 +350,54 @@ fn pull_cancelled_queued_leaf_settles_without_launch_after_lost_bind() {
     );
     assert_eq!(launcher.launches.get(), 0);
     assert_eq!(peer.settlements.get(), 1);
+}
+
+/// [ORB-12616] A follower's bound PR claim selects the handoff-only PR leaf.
+///
+/// The leaf a claim runs is chosen by the owner-resolved ship mode inside the
+/// admission record, never by run input, and the definition it names is the
+/// claimed one: the merge-capable `task_pr_pipeline` is not reachable from a
+/// claim. The created run also carries no completion input, so there is no
+/// value a later step could read as authority to land.
+#[test]
+fn pull_pr_mode_binds_the_claimed_pr_leaf_with_no_completion_authority() {
+    if isolated_pull_test(
+        "adapter::engine_host::v2_host::tests::pull::pull_pr_mode_binds_the_claimed_pr_leaf_with_no_completion_authority",
+    ) {
+        return;
+    }
+    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
+    let jobs = runtime.stores().jobs();
+    let (mut destination, mut template) = request(jobs);
+    // A follower executes elsewhere; only PR mode is open to it.
+    destination.execution_machine_id = "follower".into();
+    template.ship.mode = "pr".into();
+    let peer = Peer::default();
+    let launcher = Launcher::default();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    drain.refill(&destination, &template, 1).expect("admit");
+    let leaf = jobs.local_pull_admissions().expect("record")[0]
+        .leaf_run_id
+        .clone()
+        .expect("leaf");
+    let run = jobs.get_job_run(&leaf).expect("read").expect("leaf run");
+    assert_eq!(run.job_id, "task_claimed_pr_pipeline");
+    assert!(
+        jobs.list_job_runs("task_pr_pipeline")
+            .expect("legacy leaves")
+            .is_empty(),
+        "a claim must never start the merge-capable legacy leaf"
+    );
+    let input = run.input.expect("leaf input");
+    assert!(
+        input.get("completion").is_none(),
+        "a claimed leaf carries no completion authority: {input}"
+    );
+    assert_eq!(input["base_sync"], "remote");
 }
 
 fn isolated_pull_test(name: &str) -> bool {

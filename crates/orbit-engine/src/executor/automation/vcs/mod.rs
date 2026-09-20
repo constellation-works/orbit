@@ -1,5 +1,6 @@
 mod attribution;
 mod base_obsolescence;
+pub mod claim;
 mod commit;
 mod delivery_marker;
 mod failure;
@@ -14,6 +15,7 @@ mod resume;
 pub mod review_gate;
 mod worktree;
 
+pub(super) use claim::{claim_handoff, claim_validate};
 pub(super) use commit::git_commit;
 pub(super) use failure::pr_failure_handoff;
 pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};

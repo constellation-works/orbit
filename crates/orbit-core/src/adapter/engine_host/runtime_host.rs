@@ -186,7 +186,34 @@ impl RuntimeHost for OrbitRuntime {
         OrbitRuntime::start_task_as_system(self, task_id, note, comment)
     }
 
+    /// Admit a task into a pipeline that is about to build its worktree.
+    ///
+    /// A claimed leaf takes the bound branch [ORB-12616]: the owner already
+    /// admitted this task inside the pull transaction, so re-admitting it
+    /// locally would either be a no-op on a replica read or, worse, a second
+    /// authority for the same work. Instead the trusted worker binding fixes
+    /// which task this run may touch, and the owner's own copy of that task is
+    /// read back to confirm it is still the admitted, in-progress one. No
+    /// binding means no claimed admission: a bound-less process reaching a
+    /// claimed leaf has already been refused upstream, and an unbound ordinary
+    /// run keeps the pre-existing local admission unchanged.
     fn admit_task_for_workflow(&self, task_id: &str, workflow: &str) -> Result<Task, OrbitError> {
+        if let Some(binding) = self.worker_invocation() {
+            if task_id != binding.task_id {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "worker task binding mismatch: this leaf is bound to '{}', {workflow}                      requested '{task_id}'",
+                    binding.task_id
+                )));
+            }
+            let task: Task = self.read_owner(task_id, "task")?;
+            if task.status != TaskStatus::InProgress {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "claimed task '{task_id}' is '{}' on the owner; only an admitted                      in-progress claim may build a worktree",
+                    task.status
+                )));
+            }
+            return Ok(task);
+        }
         OrbitRuntime::admit_task_for_workflow_as_system(self, task_id, workflow)
     }
 
@@ -270,6 +297,75 @@ impl RuntimeHost for OrbitRuntime {
         update: &orbit_engine::HandoffLandingUpdate,
     ) -> Result<(), OrbitError> {
         OrbitRuntime::record_handoff_landing(self, update)
+    }
+
+    fn claim_execution_context(&self) -> Result<orbit_engine::ClaimExecutionContext, OrbitError> {
+        let leaf = self.current_claimed_leaf()?;
+        let ship = &leaf.admission.request.ship;
+        Ok(orbit_engine::ClaimExecutionContext {
+            workspace_id: leaf.binding.owner_workspace_id.clone(),
+            task_id: leaf.claim.task_id.clone(),
+            claim_id: leaf.claim.claim_id.clone(),
+            machine_id: leaf.claim.executed_on.machine_id.clone(),
+            run_id: leaf.binding.bound_run_id.clone(),
+            ship_mode: ship.mode.clone(),
+            base_branch: ship.base_branch.clone(),
+            landing_branch: ship.landing_branch.clone(),
+            // The owner re-derives its own requirements when it accepts the
+            // handoff, so this copy only decides what the executor runs. A
+            // follower reading a different list produces evidence the owner
+            // refuses, which is the fail-closed direction.
+            required_commands: self.workflow_required_validation_commands().to_vec(),
+        })
+    }
+
+    fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Result<(), OrbitError> {
+        let leaf = self.current_claimed_leaf()?;
+        orbit_types::task::validate_relative_artifact_path(path)?;
+        // The same preloaded payload the spoke connector sends: bytes are read
+        // on the executor and cross the coordination seam path-free, so the
+        // evidence the owner later re-reads by digest lives in the owner's
+        // store rather than on the executor's disk.
+        self.route_worker_tool(
+            "orbit.task.artifact.put",
+            serde_json::json!({
+                "id": leaf.claim.task_id,
+                "artifacts": [{
+                    "path": path,
+                    "content": content,
+                    "media_type": "application/json",
+                }],
+            }),
+            Default::default(),
+        )
+        .map(|_| ())
+    }
+
+    fn record_claim_handoff(
+        &self,
+        handoff: &orbit_types::workflow::handoff::TaskHandoff,
+    ) -> Result<(), OrbitError> {
+        let leaf = self.current_claimed_leaf()?;
+        if handoff.task_id != leaf.claim.task_id
+            || handoff.claim_id != leaf.claim.claim_id
+            || handoff.run_id != leaf.binding.bound_run_id
+            || handoff.machine_id != leaf.claim.executed_on.machine_id
+            || handoff.workspace_id != leaf.binding.owner_workspace_id
+        {
+            return Err(OrbitError::PolicyDenied(
+                "handoff identity does not match this claim's trusted binding".into(),
+            ));
+        }
+        // Durable before any owner call: a disconnect here leaves exactly one
+        // immutable settlement for the drain to retry idempotently.
+        self.stores().jobs().mutate_local_pull(
+            &leaf.admission.destination,
+            &leaf.admission.request.request_id,
+            &orbit_store::contracts::LocalPullMutation::Settle(Box::new(
+                orbit_store::contracts::ClaimMutation::AcceptHandoff(handoff.clone()),
+            )),
+        )?;
+        Ok(())
     }
 
     fn apply_task_automation_update(

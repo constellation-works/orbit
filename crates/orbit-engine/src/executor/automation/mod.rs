@@ -72,6 +72,8 @@ pub(crate) fn execute_engine_action<
         EngineDeterministicAction::TaskComplete => task_update::task_complete(host, input),
 
         // ---- generic built-in actions ----
+        EngineDeterministicAction::ClaimHandoff => vcs::claim_handoff(host, input),
+        EngineDeterministicAction::ClaimValidate => vcs::claim_validate(host, input),
         EngineDeterministicAction::CollectCiEvidence => ci::collect_ci_evidence(host, input),
         EngineDeterministicAction::CollectDependabotAlerts => {
             dependabot::collect_dependabot_alerts(host, input)

@@ -8,6 +8,7 @@ use std::time::Duration;
 
 mod already_landed;
 mod ci_sweep;
+mod claimed_leaf;
 mod completion;
 mod local_ship;
 mod review_gate;

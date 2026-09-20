@@ -127,12 +127,12 @@ fn occupancy(
     let mut pipelines = BTreeMap::new();
     let leaves: BTreeSet<_> = active
         .iter()
-        .filter(|(_, job, _)| matches!(job.as_str(), "task_pr_pipeline" | "task_local_pipeline"))
+        .filter(|(_, job, _)| is_leaf_pipeline(job))
         .map(|(id, _, _)| id.clone())
         .collect();
     slots.extend(leaves.iter().cloned());
     for (id, job, state) in &active {
-        if matches!(job.as_str(), "task_pr_pipeline" | "task_local_pipeline") {
+        if is_leaf_pipeline(job) {
             *pipelines.entry(job.clone()).or_insert(0) += 1;
         } else if job == "task_auto_pipeline" {
             let mut frontier = vec![state.clone()];
@@ -185,12 +185,28 @@ fn occupancy(
     }
     Ok((occupied, pipelines))
 }
+/// The leaf definitions a claim may select. They are the handoff-only claimed
+/// variants, never the merge-capable legacy pipelines: a pulled claim settles
+/// through the owner, so a leaf that could merge or complete on its own would
+/// bypass the lifecycle the claim exists to enforce.
 fn pipeline(request: &AdmissionRequest) -> Result<&'static str, OrbitError> {
     match request.ship.mode.as_str() {
-        "pr" => Ok("task_pr_pipeline"),
-        "local" => Ok("task_local_pipeline"),
+        "pr" => Ok(CLAIMED_PR_PIPELINE),
+        "local" => Ok(CLAIMED_LOCAL_PIPELINE),
         _ => Err(invalid("unsupported pulled leaf mode")),
     }
+}
+
+pub(crate) const CLAIMED_PR_PIPELINE: &str = "task_claimed_pr_pipeline";
+pub(crate) const CLAIMED_LOCAL_PIPELINE: &str = "task_claimed_local_pipeline";
+
+/// Every leaf definition that occupies one drain slot: the legacy pair a
+/// non-pulled drain still dispatches, and the claimed pair a pulled one does.
+fn is_leaf_pipeline(job: &str) -> bool {
+    matches!(
+        job,
+        "task_pr_pipeline" | "task_local_pipeline" | CLAIMED_PR_PIPELINE | CLAIMED_LOCAL_PIPELINE
+    )
 }
 
 pub(super) fn allocate(
@@ -308,7 +324,7 @@ pub(super) fn mutate(
                 let now = Utc::now();
                 let run_id = next_run_id_conn(conn, workspace, RunIdRole::Child, now)?;
                 let job = pipeline(&record.request)?;
-                let input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == "task_local_pipeline" {"local"} else {"remote"}, "completion": "review"});
+                let input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}});
                 let run = JobRun { run_id: run_id.clone(), job_id: job.into(), attempt: 1, state: JobRunState::Pending, scheduled_at: now, started_at: None, finished_at: None, duration_ms: None, created_at: now, pid: None, pid_start_time: None, input: Some(input.clone()), retry_source_run_id: None, knowledge_metrics: None, resolved_crew: None, crew_model: None, steps: vec![], executed_on: Some(claim.executed_on.clone()) };
                 let state = PipelineState::new(run_id.clone(), job.into(), input);
                 upsert_job_run_for_workspace_conn(conn, workspace, &run, Some(&state))?;

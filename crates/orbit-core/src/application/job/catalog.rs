@@ -32,7 +32,12 @@ pub(crate) fn v2_job_catalog_loads() -> usize {
 /// Shippable default workflow assets, seeded under
 /// `<orbit_root>/resources/jobs/<name>.yaml` on `orbit init`. The entries
 /// here are the admission-controlled task shipment workflows
-/// (auto / gate / local / pr). Example and smoke fixtures live
+/// (auto / gate / local / pr) plus the two claimed distributed leaves
+/// (`task_claimed_local_pipeline`, `task_claimed_pr_pipeline`). The claimed
+/// pair is seeded because a pulled leaf run has to resolve its definition,
+/// not because it is dispatchable: every step in it reads the trusted worker
+/// binding, and a run with no matching claim refuses before it touches the
+/// repository. Example and smoke fixtures live
 /// under `crates/orbit-core/assets/jobs/examples/` and are NOT seeded —
 /// they exist for `crates/orbit-engine/examples/v2_job_runtime_smoke.rs`
 /// only.
@@ -52,6 +57,14 @@ pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "task_auto_pipeline",
         include_str!("../../../assets/jobs/task_auto_pipeline.yaml"),
+    ),
+    (
+        "task_claimed_local_pipeline",
+        include_str!("../../../assets/jobs/task_claimed_local_pipeline.yaml"),
+    ),
+    (
+        "task_claimed_pr_pipeline",
+        include_str!("../../../assets/jobs/task_claimed_pr_pipeline.yaml"),
     ),
     (
         "task_gate_pipeline",

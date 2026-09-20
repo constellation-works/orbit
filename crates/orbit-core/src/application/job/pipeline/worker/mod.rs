@@ -31,9 +31,23 @@ mod tests;
 impl OrbitRuntime {
     pub fn execute_pipeline_run_worker(&self, run_id: &str) -> Result<(), OrbitError> {
         self.preflight_pipeline_worker_store()?;
-        if self.stores().jobs().local_pull_for_run(run_id)?.is_some() {
+        // [ORB-12616] A claimed leaf is executable, but only by the worker the
+        // owner's claim is bound to. The check is the trusted process worker
+        // binding against the durable admission — never a run input, an
+        // environment value or a caller-supplied label — so a generic worker
+        // that happens to pick up the run is refused exactly as before, and a
+        // worker bound to a different claim is refused too.
+        if let Some(admission) = self.claimed_leaf_admission(run_id)? {
+            self.authorize_claimed_leaf(run_id, admission)?;
+        } else if crate::application::job::claimed::CLAIMED_LEAF_JOBS
+            .contains(&self.show_job_run(run_id)?.job_id.as_str())
+        {
+            // A claimed definition submitted by hand has no claim to execute
+            // for. Refuse here rather than after `worktree_setup` and an
+            // implementation step that can never reach a handoff.
             return Err(OrbitError::JobValidation(
-                "claimed leaves require the internal handoff execution adapter; generic pipeline execution is unavailable".into(),
+                "claimed leaf definitions are selected by the owner's admission, not submitted                  directly; this run has no claim and cannot hand off"
+                    .into(),
             ));
         }
 
@@ -333,6 +347,21 @@ impl OrbitRuntime {
             Arc::new(self.clone()),
         )
     }
+    /// Launch the worker for a claimed leaf run [ORB-12616].
+    ///
+    /// The caller must already hold this claim's trusted binding: the
+    /// supervisor records it against the child's PID and sets
+    /// `ORBIT_WORKER_CONTEXT_REQUIRED`, so the child refuses to run if it
+    /// cannot resolve that binding back out of host authority.
+    pub(crate) fn spawn_claimed_leaf_worker(&self, run_id: &str) -> Result<(), OrbitError> {
+        if self.worker_invocation().is_none() {
+            return Err(OrbitError::PolicyDenied(
+                "a claimed leaf worker must be launched from a bound runtime".into(),
+            ));
+        }
+        self.pipeline_worker_supervisor().spawn(run_id, None)
+    }
+
     pub(super) fn spawn_pipeline_worker(
         &self,
         run_id: &str,

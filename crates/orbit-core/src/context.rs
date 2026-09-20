@@ -380,6 +380,10 @@ pub(crate) struct OrbitRuntimeSettings {
     /// Opt-in for unattended ship dispatch
     /// (`[workflow] auto_ship` in `config.toml`, default `false`).
     workflow_auto_ship: bool,
+    /// Commands this owner requires a distributed execution claim to pass on
+    /// its exact candidate before the delivery handoff is accepted
+    /// (`[workflow] required_validation_commands`, default empty).
+    workflow_required_validation_commands: Vec<String>,
     crews: std::collections::BTreeMap<String, Crew>,
     default_crew: Option<String>,
     complexity_crews: orbit_config::ComplexityCrewPools,
@@ -402,6 +406,7 @@ impl OrbitRuntimeSettings {
         pr_config: PrConfig,
         workflow_base_branch: String,
         workflow_auto_ship: bool,
+        workflow_required_validation_commands: Vec<String>,
         crews: std::collections::BTreeMap<String, Crew>,
         default_crew: Option<String>,
         complexity_crews: orbit_config::ComplexityCrewPools,
@@ -417,6 +422,7 @@ impl OrbitRuntimeSettings {
             pr_config,
             workflow_base_branch,
             workflow_auto_ship,
+            workflow_required_validation_commands,
             crews,
             default_crew,
             complexity_crews,
@@ -444,6 +450,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn workflow_auto_ship(&self) -> bool {
         self.workflow_auto_ship
+    }
+
+    pub(crate) fn workflow_required_validation_commands(&self) -> &[String] {
+        &self.workflow_required_validation_commands
     }
 
     pub(crate) fn crews(&self) -> &std::collections::BTreeMap<String, Crew> {

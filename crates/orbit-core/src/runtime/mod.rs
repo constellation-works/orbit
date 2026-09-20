@@ -569,6 +569,16 @@ impl OrbitRuntime {
         self.context.settings().workflow_base_branch()
     }
 
+    /// Commands this owner requires a distributed execution claim to pass on
+    /// its exact candidate before accepting the delivery handoff
+    /// (`[workflow] required_validation_commands`). Empty is fail-closed: the
+    /// claim journal refuses a handoff whose owner requirements are unset.
+    pub fn workflow_required_validation_commands(&self) -> &[String] {
+        self.context
+            .settings()
+            .workflow_required_validation_commands()
+    }
+
     /// The branch this workspace integrates into: the registered workspace
     /// base branch when a registry binding exists, else `[workflow]
     /// base_branch`. Delivery automation defaults are seeded against it.
