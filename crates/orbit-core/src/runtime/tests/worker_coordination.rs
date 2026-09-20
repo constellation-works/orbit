@@ -489,3 +489,44 @@ fn owner_routing_fences_generic_writes_across_separate_stores() {
         TaskStatus::Backlog
     );
 }
+
+/// A managed child names its requirement in the environment; the binding
+/// itself is host-only. When no binding resolves -- including when a `/proc`
+/// probe is denied and the resolver reports "unbound" -- a required child
+/// still refuses to start, while an ordinary process opens unbound.
+#[test]
+fn a_required_worker_context_fails_closed_when_no_binding_resolves() {
+    use crate::runtime::worker_coordination::restore_process_binding;
+    // The requirement is set on the child's command, never on this process:
+    // a process-wide variable would fail every sibling runtime open closed.
+    if let Some(root) = std::env::var_os("ORBIT_REQUIRED_CONTEXT_ROOT") {
+        let refused = restore_process_binding(std::path::Path::new(&root))
+            .expect_err("a required worker context has no binding to restore");
+        assert!(
+            matches!(refused, OrbitError::PolicyDenied(_)),
+            "{refused:?}"
+        );
+        return;
+    }
+    let root = tempfile::tempdir().expect("global root");
+    let unbound = {
+        let _env = orbit_common::test_env::unset(["ORBIT_WORKER_CONTEXT_REQUIRED"]);
+        restore_process_binding(root.path()).expect("an unbound process opens")
+    };
+    assert!(unbound.is_none());
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    let output = command.args(["--exact", "runtime::tests::worker_coordination::a_required_worker_context_fails_closed_when_no_binding_resolves", "--nocapture"])
+        .env("HOME", root.path()).env("USERPROFILE", root.path())
+        .env("ORBIT_REQUIRED_CONTEXT_ROOT", root.path())
+        .env("ORBIT_WORKER_CONTEXT_REQUIRED", "1")
+        .output().expect("required-context child");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
