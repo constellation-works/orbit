@@ -16,10 +16,10 @@ auto_ship = true
 base_branch = "agent-main"
 default_crew = "sonnet"
 system_crew = "luna"
-hard_complexity_crews = ["opus", "sol"]
-medium_complexity_crews = ["grok"]
 low_complexity_crews = ["luna:80", "gemini-flash:20"]
-xhard_complexity_crews = ["opus"]
+medium_complexity_crews = ["grok", "sol"]
+hard_complexity_crews = ["opus"]
+xhard_complexity_crews = ["astra", "fable"]
 
 [crews.opus]
 backend = "cli"
@@ -43,7 +43,7 @@ effort = "medium"
 backend = "cli"
 model = "gpt-6-astra"
 provider = "codex"
-effort = "medium"
+effort = "hard"
 
 [crews.sol]
 backend = "cli"
