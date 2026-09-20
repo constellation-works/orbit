@@ -66,6 +66,44 @@ fn owner_checkout(remote: bool) -> Owner {
     Owner { _temp: temp, repo }
 }
 
+/// Move the real landing branch on `origin` forward without the owner
+/// checkout ever seeing it: another machine merged, so `origin/<landing
+/// branch>` here still points where this owner's last fetch left it.
+///
+/// Returns the new upstream head, which the owner can neither read nor reach
+/// until something refreshes its view.
+fn advance_origin(owner: &Owner, marker: &str) -> SourceRevision {
+    let root = owner.repo.parent().expect("checkout root");
+    let origin = root.join("origin.git");
+    let other = root.join(format!("other-{marker}"));
+    git(
+        root,
+        &[
+            "clone",
+            "--branch",
+            LANDING_BRANCH,
+            &origin.to_string_lossy(),
+            &other.to_string_lossy(),
+        ],
+    );
+    git(&other, &["config", "user.name", "Orbit Test"]);
+    git(&other, &["config", "user.email", "orbit-test@example.com"]);
+    fs::write(other.join(marker), "landed elsewhere\n").expect("write upstream file");
+    git(&other, &["add", marker]);
+    git(&other, &["commit", "-m", "landed on another machine"]);
+    git(&other, &["push", "origin", LANDING_BRANCH]);
+    let head = revision(&other, LANDING_BRANCH);
+    assert_ne!(
+        git(
+            &owner.repo,
+            &["rev-parse", &format!("origin/{LANDING_BRANCH}")]
+        ),
+        head.commit,
+        "the owner's remote-tracking ref must still be the stale one"
+    );
+    head
+}
+
 fn revision(repo: &Path, reference: &str) -> SourceRevision {
     SourceRevision {
         commit: git(repo, &["rev-parse", &format!("{reference}^{{commit}}")]),
@@ -417,4 +455,122 @@ fn a_candidate_the_owner_cannot_read_stops_instead_of_landing() {
     );
     assert!(merge_calls(&host).is_empty());
     assert_eq!(host.landing_steps(), vec!["stop"]);
+}
+
+#[test]
+fn a_pull_request_lands_against_a_base_the_owner_had_not_fetched_yet() {
+    // The ordinary second landing: the owner merged the previous pull request
+    // on the provider, a follower branched from that merge, and the owner's
+    // `origin/agent-main` has not moved since its last fetch.
+    let owner = owner_checkout(true);
+    let upstream = advance_origin(&owner, "upstream.txt");
+    let mut candidate =
+        accepted_candidate(&owner.repo, HandoffDelivery::PullRequest { number: 42 });
+    candidate.base = upstream.clone();
+    let head = candidate.candidate.commit.clone();
+    let host = landing_host(context(&owner.repo, candidate));
+    host.queue_pr_status([open_state("CLEAN", &head), merged_state(&head)]);
+    host.queue_merge_capabilities(true, true, true, false);
+
+    let output = handoff_land(&host, &input()).expect("a newer base is not a missing one");
+
+    assert_eq!(output["phase"], "landed");
+    assert_eq!(
+        host.landing_steps(),
+        vec!["publish_intent", "resolve_intent:true", "complete"]
+    );
+    assert_eq!(merge_calls(&host).len(), 1);
+    assert_eq!(
+        git(
+            &owner.repo,
+            &["rev-parse", &format!("origin/{LANDING_BRANCH}")]
+        ),
+        upstream.commit,
+        "the landing decision was made against a refreshed remote-tracking ref"
+    );
+}
+
+#[test]
+fn no_diff_delivery_lands_a_covering_commit_the_owner_had_not_fetched_yet() {
+    // The follower's work really is on the landing branch — it landed from
+    // another machine, so this owner has neither the object nor the ref.
+    let owner = owner_checkout(false);
+    let upstream = advance_origin(&owner, "covering.txt");
+    let mut accepted = accepted_candidate(
+        &owner.repo,
+        HandoffDelivery::AlreadyLanded {
+            covering_commit: upstream.commit.clone(),
+            evidence: HandoffArtifactRef {
+                path: "already-landed.json".into(),
+                sha256: "0".repeat(64),
+            },
+        },
+    );
+    accepted.candidate = upstream.clone();
+    accepted.base = upstream.clone();
+    let host = landing_host(context(&owner.repo, accepted));
+
+    let output = handoff_land(&host, &input()).expect("already-landed work is not unlanded");
+
+    assert_eq!(
+        output["evidence"]["verified"],
+        "landing_ref_contains_covering_commit"
+    );
+    assert_eq!(output["evidence"]["landing_ref_refreshed"], true);
+    assert_eq!(output["evidence"]["external_merge"], false);
+    assert_eq!(host.landing_steps(), vec!["complete"]);
+    assert!(host.vcs_calls().is_empty(), "no provider call is made");
+}
+
+#[test]
+fn a_commit_absent_from_the_refreshed_landing_ref_still_stops() {
+    // The refresh answers freshness, not reachability: a base or covering
+    // commit that is genuinely not on the landing branch upstream must still
+    // refuse, and the evidence must say the view was current.
+    let owner = owner_checkout(true);
+    advance_origin(&owner, "upstream.txt");
+    let mut candidate =
+        accepted_candidate(&owner.repo, HandoffDelivery::PullRequest { number: 42 });
+    let head = candidate.candidate.commit.clone();
+    // The candidate branch is not on the landing branch anywhere.
+    candidate.base = revision(&owner.repo, SOURCE_BRANCH);
+    let host = landing_host(context(&owner.repo, candidate));
+    host.queue_pr_status([open_state("CLEAN", &head)]);
+    host.queue_merge_capabilities(true, true, true, false);
+
+    let error = handoff_land(&host, &input()).expect_err("an unreachable base stops");
+
+    let evidence = stop_evidence(&host);
+    assert!(
+        evidence.contains("is no longer reachable from landing ref")
+            && evidence.contains("refreshed from 'origin'"),
+        "{evidence}"
+    );
+    assert!(error.to_string().contains("no longer reachable"), "{error}");
+    assert!(merge_calls(&host).is_empty());
+    assert_eq!(host.landing_steps(), vec!["stop"]);
+
+    let no_diff = owner_checkout(false);
+    let mut accepted = accepted_candidate(
+        &no_diff.repo,
+        HandoffDelivery::AlreadyLanded {
+            covering_commit: revision(&no_diff.repo, SOURCE_BRANCH).commit,
+            evidence: HandoffArtifactRef {
+                path: "already-landed.json".into(),
+                sha256: "0".repeat(64),
+            },
+        },
+    );
+    accepted.candidate = accepted.base.clone();
+    let no_diff_host = landing_host(context(&no_diff.repo, accepted));
+
+    let error = handoff_land(&no_diff_host, &input()).expect_err("an uncovered no-diff delivery");
+
+    let evidence = stop_evidence(&no_diff_host);
+    assert!(
+        evidence.contains("not already landed") && evidence.contains("refreshed from 'origin'"),
+        "{evidence}"
+    );
+    assert!(error.to_string().contains("not already landed"), "{error}");
+    assert_eq!(no_diff_host.landing_steps(), vec!["stop"]);
 }

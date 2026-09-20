@@ -389,16 +389,20 @@ Its `handoff_land` step observes rather than assumes. The pinned `pr_complete` d
 reused directly — the same branch, base and head-commit pins, the same merged-with-merge-commit
 evidence and the same provider-state classification — with no follower run or path involved: the
 owner checks the head on every poll, resolves candidate and base objects in its own checkout, and
-verifies that the validated base is still reachable from the landing ref. The merge intent is
-durable before the external call; a lost reply or a crash leaves recorded uncertainty that the next
-attempt resolves against the provider's actual state or the local target ref before anything is
-retried, and the store refuses revocation, recovery and reassignment until it does. Changed
-identity, a conflict, an unsatisfied protection or an exhausted check budget records a durable stop
-and leaves the task in review. Owner-local candidates fast-forward the local landing branch and are
-verified from the ref; no-diff delivery verifies its covering commit on the landing ref and makes no
-external call. Every completion re-runs the authorization, candidate and validation-artifact checks
-inside the transaction that moves `review -> done`, and the observation the activity supplies must
-equal the accepted candidate exactly.
+verifies that the validated base is still reachable from the landing ref. That ref is the owner's
+remote-tracking `origin/<landing branch>`, which only moves when this checkout fetches it, so the
+attempt refreshes it from `origin` once before judging anything against it: a base or covering
+commit that landed from another machine since the owner's last fetch is a freshness gap rather than
+a missing commit, while one that is genuinely absent upstream still stops with durable evidence
+naming the refreshed view. The merge intent is durable before the external call; a lost reply or a
+crash leaves recorded uncertainty that the next attempt resolves against the provider's actual state
+or the local target ref before anything is retried, and the store refuses revocation, recovery and
+reassignment until it does. Changed identity, a conflict, an unsatisfied protection or an exhausted
+check budget records a durable stop and leaves the task in review. Owner-local candidates
+fast-forward the local landing branch and are verified from the ref; no-diff delivery verifies its
+covering commit on the landing ref and makes no external call. Every completion re-runs the
+authorization, candidate and validation-artifact checks inside the transaction that moves `review ->
+done`, and the observation the activity supplies must equal the accepted candidate exactly.
 
 ## 4. Follower preconditions
 
