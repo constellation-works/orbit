@@ -33,7 +33,7 @@ use sha2::{Digest, Sha256};
 use crate::context::{ClaimExecutionContext, RuntimeHost};
 use crate::executor::automation::input::input_string_field;
 
-use super::git::git_output;
+use super::git::{BaseSyncMode, git_output, resolve_worktree_start_point};
 use super::review_gate::revision;
 
 /// Ceiling for one required validation command. Long enough for a real
@@ -129,6 +129,10 @@ pub(super) fn slug(remote_url: &str) -> Option<String> {
 ///
 /// `source` names the branch to read, or `None` for whatever is checked out.
 /// `fallback_repository` is used when the checkout has no remote to name.
+/// `base_sync` is the run's sync mode (`local` or `remote`): the base is
+/// resolved through [`resolve_worktree_start_point`], the same mapping every
+/// other step of the claimed pipeline uses, so a remote-sync claim observes
+/// `origin/<base>` rather than a lagging local `refs/heads/<base>`.
 pub fn observe_candidate(
     workspace_path: &Path,
     source: Option<&str>,
@@ -136,6 +140,7 @@ pub fn observe_candidate(
     landing_branch: &str,
     delivery: HandoffDelivery,
     fallback_repository: &str,
+    base_sync: &str,
 ) -> Result<HandoffCandidate, OrbitError> {
     let source_branch = match source {
         Some(branch) => branch.to_string(),
@@ -150,7 +155,17 @@ pub fn observe_candidate(
         ));
     }
     let candidate = revision(workspace_path, &source_branch)?;
-    let base = revision(workspace_path, base_branch)?;
+    let sync_mode = match base_sync.trim() {
+        "local" => BaseSyncMode::Local,
+        "remote" => BaseSyncMode::Remote,
+        other => {
+            return Err(OrbitError::InvalidInput(format!(
+                "base_sync must be 'local' or 'remote', got '{other}'"
+            )));
+        }
+    };
+    let base_ref = resolve_worktree_start_point(workspace_path, base_branch, sync_mode)?;
+    let base = revision(workspace_path, &base_ref)?;
     if base.commit == candidate.commit {
         return Err(refused(
             "the candidate is the base itself; a claimed leaf hands off delivered work, and \
@@ -205,6 +220,7 @@ fn observe(
         &context.landing_branch,
         delivery(context, input)?,
         &context.workspace_id,
+        &claimed_base_sync(context, input)?,
     )?;
     if let Some(declared) = input_string_field(input, "base_sha")
         && declared != candidate.base.commit
@@ -215,6 +231,26 @@ fn observe(
         )));
     }
     Ok(candidate)
+}
+
+/// The run's sync mode, which every other claimed-leaf step already honors.
+///
+/// An explicit `base_sync` on the activity input wins. When it is absent, ship
+/// mode is the durable proxy the admission transaction used to pin the run
+/// (`local` → local ref, `pr` → `origin/<base>`). That fallback is required:
+/// `base_sync_mode_from_input` treats a missing field as remote, which would
+/// send the owner-local route looking for an origin it does not have.
+fn claimed_base_sync(context: &ClaimExecutionContext, input: &Value) -> Result<String, OrbitError> {
+    if let Some(value) = input_string_field(input, "base_sync") {
+        return Ok(value);
+    }
+    match context.ship_mode.as_str() {
+        "local" => Ok("local".to_string()),
+        "pr" => Ok("remote".to_string()),
+        other => Err(refused(format!(
+            "claimed leaf ship mode '{other}' has no base sync mode"
+        ))),
+    }
 }
 
 /// Run the owner's required commands on the exact candidate and attach one
