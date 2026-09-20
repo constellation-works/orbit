@@ -1,7 +1,7 @@
 schemaVersion: 1
 name: delivery-qa
 description: Exercise a frozen delivery batch using typed artifact evidence
-enabled: true
+enabled: false
 schedule:
   deliveries_landed:
     owner_machine: hm_ba054a1a8fbfb914
@@ -23,13 +23,13 @@ template:
     observation); set examination_complete only after all obligations are examined.
     Task status, summary prose and successful process exit do not certify coverage.
   acceptance_criteria:
-    - Every captured obligation is examined at the exact supplied revisions.
-    - Concrete checks and findings are attached as valid automation-coverage.json evidence.
-    - Missing or skipped examination remains explicitly incomplete.
+  - Every captured obligation is examined at the exact supplied revisions.
+  - Concrete checks and findings are attached as valid automation-coverage.json evidence.
+  - Missing or skipped examination remains explicitly incomplete.
   task_type: chore
   tags:
-    - delivery-qa
-    - no-diff-expected
+  - delivery-qa
+  - no-diff-expected
   priority: medium
   complexity: hard
   crew: grok
@@ -37,5 +37,5 @@ template:
 dedupe: skip_if_open
 created_by: system
 created_at: 2026-09-06T00:00:00Z
-updated_by: unknown
-updated_at: 2026-09-07T19:49:49.385208459+00:00
+updated_by: human:daniel
+updated_at: 2026-09-20T02:18:34.227513758+00:00
