@@ -1009,13 +1009,22 @@ work into the reserved pool. `workflow.pilot_max_complexity` is that ceiling:
 pilot_max_complexity = "hard"   # default; "low", "medium" and "xhard" also valid
 ```
 
-A pilot assessment whose `recommended_complexity` is above the cap is **not
+The ceiling a pilot assessment may assign is the higher of the cap and the
+complexity the task already carries. An assessment above that ceiling is **not
 applied** — neither its complexity nor its `context_files` — and the apply
 result carries a `complexity_escalation_blocked` finding naming the
-recommendation and the cap. The task is routed to the pilot's repair partition,
-where the same detail is the error it reassesses against. Raising the key to
-`xhard` lets the pilot assign the top tier itself. `unassessed` is not a
-ceiling and is rejected for this key.
+recommendation, the cap, the task's current complexity, and the ceiling. The
+task is routed to the pilot's repair partition, where the same detail is the
+error it reassesses against. Raising the key to `xhard` lets the pilot assign
+the top tier itself. `unassessed` is not a ceiling and is rejected for this
+key.
+
+A task an operator already placed above the cap — the usual case for an
+operator-authored `xhard` task, which has no `context_files` yet and so is a
+routine automatic-lane candidate — is scoped rather than refused: the pilot
+applies its `context_files`, and the task keeps the complexity it carries.
+Neither a re-statement of that tier nor a lower recommendation rewrites it, so
+the cap reserves the tier for operator decisions in both directions.
 
 ### Setting `task.crew`
 
