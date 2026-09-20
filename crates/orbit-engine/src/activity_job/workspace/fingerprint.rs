@@ -233,16 +233,10 @@ pub(crate) fn untracked_file_identity(
     root: &Path,
     path: &str,
 ) -> Result<Option<String>, DispatchError> {
-    let args = ["hash-object", "--no-filters", "--", path];
-    let output = git_output_raw(root, &args)?;
-    if output.status.success() {
-        let identity = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(Some(format!("git-blob:{identity}")));
-    }
-
-    match fs::symlink_metadata(root.join(path)) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        _ => Err(git_command_error(root, &args, &output)),
+    match untracked_path_kind(root, path)? {
+        UntrackedPathKind::Missing => Ok(None),
+        UntrackedPathKind::Symlink => untracked_symlink_identity(root, path),
+        UntrackedPathKind::File => untracked_regular_file_identity(root, path),
     }
 }
 
@@ -580,19 +574,101 @@ fn unescape_git_escape(bytes: &[u8]) -> Option<(char, &[u8])> {
     }
 }
 
+enum UntrackedPathKind {
+    Missing,
+    Symlink,
+    File,
+}
+
+fn untracked_path_kind(root: &Path, path: &str) -> Result<UntrackedPathKind, DispatchError> {
+    match fs::symlink_metadata(root.join(path)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(UntrackedPathKind::Missing)
+        }
+        Err(error) => Err(DispatchError::CliInvocationPermanent(format!(
+            "snapshot Git state in '{}': inspect untracked path '{}': {error}",
+            root.display(),
+            path
+        ))),
+        Ok(metadata) if metadata.file_type().is_symlink() => Ok(UntrackedPathKind::Symlink),
+        Ok(_) => Ok(UntrackedPathKind::File),
+    }
+}
+
+fn untracked_regular_file_identity(
+    root: &Path,
+    path: &str,
+) -> Result<Option<String>, DispatchError> {
+    let args = ["hash-object", "--no-filters", "--", path];
+    let output = git_output_raw(root, &args)?;
+    if output.status.success() {
+        return Ok(Some(git_blob_label(&output.stdout)));
+    }
+
+    match fs::symlink_metadata(root.join(path)) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        _ => Err(git_command_error(root, &args, &output)),
+    }
+}
+
+fn untracked_symlink_identity(root: &Path, path: &str) -> Result<Option<String>, DispatchError> {
+    let target = match fs::read_link(root.join(path)) {
+        Ok(target) => target,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(DispatchError::CliInvocationPermanent(format!(
+                "snapshot Git state in '{}': read untracked symlink '{}': {error}",
+                root.display(),
+                path
+            )));
+        }
+    };
+    git_blob_identity(root, &os_path_bytes(&target)).map(Some)
+}
+
+fn git_blob_identity(root: &Path, bytes: &[u8]) -> Result<String, DispatchError> {
+    let args = ["hash-object", "--stdin"];
+    let output = git_output_with_stdin(root, &args, bytes)?;
+    if output.status.success() {
+        return Ok(git_blob_label(&output.stdout));
+    }
+    Err(git_command_error(root, &args, &output))
+}
+
+fn git_blob_label(stdout: &[u8]) -> String {
+    format!("git-blob:{}", String::from_utf8_lossy(stdout).trim())
+}
+
+fn os_path_bytes(path: &Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        path.as_os_str().as_bytes().to_vec()
+    }
+    #[cfg(not(unix))]
+    {
+        path.to_string_lossy().as_bytes().to_vec()
+    }
+}
+
 fn untracked_content_identities(
     root: &Path,
     paths: &[String],
 ) -> Result<BTreeMap<String, String>, DispatchError> {
     let mut identities = BTreeMap::new();
     let mut batch_paths = Vec::new();
+    let mut record_per_path = |path: &String| -> Result<(), DispatchError> {
+        if let Some(identity) = untracked_file_identity(root, path)? {
+            identities.insert(path.clone(), identity);
+        }
+        Ok(())
+    };
     for path in paths {
-        if path.contains('\n') {
-            if let Some(identity) = untracked_file_identity(root, path)? {
-                identities.insert(path.clone(), identity);
-            }
-        } else {
-            batch_paths.push(path.clone());
+        match untracked_path_kind(root, path)? {
+            UntrackedPathKind::Missing => {}
+            UntrackedPathKind::Symlink => record_per_path(path)?,
+            UntrackedPathKind::File if path.contains('\n') => record_per_path(path)?,
+            UntrackedPathKind::File => batch_paths.push(path.clone()),
         }
     }
 
