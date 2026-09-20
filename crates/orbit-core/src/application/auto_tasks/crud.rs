@@ -1,6 +1,6 @@
 //! Auto-task CRUD [ORB-10149]: the shared domain surface behind both the CLI
 //! (`orbit auto-task …`) and the MCP tools (`orbit.auto_task.*`). Definitions
-//! are git-versioned YAML under `<local_orbit_dir>/auto_tasks/<name>.yaml`;
+//! are YAML under `<local_orbit_dir>/auto_tasks/<name>.yaml`;
 //! these methods are the single choke point that reads/writes them, so both
 //! entry points stay consistent. In a linked worktree, `local_orbit_dir`
 //! belongs to that checkout rather than the registered primary checkout.

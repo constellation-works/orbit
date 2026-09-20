@@ -30,6 +30,7 @@ Every check degrades to a row rather than aborting unless the store itself canno
 | `task-reservations` | active reservations whose owner run or terminal task association proves the reservation stale |
 | `task-relations` | unresolved relation/dependency targets that would block a task-index rebuild |
 | `orphan-task-stores` | task-store partitions (`~/.orbit/tasks/workspaces/<ws_id>/`) that no workspace binding on this host claims |
+| `tracked-orbit-files` | git still tracks files under `.orbit/`; `.orbit/` is per-user state. Remedy: `git rm -r --cached .orbit` |
 | `empty-task-stubs` | empty `ORB-*` directories under those partitions, or ones that hold only `.task.yaml.lock` (aborted creates). Data-bearing dirs missing `task.yaml` are not stubs; `orbit task reindex` still clears this row |
 | `unresolved-task-bundles` | `ORB-*` directories missing `task.yaml` that still hold bundle content (`events.jsonl`, `artifacts/`, …). Retained task data: restore `task.yaml` or move the directory aside; `orbit task reindex` will not delete them |
 | `artifacts-*` | skills, jobs, activities, auto-tasks, and routines on disk: stale, deprecated, residual, catalog-invalid, or a previously reconciled shipped default that is missing |

@@ -1,13 +1,13 @@
 ---
 title: Routines — Overview
 owner: claude
-last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_updated: 2026-09-20
+last_validated: 2026-09-20
 status: Accepted
 feature: routines
 doc_role: overview
 type: design
-summary: Durable, git-versioned scheduler primitive that fires catalog jobs/activities on cron triggers, per host, with local state.
+summary: Durable per-user scheduler primitive that fires catalog jobs/activities on cron triggers, per host, with local state.
 tags: [routines, scheduler]
 paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/sqlite/routine_store/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry]
@@ -16,14 +16,15 @@ related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-1
 
 # Routines — Overview
 
-Routines make Orbit the constellation's single scheduler. A **routine** is a durable,
-git-versioned definition of recurring work — a cron trigger, a job target from the existing
-catalog, and a retry/overlap policy. A stateless **`orbit clock tick`** pass, also available
+Routines make Orbit the constellation's single scheduler. A **routine** is a durable
+YAML definition of recurring work — a cron trigger, a job target from the existing
+catalog, and a retry/overlap policy — living under `.orbit/routines/` as per-user
+checkout state. A stateless **`orbit clock tick`** pass, also available
 through the compatibility alias `orbit sweep`, is invoked on the configured OS schedule (one
 minute by default, via launchd on macOS or a systemd timer on Linux). It fires due routines
 through the existing v2 run machinery and evaluates due auto-task definitions in-process.
-Definitions
-are shared across hosts via git; all scheduler state (last fires, pauses, locks, run history)
+Definitions do not travel by git; `orbit workspace init` / `sync` seed shipped defaults
+from the binary. All scheduler state (last fires, pauses, locks, run history)
 is host-local and never synced, so each owner checkout is an independent schedule. [2_design.md](./2_design.md) is the v1 contract;
 [3_vision.md](./3_vision.md) holds what is deliberately out of scope for v1.
 

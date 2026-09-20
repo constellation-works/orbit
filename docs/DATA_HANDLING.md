@@ -18,7 +18,9 @@ the compliance boundary actually sits.
 ## The one-paragraph answer
 
 Orbit does not process your data on your behalf. All Orbit state lives under
-`~/.orbit/` and `<repo>/.orbit/` on the host that runs it. The only network
+`~/.orbit/` and `<repo>/.orbit/` on the host that runs it. `<repo>/.orbit/` is
+per-user checkout state (gitignored in full); it is not a repository artifact.
+The only network
 traffic Orbit initiates itself is to fetch its own releases from GitHub when you
 run `orbit update` or `orbit semantic install`. Everything else that leaves
 the machine — model traffic from agent CLIs, `git push`, pull requests, SSH —
@@ -43,7 +45,8 @@ data-handling review:
 | Semantic index (docs and tasks) | `<repo>/.orbit/state/semantic.db` | Local vector index; regenerable. Embeddings are computed on the host by the search companion. |
 | Worktrees | `<repo>/.orbit/state/worktrees/` | Scratch; regenerable. |
 | Host identity (`machine_id`, `host_id`, task prefix) | `~/.orbit/host.toml` | A locally generated stable identifier. It is never transmitted to the Orbit project. |
-| Workspace registry, runtime config, resource overrides | `~/.orbit/config.toml`, `workspaces.json`, `resources/` | Configuration only. |
+| Workspace registry, runtime config, resource overrides | `~/.orbit/config.toml`, `workspaces.json`, `resources/` | Host-global configuration only. |
+| Workspace config, routines, auto-tasks, resources | `<repo>/.orbit/config.toml`, `routines/`, `auto_tasks/`, `resources/` | Per-user checkout settings. Seeded by `orbit workspace init`; not committed. |
 
 Nothing in this table is synchronised anywhere by default. If you want task
 history to leave the machine, you opt in explicitly through

@@ -316,8 +316,8 @@ fn ensure_routine_schema(conn: &Connection) -> Result<(), OrbitError> {
         r#"
             -- Host-local routine scheduler state [ORB-10021]. Lives only in
             -- the host-global store database and is never synced between
-            -- hosts (ADR-0208); routine *definitions* are git-versioned YAML
-            -- in routine-source workspaces.
+            -- hosts. Routine definitions are per-user YAML under
+            -- `.orbit/routines/`.
 
             -- Per-routine cursor: first observation baseline + last slot
             -- consumed. A routine never fires for slots before its baseline.

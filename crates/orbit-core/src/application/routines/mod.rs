@@ -1,13 +1,13 @@
 //! Routines [ORB-10021]: Orbit as the constellation's single scheduler.
 //!
-//! A routine is a durable, git-versioned YAML definition of recurring work —
-//! a cron trigger, a catalog target, and a retry/overlap policy — living
-//! under `.orbit/routines/` in a registered owner checkout. The stateless
+//! A routine is a durable YAML definition of recurring work — a cron trigger,
+//! a catalog target, and a retry/overlap policy — living under
+//! `.orbit/routines/` in a registered owner checkout. That directory is
+//! per-user state, not a repository artifact. The stateless
 //! [`run_sweep_with_providers`] pass, invoked every minute by the OS clock
 //! (see [`clock`]), fires whatever is due on this host through the existing
-//! v2 run machinery. Definitions are shared across hosts via git; all
-//! scheduler state is host-local and never synced, so every owner checkout
-//! is an independent schedule (design in `docs/design/routines/`).
+//! v2 run machinery. Every owner checkout is an independent schedule
+//! (design in `docs/design/routines/`).
 
 use std::path::Path;
 use std::sync::Arc;

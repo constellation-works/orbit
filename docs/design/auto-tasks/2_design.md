@@ -117,7 +117,7 @@ absolute and need no cursor.
 `<orbit_dir>/state/auto-tasks.json` (`{ baseline_at, last_slot, last_fired_at,
 last_task_id, pending?, last_skip? }`). This is workspace-local, gitignored
 runtime state (the scoreboard precedent, L-0041), so a scheduler fire never rewrites the
-git-versioned definition and a definition edit never races the scheduler.
+definition YAML and a definition edit never races the scheduler.
 
 Admission and persistence share one stable sidecar lock,
 `.auto-tasks.json.lock`. The JSON file is replaced by rename, so exclusion is

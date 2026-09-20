@@ -116,8 +116,7 @@ Notes that matter in practice:
 
 - **There is no host field.** Every machine with a registered owner checkout and
   an enabled clock evaluates the definition against its own store. To keep a
-  routine on one machine, put it under `.orbit/routines/local/` there, or pause
-  it on the others.
+  routine off a machine, pause it there.
 - **`missed_run`** decides what happens to slots that fell in a gap while the
   host was asleep. `skip` (the default) waits for the next natural slot;
   `catch_up_once` fires a single make-up run no matter how many slots were

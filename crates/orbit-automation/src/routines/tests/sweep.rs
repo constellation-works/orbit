@@ -49,7 +49,7 @@ fn loaded(definition: RoutineDefinition) -> LoadedRoutine {
     let name = definition.name.clone();
     LoadedRoutine {
         definition,
-        origin: RoutineOrigin::Committed,
+        origin: RoutineOrigin::Workspace,
         source_workspace: "polaris".to_string(),
         source_orbit_dir: PathBuf::from(SOURCE_DIR),
         path: PathBuf::from(format!("{SOURCE_DIR}/routines/{name}.yaml")),

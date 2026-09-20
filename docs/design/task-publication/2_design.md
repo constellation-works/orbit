@@ -72,7 +72,7 @@ authority_machine_id: hm_example
 ```
 
 The binding lives with machine-local workspace-registry state, not in a task
-bundle or source-controlled `.orbit/config.toml`. It must not contain embedded
+bundle or workspace `.orbit/config.toml`. It must not contain embedded
 credentials, claim tokens, checkout paths, SSH command lines, or
 credential-bearing URLs. Authentication uses the operator's existing Git/SSH credential
 configuration.

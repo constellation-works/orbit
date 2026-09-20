@@ -176,6 +176,7 @@ impl DoctorCommands for OrbitRuntime {
             doctor_check_task_relations(self),
             doctor_check_stalled_automation(self),
             doctor_check_orphan_task_stores(self),
+            doctor_check_tracked_orbit_files(self),
         ];
         results.extend(doctor_check_unpublished_bundle_dirs(self));
         results.extend(doctor_check_definition_artifacts(self));
@@ -230,6 +231,68 @@ impl DoctorCommands for OrbitRuntime {
     fn health_check_store_writable(&self) -> Result<String, OrbitError> {
         self.check_sqlite_store_writable()?;
         Ok("store database accepts writes".to_string())
+    }
+}
+
+/// Warn when git still tracks files under `.orbit/`. Sync rewrites the
+/// managed ignore block but never runs git; the operator untracks once.
+fn doctor_check_tracked_orbit_files(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    let repo_root = &runtime.paths().repo_root;
+    if !repo_root.join(".git").exists() {
+        return check(
+            "tracked-orbit-files",
+            WorkspaceDoctorStatus::Skipped,
+            "not a git checkout".to_string(),
+        );
+    }
+
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "--", ".orbit"])
+        .current_dir(repo_root)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let tracked = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter(|line| !line.is_empty())
+                .count();
+            if tracked == 0 {
+                check(
+                    "tracked-orbit-files",
+                    WorkspaceDoctorStatus::Ok,
+                    "no tracked files under .orbit/".to_string(),
+                )
+            } else {
+                actionable_check(
+                    "tracked-orbit-files",
+                    WorkspaceDoctorStatus::Warning,
+                    format!(
+                        "{tracked} tracked file(s) under .orbit/; .orbit/ is per-user state and should not be in git"
+                    ),
+                    "git rm -r --cached .orbit".to_string(),
+                )
+            }
+        }
+        Ok(output) => {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            let detail = detail.trim();
+            check(
+                "tracked-orbit-files",
+                WorkspaceDoctorStatus::Skipped,
+                if detail.is_empty() {
+                    "git ls-files failed".to_string()
+                } else {
+                    format!("git ls-files failed: {detail}")
+                },
+            )
+        }
+        Err(_) => check(
+            "tracked-orbit-files",
+            WorkspaceDoctorStatus::Skipped,
+            "git is not available".to_string(),
+        ),
     }
 }
 

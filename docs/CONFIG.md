@@ -21,10 +21,10 @@ Two paths are consulted, in order:
 
 | Path | Scope | Created by |
 |---|---|---|
-| `<workspace>/.orbit/config.toml` | Workspace-local | Hand-authored (optional) |
+| `<workspace>/.orbit/config.toml` | Workspace-local (per-user, gitignored) | Hand-authored or seeded by `orbit workspace init` |
 | `~/.orbit/config.toml` | Global / user | `orbit init` |
 
-Ordinary settings inherit per key: workspace values override global values, global values fill omissions, and built-in defaults fill remaining gaps.
+Workspace `config.toml` is this checkout owner's settings — crews, sandbox, base-branch fallback — and is not a repository artifact. Ordinary settings inherit per key: workspace values override global values, global values fill omissions, and built-in defaults fill remaining gaps.
 
 Tables layer down to individual settings, while scalar and array values replace the matching global value. Named crews layer by crew name and field, so this is a complete workspace override when the global file already defines `sol`:
 

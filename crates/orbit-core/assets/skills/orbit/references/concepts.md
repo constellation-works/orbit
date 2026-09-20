@@ -34,10 +34,11 @@ checkout rather than registering separately.
 workspace registry, host identity, installed resources, logs. Never in version
 control.
 
-**Workspace `.orbit/`** — split by durability. `config.toml`, `routines/`,
-`auto_tasks/`, and `resources/` are definitions and belong in git. Everything
-under `.orbit/state/` is runtime evidence — job-run bundles, audit events,
-diagnostics — and does not.
+**Workspace `.orbit/`** — per-user checkout state, gitignored in full.
+`config.toml`, `routines/`, `auto_tasks/`, and `resources/` are this owner's
+settings; `orbit workspace init` / `sync` seed shipped defaults from the
+binary. Everything under `.orbit/state/` is runtime evidence — job-run
+bundles, audit events, diagnostics.
 
 ## Work
 
@@ -93,9 +94,10 @@ writes, so profiles are declared explicitly.
 
 ## Scheduling
 
-**Routine** — a git-versioned cron trigger (`.orbit/routines/*.yaml`) pointing at
-a `job:<name>` target, with a retry and overlap policy. Definitions sync through
-git and are evaluated by every host holding an owner checkout.
+**Routine** — a cron trigger (`.orbit/routines/*.yaml`) pointing at a
+`job:<name>` target, with a retry and overlap policy. Definitions are
+per-user checkout state and are evaluated by every host holding an owner
+checkout of that workspace.
 
 **Sweep** — the stateless tick. `orbit sweep` fires whatever routine is due on
 this host, and an OS clock unit invokes it every minute.
@@ -109,8 +111,8 @@ The distinction that matters: a **routine** runs a pipeline on a schedule; an
 
 ## The rule that surprises people
 
-Routine and auto-task *definitions* are versioned files and sync across
-machines. All scheduler *state* — last fire times, pauses, locks, run history —
-lives in the host's own store and never syncs. Two machines sharing a repo run
-the same definitions against completely independent state. See
+Routine and auto-task *definitions* are per-user files under `.orbit/`. All
+scheduler *state* — last fire times, pauses, locks, run history — lives in
+the host's own store and never syncs. Two machines sharing a repo each own
+their own definitions and independent state. See
 [multi-host.md](../../orbit-setup/references/multi-host.md).

@@ -383,3 +383,23 @@ Remove the native project-learning subsystem and every executable or advertised 
 - The narrower product surface reduces schema, conformance, security, and cross-layer maintenance cost.
 - Cost: automatic delivery of scoped project rules is gone. Teams that need durable guidance must use ordinary reviewed documentation or existing repository instructions, without a native replacement resource or content migration.
 - Rejected alternative: retaining a read-only compatibility layer. It would continue advertising a resource whose lifecycle and delivery semantics no longer exist.
+
+## Ignore leftover `.orbit/learnings/` with the rest of `.orbit/`
+
+**Recorded:** 2026-09-20 · [ORB-12718]
+**Supersedes:** the git-check-in half of [Workspace-scoped, checked into git (not workspace-private state)](#workspace-scoped-checked-into-git-not-workspace-private-state), already retired with the subsystem.
+
+### Context
+
+ADR-003 stored learnings under `.orbit/learnings/` so they travelled with the repo. [Remove the native project-learning subsystem](#remove-the-native-project-learning-subsystem) left those files as inert historical data. The orbit repo's `.gitignore` still re-included `!.orbit/learnings/` even though the managed init block never did. [Per-user ownership of `.orbit/` (no git re-includes)](../routines/4_decisions.md#per-user-ownership-of-orbit-no-git-re-includes) asked whether learnings should be the one remaining exception.
+
+No runtime consumer reads `.orbit/learnings/`. Shared knowledge already has the docs corpus and task publication.
+
+### Decision
+
+Ignore `.orbit/learnings/` with the rest of `.orbit/`. No `!.orbit/learnings/` exception in the managed block or in this repository's `.gitignore`. Archaeology is git history.
+
+### Consequences
+
+- The managed block and this repo's `.gitignore` agree: a single `.orbit/` line.
+- Cost: clones no longer carry the inert YAML tree. Anyone who still wants those records reads them from history.

@@ -1,6 +1,6 @@
-//! Routine definition schema (v1) — the durable, git-versioned unit of
-//! scheduled work. One YAML file under `.orbit/routines/` describes a cron
-//! trigger, a catalog target, and a retry/overlap policy. See
+//! Routine definition schema (v1) — the durable unit of scheduled work. One
+//! YAML file under `.orbit/routines/` (per-user checkout state) describes a
+//! cron trigger, a catalog target, and a retry/overlap policy. See
 //! `docs/design/routines/2_design.md` [ORB-10021].
 //!
 //! Parsing is fail-closed: an invalid file is an error, never a routine that

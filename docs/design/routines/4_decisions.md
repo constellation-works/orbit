@@ -1,8 +1,8 @@
 ---
 title: Routines — Decisions
 owner: claude
-last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_updated: 2026-09-20
+last_validated: 2026-09-20
 status: Accepted
 feature: routines
 doc_role: decisions
@@ -11,12 +11,40 @@ summary: Decision log for the routines scheduler — OS clock, one host tick for
 tags: [routines, scheduler]
 paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry, task-migration]
-related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10739, ORB-10986, ORB-11082, ORB-12236, ORB-12237]
+related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10739, ORB-10986, ORB-11082, ORB-12236, ORB-12237, ORB-12718]
 ---
 
 # Routines — Decisions
 
 [ORB-10001] recorded five candidate scheduler decisions; [ORB-10021] implemented them for v1. Their titles and recorded task provenance below now carry that history directly.
+
+---
+
+## Per-user ownership of `.orbit/` (no git re-includes)
+
+**Recorded:** 2026-09-20 · [ORB-12718]
+**Code anchors:** `crates/orbit-cli/src/command/workspace/support.rs::ORBIT_GITIGNORE_BLOCK`
+**Supersedes:** [Routine definitions are git-shared; scheduler state is host-local and never synced](#routine-definitions-are-git-shared-scheduler-state-is-host-local-and-never-synced), and the git-versioned half of auto-tasks [ORB-10149] ([Auto-task primitive: file-backed recurring task templates + one generic scheduler routine](../auto-tasks/4_decisions.md#auto-task-primitive-file-backed-recurring-task-templates--one-generic-scheduler-routine)).
+
+### Context
+
+Orbit's model is per-user: each person (or each machine of one person) owns their checkout, task prefix, clock, crews, and delivery policy. Every *effect* of a routine or auto-task is already host-local (task store, cursors, fires, pauses, worktrees). Versioning the *definitions* in git was the last inconsistency: one owner's crews, sandbox mode, base branch, and which sweeps fire were landing on every other clone. `orbit workspace init` already seeds those files from the binary; git was carrying a copy of what the binary ships, plus a digest that churned on every release.
+
+`.orbit/learnings/` was the one remaining candidate exception (ADR-003, repo-travelling knowledge). The native learning subsystem is retired; leftover files are inert historical data with no runtime consumer. Shared knowledge already has task publication and the docs corpus.
+
+### Decision
+
+The whole of `.orbit/` is per-user checkout state and is gitignored with no `!` re-includes. The managed block is a comment plus `.orbit/`. `orbit workspace init` and `orbit workspace sync` rewrite older blocks (including `!.orbit/auto_tasks/` and friends) so retired negations do not survive. `orbit doctor` reports leftover tracked files and names `git rm -r --cached .orbit`; sync never runs git.
+
+Seeded defaults still come from the binary via `init`/`sync`. Task publication remains the mechanism for sharing task records. `.orbit/routines/local/` is no longer a git-uncommitted origin; files there still load as a plain subdirectory for one release.
+
+`.orbit/learnings/` is ignored with the rest of `.orbit/`. Archaeology is git history; current shared knowledge is docs and task publication.
+
+### Consequences
+
+- One owner's config and schedules cannot be pushed onto another clone.
+- A fresh clone gets the same shipped defaults from `orbit workspace init`, not from git.
+- Cost: operators who previously reviewed definition edits in PRs now review them only on the checkout that owns them. Sharing a chore across owners is an explicit copy, a docs change, or a published task — not a git pull of `.orbit/`.
 
 ---
 
@@ -102,6 +130,7 @@ Each routine carries a `hosts:` list matched against the host-local `host_id`; t
 
 **Recorded:** 2026-07-04 21:14:40.331256Z · [ORB-10021]
 **Paths:** `docs/design/routines/**`, `crates/orbit-core/src/application/routines/**`
+**Superseded by:** [Per-user ownership of `.orbit/` (no git re-includes)](#per-user-ownership-of-orbit-no-git-re-includes). Scheduler state stays host-local; definitions no longer converge via git.
 
 ### Context
 
@@ -218,15 +247,15 @@ Routine and auto-task definitions carry no host field. A definition is evaluated
 
 The standing rule this settles: **scheduled automation acts only on the host-local store.** A definition whose effect lands on the shared remote rather than the local store (a repo-global chore: "bump dependencies weekly") will run once per owner; such a definition must dedupe against the remote itself or must not ship as an embedded default. An `owner:` field on the definition is the additive answer if that case ever bites; it is deliberately not designed now.
 
-Migration: `hosts:` is accepted and ignored with a load warning for one release, then rejected. `.orbit/routines/local/` keeps its meaning — uncommitted definitions for this checkout — without a host check. Seeded defaults no longer render a host id, so the managed-asset digest changes once; reconciliation adopts the new bytes on the next `orbit workspace sync`.
+Migration: `hosts:` is accepted and ignored with a load warning for one release, then rejected. `.orbit/routines/local/` is no longer a git-uncommitted origin ([Per-user ownership of `.orbit/` (no git re-includes)](#per-user-ownership-of-orbit-no-git-re-includes)); files there still load as a plain subdirectory for one release. Seeded defaults no longer render a host id, so the managed-asset digest changes once; reconciliation adopts the new bytes on the next `orbit workspace sync`.
 
 ### Consequences
 
 - Three switches, each with obvious semantics, replace four. "Why didn't this fire?" is answerable from `orbit clock status`, `orbit workspace list`, and the definition.
 - `orbit init` output is machine-independent; a repository can be registered on a second machine with no definition edits.
 - Host-registry keeps `host_id`/`machine_id` for run ownership, liveness, and display only; routine placement validation and its diagnostics are deleted.
-- Enabling a host's clock immediately activates every enabled committed definition on that host. That is the contract; the clock is off until `orbit clock enable`.
-- Cost: repo-global chores are no longer prevented from running once per owner by the scheduler; that responsibility moves to the definition author. A routine that genuinely must run on exactly one machine has no mechanism — it lives under `.orbit/routines/local/` on that machine or is paused elsewhere.
+- Enabling a host's clock immediately activates every enabled definition on that host. That is the contract; the clock is off until `orbit clock enable`.
+- Cost: repo-global chores are no longer prevented from running once per owner by the scheduler; that responsibility moves to the definition author. A routine that genuinely must run on exactly one machine is paused on the others.
 
 ## Registration is the automation opt-in; there is no routine-source role
 
@@ -244,11 +273,12 @@ Remove the `[routines]` config section. The tick evaluates definitions from ever
 ### Consequences
 
 - Registering an owner checkout is the entire setup; enabling the clock is the entire activation.
-- The review boundary for scheduled execution is the definitions themselves (PR review on `.orbit/routines/` and `.orbit/auto_tasks/`), which was already the load-bearing boundary.
+- The review boundary for scheduled execution is the definitions on this checkout (`.orbit/routines/` and `.orbit/auto_tasks/`), which no longer travel by git.
 - Cost: a workspace can no longer declare "never schedule me" in versioned config; exclusion is a per-host operator action.
 
 ## Task References
 
+- [ORB-12718] — ignores all of `.orbit/` as per-user state; definitions no longer converge via git ([Per-user ownership of `.orbit/` (no git re-includes)](#per-user-ownership-of-orbit-no-git-re-includes)).
 - [ORB-12236] — removes `hosts:` pins and `[routines] role = "source"` (the second and third 2026-09-12 entries).
 - [ORB-12237] — moves auto-task evaluation into the host tick, adds `orbit clock`, retires the scheduler routine/job/activity (the first 2026-09-12 entry); depends on [ORB-12236].
 - [ORB-10001] — authored this design-doc folder (proposal).
