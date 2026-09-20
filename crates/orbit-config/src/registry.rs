@@ -59,6 +59,84 @@ pub(crate) struct CrewFieldKey<'a> {
     pub field: &'a str,
 }
 
+/// Where a key belongs in the grouped `orbit config show`/`keys` output.
+///
+/// Declared per registry row so a new key cannot be added without a home,
+/// and so `keys` and `show` group identically. [`ConfigSection::ORDER`] is
+/// the rendering order; [`ConfigKeyDescriptor::order`] orders keys inside a
+/// section by relevance rather than alphabetically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConfigSection {
+    /// `workflow.*` — how tasks are shipped.
+    Delivery,
+    /// `crews.*` — named provider/model assignments. No fixed registry rows:
+    /// crew tables are dynamically named (see [`CREW_CONFIG_FIELDS`]).
+    Crews,
+    /// `execution.*` — how agent subprocesses run.
+    Execution,
+    /// `operation.*` — unattended-operation policy.
+    Operation,
+    /// Everything else: `automation.*`, `runtime.*`, `scoring.*`, `tasks.*`, `pr.*`.
+    Housekeeping,
+}
+
+impl ConfigSection {
+    /// Sections in rendering order.
+    pub const ORDER: &'static [ConfigSection] = &[
+        ConfigSection::Delivery,
+        ConfigSection::Crews,
+        ConfigSection::Execution,
+        ConfigSection::Operation,
+        ConfigSection::Housekeeping,
+    ];
+
+    /// Section heading shown by `orbit config show`.
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Delivery => "Delivery (workflow.*)",
+            Self::Crews => "Crews (crews.*)",
+            Self::Execution => "Execution (execution.*)",
+            Self::Operation => "Operation mode (operation.*)",
+            Self::Housekeeping => "Housekeeping",
+        }
+    }
+
+    /// One-line explanation of what the section governs.
+    pub fn blurb(self) -> &'static str {
+        match self {
+            Self::Delivery => "how tasks are shipped",
+            Self::Crews => "named provider/model assignments",
+            Self::Execution => "how agent subprocesses run",
+            Self::Operation => "unattended-operation policy",
+            Self::Housekeeping => "logs, scoring, ids, and PR links",
+        }
+    }
+
+    /// Dotted prefix every key in the section shares, when there is one.
+    /// `Housekeeping` spans several prefixes and has none, so its rows print
+    /// the full key.
+    pub fn key_prefix(self) -> Option<&'static str> {
+        match self {
+            Self::Delivery => Some("workflow"),
+            Self::Crews => Some("crews"),
+            Self::Execution => Some("execution"),
+            Self::Operation => Some("operation"),
+            Self::Housekeeping => None,
+        }
+    }
+
+    /// Stable lowercase token for `--json` output.
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Delivery => "delivery",
+            Self::Crews => "crews",
+            Self::Execution => "execution",
+            Self::Operation => "operation",
+            Self::Housekeeping => "housekeeping",
+        }
+    }
+}
+
 /// One settable `config.toml` key, as advertised by `orbit config keys`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfigKeyDescriptor {
@@ -68,6 +146,12 @@ pub struct ConfigKeyDescriptor {
     pub value_type: &'static str,
     /// What the setting controls.
     pub description: &'static str,
+    /// Grouping for `orbit config show`/`keys`.
+    pub section: ConfigSection,
+    /// Relevance ordinal within the section; lower renders first. Registry
+    /// declaration order stays alphabetical (a store test enforces it), so
+    /// this is what puts the settings an operator reaches for at the top.
+    pub order: u16,
 }
 
 macro_rules! define_config_settings {
@@ -76,6 +160,8 @@ macro_rules! define_config_settings {
             key: $key:literal,
             value_type: $value_type:literal,
             description: $description:literal,
+            section: $section:expr,
+            order: $order:literal,
             resolve: $resolve:expr $(,)?
         }
     ),+ $(,)?) => {
@@ -96,6 +182,8 @@ macro_rules! define_config_settings {
                 key: $key,
                 value_type: $value_type,
                 description: $description,
+                section: $section,
+                order: $order,
             },)+
         ];
 
@@ -155,176 +243,211 @@ define_config_settings! {
     automation_stall_window_minutes: u32 => u32 {
         key: "automation.stall_window_minutes", value_type: "integer",
         description: "Minutes a deferred delivery-automation reason may persist before the evaluator logs it at warn and files one friction (1..=1440).",
+        section: ConfigSection::Housekeeping, order: 20,
         resolve: |raw: Option<u32>| resolve_bounded_minutes(raw, DEFAULT_STALL_WINDOW_MINUTES, "automation.stall_window_minutes"),
     },
     codex_approval_policy: Option<String> => String {
         key: "execution.codex.approval_policy", value_type: "string",
         description: "Codex approval policy: one of untrusted, on-request, never.",
+        section: ConfigSection::Execution, order: 20,
         resolve: |raw: Option<String>| resolve_optional_choice(raw, "execution.codex.approval_policy", &["untrusted", "on-request", "never"]),
     },
     codex_sandbox: String => String {
         key: "execution.codex.sandbox", value_type: "string",
         description: "Codex sandbox mode: one of read-only, workspace-write, danger-full-access.",
+        section: ConfigSection::Execution, order: 10,
         resolve: |raw: Option<String>| resolve_choice(raw, "workspace-write", "execution.codex.sandbox", CODEX_PROVIDER_SANDBOX_MODES),
     },
     execution_env_pass: Vec<String> => Vec<String> {
         key: "execution.env.pass", value_type: "array<string>",
         description: "Environment variable names allow-listed for passthrough into agent subprocesses.",
+        section: ConfigSection::Execution, order: 30,
         resolve: |raw: Option<Vec<String>>| raw.map(normalize_pass_list).unwrap_or_else(|| Ok(default_pass_list())),
     },
     operation_completion: Option<String> => String {
         key: "operation.completion", value_type: "string",
         description: "Operation-mode completion preference: review or done. Preset-managed; bounded by operation.delivery_cap and the grant.",
+        section: ConfigSection::Operation, order: 40,
         resolve: |raw: Option<String>| admit_choice::<CompletionPreference>(raw, CompletionPreference::as_str),
     },
     operation_delivery_cap: Option<String> => String {
         key: "operation.delivery_cap", value_type: "string",
         description: "Repository ceiling on managed delivery: review (default) or done. Independent of the preset.",
+        section: ConfigSection::Operation, order: 20,
         resolve: |raw: Option<String>| admit_choice::<DeliveryCap>(raw, DeliveryCap::as_str),
     },
     operation_leaf_ceiling: Option<u32> => u32 {
         key: "operation.leaf_ceiling", value_type: "integer",
         description: "Operation-mode ceiling on concurrently live leaf runs (1..=500). Preset-managed; the job's hard limit still applies.",
+        section: ConfigSection::Operation, order: 70,
         resolve: |raw: Option<u32>| operation::leaf_ceiling(raw),
     },
     operation_preparation: Option<String> => String {
         key: "operation.preparation", value_type: "string",
         description: "Operation-mode preparation preference: manual or automatic. Preset-managed.",
+        section: ConfigSection::Operation, order: 50,
         resolve: |raw: Option<String>| admit_choice::<PreparationPreference>(raw, PreparationPreference::as_str),
     },
     operation_preparation_due_seconds: Option<u64> => u64 {
         key: "operation.preparation_due_seconds", value_type: "integer",
         description: "Seconds after a material change before an in-grant task's preparation is due (1..=86400). Preset-managed.",
+        section: ConfigSection::Operation, order: 60,
         resolve: |raw: Option<u64>| operation::preparation_due_seconds(raw),
     },
     operation_preset: Option<String> => String {
         key: "operation.preset", value_type: "string",
         description: "Operation-mode preset: supervised (default) or autonomous. Selecting a preset resets the preset-managed operation.* fields at that layer. Grants nothing by itself.",
+        section: ConfigSection::Operation, order: 10,
         resolve: |raw: Option<String>| admit_choice::<OperationPreset>(raw, OperationPreset::as_str),
     },
     operation_promotion: Option<String> => String {
         key: "operation.promotion", value_type: "string",
         description: "Operation-mode promotion preference: separate_approval or automatic. Preset-managed; automatic promotion still needs a grant with the promote right.",
+        section: ConfigSection::Operation, order: 30,
         resolve: |raw: Option<String>| admit_choice::<PromotionPreference>(raw, PromotionPreference::as_str),
     },
     operation_recovery: Option<String> => String {
         key: "operation.recovery", value_type: "string",
         description: "Operation-mode recovery preference: existing or scheduled. Preset-managed.",
+        section: ConfigSection::Operation, order: 80,
         resolve: |raw: Option<String>| admit_choice::<RecoveryPreference>(raw, RecoveryPreference::as_str),
     },
     operation_recovery_episodes_per_task: Option<u32> => u32 {
         key: "operation.recovery_episodes_per_task", value_type: "integer",
         description: "Aggregate recovery episodes allowed per task inside a grant (0..=10). Preset-managed.",
+        section: ConfigSection::Operation, order: 90,
         resolve: |raw: Option<u32>| operation::recovery_episodes_per_task(raw),
     },
     operation_recovery_minutes_per_task: Option<u32> => u32 {
         key: "operation.recovery_minutes_per_task", value_type: "integer",
         description: "Aggregate recovery wall-time minutes allowed per task inside a grant (1..=1440). Preset-managed.",
+        section: ConfigSection::Operation, order: 100,
         resolve: |raw: Option<u32>| operation::recovery_minutes_per_task(raw),
     },
     operation_review_crew: Option<String> => String {
         key: "operation.review_crew", value_type: "string",
         description: "Crew selected for before-PR automatic review. Independent of the preset. After-landing review runs from its delivery auto-task and uses that definition's template crew.",
+        section: ConfigSection::Operation, order: 120,
         resolve: |raw: Option<String>| operation::review_crew(raw),
     },
     operation_review_minutes: Option<u32> => u32 {
         key: "operation.review_minutes", value_type: "integer",
         description: "Aggregate before-PR reviewer, repair, and final-validation wall-time minutes per delivery candidate lineage (1..=1440, default 30). Independent of the preset.",
+        section: ConfigSection::Operation, order: 130,
         resolve: |raw: Option<u32>| operation::review_minutes(raw),
     },
     operation_review_policy: Option<String> => String {
         key: "operation.review_policy", value_type: "string",
         description: "Automatic review timing: none (default), before-pr, or after-landing. Independent of the preset. before-pr holds PR creation for a fresh reviewer on the PR route and is refused for local-only delivery.",
+        section: ConfigSection::Operation, order: 110,
         resolve: |raw: Option<String>| admit_choice::<ReviewPolicy>(raw, ReviewPolicy::as_str),
     },
     operation_review_repair_cycles: Option<u32> => u32 {
         key: "operation.review_repair_cycles", value_type: "integer",
         description: "Reviewer repair/validation cycles allowed per delivery candidate lineage (0..=10, default 2). Independent of the preset.",
+        section: ConfigSection::Operation, order: 140,
         resolve: |raw: Option<u32>| operation::review_repair_cycles(raw),
     },
     operation_review_reviewer_starts: Option<u32> => u32 {
         key: "operation.review_reviewer_starts", value_type: "integer",
         description: "Fresh reviewer invocations allowed per delivery candidate lineage, including retries and invalidations (1..=10, default 2). Independent of the preset.",
+        section: ConfigSection::Operation, order: 150,
         resolve: |raw: Option<u32>| operation::review_reviewer_starts(raw),
     },
     pr_task_url_template: Option<String> => String {
         key: "pr.task_url_template", value_type: "string",
         description: "URL template used to link a task ID in PR descriptions.",
+        section: ConfigSection::Housekeeping, order: 70,
         resolve: |raw: Option<String>| Ok::<_, OrbitError>(raw),
     },
     runtime_log_max_file_mb: u64 => u64 {
         key: "runtime.log_max_file_mb", value_type: "integer",
         description: "Roll the active JSONL log once it grows past this many MiB (must be >= 1 and <= runtime.log_max_total_mb).",
+        section: ConfigSection::Housekeeping, order: 50,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw.unwrap_or_else(|| default_log_rotation().max_file_bytes / (1024 * 1024))),
     },
     runtime_log_max_total_mb: u64 => u64 {
         key: "runtime.log_max_total_mb", value_type: "integer",
         description: "Total size budget (MiB) across JSONL log archives; oldest are pruned first when exceeded (must be >= 1).",
+        section: ConfigSection::Housekeeping, order: 40,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw.unwrap_or_else(|| default_log_rotation().max_total_bytes / (1024 * 1024))),
     },
     runtime_log_retention_days: u64 => u64 {
         key: "runtime.log_retention_days", value_type: "integer",
         description: "Delete JSONL log archives whose mtime is older than this many days (must be >= 1).",
+        section: ConfigSection::Housekeeping, order: 30,
         resolve: |raw: Option<u64>| Ok::<_, OrbitError>(raw.unwrap_or_else(|| default_log_rotation().retention_days)),
     },
     scoring_enabled: bool => bool {
         key: "scoring.enabled", value_type: "bool",
         description: "Whether scoreboard metrics are recorded for task runs.",
+        section: ConfigSection::Housekeeping, order: 10,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
     },
     tasks_id_start: Option<u32> => u32 {
         key: "tasks.id_start", value_type: "integer",
         description: "Floor for the local task-id allocator on this machine (forward-only; lets machines hold disjoint id ranges).",
+        section: ConfigSection::Housekeeping, order: 60,
         resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw),
     },
     workflow_auto_ship: bool => bool {
         key: "workflow.auto_ship", value_type: "bool",
         description: "Opt-in for unattended ship dispatch via the routine/sweep scheduler.",
+        section: ConfigSection::Delivery, order: 40,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
     },
     workflow_base_branch: String => String {
         key: "workflow.base_branch", value_type: "string",
         description: "Default base branch for ship workflows.",
+        section: ConfigSection::Delivery, order: 10,
         resolve: |raw: Option<String>| resolve_non_empty(raw, DEFAULT_WORKFLOW_BASE_BRANCH, "workflow.base_branch"),
     },
     workflow_default_crew: Option<String> => String {
         key: "workflow.default_crew", value_type: "string",
         description: "Named crew used when a task does not declare `crew` and no CLI override is given.",
+        section: ConfigSection::Delivery, order: 20,
         resolve: |raw: Option<String>| resolve_optional_non_empty(raw, "workflow.default_crew"),
     },
     workflow_hard_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.hard_complexity_crews", value_type: "array<string>",
         description: "Weighted crew pool for unassigned hard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
+        section: ConfigSection::Delivery, order: 90,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
     workflow_low_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.low_complexity_crews", value_type: "array<string>",
         description: "Weighted crew pool for unassigned low-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
+        section: ConfigSection::Delivery, order: 70,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
     workflow_medium_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.medium_complexity_crews", value_type: "array<string>",
         description: "Weighted crew pool for unassigned medium-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
+        section: ConfigSection::Delivery, order: 80,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
     workflow_pilot_max_complexity: TaskComplexity => String {
         key: "workflow.pilot_max_complexity", value_type: "string",
         description: "Highest complexity the task pilot may assign: low, medium, hard (default), or xhard. A higher recommendation is refused as a complexity_escalation_blocked finding instead of being applied, so the reserved tier stays an operator decision.",
+        section: ConfigSection::Delivery, order: 50,
         resolve: |raw: Option<String>| resolve_pilot_max_complexity(raw),
     },
     workflow_required_validation_commands: Vec<String> => Vec<String> {
         key: "workflow.required_validation_commands", value_type: "array<string>",
         description: "Commands a distributed execution claim must pass on its exact candidate before this owner accepts its delivery handoff; empty means no claimed handoff can be accepted.",
+        section: ConfigSection::Delivery, order: 60,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
     workflow_system_crew: String => String {
         key: "workflow.system_crew", value_type: "string",
         description: "Named crew used by system activities such as step-failure recovery and the task pilot.",
+        section: ConfigSection::Delivery, order: 30,
         resolve: |raw: Option<String>| resolve_non_empty(raw, DEFAULT_WORKFLOW_SYSTEM_CREW, "workflow.system_crew"),
     },
     workflow_xhard_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.xhard_complexity_crews", value_type: "array<string>",
         description: "Weighted crew pool for unassigned xhard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
+        section: ConfigSection::Delivery, order: 100,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
 }

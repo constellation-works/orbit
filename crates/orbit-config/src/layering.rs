@@ -88,6 +88,72 @@ impl ConfigValueSource {
     }
 }
 
+/// Why a layer that defines a key did not supply the effective value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShadowReason {
+    /// A higher layer set the same key.
+    Overridden,
+    /// A security key ([`WORKSPACE_REPLACE_ONLY_KEYS`]) that the workspace
+    /// file must restate to keep: it never inherits from global once a
+    /// distinct workspace file exists.
+    NotInherited,
+    /// A workspace `operation.preset` selection reset this preset-managed
+    /// key, so the global explicit value did not survive the merge.
+    PresetReset,
+}
+
+impl ShadowReason {
+    /// Stable token used in `orbit config show --json`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Overridden => "overridden",
+            Self::NotInherited => "not-inherited",
+            Self::PresetReset => "preset-reset",
+        }
+    }
+}
+
+/// A layer that defines a key without supplying the effective value.
+///
+/// This is what makes the two surprising cases legible in `config show`: a
+/// global value a workspace overrode, and a global security value that was
+/// deliberately not inherited.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShadowedConfigValue {
+    /// Layer that defines the shadowed value.
+    pub layer: ConfigValueSourceKind,
+    /// The value that layer defines, projected as JSON.
+    pub value: serde_json::Value,
+    /// Why it is not the effective value.
+    pub reason: ShadowReason,
+}
+
+/// Three-way state of one resolved value.
+///
+/// `unset` and `default` are different facts that both used to render as
+/// `[built-in]`: one setting has no value at all, the other has a compiled-in
+/// one that is actually in force.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigValueState {
+    /// A config file (or the environment) supplied the value.
+    Set,
+    /// No file supplies it; the compiled-in default is in force.
+    Default,
+    /// No file supplies it and there is no default: the key has no value.
+    Unset,
+}
+
+impl ConfigValueState {
+    /// Stable token used in `orbit config show --json`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Set => "set",
+            Self::Default => "default",
+            Self::Unset => "unset",
+        }
+    }
+}
+
 /// One resolved key with its value and provenance.
 #[derive(Debug, Clone)]
 pub struct EffectiveConfigValue {
@@ -97,6 +163,20 @@ pub struct EffectiveConfigValue {
     pub value: serde_json::Value,
     /// Layer the value came from.
     pub source: ConfigValueSource,
+    /// Layers that define the key without supplying the effective value,
+    /// highest-precedence first. Empty for the ordinary case.
+    pub shadowed_by: Vec<ShadowedConfigValue>,
+}
+
+impl EffectiveConfigValue {
+    /// Whether the value is set by a layer, defaulted, or absent entirely.
+    pub fn state(&self) -> ConfigValueState {
+        match self.source.kind() {
+            ConfigValueSourceKind::BuiltIn if self.value.is_null() => ConfigValueState::Unset,
+            ConfigValueSourceKind::BuiltIn => ConfigValueState::Default,
+            _ => ConfigValueState::Set,
+        }
+    }
 }
 
 /// Every resolved key with provenance, for `orbit config show`/`get`.
@@ -367,10 +447,14 @@ fn effective_values(
         .snapshot
         .all_values()
         .into_iter()
-        .map(|(key, value)| EffectiveConfigValue {
-            key: key.to_string(),
-            value,
-            source: source_for_key(key, global, workspace),
+        .map(|(key, value)| {
+            let source = source_for_key(key, global, workspace);
+            EffectiveConfigValue {
+                shadowed_by: shadowed_for_key(key, &source, global, workspace),
+                key: key.to_string(),
+                value,
+                source,
+            }
         })
         .collect::<Vec<_>>();
 
@@ -395,8 +479,10 @@ fn effective_values(
         }
         for (field, value) in fields {
             let key = format!("crews.{name}.{field}");
+            let source = source_for_crew_field(name, field, global, workspace);
             values.push(EffectiveConfigValue {
-                source: source_for_crew_field(name, field, global, workspace),
+                shadowed_by: shadowed_for_crew_field(name, field, &source, global),
+                source,
                 key,
                 value,
             });
@@ -404,6 +490,74 @@ fn effective_values(
     }
     values.sort_by(|left, right| left.key.cmp(&right.key));
     values
+}
+
+/// Layers that define `key` without supplying the effective value.
+///
+/// Only the global layer can be shadowed today: it is the one layer below a
+/// workspace file, and the two non-inheriting rules ([`WORKSPACE_REPLACE_ONLY_KEYS`]
+/// and the workspace preset reset) both drop a global value.
+fn shadowed_for_key(
+    key: &str,
+    source: &ConfigValueSource,
+    global: Option<&ConfigDocument>,
+    workspace: Option<&ConfigDocument>,
+) -> Vec<ShadowedConfigValue> {
+    if source.kind() == ConfigValueSourceKind::Global {
+        return Vec::new();
+    }
+    let Some(document) = global else {
+        return Vec::new();
+    };
+    let Some(value) = value_at_path(&document.value, key) else {
+        return Vec::new();
+    };
+    // Mirrors the order `source_for_key` refuses the global value in, so the
+    // stated reason is the rule that actually applied.
+    let reason = if source.kind() == ConfigValueSourceKind::Workspace {
+        ShadowReason::Overridden
+    } else if workspace.is_some() && WORKSPACE_REPLACE_ONLY_KEYS.contains(&key) {
+        ShadowReason::NotInherited
+    } else if PRESET_MANAGED_KEYS.contains(&key) {
+        ShadowReason::PresetReset
+    } else {
+        ShadowReason::Overridden
+    };
+    vec![ShadowedConfigValue {
+        layer: ConfigValueSourceKind::Global,
+        value: json_from_toml(value),
+        reason,
+    }]
+}
+
+/// The global definition of a crew field a workspace crew table overrode.
+fn shadowed_for_crew_field(
+    crew: &str,
+    field: &str,
+    source: &ConfigValueSource,
+    global: Option<&ConfigDocument>,
+) -> Vec<ShadowedConfigValue> {
+    if source.kind() != ConfigValueSourceKind::Workspace {
+        return Vec::new();
+    }
+    let Some(value) = global
+        .and_then(|document| crew_entry(&document.value, crew))
+        .and_then(|entry| entry.get(field))
+    else {
+        return Vec::new();
+    };
+    vec![ShadowedConfigValue {
+        layer: ConfigValueSourceKind::Global,
+        value: json_from_toml(value),
+        reason: ShadowReason::Overridden,
+    }]
+}
+
+/// Project a TOML value as JSON for display. A value that will not project
+/// (only TOML datetimes, which no config key uses) renders as null rather
+/// than failing a read-only listing.
+fn json_from_toml(value: &toml::Value) -> serde_json::Value {
+    serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
 }
 
 fn source_for_key(

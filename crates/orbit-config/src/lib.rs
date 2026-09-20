@@ -66,8 +66,8 @@ pub use crew_pools::{
     canonical_crew_pool_entries,
 };
 pub use layering::{
-    ConfigValueSource, ConfigValueSourceKind, EffectiveConfig, EffectiveConfigValue,
-    load_effective_config,
+    ConfigValueSource, ConfigValueSourceKind, ConfigValueState, EffectiveConfig,
+    EffectiveConfigValue, ShadowReason, ShadowedConfigValue, load_effective_config,
 };
 pub use operation::{
     CompletionPreference, DeliveryCap, OPERATION_POLICY_VERSION, OperationField,
@@ -77,7 +77,7 @@ pub use operation::{
 pub use persistence::PersistenceConfig;
 pub use raw::CrewSeed;
 pub use registry::{
-    CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSnapshot, admit_config_key,
+    CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection, ConfigSnapshot, admit_config_key,
     describe as describe_config_key,
 };
 pub use resolved::{CodexExecutionPolicy, ExecutionEnvPolicy, PrSettings, ResolvedConfig};

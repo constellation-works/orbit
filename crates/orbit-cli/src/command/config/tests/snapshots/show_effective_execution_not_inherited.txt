@@ -1,0 +1,60 @@
+orbit config — effective
+
+Layers (later wins)          built-in defaults → global <global-root>/config.toml → workspace <workspace-root>/config.toml
+                             ⚠ security keys (execution.*) do not inherit from global once a workspace file exists
+
+Delivery (workflow.*)        how tasks are shipped
+  base_branch                      main                  default    Default base branch for ship workflows.
+  default_crew                     opus                  default    Named crew used when a task does not declare `crew` and no CLI override is given.
+  system_crew                      system                default    Named crew used by system activities such as step-failure recovery and the task pilot.
+  auto_ship                        false                 default    Opt-in for unattended ship dispatch via the routine/sweep scheduler.
+  pilot_max_complexity             hard                  default    Highest complexity the task pilot may assign: low, medium, hard (default), or xhard. A higher recommendation is refused as a complexity_escalation_blocked finding instead of being applied, so the reserved tier stays an operator decision.
+  required_validation_commands     []                    default    Commands a distributed execution claim must pass on its exact candidate before this owner accepts its delivery handoff; empty means no claimed handoff can be accepted.
+  low_complexity_crews             []                    default    Weighted crew pool for unassigned low-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
+  medium_complexity_crews          []                    default    Weighted crew pool for unassigned medium-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
+  hard_complexity_crews            []                    default    Weighted crew pool for unassigned hard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
+  xhard_complexity_crews           []                    default    Weighted crew pool for unassigned xhard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
+
+Crews (crews.*)              15 defined, all from built-in
+  NAME         FROM      PROVIDER     MODEL                        EFFORT  TAGS  DESCRIPTION
+  antigravity  built-in  antigravity  gemini-3.8-flash-high        –       –
+  astra        built-in  codex        gpt-6-astra                  –       –
+  copilot      built-in  copilot      claude-sonnet-5              –       –
+  cursor       built-in  cursor       gpt-5                        –       –
+  fable        built-in  claude       fable                        –       –
+  gemini       built-in  gemini       gemini-3.8-flash             –       –
+  grok         built-in  grok         grok-4.6                     –       –
+  luna         built-in  codex        gpt-5.6-luna                 –       –
+  opencode     built-in  opencode     anthropic/claude-sonnet-4-5  –       –
+  opus         built-in  claude       opus                         –       –  ← workflow.default_crew
+  pi           built-in  pi           sonnet                       –       –
+  sol          built-in  codex        gpt-5.6-sol                  –       –
+  sonnet       built-in  claude       sonnet                       –       –
+  system       built-in  claude       sonnet                       –       –  ← workflow.system_crew
+  terra        built-in  codex        gpt-5.6-terra                –       –
+
+Execution (execution.*)      how agent subprocesses run          ⚠ workspace file present: global execution values are ignored
+  codex.sandbox                    workspace-write       default    Codex sandbox mode: one of read-only, workspace-write, danger-full-access.  (global sets danger-full-access — not inherited)
+  codex.approval_policy            –                     unset      Codex approval policy: one of untrusted, on-request, never.  (global sets never — not inherited)
+  env.pass                         HOME, PATH, CODEX_HOME, TMPDIR, USER  default    Environment variable names allow-listed for passthrough into agent subprocesses.  (global sets HOME, PATH — not inherited)
+  env.inherit                      false                 derived    Not settable: an agent subprocess environment is always composed from execution.env.pass.
+
+Operation mode (operation.*) unattended-operation policy — 15 keys unset (pass --all to list them)
+
+Housekeeping                 logs, scoring, ids, and PR links
+  scoring.enabled                  true                  workspace  Whether scoreboard metrics are recorded for task runs.
+  automation.stall_window_minutes  60                    default    Minutes a deferred delivery-automation reason may persist before the evaluator logs it at warn and files one friction (1..=1440).
+  runtime.log_retention_days       7                     default    Delete JSONL log archives whose mtime is older than this many days (must be >= 1).
+  runtime.log_max_total_mb         500                   default    Total size budget (MiB) across JSONL log archives; oldest are pruned first when exceeded (must be >= 1).
+  runtime.log_max_file_mb          100                   default    Roll the active JSONL log once it grows past this many MiB (must be >= 1 and <= runtime.log_max_total_mb).
+  tasks.id_start                   –                     unset      Floor for the local task-id allocator on this machine (forward-only; lets machines hold disjoint id ranges).
+  pr.task_url_template             –                     unset      URL template used to link a task ID in PR descriptions.
+
+Paths
+  global root                            <global-root>
+  workspace root                         <workspace-root>
+  local root                             <workspace-root>
+  audit db                               <global-root>/orbit.db
+  semantic db                            <workspace-root>/state/semantic.db
+  activities, executors, jobs, policies  <global-root>/resources/
+  skills                                 <workspace-root>/resources/skills

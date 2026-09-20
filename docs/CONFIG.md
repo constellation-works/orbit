@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-09-19
+last_validated: 2026-09-20
 ---
 
 # Orbit Configuration
@@ -41,9 +41,19 @@ Three security-sensitive settings deliberately do not inherit from global whenev
 
 If the workspace file omits one of these, Orbit uses that setting's built-in default. This keeps repository agent sandboxing, approval, and environment passthrough deterministic instead of depending on a user's global policy. `execution.env.inherit` is not a configurable key: an agent subprocess environment is always composed from an allowlist — see [`[execution.env]` — the agent subprocess environment](#executionenv--the-agent-subprocess-environment).
 
-Run `orbit config show` for the effective merged view. Every setting is annotated as `workspace`, `global`, `built-in`, or `environment`, including the source file path where one applies. `orbit config show --json` exposes the same attribution in its `provenance` object.
+Run `orbit config show` for the effective merged view. It is grouped into sections — Delivery (`workflow.*`), Crews, Execution (`execution.*`), Operation mode (`operation.*`), Housekeeping, and Paths — and every key prints the same description `orbit config keys` shows. Each value reports exactly one state:
 
-Use `--scope global` or `--scope workspace` to resolve either physical file in isolation, without values from the other file. Both `config show --scope <scope>` and `config get --scope <scope> <key>` include built-in defaults for keys omitted from the selected file, so they report the same value for a given key. In scoped `config get --json`, the top-level `exists` field instead reports whether that key is explicitly present in the selected file; it can be `false` while `value` contains a default. In scoped `config show --json`, `source.exists` reports whether the selected file itself exists. Settings are still resolved when the file is absent.
+| State | Meaning |
+|---|---|
+| `workspace` / `global` / `environment` | A layer set it; that layer is named |
+| `default` | No layer set it and the built-in value is in force |
+| `unset` | No layer set it and there is no default: the key has no value |
+
+When a lower layer also defines a key, the row says so rather than hiding it: `(overrides global: main)` for an ordinary override, and `(global sets danger-full-access — not inherited)` for one of the three security keys a workspace file did not restate. The security exception also gets a banner line under `Layers` whenever a workspace file exists. Crews render as one row per crew, annotated with the `workflow.default_crew` / `workflow.system_crew` keys that point at them. A section whose keys are all unset collapses to a one-line summary; pass `--all` to list every key. A registered checkout also gets a `Workspace` line reporting the base branch and ship mode from the **workspace registry** — those are what delivery uses, so a mismatch against `workflow.base_branch` is visible here.
+
+`orbit config show --json` exposes the same attribution in its `provenance` object: the `scope` and `path` fields as before, plus `section`, `description`, `state` (`set`/`default`/`unset`), and `shadowed_by` (`[{layer, value, reason}]`, where `reason` is `overridden`, `not-inherited`, or `preset-reset`). A top-level `workspace_binding` object reports the registered base branch and ship mode, or `null` for an unregistered checkout.
+
+Use `--scope global` or `--scope workspace` to resolve either physical file in isolation, without values from the other file. Scoped output uses the same grouping, minus the layering banner and the crew table (a single file resolves registry keys only). Both `config show --scope <scope>` and `config get --scope <scope> <key>` include built-in defaults for keys omitted from the selected file, so they report the same value for a given key. In scoped `config get --json`, the top-level `exists` field instead reports whether that key is explicitly present in the selected file; it can be `false` while `value` contains a default. In scoped `config show --json`, `source.exists` reports whether the selected file itself exists. Settings are still resolved when the file is absent.
 
 The workspace identity file `.orbit/config.yaml` is a separate artifact (it stores `workspace_id` for the canonical task store binding) and is unrelated to runtime config.
 
