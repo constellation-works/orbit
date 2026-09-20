@@ -46,6 +46,7 @@ let taskDetailLoads = new Map();
 let expandedComments = new Set();
 let rawComments = new Set();
 let commentPrefs = loadCommentPrefs();
+let restoredCommentHash = null;
 
 onWorkspaceChange(() => {
   pinnedExternalTask = null;
@@ -58,6 +59,7 @@ onWorkspaceChange(() => {
   taskDetailLoads.clear();
   expandedComments.clear();
   rawComments.clear();
+  restoredCommentHash = null;
 });
 
 // ORB-10444: task ids whose Ship dispatch this page has already issued. Ship is
@@ -1471,10 +1473,16 @@ function buildCommentCard(task, comment, index, context) {
   return card;
 }
 
+function getCommentHash() {
+  if (typeof window === "undefined" || !window.location || !window.location.hash) return "";
+  const raw = String(window.location.hash);
+  return raw.startsWith("#") ? raw : `#${raw}`;
+}
+
 function buildCommentsPanel(task, context) {
   let isCollapsed = commentPrefs.collapsed === true;
-  const hash = window.location && window.location.hash ? String(window.location.hash).replace(/^#/, "") : "";
-  if (hash.startsWith(`comment-${task.id}-`)) {
+  const currentHash = getCommentHash();
+  if (currentHash.startsWith(`#comment-${task.id}-`) && restoredCommentHash !== currentHash) {
     isCollapsed = false;
   }
   let classes = "field-block collapsible comments-panel";
@@ -1516,7 +1524,7 @@ function findCommentsPanel(node) {
   return null;
 }
 
-export function scrollToComment(hash = (typeof window !== "undefined" && window.location && window.location.hash) || "") {
+export function scrollToComment(hash = getCommentHash()) {
   if (!hash) return false;
   const rawId = String(hash).replace(/^#/, "");
   if (!rawId.startsWith("comment-")) return false;
@@ -1548,12 +1556,25 @@ export function scrollToComment(hash = (typeof window !== "undefined" && window.
   if (typeof target.scrollIntoView === "function") {
     target.scrollIntoView({ behavior: "smooth", block: "start" });
   }
+  const currentHash = getCommentHash();
+  if (currentHash && (hash === currentHash || rawId === currentHash.replace(/^#/, ""))) {
+    restoredCommentHash = currentHash;
+  }
   return true;
 }
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("hashchange", () => {
-    scrollToComment();
+    const commentHash = getCommentHash();
+    if (commentHash.startsWith("#comment-")) {
+      if (scrollToComment(commentHash)) {
+        restoredCommentHash = commentHash;
+      } else {
+        restoredCommentHash = null;
+      }
+    } else {
+      restoredCommentHash = null;
+    }
   });
 }
 
@@ -2620,7 +2641,14 @@ export function renderTasks(tasks, context) {
     }
   }
   syncNodes(body, nodes);
-  if (typeof window !== "undefined" && window.location && window.location.hash && String(window.location.hash).startsWith("#comment-")) {
-    scrollToComment(window.location.hash);
+  const commentHash = getCommentHash();
+  if (commentHash.startsWith("#comment-")) {
+    if (restoredCommentHash !== commentHash) {
+      if (scrollToComment(commentHash)) {
+        restoredCommentHash = commentHash;
+      }
+    }
+  } else {
+    restoredCommentHash = null;
   }
 }

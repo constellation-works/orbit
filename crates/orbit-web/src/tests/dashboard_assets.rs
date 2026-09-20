@@ -2250,6 +2250,40 @@ if (panelHead.getAttribute("aria-expanded") !== "true") throw new Error("expande
 if (targetCard.scrolled <= targetScrolledBefore) throw new Error("permalink must scroll target card into view");
 targetCard.scrolled = 0;
 
+// 1d. Permalink #comment-<task>-<n> in address bar scrolls target card into view once; repeated renders do not re-scroll or overwrite collapse preference
+window.location.hash = "#comment-ORB-1-2";
+renderTasks([task], context);
+if (targetCard.scrolled !== 1) throw new Error(`initial render with comment hash must scroll target card into view once, got ${targetCard.scrolled}`);
+
+// A second render (e.g. 30 s background poll) must not scroll the card again
+renderTasks([task], context);
+if (targetCard.scrolled !== 1) throw new Error(`second render with comment hash must not scroll target card again, got ${targetCard.scrolled}`);
+
+// Collapsing the comments block while that hash is present persists collapsed: true
+panelHead.listeners.click({ stopPropagation: () => {} });
+if (!has(panel, "collapsed")) throw new Error("clicking panel header must collapse the panel");
+savedPrefs = JSON.parse(store.get("orbit.dashboard.comments") || "{}");
+if (savedPrefs.collapsed !== true) throw new Error(`collapsed preference must persist in store: ${store.get("orbit.dashboard.comments")}`);
+
+// A subsequent refresh while that hash is present stays collapsed and does not overwrite stored preference or re-scroll
+task.updated_at = "2026-09-20T10:20:00Z";
+renderTasks([task], context);
+refreshedDetail = find(get("tasks-body"), (node) => node.dataset.key === "detail-ORB-1");
+refreshedLeft = refreshedDetail.children.find((node) => has(node, "detail-main"));
+panel = refreshedLeft.children.find((node) => has(node, "comments-panel"));
+if (!has(panel, "collapsed")) throw new Error("comments panel must stay collapsed across refresh with comment hash");
+panelHead = find(panel, (node) => node.tag === "h4");
+if (panelHead.getAttribute("aria-expanded") !== "false") throw new Error("refreshed panel must keep aria-expanded=false");
+savedPrefs = JSON.parse(store.get("orbit.dashboard.comments") || "{}");
+if (savedPrefs.collapsed !== true) throw new Error("stored collapsed preference must not be overwritten by refresh");
+const refreshedTargetCard = find(panel, (node) => node.id === "comment-ORB-1-2");
+if (refreshedTargetCard.scrolled !== 0) throw new Error(`refreshed card must not be scrolled: ${refreshedTargetCard.scrolled}`);
+if (targetCard.scrolled !== 1) throw new Error(`prior card scroll count must remain 1: ${targetCard.scrolled}`);
+
+// Re-expand panel for remaining tests
+panelHead.listeners.click({ stopPropagation: () => {} });
+if (has(panel, "collapsed")) throw new Error("re-expanding panel must remove collapsed");
+
 const cards = () => collect(panel, (node) => has(node, "comment-card"));
 if (cards().length !== 3) throw new Error(`expected three cards, got ${cards().length}`);
 if (cards()[0].id !== "comment-ORB-1-1") throw new Error(`oldest first by default: ${cards()[0].id}`);
@@ -2421,6 +2455,134 @@ if (preview.style.display !== "none") throw new Error("the preview must toggle b
     assert!(
         !css.contains(".comment-line"),
         "the single-line comment rendering is retired"
+    );
+}
+
+/// ORB-12656: permalink #comment-<task>-<n> in the address bar must restore
+/// (scroll into view) exactly once across multiple renders (such as the 30 s
+/// poll or status changes), and collapsing the thread must persist across
+/// refresh rather than being force-expanded or overwriting commentPrefs.
+#[test]
+fn dashboard_comment_permalink_hash_renders_twice_and_scrolls_once() {
+    run_dashboard_javascript_test(
+        r#"
+class Node {
+  constructor(tag = "") { this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; this.scrolled = 0; }
+  appendChild(child) { if (child == null) return child; this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { const old = child.parentNode; if (old) old.children = old.children.filter((candidate) => candidate !== child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  replaceChildren(...next) { for (const child of this.children) child.parentNode = null; this.children = []; for (const child of next) this.appendChild(child); }
+  replaceWith(next) { const parent = this.parentNode; if (!parent) return; parent.children = parent.children.map((candidate) => candidate === this ? next : candidate); next.parentNode = parent; this.parentNode = null; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this[name] = String(value); }
+  getAttribute(name) { return this[name] != null ? String(this[name]) : null; }
+  focus() {}
+  scrollIntoView() { this.scrolled += 1; }
+  querySelectorAll(selector) { const out = []; const walk = (node) => { for (const child of node.children) { if (child.tag === selector) out.push(child); walk(child); } }; walk(this); return out; }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  get textContent() { return this.children.length > 0 ? this.children.map((child) => child.textContent || "").join("") : this._text; }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) {
+    this._text = String(value);
+    this.children = [];
+    const regex = /<([a-z0-9]+)[^>]*>(.*?)<\/\1>/gis;
+    let match;
+    while ((match = regex.exec(this._text)) !== null) {
+      const child = new Node(match[1].toLowerCase());
+      child.textContent = match[2].replace(/<[^>]+>/g, "");
+      this.appendChild(child);
+    }
+  }
+  get innerHTML() { return this._text; }
+  get lastElementChild() { return this.children[this.children.length - 1]; }
+  set id(value) { this._id = String(value); byId.set(String(value), this); }
+  get id() { return this._id || ""; }
+  get classList() {
+    const self = this;
+    const tokens = () => new Set(String(self.className || "").split(/\s+/).filter(Boolean));
+    const write = (set) => { self.className = [...set].join(" "); };
+    return {
+      add: (...names) => { const set = tokens(); for (const name of names) set.add(name); write(set); },
+      remove: (...names) => { const set = tokens(); for (const name of names) set.delete(name); write(set); },
+      contains: (name) => tokens().has(name),
+      toggle: (name, on) => {
+        const set = tokens();
+        const next = on === undefined ? !set.has(name) : !!on;
+        if (next) set.add(name); else set.delete(name);
+        write(set);
+        return next;
+      },
+    };
+  }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node()), byId.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: (tag) => new Node(tag),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+};
+const store = new Map();
+globalThis.window = {
+  location: new URL("http://dashboard.test/#comment-ORB-1-2"),
+  addEventListener: () => {}, confirm: () => false,
+  localStorage: { getItem: (key) => (store.has(key) ? store.get(key) : null), setItem: (key, value) => store.set(key, String(value)) },
+};
+const comments = [
+  { at: "2026-09-19T10:00:00Z", by: "dani", message: "First comment." },
+  { at: "2026-09-20T09:00:00Z", by: "codex", message: "Target comment." },
+];
+const task = { id: "ORB-1", title: "Permalink", status: "review", updated_at: "2026-09-20T10:00:00Z", history: [], artifacts: [], comments };
+const statuses = ["in-progress", "review", "blocked", "done"];
+const context = {
+  getTasks: () => [task], getTasksMeta: () => null, getSearchQuery: () => "",
+  getActiveStatuses: () => new Set(["review"]), statusOrder: statuses,
+  statusUpdateTargets: statuses, fmtAbsTime: (value) => `abs:${value}`,
+  refreshDashboard: () => Promise.resolve(),
+};
+const { renderTasks } = await import("./tasks.js");
+function find(node, predicate) {
+  if (predicate(node)) return node;
+  for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
+  return null;
+}
+const has = (node, name) => String(node.className).split(" ").includes(name);
+const body = get("tasks-body");
+
+// Initial render with #comment-ORB-1-2 hash in address bar, row collapsed
+renderTasks([task], context);
+
+// Expanding the task row renders the detail and scrolls comment-ORB-1-2 into view exactly once
+find(body, (node) => node.dataset.key === "task-ORB-1").listeners.click();
+const targetCard = find(body, (node) => node.id === "comment-ORB-1-2");
+if (!targetCard) throw new Error("target card not found after expanding row");
+if (targetCard.scrolled !== 1) throw new Error(`initial render must scroll target card once, got ${targetCard.scrolled}`);
+
+// Second render (simulating 30 s poll) must not scroll target card again
+renderTasks([task], context);
+if (targetCard.scrolled !== 1) throw new Error(`second render must not scroll target card again, got ${targetCard.scrolled}`);
+
+// Collapsing comments panel persists collapsed: true
+let panel = find(body, (node) => has(node, "comments-panel"));
+let panelHead = find(panel, (node) => node.tag === "h4");
+panelHead.listeners.click({ stopPropagation: () => {} });
+if (!has(panel, "collapsed")) throw new Error("comments panel must be collapsed after click");
+let savedPrefs = JSON.parse(store.get("orbit.dashboard.comments") || "{}");
+if (savedPrefs.collapsed !== true) throw new Error("collapsed preference must persist in store");
+
+// A subsequent refresh while hash is still present stays collapsed and does not overwrite preference
+task.updated_at = "2026-09-20T10:30:00Z";
+renderTasks([task], context);
+panel = find(get("tasks-body"), (node) => has(node, "comments-panel"));
+if (!has(panel, "collapsed")) throw new Error("comments panel must stay collapsed across refresh");
+panelHead = find(panel, (node) => node.tag === "h4");
+if (panelHead.getAttribute("aria-expanded") !== "false") throw new Error("panel header must keep aria-expanded=false");
+savedPrefs = JSON.parse(store.get("orbit.dashboard.comments") || "{}");
+if (savedPrefs.collapsed !== true) throw new Error("stored collapsed preference must not be overwritten by refresh");
+const refreshedTargetCard = find(panel, (node) => node.id === "comment-ORB-1-2");
+if (refreshedTargetCard.scrolled !== 0) throw new Error(`refreshed card must not be scrolled: ${refreshedTargetCard.scrolled}`);
+if (targetCard.scrolled !== 1) throw new Error(`prior card scroll count must remain 1: ${targetCard.scrolled}`);
+"#,
     );
 }
 
