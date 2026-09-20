@@ -169,6 +169,19 @@ fn write_task_bundle(global_root: &Path, workspace_id: &str, task_id: &str) {
     fs::write(bundle.join("task.yaml"), b"id: dummy\n").expect("write bundle file");
 }
 
+fn write_unpublished_stub(
+    global_root: &Path,
+    workspace_id: &str,
+    task_id: &str,
+) -> std::path::PathBuf {
+    let bundle = task_workspaces_dir(global_root)
+        .join(workspace_id)
+        .join(task_id);
+    fs::create_dir_all(&bundle).expect("create stub dir");
+    fs::write(bundle.join(".task.yaml.lock"), []).expect("write stub lock");
+    bundle
+}
+
 /// A partition directory emptied of its bundles, as `workspace teardown` on an
 /// older binary left it behind.
 fn write_empty_partition(global_root: &Path, workspace_id: &str) {
@@ -184,9 +197,9 @@ fn healthy_fresh_workspace_has_no_failures() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let results = runtime.doctor_workspace().expect("doctor");
 
-    // Eleven infrastructure checks plus one definition-artifact row per kind
+    // Twelve infrastructure checks plus one definition-artifact row per kind
     // (skills, jobs, activities, auto-tasks, routines).
-    assert_eq!(results.len(), 16, "one row per check: {results:?}");
+    assert_eq!(results.len(), 17, "one row per check: {results:?}");
     assert!(
         results
             .iter()
@@ -235,6 +248,10 @@ fn healthy_fresh_workspace_has_no_failures() {
     // No task ever committed on this host → no partitions to flag as orphaned.
     assert_eq!(
         status_of(&results, "orphan-task-stores").status,
+        WorkspaceDoctorStatus::Ok
+    );
+    assert_eq!(
+        status_of(&results, "empty-task-stubs").status,
         WorkspaceDoctorStatus::Ok
     );
 }
@@ -1075,6 +1092,38 @@ fn missing_shipped_activity_default_is_an_error_not_healthy() {
             .iter()
             .any(|row| row.status == WorkspaceDoctorStatus::Error),
         "a missing shipped default must not leave the workspace looking healthy: {results:?}"
+    );
+}
+
+/// [ORB-12668] An aborted create (ORB-* directory, no task.yaml) is named
+/// with its path and a reindex remediation instead of staying silent.
+#[test]
+fn unpublished_task_stub_is_reported_with_path_and_reindex_remediation() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    write_registered_workspace(&global_root, "ws_registered", "registered");
+    write_task_bundle(&global_root, "ws_registered", "ORB-00000");
+    let stub = write_unpublished_stub(&global_root, "ws_registered", "ORB-00001");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "empty-task-stubs");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    assert!(
+        row.message.contains(&stub.to_string_lossy().into_owned()),
+        "message names the stub path: {}",
+        row.message
+    );
+    assert!(
+        !row.message.contains("ORB-00000"),
+        "healthy bundles must not be reported as stubs: {}",
+        row.message
+    );
+    assert_eq!(
+        row.remediation.as_deref(),
+        Some(
+            "Run `orbit task reindex` from the owning checkout to skip or remove empty stub directories."
+        )
     );
 }
 

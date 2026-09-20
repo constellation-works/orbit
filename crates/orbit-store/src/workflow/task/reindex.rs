@@ -10,7 +10,9 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::with_exclusive_file_lock;
 use orbit_types::task::{TaskEnvelopeV2, is_valid_orb_task_id};
 
-use crate::driver::file::task_bundle::{bundle_lock_target, recover_pending_bundle_at};
+use crate::driver::file::task_bundle::{
+    bundle_lock_target, is_unpublished_stub, reap_unpublished_stub, recover_pending_bundle_at,
+};
 use crate::driver::sqlite::task_registry::{TaskRegistryStore, parse_orb_task_number};
 use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 
@@ -175,6 +177,23 @@ fn inspect_candidate(
             return Ok(None);
         }
         if !dir.try_exists()? {
+            if registry.unregister_task_bundle(task_id, workspace_id)? {
+                *removed_stale += 1;
+            }
+            return Ok(None);
+        }
+        // Aborted creates leave a valid ORB-* directory with no task.yaml
+        // (often only `.task.yaml.lock`). That is garbage, not an unresolved
+        // bundle: reap it so a healthy neighbor can still be indexed.
+        if is_unpublished_stub(dir) {
+            if let Err(error) = reap_unpublished_stub(dir) {
+                orbit_common::tracing::warn!(
+                    target: "orbit.store.task_reindex",
+                    bundle_dir = %dir.display(),
+                    error = %error,
+                    "failed to reap unpublished task-bundle stub; skipping",
+                );
+            }
             if registry.unregister_task_bundle(task_id, workspace_id)? {
                 *removed_stale += 1;
             }

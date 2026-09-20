@@ -181,6 +181,40 @@ fn listing_survives_a_bundle_removed_under_a_live_registry_binding() {
     );
 }
 
+/// An aborted create (ORB-* dir, no task.yaml) must not fail listing of
+/// healthy neighbors, even if a stale registry binding still names it.
+#[test]
+fn listing_skips_unpublished_stub_and_returns_healthy_neighbors() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let ids = create_tasks(&store, 2);
+    let stub = store
+        .bundle_store
+        .bundle_path("ORB-00099")
+        .expect("stub path");
+    std::fs::create_dir(&stub).expect("create stub dir");
+    std::fs::write(stub.join(".task.yaml.lock"), []).expect("write stub lock");
+    store
+        .bundle_store
+        .registry
+        .register_task_bundle("ORB-00099", &store.workspace_id, &stub)
+        .expect("register stub binding");
+
+    let listed: Vec<String> = store
+        .list_tasks()
+        .expect("an unpublished stub must not fail listing")
+        .into_iter()
+        .map(|task| task.id)
+        .collect();
+    assert_eq!(listed.len(), 2, "listed: {listed:?}");
+    assert!(listed.contains(&ids[0]) && listed.contains(&ids[1]));
+    assert!(!listed.contains(&"ORB-00099".to_string()));
+    assert!(
+        stub.exists(),
+        "listing skips stubs; reindex is what reaps them"
+    );
+}
+
 /// A stale sentinel from the retired lock protocol cannot hide corruption.
 #[test]
 fn listing_reports_an_incomplete_bundle_despite_a_stale_lock_sentinel() {

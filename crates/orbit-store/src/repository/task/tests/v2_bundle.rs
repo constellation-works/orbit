@@ -428,9 +428,13 @@ fn reindex_retains_unresolved_data_and_repairs_healthy_neighbors() {
             .unwrap_err()
             .to_string();
         assert!(error.contains("indexed 1 healthy tasks"), "{error}");
-        for id in ["ORB-00000", "ORB-00001", "ORB-00003"] {
+        for id in ["ORB-00000", "ORB-00001"] {
             assert!(error.contains(id), "{error}");
         }
+        assert!(
+            !error.contains("ORB-00003"),
+            "unpublished stubs are garbage, not unresolved bundles: {error}"
+        );
         assert_eq!(
             store
                 .registry
@@ -457,12 +461,56 @@ fn reindex_retains_unresolved_data_and_repairs_healthy_neighbors() {
             fs::read_to_string(deletion_path(&conflict).join("evidence")).unwrap(),
             "retain me"
         );
-        assert_eq!(
-            fs::read_to_string(orphan.join("evidence")).unwrap(),
-            "partial create"
+        assert!(
+            !orphan.exists(),
+            "unpublished stub without task.yaml is reaped"
         );
         assert!(store.registry.allocator_next_number().unwrap() >= 4);
     }
+}
+
+#[test]
+fn reindex_reaps_lock_only_stub_and_indexes_healthy_neighbor() {
+    use crate::workflow::task::reindex_workspace;
+
+    let temp = TempDir::new().unwrap();
+    let store = bundle_store(&temp);
+    let healthy = sample_bundle("ORB-00000");
+    store.create_bundle(&healthy).unwrap();
+    store
+        .registry
+        .replace_task_index(&store.workspace_id, &healthy.envelope)
+        .unwrap();
+    store
+        .registry
+        .unregister_task_bundle("ORB-00000", &store.workspace_id)
+        .unwrap();
+
+    let stub = store.bundle_path("ORB-00001").unwrap();
+    fs::create_dir(&stub).unwrap();
+    fs::write(stub.join(".task.yaml.lock"), []).unwrap();
+
+    let outcome = reindex_workspace(&store.registry, &store.workspace_id).expect("reindex");
+    assert_eq!(outcome.indexed, 1, "healthy neighbor is indexed");
+    assert!(!stub.exists(), "lock-only stub directory must be reaped");
+    assert_eq!(
+        store
+            .registry
+            .tasks_for_workspace(&store.workspace_id)
+            .unwrap()
+            .into_iter()
+            .map(|binding| binding.task_id)
+            .collect::<Vec<_>>(),
+        vec!["ORB-00000".to_string()]
+    );
+    assert_eq!(
+        store
+            .registry
+            .indexed_task_count_for_workspace(&store.workspace_id)
+            .unwrap(),
+        1
+    );
+    assert!(store.read_bundle("ORB-00000").is_ok());
 }
 
 #[test]

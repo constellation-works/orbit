@@ -17,7 +17,7 @@ use orbit_store::maintenance::task_registry::{
     task_workspaces_dir,
 };
 use orbit_store::workflow::task::{export_tasks, import_tasks, reindex_workspace};
-use orbit_types::task::is_valid_orb_task_id;
+use orbit_types::task::{TASK_ENVELOPE_FILE_NAME, is_valid_orb_task_id};
 
 use crate::OrbitRuntime;
 
@@ -148,6 +148,7 @@ impl OrbitRuntime {
                     .file_name()
                     .to_str()
                     .is_some_and(|id| is_valid_orb_task_id(id) && !indexed.contains(id))
+                && entry.path().join(TASK_ENVELOPE_FILE_NAME).is_file()
             {
                 unindexed += 1;
             }
