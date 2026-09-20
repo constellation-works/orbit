@@ -156,7 +156,7 @@ That is unavailable evidence, not a clean CI result.
   dependencies, secret handling, and configuration with evidence; files a
   durable Orbit task for each non-duplicate finding with severity and impact; a
   clean review is a successful no-op.
-- **`code-review`** (`medium`) — every six hours. Reviews the commits merged into the
+- **`code-review`** (`hard`) — every six hours. Reviews the commits merged into the
   integration branch since the previous sweep's recorded cursor, verifies each
   candidate finding against the live code, files the non-duplicate ones as tasks
   tagged `code-review`, and records the new last-reviewed commit in its execution
