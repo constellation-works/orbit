@@ -16,7 +16,7 @@ use crate::context::RuntimeHost;
 
 use super::super::input::{canonicalize_existing_dir, input_string_field, required_job_run_id};
 use super::failure::commit_head_matches_failure_handoff;
-use super::git::{git_output, git_output_raw, git_success};
+use super::git::{git_command_success, git_output, git_output_raw, git_success};
 use super::handoff::reject_failed_delivery;
 use author::{append_co_author_trailers, commit_author_for_tasks, reviewer_author};
 use git_ops::{
@@ -207,9 +207,12 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
     reject_failed_delivery(&task)?;
 
     // ADR-0219: an explicitly side-effect-only task may skip a *clean* commit
-    // phase instead of failing it. ORB-12683: a moved HEAD means there is
-    // already work to deliver, so the tag must not skip before the tree is
-    // inspected — fall through to already_committed / leftover-work handling.
+    // phase instead of failing it. ORB-12683: a descendant HEAD means the run
+    // already committed corrections, so the tag must not skip before the tree
+    // is inspected — fall through to already_committed / leftover-work handling.
+    // ORB-12690: the tag is not an unconditional allow_moved_head. Bypass
+    // changed_head_error only when HEAD is a descendant of the pinned base;
+    // unrelated or otherwise non-descendant history still fails closed.
     let no_diff_expected = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
     let allow_empty = input
         .get("allow_empty")
@@ -233,7 +236,9 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
                 &base_sha,
                 &head_sha,
             )?;
-            if !preserved_failure_head && !allow_moved_head && !no_diff_expected {
+            let tagged_descendant =
+                no_diff_expected && head_descends_from_pin(&workspace_path, &base_sha, &head_sha)?;
+            if !preserved_failure_head && !allow_moved_head && !tagged_descendant {
                 return Err(changed_head_error(
                     &task.id,
                     &workspace_path,
@@ -404,6 +409,23 @@ fn validate_pinned_head(workspace_path: &Path, input: &Value) -> Result<PinnedHe
     }
 
     Ok(PinnedHead::Changed { base_sha, head_sha })
+}
+
+/// Whether HEAD is a descendant of the pinned setup checkpoint.
+///
+/// `validate_pinned_head` only compares object ids; it does not walk history.
+/// The `no-diff-expected` tag may proceed past a moved HEAD only when that
+/// HEAD sits on the pin (the run's own commits — ORB-12683). A non-descendant
+/// HEAD, including an orphan/unrelated root, still fails closed (ORB-12690).
+fn head_descends_from_pin(
+    workspace_path: &Path,
+    base_sha: &str,
+    head_sha: &str,
+) -> Result<bool, OrbitError> {
+    git_command_success(
+        workspace_path,
+        &["merge-base", "--is-ancestor", base_sha, head_sha],
+    )
 }
 
 /// Reject anything that is not a full Git object id.

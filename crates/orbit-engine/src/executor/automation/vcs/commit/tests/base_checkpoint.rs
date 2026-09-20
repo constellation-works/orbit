@@ -5,8 +5,8 @@
 //! `.git`. A sibling run's setup fetch, a rescue fetch, or a merge moves it
 //! while other runs are still in flight, so a commit step that re-resolved the
 //! name failed every older run by construction. These tests pin the immutable
-//! base contract, the ADR-0219 carve-out reachability, and the rule that no
-//! failure path mutates the worktree on its way out.
+//! base contract, the ancestry-gated `no-diff-expected` carve-out, and the
+//! rule that no failure path mutates the worktree on its way out.
 
 use std::fs;
 use std::path::Path;
@@ -424,6 +424,57 @@ fn no_diff_expected_skips_only_when_head_still_matches_the_pin() {
         git_output(workspace, &["rev-parse", "HEAD"]).expect("read head after"),
         base_sha,
         "the skip creates no commit"
+    );
+}
+
+#[test]
+fn no_diff_expected_unrelated_history_fails_closed() {
+    // ORB-12690: the tag is not an unconditional allow_moved_head. Restore the
+    // orphan/unrelated-history fixture that 94c24441c deleted
+    // (`no_diff_expected_task_skips_the_phase_even_when_its_base_is_unreachable`)
+    // and assert fail-closed so the run never reaches already_committed.
+    let temp = initialized_git_repo();
+    let workspace = temp.path();
+    let base_sha = git_output(workspace, &["rev-parse", "HEAD"]).expect("read checkpoint");
+
+    git_success(workspace, &["checkout", "--orphan", "unrelated"])
+        .expect("start unrelated history");
+    git_success(workspace, &["rm", "-rf", "--cached", "."]).expect("clear orphan index");
+    fs::write(workspace.join("unrelated.txt"), "unrelated root\n").unwrap();
+    let unrelated_head = commit_all(workspace, "unrelated root commit");
+    let status_before = git_output(
+        workspace,
+        &["status", "--porcelain", "--untracked-files=all"],
+    )
+    .expect("status before refusal");
+
+    let mut task = task_with_file("T1", "Unrelated history", "unrelated.txt", "sonnet");
+    task.tags.push(NO_DIFF_EXPECTED_TAG.to_string());
+    let host = CommitTestHost::new(vec![task], workspace.to_path_buf());
+
+    let error = git_commit(&host, &batch_input(workspace, &base_sha))
+        .expect_err("tagged unrelated history must fail closed");
+
+    let message = error.to_string();
+    assert!(message.contains("worktree_head_changed"), "{message}");
+    assert!(
+        message.contains(&base_sha),
+        "names the pinned base: {message}"
+    );
+    assert!(message.contains(&unrelated_head), "names HEAD: {message}");
+    assert_eq!(
+        git_output(workspace, &["rev-parse", "HEAD"]).expect("head after refusal"),
+        unrelated_head,
+        "no commit may be created on a failure path"
+    );
+    assert_eq!(
+        git_output(
+            workspace,
+            &["status", "--porcelain", "--untracked-files=all"]
+        )
+        .expect("status after refusal"),
+        status_before,
+        "the worktree must be left as found"
     );
 }
 
