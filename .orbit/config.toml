@@ -14,7 +14,7 @@ sandbox = "danger-full-access"
 [workflow]
 auto_ship = true
 base_branch = "agent-main"
-default_crew = "sonnet"
+default_crew = "opus"
 system_crew = "luna"
 low_complexity_crews = ["luna:80", "gemini-flash:20"]
 medium_complexity_crews = ["grok", "sol"]
@@ -43,7 +43,7 @@ effort = "medium"
 backend = "cli"
 model = "gpt-6-astra"
 provider = "codex"
-effort = "hard"
+effort = "high"
 
 [crews.sol]
 backend = "cli"
