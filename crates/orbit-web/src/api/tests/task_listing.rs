@@ -130,7 +130,7 @@ async fn aggregate_selects_global_newest_rows_before_reading_off_page_workspace_
     );
 }
 use axum::http::StatusCode;
-use orbit_core::{OrbitRuntime, application::task::TaskUpdateParams};
+use orbit_core::{OrbitRuntime, TaskStatus, application::task::TaskUpdateParams};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -350,4 +350,48 @@ async fn list_rows_resolve_crew_without_reading_the_task_job_run() {
             .all(|transition| transition.get("required_field").is_none()),
         "summary transitions leave the requirement to the detail endpoint"
     );
+}
+
+/// [ORB-12678] Once a dispatched task carries the stamped crew, list rows and
+/// the detail projection agree — the list path never needs a job-run read.
+#[tokio::test]
+async fn list_and_detail_agree_on_stamped_task_crew() {
+    let runtime = Arc::new(OrbitRuntime::in_memory().unwrap());
+    let registry = runtime.configured_crew_registry_projection();
+    let stamped = registry
+        .crews
+        .iter()
+        .find(|crew| !crew.is_default)
+        .or(registry.crews.first())
+        .expect("in-memory runtime registers at least one crew");
+    let task = super::tasks::seed_backlog_task(&runtime, "Stamped crew task");
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                crew: Some(Some(stamped.name.clone())),
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+
+    let list = body_json(request_shared(runtime.clone(), "/tasks").await).await;
+    let detail = body_json(request_shared(runtime, &format!("/tasks/{}", task.id)).await).await;
+    let row = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == json!(task.id))
+        .unwrap();
+    assert_eq!(row["crew"], json!(stamped.name));
+    assert_eq!(row["resolved_crew"], json!(stamped.name));
+    assert_eq!(row["crew_model"], json!(stamped.model));
+    assert_eq!(detail["crew"], json!(stamped.name));
+    assert_eq!(detail["resolved_crew"], json!(stamped.name));
+    assert_eq!(detail["crew_model"], json!(stamped.model));
+    assert_eq!(row["resolved_crew"], detail["resolved_crew"]);
+    assert_eq!(row["crew_model"], detail["crew_model"]);
 }
