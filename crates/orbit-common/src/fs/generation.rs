@@ -21,6 +21,9 @@ pub const GENERATION_CONTRACT: &str = "executable-generation-v1";
 /// A shared generation pin. Retain until all operations and replies finish.
 pub struct GenerationGuard {
     _file: File,
+    /// True when this process joined a recorded generation other than its own
+    /// digest, without rewriting the record (read-only same-schema join).
+    joined_foreign: bool,
 }
 
 impl Drop for GenerationGuard {
@@ -46,6 +49,9 @@ const QUIESCE: &str = "Quiesce the existing Orbit processes through their owning
 const UNWRITABLE: &str = "Run the recorded generation, or retry where the Orbit root is writable. \
      A read-only mount, or a sandbox that denies writes under this root, \
      cannot record a takeover";
+
+const WRITES_WHILE_FOREIGN: &str = "another executable generation is still running \
+     (this command writes; read-only commands are admitted when the store schema matches)";
 
 const ADMISSION_LOCK: &str = ".generation-admission.lock";
 const GENERATION_LOCK: &str = ".generation.lock";
@@ -323,9 +329,35 @@ fn read_generation(file: &mut File) -> Result<String, OrbitError> {
 }
 
 impl GenerationGuard {
+    fn holding(file: File, joined_foreign: bool) -> Self {
+        Self {
+            _file: file,
+            joined_foreign,
+        }
+    }
+
+    /// Whether this pin joined a live generation without recording this digest.
+    pub fn joined_foreign_generation(&self) -> bool {
+        self.joined_foreign
+    }
+
     /// Pin this process before runtime bootstrap, for the whole process lifetime.
     pub fn for_process(root: &Path) -> Result<Self, OrbitError> {
         Self::acquire(root, process_generation()?)
+    }
+
+    /// Pin a write-free process. A differing digest may join the recorded
+    /// generation without rewriting it when `compiled_schema` equals the live
+    /// store schema. `store_schema` is consulted only on a digest mismatch.
+    pub fn for_process_read_only<F>(
+        root: &Path,
+        compiled_schema: u32,
+        store_schema: F,
+    ) -> Result<Self, OrbitError>
+    where
+        F: FnOnce() -> Result<u32, OrbitError>,
+    {
+        Self::acquire_read_only(root, process_generation()?, compiled_schema, store_schema)
     }
 
     /// Pin an exact digest. The admission mutex makes lock conversion atomic
@@ -335,18 +367,50 @@ impl GenerationGuard {
         let mut generation = open(root, GENERATION_LOCK)?;
         FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
         if read_generation(&mut generation.file)? == digest {
-            return Ok(Self {
-                _file: generation.file,
-            });
+            return Ok(Self::holding(generation.file, false));
         }
         FileExt::unlock(&generation.file).map_err(refusal)?;
-        FileExt::try_lock_exclusive(&generation.file)
-            .map_err(|_| refusal("another executable generation is still running"))?;
+        FileExt::try_lock_exclusive(&generation.file).map_err(|_| refusal(WRITES_WHILE_FOREIGN))?;
         GenerationUpdate {
             admission,
             generation,
         }
         .pin(digest)
+    }
+
+    /// Join the live generation for a write-free command.
+    ///
+    /// Matching digest behaves like [`Self::acquire`]. A differing digest
+    /// keeps the shared lock and leaves the record unchanged when the
+    /// compiled store schema equals the live store schema.
+    pub fn acquire_read_only<F>(
+        root: &Path,
+        digest: &str,
+        compiled_schema: u32,
+        store_schema: F,
+    ) -> Result<Self, OrbitError>
+    where
+        F: FnOnce() -> Result<u32, OrbitError>,
+    {
+        let _admission = admission(root)?;
+        let mut generation = open(root, GENERATION_LOCK)?;
+        FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
+        if read_generation(&mut generation.file)? == digest {
+            return Ok(Self::holding(generation.file, false));
+        }
+        let store_schema = store_schema().map_err(|error| {
+            refusal(format!(
+                "another executable generation is still running \
+                 (cannot read store schema for a read-only join: {error})"
+            ))
+        })?;
+        if compiled_schema != store_schema {
+            return Err(refusal(format!(
+                "another executable generation is still running \
+                 (store schema {store_schema} differs from compiled schema {compiled_schema})"
+            )));
+        }
+        Ok(Self::holding(generation.file, true))
     }
 }
 
@@ -406,9 +470,7 @@ impl GenerationUpdate {
         self.generation.file.sync_all().map_err(refusal)?;
         FileExt::lock_shared(&self.generation.file).map_err(refusal)?;
         drop(self.admission);
-        Ok(GenerationGuard {
-            _file: self.generation.file,
-        })
+        Ok(GenerationGuard::holding(self.generation.file, false))
     }
 }
 

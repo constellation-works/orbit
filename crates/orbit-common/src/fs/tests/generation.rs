@@ -368,6 +368,77 @@ fn shared_child() {
     let _ = std::io::stdin().read(&mut [0u8; 1]);
 }
 
+#[test]
+fn read_only_join_keeps_the_recorded_generation_and_blocks_update() {
+    let root = tempfile::tempdir().expect("root");
+    let old = GenerationGuard::acquire(root.path(), OLD).expect("record OLD");
+    let joined = GenerationGuard::acquire_read_only(root.path(), NEW, 22, || Ok(22))
+        .expect("same-schema read-only join");
+    assert!(joined.joined_foreign_generation());
+    assert_eq!(
+        std::fs::read_to_string(root.path().join(".generation.lock")).expect("record"),
+        format!("1:{OLD}\n")
+    );
+    let update = match GenerationUpdate::acquire(root.path()) {
+        Ok(_) => panic!("update must stay refused under a read-only joiner"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        update.contains("Orbit clients or commands are still running"),
+        "{update}"
+    );
+    let writes = match GenerationGuard::acquire(root.path(), NEW) {
+        Ok(_) => panic!("a writing command must not take over under a live pin"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        writes.contains("this command writes"),
+        "writer refusal must say the command writes: {writes}"
+    );
+    assert!(
+        writes.contains("read-only commands are admitted when the store schema matches"),
+        "{writes}"
+    );
+    drop(joined);
+    drop(old);
+}
+
+#[test]
+fn read_only_join_refuses_when_store_schema_differs() {
+    let root = tempfile::tempdir().expect("root");
+    drop(GenerationGuard::acquire(root.path(), OLD).expect("record OLD"));
+    let refusal = match GenerationGuard::acquire_read_only(root.path(), NEW, 22, || Ok(21)) {
+        Ok(_) => panic!("schema mismatch must refuse a foreign read-only join"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        refusal.contains("store schema 21 differs from compiled schema 22"),
+        "{refusal}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join(".generation.lock")).expect("record"),
+        format!("1:{OLD}\n")
+    );
+}
+
+#[test]
+fn matching_digest_read_only_join_does_not_consult_store_schema() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let root = tempfile::tempdir().expect("root");
+    drop(GenerationGuard::acquire(root.path(), OLD).expect("record OLD"));
+    let probed = AtomicBool::new(false);
+    let joined = GenerationGuard::acquire_read_only(root.path(), OLD, 22, || {
+        probed.store(true, Ordering::SeqCst);
+        Ok(99)
+    })
+    .expect("same-digest read-only join");
+    assert!(!joined.joined_foreign_generation());
+    assert!(
+        !probed.load(Ordering::SeqCst),
+        "matching digest must not require a schema probe"
+    );
+}
+
 // APFS rejects directory names containing invalid UTF-8 with EILSEQ, so these
 // byte-preservation fixtures are meaningful only on Unix filesystems that
 // accept arbitrary path bytes.

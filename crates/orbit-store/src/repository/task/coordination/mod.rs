@@ -242,6 +242,22 @@ impl TaskCommitBoundary {
         Ok(boundary)
     }
 
+    /// Observation-only handle: no directory creation, lock files, or marker writes.
+    pub fn for_observation(
+        store: Store,
+        registry: TaskRegistryStore,
+        workspace_id: String,
+    ) -> Result<Self, OrbitError> {
+        let partition_dir = registry.workspace_partition_dir(&workspace_id)?;
+        Ok(Self {
+            bundle_store: TaskBundleStoreV2::new(registry.clone(), workspace_id.clone()),
+            store,
+            registry,
+            workspace_id,
+            partition_dir,
+        })
+    }
+
     fn verify_journal_binding(&self) -> Result<(), OrbitError> {
         let marker = self.partition_dir.join(REQUIRED_MARKER_FILE);
         if marker.try_exists()? {

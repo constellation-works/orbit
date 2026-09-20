@@ -9,7 +9,7 @@ use orbit_types::task::{
     is_valid_orb_task_id, is_valid_task_id_prefix, normalize_task_tags, parse_task_number,
     task_id_prefix, validate_orb_task_id, validate_task_relations_for_source,
 };
-use rusqlite::{Connection, TransactionBehavior, params, params_from_iter};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior, params, params_from_iter};
 
 use super::partition_id::{next_partition_id_candidate, sanitize_slug, validate_partition_id};
 use super::queries::{
@@ -98,6 +98,24 @@ impl TaskRegistryStore {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             readers: (!read_only).then(|| Arc::new(ReadPool::new(path.to_path_buf()))),
+            workspaces_dir,
+        })
+    }
+
+    /// Open an existing registry without creating files, applying schema, or
+    /// taking a writer connection. Used by a differing-generation read-only join.
+    pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
+        let registry_dir = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let workspaces_dir = normalize_path(&registry_dir.join("workspaces"));
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        assert_readable_schema(&conn, path)?;
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            readers: None,
             workspaces_dir,
         })
     }

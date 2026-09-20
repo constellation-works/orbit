@@ -1,6 +1,7 @@
 //! Real process coverage: no replacement server, retries or substitute authority.
 use super::*;
-use orbit_common::fs::generation::executable_generation;
+use orbit_common::fs::generation::{GenerationGuard, executable_generation};
+use std::collections::BTreeMap;
 
 fn preflight(workspace: &McpWorkspace) -> std::process::Output {
     McpWorkspace::orbit_command(&workspace.work, &workspace.home)
@@ -15,6 +16,59 @@ fn assert_refused(output: &std::process::Output) {
         String::from_utf8_lossy(&output.stderr).contains("upgrade admission refused"),
         "{output:?}"
     );
+}
+
+fn distinct_candidate(workspace: &McpWorkspace) -> PathBuf {
+    let candidate = workspace.home.join("candidate-orbit");
+    std::fs::copy(env!("CARGO_BIN_EXE_orbit"), &candidate).expect("candidate copy");
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&candidate)
+        .expect("open candidate")
+        .write_all(b"\nupgrade-regression-candidate\n")
+        .expect("distinct executable");
+    candidate
+}
+
+fn authority_root(workspace: &McpWorkspace) -> PathBuf {
+    workspace.home.join(".orbit")
+}
+
+fn generation_record(workspace: &McpWorkspace) -> String {
+    std::fs::read_to_string(authority_root(workspace).join(".generation.lock")).expect("record")
+}
+
+fn snapshot_tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    fn walk(dir: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+        for entry in entries {
+            let entry = entry.expect("entry");
+            let path = entry.path();
+            let file_type = entry.file_type().expect("file type");
+            if file_type.is_dir() {
+                walk(&path, files);
+            } else if file_type.is_file() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                // SQLite may materialize WAL/SHM for a read-only open. Flock
+                // state (and the empty lock files flock needs) is excluded.
+                if name.ends_with("-wal")
+                    || name.ends_with("-shm")
+                    || name.ends_with(".lock")
+                    || name == "orbit.jsonl"
+                    || name.starts_with("orbit.jsonl.")
+                {
+                    continue;
+                }
+                files.insert(path.clone(), std::fs::read(&path).expect("read"));
+            }
+        }
+    }
+    walk(root, &mut files);
+    files
 }
 
 fn store_bytes(workspace: &McpWorkspace) -> Vec<(PathBuf, Vec<u8>)> {
@@ -154,7 +208,6 @@ fn different_executable_cannot_auto_migrate_while_old_client_is_live() {
     for args in [
         vec!["migrate", "--confirm"],
         vec!["workspace", "sync"],
-        vec!["task", "list", "--json"],
         vec!["mcp", "serve"],
     ] {
         let output =
@@ -164,6 +217,11 @@ fn different_executable_cannot_auto_migrate_while_old_client_is_live() {
                 .output()
                 .expect("candidate launch");
         assert_refused(&output);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("this command writes"),
+            "writer refusal must say the command writes: {stderr}"
+        );
         assert_eq!(store_bytes(&workspace), before);
     }
     client.call_tool_ok("orbit_workspace_list", json!({}));
@@ -227,4 +285,176 @@ fn listener_retains_admission_until_process_exit() {
     client.call_tool_ok("orbit_workspace_list", json!({}));
     drop(client);
     assert!(preflight(&workspace).status.success());
+}
+
+fn audit_rows(workspace: &McpWorkspace) -> i64 {
+    Connection::open_with_flags(
+        workspace.home.join(".orbit/orbit.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .expect("audit")
+    .query_row("SELECT COUNT(*) FROM audit_events", [], |row| row.get(0))
+    .expect("audit count")
+}
+
+fn assert_byte_identical_root(
+    before: &BTreeMap<PathBuf, Vec<u8>>,
+    after: &BTreeMap<PathBuf, Vec<u8>>,
+) {
+    let before_keys: BTreeSet<_> = before.keys().collect();
+    let after_keys: BTreeSet<_> = after.keys().collect();
+    let added: Vec<_> = after_keys.difference(&before_keys).collect();
+    let removed: Vec<_> = before_keys.difference(&after_keys).collect();
+    assert!(added.is_empty(), "read-only join created files: {added:?}");
+    assert!(
+        removed.is_empty(),
+        "read-only join removed files: {removed:?}"
+    );
+    for (path, bytes) in before {
+        assert_eq!(
+            after.get(path).map(Vec::as_slice),
+            Some(bytes.as_slice()),
+            "read-only join changed {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn read_only_foreign_digest_joins_matching_schema_without_rewriting_the_record() {
+    let workspace = McpWorkspace::init();
+    {
+        let mut client = workspace.serve();
+        client.call_tool_ok("orbit_workspace_list", json!({}));
+        drop(client);
+    }
+    let a_digest = executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit"))).expect("A");
+    let _pin_a = GenerationGuard::acquire(&authority_root(&workspace), &a_digest).expect("pin A");
+    let recorded = generation_record(&workspace);
+    let candidate = distinct_candidate(&workspace);
+    assert_ne!(
+        executable_generation(&candidate).expect("candidate"),
+        executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit"))).expect("live")
+    );
+    let before_tree = snapshot_tree(&authority_root(&workspace));
+    let before_audit = audit_rows(&workspace);
+
+    for args in [
+        vec!["task", "list", "--json"],
+        vec!["task", "flow"],
+        vec!["run", "history"],
+        vec!["run", "show"],
+        vec!["search", "registry"],
+        vec!["workspace", "list"],
+        vec!["workspace", "show"],
+        vec!["tool", "list"],
+    ] {
+        let output =
+            McpWorkspace::orbit_program_command(&candidate, &workspace.work, &workspace.home)
+                .args(&args)
+                .output()
+                .expect("read-only candidate");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains("upgrade admission refused"),
+            "read-only {:?} must be admitted under a live foreign pin\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            stderr
+        );
+        assert!(
+            output.status.success()
+                || stderr.contains("not found")
+                || stderr.contains("job run not found"),
+            "read-only {:?} failed after admission\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            stderr
+        );
+    }
+
+    let show = McpWorkspace::orbit_program_command(&candidate, &workspace.work, &workspace.home)
+        .args(["task", "show", "TST-1"])
+        .output()
+        .expect("task show");
+    assert!(
+        show.status.success() || String::from_utf8_lossy(&show.stderr).contains("not found"),
+        "task show must pass admission: {}",
+        String::from_utf8_lossy(&show.stderr)
+    );
+
+    assert_eq!(generation_record(&workspace), recorded);
+    assert_byte_identical_root(&before_tree, &snapshot_tree(&authority_root(&workspace)));
+    assert_eq!(audit_rows(&workspace), before_audit);
+
+    let writes = McpWorkspace::orbit_program_command(&candidate, &workspace.work, &workspace.home)
+        .args(["task", "add", "--title", "nope", "--complexity", "low"])
+        .output()
+        .expect("writing candidate");
+    assert_refused(&writes);
+    assert!(
+        String::from_utf8_lossy(&writes.stderr).contains("this command writes"),
+        "{}",
+        String::from_utf8_lossy(&writes.stderr)
+    );
+
+    let candidate_digest = executable_generation(&candidate).expect("candidate digest");
+    let compiled = Connection::open(workspace.home.join(".orbit/orbit.db"))
+        .expect("schema")
+        .query_row(
+            "SELECT MAX(CAST(substr(key, 12) AS INTEGER)) FROM schema_meta WHERE key LIKE 'migration.v%'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("compiled schema");
+    let _joiner = GenerationGuard::acquire_read_only(
+        &authority_root(&workspace),
+        &candidate_digest,
+        compiled as u32,
+        || Ok(compiled as u32),
+    )
+    .expect("hold foreign shared pin");
+    assert_refused(&preflight(&workspace));
+    assert_eq!(generation_record(&workspace), recorded);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn read_only_foreign_digest_refuses_when_store_schema_differs() {
+    let workspace = McpWorkspace::init();
+    {
+        let mut client = workspace.serve();
+        client.call_tool_ok("orbit_workspace_list", json!({}));
+        drop(client);
+    }
+    let home_orbit = authority_root(&workspace);
+    const FOREIGN: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let _pin = GenerationGuard::acquire(&home_orbit, FOREIGN).expect("pin A");
+    let db = home_orbit.join("orbit.db");
+    assert!(
+        db.is_file(),
+        "expected {} after MCP bootstrap",
+        db.display()
+    );
+    let connection = Connection::open(&db).expect("store");
+    connection
+        .execute(
+            "INSERT INTO schema_meta(key, value, updated_at) VALUES ('migration.v9999', 'fake', 'now')",
+            [],
+        )
+        .expect("bump schema");
+    drop(connection);
+    let candidate = distinct_candidate(&workspace);
+    let output = McpWorkspace::orbit_program_command(&candidate, &workspace.work, &workspace.home)
+        .args(["task", "list", "--json"])
+        .output()
+        .expect("schema-mismatch candidate");
+    assert_refused(&output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("store schema 9999 differs from compiled schema"),
+        "{stderr}"
+    );
+    assert_eq!(generation_record(&workspace), format!("1:{FOREIGN}\n"));
 }

@@ -9,7 +9,7 @@ use orbit_store::compose::{
     global_executor_def_store, global_policy_def_store, invocation_store_from_store,
     layered_policy_def_store, operation_store, review_store, tool_store_sqlite,
     v2_audit_store_from_store, workspace_coordinated_backends, workspace_job_run_store,
-    workspace_policy_def_store,
+    workspace_observational_backends, workspace_policy_def_store,
 };
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, WorkspaceConfig, read_workspace_config_optional,
@@ -52,10 +52,15 @@ pub(crate) fn build_context_from_roots(
     binding: Option<&WorkspaceRuntimeBinding>,
     runtime_config: &ResolvedConfig,
     host_lifetime: HostLifetime,
+    write_free: bool,
 ) -> Result<OrbitContext, OrbitError> {
     let persistence = &runtime_config.persistence;
 
-    let store = Store::open(&persistence.audit_db)?;
+    let store = if write_free {
+        Store::open_read_only(&persistence.audit_db)?
+    } else {
+        Store::open(&persistence.audit_db)?
+    };
 
     // workspace_root IS the .orbit dir. A cwd checkout binding is authoritative.
     // Without one, an explicit data dir must not mint parent(orbit-dir) as a
@@ -63,7 +68,7 @@ pub(crate) fn build_context_from_roots(
     // so every consumer of `repo_root` (including the context-selector guard)
     // would validate against the wrong tree. Recover the stored checkout, and
     // if none exists keep paths inside the data dir itself.
-    let repo_root = repo_root_for_runtime(global_root, workspace_root, binding)?;
+    let repo_root = repo_root_for_runtime(global_root, workspace_root, binding, write_free)?;
     let paths = WorkspacePaths::new_with_local(
         repo_root,
         workspace_root.to_path_buf(),
@@ -71,7 +76,8 @@ pub(crate) fn build_context_from_roots(
         global_root.to_path_buf(),
     );
 
-    let coordinated = build_v2_task_backends(global_root, &paths, binding, store.clone())?;
+    let coordinated =
+        build_v2_task_backends(global_root, &paths, binding, store.clone(), write_free)?;
     let task_backends = coordinated.task;
     let task_reservation_store = coordinated.reservation;
     let configured = read_workspace_config_optional(&paths.orbit_dir)?;
@@ -89,7 +95,7 @@ pub(crate) fn build_context_from_roots(
             .map(|config| config.workspace_id.clone())
     }
     .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
-    let import_report = if configured.is_none() {
+    let import_report = if write_free || configured.is_none() {
         orbit_store::workflow::legacy_state::ImportReport::skipped()
     } else {
         match orbit_store::workflow::legacy_state::import_legacy_v2_state(
@@ -117,7 +123,11 @@ pub(crate) fn build_context_from_roots(
             "skipped malformed legacy state records during SQLite import",
         );
     }
-    let semantic_index = SemanticIndex::open(&persistence.semantic_db)?;
+    let semantic_index = if write_free {
+        SemanticIndex::open_read_only(&persistence.semantic_db)?
+    } else {
+        SemanticIndex::open(&persistence.semantic_db)?
+    };
     // One companion per model for this process, shared by queries, indexing,
     // and the background worker. A long-lived host takes the process-wide pool
     // — it opens a runtime per call, so a per-runtime pool would reload the
@@ -143,13 +153,24 @@ pub(crate) fn build_context_from_roots(
     // under the workspace state directory.
     let tool_store = tool_store_sqlite(store.clone());
     let audit_event_store = audit_event_store_sqlite(store.clone());
-    let host_store = OrbitHostStore {
-        sqlite: store.clone(),
-        automation: automation_store(store.clone())?,
-        review: review_store(store.clone())?,
-        operation: operation_store(store.clone())?,
-        v2_audit: v2_audit_store_from_store(store.clone()),
-        invocation: invocation_store_from_store(store.clone()),
+    let host_store = if write_free {
+        OrbitHostStore {
+            sqlite: store.clone(),
+            automation: Arc::new(store.clone()),
+            review: Arc::new(store.clone()),
+            operation: Arc::new(store.clone()),
+            v2_audit: v2_audit_store_from_store(store.clone()),
+            invocation: invocation_store_from_store(store.clone()),
+        }
+    } else {
+        OrbitHostStore {
+            sqlite: store.clone(),
+            automation: automation_store(store.clone())?,
+            review: review_store(store.clone())?,
+            operation: operation_store(store.clone())?,
+            v2_audit: v2_audit_store_from_store(store.clone()),
+            invocation: invocation_store_from_store(store.clone()),
+        }
     };
     let executor_def_store = global_executor_def_store(persistence.executor_dir.clone());
     let global_policy_store = global_policy_def_store(persistence.policy_dir.clone());
@@ -165,7 +186,7 @@ pub(crate) fn build_context_from_roots(
 
     let skill_catalog =
         SkillCatalog::layered(persistence.skill_dir.clone(), global_root.join("skills"));
-    if let Err(error) = skill_catalog.ensure_layout() {
+    if !write_free && let Err(error) = skill_catalog.ensure_layout() {
         if error.is_readonly_or_access_failure() {
             tracing::warn!(
                 target: "orbit.core.bootstrap",
@@ -262,8 +283,13 @@ fn build_v2_task_backends(
     paths: &WorkspacePaths,
     runtime_binding: Option<&WorkspaceRuntimeBinding>,
     store: Store,
+    write_free: bool,
 ) -> Result<CoordinatedWorkspaceBackends, OrbitError> {
-    let registry = TaskRegistryStore::open(&task_registry_path(global_root))?;
+    let registry = if write_free {
+        TaskRegistryStore::open_read_only(&task_registry_path(global_root))?
+    } else {
+        TaskRegistryStore::open(&task_registry_path(global_root))?
+    };
     let config = read_workspace_config_optional(&paths.orbit_dir)?;
     // Several registered repositories may intentionally share one explicit
     // Orbit root. That root has only one compatibility config.yaml and cannot
@@ -274,11 +300,14 @@ fn build_v2_task_backends(
     if is_explicit_data_dir(global_root, &paths.orbit_dir)
         && let Some(binding) = runtime_binding
     {
-        ensure_explicit_root_task_binding(&registry, paths, binding)?;
-        return workspace_coordinated_backends(
+        if !write_free {
+            ensure_explicit_root_task_binding(&registry, paths, binding)?;
+        }
+        return compose_task_backends(
             registry,
             binding.logical_workspace_id.clone(),
             store,
+            write_free,
         );
     }
     let partition_id_hint = runtime_binding.map(|binding| binding.task_partition_id.as_str());
@@ -291,7 +320,7 @@ fn build_v2_task_backends(
             .as_ref()
             .map(|config| config.workspace_id.clone())
             .unwrap_or_else(|| UNBOUND_DATA_DIR_PARTITION_ID.to_string());
-        return workspace_coordinated_backends(registry, partition_id, store);
+        return compose_task_backends(registry, partition_id, store, write_free);
     }
     let configured_partition_id = config.as_ref().map(|config| config.workspace_id.as_str());
     if let (Some(hint), Some(configured)) = (partition_id_hint, configured_partition_id)
@@ -321,9 +350,18 @@ fn build_v2_task_backends(
         }
         None => match configured_partition_id.or(partition_id_hint) {
             Some(id) => Some(id.to_string()),
+            None if write_free => None,
             None => rebind_candidate_partition_id(&registry, paths)?,
         },
     };
+    if write_free {
+        let partition_id = partition_id.ok_or_else(|| {
+            OrbitError::WorkspaceError(
+                "read-only generation join needs an existing task-registry binding".to_string(),
+            )
+        })?;
+        return compose_task_backends(registry, partition_id, store, write_free);
+    }
     let binding = registry.bind_workspace(BindWorkspaceParams {
         partition_id,
         slug: workspace_slug(&paths.repo_root),
@@ -332,9 +370,10 @@ fn build_v2_task_backends(
         orbit_dir: paths.orbit_dir.clone(),
         repo_fingerprint: None,
     })?;
-    if config
-        .as_ref()
-        .is_none_or(|config| config.workspace_id != binding.partition_id)
+    if !write_free
+        && config
+            .as_ref()
+            .is_none_or(|config| config.workspace_id != binding.partition_id)
         && let Err(error) = write_workspace_config(
             &paths.orbit_dir,
             &WorkspaceConfig {
@@ -357,7 +396,20 @@ fn build_v2_task_backends(
         }
     }
 
-    workspace_coordinated_backends(registry, binding.partition_id, store)
+    compose_task_backends(registry, binding.partition_id, store, write_free)
+}
+
+fn compose_task_backends(
+    registry: TaskRegistryStore,
+    workspace_id: String,
+    store: Store,
+    write_free: bool,
+) -> Result<CoordinatedWorkspaceBackends, OrbitError> {
+    if write_free {
+        workspace_observational_backends(registry, workspace_id, store)
+    } else {
+        workspace_coordinated_backends(registry, workspace_id, store)
+    }
 }
 
 /// Recreate the selected checkout's task-registry binding after its index was
@@ -411,12 +463,14 @@ fn repo_root_for_runtime(
     global_root: &Path,
     workspace_root: &Path,
     binding: Option<&WorkspaceRuntimeBinding>,
+    write_free: bool,
 ) -> Result<PathBuf, OrbitError> {
     if let Some(binding) = binding {
         return Ok(binding.repo_root.clone());
     }
     if is_explicit_data_dir(global_root, workspace_root) {
-        if let Some(repo_root) = stored_checkout_repo_root(global_root, workspace_root)? {
+        if let Some(repo_root) = stored_checkout_repo_root(global_root, workspace_root, write_free)?
+        {
             return Ok(repo_root);
         }
         return Ok(workspace_root.to_path_buf());
@@ -432,11 +486,16 @@ fn repo_root_for_runtime(
 fn stored_checkout_repo_root(
     global_root: &Path,
     workspace_root: &Path,
+    write_free: bool,
 ) -> Result<Option<PathBuf>, OrbitError> {
     let Some(config) = read_workspace_config_optional(workspace_root)? else {
         return Ok(None);
     };
-    let registry = TaskRegistryStore::open(&task_registry_path(global_root))?;
+    let registry = if write_free {
+        TaskRegistryStore::open_read_only(&task_registry_path(global_root))?
+    } else {
+        TaskRegistryStore::open(&task_registry_path(global_root))?
+    };
     if let Some(checkout) = registry.find_workspace_checkout(&config.workspace_id)? {
         return Ok(Some(checkout.repo_root));
     }

@@ -258,7 +258,9 @@ impl RegisteredRuntimeFactory {
                 Some(inputs) if inputs.global_root == roots.global_root => inputs,
                 _ => RuntimeOpenInputs::read(&roots.global_root)?,
             };
-            sync_task_prefix_for_identity(&roots.global_root, &inputs.identity)?;
+            if !read_only {
+                sync_task_prefix_for_identity(&roots.global_root, &inputs.identity)?;
+            }
             let selection = select_workspace_for_cwd_and_roots(&cwd, &roots, &inputs.registry)?;
             let binding = selection
                 .as_ref()
@@ -499,7 +501,6 @@ impl RegisteredRuntimeFactory {
         local_root: &Path,
         identity: &HostIdentityState,
     ) -> Result<OrbitRuntime, OrbitError> {
-        sync_task_prefix_for_identity(global_root, identity)?;
         let binding = workspace_runtime_binding(workspace, checkout)?;
         OrbitRuntime::from_resolved_roots_read_only_with_binding(
             global_root,
