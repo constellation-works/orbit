@@ -8,7 +8,7 @@ use super::super::task_pilot::{
 };
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::{
-    runtime_with_workspace_layout, write_workspace_file,
+    runtime_with_workspace_config, runtime_with_workspace_layout, write_workspace_file,
 };
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
@@ -1317,5 +1317,150 @@ fn proposal_within_its_complexity_budget_attaches_no_finding() {
     assert_eq!(
         applied(&unassessed.id)["context_files_after"],
         json!(selectors[..10])
+    );
+}
+
+/// [ORB-12605] The reserved top tier carries the widest budget, so a 60-selector
+/// proposal is inside it and 61 is not. The workspace must raise
+/// `workflow.pilot_max_complexity` for an `xhard` assessment to apply at all.
+#[test]
+fn xhard_budget_admits_sixty_selectors_and_reports_the_sixty_first() {
+    let (_root, runtime, repo_root) =
+        runtime_with_workspace_config(Some("[workflow]\npilot_max_complexity = \"xhard\"\n"));
+    let selectors = workspace_selectors(&repo_root, 61);
+    let at_budget = seed_task(&runtime, "at-xhard-budget", TaskStatus::Backlog, &[], &[]);
+    let over_budget = seed_task(&runtime, "over-xhard-budget", TaskStatus::Backlog, &[], &[]);
+    let task_ids = vec![at_budget.id.clone(), over_budget.id.clone()];
+    let prepared_snapshot = prepared(&runtime, &repo_root, &task_ids);
+    let result = partition_result(
+        0,
+        &task_ids,
+        vec![
+            selector_assessment_with_complexity(
+                &at_budget,
+                selectors[..60].iter().map(String::as_str).collect(),
+                "xhard",
+            ),
+            selector_assessment_with_complexity(
+                &over_budget,
+                selectors.iter().map(String::as_str).collect(),
+                "xhard",
+            ),
+        ],
+    );
+
+    let output = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": prepared_snapshot,
+            "results": [result],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("xhard proposals apply under a raised cap");
+
+    assert_eq!(output["status"], "succeeded");
+    assert_eq!(output["complexity_escalation_blocked"], json!([]));
+    let assessment = |task_id: &str| -> Value {
+        output["tasks"]
+            .as_array()
+            .expect("applied assessments")
+            .iter()
+            .find(|assessment| assessment["task_id"] == task_id)
+            .expect("assessment for task")
+            .clone()
+    };
+    assert_eq!(
+        assessment(&at_budget.id)["context_attachment_warnings"],
+        json!([])
+    );
+    let findings = assessment(&over_budget.id)["context_attachment_warnings"]
+        .as_array()
+        .expect("context_attachment_warnings array")
+        .clone();
+    assert_eq!(findings.len(), 1);
+    let finding = findings[0].as_str().expect("finding string");
+    assert!(
+        finding.contains("61 selectors")
+            && finding.contains("60-selector budget")
+            && finding.contains("xhard"),
+        "finding must name the count, the xhard budget, and the tier: {finding}"
+    );
+    assert_eq!(
+        runtime
+            .get_task(&at_budget.id)
+            .expect("task after apply")
+            .complexity,
+        Some(TaskComplexity::XHard)
+    );
+}
+
+/// [ORB-12605] The pilot writes `complexity`, so without a ceiling it could
+/// route its own work to the reserved — and most expensive — crew pool. Above
+/// the cap the whole assessment is refused: the task keeps its complexity and
+/// its `context_files`, and the finding names both sides of the comparison.
+#[test]
+fn pilot_recommendation_above_the_cap_is_refused_with_a_finding() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "src/target.rs");
+    let task = seed_task(&runtime, "escalating", TaskStatus::Backlog, &[], &[]);
+    let task_ids = vec![task.id.clone()];
+    let prepared_snapshot = prepared(&runtime, &repo_root, &task_ids);
+    let result = partition_result(
+        0,
+        &task_ids,
+        vec![selector_assessment_with_complexity(
+            &task,
+            vec!["file:src/target.rs"],
+            "xhard",
+        )],
+    );
+
+    let output = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": prepared_snapshot,
+            "results": [result],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("a refused escalation is a decision, not a host failure");
+
+    assert_eq!(output["status"], "failed");
+    let finding = &output["complexity_escalation_blocked"][0];
+    assert_eq!(finding["task_id"], task.id);
+    assert_eq!(finding["recommended_complexity"], "xhard");
+    assert_eq!(finding["pilot_max_complexity"], "hard");
+    assert!(
+        finding["detail"]
+            .as_str()
+            .expect("detail")
+            .contains("workflow.pilot_max_complexity"),
+        "the finding must name the cap that refused it: {finding}"
+    );
+    let outcome = &output["task_outcomes"][0];
+    assert_eq!(outcome["outcome"], "invalid");
+    assert!(
+        outcome["error"]
+            .as_str()
+            .expect("error")
+            .contains("complexity_escalation_blocked"),
+        "the repair prompt must carry the refusal: {outcome}"
+    );
+    assert_eq!(
+        output["repair_partitions"][0]["task_ids"],
+        json!([task.id]),
+        "the refused task is reassessable"
+    );
+    let stored = runtime.get_task(&task.id).expect("task after apply");
+    assert_eq!(
+        stored.complexity, task.complexity,
+        "the task keeps the complexity it had before the refused assessment"
+    );
+    assert!(
+        stored.context_files.is_empty(),
+        "the refused assessment applies nothing at all"
     );
 }

@@ -51,7 +51,8 @@ spec:
        partition_decisions, partition_count, received_partition_count,
        failed_partitions, skipped_stale_partitions, task_outcomes, applied_count,
        unresolved_count, repair_count, repair_partitions, repair_prepared,
-       non_repairable_outcomes, tasks, ci_sweep_admission]
+       non_repairable_outcomes, tasks, ci_sweep_admission,
+       complexity_escalation_blocked]
     properties:
       status:
         type: string
@@ -112,6 +113,12 @@ spec:
         items:
           type: object
       ci_sweep_admission:
+        type: array
+        items:
+          type: object
+      # One entry per assessment refused for recommending above
+      # `workflow.pilot_max_complexity`; empty when nothing was refused.
+      complexity_escalation_blocked:
         type: array
         items:
           type: object

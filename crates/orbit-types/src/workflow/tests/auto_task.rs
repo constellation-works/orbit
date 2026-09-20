@@ -58,7 +58,7 @@ fn definition_validation_rejects_explicit_unassessed_complexity() {
         .validate()
         .expect_err("template complexity must be assessed");
     assert!(
-        error.to_string().contains("low, medium, or hard"),
+        error.to_string().contains("low, medium, hard, or xhard"),
         "{error}"
     );
 }

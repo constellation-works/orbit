@@ -561,7 +561,7 @@ fn task_pilot_output_schema_declares_advisory_field_types() {
     );
     assert_eq!(
         properties["recommended_complexity"]["enum"],
-        serde_json::json!(["low", "medium", "hard", "unassessed"])
+        serde_json::json!(["low", "medium", "hard", "xhard", "unassessed"])
     );
     assert_eq!(
         properties["confidence"]["enum"],

@@ -1037,7 +1037,7 @@ function completeFieldSave(taskId, field, updatedTask, context) {
    would only produce a 400. A task that currently carries it (or any value the
    server later adds) keeps a disabled placeholder so the select still shows
    what is stored. */
-const TASK_COMPLEXITY_OPTIONS = ["low", "medium", "hard"];
+const TASK_COMPLEXITY_OPTIONS = ["low", "medium", "hard", "xhard"];
 
 function buildComplexityUpdateControl(task, context) {
   const cell = el("div", { class: "complexity-cell" });

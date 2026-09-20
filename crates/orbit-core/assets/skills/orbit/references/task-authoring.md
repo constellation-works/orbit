@@ -48,7 +48,8 @@ Keep incomplete entry points unavailable when later slices are needed for safety
    required repository gates, and explicit platform or operator handoffs where
    necessary. See [task fields](task-fields.md) for `required_tools` and capabilities.
 4. Create through `orbit.task.add` with `model` attribution. Required inputs are
-   title, description, workspace and assessed complexity (`low`, `medium`, `hard`).
+   title, description, workspace and assessed complexity (`low`, `medium`, `hard`,
+   `xhard`).
    Use the advertised schema; detailed `plan` belongs to pickup, not task creation.
    Creation does not approve promotion, dispatch or completion.
 5. Read the returned ID using `fields: ["id"]` or a JSON parser. Never truncate a

@@ -16,6 +16,7 @@ use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{Crew, CrewAssignment, resolve_crew};
+use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::automation::recovery::DEFAULT_STALL_WINDOW_MINUTES;
 use orbit_types::workflow::{CODEX_PROVIDER_SANDBOX_MODES, Provider};
 
@@ -27,6 +28,9 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value as JsonValue, json};
 
 const DEFAULT_WORKFLOW_BASE_BRANCH: &str = "main";
+/// The pilot may assess up to `hard` on its own; `xhard` reserves the most
+/// capable crews for work an operator escalated deliberately.
+const DEFAULT_PILOT_MAX_COMPLEXITY: TaskComplexity = TaskComplexity::Hard;
 const DEFAULT_WORKFLOW_CREW: &str = "opus";
 /// Name of the crew seeded for the bounded system lane. `orbit init` writes
 /// both this crew table and the `workflow.system_crew` key that points at it,
@@ -303,10 +307,20 @@ define_config_settings! {
         description: "Weighted crew pool for unassigned medium-complexity tasks in auto drains; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
+    workflow_pilot_max_complexity: TaskComplexity => String {
+        key: "workflow.pilot_max_complexity", value_type: "string",
+        description: "Highest complexity the task pilot may assign: low, medium, hard (default), or xhard. A higher recommendation is refused as a complexity_escalation_blocked finding instead of being applied, so the reserved tier stays an operator decision.",
+        resolve: |raw: Option<String>| resolve_pilot_max_complexity(raw),
+    },
     workflow_system_crew: String => String {
         key: "workflow.system_crew", value_type: "string",
         description: "Named crew used by system activities such as step-failure recovery and the task pilot.",
         resolve: |raw: Option<String>| resolve_non_empty(raw, DEFAULT_WORKFLOW_SYSTEM_CREW, "workflow.system_crew"),
+    },
+    workflow_xhard_complexity_crews: Vec<String> => Vec<String> {
+        key: "workflow.xhard_complexity_crews", value_type: "array<string>",
+        description: "Weighted crew pool for unassigned xhard-complexity tasks in auto drains; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
 }
 
@@ -335,6 +349,11 @@ impl ConfigSnapshot {
             &mut self.workflow_hard_complexity_crews,
             crews,
             "workflow.hard_complexity_crews",
+        )?;
+        admit_crew_pool(
+            &mut self.workflow_xhard_complexity_crews,
+            crews,
+            "workflow.xhard_complexity_crews",
         )?;
         self.workflow_default_crew =
             resolve_default_crew(self.workflow_default_crew.take(), crews, env_default)?;
@@ -369,6 +388,24 @@ fn default_admission_crews() -> BTreeMap<String, Crew> {
             tags: Vec::new(),
         },
     )])
+}
+
+/// Admit `workflow.pilot_max_complexity`, the ceiling on what the task pilot
+/// may assign. Only assessed tiers are a ceiling: `unassessed` is the absence
+/// of an assessment, so it would cap the pilot at nothing.
+fn resolve_pilot_max_complexity(raw: Option<String>) -> Result<TaskComplexity, OrbitError> {
+    let Some(raw) = raw else {
+        return Ok(DEFAULT_PILOT_MAX_COMPLEXITY);
+    };
+    raw.trim()
+        .parse::<TaskComplexity>()
+        .ok()
+        .filter(|complexity| complexity.is_assessed())
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "workflow.pilot_max_complexity must be one of low, medium, hard, xhard (got '{raw}')"
+            ))
+        })
 }
 
 /// Admit one `workflow.*_complexity_crews` value in place, replacing it with

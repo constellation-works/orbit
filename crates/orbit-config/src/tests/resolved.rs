@@ -905,6 +905,7 @@ fn complexity_crew_pools_are_validated_deduplicated_and_projected() {
 low_complexity_crews = ["luna"]
 medium_complexity_crews = ["terra", " grok ", "terra"]
 hard_complexity_crews = ["astra"]
+xhard_complexity_crews = ["fable:70", "astra:30"]
 "#,
     )
     .expect("valid pools");
@@ -921,6 +922,10 @@ hard_complexity_crews = ["astra"]
         (
             "workflow.hard_complexity_crews",
             serde_json::json!(["astra"]),
+        ),
+        (
+            "workflow.xhard_complexity_crews",
+            serde_json::json!(["astra:30", "fable:70"]),
         ),
     ] {
         assert_eq!(config.snapshot.value_for(key), Some(expected));
@@ -967,7 +972,7 @@ fn complexity_crew_pools_layer_by_replacement_and_empty_disables() {
     let workspace = tempdir().expect("workspace");
     write_config(
         global.path(),
-        "[workflow]\nlow_complexity_crews = [\"luna\"]\nmedium_complexity_crews = [\"grok\"]\nhard_complexity_crews = [\"astra\"]\n",
+        "[workflow]\nlow_complexity_crews = [\"luna\"]\nmedium_complexity_crews = [\"grok\"]\nhard_complexity_crews = [\"astra\"]\nxhard_complexity_crews = [\"fable\"]\n",
     );
     write_config(
         workspace.path(),
@@ -977,7 +982,46 @@ fn complexity_crew_pools_layer_by_replacement_and_empty_disables() {
         ResolvedConfig::load(&roots(global.path(), workspace.path())).expect("layered pools");
     assert_eq!(config.complexity_crews.low, Some(vec!["luna".into()]));
     assert_eq!(config.complexity_crews.medium, Some(vec!["terra".into()]));
+    assert_eq!(config.complexity_crews.xhard, Some(vec!["fable".into()]));
     assert_eq!(config.complexity_crews.hard, Some(vec![]));
     let defaults = load_config("").expect("defaults");
     assert_eq!(defaults.complexity_crews.medium, Some(vec![]));
+    assert_eq!(defaults.complexity_crews.xhard, Some(vec![]));
+}
+
+/// [ORB-12605] The pilot writes `complexity`, so the reserved top tier is only
+/// reachable by an operator until this key says otherwise.
+#[test]
+fn pilot_max_complexity_defaults_to_hard_and_admits_only_assessed_tiers() {
+    use orbit_types::task::TaskComplexity;
+
+    let defaults = load_config("").expect("defaults");
+    assert_eq!(defaults.pilot_max_complexity, TaskComplexity::Hard);
+    assert_eq!(
+        defaults.snapshot.value_for("workflow.pilot_max_complexity"),
+        Some(serde_json::json!("hard"))
+    );
+
+    let raised = load_config("[workflow]\npilot_max_complexity = \"xhard\"\n")
+        .expect("xhard is a valid ceiling");
+    assert_eq!(raised.pilot_max_complexity, TaskComplexity::XHard);
+    assert_eq!(
+        raised.snapshot.value_for("workflow.pilot_max_complexity"),
+        Some(serde_json::json!("xhard"))
+    );
+    assert_eq!(
+        load_config("[workflow]\npilot_max_complexity = \"low\"\n")
+            .expect("low is a valid ceiling")
+            .pilot_max_complexity,
+        TaskComplexity::Low
+    );
+
+    for invalid in ["\"unassessed\"", "\"x-hard\"", "\"extreme\"", "\"\"", "3"] {
+        let error = load_config(&format!("[workflow]\npilot_max_complexity = {invalid}\n"))
+            .expect_err("only assessed tiers cap the pilot");
+        assert!(
+            error.to_string().contains("pilot_max_complexity"),
+            "{error}"
+        );
+    }
 }

@@ -235,6 +235,7 @@ pub(crate) fn build_context_from_roots(
             crews,
             default_crew,
             runtime_config.complexity_crews.clone(),
+            runtime_config.pilot_max_complexity,
             system_crew,
             operation,
         ),

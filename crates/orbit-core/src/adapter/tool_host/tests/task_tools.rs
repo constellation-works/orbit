@@ -1956,6 +1956,48 @@ fn task_update_tool_rejects_unassessed_complexity_and_keeps_the_stored_value() {
     );
 }
 
+/// [ORB-12605] `xhard` is an ordinary assessed value on the agent-facing
+/// create and update surfaces; only `unassessed` stays reserved there.
+#[test]
+fn task_tools_accept_xhard_on_create_and_update() {
+    let (_root, runtime, _repo_root) = test_runtime();
+    let added = runtime
+        .execute_tool_command(
+            "orbit.task.add",
+            json!({
+                "title": "Reserved tier work",
+                "description": "The top tier is assignable through the tool surface.",
+                "complexity": "xhard",
+                "workspace": ".",
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("task add accepts xhard");
+    assert_eq!(added.get("complexity"), Some(&json!("xhard")));
+    let task_id = added["id"].as_str().expect("task id");
+
+    let updated = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({ "id": task_id, "complexity": "hard" }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("task update accepts an assessed tier");
+    assert_eq!(updated.get("complexity"), Some(&json!("hard")));
+
+    let raised = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({ "id": task_id, "complexity": "xhard" }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("task update accepts xhard");
+    assert_eq!(raised.get("complexity"), Some(&json!("xhard")));
+}
+
 /// Automated callers write through the application layer, not the tool
 /// surface, so task-pilot, auto-task mint and other system paths keep the
 /// ability to store the explicit non-answer.

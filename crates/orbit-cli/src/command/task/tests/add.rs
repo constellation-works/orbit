@@ -222,6 +222,38 @@ fn task_add_requires_assessed_complexity() {
         .is_err(),
         "unassessed is not a CLI create value"
     );
+    // [ORB-12605] The reserved top tier is an ordinary create value on the CLI,
+    // spelled as one word rather than clap's default `x-hard`.
+    let xhard = Cli::try_parse_from([
+        "orbit",
+        "task",
+        "add",
+        "--title",
+        "Reserved tier",
+        "--complexity",
+        "xhard",
+    ])
+    .expect("xhard is an assessed create value");
+    let Commands::Task(task) = xhard.command else {
+        panic!("task command");
+    };
+    let TaskSubcommand::Add(args) = task.command else {
+        panic!("add");
+    };
+    assert_eq!(args.complexity, orbit_core::TaskComplexity::XHard);
+    assert!(
+        Cli::try_parse_from([
+            "orbit",
+            "task",
+            "add",
+            "--title",
+            "Hyphenated",
+            "--complexity",
+            "x-hard",
+        ])
+        .is_err(),
+        "the tier is spelled xhard, never x-hard"
+    );
 }
 
 #[test]

@@ -87,7 +87,7 @@ spec:
               type: string
             recommended_complexity:
               type: string
-              enum: [low, medium, hard, unassessed]
+              enum: [low, medium, hard, xhard, unassessed]
             assessment_rationale:
               type: string
             confidence:
@@ -236,9 +236,13 @@ spec:
        dependency bump with direct validation can be low; a caller migration
        is often medium; a trust-boundary or cross-subsystem redesign can be
        hard. These are policy examples, not proof of live-model classification
-       accuracy.
+       accuracy. `xhard` is the reserved top tier, routing work to the most
+       capable and most expensive crews; a workspace caps what this lane may
+       assign (`workflow.pilot_max_complexity`, `hard` by default) and refuses
+       an assessment above that cap outright, so recommend `xhard` only for a
+       repair `hard` genuinely understates.
        Whenever the pilot has produced selectors and a rationale, return an
-       assessed complexity (`low`, `medium`, or `hard`) with an appropriate
+       assessed complexity (`low`, `medium`, `hard`, or `xhard`) with an appropriate
        `confidence` level (`high`, `medium`, or `low`) expressing uncertainty.
        Reserve `unassessed` strictly for tasks where the pilot cannot identify
        the bounded repair at all, proposing the smallest bounded investigation
@@ -300,7 +304,7 @@ spec:
         "disposition":"selectors|verified_no_diff|host_operational",
         "evidence":"required when context_files_after is empty",
         "recommended_crew":"<crew configured in this workspace>",
-        "recommended_complexity":"low|medium|hard|unassessed",
+        "recommended_complexity":"low|medium|hard|xhard|unassessed",
         "assessment_rationale":"why evidence supports the rating or investigation",
         "confidence":"high|medium|low",
         "evidence_gaps":[],
@@ -319,7 +323,7 @@ spec:
 
     Copy `partition_index` and `task_ids` exactly from the input and return one
     task assessment per input ID. Whenever you have produced selectors and a
-    rationale, return an assessed complexity (`low|medium|hard`) with an
+    rationale, return an assessed complexity (`low|medium|hard|xhard`) with an
     appropriate `confidence` level (`high|medium|low`). Reserve `unassessed`
     strictly for tasks where the bounded repair cannot be identified at all.
     Define `evidence_gaps` as rating-changing unknowns only, leaving it empty

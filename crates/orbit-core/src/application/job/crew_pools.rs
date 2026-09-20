@@ -18,10 +18,11 @@ use crate::runtime::run_input::{non_empty, singular_task_id_from_input};
 
 const POOLS_KEY: &str = "auto_crew_pools";
 const SELECTION_KEY: &str = "crew_selection";
-const COMPLEXITIES: [TaskComplexity; 3] = [
+const COMPLEXITIES: [TaskComplexity; 4] = [
     TaskComplexity::Low,
     TaskComplexity::Medium,
     TaskComplexity::Hard,
+    TaskComplexity::XHard,
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
