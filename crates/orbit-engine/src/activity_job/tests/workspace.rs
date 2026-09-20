@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -264,6 +265,84 @@ fn fingerprint_identities_match_per_path_git_and_stay_stable() {
     assert!(
         value["tracked_patch_sha256"].is_string(),
         "tracked path patches retain a compact aggregate identity"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn untracked_symlinks_fingerprint_from_link_text() {
+    let fixture = linked_worktree_fixture();
+    seed_untracked_symlink_shapes(&fixture.assigned);
+
+    let first = git_fingerprint(&fixture.assigned).expect("fingerprint with untracked symlinks");
+    let regular = "regular.txt";
+    let link_to_dir = "link-to-dir";
+    let dangling = "dangling";
+    let link_to_file = "link-to-file";
+
+    let expected_regular = format!(
+        "git-blob:{}",
+        String::from_utf8_lossy(&git_bytes(
+            &fixture.assigned,
+            &["hash-object", "--no-filters", "--", regular]
+        ))
+        .trim()
+    );
+    assert_eq!(
+        first.untracked_content.get(regular).map(String::as_str),
+        Some(expected_regular.as_str()),
+        "regular-file identities stay on hash-object --no-filters"
+    );
+    assert_eq!(
+        first.untracked_content.get(link_to_dir).map(String::as_str),
+        Some(expected_symlink_blob(&fixture.assigned, link_to_dir).as_str())
+    );
+    assert_eq!(
+        first.untracked_content.get(dangling).map(String::as_str),
+        Some(expected_symlink_blob(&fixture.assigned, dangling).as_str())
+    );
+    assert_eq!(
+        first
+            .untracked_content
+            .get(link_to_file)
+            .map(String::as_str),
+        Some(expected_symlink_blob(&fixture.assigned, link_to_file).as_str())
+    );
+    assert_eq!(
+        untracked_file_identity(&fixture.assigned, link_to_dir)
+            .expect("dir-target symlink identity")
+            .as_deref(),
+        first.untracked_content.get(link_to_dir).map(String::as_str)
+    );
+
+    fs::remove_file(fixture.assigned.join(link_to_dir)).expect("remove dir-target symlink");
+    std::os::unix::fs::symlink("other-dir", fixture.assigned.join(link_to_dir))
+        .expect("retarget dir-target symlink");
+
+    let second = git_fingerprint(&fixture.assigned).expect("fingerprint after retarget");
+    assert_ne!(
+        first.untracked_content.get(link_to_dir),
+        second.untracked_content.get(link_to_dir),
+        "symlink identity must change when the link text changes"
+    );
+    assert_eq!(
+        second
+            .untracked_content
+            .get(link_to_dir)
+            .map(String::as_str),
+        Some(expected_symlink_blob(&fixture.assigned, link_to_dir).as_str())
+    );
+    assert_eq!(
+        first.untracked_content.get(dangling),
+        second.untracked_content.get(dangling)
+    );
+    assert_eq!(
+        first.untracked_content.get(link_to_file),
+        second.untracked_content.get(link_to_file)
+    );
+    assert_eq!(
+        first.untracked_content.get(regular),
+        second.untracked_content.get(regular)
     );
 }
 
@@ -608,6 +687,54 @@ fn seed_identity_dirt(root: &Path) {
     fs::write(root.join("dir with spaces/a file.txt"), "x").expect("spaced untracked");
     fs::create_dir_all(root.join("weird")).expect("weird dir");
     fs::write(root.join("weird/foo\"bar.txt"), "q\n").expect("quoted untracked");
+}
+
+#[cfg(unix)]
+fn seed_untracked_symlink_shapes(root: &Path) {
+    fs::create_dir_all(root.join("target-dir")).expect("target directory");
+    fs::write(root.join("target-file.txt"), "target\n").expect("target file");
+    fs::write(root.join("regular.txt"), "regular\n").expect("regular untracked file");
+    std::os::unix::fs::symlink("target-dir", root.join("link-to-dir"))
+        .expect("symlink to directory");
+    std::os::unix::fs::symlink("missing-target", root.join("dangling")).expect("dangling symlink");
+    std::os::unix::fs::symlink("target-file.txt", root.join("link-to-file"))
+        .expect("symlink to file");
+}
+
+#[cfg(unix)]
+fn expected_symlink_blob(root: &Path, path: &str) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let target = fs::read_link(root.join(path)).expect("readlink");
+    git_blob_from_stdin(root, target.as_os_str().as_bytes())
+}
+
+#[cfg(unix)]
+fn git_blob_from_stdin(repo: &Path, bytes: &[u8]) -> String {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["hash-object", "--stdin"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn git hash-object --stdin");
+    child
+        .stdin
+        .take()
+        .expect("hash-object stdin")
+        .write_all(bytes)
+        .expect("write link text");
+    let output = child.wait_with_output().expect("wait hash-object --stdin");
+    assert!(
+        output.status.success(),
+        "git hash-object --stdin failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    format!(
+        "git-blob:{}",
+        String::from_utf8_lossy(&output.stdout).trim()
+    )
 }
 
 fn write_untracked_tree(root: &Path, count: usize) {
