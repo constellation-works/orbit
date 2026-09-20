@@ -925,12 +925,30 @@ hard_complexity_crews = ["astra"]
     ] {
         assert_eq!(config.snapshot.value_for(key), Some(expected));
     }
+    let weighted = load_config(
+        "[workflow]\nmedium_complexity_crews = [\"grok:70\", \"opus:0\", \"terra:30\"]\n",
+    )
+    .expect("weighted pools load");
+    assert_eq!(
+        weighted.complexity_crews.medium,
+        Some(vec!["grok:70".into(), "opus:0".into(), "terra:30".into()])
+    );
+    assert_eq!(
+        weighted
+            .snapshot
+            .value_for("workflow.medium_complexity_crews"),
+        Some(serde_json::json!(["grok:70", "opus:0", "terra:30"]))
+    );
     for invalid in [
         r#"["missing"]"#,
         r#"[" "]"#,
         r#"["grok", ""]"#,
         "[1]",
         "false",
+        r#"["grok:50", "terra"]"#,
+        r#"["grok:50", "grok:20"]"#,
+        r#"["grok:-1"]"#,
+        r#"["grok:0", "terra:0"]"#,
     ] {
         let error = load_config(&format!(
             "[workflow]\nmedium_complexity_crews = {invalid}\n"

@@ -43,7 +43,7 @@ before the subcommand.
 |---|---|
 | `orbit run ship [task_id ...]` | Ship selected tasks, or the ready backlog, through the gated pipeline. Returns a run ID immediately. |
 | `orbit run ship --mode local` | Deliver in place instead of opening a pull request. |
-| `orbit run auto [--for <duration>]` | Drain the backlog for a window. `--concurrency`, `--allow-crew`, `--low-complexity-crews` / `--medium-complexity-crews` / `--hard-complexity-crews` (random crew pools for unassigned tasks; override the `[workflow]` pools), `--claim-token` when another operator holds the workspace claim. |
+| `orbit run auto [--for <duration>]` | Drain the backlog for a window. `--concurrency`, `--allow-crew`, `--low-complexity-crews` / `--medium-complexity-crews` / `--hard-complexity-crews` (crew pools for unassigned tasks, `crew` or `crew:weight`; override the `[workflow]` pools), `--claim-token` when another operator holds the workspace claim. |
 | `orbit run auto --grant <ID>` | Bind the drain to an operation-mode grant from `orbit operation enable`: window, task set, and completion authority come from the grant, and `--complete` is not accepted alongside it. |
 | `orbit run auto --stop` | Stop new admissions for this workspace's active auto coordinator. Already admitted workers keep running — this is not cancellation. |
 | `orbit run ship --complete` / `orbit run auto --complete` | Additionally authorize that run to finish delivery and move the tasks it ships from `review` to `done`. Off by default. |

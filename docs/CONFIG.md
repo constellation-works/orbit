@@ -900,6 +900,40 @@ medium_complexity_crews = ["grok", "terra"]
 hard_complexity_crews = ["astra"]
 ```
 
+#### Weighting a pool
+
+Each entry is written `name` or `name:weight`, so a pool can bias traffic
+without splitting workspaces:
+
+```toml
+[workflow]
+low_complexity_crews    = ["luna:50", "sonnet:50"]
+medium_complexity_crews = ["grok:70", "opus:10", "sol:20"]
+hard_complexity_crews   = ["opus", "sol"]          # bare list = uniform
+```
+
+The grammar:
+
+- Weights are relative non-negative whole numbers, not percentages. They need
+  not sum to 100; `["grok:7", "sol:3"]` and `["grok:70", "sol:30"]` draw the
+  same odds.
+- A pool is either all bare or all weighted. Mixing the two
+  (`["luna:50", "sonnet"]`) is a configuration error, as is a suffix that is
+  not a non-negative whole number (`grok:-1`, `grok:2.5`). The colon is
+  reserved by this grammar, so a bare name may not contain one.
+- A bare entry weighs one ticket, so a bare pool draws uniformly — exactly as
+  it did before weights existed. Bare duplicates still collapse to one ticket
+  per crew; a weighted pool names each crew once, and a repeat is an error.
+- Weight `0` parks a crew without deleting it from the pool: it is never
+  drawn. At least one entry must weigh more than `0`, or the pool is an error.
+- Entries are validated the same way wherever they are written — `config.toml`
+  at load, `orbit config set`, and the `--<tier>-complexity-crews` CLI
+  overrides — and the error names the setting.
+
+The draw takes one ticket in `[0, total_weight)` and walks the pool in
+canonical name order, so `medium_complexity_crews = ["grok:70", "opus:10",
+"sol:20"]` sends 70% of unassigned medium work to `grok` and 10% to `opus`.
+
 Use `--low-complexity-crews`, `--medium-complexity-crews`, and
 `--hard-complexity-crews` for run overrides, including with `--grant`. Each
 provided CLI pool replaces only its matching configuration pool for that
@@ -920,13 +954,16 @@ pool inherits configuration; an absent or empty effective pool uses the
 default chain. `medium_complexity_crews = []` disables that configured pool;
 `orbit run auto --medium-complexity-crews` (with no names) disables it for one
 drain. Blank entries such as `""` and unknown crew names fail before dispatch.
-Names are trimmed, resolved against the configured registry and deduplicated,
-so repeated entries never add random weight.
+Names are trimmed and resolved against the configured registry; bare pools are
+deduplicated, so repeated entries never add draw weight.
 
 Pools are selection preferences. They do not install a crew allowlist or
 restrict manual assignments, ordinary `run ship`, or explicit activity crews.
-When a separately supplied `--allow-crew` restricts the drain, random selection
-is uniform among the pool's permitted members. A disjoint pool is ineligible
+When a separately supplied `--allow-crew` restricts the drain, the draw
+renormalises over the pool's permitted members: their weights keep their
+ratios, and an excluded member's share is redistributed among them. A pool
+whose permitted members all weigh `0` has nothing to draw and counts as
+disjoint. A disjoint pool is ineligible
 and `orbit run readiness --allow-crew <crew>` diagnoses `crew_not_allowed`; an explicit task assignment
 outside the allowlist is also excluded. The allowlist still applies to system
 and review activities at dispatch, and operation grants keep their scope and
@@ -935,8 +972,12 @@ admission limits.
 The coordinator captures effective pools in run input `auto_crew_pools`.
 Each admitted leaf records `crew` and `crew_selection`, including
 the task ID, complexity, source (`task.crew`, `run_input.<complexity>_complexity_crews`,
-`workflow.<complexity>_complexity_crews`, `explicit`, or `default`), and eligible
-pool. Inspect these with `orbit run show <RUN_ID>`. Same-task pipeline children
+`workflow.<complexity>_complexity_crews`, `explicit`, or `default`), and the
+eligible pool as `[{name, weight}]` — the odds the draw actually ran on, after
+any allowlist renormalisation. Inspect these with `orbit run show <RUN_ID>`,
+which renders them on a `Crew Selection:` line. A pool captured before weights
+existed is stored as plain names and still resumes, each name weighing one
+ticket. Same-task pipeline children
 and retries/resumes retain the admitted selection even if configuration or
 the task assignment changes later. Different tasks, including a parent and its
 children, receive independent draws at their own admission. No choice rewrites

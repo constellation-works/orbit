@@ -61,7 +61,10 @@ use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 
-pub use crew_pools::{ComplexityCrewPools, canonical_crew_pool};
+pub use crew_pools::{
+    CanonicalCrewPool, ComplexityCrewPools, CrewPoolEntry, canonical_crew_pool,
+    canonical_crew_pool_entries,
+};
 pub use layering::{
     ConfigValueSource, ConfigValueSourceKind, EffectiveConfig, EffectiveConfigValue,
     load_effective_config,

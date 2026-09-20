@@ -223,3 +223,52 @@ fn history_role_prints_the_routine_name_instead_of_the_id_marker() {
         "unmarked"
     );
 }
+
+#[test]
+fn crew_selection_line_explains_the_weighted_odds_the_draw_ran_on() {
+    let input = json!({
+        "crew": "sol",
+        "crew_selection": {
+            "task_id": "ORB-1",
+            "crew": "sol",
+            "source": "workflow.medium_complexity_crews",
+            "complexity": "medium",
+            "eligible_pool": [{"name": "grok", "weight": 70}, {"name": "sol", "weight": 20}],
+        },
+    });
+
+    assert_eq!(
+        format_crew_selection_line(Some(&input)),
+        Some(
+            "Crew Selection: sol source=workflow.medium_complexity_crews complexity=medium \
+             eligible=grok:70, sol:20"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn crew_selection_line_reads_a_pool_recorded_before_weights_and_skips_manual_runs() {
+    let legacy = json!({
+        "crew_selection": {
+            "crew": "terra",
+            "source": "run_input.medium_complexity_crews",
+            "complexity": "medium",
+            "eligible_pool": ["grok", "terra"],
+        },
+    });
+
+    assert_eq!(
+        format_crew_selection_line(Some(&legacy)),
+        Some(
+            "Crew Selection: terra source=run_input.medium_complexity_crews complexity=medium \
+             eligible=grok, terra"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        format_crew_selection_line(Some(&json!({"crew": "sol"}))),
+        None
+    );
+    assert_eq!(format_crew_selection_line(None), None);
+}

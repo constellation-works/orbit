@@ -1551,6 +1551,40 @@ fn complexity_pools_drive_allowlist_eligibility_without_reassigning_manual_tasks
     );
 }
 
+/// [ORB-12604] A crew parked at weight 0 holds no ticket, so it cannot make a
+/// task eligible for a drain restricted to it. The task is excluded for the
+/// same reason a disjoint pool is, naming the whole pool it could not draw.
+#[test]
+fn a_pool_member_parked_at_weight_zero_is_not_a_permitted_crew() {
+    let (_root, runtime, _repo) = runtime_with_workspace_config(Some(
+        "[workflow]\ndefault_crew = \"opus\"\nmedium_complexity_crews = [\"grok:0\", \"terra:50\"]\n",
+    ));
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Weighted pool task".into(),
+            description: "Only the weighted member can be drawn".into(),
+            plan: "Inspect classification".into(),
+            complexity: orbit_types::task::TaskComplexity::Medium,
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("task");
+    assert_eq!(
+        classify_with(&runtime, json!({"allowed_crews": ["terra"]}))["loose_task_ids"],
+        json!([task.id])
+    );
+    assert_eq!(
+        classify_with(&runtime, json!({"allowed_crews": ["grok"]}))["loose_task_ids"],
+        json!([])
+    );
+    let readiness = runtime
+        .workspace_auto_readiness(std::slice::from_ref(&task.id), None, 10, &["grok".into()])
+        .expect("readiness");
+    let excluded = readiness_task(&readiness, &task.id);
+    assert_eq!(excluded["reason"], "crew_not_allowed");
+    assert_eq!(excluded["crew"], "grok, terra");
+}
+
 #[test]
 fn classifier_uses_captured_cli_pool_instead_of_current_configuration() {
     let (_root, runtime, _repo) =

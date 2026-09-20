@@ -75,16 +75,22 @@ pub struct AutoCommand {
     /// invocation is already running is cancelled.
     #[arg(long = "allow-crew", value_name = "CREW", value_delimiter = ',')]
     pub allow_crew: Vec<String>,
-    /// Random crew pool for unassigned low-complexity tasks. Overrides the
-    /// matching workflow pool; pass the flag with no names to disable it.
+    /// Random crew pool for unassigned low-complexity tasks. Entries are
+    /// `crew` or `crew:weight` (relative, non-negative whole numbers), all
+    /// bare or all weighted. Overrides the matching workflow pool; pass the
+    /// flag with no names to disable it.
     #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
     pub low_complexity_crews: Option<Vec<String>>,
-    /// Random crew pool for unassigned medium-complexity tasks. Overrides the
-    /// matching workflow pool; pass the flag with no names to disable it.
+    /// Random crew pool for unassigned medium-complexity tasks. Entries are
+    /// `crew` or `crew:weight` (relative, non-negative whole numbers), all
+    /// bare or all weighted. Overrides the matching workflow pool; pass the
+    /// flag with no names to disable it.
     #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
     pub medium_complexity_crews: Option<Vec<String>>,
-    /// Random crew pool for unassigned hard-complexity tasks. Overrides the
-    /// matching workflow pool; pass the flag with no names to disable it.
+    /// Random crew pool for unassigned hard-complexity tasks. Entries are
+    /// `crew` or `crew:weight` (relative, non-negative whole numbers), all
+    /// bare or all weighted. Overrides the matching workflow pool; pass the
+    /// flag with no names to disable it.
     #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
     pub hard_complexity_crews: Option<Vec<String>>,
     /// Bind this drain to an operation-mode grant (see `orbit operation`).

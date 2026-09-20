@@ -1,5 +1,7 @@
 //! Deterministic admission tests over the real task and run stores.
 
+use std::collections::BTreeMap;
+
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskComplexity, TaskStatus};
@@ -90,7 +92,7 @@ hard_complexity_crews = ["sol"]
     );
     assert_eq!(
         left["crew_selection"]["eligible_pool"],
-        json!(["grok", "terra"])
+        json!([{"name": "grok", "weight": 1}, {"name": "terra", "weight": 1}])
     );
     assert!(left.get("allowed_crews").is_none());
     assert_eq!(
@@ -154,7 +156,7 @@ fn explicit_task_crews_empty_pools_and_unassessed_tasks_preserve_fallback() {
     let (candidates, source) = runtime
         .auto_task_crew_candidates(&unset, &pools, None)
         .expect("legacy unset complexity");
-    assert_eq!(candidates[0].name, "opus");
+    assert_eq!(candidates[0].crew.name, "opus");
     assert_eq!(source, "default");
 }
 
@@ -458,4 +460,174 @@ fn no_diff_expected_task(runtime: &OrbitRuntime, crew: Option<&str>) -> Task {
             ..Default::default()
         })
         .expect("task")
+}
+
+/// [ORB-12604] A weighted pool hands out one ticket per unit of weight. The
+/// draw is swept across every ticket in `[0, total_weight)` — offset past the
+/// rejection threshold, which the uniform case already covers — so each crew
+/// must win exactly its share, in cumulative name order.
+#[test]
+fn weighted_pools_select_each_crew_for_exactly_its_share_of_the_tickets() {
+    let (_root, runtime, _, _) = test_runtime_with_workspace_config(
+        "[workflow]\nmedium_complexity_crews = [\"grok:70\", \"opus:10\", \"sol:20\"]\n",
+    );
+    let parent = coordinator(&runtime, json!({}));
+    let drawn = task(&runtime, TaskComplexity::Medium, None);
+    let mut wins: BTreeMap<String, u32> = BTreeMap::new();
+    for ticket in 0..100 {
+        // Offsetting by the bound keeps the ticket above the rejection
+        // threshold while `ticket % 100` still sweeps the whole range.
+        let input = admit(&runtime, &parent, &drawn, ticket + 100);
+        let crew = input["crew"].as_str().expect("crew").to_string();
+        let expected = match ticket {
+            0..70 => "grok",
+            70..80 => "opus",
+            _ => "sol",
+        };
+        assert_eq!(crew, expected, "ticket {ticket}");
+        *wins.entry(crew).or_default() += 1;
+    }
+    assert_eq!(
+        wins,
+        BTreeMap::from([
+            ("grok".to_string(), 70),
+            ("opus".to_string(), 10),
+            ("sol".to_string(), 20),
+        ])
+    );
+    let evidence = admit(&runtime, &parent, &drawn, 100);
+    assert_eq!(
+        evidence["crew_selection"]["eligible_pool"],
+        json!([
+            {"name": "grok", "weight": 70},
+            {"name": "opus", "weight": 10},
+            {"name": "sol", "weight": 20},
+        ])
+    );
+    assert_eq!(
+        evidence["crew_selection"]["source"],
+        "workflow.medium_complexity_crews"
+    );
+}
+
+/// [ORB-12604] An allowlist renormalises the odds over the members it permits,
+/// and a crew parked at weight 0 holds no ticket: it can neither win a draw
+/// nor stand in for a pool the allowlist has otherwise emptied.
+#[test]
+fn allowlists_renormalise_over_permitted_members_and_never_draw_a_parked_crew() {
+    let (_root, runtime, _, _) = test_runtime_with_workspace_config("");
+    let parent = coordinator(
+        &runtime,
+        json!({"medium_complexity_crews": ["grok:70", "opus:10", "sol:20"]}),
+    );
+    let drawn = task(&runtime, TaskComplexity::Medium, None);
+    for (ticket, expected) in [(0, "opus"), (9, "opus"), (10, "sol"), (29, "sol")] {
+        let mut input = json!({"task_ids": [drawn.id], "allowed_crews": ["opus", "sol"]});
+        runtime
+            .install_auto_crew_admission(
+                "task_auto_pipeline",
+                &mut input,
+                Some(&parent),
+                false,
+                // 30 permitted tickets, offset past the rejection threshold.
+                &mut || Ok(ticket + 30),
+            )
+            .expect("renormalised draw");
+        assert_eq!(input["crew"], expected, "ticket {ticket} of 30");
+        assert_eq!(
+            input["crew_selection"]["eligible_pool"],
+            json!([{"name": "opus", "weight": 10}, {"name": "sol", "weight": 20}]),
+            "the recorded odds are the permitted ones"
+        );
+    }
+    let parked = coordinator(
+        &runtime,
+        json!({"medium_complexity_crews": ["grok:0", "terra:50"]}),
+    );
+    // terra alone is permitted and carries every ticket: no draw is needed.
+    assert_eq!(
+        admit_allowed(&runtime, &parked, &drawn, &["terra"]).expect("sole permitted member")["crew"],
+        "terra"
+    );
+    let error = admit_allowed(&runtime, &parked, &drawn, &["grok"])
+        .expect_err("a parked crew is not a permitted member");
+    assert!(error.to_string().contains("no member permitted"), "{error}");
+}
+
+fn admit_allowed(
+    runtime: &OrbitRuntime,
+    parent: &str,
+    task: &Task,
+    allowed: &[&str],
+) -> Result<Value, OrbitError> {
+    let mut input = json!({"task_ids": [task.id], "allowed_crews": allowed});
+    runtime.install_auto_crew_admission(
+        "task_auto_pipeline",
+        &mut input,
+        Some(parent),
+        false,
+        &mut no_draw,
+    )?;
+    Ok(input)
+}
+
+/// [ORB-12604] `auto_crew_pools` persisted before weights existed stores plain
+/// crew names. Such a run must resume, and its same-task children must inherit,
+/// without a reroll; a sibling task admitted from it draws uniformly, exactly
+/// as it did when the pool was written.
+#[test]
+fn a_legacy_named_pool_resumes_inherits_and_draws_uniformly() {
+    let (_root, runtime, _, _) = test_runtime_with_workspace_config("");
+    let inherited = task(&runtime, TaskComplexity::Medium, None);
+    let sibling = task(&runtime, TaskComplexity::Medium, None);
+    // Hand-written in the shape a pre-ORB-12604 coordinator persisted.
+    let legacy = json!({
+        "task_ids": [inherited.id],
+        "crew": "terra",
+        "auto_crew_pools": {
+            "low": {"crews": [], "source": "workflow.low_complexity_crews"},
+            "medium": {
+                "crews": ["grok", "terra"],
+                "source": "run_input.medium_complexity_crews",
+            },
+            "hard": {"crews": [], "source": "workflow.hard_complexity_crews"},
+        },
+        "crew_selection": {
+            "task_id": inherited.id,
+            "crew": "terra",
+            "source": "run_input.medium_complexity_crews",
+            "complexity": "medium",
+            "eligible_pool": ["grok", "terra"],
+        },
+    });
+    let parent = persist(&runtime, "task_auto_pipeline", legacy.clone());
+
+    let mut resumed = legacy.clone();
+    runtime
+        .install_auto_crew_admission("task_auto_pipeline", &mut resumed, None, true, &mut no_draw)
+        .expect("resume a legacy run");
+    assert_eq!(resumed, legacy);
+
+    let mut child = json!({"task_ids": [inherited.id]});
+    runtime
+        .install_auto_crew_admission(
+            "task_gate_pipeline",
+            &mut child,
+            Some(&parent),
+            false,
+            &mut no_draw,
+        )
+        .expect("inherit the legacy selection");
+    assert_eq!(child["crew"], "terra");
+    assert_eq!(child["crew_selection"], legacy["crew_selection"]);
+
+    for (ticket, expected) in [(0, "grok"), (1, "terra")] {
+        let drawn = admit(&runtime, &parent, &sibling, ticket);
+        assert_eq!(drawn["crew"], expected);
+        assert_eq!(
+            drawn["crew_selection"]["eligible_pool"],
+            json!([{"name": "grok", "weight": 1}, {"name": "terra", "weight": 1}]),
+            "a legacy name carries the single ticket it always had"
+        );
+    }
 }

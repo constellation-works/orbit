@@ -290,17 +290,17 @@ define_config_settings! {
     },
     workflow_hard_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.hard_complexity_crews", value_type: "array<string>",
-        description: "Random crew pool for unassigned hard-complexity tasks in auto drains; empty disables the pool.",
+        description: "Weighted crew pool for unassigned hard-complexity tasks in auto drains; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
     workflow_low_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.low_complexity_crews", value_type: "array<string>",
-        description: "Random crew pool for unassigned low-complexity tasks in auto drains; empty disables the pool.",
+        description: "Weighted crew pool for unassigned low-complexity tasks in auto drains; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
     workflow_medium_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.medium_complexity_crews", value_type: "array<string>",
-        description: "Random crew pool for unassigned medium-complexity tasks in auto drains; empty disables the pool.",
+        description: "Weighted crew pool for unassigned medium-complexity tasks in auto drains; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
     workflow_system_crew: String => String {
@@ -321,18 +321,18 @@ impl ConfigSnapshot {
             Some(self.runtime_log_max_total_mb),
             Some(self.runtime_log_max_file_mb),
         )?;
-        self.workflow_low_complexity_crews = crate::canonical_crew_pool(
-            &self.workflow_low_complexity_crews,
+        admit_crew_pool(
+            &mut self.workflow_low_complexity_crews,
             crews,
             "workflow.low_complexity_crews",
         )?;
-        self.workflow_medium_complexity_crews = crate::canonical_crew_pool(
-            &self.workflow_medium_complexity_crews,
+        admit_crew_pool(
+            &mut self.workflow_medium_complexity_crews,
             crews,
             "workflow.medium_complexity_crews",
         )?;
-        self.workflow_hard_complexity_crews = crate::canonical_crew_pool(
-            &self.workflow_hard_complexity_crews,
+        admit_crew_pool(
+            &mut self.workflow_hard_complexity_crews,
             crews,
             "workflow.hard_complexity_crews",
         )?;
@@ -369,6 +369,17 @@ fn default_admission_crews() -> BTreeMap<String, Crew> {
             tags: Vec::new(),
         },
     )])
+}
+
+/// Admit one `workflow.*_complexity_crews` value in place, replacing it with
+/// its canonical `name[:weight]` rendering.
+fn admit_crew_pool(
+    pool: &mut Vec<String>,
+    crews: &BTreeMap<String, Crew>,
+    setting: &str,
+) -> Result<(), OrbitError> {
+    *pool = crate::canonical_crew_pool(pool, crews, setting)?.to_setting_value();
+    Ok(())
 }
 
 /// Look up one registry key's metadata.

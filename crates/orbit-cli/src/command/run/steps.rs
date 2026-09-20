@@ -8,8 +8,9 @@ use crate::command::{CommandOut, Payload};
 use crate::output::color::Domain;
 
 use super::format::{
-    format_admissions_stop_line, format_child_dispatch_lines, format_duration, format_run_role,
-    format_timestamp, format_waiting_line, format_worker_limit_line, summarize_error_message,
+    format_admissions_stop_line, format_child_dispatch_lines, format_crew_selection_line,
+    format_duration, format_run_role, format_timestamp, format_waiting_line,
+    format_worker_limit_line, summarize_error_message,
 };
 
 pub(crate) fn resolve_run(
@@ -195,6 +196,9 @@ pub(crate) fn run_header_text_with_state(run: &JobRun, state: Option<&PipelineSt
         .and_then(Value::as_str)
     {
         lines.push(format!("{} {}", bold("Requested Crew:"), requested_crew));
+    }
+    if let Some(line) = format_crew_selection_line(run.input.as_ref()) {
+        lines.push(line);
     }
     if run.resolved_crew.is_some() || run.crew_model.is_some() {
         lines.push(format!(
