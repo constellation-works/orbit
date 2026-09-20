@@ -34,8 +34,8 @@ fn runtime_free_command_set_is_derived_from_operations() {
 
     let runtime_required: &[&[&str]] = &[
         &["orbit", "migrate", "--confirm"],
-        &["orbit", "run", "history"],
         &["orbit", "task", "lint", "--restore-pruned"],
+        &["orbit", "task", "update", "ORB-10200"],
     ];
     for args in runtime_required {
         assert_eq!(
@@ -62,6 +62,10 @@ fn observation_commands_use_the_read_only_runtime() {
         &["orbit", "auto-task", "list"],
         &["orbit", "auto-task", "show", "daily"],
         &["orbit", "tool", "list"],
+        &["orbit", "search", "registry"],
+        &["orbit", "run", "history"],
+        &["orbit", "run", "show"],
+        &["orbit", "friction", "list"],
     ];
 
     for args in runtime_read_only {
@@ -77,6 +81,13 @@ fn observation_commands_use_the_read_only_runtime() {
             .task_owner_id
             .as_deref(),
         Some("ORB-10200")
+    );
+    assert_eq!(
+        operation_for(&[
+            "orbit", "friction", "add", "--body", "note", "--model", "codex",
+        ])
+        .runtime_need,
+        RuntimeNeed::Required
     );
 }
 

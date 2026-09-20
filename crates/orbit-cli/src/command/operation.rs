@@ -405,13 +405,13 @@ impl Commands {
                         "history",
                         Some("job_run"),
                         args.job_id.as_deref(),
-                        RuntimeNeed::Required,
+                        RuntimeNeed::ReadOnly,
                     ),
                     RunSubcommand::Show(args) => (
                         "show",
                         Some("job_run"),
                         args.run_id.as_deref(),
-                        RuntimeNeed::Required,
+                        RuntimeNeed::ReadOnly,
                     ),
                     RunSubcommand::Logs(args) => (
                         "logs",
@@ -638,7 +638,7 @@ impl Commands {
                 )
             }
             Commands::Search(command) => CommandOperation::new(
-                RuntimeNeed::Required,
+                RuntimeNeed::ReadOnly,
                 Some(admin_meta(
                     "search",
                     Some(&command.audit_subcommand()),
@@ -675,9 +675,15 @@ impl Commands {
             // this arm reads the invocation instead of matching verb by verb.
             // A new friction verb needs no edit here.
             Commands::Friction(command) => {
+                use orbit_common::governance::friction::FrictionVerb;
                 let invocation = &command.command;
+                let runtime_need = if invocation.spec.verb == FrictionVerb::List {
+                    RuntimeNeed::ReadOnly
+                } else {
+                    RuntimeNeed::Required
+                };
                 CommandOperation::new(
-                    RuntimeNeed::Required,
+                    runtime_need,
                     Some(admin_meta(
                         "friction",
                         Some(invocation.spec.name),

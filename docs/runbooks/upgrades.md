@@ -5,7 +5,7 @@ tags: [operations, upgrades, migrations, recovery]
 paths: ["crates/orbit-cmd/src/update/**", "crates/orbit-store/src/workflow/layout/**", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-store/src/contracts/compat.rs"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10014, ORB-11280, ORB-11344, ORB-11695, ORB-11753, ORB-12013, ORB-12434]
-last_validated: 2026-09-19
+last_validated: 2026-09-20
 ---
 
 # Upgrade Orbit Safely
@@ -163,13 +163,23 @@ workspace selection, operator/agent capability, remote caller and managed-run
 checks still run. Admission grants none of those permissions.
 
 The policy is deliberately conservative: any live process prevents ordinary
-`orbit update`, even an update with the same schema or version. Different
-executable generations cannot open runtimes concurrently against that authority,
-so launching a newly installed executable cannot silently auto-migrate underneath
-an older participating MCP process. The updater changes its exclusive pin to the
-candidate generation before convergence children start. An old pinned executable
-cannot enter that gap. Identical executable copies share admission; version
-strings alone are not compatibility evidence. On Linux, the digest comes from
+`orbit update`, even an update with the same schema or version. A *writing*
+command from a different executable generation cannot open a runtime while that
+authority is pinned, so launching a newly installed executable cannot silently
+auto-migrate underneath an older participating MCP process. A *read-only*
+command (`RuntimeNeed::ReadOnly` — `task show`/`list`/`flow`, `run history`/
+`show`, `search`, `workspace list`/`show`, `tool list`, `friction list`, and
+other observation verbs) may join the live generation without rewriting
+`.generation.lock` when its compiled store schema equals the store's current
+schema. The joiner takes the same shared flock, so `orbit update` still refuses
+while it runs. Schema equality is exact, not ORB-12434 additive-newer; a
+matching digest still uses that additive-newer read-only compatibility after
+admission. A differing digest whose schema does not match is refused for
+read-only commands too, naming both schema versions. Writer refusals say the
+command writes. The updater changes its exclusive pin to the candidate
+generation before convergence children start. An old pinned executable cannot
+enter that gap. Identical executable copies share admission; version strings
+alone are not compatibility evidence. On Linux, the digest comes from
 `/proc/self/exe`, including a deleted running inode. On macOS the native Mach-O
 image UUID must match the loaded image before the opened descriptor is hashed;
 a replaced path or unsupported image format refuses admission.

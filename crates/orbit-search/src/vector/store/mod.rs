@@ -72,6 +72,15 @@ impl VectorStore {
         })
     }
 
+    /// Open an existing index without creating files or applying schema.
+    pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| OrbitError::Store(error.to_string()))?;
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
+    }
+
     /// Open an in-memory orbit-search database. Used by tests.
     pub fn open_in_memory() -> Result<Self, OrbitError> {
         let conn = Connection::open_in_memory().map_err(|e| OrbitError::Store(e.to_string()))?;

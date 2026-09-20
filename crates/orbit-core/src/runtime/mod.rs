@@ -213,14 +213,53 @@ impl OrbitRuntime {
         layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
         host_lifetime: HostLifetime,
     ) -> Result<Self, OrbitError> {
-        let context = builder::build_context_from_roots(
+        Self::finish_from_context(
+            builder::build_context_from_roots(
+                global_root,
+                shared_root,
+                local_root,
+                binding.as_ref(),
+                runtime_config,
+                host_lifetime,
+                false,
+            )?,
+            binding,
             global_root,
-            shared_root,
-            local_root,
-            binding.as_ref(),
-            runtime_config,
-            host_lifetime,
-        )?;
+            layout_report,
+        )
+    }
+
+    pub(crate) fn build_from_resolved_config_write_free(
+        global_root: &Path,
+        shared_root: &Path,
+        local_root: &Path,
+        binding: Option<WorkspaceRuntimeBinding>,
+        runtime_config: &orbit_config::ResolvedConfig,
+        layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+        host_lifetime: HostLifetime,
+    ) -> Result<Self, OrbitError> {
+        Self::finish_from_context(
+            builder::build_context_from_roots(
+                global_root,
+                shared_root,
+                local_root,
+                binding.as_ref(),
+                runtime_config,
+                host_lifetime,
+                true,
+            )?,
+            binding,
+            global_root,
+            layout_report,
+        )
+    }
+
+    fn finish_from_context(
+        context: crate::context::OrbitContext,
+        binding: Option<WorkspaceRuntimeBinding>,
+        global_root: &Path,
+        layout_report: orbit_store::workflow::layout::LayoutUpgradeReport,
+    ) -> Result<Self, OrbitError> {
         Ok(Self {
             context,
             workspace_binding: binding.map(Arc::new),
@@ -263,6 +302,7 @@ impl OrbitRuntime {
             Some(&binding),
             runtime_config,
             HostLifetime::ShortLived,
+            false,
         )?;
         Ok(Self {
             context,

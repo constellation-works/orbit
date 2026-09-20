@@ -197,6 +197,32 @@ pub struct CoordinatedWorkspaceBackends {
 /// outcome.
 ///
 /// `store` must be the database that holds this host's reservations.
+pub fn workspace_observational_backends(
+    registry: TaskRegistryStore,
+    workspace_id: String,
+    store: Store,
+) -> Result<CoordinatedWorkspaceBackends, orbit_common::OrbitError> {
+    let commit_boundary = Arc::new(TaskCommitBoundary::for_observation(
+        store.clone(),
+        registry.clone(),
+        workspace_id.clone(),
+    )?);
+    let task_store = Arc::new(TaskV2Store::new(registry, workspace_id));
+    Ok(CoordinatedWorkspaceBackends {
+        task: WorkspaceTaskBackends {
+            task: task_store.clone(),
+            document: task_store.clone(),
+            history: task_store.clone(),
+            artifact: task_store,
+        },
+        reservation: Arc::new(SqliteTaskReservationStoreBackend {
+            store,
+            coordination: Arc::clone(&commit_boundary),
+        }),
+        commit_boundary,
+    })
+}
+
 pub fn workspace_coordinated_backends(
     registry: TaskRegistryStore,
     workspace_id: String,
@@ -242,7 +268,6 @@ pub fn layered_policy_def_store(
     Arc::new(LayeredPolicyDefStore::new(workspace, global))
 }
 
-#[cfg(test)]
 #[cfg(test)]
 mod tests;
 

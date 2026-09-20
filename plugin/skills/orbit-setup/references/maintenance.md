@@ -124,12 +124,19 @@ compatibility.
 
 Participating CLI/MCP processes pin their executable generation for their entire
 lifetime. An update refuses while any is live, and a different executable cannot
-auto-migrate underneath them. This covers stdio/operator, TCP listener,
-federated local, destination SSH and managed processes without changing their
-authority. Quiesce via the owning client/operator and retry; Orbit does not kill
-sessions, hand off connections, reclaim claims or replay mutations. For a lost
-reply, inspect the durable operation/audit before any retry. Never delete the
-root's `.generation.lock` or `.generation-admission.lock` to force admission.
+auto-migrate underneath them. A read-only command whose compiled store schema
+equals the live store schema may join that pin without rewriting `.generation.lock`
+(`task show`/`list`/`flow`, `run history`/`show`, `search`, `workspace list`/`show`,
+`tool list`, `friction list`). The joiner still holds the shared flock, so
+`orbit update` stays refused until it exits. Writers, MCP/web serve, `migrate --confirm`,
+and a differing schema are still refused; schema equality is exact, not
+additive-newer. Additive-newer read-only compatibility still applies
+to a matching digest. This covers stdio/operator, TCP listener, federated local,
+destination SSH and managed processes without changing their authority. Quiesce
+via the owning client/operator and retry; Orbit does not kill sessions, hand off
+connections, reclaim claims or replay mutations. For a lost reply, inspect the
+durable operation/audit before any retry. Never delete the root's
+`.generation.lock` or `.generation-admission.lock` to force admission.
 
 Existing pre-fix processes do not hold these locks: the first installation needs
 explicit quiescence and reconnection to the same configured authority. A desktop

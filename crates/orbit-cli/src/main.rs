@@ -40,6 +40,7 @@ mod parse;
 use clap::{Arg, ArgMatches, Command, CommandFactory, FromArgMatches};
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_core::ActorIdentity;
+use orbit_core::composition::pin_executable_generation;
 
 #[cfg(test)]
 use crate::command::init::InitCommand;
@@ -239,27 +240,15 @@ fn main() {
         "resolved output sink"
     );
     // Update owns exclusive admission and pins its candidate before convergence.
-    // Every other command pins the exact running inode before any bootstrap.
-    // This also covers all MCP transports, managed workers and automatic migrations.
-    // `--root` / `ORBIT_ROOT` isolate that pin so a read-only unpinned
-    // `~/.orbit` cannot block scratch init; without those, the host-global root
-    // remains the authority.
+    // Read-only commands may join a live generation without rewriting the
+    // record when store schema matches. Everything else pins the exact running
+    // inode before any bootstrap. This also covers all MCP transports, managed
+    // workers and automatic migrations. `--root` / `ORBIT_ROOT` isolate that
+    // pin so a read-only unpinned `~/.orbit` cannot block scratch init; without
+    // those, the host-global root remains the authority.
     let inspection =
         matches!(&cli.command, command::Commands::Migrate(command) if !command.confirm);
     let root_override = cli.root.clone();
-    let _generation = if matches!(&cli.command, command::Commands::Update(_)) || inspection {
-        None
-    } else {
-        match orbit_core::runtime::resolve_generation_root(root_override.as_deref())
-            .and_then(|root| orbit_common::fs::generation::GenerationGuard::for_process(&root))
-        {
-            Ok(guard) => Some(guard),
-            Err(error) => {
-                print_error(&error, &sink, None);
-                std::process::exit(1);
-            }
-        }
-    };
     let workspace_selector = cli.workspace.clone();
     let actor = ActorIdentity::from_env();
     let CommandOperation {
@@ -271,6 +260,19 @@ fn main() {
         dispatch,
         governed,
     } = cli.command.operation().attribute_to(&actor);
+    let _generation = if matches!(&cli.command, command::Commands::Update(_)) || inspection {
+        None
+    } else {
+        match orbit_core::runtime::resolve_generation_root(root_override.as_deref()).and_then(
+            |root| pin_executable_generation(&root, matches!(runtime_need, RuntimeNeed::ReadOnly)),
+        ) {
+            Ok(guard) => Some(guard),
+            Err(error) => {
+                print_error(&error, &sink, None);
+                std::process::exit(1);
+            }
+        }
+    };
 
     let bootstrapped = match &runtime_need {
         RuntimeNeed::Forbidden => {
@@ -345,14 +347,17 @@ fn main() {
         }
         None => Ok(()),
     };
+    let skip_audit = _generation
+        .as_ref()
+        .is_some_and(orbit_common::fs::generation::GenerationGuard::joined_foreign_generation);
     let result = match audit_meta {
-        Some(meta) => {
+        Some(meta) if !skip_audit => {
             let mut guard = audit_middleware::AuditGuard::new(&runtime, meta);
             let result = authorize(&runtime).and_then(|()| dispatch(cli.command, context));
             guard.mark_result(&result);
             result
         }
-        None => authorize(&runtime).and_then(|()| dispatch(cli.command, context)),
+        _ => authorize(&runtime).and_then(|()| dispatch(cli.command, context)),
     };
 
     finish_command(result, &sink, suppress_errors, json_error_preference);

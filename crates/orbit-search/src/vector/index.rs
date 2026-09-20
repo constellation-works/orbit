@@ -53,6 +53,18 @@ impl SemanticIndex {
         }
     }
 
+    /// Open an existing index without creating or migrating it. Missing or
+    /// unreadable storage is unavailable rather than a startup failure.
+    pub fn open_read_only(path: &Path) -> Result<Self, OrbitError> {
+        match VectorStore::open_read_only(path) {
+            Ok(store) => Ok(Self::Ready(store)),
+            Err(error) if error.is_readonly_or_access_failure() || !path.exists() => {
+                Ok(Self::Unavailable(unavailable_reason(path, &error)))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// The open store, or the error every semantic operation reports when
     /// there is no index to consult.
     pub fn store(&self) -> Result<&VectorStore, OrbitError> {
