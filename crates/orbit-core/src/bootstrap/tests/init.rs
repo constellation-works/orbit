@@ -112,13 +112,19 @@ fn global_and_workspace_init_create_private_directory_trees_under_permissive_uma
             &workspace.audit_dir,
             &workspace.job_runs_dir,
             &workspace.logs_dir,
-            &workspace.diagnostics_dir,
             &workspace.scoreboard_dir,
             &workspace.worktrees_dir,
-            &workspace.knowledge_dir,
         ]
         .into_iter()
         .map(PathBuf::as_path),
+    );
+    assert!(
+        !workspace.state_dir.join("diagnostics").exists(),
+        "workspace init must not scaffold unused state/diagnostics"
+    );
+    assert!(
+        !workspace_root.join("knowledge").exists(),
+        "workspace init must not scaffold unused knowledge/"
     );
 }
 

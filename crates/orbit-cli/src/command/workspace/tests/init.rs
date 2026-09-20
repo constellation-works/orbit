@@ -1596,9 +1596,19 @@ fn workspace_init_under_home_with_global_orbit_creates_repo_orbit() {
         .execute_without_runtime(None);
 
         result.expect("workspace init");
-        assert!(workspace.join(".orbit").join("state").is_dir());
-        assert!(workspace.join(".orbit").join("knowledge").is_dir());
-        assert!(!workspace.join(".orbit").join("adrs").exists());
+        let orbit = workspace.join(".orbit");
+        assert!(orbit.join("state").is_dir());
+        assert!(orbit.join("resources").is_dir());
+        for live_state in ["audit", "job-runs", "logs", "scoreboard", "worktrees"] {
+            assert!(
+                orbit.join("state").join(live_state).is_dir(),
+                "workspace init must scaffold state/{live_state}",
+                live_state = live_state
+            );
+        }
+        assert!(!orbit.join("knowledge").exists());
+        assert!(!orbit.join("state").join("diagnostics").exists());
+        assert!(!orbit.join("adrs").exists());
         assert!(!home.path().join(".orbit").join("state").exists());
         assert!(!home.path().join(".orbit").join("knowledge").exists());
         assert!(home.path().join(".orbit/workspaces.json").is_file());

@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit Data Handling — what stays on your machine, what leaves it, and to whom"
-last_validated: 2026-09-18
+last_validated: 2026-09-20
 ---
 
 # Orbit Data Handling
@@ -41,7 +41,7 @@ data-handling review:
 | Redacted agent output blobs | `<repo>/.orbit/state/audit/blobs/` | Content-addressed; secrets are redacted at write time (see below). |
 | Process logs | `~/.orbit/state/logs/orbit.jsonl` | JSONL, rotated locally; secret-looking values are redacted before reaching the sink. See [logging](./runbooks/logging.md). |
 | Semantic index (docs and tasks) | `<repo>/.orbit/state/semantic.db` | Local vector index; regenerable. Embeddings are computed on the host by the search companion. |
-| Worktrees and diagnostics | `<repo>/.orbit/state/worktrees/`, `state/diagnostics/` | Scratch; regenerable. |
+| Worktrees | `<repo>/.orbit/state/worktrees/` | Scratch; regenerable. |
 | Host identity (`machine_id`, `host_id`, task prefix) | `~/.orbit/host.toml` | A locally generated stable identifier. It is never transmitted to the Orbit project. |
 | Workspace registry, runtime config, resource overrides | `~/.orbit/config.toml`, `workspaces.json`, `resources/` | Configuration only. |
 
