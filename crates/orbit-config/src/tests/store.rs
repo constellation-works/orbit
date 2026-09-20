@@ -614,9 +614,12 @@ fn set_crew_effort_rejects_invalid_value_and_leaves_file_byte_identical() {
     store
         .set_value("crews.sol.effort", "medium-low")
         .expect("set_value only mutates in-memory");
-    let error = store
+    store
         .validate()
-        .expect_err("invalid effort must fail validation");
+        .expect("invalid optional effort is ignored at admission");
+    let error = store
+        .validate_for_set("crews.sol.effort")
+        .expect_err("set must still refuse an ignored optional effort");
     assert!(
         error
             .to_string()
@@ -624,7 +627,7 @@ fn set_crew_effort_rejects_invalid_value_and_leaves_file_byte_identical() {
         "{error}"
     );
     assert_eq!(
-        fs::read(&path).expect("read after failed validate"),
+        fs::read(&path).expect("read after failed validate_for_set"),
         original.as_bytes()
     );
 }
@@ -640,9 +643,12 @@ fn set_crew_effort_rejects_unsupported_provider_before_save() {
     store
         .set_value("crews.gemini.effort", "high")
         .expect("set_value only mutates in-memory");
-    let error = store
+    store
         .validate()
-        .expect_err("unsupported provider must fail closed");
+        .expect("unsupported provider effort is ignored at admission");
+    let error = store
+        .validate_for_set("crews.gemini.effort")
+        .expect_err("set must still refuse unsupported provider effort");
     assert!(
         error
             .to_string()
@@ -650,7 +656,7 @@ fn set_crew_effort_rejects_unsupported_provider_before_save() {
         "{error}"
     );
     assert_eq!(
-        fs::read(&path).expect("read after failed validate"),
+        fs::read(&path).expect("read after failed validate_for_set"),
         original.as_bytes()
     );
 }

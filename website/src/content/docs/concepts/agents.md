@@ -361,7 +361,7 @@ model = "gemini-3.8-flash-high"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p><code>xhigh</code> and <code>max</code> are deliberately absent: <code>agy --effort</code> does not define them, and Orbit rejects the config rather than quietly downgrading to <code>high</code>.</p><p>Antigravity model ids carry their own effort suffix and must come from <code>agy models</code>. A bare Gemini CLI id such as <code>gemini-3.8-flash</code> is rejected at config load — it is not rewritten into a suffixed slug.</p></div>
+<div class="ose-note"><p><code>xhigh</code> and <code>max</code> are deliberately absent: <code>agy --effort</code> does not define them, and Orbit ignores those values with a warning rather than quietly downgrading to <code>high</code>.</p><p>Antigravity model ids carry their own effort suffix and must come from <code>agy models</code>. A bare Gemini CLI id such as <code>gemini-3.8-flash</code> is rejected at config load — it is not rewritten into a suffixed slug.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-grok">
 <dl class="ose-facts">
@@ -395,7 +395,7 @@ model = "grok-4.6"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p>Grok effort is the one model-specific case. This picker shows the <code>grok-4.6</code> set; <code>grok-4.5</code> accepts <code>low</code>, <code>medium</code>, <code>high</code> and rejects <code>xhigh</code>.</p><p>Effort is verified only for those two models. Setting <code>effort</code> alongside any other Grok model — or alongside no model at all — fails config load instead of being sent to a CLI that might reinterpret it.</p></div>
+<div class="ose-note"><p>Grok effort is the one model-specific case. This picker shows the <code>grok-4.6</code> set; <code>grok-4.5</code> accepts <code>low</code>, <code>medium</code>, <code>high</code> and ignores <code>xhigh</code> with a warning.</p><p>Effort is verified only for those two models. Setting <code>effort</code> alongside any other Grok model — or alongside no model at all — is ignored with a warning instead of being sent to a CLI that might reinterpret it.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-copilot">
 <dl class="ose-facts">
@@ -415,7 +415,7 @@ model = "claude-sonnet-5"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p>No effort picker is shown because Orbit has no verified Copilot effort contract. Adding <code>effort</code> to this crew fails config load with <em>provider 'copilot' does not support configured reasoning effort</em> — the key is never silently dropped.</p><p>The retired <code>gh-copilot</code> gh extension is a different tool and is not an Orbit executor.</p></div>
+<div class="ose-note"><p>No effort picker is shown because Orbit has no verified Copilot effort contract. Adding <code>effort</code> to this crew is ignored with a warning (<em>provider 'copilot' does not support configured reasoning effort</em>) rather than taking the workspace down or remapping the key.</p><p>The retired <code>gh-copilot</code> gh extension is a different tool and is not an Orbit executor.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-cursor">
 <dl class="ose-facts">
@@ -435,7 +435,7 @@ model = "gpt-5"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p>Adding <code>effort</code> to this crew fails config load rather than being ignored.</p><p>Orbit dispatches to the standalone headless <code>cursor-agent</code> binary. Having the Cursor editor installed is not evidence that this executable is on <code>PATH</code>.</p></div>
+<div class="ose-note"><p>Adding <code>effort</code> to this crew is ignored with a warning rather than remapped onto a nearby value.</p><p>Orbit dispatches to the standalone headless <code>cursor-agent</code> binary. Having the Cursor editor installed is not evidence that this executable is on <code>PATH</code>.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-pi">
 <dl class="ose-facts">
@@ -521,7 +521,7 @@ model = "gemini-3.8-flash"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p><strong>This is the legacy Google lane.</strong> Individual Gemini CLI accounts stopped on 2026-06-18; enterprise Gemini Code Assist and API-key authentication remain available on it. New setups should prefer the <code>antigravity</code> executor, which is what <code>orbit init</code> now picks when <code>agy</code> is installed.</p><p>Adding <code>effort</code> to this crew fails config load rather than being ignored.</p></div>
+<div class="ose-note"><p><strong>This is the legacy Google lane.</strong> Individual Gemini CLI accounts stopped on 2026-06-18; enterprise Gemini Code Assist and API-key authentication remain available on it. New setups should prefer the <code>antigravity</code> executor, which is what <code>orbit init</code> now picks when <code>agy</code> is installed.</p><p>Adding <code>effort</code> to this crew is ignored with a warning rather than remapped onto a nearby value.</p></div>
 </div>
 </div>
 
