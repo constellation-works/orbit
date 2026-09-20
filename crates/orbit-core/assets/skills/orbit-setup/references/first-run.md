@@ -194,8 +194,9 @@ initial setup succeeded:
 
 1. **A docs corpus** — register the markdown the repo already has, so agents
    retrieve by concept instead of filename. → [docs-corpus.md](../../orbit/references/docs-corpus.md)
-2. **Crews and base branch** — point `workflow.base_branch` at the branch task
-   PRs should target, and set a default crew. → [configuration.md](configuration.md)
+2. **Crews and base branch** — register the workspace with `--base-branch`
+   at the branch task PRs should target (`workflow.base_branch` is only the
+   config fallback), and set a default crew. → [configuration.md](configuration.md)
 3. **The scheduler** — host clock, then routines, in the documented order.
    → [automation.md](automation.md)
 4. **Recurring chores** — QA sweeps, friction curation, anything periodic.

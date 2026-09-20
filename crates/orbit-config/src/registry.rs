@@ -398,7 +398,7 @@ define_config_settings! {
     },
     workflow_base_branch: String => String {
         key: "workflow.base_branch", value_type: "string",
-        description: "Default base branch for ship workflows.",
+        description: "Config fallback for ship/auto/pilot base branch when no registered workspace base_branch is bound.",
         section: ConfigSection::Delivery, order: 10,
         resolve: |raw: Option<String>| resolve_non_empty(raw, DEFAULT_WORKFLOW_BASE_BRANCH, "workflow.base_branch"),
     },

@@ -46,7 +46,7 @@ assuming a value.
 
 | Key | Purpose |
 |---|---|
-| `workflow.base_branch` | Default base branch for ship workflows. Set this first — it decides where PRs land. |
+| `workflow.base_branch` | Config fallback for ship/auto/pilot base branch. A registered workspace `base_branch` takes precedence. |
 | `workflow.default_crew` | Crew for any task that doesn't declare one. |
 | `workflow.system_crew` | Crew for Orbit's own bounded activities (failure recovery, task pilot). |
 | `workflow.auto_ship` | Opt-in for unattended ship dispatch via the scheduler. |

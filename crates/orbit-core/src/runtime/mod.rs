@@ -602,9 +602,9 @@ impl OrbitRuntime {
         self.context.settings().pr_config()
     }
 
-    /// Default base branch for ship workflows. Sourced
-    /// from `[workflow] base_branch` in the active `config.toml`; defaults
-    /// to `"main"` when no key is present.
+    /// Config-only `[workflow] base_branch` fallback (default `"main"`).
+    /// Delivery defaults must use [`Self::workspace_base_branch`], which
+    /// prefers the registered workspace base branch when a binding exists.
     pub fn workflow_base_branch(&self) -> &str {
         self.context.settings().workflow_base_branch()
     }

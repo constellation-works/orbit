@@ -34,7 +34,7 @@ orbit run ship-sweep --dry-run      # what every registered workspace would ship
 
 `ship` with no IDs discovers ready backlog work itself. `--mode` defaults to the
 workspace's registered ship mode (`pr` unless set otherwise), and `--base`
-defaults to `workflow.base_branch`.
+defaults to the registered workspace base branch, else `workflow.base_branch`.
 
 `run auto` drains backlog leaf tasks for a bounded window. The window bounds
 only the *start* of new work — a task already shipping when it expires still
@@ -157,8 +157,8 @@ selectors, but refuses an ID already prepared by an active run; inspect or
 resume the named run instead.
 
 At the prepare activity boundary, an omitted optional `base_branch` is bound as
-an empty string. Prepare treats an omitted or empty value as
-`workflow.base_branch`, fetches that landing branch, and pins one
+an empty string. Prepare treats an omitted or empty value as the registered
+workspace base branch, else `workflow.base_branch`, fetches that landing branch, and pins one
 `source_revision` while preserving primary HEAD, index, dirty and untracked
 files. Remote failure stops before an agent call. Each pilot runs in its own
 detached checkout at that revision, with
@@ -248,7 +248,7 @@ in the first place, see [multi-host.md](../../orbit-setup/references/multi-host.
 `ship-sweep` and the `ship-sweep` routine dispatch without a human present. Both
 require `workflow.auto_ship = true`. Before enabling either:
 
-- Confirm `workflow.base_branch` points where PRs should actually land.
+- Confirm the registered workspace base branch (else `workflow.base_branch`) points where PRs should actually land.
 - Enable worktree GC first — unattended shipping is the fastest way to fill a
   disk with abandoned worktrees. → [maintenance.md](../../orbit-setup/references/maintenance.md)
 - Watch `orbit run ship-sweep --dry-run` across a realistic backlog first.

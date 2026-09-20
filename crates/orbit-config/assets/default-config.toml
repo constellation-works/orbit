@@ -30,8 +30,8 @@ sandbox = "danger-full-access"
 enabled = true
 
 [workflow]
-# Default base branch for `orbit run ship`.
-# Override per-invocation with `--base <branch>`.
+# Config fallback for ship/auto/pilot when no registered workspace
+# base_branch is bound. Override per-invocation with `--base <branch>`.
 base_branch = "main"
 # Crew used by bounded system activities, such as step-failure recovery.
 # `orbit init` seeds a `system` crew whenever it detects a supported CLI,

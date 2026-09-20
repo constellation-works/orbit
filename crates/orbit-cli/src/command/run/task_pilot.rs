@@ -22,8 +22,8 @@ pub struct TaskPilotCommand {
     /// proposed/backlog tasks with empty context_files or unassessed complexity.
     #[arg(value_name = "TASK_ID", num_args = 0..)]
     pub task_ids: Vec<String>,
-    /// Base branch to inspect. Omit to let the job resolve
-    /// `[workflow] base_branch`.
+    /// Base branch to inspect. Omit to use the registered workspace
+    /// base branch, else `[workflow] base_branch`.
     #[arg(long = "base-branch", value_name = "BRANCH")]
     pub base_branch: Option<String>,
     /// Maximum tasks to select. Omit to use the job default (50).

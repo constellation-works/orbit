@@ -374,8 +374,7 @@ pub(crate) struct OrbitRuntimeSettings {
     /// evaluator escalates it (`[automation] stall_window_minutes`).
     automation_stall_window_minutes: u32,
     pr_config: PrConfig,
-    /// Default base branch for ship workflows
-    /// (`[workflow] base_branch` in `config.toml`, default `"main"`).
+    /// Config-only `[workflow] base_branch` fallback (default `"main"`).
     workflow_base_branch: String,
     /// Opt-in for unattended ship dispatch
     /// (`[workflow] auto_ship` in `config.toml`, default `false`).
