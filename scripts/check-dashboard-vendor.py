@@ -3,9 +3,9 @@
 
 The dashboard self-hosts DOMPurify and marked as checked-in blobs. Pins,
 upstream URLs, and SHA-256 digests live in vendor-manifest.json; npm identity
-for Dependabot lives in the sibling package.json. This check is the
-regression gate: an undocumented swap or a version bump that does not
-refresh the copies cannot land silently.
+for Dependabot lives in the sibling package.json and package-lock.json. This
+check is the regression gate: an undocumented swap, a version bump that does
+not refresh the copies, or a missing or drifted lockfile cannot land silently.
 
 Runs from `scripts/ci-guardrails.sh` (and `make ci-fast`).
 """
@@ -25,6 +25,7 @@ from typing import Any
 VENDOR_DIR = Path("crates/orbit-web/assets/dashboard")
 MANIFEST_NAME = "vendor-manifest.json"
 PACKAGE_NAME = "package.json"
+LOCKFILE_NAME = "package-lock.json"
 REQUIRED_ASSET_FIELDS = (
     "name",
     "npm_package",
@@ -61,8 +62,10 @@ def check_vendor(root: Path) -> list[str]:
     vendor = root / VENDOR_DIR
     manifest_path = vendor / MANIFEST_NAME
     package_path = vendor / PACKAGE_NAME
+    lockfile_path = vendor / LOCKFILE_NAME
     manifest_label = str(VENDOR_DIR / MANIFEST_NAME)
     package_label = str(VENDOR_DIR / PACKAGE_NAME)
+    lockfile_label = str(VENDOR_DIR / LOCKFILE_NAME)
     failures: list[str] = []
 
     manifest = load_json(manifest_path, "vendor manifest")
@@ -89,6 +92,34 @@ def check_vendor(root: Path) -> list[str]:
     if not isinstance(dependencies, dict) or not dependencies:
         failures.append(f"{package_label}: dependencies must be a non-empty object")
         dependencies = {}
+
+    lock_packages: dict[str, Any] = {}
+    lock_dependencies: dict[str, Any] = {}
+    has_lockfile = False
+    if not lockfile_path.is_file():
+        failures.append(f"{lockfile_label}: missing")
+    else:
+        lockfile = load_json(lockfile_path, "package-lock.json")
+        if not isinstance(lockfile, dict):
+            failures.append(f"{lockfile_label}: package-lock.json must be a JSON object")
+        else:
+            has_lockfile = True
+            packages_field = lockfile.get("packages")
+            if not isinstance(packages_field, dict):
+                failures.append(f"{lockfile_label}: packages must be an object")
+            else:
+                lock_packages = packages_field
+                root_entry = packages_field.get("")
+                if not isinstance(root_entry, dict):
+                    failures.append(f'{lockfile_label}: packages[""] must be an object')
+                else:
+                    root_deps = root_entry.get("dependencies")
+                    if not isinstance(root_deps, dict) or not root_deps:
+                        failures.append(
+                            f'{lockfile_label}: packages[""].dependencies must be a non-empty object'
+                        )
+                    else:
+                        lock_dependencies = root_deps
 
     seen_packages: set[str] = set()
     seen_paths: set[str] = set()
@@ -166,11 +197,45 @@ def check_vendor(root: Path) -> list[str]:
                 f"{package_label}: {npm_package} is {pinned!r}, manifest records {version!r}"
             )
 
+        if has_lockfile:
+            lock_pinned = lock_dependencies.get(npm_package)
+            if lock_pinned is None:
+                failures.append(
+                    f"{lockfile_label}: missing dependency {npm_package} (manifest version {version})"
+                )
+            elif lock_pinned != version:
+                failures.append(
+                    f"{lockfile_label}: {npm_package} is {lock_pinned!r}, manifest records {version!r}"
+                )
+
+            nm_key = f"node_modules/{npm_package}"
+            nm_entry = lock_packages.get(nm_key)
+            if not isinstance(nm_entry, dict):
+                failures.append(f"{lockfile_label}: missing {nm_key} entry")
+            else:
+                resolved = nm_entry.get("version")
+                if resolved != version:
+                    failures.append(
+                        f"{lockfile_label}: {nm_key} is {resolved!r}, manifest records {version!r}"
+                    )
+
     extra = sorted(set(dependencies) - seen_packages)
     for npm_package in extra:
         failures.append(
             f"{package_label}: dependency {npm_package} is not recorded in {MANIFEST_NAME}"
         )
+
+    if has_lockfile:
+        extra_lock = sorted(set(lock_dependencies) - set(dependencies))
+        for npm_package in extra_lock:
+            failures.append(
+                f"{lockfile_label}: dependency {npm_package} is not recorded in {PACKAGE_NAME}"
+            )
+        missing_lock = sorted(set(dependencies) - set(lock_dependencies))
+        for npm_package in missing_lock:
+            failures.append(
+                f"{lockfile_label}: missing dependency {npm_package} from {PACKAGE_NAME}"
+            )
 
     return failures
 
@@ -216,11 +281,25 @@ def write_fixture(root: Path, *, digest: str | None = None, package_version: str
         "dependencies": {"dompurify": package_version, "marked": "18.0.5"},
     }
     (vendor / PACKAGE_NAME).write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
+    lockfile = {
+        "name": "orbit-dashboard-vendor",
+        "lockfileVersion": 3,
+        "requires": True,
+        "packages": {
+            "": {
+                "name": "orbit-dashboard-vendor",
+                "dependencies": {"dompurify": package_version, "marked": "18.0.5"},
+            },
+            "node_modules/dompurify": {"version": package_version},
+            "node_modules/marked": {"version": "18.0.5"},
+        },
+    }
+    (vendor / LOCKFILE_NAME).write_text(json.dumps(lockfile, indent=2) + "\n", encoding="utf-8")
     return blob
 
 
 def verify_fixture_reporting() -> None:
-    """Prove a matching tree passes and a swapped blob or drifted pin fails."""
+    """Prove a matching tree passes and swapped, drifted, or missing pins fail."""
     with tempfile.TemporaryDirectory(prefix="orbit-dashboard-vendor-") as temporary:
         root = Path(temporary) / "ok"
         write_fixture(root)
@@ -255,6 +334,57 @@ def verify_fixture_reporting() -> None:
         if expected not in failures:
             raise RuntimeError(
                 "version-drift fixture did not report pin mismatch: "
+                f"expected {expected!r} in {failures!r}"
+            )
+
+    with tempfile.TemporaryDirectory(prefix="orbit-dashboard-vendor-") as temporary:
+        root = Path(temporary) / "lock-missing"
+        write_fixture(root)
+        (root / VENDOR_DIR / LOCKFILE_NAME).unlink()
+        failures = check_vendor(root)
+        expected = f"{VENDOR_DIR / LOCKFILE_NAME}: missing"
+        if expected not in failures:
+            raise RuntimeError(
+                "deleted-lockfile fixture did not report missing lockfile: "
+                f"expected {expected!r} in {failures!r}"
+            )
+
+    with tempfile.TemporaryDirectory(prefix="orbit-dashboard-vendor-") as temporary:
+        root = Path(temporary) / "lock-drift"
+        write_fixture(root)
+        lockfile_path = root / VENDOR_DIR / LOCKFILE_NAME
+        lockfile = json.loads(lockfile_path.read_text(encoding="utf-8"))
+        lockfile["packages"][""]["dependencies"]["dompurify"] = "1.0.0"
+        lockfile["packages"]["node_modules/dompurify"]["version"] = "1.0.0"
+        lockfile_path.write_text(json.dumps(lockfile, indent=2) + "\n", encoding="utf-8")
+        failures = check_vendor(root)
+        expected_root = (
+            f"{VENDOR_DIR / LOCKFILE_NAME}: dompurify is '1.0.0', manifest records '3.4.8'"
+        )
+        expected_resolved = (
+            f"{VENDOR_DIR / LOCKFILE_NAME}: node_modules/dompurify is '1.0.0', "
+            "manifest records '3.4.8'"
+        )
+        if expected_root not in failures or expected_resolved not in failures:
+            raise RuntimeError(
+                "drifted-lockfile fixture did not report version mismatch: "
+                f"expected {expected_root!r} and {expected_resolved!r} in {failures!r}"
+            )
+
+    with tempfile.TemporaryDirectory(prefix="orbit-dashboard-vendor-") as temporary:
+        root = Path(temporary) / "lock-extra"
+        write_fixture(root)
+        lockfile_path = root / VENDOR_DIR / LOCKFILE_NAME
+        lockfile = json.loads(lockfile_path.read_text(encoding="utf-8"))
+        lockfile["packages"][""]["dependencies"]["leftpad"] = "1.0.0"
+        lockfile_path.write_text(json.dumps(lockfile, indent=2) + "\n", encoding="utf-8")
+        failures = check_vendor(root)
+        expected = (
+            f"{VENDOR_DIR / LOCKFILE_NAME}: dependency leftpad is not recorded in {PACKAGE_NAME}"
+        )
+        if expected not in failures:
+            raise RuntimeError(
+                "extra-lockfile-dep fixture did not report set mismatch: "
                 f"expected {expected!r} in {failures!r}"
             )
 

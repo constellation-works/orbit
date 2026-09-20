@@ -242,8 +242,9 @@ Pins, upstream URLs, SHA-256 digests, and the refresh command are in
 [`vendor-manifest.json`](crates/orbit-web/assets/dashboard/vendor-manifest.json);
 the procedure is in [`VENDOR.md`](crates/orbit-web/assets/dashboard/VENDOR.md).
 `make ci-fast` runs [`scripts/check-dashboard-vendor.py`](scripts/check-dashboard-vendor.py),
-which fails if a blob no longer matches its recorded digest or if those
-versions drift from `package.json`.
+which fails if a blob no longer matches its recorded digest, if those
+versions drift from `package.json`, or if `package-lock.json` is missing or
+drifted from the recorded pins.
 
 GitHub Dependabot (`npm` ecosystem on that directory in
 [`.github/dependabot.yml`](.github/dependabot.yml)) and GitHub security alerts
