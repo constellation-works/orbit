@@ -121,6 +121,7 @@ const console_ = (claims, capabilities) => ({
 let consoleBody = console_([claim()]);
 let nextAction = null; // { status, body } for the next POST, else success
 const sent = [];
+const getRequests = [];
 
 const respond = (payload, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -132,7 +133,10 @@ const respond = (payload, status = 200) => ({
 globalThis.fetch = async (path, options = {}) => {
   const url = new URL(String(path), "http://dashboard.test");
   const method = (options && options.method) || "GET";
-  if (method === "GET") return respond(consoleBody);
+  if (method === "GET") {
+    getRequests.push({ path: url.pathname, search: url.search, url: url.toString() });
+    return respond(consoleBody);
+  }
   const body = options.body ? JSON.parse(options.body) : null;
   sent.push({ path: url.pathname, body });
   if (nextAction) {
@@ -145,6 +149,8 @@ globalThis.fetch = async (path, options = {}) => {
 
 const distributed = await import("./distributed.js");
 const { buildDistributedBlock, invalidateDistributedConsole, formatExecutionLocation } = distributed;
+await import("./tasks.js");
+const { setWorkspace } = await import("./common.js");
 
 const mount = async (taskId = "ORB-2") => {
   invalidateDistributedConsole();
@@ -407,6 +413,93 @@ const mount = async (taskId = "ORB-2") => {
   assert.equal(block.style.display, "", "a replica says so rather than rendering nothing");
   assert.ok(block.textContent.includes("owned by machine 'hm_owner'"), block.textContent);
   assert.equal(buttons(block).length, 0, "a replica offers no owner action");
+}
+
+// --- switching workspace invalidates memoized claims and issues fresh read ---
+
+{
+  // 1. Initial selection: workspace "ws_alpha"
+  setWorkspace("ws_alpha");
+  invalidateDistributedConsole();
+  getRequests.length = 0;
+
+  const claimAlpha = claim({
+    claim_id: "claim-alpha",
+    task_id: "ORB-ALPHA",
+    phase: "handed_off",
+    executed_on: { known: true, machine_id: "hm_alpha", host_id: "host_alpha" },
+  });
+  consoleBody = console_([claimAlpha]);
+
+  // Mount panel in ws_alpha without manually calling invalidateDistributedConsole
+  const blockAlpha = buildDistributedBlock("ORB-ALPHA");
+  await settle();
+
+  assert.equal(getRequests.length, 1, "initial mount fetches claim console");
+  assert.equal(getRequests[0].path, "/api/distributed/claims");
+  assert.equal(getRequests[0].search, "?workspace=ws_alpha", "initial read is scoped to ws_alpha");
+  assert.equal(blockAlpha.style.display, "", "task in ws_alpha displays claim panel");
+  assert.equal(
+    blockAlpha.querySelector(".claim-panel").getAttribute("data-claim-id"),
+    "claim-alpha",
+    "panel renders ws_alpha claim",
+  );
+  assert.ok(blockAlpha.textContent.includes("machine hm_alpha"), "panel text contains ws_alpha machine");
+
+  // 2. Prepare payload for workspace "ws_beta"
+  const claimBeta = claim({
+    claim_id: "claim-beta",
+    task_id: "ORB-BETA",
+    phase: "handed_off",
+    unsettled: true,
+    executed_on: { known: true, machine_id: "hm_beta", host_id: "host_beta" },
+    handoff: {
+      ...claim().handoff,
+      task_id: "ORB-BETA",
+      claim_id: "claim-beta",
+      authority: { state: "not_authorized", summary: "awaiting owner approval" },
+    },
+  });
+  consoleBody = console_([claimBeta], {
+    handoff_approve: { authorized: true, reason: null },
+    handoff_revoke: { authorized: true, reason: null },
+    claim_recover: { authorized: true, reason: null },
+  });
+
+  // 3. Switch workspace selector to "ws_beta".
+  // The onWorkspaceChange handler in tasks.js must call invalidateDistributedConsole().
+  setWorkspace("ws_beta");
+
+  // 4. Mount task in ws_beta WITHOUT calling invalidateDistributedConsole().
+  // If the console read is served from the prior workspace's cache:
+  // - getRequests.length will remain 1 (no fresh GET).
+  // - ORB-BETA will not be found in ws_alpha's cached claims, hiding the panel.
+  const blockBeta = buildDistributedBlock("ORB-BETA");
+  await settle();
+
+  assert.equal(getRequests.length, 2, "workspace switch triggers fresh GET rather than serving from cache");
+  assert.equal(getRequests[1].path, "/api/distributed/claims");
+  assert.equal(getRequests[1].search, "?workspace=ws_beta", "fresh GET is scoped to ws_beta");
+
+  assert.equal(blockBeta.style.display, "", "task in newly selected workspace renders distributed panel");
+  assert.equal(
+    blockBeta.querySelector(".claim-panel").getAttribute("data-claim-id"),
+    "claim-beta",
+    "panel renders ws_beta claim",
+  );
+  assert.ok(blockBeta.textContent.includes("machine hm_beta"), "panel text contains ws_beta machine");
+  assert.ok(button(blockBeta, "Approve handoff"), "rendered panel includes actions permitted by capabilities (approve)");
+  assert.ok(button(blockBeta, "Recover claim"), "rendered panel includes actions permitted by capabilities (recover)");
+
+  // Furthermore, a task from the old workspace (ORB-ALPHA) does not render in ws_beta
+  const blockOldTask = buildDistributedBlock("ORB-ALPHA");
+  await settle();
+  assert.equal(blockOldTask.style.display, "none", "old workspace task has no panel in ws_beta");
+  assert.equal(getRequests.length, 2, "subsequent mount within same workspace reuses fresh cache");
+
+  // Reset workspace selection
+  setWorkspace(null);
+  invalidateDistributedConsole();
 }
 
 globalThis.distributedTestsPassed = true;

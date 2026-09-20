@@ -50,6 +50,7 @@ let commentPrefs = loadCommentPrefs();
 let restoredCommentHash = null;
 
 onWorkspaceChange(() => {
+  invalidateDistributedConsole();
   pinnedExternalTask = null;
   expandedTaskIds.clear();
   statusFeedback.clear();
