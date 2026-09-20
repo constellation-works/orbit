@@ -103,9 +103,24 @@ fn validated_generation_root(root: &Path) -> Result<PathBuf, OrbitError> {
     }
     match root.canonicalize() {
         Ok(canonical) => existing_generation_root(canonical),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => missing_generation_root(root),
+        Err(error) if is_missing_generation_path_error(&error) => missing_generation_root(root),
         Err(error) => Err(refusal(error)),
     }
+}
+
+fn is_missing_generation_path_error(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        return true;
+    }
+
+    // macOS reports an unrepresentable byte in a not-yet-created path as
+    // EILSEQ instead of ENOENT. Keep the path lossless and use the same
+    // component-wise reconstruction as for an ordinary missing root.
+    #[cfg(unix)]
+    return error.raw_os_error() == Some(libc::EILSEQ);
+
+    #[cfg(not(unix))]
+    false
 }
 
 fn existing_generation_root(canonical: PathBuf) -> Result<PathBuf, OrbitError> {
@@ -130,7 +145,7 @@ fn missing_generation_root(root: &Path) -> Result<PathBuf, OrbitError> {
     };
     match parent.canonicalize() {
         Ok(canonical_parent) => contained_under_parent(&canonical_parent, name),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(error) if is_missing_generation_path_error(&error) => {
             normalize_missing_generation_root(root)
         }
         Err(error) => Err(refusal(error)),

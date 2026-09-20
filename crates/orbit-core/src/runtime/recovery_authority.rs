@@ -510,19 +510,25 @@ pub(crate) fn current_worker_binding(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_namespace_binding')", [], |row| row.get(0),
     ).map_err(|error| authority_error("inspect namespace authority", error))?;
     if namespace_table {
-        let value: Option<String> = connection
-            .query_row(
-                "SELECT binding_json FROM worker_namespace_binding WHERE namespace_key=?1",
-                params![namespace_key(1)?],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| authority_error("resolve namespace authority", error))?;
-        if let Some(value) = value {
-            let binding: orbit_types::tool::WorkerInvocation = serde_json::from_str(&value)
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
-            binding.validate().map_err(OrbitError::InvalidInput)?;
-            return Ok(Some(binding));
+        // Namespace/process identity is evidence, not authorization. A host
+        // may deny access to PID 1 or mount /proc with hidepid, in which case
+        // the required-worker caller below turns an unresolved binding into a
+        // policy denial while ordinary host processes remain usable.
+        if let Ok(namespace) = namespace_key(1) {
+            let value: Option<String> = connection
+                .query_row(
+                    "SELECT binding_json FROM worker_namespace_binding WHERE namespace_key=?1",
+                    params![namespace],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| authority_error("resolve namespace authority", error))?;
+            if let Some(value) = value {
+                let binding: orbit_types::tool::WorkerInvocation = serde_json::from_str(&value)
+                    .map_err(|error| OrbitError::Store(error.to_string()))?;
+                binding.validate().map_err(OrbitError::InvalidInput)?;
+                return Ok(Some(binding));
+            }
         }
     }
     let exists: bool = connection.query_row(
@@ -551,8 +557,7 @@ pub(crate) fn current_worker_binding(
         }
         let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             Ok(stat) => stat,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
+            Err(_) => return Ok(None),
         };
         let parent = stat
             .rsplit_once(')')
