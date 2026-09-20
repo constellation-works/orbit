@@ -23,8 +23,10 @@ spec:
       # `refs/heads/<base>`.
       base_sync:
         type: string
-      # The immutable base the worktree was created at. Supplied so a
-      # disagreement with the observed base branch tip stops the run.
+      # The base SHA `sync_base` published. Observation compares it to the
+      # merge-base of the candidate and the resolved base ref, not the live
+      # tip of `origin/<base>`: a later advance of that tip is not a
+      # disagreement, but a candidate that does not contain this SHA is.
       base_sha:
         type: string
       # Set only on the pull-request route, from the number this run's own
