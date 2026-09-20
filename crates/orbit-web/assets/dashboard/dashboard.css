@@ -1632,17 +1632,17 @@
       
       .row-detail .history-line .actor { color: var(--accent-hover); font-weight: 500; }
 
-      /* ORB-12645: the comment thread. It sits below both detail columns at
-         full width, each card renders Markdown at the ~72ch measure the eye
-         tracks, and a body over ~300px stays capped behind a fade until the
-         operator opens it. */
-      .row-detail.split-layout > .comments-panel {
-        grid-column: 1 / -1;
-      }
+      /* ORB-12645/ORB-12651: the comment thread. It sits in the left/main
+         detail column, capped to keep actions visible, with per-card collapse,
+         Markdown bodies at ~72ch measure, and a sticky header inside the thread. */
       .comments-panel .comment-thread {
         display: flex;
         flex-direction: column;
         gap: 10px;
+        max-height: min(60vh, 640px);
+        overflow-y: auto;
+        padding-right: 4px;
+        position: relative;
       }
       .comment-pref {
         font-family: var(--font-mono);
@@ -1661,6 +1661,7 @@
       .comments-panel h4 .field-actions { gap: 6px; }
 
       .comment-card {
+        container-type: inline-size;
         border: 1px solid var(--hair);
         border-radius: 4px;
         background: rgba(255, 255, 255, 0.015);
@@ -1739,18 +1740,18 @@
       .comment-action:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
 
       .comment-layout { display: block; }
-      .comment-layout.outlined {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 180px;
-        gap: 16px;
-        align-items: start;
-      }
-      /* The outline reads as a margin note, so it follows the body in the DOM
-         (and in a narrow viewport) but sits beside it when there is room. */
-      .comment-layout.outlined .comment-outline { grid-column: 2; grid-row: 1; }
-      .comment-layout.outlined .comment-bodies { grid-column: 1; grid-row: 1; }
-      @media (max-width: 1000px) {
-        .comment-layout.outlined { display: block; }
+      .comment-layout.outlined { display: block; }
+      /* The outline reads as a margin note, so it stacks above the body in
+         a narrower column, but sits beside it when the card is at least 760px wide. */
+      @container (min-width: 760px) {
+        .comment-layout.outlined {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 180px;
+          gap: 16px;
+          align-items: start;
+        }
+        .comment-layout.outlined .comment-outline { grid-column: 2; grid-row: 1; }
+        .comment-layout.outlined .comment-bodies { grid-column: 1; grid-row: 1; }
       }
       .comment-bodies { min-width: 0; }
       .comment-body {

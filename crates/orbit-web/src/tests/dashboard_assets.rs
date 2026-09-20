@@ -2054,6 +2054,7 @@ class Node {
   replaceWith(next) { const parent = this.parentNode; if (!parent) return; parent.children = parent.children.map((candidate) => candidate === this ? next : candidate); next.parentNode = parent; this.parentNode = null; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
   setAttribute(name, value) { this[name] = String(value); }
+  getAttribute(name) { return this[name] != null ? String(this[name]) : null; }
   focus() {}
   scrollIntoView() { this.scrolled += 1; }
   querySelectorAll(selector) { const out = []; const walk = (node) => { for (const child of node.children) { if (child.tag === selector) out.push(child); walk(child); } }; walk(this); return out; }
@@ -2063,7 +2064,25 @@ class Node {
   set innerHTML(value) { this.textContent = value; }
   get innerHTML() { return this.textContent; }
   get lastElementChild() { return this.children[this.children.length - 1]; }
-  get classList() { return { add: (...names) => { this.className = `${this.className} ${names.join(" ")}`.trim(); }, remove: () => {}, toggle: () => {} }; }
+  set id(value) { this._id = String(value); byId.set(String(value), this); }
+  get id() { return this._id || ""; }
+  get classList() {
+    const self = this;
+    const tokens = () => new Set(String(self.className || "").split(/\s+/).filter(Boolean));
+    const write = (set) => { self.className = [...set].join(" "); };
+    return {
+      add: (...names) => { const set = tokens(); for (const name of names) set.add(name); write(set); },
+      remove: (...names) => { const set = tokens(); for (const name of names) set.delete(name); write(set); },
+      contains: (name) => tokens().has(name),
+      toggle: (name, on) => {
+        const set = tokens();
+        const next = on === undefined ? !set.has(name) : !!on;
+        if (next) set.add(name); else set.delete(name);
+        write(set);
+        return next;
+      },
+    };
+  }
 }
 const byId = new Map();
 const get = (id) => byId.get(id) || (byId.set(id, new Node()), byId.get(id));
@@ -2116,7 +2135,7 @@ const context = {
   statusUpdateTargets: statuses, fmtAbsTime: (value) => `abs:${value}`,
   refreshDashboard: () => Promise.resolve(),
 };
-const { renderTasks } = await import("./tasks.js");
+const { renderTasks, scrollToComment } = await import("./tasks.js");
 function find(node, predicate) {
   if (predicate(node)) return node;
   for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
@@ -2134,13 +2153,66 @@ find(body, (node) => node.dataset.key === "task-ORB-1").listeners.click();
 const detail = find(body, (node) => node.dataset.key === "detail-ORB-1");
 if (!detail) throw new Error("the task detail did not render");
 
-// 1. the thread is a full-width sibling of the two columns, ahead of the actions row.
-const panel = detail.children.find((node) => has(node, "comments-panel"));
-if (!panel) throw new Error("the comments panel is not a direct child of the detail");
-const order = detail.children.map((node) => node.className);
-if (order.indexOf("detail-side") > order.indexOf("field-block comments-panel")) throw new Error(`the thread must follow both columns: ${order}`);
+// 1. Comments block appears in the left/main column after review gate; the two-column grid has no full-width child besides the actions row
+const leftCol = detail.children.find((node) => has(node, "detail-main"));
+if (!leftCol) throw new Error("the main column did not render");
+const sideCol = detail.children.find((node) => has(node, "detail-side"));
+if (!sideCol) throw new Error("the side column did not render");
+let panel = leftCol.children.find((node) => has(node, "comments-panel"));
+if (!panel) throw new Error("the comments panel is not inside detail-main");
+if (leftCol.children[leftCol.children.length - 1] !== panel) throw new Error("comments panel must be the last child of detail-main");
+if (detail.children.some((node) => node !== leftCol && node !== sideCol && node !== detail.children[detail.children.length - 1])) {
+  throw new Error("detail grid has unexpected full-width children");
+}
 if (!detail.children[detail.children.length - 1].className.includes("actions")) throw new Error("the actions row must stay last");
 if (find(panel, (node) => has(node, "field-count")).textContent !== "3") throw new Error("the panel must count its comments");
+if (!has(panel, "collapsible")) throw new Error("the comments panel must be collapsible");
+
+// Acceptance criteria: no inline style attributes
+if (panel.style && (panel.style.display || panel.style.maxHeight)) {
+  throw new Error("comments panel structure/collapse must not use inline style attributes");
+}
+
+// 1b. Block header collapses/expands with click and keyboard, chevron matches other blocks, state persists across refresh via localStorage
+let panelHead = find(panel, (node) => node.tag === "h4");
+if (!panelHead) throw new Error("the panel needs an h4 header");
+if (panelHead.getAttribute("aria-expanded") !== "true") throw new Error("panel header must start expanded");
+if (has(panel, "collapsed")) throw new Error("panel must start expanded when task has comments");
+
+// Click header to collapse
+panelHead.listeners.click({ stopPropagation: () => {} });
+if (!has(panel, "collapsed")) throw new Error("clicking panel header must collapse the panel");
+if (panelHead.getAttribute("aria-expanded") !== "false") throw new Error("collapsed panel must set aria-expanded=false");
+let savedPrefs = JSON.parse(store.get("orbit.dashboard.comments") || "{}");
+if (savedPrefs.collapsed !== true) throw new Error(`collapsed pref must persist: ${store.get("orbit.dashboard.comments")}`);
+
+// State persists across refresh via localStorage
+task.updated_at = "2026-09-20T10:15:00Z";
+renderTasks([task], context);
+let refreshedDetail = find(get("tasks-body"), (node) => node.dataset.key === "detail-ORB-1");
+let refreshedLeft = refreshedDetail.children.find((node) => has(node, "detail-main"));
+panel = refreshedLeft.children.find((node) => has(node, "comments-panel"));
+if (!has(panel, "collapsed")) throw new Error("comments panel must stay collapsed across refresh");
+panelHead = find(panel, (node) => node.tag === "h4");
+if (panelHead.getAttribute("aria-expanded") !== "false") throw new Error("refreshed panel must keep aria-expanded=false");
+
+// Keyboard toggle expands the panel
+panelHead.listeners.keydown({ key: "Enter", target: panelHead, preventDefault: () => {}, stopPropagation: () => {} });
+if (has(panel, "collapsed")) throw new Error("keyboard toggle must expand the panel");
+if (panelHead.getAttribute("aria-expanded") !== "true") throw new Error("keyboard toggle must set aria-expanded=true");
+savedPrefs = JSON.parse(store.get("orbit.dashboard.comments") || "{}");
+if (savedPrefs.collapsed !== false) throw new Error("expanded pref must persist");
+
+// 1c. Permalink #comment-<task>-<n> expands a collapsed panel before scrolling to the card
+panelHead.listeners.click({ stopPropagation: () => {} });
+if (!has(panel, "collapsed")) throw new Error("panel should be collapsed before permalink test");
+const targetCard = find(panel, (node) => node.id === "comment-ORB-1-2");
+const targetScrolledBefore = targetCard.scrolled;
+scrollToComment("#comment-ORB-1-2");
+if (has(panel, "collapsed")) throw new Error("permalink must expand the collapsed panel");
+if (panelHead.getAttribute("aria-expanded") !== "true") throw new Error("expanded panel must update aria-expanded");
+if (targetCard.scrolled <= targetScrolledBefore) throw new Error("permalink must scroll target card into view");
+targetCard.scrolled = 0;
 
 const cards = () => collect(panel, (node) => has(node, "comment-card"));
 if (cards().length !== 3) throw new Error(`expected three cards, got ${cards().length}`);
@@ -2231,9 +2303,26 @@ if (preview.style.display !== "none") throw new Error("the preview must toggle b
 
     let css = include_str!("../../assets/dashboard/dashboard.css");
     assert!(
-        css.contains(".row-detail.split-layout > .comments-panel {")
-            && css.contains("grid-column: 1 / -1;"),
-        "the thread must span both detail columns"
+        !css.contains(".row-detail.split-layout > .comments-panel {"),
+        "the full-width split-layout comments rule must be dropped"
+    );
+    assert!(
+        css.contains(".comments-panel .comment-thread {")
+            && css.contains("max-height: min(60vh, 640px);")
+            && css.contains("overflow-y: auto;"),
+        "the comment thread must have a scroll cap"
+    );
+    assert!(
+        css.contains(".comment-card {") && css.contains("container-type: inline-size;"),
+        "comment card must declare container-type for container queries"
+    );
+    assert!(
+        css.contains("@container (min-width: 760px)"),
+        "section outline must use container query for >=760px"
+    );
+    assert!(
+        !css.contains("@media (max-width: 1000px) {\n        .comment-layout"),
+        "old viewport media query for comment outline must be removed"
     );
     assert!(
         css.contains(".comment-card.collapsed .comment-bodies {")

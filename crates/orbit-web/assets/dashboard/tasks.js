@@ -1150,9 +1150,12 @@ const AGENT_COMMENT_AUTHORS = new Set(["codex", "claude", "gemini", "grok", "age
 function loadCommentPrefs() {
   try {
     const parsed = JSON.parse(window.localStorage.getItem(COMMENT_PREFS_KEY) || "{}");
-    return { newestFirst: parsed.newestFirst === true };
+    return {
+      newestFirst: parsed.newestFirst === true,
+      collapsed: parsed.collapsed === true,
+    };
   } catch (_) {
-    return { newestFirst: false };
+    return { newestFirst: false, collapsed: false };
   }
 }
 
@@ -1439,15 +1442,98 @@ function buildCommentCard(task, comment, index, context) {
 }
 
 function buildCommentsPanel(task, context) {
-  const panel = el("div", { class: "field-block comments-panel" });
+  let isCollapsed = commentPrefs.collapsed === true;
+  const hash = window.location && window.location.hash ? String(window.location.hash).replace(/^#/, "") : "";
+  if (hash.startsWith(`comment-${task.id}-`)) {
+    isCollapsed = false;
+  }
+  let classes = "field-block collapsible comments-panel";
+  if (isCollapsed) classes += " collapsed";
+  const panel = el("div", { class: classes });
   renderCommentsPanel(panel, task, context);
   return panel;
+}
+
+function findCommentCard(id) {
+  if (typeof document.getElementById === "function") {
+    const node = document.getElementById(id);
+    if (node && (node.id === id || String(node.className).includes("comment-card"))) return node;
+  }
+  const root = (typeof document.getElementById === "function" ? document.getElementById("tasks-body") : null) || (typeof document !== "undefined" ? document.body : null);
+  if (!root) return null;
+  const queue = [root];
+  while (queue.length > 0) {
+    const curr = queue.shift();
+    if (curr.id === id) return curr;
+    if (curr.children) {
+      for (const child of curr.children) queue.push(child);
+    }
+  }
+  return null;
+}
+
+function findCommentsPanel(node) {
+  let curr = node ? node.parentNode : null;
+  while (curr) {
+    if (curr.classList && typeof curr.classList.contains === "function" && curr.classList.contains("comments-panel")) {
+      return curr;
+    }
+    if (String(curr.className || "").split(/\s+/).includes("comments-panel")) {
+      return curr;
+    }
+    curr = curr.parentNode;
+  }
+  return null;
+}
+
+export function scrollToComment(hash = (typeof window !== "undefined" && window.location && window.location.hash) || "") {
+  if (!hash) return false;
+  const rawId = String(hash).replace(/^#/, "");
+  if (!rawId.startsWith("comment-")) return false;
+  const target = findCommentCard(rawId);
+  if (!target) return false;
+  const panel = findCommentsPanel(target);
+  if (panel) {
+    const isCollapsed = panel.classList && typeof panel.classList.contains === "function"
+      ? panel.classList.contains("collapsed")
+      : String(panel.className || "").split(/\s+/).includes("collapsed");
+    if (isCollapsed) {
+      if (panel.classList && typeof panel.classList.remove === "function") {
+        panel.classList.remove("collapsed");
+      }
+      panel.className = String(panel.className || "")
+        .split(/\s+/)
+        .filter((c) => c !== "collapsed")
+        .join(" ");
+      const head = panel.querySelector
+        ? panel.querySelector("h4")
+        : (panel.children || []).find((c) => c.tag === "h4" || (c.tagName && c.tagName.toLowerCase() === "h4"));
+      if (head && typeof head.setAttribute === "function") {
+        head.setAttribute("aria-expanded", "true");
+      }
+      commentPrefs = { ...commentPrefs, collapsed: false };
+      saveCommentPrefs();
+    }
+  }
+  if (typeof target.scrollIntoView === "function") {
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  return true;
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("hashchange", () => {
+    scrollToComment();
+  });
 }
 
 /* Rendered in place rather than through renderTasks: the thread's order and
    each card's disclosure are this panel's own state, and the detail node is
    diffed on the task payload, which none of them are part of. */
 function renderCommentsPanel(panel, task, context) {
+  const isCollapsed = panel.classList && typeof panel.classList.contains === "function"
+    ? panel.classList.contains("collapsed")
+    : String(panel.className || "").split(/\s+/).includes("collapsed");
   const comments = Array.isArray(task.comments) ? task.comments : [];
   const actions = el("span", { class: "field-actions" });
   const order = el("button", {
@@ -1484,6 +1570,28 @@ function renderCommentsPanel(panel, task, context) {
     el("span", { class: "field-count", text: String(comments.length) }),
     actions,
   ]);
+  makeToggleRow(head, {
+    expanded: !isCollapsed,
+    onToggle: (event) => {
+      if (event && typeof event.stopPropagation === "function") {
+        event.stopPropagation();
+      }
+      const hasToggle = panel.classList && typeof panel.classList.toggle === "function";
+      const nowCollapsed = hasToggle
+        ? panel.classList.toggle("collapsed")
+        : !isCollapsed;
+      if (!hasToggle || nowCollapsed === undefined) {
+        const set = new Set(String(panel.className || "").split(/\s+/).filter(Boolean));
+        const next = !set.has("collapsed");
+        if (next) set.add("collapsed");
+        else set.delete("collapsed");
+        panel.className = Array.from(set).join(" ");
+      }
+      head.setAttribute("aria-expanded", String(!nowCollapsed));
+      commentPrefs = { ...commentPrefs, collapsed: nowCollapsed };
+      saveCommentPrefs();
+    },
+  });
   const thread = el("div", { class: "comment-thread" });
   const ordered = comments.map((comment, index) => ({ comment, index }));
   if (commentPrefs.newestFirst) ordered.reverse();
@@ -1557,6 +1665,11 @@ function buildTaskDetail(task, context) {
 
   if (task.review && typeof task.review === "object") {
     addField(leftCol, "review gate", buildReviewGate(task.review), true, true);
+  }
+
+  // ORB-12651: comments block appears in the left/main column after review gate
+  if (Array.isArray(task.comments) && task.comments.length > 0) {
+    leftCol.appendChild(buildCommentsPanel(task, context));
   }
 
   // The side column leads with what identifies the task — who made it, which
@@ -1647,13 +1760,6 @@ function buildTaskDetail(task, context) {
 
   detail.appendChild(leftCol);
   detail.appendChild(rightCol);
-
-  // ORB-12645: the thread is the detail's widest reader, not a side note, so it
-  // spans both columns below them.
-  if (Array.isArray(task.comments) && task.comments.length > 0) {
-    detail.appendChild(buildCommentsPanel(task, context));
-  }
-
   detail.appendChild(buildActionsRow(task, detail, context));
 
   return detail;
@@ -2476,4 +2582,7 @@ export function renderTasks(tasks, context) {
     }
   }
   syncNodes(body, nodes);
+  if (typeof window !== "undefined" && window.location && window.location.hash && String(window.location.hash).startsWith("#comment-")) {
+    scrollToComment(window.location.hash);
+  }
 }
