@@ -177,6 +177,32 @@ registry database is involved.
 
 > **Note.** Earlier Orbit versions used `[agent.<role>]` tables. That schema was removed in [ORB-00058](../.orbit/) — config load now hard-errors if `[agent.*]` is present. Migrate to `[crews.<name>]` + `workflow.default_crew`.
 
+### Repairing a config that already names a crew with a colon
+
+A colon-named crew was admissible before this rule existed, so upgrading Orbit
+can turn a working `config.toml` into one Orbit refuses to load. That refusal
+is total: every command reads the config, and every `orbit config` subcommand
+opens a runtime first, so `orbit config set` cannot rewrite the offending table
+either. Editing the file is the way back, and the refusal names which file and
+which table:
+
+```
+error: invalid input: [crews]: crew name 'gpt-5:codex' must not contain ':';
+workflow.*_complexity_crews entries are written 'name' or 'name:weight', so the
+pool grammar reserves that separator. The crew is defined in
+'~/.orbit/config.toml'; Orbit refuses to load that config, so `orbit config set`
+cannot repair it either. Edit '~/.orbit/config.toml' and rename or remove the
+[crews."gpt-5:codex"] table, then rerun the command
+```
+
+To recover, open the file the message names, rename the `[crews."<name>"]`
+table to a colon-free name (or delete the table), update anything that
+referenced the old name — `workflow.default_crew`, `workflow.system_crew`, a
+pool entry, a task's own `crew` field — and rerun the command. Each layer is
+checked against this rule before the global and workspace files are merged, so
+with both layers present the message names the file that actually defines the
+crew rather than the other one.
+
 ---
 
 ## Provider identity and resolution
@@ -937,7 +963,9 @@ The grammar:
   not a non-negative whole number (`grok:-1`, `grok:2.5`). The colon is
   reserved by this grammar, so a crew may not be *named* with one either:
   `[crews."gpt-5:codex"]` is refused where the crew is defined (see
-  [`[crews.<name>]`](#crewsname--which-provider-model-runs-the-task)).
+  [`[crews.<name>]`](#crewsname--which-provider-model-runs-the-task), and
+  [Repairing a config that already names a crew with a colon](#repairing-a-config-that-already-names-a-crew-with-a-colon)
+  for a config that already holds one).
 - A bare entry weighs one ticket, so a bare pool draws uniformly — exactly as
   it did before weights existed. Bare duplicates still collapse to one ticket
   per crew; a weighted pool names each crew once, and a repeat is an error.

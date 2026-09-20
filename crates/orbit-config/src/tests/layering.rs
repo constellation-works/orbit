@@ -428,3 +428,93 @@ fn crate_and_user_docs_share_the_layering_contract() {
     assert!(crate_docs.contains(CONTRACT));
     assert!(user_docs.contains(CONTRACT));
 }
+
+/// [ORB-12625] A crew named with `:` was admissible before the pool grammar
+/// reserved the character, so upgrading Orbit can leave a persisted
+/// `config.toml` that every command — including every `orbit config`
+/// subcommand, each of which opens a runtime — refuses. Hand-editing that file
+/// is the only way back, so the refusal has to name the file that defines the
+/// crew, and that recovery has to actually work.
+#[test]
+fn a_persisted_colon_named_crew_is_refused_by_file_and_repaired_by_renaming_it() {
+    const OFFENDING: &str = r#"
+[workflow]
+default_crew = "sol"
+
+[crews.sol]
+model = "gpt-5.6-sol"
+provider = "codex"
+
+[crews."gpt-5:codex"]
+model = "gpt-5.5"
+provider = "codex"
+"#;
+    const REPAIRED: &str = r#"
+[workflow]
+default_crew = "sol"
+
+[crews.sol]
+model = "gpt-5.6-sol"
+provider = "codex"
+
+[crews."gpt-5-codex"]
+model = "gpt-5.5"
+provider = "codex"
+"#;
+
+    for holder in [
+        ConfigValueSourceKind::Global,
+        ConfigValueSourceKind::Workspace,
+    ] {
+        let global = tempdir().expect("global tempdir");
+        let workspace = tempdir().expect("workspace tempdir");
+        let (offending_root, other_root) = match holder {
+            ConfigValueSourceKind::Global => (global.path(), workspace.path()),
+            _ => (workspace.path(), global.path()),
+        };
+        write_config(offending_root, OFFENDING);
+        write_config(other_root, "[workflow]\nbase_branch = \"agent-main\"\n");
+        let roots = roots(global.path(), workspace.path());
+        let offending_config = offending_root.join("config.toml").display().to_string();
+        let other_config = other_root.join("config.toml").display().to_string();
+
+        // Every surface that opens the config refuses, and names the file that
+        // holds the crew rather than the other layer or the merged view.
+        for message in [
+            ResolvedConfig::load(&roots)
+                .expect_err("a persisted colon-named crew must not load")
+                .to_string(),
+            load_effective_config(&roots)
+                .expect_err("`orbit config show` must refuse it too")
+                .to_string(),
+        ] {
+            assert!(message.contains("gpt-5:codex"), "{holder:?}: {message}");
+            assert!(
+                message.contains(&offending_config),
+                "{holder:?}: the refusal must name the file holding the crew: {message}"
+            );
+            assert!(
+                !message.contains(&other_config),
+                "{holder:?}: the refusal must not blame the other layer: {message}"
+            );
+            assert!(
+                message.contains("rename or remove"),
+                "{holder:?}: the refusal must state the repair: {message}"
+            );
+        }
+
+        // The documented recovery: edit the named file, rename the crew there,
+        // rerun. Nothing else changes.
+        write_config(offending_root, REPAIRED);
+        let config = ResolvedConfig::load(&roots).expect("renaming the crew must repair the load");
+        assert!(config.crews.contains_key("gpt-5-codex"), "{holder:?}");
+        assert!(!config.crews.contains_key("gpt-5:codex"), "{holder:?}");
+        let effective =
+            load_effective_config(&roots).expect("`orbit config show` must work after the repair");
+        assert_eq!(
+            effective.value_for("crews.gpt-5-codex.model"),
+            Some(serde_json::json!("gpt-5.5")),
+            "{holder:?}"
+        );
+    }
+}
