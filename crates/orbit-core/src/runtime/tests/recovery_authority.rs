@@ -498,9 +498,14 @@ fn worker_process_binding_survives_descendants_and_forged_environment() {
                 .read_exact(&mut [0u8; 1])
                 .expect("parent binding barrier");
         }
-        let binding = super::current_worker_binding(Path::new(&root))
-            .expect("resolve authority")
-            .expect("bound ancestor");
+        let binding = match std::env::var_os("ORBIT_BINDING_PROC_ROOT") {
+            Some(proc_root) => {
+                super::current_worker_binding_in(Path::new(&root), Path::new(&proc_root))
+            }
+            None => super::current_worker_binding(Path::new(&root)),
+        }
+        .expect("resolve authority")
+        .expect("bound ancestor");
         assert_eq!(binding.bound_run_id, "immutable-leaf");
         assert_eq!(binding.execution.machine_id, "execution-machine");
         assert_ne!(
@@ -525,18 +530,7 @@ fn worker_process_binding_survives_descendants_and_forged_environment() {
     }
     let root = TempDir::new().expect("authority root");
     let authority = RecoveryAuthority::open(root.path()).expect("authority");
-    let binding = orbit_types::tool::WorkerInvocation {
-        owner_machine_id: "owner-machine".into(),
-        owner_workspace_id: "workspace".into(),
-        owner_destination: "owner/workspace".into(),
-        task_id: "task".into(),
-        claim_id: "claim".into(),
-        execution: orbit_types::task::ExecutionLocation {
-            machine_id: "execution-machine".into(),
-            host_id: None,
-        },
-        bound_run_id: "immutable-leaf".into(),
-    };
+    let binding = worker_binding();
     let mut command = Command::new(std::env::current_exe().expect("test binary"));
     orbit_common::test_env::clear_inherited_authority(|key| {
         command.env_remove(key);
@@ -580,7 +574,12 @@ fn worker_process_binding_survives_descendants_and_forged_environment() {
             .expect("unrelated namespace refused")
             .is_none()
     );
-    let namespace = super::namespace_key(1).expect("current init identity");
+    // A synthetic namespace leader keeps these assertions runnable wherever
+    // `/proc/1/ns/pid` is not readable for the caller -- a CI runner is not
+    // PID 1's namespace peer, and the resolver now reads that denial as "no
+    // binding" rather than refusing to open.
+    let proc_root = synthetic_proc_root();
+    let namespace = super::namespace_key(proc_root.path(), 1).expect("synthetic init identity");
     authority
         .record_worker_namespace(&namespace, &binding)
         .expect("seed namespace identity");
@@ -598,6 +597,7 @@ fn worker_process_binding_survives_descendants_and_forged_environment() {
     });
     let output = retry.args(["--exact", "runtime::recovery_authority::tests::worker_process_binding_survives_descendants_and_forged_environment", "--nocapture"])
         .env("HOME", root.path()).env("USERPROFILE", root.path()).env("ORBIT_BINDING_FIXTURE_ROOT", root.path())
+        .env("ORBIT_BINDING_PROC_ROOT", proc_root.path())
         .env("ORBIT_BINDING_GRANDCHILD", "1").env("ORBIT_RUN_ID", "forged-retry")
         .output().expect("new process with namespace binding");
     assert!(
@@ -605,4 +605,109 @@ fn worker_process_binding_survives_descendants_and_forged_environment() {
         "{}",
         String::from_utf8_lossy(&output.stdout)
     );
+}
+
+/// Identity discovery, not authorization: a `/proc` entry the caller cannot
+/// read leaves the process unbound instead of refusing every runtime open on a
+/// machine that already has worker binding rows.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_denied_proc_probe_leaves_the_process_unbound_instead_of_refusing() {
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+    if std::env::var_os("ORBIT_DENIED_PROBE_CHILD").is_some() {
+        // Stay alive until the parent has bound this PID, then exit so the
+        // resolver's ancestry walk has no live match to find.
+        let _ = std::io::stdin().read_exact(&mut [0u8; 1]);
+        return;
+    }
+    let root = TempDir::new().expect("authority root");
+    let authority = RecoveryAuthority::open(root.path()).expect("authority");
+    let binding = worker_binding();
+    let mut command = Command::new(std::env::current_exe().expect("test binary"));
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    let mut child = command.args(["--exact", "runtime::recovery_authority::tests::a_denied_proc_probe_leaves_the_process_unbound_instead_of_refusing", "--nocapture"])
+        .env("HOME", root.path()).env("USERPROFILE", root.path())
+        .env("ORBIT_DENIED_PROBE_CHILD", "1")
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("child");
+    // Both binding tables must exist, or the resolver would answer `None`
+    // before it ever probes `/proc`.
+    authority
+        .bind_worker_process(child.id(), &binding)
+        .expect("bind");
+    authority
+        .record_worker_namespace("unrelated-namespace", &binding)
+        .expect("namespace row");
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("child output");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // A file standing in for the `/proc` mount denies every probe with
+    // `ENOTDIR` for any caller, privileged or not.
+    let not_a_mount = TempDir::new().expect("proc root");
+    let path = not_a_mount.path().join("proc");
+    std::fs::write(&path, "").expect("proc stand-in");
+    assert!(std::fs::read_link(path.join("1/ns/pid")).is_err());
+    assert!(
+        super::current_worker_binding_in(root.path(), &path)
+            .expect("an unreadable probe is not a refusal")
+            .is_none()
+    );
+
+    // The shape an ordinary host actually produces: an unprivileged caller
+    // gets `EACCES` from a directory it may not traverse. Running as root the
+    // same probe fails with `ENOENT`; either way the answer is "no binding".
+    let denied = not_a_mount.path().join("denied");
+    std::fs::create_dir(&denied).expect("denied root");
+    std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o000)).expect("deny");
+    let refused = super::current_worker_binding_in(root.path(), &denied);
+    std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o700)).expect("restore");
+    assert!(refused.expect("a denied probe is not a refusal").is_none());
+}
+
+#[cfg(target_os = "linux")]
+fn worker_binding() -> orbit_types::tool::WorkerInvocation {
+    orbit_types::tool::WorkerInvocation {
+        owner_machine_id: "owner-machine".into(),
+        owner_workspace_id: "workspace".into(),
+        owner_destination: "owner/workspace".into(),
+        task_id: "task".into(),
+        claim_id: "claim".into(),
+        execution: orbit_types::task::ExecutionLocation {
+            machine_id: "execution-machine".into(),
+            host_id: None,
+        },
+        bound_run_id: "immutable-leaf".into(),
+    }
+}
+
+/// A `/proc` stand-in whose PID 1 the caller owns: the namespace link, the
+/// start identity in field 22 of `stat`, and the boot id the key pins.
+#[cfg(target_os = "linux")]
+fn synthetic_proc_root() -> TempDir {
+    let root = TempDir::new().expect("proc root");
+    let leader = root.path().join("1");
+    std::fs::create_dir_all(leader.join("ns")).expect("leader ns");
+    std::os::unix::fs::symlink("pid:[4026531836]", leader.join("ns/pid")).expect("namespace link");
+    std::fs::write(
+        leader.join("stat"),
+        format!("1 (systemd) S{} 8241\n", " 0".repeat(18)),
+    )
+    .expect("leader stat");
+    let random = root.path().join("sys/kernel/random");
+    std::fs::create_dir_all(&random).expect("boot id dir");
+    std::fs::write(
+        random.join("boot_id"),
+        "d5a1f0c2-3b4e-4f5a-8c6d-7e8f90a1b2c3\n",
+    )
+    .expect("boot id");
+    root
 }

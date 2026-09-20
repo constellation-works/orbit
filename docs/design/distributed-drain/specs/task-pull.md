@@ -296,6 +296,9 @@ provides destination access; the claim transaction independently fences task, ma
 and phase. Neither tool arguments nor editable job input can replace the invocation or elevate a
 managed proxy to operator. Protected process and Linux PID-namespace bindings carry it through
 subprocesses, detached workers and same-bound-run retries; missing required context refuses.
+Binding resolution is identity discovery, not authorization: a `/proc` entry the caller cannot
+read leaves the process unbound, so an unrelated host process still opens a runtime on a machine
+that holds binding rows, and only a child that requires a worker context refuses.
 
 Generic task evidence/document updates and claim-scoped friction use the owner commit journal.
 An omitted friction task inherits the bound task; conflicting arguments refuse. Friction allocation

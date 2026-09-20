@@ -41,6 +41,14 @@ const AUTHORITY_DIR_MODE: u32 = 0o700;
 #[cfg(unix)]
 const AUTHORITY_FILE_MODE: u32 = 0o600;
 
+/// The kernel process table every binding probe reads.
+#[cfg(target_os = "linux")]
+const PROC_ROOT: &str = "/proc";
+
+/// PID of the namespace leader a sandboxed worker shares with its host record.
+#[cfg(target_os = "linux")]
+const NAMESPACE_LEADER_PID: u32 = 1;
+
 /// The durable record a host writes when it completes a rebase recovery, and
 /// the only evidence a later resume will accept.
 #[derive(Debug)]
@@ -489,6 +497,17 @@ impl RecoveryAuthority {
 pub(crate) fn current_worker_binding(
     global_root: &Path,
 ) -> Result<Option<orbit_types::tool::WorkerInvocation>, OrbitError> {
+    current_worker_binding_in(global_root, Path::new(PROC_ROOT))
+}
+
+/// Resolution against an explicit `/proc` mount. Tests inject a proc root that
+/// denies the namespace and ancestry probes; production always passes
+/// [`PROC_ROOT`].
+#[cfg(target_os = "linux")]
+fn current_worker_binding_in(
+    global_root: &Path,
+    proc_root: &Path,
+) -> Result<Option<orbit_types::tool::WorkerInvocation>, OrbitError> {
     if !global_root.try_exists()? {
         return Ok(None);
     }
@@ -509,11 +528,16 @@ pub(crate) fn current_worker_binding(
     let namespace_table: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_namespace_binding')", [], |row| row.get(0),
     ).map_err(|error| authority_error("inspect namespace authority", error))?;
-    if namespace_table {
+    // Both probes below are identity discovery, not authorization: a `/proc`
+    // entry this process may not read (`EACCES` on a root-owned PID 1, a
+    // `hidepid=2` mount, a restricted ancestor) means "no binding here", never
+    // a refusal to open the runtime. `restore_process_binding` is what fails
+    // closed for a managed child that requires one.
+    if namespace_table && let Ok(key) = namespace_key(proc_root, NAMESPACE_LEADER_PID) {
         let value: Option<String> = connection
             .query_row(
                 "SELECT binding_json FROM worker_namespace_binding WHERE namespace_key=?1",
-                params![namespace_key(1)?],
+                params![key],
                 |row| row.get(0),
             )
             .optional()
@@ -549,10 +573,10 @@ pub(crate) fn current_worker_binding(
                 return Ok(Some(binding));
             }
         }
-        let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-            Ok(stat) => stat,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
+        let Ok(stat) = std::fs::read_to_string(proc_root.join(pid.to_string()).join("stat")) else {
+            // An ancestor that has exited or that this process may not read
+            // ends the walk with no binding.
+            return Ok(None);
         };
         let parent = stat
             .rsplit_once(')')
@@ -577,16 +601,17 @@ pub(crate) fn current_worker_binding(
 }
 
 #[cfg(target_os = "linux")]
-fn namespace_key(pid: u32) -> Result<String, OrbitError> {
-    let namespace = std::fs::read_link(format!("/proc/{pid}/ns/pid"))?;
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+fn namespace_key(proc_root: &Path, pid: u32) -> Result<String, OrbitError> {
+    let process = proc_root.join(pid.to_string());
+    let namespace = std::fs::read_link(process.join("ns/pid"))?;
+    let stat = std::fs::read_to_string(process.join("stat"))?;
     let start = stat
         .rsplit_once(')')
         .and_then(|(_, fields)| fields.split_whitespace().nth(19))
         .ok_or_else(|| {
             OrbitError::Execution("namespace leader start identity unavailable".into())
         })?;
-    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
+    let boot = std::fs::read_to_string(proc_root.join("sys/kernel/random/boot_id"))?;
     Ok(format!("{}:{}:{}", namespace.display(), start, boot.trim()))
 }
 
@@ -615,7 +640,10 @@ impl RecoveryAuthority {
                         })
                     })
                 {
-                    return self.record_worker_namespace(&namespace_key(pid)?, binding);
+                    return self.record_worker_namespace(
+                        &namespace_key(Path::new(PROC_ROOT), pid)?,
+                        binding,
+                    );
                 }
                 if let Ok(children) =
                     std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
