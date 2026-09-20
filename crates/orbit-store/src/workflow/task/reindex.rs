@@ -183,8 +183,10 @@ fn inspect_candidate(
             return Ok(None);
         }
         // Aborted creates leave a valid ORB-* directory with no task.yaml
-        // (often only `.task.yaml.lock`). That is garbage, not an unresolved
-        // bundle: reap it so a healthy neighbor can still be indexed.
+        // (empty, or only `.task.yaml.lock`). That is garbage, not an
+        // unresolved bundle: reap it so a healthy neighbor can still be
+        // indexed. A directory missing task.yaml but holding any other
+        // entry is unresolved data and must fail closed.
         if is_unpublished_stub(dir) {
             if let Err(error) = reap_unpublished_stub(dir) {
                 orbit_common::tracing::warn!(
