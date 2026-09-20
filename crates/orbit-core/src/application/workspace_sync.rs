@@ -104,6 +104,8 @@ pub fn reconcile_workspace_managed_artifacts(
     base_branch: &str,
     check: bool,
 ) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
+    crate::bootstrap::product_profile::ProductProfile::Orbit
+        .validate_roots(&[global_root, workspace_orbit_root])?;
     let mode = if check {
         ManagedAssetReconcileMode::Check
     } else {

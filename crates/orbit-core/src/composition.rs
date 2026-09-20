@@ -9,6 +9,7 @@ use orbit_store::compose::global_policy_def_store;
 use crate::bootstrap::global_defaults::global_defaults_are_current;
 use crate::bootstrap::init::ensure_orbit_root_initialized;
 use crate::bootstrap::policy::seed_default_policies;
+use crate::bootstrap::product_profile::ProductProfile;
 use crate::bootstrap::task_migration::apply_configured_id_start;
 use crate::runtime::run_input::managed_run_context_from_env;
 use crate::runtime::{
@@ -32,6 +33,11 @@ impl OrbitRuntime {
         roots: OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
     ) -> Result<Self, OrbitError> {
+        ProductProfile::Orbit.validate_roots(&[
+            &roots.global_root,
+            &roots.shared_root,
+            &roots.local_root,
+        ])?;
         // Library consumers must also refuse before bootstrap can migrate or
         // reconcile resources under a participating persistent CLI/MCP client.
         let _generation =
@@ -201,6 +207,26 @@ impl OrbitRuntime {
         )
     }
 
+    /// Bootstrap feasibility fixture only. Does not establish admission or
+    /// re-entry isolation, so must never be exposed by a production executable.
+    #[cfg(test)]
+    pub(crate) fn initialize_research_fixture(
+        roots: OrbitRuntimeRoots,
+    ) -> Result<Self, OrbitError> {
+        crate::bootstrap::product_profile::initialize_research_catalog(&roots)?;
+        let resolved =
+            ResolvedConfig::load(&ConfigRoots::new(&roots.global_root, &roots.shared_root))?;
+        Self::build_from_resolved_config(
+            &roots.global_root,
+            &roots.shared_root,
+            &roots.local_root,
+            None,
+            &resolved,
+            orbit_store::workflow::layout::LayoutUpgradeReport::default(),
+            HostLifetime::ShortLived,
+        )
+    }
+
     pub fn in_memory() -> Result<Self, OrbitError> {
         let temp_dir = tempfile::Builder::new()
             .prefix("orbit-in-memory-")
@@ -226,6 +252,7 @@ fn build_runtime(
     reconcile_stale_runs: bool,
     host_lifetime: HostLifetime,
 ) -> Result<OrbitRuntime, OrbitError> {
+    ProductProfile::Orbit.validate_roots(&[global_root, shared_root, local_root])?;
     let _generation = orbit_common::fs::generation::GenerationGuard::for_process(global_root)?;
     let layout_report = match orbit_store::workflow::layout::upgrade_workspace_layout(shared_root) {
         Ok(report) => report,
