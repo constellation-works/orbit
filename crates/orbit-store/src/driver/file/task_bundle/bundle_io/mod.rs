@@ -353,7 +353,10 @@ const UNPUBLISHED_STUB_LOCK_FILE_NAME: &str = ".task.yaml.lock";
 /// listing of healthy neighbors. A present `task.yaml` that cannot be loaded
 /// is corrupt and stays fail-closed. A directory missing `task.yaml` but
 /// holding any other entry is unresolved data, not a stub.
-pub(crate) fn is_unpublished_stub(bundle_dir: &Path) -> bool {
+///
+/// Shared by reindex, listing, and `orbit doctor` so those surfaces cannot
+/// disagree on what is reapable residue.
+pub fn is_unpublished_stub(bundle_dir: &Path) -> bool {
     bundle_dir.is_dir()
         && !bundle_dir.join(TASK_ENVELOPE_FILE_NAME).is_file()
         && directory_holds_only_stub_residue(bundle_dir)
