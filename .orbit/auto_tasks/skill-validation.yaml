@@ -64,6 +64,7 @@ template:
   - skill-validation
   - skills
   - staleness
+  - no-diff-expected
   priority: medium
   complexity: medium
   crew: luna
