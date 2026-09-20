@@ -523,6 +523,19 @@ pub trait JobRunStoreBackend: Send + Sync {
         ))
     }
 
+    /// How much leaf capacity both admission paths are already using
+    /// [ORB-12617].
+    ///
+    /// The legacy drain and the pull drain allocate against one ceiling, so
+    /// they must read one number: a wrapper is replaced by the leaf runs it
+    /// dispatched rather than counted beside them, every leaf definition
+    /// counts, and a pending admission with no live run of its own counts too.
+    /// Read-only, and it never creates pull schema in a workspace that has
+    /// none.
+    fn drain_leaf_occupancy(&self) -> Result<super::DrainLeafOccupancy, OrbitError> {
+        Err(OrbitError::Store("drain leaf occupancy unavailable".into()))
+    }
+
     fn mutate_local_pull(
         &self,
         _destination: &PullDestination,

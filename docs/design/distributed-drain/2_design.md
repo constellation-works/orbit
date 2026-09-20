@@ -170,15 +170,46 @@ run. Worktree admission on a bound leaf no longer re-admits locally: it checks
 the binding and reads the owner's already-admitted task. Generic workers still
 refuse these leaves, and a local binding still refuses generic resume.
 
-**What is still not executable.** Only an owner-local destination is served end
-to end. The owner accepts a local candidate from its own Git observation;
-accepting a *published pull request* needs an independent provider observation
-this slice does not implement, so that settlement is refused explicitly and
-left durable for retry, and the follower-PR executable fixture is **not
-delivered**. A follower destination still fails on the public mutation gate,
-which stays false. No routine, schedule, ship-sweep entry point or live host
-changes, and `run auto` / `run ship` cannot name a claimed leaf: every mode they
-admit (`pr`, `local`) renders a legacy pipeline name.
+[ORB-12617] closed the mixed-admission integration and proved the whole path
+end to end.
+
+**One capacity ceiling.** The legacy classifier used to divide the configured
+ceiling by its own `task_auto_pipeline` run count, so a pulled claim's leaf was
+invisible to it and the two admission paths could each fill the drain. Both now
+read one occupancy from the job store —
+`JobRunStoreBackend::drain_leaf_occupancy`, the same reading the pull allocator
+commits against inside its own transaction. A wrapper is replaced by whatever
+descendant is actually carrying its work (a live leaf run of any of the four
+leaf definitions, or a pull admission whose bound leaf went terminal before
+settling) rather than counted beside it; an admission with no live run of its
+own holds its own slot; each definition's `max_active_runs: 10` is checked
+against that same reading, per definition. `classify_workspace_auto_tasks` and
+the readiness diagnostic both report the breakdown (`wrapper_leaf_runs`,
+`leaf_occupancy_by_pipeline`), so a drain saturated by claimed work reads as
+saturation rather than as an empty backlog. A slot returns when the claim
+settles, not when its leaf terminalizes.
+
+**Fault injection against the real adapters.** Request, create, bind and launch
+cuts run against the real owner peer and the real launcher binding. Each cut is
+the response half of a step whose owner-side effect already committed, except
+the create cut, which is an executor dying with a leaf it never announced.
+Across all four, one claim and one leaf survive, a failed launch leaves exactly
+one immutable settlement the next pass retries idempotently, and a killed
+launch leaves a `Launching` record that every generic path refuses — the drain
+refuses to relaunch it, `orbit job resume` refuses it, and nothing settles or
+revokes it on a guess. Deliberate recovery remains the only way forward.
+
+**What is still not executable.** The executor half of PR delivery now runs end
+to end — real worktree, commit, push to a real remote, `pr_open`, owner-required
+validation on the published candidate, and a typed `PullRequest` handoff
+recorded as the claim's durable pending settlement. What the *owner* still
+cannot do is accept it: an independent provider observation of a published pull
+request is not implemented, so that settlement is refused explicitly and left
+durable for retry. Only an owner-local destination is served at all; a follower
+destination still fails on the public mutation gate, which stays false. No
+routine, schedule, ship-sweep entry point or live host changes, and `run auto` /
+`run ship` cannot name a claimed leaf: every mode they admit (`pr`, `local`)
+renders a legacy pipeline name.
 
 
 `orbit run auto --pull <selector>` binds a local replica checkout to the owner's host-qualified
@@ -676,6 +707,7 @@ These are implementation acceptance criteria, not tests reported as passing by t
 | Missing, failed, replaced or wrong-candidate validation artifact | Reject acceptance/approval/merge-intent publication without partial review, authorization or reservation effects |
 | Idle polling and receipt compaction | One idle request per refill pass; tombstone replay cannot re-admit; unsettled receipt retained; growth metrics visible |
 | PR/local leaves replace auto wrappers in capacity accounting | Configured local ceiling includes actual bound/queued runs and unrepresented admissions exactly once |
+| Mixed legacy and claimed admission under one ceiling | Legacy classifier and pull allocator read one occupancy; wrapper -> gate -> queued claimed leaf is one slot; a terminal leaf holds its slot until settlement; each definition's own `max_active_runs` applies per definition |
 
 ## 9. Concerns & Honest Limitations
 
@@ -713,5 +745,10 @@ These are implementation acceptance criteria, not tests reported as passing by t
 - [ORB-12616] — made the owner-local claimed leaf executable: the two claimed leaf definitions, the
   `claim_validate` / `claim_handoff` steps, owner-declared required validation, and the real owner
   and launcher adapters. The follower-PR executable path is explicitly not delivered.
+- [ORB-12617] — put legacy and claimed admission on one shared capacity reading, ran request /
+  create / bind / launch fault injection against the real owner and launcher adapters, and added
+  the integrated acceptance fixtures: an owner-local no-origin claim that executes, validates and
+  hands off without PR credentials or a merge; a published PR claim that hands off a typed
+  `PullRequest` delivery without merging; and a stopped parent that revokes no child.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

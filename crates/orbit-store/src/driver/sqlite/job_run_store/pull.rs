@@ -12,8 +12,8 @@ use super::queries::{
 };
 use crate::Store;
 use crate::contracts::{
-    AdmissionRequest, ClaimMutation, LocalPullAdmission, LocalPullMutation, LocalPullPhase,
-    PullDestination,
+    AdmissionRequest, ClaimMutation, DrainLeafOccupancy, LocalPullAdmission, LocalPullMutation,
+    LocalPullPhase, PullDestination,
 };
 use crate::driver::sqlite::migration::FeatureMigration;
 
@@ -39,6 +39,17 @@ fn invalid(message: &str) -> OrbitError {
 fn decode(raw: String) -> Result<LocalPullAdmission, OrbitError> {
     serde_json::from_str(&raw).map_err(db_error)
 }
+/// Whether the `local_pull` feature migration has ever run here. A reader must
+/// not create the feature schema merely to discover there are no admissions.
+fn admissions_table_exists(conn: &Connection) -> Result<bool, OrbitError> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_pull_admissions')",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(db_error)
+}
+
 fn records(conn: &Connection, workspace: &str) -> Result<Vec<LocalPullAdmission>, OrbitError> {
     let mut stmt = conn
         .prepare(
@@ -89,10 +100,7 @@ pub(super) fn for_run(
     run_id: &str,
 ) -> Result<Option<LocalPullAdmission>, OrbitError> {
     store.with_read_connection(|conn| {
-        let exists: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='local_pull_admissions')",
-            [], |row| row.get(0)).map_err(db_error)?;
-        if !exists { return Ok(None); }
+        if !admissions_table_exists(conn)? { return Ok(None); }
         conn.query_row("SELECT record_json FROM local_pull_admissions WHERE workspace_id=?1 AND leaf_run_id=?2",
             params![workspace, run_id], |row| row.get::<_, String>(0))
             .optional().map_err(db_error)?.map(decode).transpose()
@@ -104,13 +112,54 @@ pub(super) fn list(store: &Store, workspace: &str) -> Result<Vec<LocalPullAdmiss
     store.with_read_connection(|conn| records(conn, workspace))
 }
 
-/// Count legacy wrappers once, replacing them with their actual PR/local
-/// descendants. Bound queued leaves and admissions lacking an active leaf each
-/// consume one slot. A terminal leaf retains its slot until settlement.
-fn occupancy(
+/// How far the wrapper lineage walk follows dispatch records. A loop guard for
+/// a malformed or cyclic dispatch chain, not a tuning knob.
+const MAX_WRAPPER_LINEAGE_DEPTH: usize = 64;
+
+/// Every run a live legacy wrapper dispatched, transitively.
+fn wrapper_lineage(
     conn: &Connection,
     workspace: &str,
-) -> Result<(usize, BTreeMap<String, usize>), OrbitError> {
+    root_state: Option<&String>,
+) -> Result<BTreeSet<String>, OrbitError> {
+    let mut frontier = vec![root_state.cloned()];
+    let mut seen = BTreeSet::new();
+    for _ in 0..MAX_WRAPPER_LINEAGE_DEPTH {
+        let mut next = Vec::new();
+        for raw in frontier.into_iter().flatten() {
+            let state: PipelineState = serde_json::from_str(&raw).map_err(db_error)?;
+            for child in state.child_dispatches {
+                if seen.insert(child.child_run_id.clone()) {
+                    let raw: Option<String> = conn
+                        .query_row(
+                            "SELECT pipeline_state_json FROM job_runs WHERE workspace_id=?1 AND run_id=?2",
+                            params![workspace, child.child_run_id],
+                            |r| r.get(0),
+                        )
+                        .optional()
+                        .map_err(db_error)?
+                        .flatten();
+                    next.push(raw);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    Ok(seen)
+}
+
+/// The one capacity reading both admission paths allocate against [ORB-12617].
+///
+/// Legacy wrappers are counted once and replaced by whichever descendant is
+/// actually carrying their work: a live leaf run of any of the four leaf
+/// definitions, or a pull admission whose bound leaf has gone terminal but has
+/// not settled yet. An admission with no live run of its own — never created,
+/// or created and since terminal — holds its own slot instead, so a slot is
+/// released exactly when the claim settles and not before.
+fn occupancy(conn: &Connection, workspace: &str) -> Result<DrainLeafOccupancy, OrbitError> {
     let mut stmt = conn.prepare("SELECT run_id,job_id,pipeline_state_json FROM job_runs WHERE workspace_id=?1 AND state IN ('pending','running','retrying')").map_err(db_error)?;
     let active = stmt
         .query_map([workspace], |r| {
@@ -123,49 +172,43 @@ fn occupancy(
         .map_err(db_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(db_error)?;
-    let mut slots = BTreeSet::new();
-    let mut pipelines = BTreeMap::new();
-    let leaves: BTreeSet<_> = active
+    // Admissions that still hold capacity. Read before the wrapper walk
+    // because a wrapper whose lineage reaches one of their leaves is
+    // represented by that admission, terminal leaf or not.
+    let pending = if admissions_table_exists(conn)? {
+        records(conn, workspace)?
+    } else {
+        Vec::new()
+    };
+    let pending: Vec<LocalPullAdmission> = pending
+        .into_iter()
+        .filter(|record| !matches!(record.phase, LocalPullPhase::Idle | LocalPullPhase::Settled))
+        .collect();
+    let admitted_runs: BTreeSet<String> = pending
+        .iter()
+        .filter_map(|record| record.leaf_run_id.clone())
+        .collect();
+
+    let mut pipelines: BTreeMap<String, usize> = BTreeMap::new();
+    let leaves: BTreeSet<String> = active
         .iter()
         .filter(|(_, job, _)| is_leaf_pipeline(job))
         .map(|(id, _, _)| id.clone())
         .collect();
-    slots.extend(leaves.iter().cloned());
+    let mut slots: BTreeSet<String> = leaves.iter().cloned().collect();
     for (id, job, state) in &active {
         if is_leaf_pipeline(job) {
             *pipelines.entry(job.clone()).or_insert(0) += 1;
-        } else if job == "task_auto_pipeline" {
-            let mut frontier = vec![state.clone()];
-            let mut seen = BTreeSet::new();
-            for _ in 0..64 {
-                let mut next = Vec::new();
-                for raw in frontier.into_iter().flatten() {
-                    let state: PipelineState = serde_json::from_str(&raw).map_err(db_error)?;
-                    for child in state.child_dispatches {
-                        if seen.insert(child.child_run_id.clone()) {
-                            let raw: Option<String> = conn.query_row(
-                                "SELECT pipeline_state_json FROM job_runs WHERE workspace_id=?1 AND run_id=?2",
-                                params![workspace, child.child_run_id], |r| r.get(0))
-                                .optional().map_err(db_error)?.flatten();
-                            next.push(raw);
-                        }
-                    }
-                }
-                if next.is_empty() {
-                    break;
-                }
-                frontier = next;
-            }
-            if seen.is_disjoint(&leaves) {
+        } else if job == LEGACY_WRAPPER_PIPELINE {
+            let seen = wrapper_lineage(conn, workspace, state.as_ref())?;
+            if seen.is_disjoint(&leaves) && seen.is_disjoint(&admitted_runs) {
                 slots.insert(id.clone());
             }
         }
     }
+
     let mut occupied = slots.len();
-    for record in records(conn, workspace)? {
-        if matches!(record.phase, LocalPullPhase::Idle | LocalPullPhase::Settled) {
-            continue;
-        }
+    for record in pending {
         if record
             .leaf_run_id
             .as_ref()
@@ -183,7 +226,21 @@ fn occupancy(
                 .or_insert(0) += 1;
         }
     }
-    Ok((occupied, pipelines))
+    Ok(DrainLeafOccupancy {
+        occupied,
+        per_pipeline: pipelines,
+    })
+}
+
+/// The shared reading both admission paths allocate against [ORB-12617].
+///
+/// Read-only and schema-neutral: a workspace that has never pulled has no
+/// `local_pull` feature schema, and asking how full it is must not create one.
+pub(super) fn drain_occupancy(
+    store: &Store,
+    workspace: &str,
+) -> Result<DrainLeafOccupancy, OrbitError> {
+    store.with_read_connection(|conn| occupancy(conn, workspace))
 }
 /// The leaf definitions a claim may select. They are the handoff-only claimed
 /// variants, never the merge-capable legacy pipelines: a pulled claim settles
@@ -197,8 +254,18 @@ fn pipeline(request: &AdmissionRequest) -> Result<&'static str, OrbitError> {
     }
 }
 
+/// Each leaf definition's own `max_active_runs`, which a pulled admission is
+/// bound by exactly as a dispatched one is. Mirrors the `max_active_runs: 10`
+/// the four leaf job assets declare.
+const MAX_ACTIVE_LEAF_RUNS_PER_PIPELINE: usize = 10;
+
 pub(crate) const CLAIMED_PR_PIPELINE: &str = "task_claimed_pr_pipeline";
 pub(crate) const CLAIMED_LOCAL_PIPELINE: &str = "task_claimed_local_pipeline";
+
+/// The loose-leaf wrapper the legacy drain dispatches. It occupies a slot on
+/// behalf of the leaf beneath it, so it is only counted while nothing beneath
+/// it is.
+const LEGACY_WRAPPER_PIPELINE: &str = "task_auto_pipeline";
 
 /// Every leaf definition that occupies one drain slot: the legacy pair a
 /// non-pulled drain still dispatches, and the claimed pair a pulled one does.
@@ -268,8 +335,10 @@ pub(super) fn allocate(
         let ceiling = state
             .effective_max_active_leaf_runs(u32::try_from(ceiling).unwrap_or(u32::MAX))
             as usize;
-        let (occupied, pipelines) = occupancy(conn, workspace)?;
-        if occupied >= ceiling || pipelines.get(pipeline(request)?).copied().unwrap_or(0) >= 10 {
+        let occupancy = occupancy(conn, workspace)?;
+        if occupancy.occupied >= ceiling
+            || occupancy.for_pipeline(pipeline(request)?) >= MAX_ACTIVE_LEAF_RUNS_PER_PIPELINE
+        {
             return Ok(None);
         }
         let record = LocalPullAdmission {

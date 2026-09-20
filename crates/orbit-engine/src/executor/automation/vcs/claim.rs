@@ -62,7 +62,7 @@ fn delivery(context: &ClaimExecutionContext, input: &Value) -> Result<HandoffDel
         "pr" => {
             let number = input
                 .get("pull_request")
-                .and_then(Value::as_u64)
+                .and_then(pull_request_number)
                 .filter(|number| *number > 0)
                 .ok_or_else(|| {
                     OrbitError::InvalidInput(
@@ -77,6 +77,20 @@ fn delivery(context: &ClaimExecutionContext, input: &Value) -> Result<HandoffDel
             "claimed leaf ship mode '{other}' has no handoff delivery"
         ))),
     }
+}
+
+/// The PR number this step was handed, in either shape the run can produce
+/// [ORB-12617].
+///
+/// `pr_open` reports `pr_number` as a *string* — a provider selector rather
+/// than a quantity — and an exact step-output template forwards the source
+/// JSON type unchanged, so the pr-mode leaf receives a string. Reading only
+/// `as_u64` here made every published claimed PR fail at its handoff with
+/// "pull_request is required" while the number was sitting right there.
+pub(super) fn pull_request_number(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
 }
 
 /// Repository identity for the handoff. A checkout with a remote names it; an
