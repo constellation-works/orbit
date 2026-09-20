@@ -46,7 +46,8 @@ impl OrbitRuntime {
             // for. Refuse here rather than after `worktree_setup` and an
             // implementation step that can never reach a handoff.
             return Err(OrbitError::JobValidation(
-                "claimed leaf definitions are selected by the owner's admission, not submitted                  directly; this run has no claim and cannot hand off"
+                "claimed leaf definitions are selected by the owner's admission, not submitted \
+                 directly; this run has no claim and cannot hand off"
                     .into(),
             ));
         }

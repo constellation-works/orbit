@@ -69,7 +69,8 @@ impl OwnerPullPeer<'_> {
             // destination never becomes owner-local, whatever the gate says.
             ensure_distributed_mutation_available("orbit.task.pull")?;
             return Err(refused(format!(
-                "destination owner '{}' / executor '{}' is not this machine '{machine}'; the                  owner-local adapter serves only its own machine",
+                "destination owner '{}' / executor '{}' is not this machine '{machine}'; the \
+                 owner-local adapter serves only its own machine",
                 destination.owner_machine_id, destination.execution_machine_id
             )));
         }

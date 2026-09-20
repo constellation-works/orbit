@@ -201,14 +201,16 @@ impl RuntimeHost for OrbitRuntime {
         if let Some(binding) = self.worker_invocation() {
             if task_id != binding.task_id {
                 return Err(OrbitError::PolicyDenied(format!(
-                    "worker task binding mismatch: this leaf is bound to '{}', {workflow}                      requested '{task_id}'",
+                    "worker task binding mismatch: this leaf is bound to '{}', {workflow} \
+                     requested '{task_id}'",
                     binding.task_id
                 )));
             }
             let task: Task = self.read_owner(task_id, "task")?;
             if task.status != TaskStatus::InProgress {
                 return Err(OrbitError::PolicyDenied(format!(
-                    "claimed task '{task_id}' is '{}' on the owner; only an admitted                      in-progress claim may build a worktree",
+                    "claimed task '{task_id}' is '{}' on the owner; only an admitted \
+                     in-progress claim may build a worktree",
                     task.status
                 )));
             }
