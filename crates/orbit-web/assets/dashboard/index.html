@@ -89,7 +89,7 @@
         </header>
 
     <section class="tab-pane" data-tab="tasks">
-      <main class="tasks-layout" style="grid-template-columns: minmax(0, 1fr) 336px;">
+      <main class="tasks-layout">
         <div class="col-tasks" style="display: flex; flex-direction: column; min-width: 0;">
           <section class="panel" id="tasks-panel">
             <header><span>Tasks</span><span class="count" id="tasks-count">-</span></header>
@@ -112,6 +112,7 @@
             </div>
           </section>
         </div>
+        <div class="dock-splitter" id="dock-splitter" role="separator" aria-orientation="vertical" tabindex="0" title="Resize dock" aria-label="Resize dock" aria-valuenow="336" aria-valuemin="336"></div>
         <!-- ORB-10972: the right column is a two-mode dock. Status keeps the
              per-task file locks; Log hosts the orbit.log tail at full dock
              height. The column width is identical in both modes, so switching
@@ -140,6 +141,7 @@
                 <button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">deny</button>
                 <button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">warn</button>
                 <button type="button" class="seg right on" id="log-follow-tail" title="Follow the tail" aria-pressed="true"><b>&#8595;</b> follow</button>
+                <button type="button" class="seg" id="log-wrap-lines" title="Wrap lines" aria-pressed="false">wrap</button>
                 <button type="button" class="count" id="log-buffered-count" style="display: none;">0 buffered</button>
               </div>
               <div class="log-stream">
