@@ -23,6 +23,7 @@ use crate::bootstrap::global_defaults::{
     global_defaults_are_current, record_global_defaults_reconciled,
 };
 use crate::bootstrap::policy::seed_default_policies;
+use crate::bootstrap::product_profile::ProductProfile;
 use orbit_common::fs::io::{create_dir_symlink, create_private_dir_all, remove_path_if_exists};
 
 use crate::runtime::{is_global_orbit_root, resolve_global_root};
@@ -111,6 +112,7 @@ pub(crate) fn ensure_orbit_root_initialized(
     global_root: &Path,
     workspace_root: &Path,
 ) -> Result<(), OrbitError> {
+    ProductProfile::Orbit.validate_roots(&[global_root, workspace_root])?;
     if !global_defaults_are_current(global_root) {
         let global_init = init_workspace_at_root(
             global_root,
@@ -179,9 +181,6 @@ pub fn init_workspace_at_root(
     let init_target = resolve_init_target_from_root(orbit_root);
     let orbit_root = init_target.orbit_root.clone();
 
-    if options.force {
-        remove_path_if_exists(&orbit_root)?;
-    }
     // The workspace branch needs its global root before laying out the
     // workspace: skill reaping must know which catalog is the live global one.
     let workspace_global_root = if options.global_only {
@@ -194,6 +193,15 @@ pub fn init_workspace_at_root(
                 .map_or_else(resolve_global_root, Ok::<PathBuf, OrbitError>)?,
         )
     };
+    ProductProfile::Orbit.validate_roots(&[&orbit_root])?;
+    if let Some(global_root) = workspace_global_root.as_deref() {
+        ProductProfile::Orbit.validate_roots(&[global_root])?;
+    }
+    if options.force {
+        remove_path_if_exists(&orbit_root)?;
+    }
+    let claim = ProductProfile::Orbit.claim_root(&orbit_root);
+    ignore_denied_implicit_bootstrap_write("product marker", &orbit_root, claim)?;
     let layout = match workspace_global_root.as_deref() {
         None => prepare_global_root_layout(&orbit_root)?,
         Some(global_root) => prepare_workspace_root_layout(&orbit_root, global_root)?,

@@ -4,6 +4,7 @@ pub(crate) mod activity;
 pub(crate) mod global_defaults;
 pub mod init;
 pub(crate) mod policy;
+pub(crate) mod product_profile;
 pub mod task_migration;
 pub mod task_publication;
 

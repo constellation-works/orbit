@@ -265,3 +265,53 @@ Managed worker composition in `orbit-cmd` uses `orbit-mcp` owner transports and 
 work; only coordination requests cross this injected transport. Process invocation
 bindings live in the existing protected runtime authority store, outside leaf write
 grants; they are attempt provenance, not a destination caller registry.
+
+## Product identity groundwork
+
+Orbit remains the only supported application profile. Core's
+[`bootstrap::product_profile`](crates/orbit-core/src/bootstrap/product_profile.rs)
+checks a `.orbit-product` ownership marker before supported composition,
+initialization and managed-asset reconciliation can change a root. Explicit
+initialization claims an Orbit root; ordinary opens retain compatibility with
+unmarked legacy Orbit directories. Foreign, malformed and symlinked markers are
+refused. Physical ancestor checks prevent treating a child or symlink alias of
+another product's state tree as independent state.
+
+This is protection against accidental cross-product composition, not a security
+boundary against raw file/store access or older binaries that do not understand
+the marker. It does not promise a transaction across multiple directories or
+protection against hostile concurrent filesystem replacement. Partial marker
+writes fail closed. Existing generation/schema compatibility and sandbox checks
+remain separate requirements.
+
+A **test-only** research fixture receives explicit global/shared/local roots and
+bootstraps the shared safety policy without engineering activities, jobs, skills,
+executors, routines or auto-tasks. It can construct the existing task/audit/job
+runtime synchronously. The fixture demonstrates reuse without duplicating those
+engines; it is not a public research profile API, shipped executable or packaging
+contract. Its result/receipt adapter is a synthetic fixture, not scientific
+record authoring or a production delivery gate.
+
+### Remaining composition boundaries
+
+A public product profile must be immutable and selected by the application before
+state is opened. Merely omitting default assets or filtering tool discovery is
+insufficient. These paths must carry the same profile before research construction
+can become available:
+
+| Boundary | Required integration |
+| --- | --- |
+| [`runtime/tool_exec.rs`](crates/orbit-core/src/runtime/tool_exec.rs) and [audited command dispatch](crates/orbit-core/src/adapter/command/dispatch.rs) | Product admission intersects existing caller capability and policy checks, including direct calls; workspace config cannot widen it. |
+| [Engine dispatcher](crates/orbit-engine/src/activity_job/dispatcher.rs) and [Core deterministic dispatch](crates/orbit-core/src/adapter/engine_host/v2_host/dispatch.rs) | Admission at execution as well as job validation. Engine actions bypass Core's action dispatcher; both need coverage. |
+| [Job submission](crates/orbit-core/src/application/job/pipeline/submit.rs) and [web run handlers](crates/orbit-web/src/api/runs.rs) | Guard engineering service entrypoints, which can bypass the tool registry, or provide an explicitly restricted application facade. |
+| [MCP transport](crates/orbit-cli/src/command/mcp/command.rs) and [global server dispatch](crates/orbit-cli/src/command/mcp/server.rs) | Research composition omits remote/federated entrypoints and supplies product-aware global discovery; these paths can execute before a Core runtime exists. |
+| [Detached worker command](crates/orbit-core/src/application/job/pipeline/worker/command.rs) | Carry application executable and both global/workspace roots through child-process entry and restart. Existing split-root workers rely on cwd rediscovery. |
+| [Agent callback setup](crates/orbit-engine/src/activity_job/cli_runner/spawn.rs) | Avoid selecting another product through ambient `ORBIT_BIN` or bare `orbit` on PATH. A renamed executable alone does not solve callback routing. |
+| [Clock installation](crates/orbit-core/src/application/routines/clock.rs) | Namespace service labels, launch commands and state paths; current Orbit labels must not be reused by another app. |
+
+Follow-on work should prove the integrated boundaries with adversarial copied-job,
+direct-operation and real child-process fixtures, while retaining normal Orbit's
+default behavior. Do not expose the research constructor after only tool filtering
+or asset selection is complete. Local-only application operations also do not mean
+network-denied execution: shell/provider networking remains governed by the
+existing execution policy.
