@@ -125,11 +125,29 @@ pub fn uncommitted_paths(workspace_path: &Path) -> Result<Vec<String>, OrbitErro
         workspace_path,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     )?;
-    let mut paths = status
-        .split('\0')
-        .filter(|entry| entry.len() > 3)
-        .map(|entry| entry[3..].to_string())
-        .collect::<Vec<_>>();
+    let mut paths = Vec::new();
+    let mut fields = status.split('\0');
+    while let Some(entry) = fields.next() {
+        if entry.is_empty() {
+            continue;
+        }
+        let mut codes = entry.chars();
+        let (Some(index_state), Some(_worktree_state)) = (codes.next(), codes.next()) else {
+            continue;
+        };
+        // A rename or copy is followed by a second NUL-terminated field holding
+        // the source path, which belongs to the record before it rather than
+        // starting a new record.
+        if matches!(index_state, 'R' | 'C') {
+            let _ = fields.next();
+        }
+        let Some(path) = entry.get(3..) else {
+            continue;
+        };
+        if !path.is_empty() {
+            paths.push(path.to_string());
+        }
+    }
     paths.sort();
     paths.dedup();
     Ok(paths)

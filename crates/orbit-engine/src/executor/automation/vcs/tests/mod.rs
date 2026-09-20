@@ -6,6 +6,7 @@ mod freshness;
 mod git;
 mod landing;
 mod operations;
+mod review_gate;
 
 /// Isolate PATH in a child test process so real private VCS operations can run
 /// a fake provider without changing the environment of concurrent Rust tests.
