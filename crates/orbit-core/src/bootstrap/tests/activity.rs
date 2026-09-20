@@ -156,13 +156,14 @@ fn agent_implement_guidance_allows_bounded_scope_expansion() {
                 .join(" ")
                 .to_lowercase();
             assert!(!yaml.contains("\n  role:"));
-            assert!(instruction.contains("not as a perfect inventory"));
-            assert!(instruction.contains("make the smallest compatible change"));
-            assert!(instruction.contains("stop after a task comment"));
-            assert!(instruction.contains("before the first edit"));
-            assert!(instruction.contains("before validation"));
-            assert!(instruction.contains("git rev-parse --show-toplevel"));
-            assert!(instruction.contains("worktree_mismatch"));
+            assert!(
+                instruction.contains("git rev-parse --show-toplevel"),
+                "[ORB-10296] instruction must guard worktree toplevel check"
+            );
+            assert!(
+                instruction.contains("worktree_mismatch"),
+                "[ORB-10296] instruction must fail with worktree_mismatch diagnostic"
+            );
             for contract in [
                 "task.terminal",
                 "pwd -p",
@@ -227,12 +228,30 @@ fn agent_implement_context_loading_reads_files_and_lists_directories() {
         .join(" ")
         .to_lowercase();
 
-    assert!(instruction.contains("each `file:` target with the provider-native file-read tool"));
-    assert!(instruction.contains("each `dir:` selector"));
-    assert!(instruction.contains("do not call the file-read tool on the directory"));
-    assert!(instruction.contains("resolves beneath the workspace root"));
-    assert!(instruction.contains("`rg --files <directory>`"));
-    assert!(!instruction.contains("is a directory"));
+    assert!(
+        instruction.contains("each `file:` target with the provider-native file-read tool"),
+        "[ORB-10652] file selector contract"
+    );
+    assert!(
+        instruction.contains("each `dir:` selector"),
+        "[ORB-10652] dir selector contract"
+    );
+    assert!(
+        instruction.contains("do not call the file-read tool on the directory"),
+        "[ORB-10652] directory read avoidance"
+    );
+    assert!(
+        instruction.contains("resolves beneath the workspace root"),
+        "[ORB-10652] workspace root boundary"
+    );
+    assert!(
+        instruction.contains("`rg --files <directory>`"),
+        "[ORB-10652] rg listing contract"
+    );
+    assert!(
+        !instruction.contains("is a directory"),
+        "[ORB-10652] no obsolete error phrasing"
+    );
 }
 
 /// The effective implementation instruction — the packaged asset and the
@@ -501,8 +520,6 @@ fn task_pilot_is_read_only_bounded_and_uses_advisory_output() {
                     .any(|program| program == "orbit"),
                 "proc.spawn must not bypass the scoped Orbit tool allowlist"
             );
-            assert!(spec.instruction.contains("Never update a task"));
-            assert!(spec.instruction.contains("one to five"));
         }
         _ => panic!("expected agent_loop task_pilot activity"),
     }
@@ -693,10 +710,12 @@ fn seeded_activities_include_step_failure_recovery() {
             assert!(!yaml.contains("\n  role:"));
             assert!(!yaml.contains("\n  backend:"));
             assert!(!yaml.contains("\n  provider:"));
-            assert!(
-                spec.instruction
-                    .contains("You are Orbit's step-failure recovery agent.")
+            assert_eq!(
+                spec.tools,
+                ["orbit.task.*", "orbit.friction.*", "proc.spawn"]
             );
+            assert_eq!(spec.on_denial, orbit_types::workflow::OnDenial::Terminate);
+            assert!(!spec.instruction.is_empty());
         }
         _ => panic!("expected agent_loop activity"),
     }
@@ -731,7 +750,7 @@ fn step_failure_recovery_cannot_write_persistent_git_configuration() {
     ] {
         assert!(
             spec.instruction.contains(stated),
-            "recovery contract must state `{stated}`"
+            "[ORB-12103] recovery contract must state `{stated}`"
         );
     }
     let programs = spec.proc_allowed_programs.clone().unwrap_or_default();

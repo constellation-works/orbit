@@ -243,52 +243,35 @@ fn workspace_init_seeds_inert_defaults_without_clobbering_edits() {
     assert_eq!(friction_definition.template.crew.as_deref(), Some("system"));
     assert!(
         friction.contains("\n  crew: system"),
-        "seeded friction default must name the system crew"
+        "[ORB-10877] seeded friction default must name the system crew"
     );
     assert!(matches!(
         friction_definition.dedupe,
         orbit_types::workflow::DedupePolicy::SkipIfOpen
     ));
-    let qa = fs::read_to_string(&qa_path).expect("read seeded QA definition");
-    let qa_definition = orbit_common::protocol::yaml::parse_auto_task_yaml(&qa)
-        .expect("seeded QA definition parses through loader schema");
+    let qa_definition = orbit_common::protocol::yaml::parse_auto_task_yaml(
+        &fs::read_to_string(&qa_path).expect("read seeded QA definition"),
+    )
+    .expect("seeded QA definition parses through loader schema");
     assert!(!qa_definition.enabled);
-    assert_eq!(qa_definition.template.crew.as_deref(), Some("system"));
-    assert!(
-        qa.contains("\n  crew: system"),
-        "seeded QA default must name the system crew"
-    );
     assert!(matches!(
         qa_definition.dedupe,
         orbit_types::workflow::DedupePolicy::SkipIfOpen
     ));
-    let security =
-        fs::read_to_string(&security_path).expect("read seeded security-review definition");
-    let security_definition = orbit_common::protocol::yaml::parse_auto_task_yaml(&security)
-        .expect("seeded security-review definition parses through loader schema");
+    let security_definition = orbit_common::protocol::yaml::parse_auto_task_yaml(
+        &fs::read_to_string(&security_path).expect("read seeded security-review definition"),
+    )
+    .expect("seeded security-review definition parses through loader schema");
     assert!(!security_definition.enabled);
-    assert_eq!(security_definition.template.crew.as_deref(), Some("system"));
-    assert!(
-        security.contains("\n  crew: system"),
-        "seeded security-review default must name the system crew"
-    );
     assert!(matches!(
         security_definition.dedupe,
         orbit_types::workflow::DedupePolicy::SkipIfOpen
     ));
-    let code_review =
-        fs::read_to_string(&code_review_path).expect("read seeded code-review definition");
-    let code_review_definition = orbit_common::protocol::yaml::parse_auto_task_yaml(&code_review)
-        .expect("seeded code-review definition parses through loader schema");
+    let code_review_definition = orbit_common::protocol::yaml::parse_auto_task_yaml(
+        &fs::read_to_string(&code_review_path).expect("read seeded code-review definition"),
+    )
+    .expect("seeded code-review definition parses through loader schema");
     assert!(!code_review_definition.enabled);
-    assert_eq!(
-        code_review_definition.template.crew.as_deref(),
-        Some("system")
-    );
-    assert!(
-        code_review.contains("\n  crew: system"),
-        "seeded code-review default must name the system crew"
-    );
     assert!(matches!(
         code_review_definition.dedupe,
         orbit_types::workflow::DedupePolicy::SkipIfOpen

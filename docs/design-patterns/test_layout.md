@@ -117,3 +117,7 @@ For modules already migrated to the *nested* anti-pattern (`<file>/tests/<topic>
 3. Ensure `<parent>/mod.rs` declares `#[cfg(test)] mod tests;` once for the whole parent module.
 4. Update imports through the sibling path (`use super::super::<file>::<item>;`).
 5. `cargo test -p <crate>` must pass.
+
+## What tests assert (invariants vs. policy)
+
+Tests assert what the code guarantees (parses, required fields present, ships disabled, structural safeguards, tool reachability). Crew, model, schedule, complexity and prompt wording are policy owned by config and prompts; a test may not pin them unless it cites the incident it guards.
