@@ -103,7 +103,6 @@ template:
   - no-diff-expected
   priority: medium
   complexity: hard
-  crew: opus
   status: backlog
 dedupe: skip_if_open
 skip_if_unchanged:

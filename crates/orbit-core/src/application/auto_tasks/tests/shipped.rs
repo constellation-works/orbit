@@ -51,8 +51,10 @@ fn shipped_defaults_all_parse_and_are_disabled() {
             "default auto-task {stem} must ship disabled"
         );
         let expected = match *stem {
-            "code-review" | "friction-curation" | "qa-sweep" => TaskComplexity::Medium,
-            "delivery-code-review" | "delivery-qa" | "security-review" => TaskComplexity::Hard,
+            "friction-curation" | "qa-sweep" => TaskComplexity::Medium,
+            "code-review" | "delivery-code-review" | "delivery-qa" | "security-review" => {
+                TaskComplexity::Hard
+            }
             other => panic!("unreviewed shipped auto-task complexity for {other}"),
         };
         assert_eq!(definition.template.complexity, Some(expected), "{stem}");
@@ -169,9 +171,10 @@ fn repository_definitions_all_parse() {
         );
         let expected = match stem {
             "release-prep" | "test-layout-sweep" => TaskComplexity::Low,
-            "code-review" | "doc-duties" | "friction-curation" | "model-price-audit"
-            | "qa-sweep" | "skill-validation" => TaskComplexity::Medium,
+            "doc-duties" | "friction-curation" | "model-price-audit" | "qa-sweep"
+            | "skill-validation" => TaskComplexity::Medium,
             "ci-failure-remediation"
+            | "code-review"
             | "delivery-code-review"
             | "delivery-qa"
             | "qa-full-sweep"
@@ -487,6 +490,11 @@ fn code_review_default_is_portable_cursor_driven_and_inert() {
     );
     assert!(matches!(definition.dedupe, DedupePolicy::SkipIfOpen));
     assert_eq!(definition.template.crew.as_deref(), Some("system"));
+    assert_eq!(
+        repository_definition.template.complexity,
+        Some(TaskComplexity::Hard)
+    );
+    assert_eq!(repository_definition.template.crew, None);
     assert!(
         yaml.contains("\n  crew: system"),
         "default must name the portable system crew"
