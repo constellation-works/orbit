@@ -168,18 +168,18 @@ pub(super) fn list_backlog_tasks(
         })
         .unwrap_or_default();
     let (mut tasks, excluded_entries) = if explicit_task_ids.is_empty() {
-        let pools = if input.get("auto_crew_pools").is_some()
-            || action == "classify_workspace_auto_tasks"
-        {
-            runtime.auto_crew_pools_for_input(input).map_err(|error| {
-                DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: error.to_string(),
-                }
-            })?
-        } else {
-            CapturedCrewPools::new()
-        };
+        // [ORB-12635] Discovery routes a crew-less task through its complexity
+        // pool exactly as admission does. The run's frozen policy is reached
+        // through the injected `run_id`, so this crew filter and
+        // `install_auto_crew_admission` cannot disagree about which tasks an
+        // allowlist permits; a direct call without a run reads the workspace's
+        // current pools rather than falling back to the default crew chain.
+        let pools = runtime.auto_crew_pools_for_input(input).map_err(|error| {
+            DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: error.to_string(),
+            }
+        })?;
         let mut snapshot = backlog_snapshot(
             runtime,
             action,

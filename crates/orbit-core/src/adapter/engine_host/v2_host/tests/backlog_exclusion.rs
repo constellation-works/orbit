@@ -1,3 +1,4 @@
+use chrono::Utc;
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
 use orbit_types::task::{
@@ -8,7 +9,8 @@ use serde_json::{Value, json};
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::backlog_exclusion::sort_tasks_for_automatic_dispatch;
 use crate::adapter::engine_host::v2_host::test_support::{
-    runtime_with_workspace_layout, seed_list_backlog_task, write_workspace_file,
+    runtime_with_workspace_config, runtime_with_workspace_layout, seed_list_backlog_task,
+    write_workspace_file,
 };
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
@@ -1188,5 +1190,79 @@ fn the_no_diff_expected_exemption_does_not_relax_dependency_readiness() {
     let output = list_backlog_tasks(&runtime, json!({}));
 
     assert!(!output_task_ids(&output).contains(&exempt.id));
+    assert_eq!(output["excluded"], json!([]));
+}
+
+fn seed_pool_routed_task(runtime: &OrbitRuntime, title: &str) -> String {
+    runtime
+        .add_task(TaskAddParams {
+            title: title.to_string(),
+            description: "Fixture task without a crew of its own".to_string(),
+            acceptance_criteria: vec!["Fixture task is observable.".to_string()],
+            plan: "Fixture plan.".to_string(),
+            priority: TaskPriority::Medium,
+            complexity: TaskComplexity::Medium,
+            task_type: Some(TaskType::Chore),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .expect("seed pool-routed task")
+        .id
+}
+
+/// [ORB-12635] `orbit run ship --allow-crew <crew>` with no task IDs reaches
+/// the discovery branch. A crew-less task is routed through its complexity
+/// pool there, exactly as submission admission routes it, so an allowlist
+/// naming a pool member admits the task instead of judging it against the
+/// default crew chain and dropping it as `crew_not_allowed`.
+#[test]
+fn discovery_mode_admits_a_pool_routed_task_under_an_allowlist() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_config(Some(
+        "[workflow]\ndefault_crew = \"opus\"\nmedium_complexity_crews = [\"grok\", \"terra\"]\n",
+    ));
+    let task_id = seed_pool_routed_task(&runtime, "Pool-eligible discovery task");
+
+    let permitted = list_backlog_tasks(&runtime, json!({ "allowed_crews": ["terra"] }));
+
+    assert_eq!(output_task_ids(&permitted), vec![task_id.clone()]);
+    assert_eq!(permitted["excluded"], json!([]));
+
+    // A crew the pool cannot draw still excludes, naming the whole pool the
+    // task would have been drawn from rather than the default crew.
+    let disjoint = list_backlog_tasks(&runtime, json!({ "allowed_crews": ["luna"] }));
+
+    assert!(output_task_ids(&disjoint).is_empty());
+    let excluded = excluded_entry(&disjoint, &task_id);
+    assert_eq!(excluded["reason"], "crew_not_allowed");
+    assert_eq!(excluded["crew"], "grok, terra");
+}
+
+/// [ORB-12635] Discovery reads the pools the run's own admission froze, so a
+/// CLI override decides eligibility for the whole run even after the workspace
+/// configuration moves underneath it.
+#[test]
+fn discovery_mode_uses_the_runs_captured_pool_instead_of_current_configuration() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_config(Some(
+        "[workflow]\ndefault_crew = \"opus\"\nmedium_complexity_crews = [\"grok\"]\n",
+    ));
+    let task_id = seed_pool_routed_task(&runtime, "Captured pool discovery task");
+    let mut input = json!({ "medium_complexity_crews": ["terra"], "allowed_crews": ["terra"] });
+    runtime
+        .install_auto_crew_admission("task_auto_pipeline", &mut input, None, false, &mut || {
+            panic!("a discovery submission draws no crew")
+        })
+        .expect("capture ship pools");
+    let run = runtime
+        .stores()
+        .jobs()
+        .insert_job_run("task_auto_pipeline", 1, Utc::now(), Some(input), None)
+        .expect("seed ship run");
+
+    let output = list_backlog_tasks(
+        &runtime,
+        json!({ "run_id": run.run_id, "allowed_crews": ["terra"] }),
+    );
+
+    assert_eq!(output_task_ids(&output), vec![task_id]);
     assert_eq!(output["excluded"], json!([]));
 }
