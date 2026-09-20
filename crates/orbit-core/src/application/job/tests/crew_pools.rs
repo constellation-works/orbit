@@ -415,45 +415,175 @@ fn children_draw_independently_and_system_jobs_keep_their_crew() {
     assert_eq!(system, original);
 }
 
+/// [ORB-12606] Pool policy routes any crew-less task, whichever pipeline
+/// admits it: a top-level `task_auto_pipeline` — what `orbit run ship` and
+/// `orbit.workflow.ship` submit — captures the effective pools itself and
+/// draws. An explicit run-input crew and `task.crew` still win outright.
 #[test]
-fn explicit_run_crew_wins_and_ordinary_ship_admission_has_no_pool_policy() {
+fn explicit_run_crew_wins_and_ordinary_ship_admission_draws_from_the_matching_pool() {
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(
         "[workflow]\nmedium_complexity_crews = [\"grok\", \"terra\"]\n",
     );
-    let parent = coordinator(&runtime, json!({}));
     let assigned = task(&runtime, TaskComplexity::Medium, Some("astra"));
-    let mut input = json!({"task_ids": [assigned.id], "crew": "luna"});
+    let unassigned = task(&runtime, TaskComplexity::Medium, None);
+
+    let mut explicit = json!({"task_ids": [unassigned.id], "crew": "luna"});
     runtime
         .install_auto_crew_admission(
             "task_auto_pipeline",
-            &mut input,
-            Some(&parent),
+            &mut explicit,
+            None,
             false,
             &mut no_draw,
         )
         .expect("explicit run assignment");
-    assert_eq!(input["crew"], "luna");
-    assert_eq!(input["crew_selection"]["source"], "explicit");
-    let ship = persist(&runtime, "workspace_ship_pipeline", json!({}));
-    let mut ordinary = json!({"task_ids": [assigned.id]});
-    let original = ordinary.clone();
+    assert_eq!(explicit["crew"], "luna");
+    assert_eq!(explicit["crew_selection"]["source"], "explicit");
+
+    let mut manual = json!({"task_ids": [assigned.id]});
+    runtime
+        .install_auto_crew_admission("task_auto_pipeline", &mut manual, None, false, &mut no_draw)
+        .expect("manual assignment");
+    assert_eq!(manual["crew"], "astra");
+    assert_eq!(manual["crew_selection"]["source"], "task.crew");
+
+    let mut drawn = json!({"task_ids": [unassigned.id]});
+    runtime
+        .install_auto_crew_admission("task_auto_pipeline", &mut drawn, None, false, &mut || Ok(1))
+        .expect("ordinary ship draw");
+    assert_eq!(drawn["crew"], "terra");
+    assert_eq!(drawn["crew_selection"]["task_id"], unassigned.id);
+    assert_eq!(
+        drawn["crew_selection"]["source"],
+        "workflow.medium_complexity_crews"
+    );
+    assert_eq!(
+        runtime
+            .resolve_crew_for_run_input(&drawn)
+            .expect("dispatch crew")
+            .name,
+        "terra"
+    );
+    assert_eq!(
+        runtime
+            .get_task(&unassigned.id)
+            .expect("unchanged task")
+            .crew,
+        None,
+        "a draw never rewrites the task"
+    );
+}
+
+/// [ORB-12606] A `workspace_ship_pipeline` run carries the same frozen policy
+/// a drain coordinator does: each leaf draws for its own task, a same-task
+/// child and a resume keep the admitted selection, and `allowed_crews`
+/// filters the pool and diagnoses a disjoint one exactly as `run auto` does.
+#[test]
+fn ship_coordinator_policy_filters_pools_and_holds_each_task_selection() {
+    let (_root, runtime, _, _) = test_runtime_with_workspace_config(
+        "[workflow]\nmedium_complexity_crews = [\"grok\", \"terra\"]\n",
+    );
+    let ship = ship_coordinator(&runtime, json!({"mode": "pr", "base_branch": "main"}));
+    let first = task(&runtime, TaskComplexity::Medium, None);
+    let second = task(&runtime, TaskComplexity::Medium, None);
+
+    let mut leaf = json!({"task_ids": [first.id]});
     runtime
         .install_auto_crew_admission(
             "task_gate_pipeline",
-            &mut ordinary,
+            &mut leaf,
             Some(&ship),
+            false,
+            &mut || Ok(0),
+        )
+        .expect("ship leaf admission");
+    assert_eq!(leaf["crew"], "grok");
+    assert_eq!(
+        leaf["crew_selection"]["source"],
+        "workflow.medium_complexity_crews"
+    );
+    let leaf_run = persist(&runtime, "task_gate_pipeline", leaf.clone());
+
+    let mut same_task = json!({"task_ids": [first.id]});
+    runtime
+        .install_auto_crew_admission(
+            "task_pr_pipeline",
+            &mut same_task,
+            Some(&leaf_run),
             false,
             &mut no_draw,
         )
-        .expect("manual ship");
-    assert_eq!(ordinary, original);
+        .expect("same-task child keeps the selection");
+    assert_eq!(same_task["crew_selection"], leaf["crew_selection"]);
+
+    let mut resumed = leaf.clone();
+    runtime
+        .install_auto_crew_admission(
+            "task_gate_pipeline",
+            &mut resumed,
+            Some(&ship),
+            true,
+            &mut no_draw,
+        )
+        .expect("resume");
+    assert_eq!(resumed, leaf);
+
+    let mut sibling = json!({"task_ids": [second.id]});
+    runtime
+        .install_auto_crew_admission(
+            "task_gate_pipeline",
+            &mut sibling,
+            Some(&ship),
+            false,
+            &mut || Ok(1),
+        )
+        .expect("sibling draws independently");
+    assert_eq!(sibling["crew"], "terra");
+    assert_eq!(sibling["crew_selection"]["task_id"], second.id);
+
+    let restricted = ship_coordinator(&runtime, json!({"allowed_crews": ["terra"]}));
+    let mut permitted = json!({"task_ids": [second.id]});
+    runtime
+        .install_auto_crew_admission(
+            "task_gate_pipeline",
+            &mut permitted,
+            Some(&restricted),
+            false,
+            &mut no_draw,
+        )
+        .expect("sole permitted member needs no draw");
+    assert_eq!(permitted["crew"], "terra");
+    assert_eq!(permitted["allowed_crews"], json!(["terra"]));
+
+    let disjoint = ship_coordinator(&runtime, json!({"allowed_crews": ["astra"]}));
+    let mut rejected = json!({"task_ids": [second.id]});
+    let error = runtime
+        .install_auto_crew_admission(
+            "task_gate_pipeline",
+            &mut rejected,
+            Some(&disjoint),
+            false,
+            &mut no_draw,
+        )
+        .expect_err("disjoint pool");
+    assert!(error.to_string().contains("no member permitted"), "{error}");
+}
+
+fn ship_coordinator(runtime: &OrbitRuntime, mut input: Value) -> String {
+    runtime
+        .install_auto_crew_admission(
+            "workspace_ship_pipeline",
+            &mut input,
+            None,
+            false,
+            &mut no_draw,
+        )
+        .expect("capture ship policy");
     assert_eq!(
-        runtime
-            .resolve_crew_for_run_input(&ordinary)
-            .expect("manual crew")
-            .name,
-        "astra"
+        input["auto_crew_pools"]["medium"]["source"], "workflow.medium_complexity_crews",
+        "an ordinary ship captures the configured pools"
     );
+    persist(runtime, "workspace_ship_pipeline", input)
 }
 
 /// [ORB-12118] `no-diff-expected` work is admitted without an assessed

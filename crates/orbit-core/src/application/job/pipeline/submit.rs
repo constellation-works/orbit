@@ -158,10 +158,13 @@ impl OrbitRuntime {
         for task_id in task_ids {
             let task = self.get_task(task_id)?;
             if let Some(allowlist) = allowlist.as_ref() {
-                let crew = self.effective_task_crew(&task)?;
-                crate::runtime::engine::crew::enforce_crew_allowlist(
-                    Some(allowlist),
-                    &crew,
+                // [ORB-12606] Report against the crew admission will draw, not
+                // the default chain: a crew-less task whose complexity pool
+                // still has a permitted member is not excluded.
+                self.enforce_admitted_crew_allowlist(
+                    &task,
+                    &input,
+                    allowlist,
                     &format!("explicit ship task '{task_id}'"),
                 )?;
             }
