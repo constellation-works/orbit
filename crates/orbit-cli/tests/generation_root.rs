@@ -5,7 +5,10 @@
 //! Binary-level coverage for generation admission isolation.
 //!
 //! `--root` and isolated `HOME` must be able to first-create `.generation.lock`
-//! when the process home Orbit root is present, unpinned, and not writable.
+//! when the process home Orbit root is present, unpinned, and not writable —
+//! those invocations only pin their own resolved root. `orbit update` is the
+//! exception: it replaces the host binary, so it admits against the
+//! host-global root as well and refuses when that record cannot be written.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -139,9 +142,13 @@ fn init_with_isolated_home_writes_generation_lock_under_home_orbit() {
     assert!(home_orbit.join("config.toml").is_file());
 }
 
+/// `orbit update` replaces the host binary whatever `--root` says, so the
+/// host-global authority has to be able to record the candidate. A `~/.orbit`
+/// this process cannot write is refused by the probe, not discovered after
+/// the executable has already been swapped.
 #[cfg(unix)]
 #[test]
-fn preflight_with_root_uses_scratch_authority_when_home_orbit_is_readonly() {
+fn preflight_with_root_refuses_an_unwritable_host_global_authority() {
     let temp = tempdir().expect("fixture tempdir");
     let home = temp.path().join("home");
     let work = temp.path().join("work");
@@ -161,9 +168,44 @@ fn preflight_with_root_uses_scratch_authority_when_home_orbit_is_readonly() {
         ])
         .output()
         .expect("run --root preflight");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("upgrade admission refused"), "{stderr}");
+    assert!(
+        stderr.contains(&home_orbit.display().to_string()),
+        "the refusal must name the authority it could not record against: {stderr}"
+    );
+    assert!(!home_orbit.join(".generation.lock").exists());
+    assert!(!home_orbit.join(".generation-admission.lock").exists());
+}
+
+/// A `--root` override stays isolated for state, and admission over a
+/// writable host-global root still reports both authorities.
+#[cfg(unix)]
+#[test]
+fn preflight_with_root_reports_both_authorities_when_home_orbit_is_writable() {
+    let temp = tempdir().expect("fixture tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    let scratch = temp.path().join("scratch");
+    fs::create_dir_all(&home).expect("create home");
+    fs::create_dir_all(&work).expect("create work");
+    let home_orbit = home.join(".orbit");
+    fs::create_dir_all(&home_orbit).expect("create home orbit");
+
+    let output = orbit(&work, &home)
+        .args([
+            "--root",
+            scratch.to_str().expect("utf-8 scratch"),
+            "update",
+            "--preflight",
+            "--json",
+        ])
+        .output()
+        .expect("run --root preflight");
     assert!(
         output.status.success(),
-        "--root preflight failed against a read-only home Orbit root\nstdout:\n{}\nstderr:\n{}",
+        "--root preflight failed against a writable home Orbit root\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -172,13 +214,15 @@ fn preflight_with_root_uses_scratch_authority_when_home_orbit_is_readonly() {
     assert_eq!(report["reservation"], false);
     assert_eq!(report["contract"], "executable-generation-v1");
     assert_eq!(report["global_root"], scratch.to_string_lossy().as_ref());
+    assert_eq!(
+        report["admission_roots"][1],
+        home_orbit.to_string_lossy().as_ref()
+    );
     assert!(
         scratch.join(".generation.lock").is_file()
             || scratch.join(".generation-admission.lock").is_file(),
         "preflight should create coordination lock files under --root"
     );
-    assert!(!home_orbit.join(".generation.lock").exists());
-    assert!(!home_orbit.join(".generation-admission.lock").exists());
 }
 
 #[test]

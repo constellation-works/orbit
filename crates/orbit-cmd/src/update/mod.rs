@@ -171,6 +171,14 @@ pub fn admission_authorities(root_override: Option<&Path>) -> Result<Vec<PathBuf
 /// Returns one admission per root, in the same order: with an override in play
 /// the operator otherwise cannot tell which set of clients to quiesce, so both
 /// this refusal and a later pin failure name the authority they came from.
+///
+/// Each admission is also asked up front whether it could record a candidate
+/// generation at all. Writability is a property of the record rather than of
+/// the lock, and `pin` only runs after the executable has been replaced: a
+/// host-global `~/.orbit` on a read-only mount would otherwise let an override
+/// invocation swap the binary and then strand every host-global client behind
+/// a record naming the generation that is gone. Refusing here also makes
+/// `--preflight`, which takes the same admissions, answer for the pin.
 pub fn acquire_admissions(
     roots: &[PathBuf],
 ) -> Result<Vec<orbit_common::fs::generation::GenerationUpdate>, OrbitError> {
@@ -184,8 +192,12 @@ pub fn acquire_admissions(
     roots
         .iter()
         .map(|root| {
-            orbit_common::fs::generation::GenerationUpdate::acquire(root)
-                .map_err(|error| naming_authority(root, &error))
+            let admission = orbit_common::fs::generation::GenerationUpdate::acquire(root)
+                .map_err(|error| naming_authority(root, &error))?;
+            admission
+                .ensure_can_record()
+                .map_err(|error| naming_authority(root, &error))?;
+            Ok(admission)
         })
         .collect()
 }
