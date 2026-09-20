@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 
 use orbit_types::task::{Task, TaskArtifact, TaskStatus};
 use orbit_types::workflow::PipelineState;
@@ -12,17 +13,42 @@ use super::super::git_commit;
 use super::test_support::{CommitTestHost, initialized_git_repo, task_with_file};
 
 fn fixture() -> (tempfile::TempDir, Task, Value, Value, Value) {
+    coverage_fixture("T1", "T2")
+}
+
+fn sibling_fixture() -> (tempfile::TempDir, Task, Value, Value, Value) {
+    coverage_fixture("T2", "T3")
+}
+
+fn coverage_fixture(
+    covering_task_id: &str,
+    later_task_id: &str,
+) -> (tempfile::TempDir, Task, Value, Value, Value) {
     let temp = initialized_git_repo();
     let workspace = temp.path();
     let base = git_output(workspace, &["rev-parse", "HEAD"]).unwrap();
     git_success(workspace, &["checkout", "-b", "candidate"]).unwrap();
     fs::write(workspace.join("task.txt"), "delivered behavior\n").unwrap();
     git_success(workspace, &["add", "task.txt"]).unwrap();
-    git_success(workspace, &["commit", "-m", "Fix behavior [T1]"]).unwrap();
+    git_success(
+        workspace,
+        &[
+            "commit",
+            "-m",
+            &format!("Fix behavior [{covering_task_id}]"),
+        ],
+    )
+    .unwrap();
     git_success(workspace, &["checkout", "-b", "integration", &base]).unwrap();
     git_success(
         workspace,
-        &["merge", "--no-ff", "candidate", "-m", "Merge fix [T1]"],
+        &[
+            "merge",
+            "--no-ff",
+            "candidate",
+            "-m",
+            &format!("Merge fix [{covering_task_id}]"),
+        ],
     )
     .unwrap();
     let covering = git_output(workspace, &["rev-parse", "HEAD"]).unwrap();
@@ -30,13 +56,18 @@ fn fixture() -> (tempfile::TempDir, Task, Value, Value, Value) {
     // the real retry. Unrelated intervening changes do not invalidate it.
     fs::write(workspace.join("other.txt"), "later unrelated work\n").unwrap();
     git_success(workspace, &["add", "other.txt"]).unwrap();
-    git_success(workspace, &["commit", "-m", "Other task [T2]"]).unwrap();
+    git_success(
+        workspace,
+        &["commit", "-m", &format!("Other task [{later_task_id}]")],
+    )
+    .unwrap();
     let head = git_output(workspace, &["rev-parse", "HEAD"]).unwrap();
     let mut task = task_with_file("T1", "Fix behavior", "task.txt", "codex");
     task.acceptance_criteria = vec!["Behavior works".to_string()];
     let report = json!({
         "schema_version": 1, "task_id": "T1", "run_id": "batch-1",
-        "tested_head": head, "covering_commit": covering, "covering_task_id": "T1",
+        "tested_head": head, "covering_commit": covering,
+        "covering_task_id": covering_task_id,
         "scope": {
             "title": task.title, "description": task.description,
             "plan": task.plan, "acceptance_criteria": task.acceptance_criteria,
@@ -55,6 +86,18 @@ fn fixture() -> (tempfile::TempDir, Task, Value, Value, Value) {
     let input = json!({"scope": "all", "job_run_id": "batch-1", "verify_already_landed": true,
         "workspace_path": workspace, "base_sha": head});
     (temp, task, input, report, log)
+}
+
+fn assert_git_unmutated(workspace: &Path, head: &Value) {
+    assert_eq!(
+        json!(git_output(workspace, &["rev-parse", "HEAD"]).unwrap()),
+        *head
+    );
+    assert!(
+        git_output(workspace, &["status", "--porcelain"])
+            .unwrap()
+            .is_empty()
+    );
 }
 
 fn artifacts(report: &Value, log: &Value) -> Vec<TaskArtifact> {
@@ -101,15 +144,56 @@ fn already_landed_retry_completes_without_new_commit_or_pr_and_is_idempotent() {
         pr_complete(&host, &handoff).unwrap()["skipped_task_ids"],
         json!(["T1"])
     );
-    assert_eq!(
-        git_output(temp.path(), &["rev-parse", "HEAD"]).unwrap(),
-        input["base_sha"]
+    assert_git_unmutated(temp.path(), &input["base_sha"]);
+}
+
+#[test]
+fn already_landed_sibling_coverage_completes_without_new_commit() {
+    let (temp, task, input, report, log) = sibling_fixture();
+    let host = CommitTestHost::new(vec![task], temp.path().to_path_buf())
+        .with_artifacts(artifacts(&report, &log));
+    let checkpoint =
+        git_commit(&host, &input).expect("sibling already-landed revalidation succeeds");
+    assert_eq!(checkpoint["decision"], "verified_already_landed");
+    assert_eq!(checkpoint["committed"], false);
+    assert!(checkpoint.get("commit_sha").is_none());
+    assert_eq!(checkpoint["already_landed"], report);
+    assert_eq!(checkpoint["already_landed"]["task_id"], "T1");
+    assert_eq!(checkpoint["already_landed"]["covering_task_id"], "T2");
+    assert_eq!(git_commit(&host, &input).unwrap(), checkpoint);
+
+    let mut handoff = input.clone();
+    handoff["completed_task_ids"] = json!(["T1"]);
+    handoff["no_diff_expected"] = json!(true);
+    handoff["already_landed_checkpoint"] = checkpoint;
+    pr_promote(&host, &handoff).unwrap();
+    assert_eq!(host.get_task("T1").unwrap().status, TaskStatus::Review);
+    let completed = pr_complete(&host, &handoff).unwrap();
+    assert_eq!(completed["merge"]["reason"], "verified_already_landed");
+    assert_eq!(completed["merge"]["merged"], false);
+    assert_eq!(host.get_task("T1").unwrap().status, TaskStatus::Done);
+    assert_git_unmutated(temp.path(), &input["base_sha"]);
+}
+
+#[test]
+fn already_landed_same_task_still_requires_current_task_covering_marker() {
+    let (temp, task, input, mut report, log) = sibling_fixture();
+    report["covering_task_id"] = json!("T1");
+    let host = CommitTestHost::new(vec![task], temp.path().to_path_buf())
+        .with_artifacts(artifacts(&report, &log));
+    let error = git_commit(&host, &input).unwrap_err();
+    assert!(
+        error.to_string().contains("already_landed_unverified"),
+        "{error}"
     );
     assert!(
-        git_output(temp.path(), &["status", "--porcelain"])
-            .unwrap()
-            .is_empty()
+        error
+            .to_string()
+            .contains("no matching task delivery marker"),
+        "{error}"
     );
+    assert_eq!(host.get_task("T1").unwrap().status, TaskStatus::InProgress);
+    assert_git_unmutated(temp.path(), &input["base_sha"]);
 }
 
 #[test]
@@ -117,6 +201,7 @@ fn already_landed_refuses_missing_or_invalid_evidence_without_mutating_git() {
     for fault in [
         "missing",
         "unrelated",
+        "unrelated_sibling",
         "scope",
         "run",
         "head",
@@ -128,12 +213,17 @@ fn already_landed_refuses_missing_or_invalid_evidence_without_mutating_git() {
         "stale_log",
         "missing_criterion",
         "cross_task",
+        "empty_covering_task",
         "missing_required",
         "failed_log",
     ] {
         let (temp, mut task, input, mut report, mut log) = fixture();
         match fault {
             "unrelated" => report["covering_commit"] = input["base_sha"].clone(),
+            "unrelated_sibling" => {
+                report["covering_task_id"] = json!("T2");
+                report["covering_commit"] = input["base_sha"].clone();
+            }
             "scope" => task.acceptance_criteria.push("New requirement".to_string()),
             "run" => report["run_id"] = json!("different-run"),
             "head" => report["tested_head"] = report["covering_commit"].clone(),
@@ -142,6 +232,7 @@ fn already_landed_refuses_missing_or_invalid_evidence_without_mutating_git() {
             "stale_log" => log["tested_head"] = report["covering_commit"].clone(),
             "missing_criterion" => report["criteria_evidence"] = json!([]),
             "cross_task" => report["covering_task_id"] = json!("T2"),
+            "empty_covering_task" => report["covering_task_id"] = json!(""),
             "missing_required" => {
                 report["required_commands"] = json!(["test behavior", "workspace lint"])
             }
@@ -285,4 +376,100 @@ fn already_landed_accepts_captured_silent_validation_success() {
         .with_artifacts(artifacts(&report, &log));
     let result = git_commit(&host, &input).unwrap();
     assert_eq!(result["validation_provenance"][0]["output"], "");
+}
+
+#[test]
+fn already_landed_refuses_unrelated_sibling_covering_commit() {
+    let (temp, task, input, mut report, log) = fixture();
+    report["covering_task_id"] = json!("T2");
+    report["covering_commit"] = input["base_sha"].clone();
+    let host = CommitTestHost::new(vec![task], temp.path().to_path_buf())
+        .with_artifacts(artifacts(&report, &log));
+    let error = git_commit(&host, &input).unwrap_err();
+    assert!(
+        error.to_string().contains("already_landed_unverified"),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("did not change the task's declared scope"),
+        "{error}"
+    );
+    assert_git_unmutated(temp.path(), &input["base_sha"]);
+}
+
+#[test]
+fn already_landed_refuses_dirty_tree_without_mutating_git() {
+    let (temp, task, input, report, log) = sibling_fixture();
+    fs::write(temp.path().join("dirty.txt"), "pending work").unwrap();
+    let host = CommitTestHost::new(vec![task], temp.path().to_path_buf())
+        .with_artifacts(artifacts(&report, &log));
+    let error = git_commit(&host, &input).unwrap_err();
+    assert!(
+        error.to_string().contains("unknown untracked paths"),
+        "{error}"
+    );
+    assert_eq!(host.get_task("T1").unwrap().status, TaskStatus::InProgress);
+    assert_eq!(
+        json!(git_output(temp.path(), &["rev-parse", "HEAD"]).unwrap()),
+        input["base_sha"]
+    );
+}
+
+#[test]
+fn already_landed_refuses_covering_commit_that_is_not_ancestor_of_head() {
+    let temp = initialized_git_repo();
+    let workspace = temp.path();
+    fs::write(workspace.join("task.txt"), "old behavior\n").unwrap();
+    git_success(workspace, &["add", "task.txt"]).unwrap();
+    git_success(workspace, &["commit", "-m", "seed task.txt"]).unwrap();
+    let fork = git_output(workspace, &["rev-parse", "HEAD"]).unwrap();
+    git_success(workspace, &["checkout", "-b", "repair"]).unwrap();
+    fs::write(workspace.join("task.txt"), "delivered behavior\n").unwrap();
+    git_success(workspace, &["add", "task.txt"]).unwrap();
+    git_success(workspace, &["commit", "-m", "Fix behavior [T2]"]).unwrap();
+    let covering = git_output(workspace, &["rev-parse", "HEAD"]).unwrap();
+    git_success(workspace, &["checkout", "-B", "integration", &fork]).unwrap();
+    fs::write(workspace.join("other.txt"), "unrelated\n").unwrap();
+    git_success(workspace, &["add", "other.txt"]).unwrap();
+    git_success(workspace, &["commit", "-m", "Other task [T3]"]).unwrap();
+    let head = git_output(workspace, &["rev-parse", "HEAD"]).unwrap();
+    let mut task = task_with_file("T1", "Fix behavior", "task.txt", "codex");
+    task.acceptance_criteria = vec!["Behavior works".to_string()];
+    let report = json!({
+        "schema_version": 1, "task_id": "T1", "run_id": "batch-1",
+        "tested_head": head, "covering_commit": covering, "covering_task_id": "T2",
+        "scope": {
+            "title": task.title, "description": task.description,
+            "plan": task.plan, "acceptance_criteria": task.acceptance_criteria,
+            "context_files": task.context_files,
+            "tags": task.tags, "relations": task.relations,
+            "required_tools": task.required_tools, "type": task.task_type,
+            "comments": [],
+        },
+        "required_commands": ["test behavior"],
+        "criteria_evidence": ["The behavior regression passed on current HEAD"],
+        "validation": [{"command": "test behavior", "outcome": "passed",
+            "role": "required", "log_artifact": "validation.json"}],
+    });
+    let log = json!({"run_id": "batch-1", "tested_head": head,
+        "command": "test behavior", "exit_code": 0, "output": "1 test passed"});
+    let input = json!({"scope": "all", "job_run_id": "batch-1", "verify_already_landed": true,
+        "workspace_path": workspace, "base_sha": head});
+    let host = CommitTestHost::new(vec![task], workspace.to_path_buf())
+        .with_artifacts(artifacts(&report, &log));
+    let error = git_commit(&host, &input).unwrap_err();
+    assert!(
+        error.to_string().contains("already_landed_unverified"),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("not a verified ancestor of tested HEAD"),
+        "{error}"
+    );
+    assert_eq!(host.get_task("T1").unwrap().status, TaskStatus::InProgress);
+    assert_git_unmutated(workspace, &input["base_sha"]);
 }
