@@ -126,6 +126,8 @@ let nextAction = null; // { status, body } for the next POST, else success
 const sent = [];
 const consoleReads = [];
 let workspaceConsoles = null;
+let holdConsoleReads = false;
+const heldConsoleReads = [];
 
 const respond = (payload, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -140,7 +142,13 @@ globalThis.fetch = async (path, options = {}) => {
   if (method === "GET") {
     const workspace = url.searchParams.get("workspace");
     consoleReads.push({ path: url.pathname, workspace });
-    return respond((workspaceConsoles && workspaceConsoles[workspace]) || consoleBody);
+    const payload = (workspaceConsoles && workspaceConsoles[workspace]) || consoleBody;
+    if (holdConsoleReads) {
+      return new Promise((resolve, reject) => {
+        heldConsoleReads.push({ payload, workspace, resolve, reject });
+      });
+    }
+    return respond(payload);
   }
   const body = options.body ? JSON.parse(options.body) : null;
   sent.push({ path: url.pathname, body });
@@ -274,6 +282,57 @@ const mount = async (taskId = "ORB-2") => {
   assert.ok(button(newWorkspaceBlock, "Revoke authority"), "workspace B renders the revoke action after approval");
 
   workspaceConsoles = null;
+  setWorkspace(null);
+  invalidateDistributedConsole();
+  consoleBody = console_([claim()]);
+  sent.length = 0;
+}
+
+{
+  // An in-flight workspace-A console read that lands after the selector
+  // moves to B must not refill the memo. Otherwise the next B detail peeks
+  // A's payload and hides B's claim actions.
+  const workspaceA = console_([claim({ task_id: "ORB-workspace-a" })]);
+  workspaceA.owner_workspace = false;
+  workspaceA.refusal_detail = "stale workspace-a replica payload";
+  const workspaceB = console_([claim({ claim_id: "claim-workspace-b" })]);
+  workspaceConsoles = {
+    "workspace-a": workspaceA,
+    "workspace-b": workspaceB,
+  };
+  consoleReads.length = 0;
+  sent.length = 0;
+  holdConsoleReads = true;
+
+  setWorkspace("workspace-a");
+  buildDistributedBlock("ORB-2");
+  assert.equal(heldConsoleReads.length, 1, "workspace A console read is in flight");
+  assert.equal(heldConsoleReads[0].workspace, "workspace-a");
+
+  setWorkspace("workspace-b");
+  const staleReads = heldConsoleReads.splice(0);
+  for (const request of staleReads) request.resolve(respond(request.payload));
+  await settle();
+  holdConsoleReads = false;
+
+  const newWorkspaceBlock = buildDistributedBlock("ORB-2");
+  await settle();
+  assert.equal(newWorkspaceBlock.style.display, "", "workspace B's live claim renders its panel");
+  assert.ok(
+    !newWorkspaceBlock.textContent.includes("stale workspace-a replica payload"),
+    "stale workspace A payload is not served after the switch",
+  );
+  assert.equal(
+    consoleReads.filter((read) => read.path === "/api/distributed/claims" && read.workspace === "workspace-b").length,
+    1,
+    "workspace B issues a fresh workspace-scoped claim read after the in-flight A response is discarded",
+  );
+  assert.ok(button(newWorkspaceBlock, "Approve handoff"), "workspace B renders the approve action");
+  assert.ok(button(newWorkspaceBlock, "Recover claim"), "workspace B renders the recover action");
+
+  workspaceConsoles = null;
+  holdConsoleReads = false;
+  heldConsoleReads.length = 0;
   setWorkspace(null);
   invalidateDistributedConsole();
   consoleBody = console_([claim()]);
