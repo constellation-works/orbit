@@ -7,4 +7,5 @@ mod job_submission;
 mod managed_asset_manifest;
 mod managed_assets;
 mod routine;
+mod skill;
 mod workspace_sync;
