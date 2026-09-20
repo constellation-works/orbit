@@ -27,6 +27,7 @@ use orbit_types::workflow::activity_job::{
 };
 
 use crate::ConfigRoots;
+use crate::crew_pools::reject_unpoolable_crew_name;
 use crate::layering::{load_layered_resolved, value_at_path};
 use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
@@ -367,6 +368,7 @@ fn crews_from_raw(
                 "[crews] names must not be empty".to_string(),
             ));
         }
+        reject_unpoolable_crew_name(trimmed, "[crews]")?;
         let crew = Crew {
             name: trimmed.to_string(),
             assignment: crew_assignment_from_raw(trimmed, entry)?,

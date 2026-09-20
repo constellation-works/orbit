@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use orbit_types::identity::{Crew, CrewAssignment};
 
+use crate::crew_pools::reject_unpoolable_crew_name;
 use crate::{CrewPoolEntry, canonical_crew_pool, canonical_crew_pool_entries};
 
 const SETTING: &str = "workflow.medium_complexity_crews";
@@ -155,4 +156,27 @@ fn persisted_entries_deserialize_from_the_plain_name_shape_too() {
         serde_json::to_value(&weighted).expect("serialize"),
         serde_json::json!([{"name": "grok", "weight": 70}])
     );
+}
+
+/// [ORB-12619] The pool grammar reserves `:`, so a crew can never be named
+/// with one: the check lives where crews are defined, not where they are
+/// pooled.
+#[test]
+fn a_colon_in_a_crew_name_is_refused_and_names_the_pool_grammar() {
+    for name in ["gpt-5:codex", ":leading", "trailing:", "a:70"] {
+        let error = reject_unpoolable_crew_name(name, "[crews]")
+            .expect_err(&format!("'{name}' must be refused"));
+        let message = error.to_string();
+        assert!(message.contains("[crews]"), "{message}");
+        assert!(message.contains(name), "{message}");
+        assert!(
+            message.contains("workflow.*_complexity_crews"),
+            "the refusal must name the grammar that reserves the separator: {message}"
+        );
+        assert!(message.contains("name:weight"), "{message}");
+    }
+    for name in ["grok", "gpt-5.6-terra", "a-b_c"] {
+        reject_unpoolable_crew_name(name, "[crews]")
+            .unwrap_or_else(|error| panic!("'{name}' must stay admissible: {error}"));
+    }
 }

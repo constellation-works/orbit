@@ -471,6 +471,7 @@ pub(crate) fn parse_crew_field_key(key: &str) -> Result<Option<CrewFieldKey<'_>>
             "crew config keys require a non-empty crew name".to_string(),
         ));
     }
+    crate::crew_pools::reject_unpoolable_crew_name(name, "crew config keys")?;
     if field.is_empty() {
         return Err(OrbitError::InvalidInput(format!(
             "crew config keys are crews.<name>.<field>; '{key}' is missing a field"

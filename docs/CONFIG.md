@@ -70,6 +70,13 @@ system_crew = "system"      # crew for recovery paths with no job step to name o
 
 A **crew** is one provider-model assignment. Activities do not carry a model-selection role: a rendered activity input may name a `crew`, and otherwise the activity inherits the run's resolved crew.
 
+A crew name may not contain `:`. The colon is the weight separator in
+[`workflow.*_complexity_crews`](#weighting-a-pool), which has no quoting form,
+so a colon-named crew could never be pooled. Both `[crews.<name>]` at config
+load and `orbit config set crews.<name>.<field>` refuse the name outright,
+naming that grammar, rather than letting the config load and fail later on
+every command.
+
 | Field | Purpose | Values |
 |---|---|---|
 | `model` | Model identifier passed to the provider CLI | Provider-specific (e.g. `opus`, `sonnet`, `gpt-6-astra`, `gemini-3.8-flash-high`, `grok-4.6`) |
@@ -926,7 +933,9 @@ The grammar:
 - A pool is either all bare or all weighted. Mixing the two
   (`["luna:50", "sonnet"]`) is a configuration error, as is a suffix that is
   not a non-negative whole number (`grok:-1`, `grok:2.5`). The colon is
-  reserved by this grammar, so a bare name may not contain one.
+  reserved by this grammar, so a crew may not be *named* with one either:
+  `[crews."gpt-5:codex"]` is refused where the crew is defined (see
+  [`[crews.<name>]`](#crewsname--which-provider-model-runs-the-task)).
 - A bare entry weighs one ticket, so a bare pool draws uniformly — exactly as
   it did before weights existed. Bare duplicates still collapse to one ticket
   per crew; a weighted pool names each crew once, and a repeat is an error.
