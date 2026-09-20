@@ -12,7 +12,9 @@
 //! relation/dependency targets that no longer resolve in the registry
 //! (grandfathered relations that block index rebuilds — ORB-10305), and
 //! unpublished `ORB-*` stub directories that never received `task.yaml`
-//! (aborted creates that used to fail `orbit task reindex` closed).
+//! and hold no bundle content (aborted creates that used to fail
+//! `orbit task reindex` closed), plus data-bearing `ORB-*` directories
+//! missing `task.yaml` (retained unresolved task data, not stubs).
 //!
 //! Every check degrades rather than errors: subsystems that are absent in a
 //! fresh workspace report [`WorkspaceDoctorStatus::Skipped`], and probe
@@ -174,8 +176,8 @@ impl DoctorCommands for OrbitRuntime {
             doctor_check_task_relations(self),
             doctor_check_stalled_automation(self),
             doctor_check_orphan_task_stores(self),
-            doctor_check_empty_task_stubs(self),
         ];
+        results.extend(doctor_check_unpublished_bundle_dirs(self));
         results.extend(doctor_check_definition_artifacts(self));
         Ok(results)
     }
@@ -671,19 +673,30 @@ fn describe_partitions(partitions: &[task_store::UnclaimedPartition]) -> String 
 }
 
 /// Directories named for a valid task id that never published `task.yaml`.
-/// Aborted creates leave this residue (often only `.task.yaml.lock`) and
-/// used to fail `orbit task reindex` closed for the whole workspace.
-fn doctor_check_empty_task_stubs(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    let stubs = match collect_unpublished_task_stubs(&runtime.global_root()) {
-        Ok(stubs) => stubs,
-        Err(error) => {
-            return check(
+/// Split by the store's `is_unpublished_stub` predicate: empty / lock-only
+/// residue is reapable; any other entry is retained unresolved task data.
+fn doctor_check_unpublished_bundle_dirs(runtime: &OrbitRuntime) -> [WorkspaceDoctorResult; 2] {
+    match collect_unpublished_bundle_dirs(&runtime.global_root()) {
+        Ok(scan) => [
+            unpublished_stub_row(scan.stubs),
+            unresolved_bundle_row(scan.unresolved),
+        ],
+        Err(error) => [
+            check(
                 "empty-task-stubs",
                 WorkspaceDoctorStatus::Warning,
                 format!("cannot scan task-store partitions for unpublished bundle stubs: {error}"),
-            );
-        }
-    };
+            ),
+            check(
+                "unresolved-task-bundles",
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot scan task-store partitions for unresolved task bundles: {error}"),
+            ),
+        ],
+    }
+}
+
+fn unpublished_stub_row(stubs: Vec<PathBuf>) -> WorkspaceDoctorResult {
     if stubs.is_empty() {
         return check(
             "empty-task-stubs",
@@ -700,24 +713,66 @@ fn doctor_check_empty_task_stubs(runtime: &OrbitRuntime) -> WorkspaceDoctorResul
         "empty-task-stubs",
         WorkspaceDoctorStatus::Warning,
         format!(
-            "{} unpublished task-bundle stub {noun} (valid ORB-* name, no task.yaml): {}",
+            "{} unpublished task-bundle stub {noun} (empty or only .task.yaml.lock): {}",
             stubs.len(),
-            stubs
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join("; ")
+            join_paths(&stubs)
         ),
         "Run `orbit task reindex` from the owning checkout to skip or remove empty stub directories."
             .to_string(),
     )
 }
 
-fn collect_unpublished_task_stubs(global_root: &Path) -> Result<Vec<PathBuf>, OrbitError> {
+fn unresolved_bundle_row(unresolved: Vec<PathBuf>) -> WorkspaceDoctorResult {
+    if unresolved.is_empty() {
+        return check(
+            "unresolved-task-bundles",
+            WorkspaceDoctorStatus::Ok,
+            "no unresolved task-bundle directories missing task.yaml".to_string(),
+        );
+    }
+    let noun = if unresolved.len() == 1 {
+        "directory"
+    } else {
+        "directories"
+    };
+    actionable_check(
+        "unresolved-task-bundles",
+        WorkspaceDoctorStatus::Warning,
+        format!(
+            "{} unresolved task-bundle {noun} (retained task data, no task.yaml): {}",
+            unresolved.len(),
+            join_paths(&unresolved)
+        ),
+        "Restore `task.yaml` from a backup or export, or move the directory aside deliberately. Do not delete it: it holds retained task data."
+            .to_string(),
+    )
+}
+
+fn join_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+struct UnpublishedBundleScan {
+    stubs: Vec<PathBuf>,
+    unresolved: Vec<PathBuf>,
+}
+
+fn collect_unpublished_bundle_dirs(
+    global_root: &Path,
+) -> Result<UnpublishedBundleScan, OrbitError> {
     let workspaces_dir = task_store::task_workspaces_dir(global_root);
     let partitions = match std::fs::read_dir(&workspaces_dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(UnpublishedBundleScan {
+                stubs: Vec::new(),
+                unresolved: Vec::new(),
+            });
+        }
         Err(error) => {
             return Err(OrbitError::Io(format!(
                 "read {}: {error}",
@@ -726,6 +781,7 @@ fn collect_unpublished_task_stubs(global_root: &Path) -> Result<Vec<PathBuf>, Or
         }
     };
     let mut stubs = Vec::new();
+    let mut unresolved = Vec::new();
     for partition in partitions.flatten() {
         let partition = partition.path();
         if !partition.is_dir() {
@@ -740,16 +796,20 @@ fn collect_unpublished_task_stubs(global_root: &Path) -> Result<Vec<PathBuf>, Or
             let Some(name) = name.to_str() else {
                 continue;
             };
-            if path.is_dir()
-                && is_valid_orb_task_id(name)
-                && !path.join(TASK_ENVELOPE_FILE_NAME).is_file()
-            {
+            if !path.is_dir() || !is_valid_orb_task_id(name) {
+                continue;
+            }
+            // Shared with reindex/listing: residue-only dirs are stubs.
+            if orbit_store::is_unpublished_stub(&path) {
                 stubs.push(path);
+            } else if !path.join(TASK_ENVELOPE_FILE_NAME).is_file() {
+                unresolved.push(path);
             }
         }
     }
     stubs.sort();
-    Ok(stubs)
+    unresolved.sort();
+    Ok(UnpublishedBundleScan { stubs, unresolved })
 }
 
 /// Delete one dead-holder lock only after acquiring its advisory lock. A

@@ -146,6 +146,7 @@ pub use contracts::{
     WorkspaceClaimStatusResult,
 };
 pub use driver::file::session_log_store::SessionLogStore;
+pub use driver::file::task_bundle::bundle_io::is_unpublished_stub;
 pub use driver::file::workspace_binding::{
     read_workspace_config, read_workspace_config_optional, workspace_config_path,
     workspace_id_for_orbit_dir, write_workspace_config,

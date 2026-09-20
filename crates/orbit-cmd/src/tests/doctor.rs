@@ -182,6 +182,19 @@ fn write_unpublished_stub(
     bundle
 }
 
+fn write_unresolved_bundle(
+    global_root: &Path,
+    workspace_id: &str,
+    task_id: &str,
+) -> std::path::PathBuf {
+    let bundle = task_workspaces_dir(global_root)
+        .join(workspace_id)
+        .join(task_id);
+    fs::create_dir_all(&bundle).expect("create unresolved bundle dir");
+    fs::write(bundle.join("events.jsonl"), b"{}\n").expect("write retained events");
+    bundle
+}
+
 /// A partition directory emptied of its bundles, as `workspace teardown` on an
 /// older binary left it behind.
 fn write_empty_partition(global_root: &Path, workspace_id: &str) {
@@ -197,9 +210,9 @@ fn healthy_fresh_workspace_has_no_failures() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let results = runtime.doctor_workspace().expect("doctor");
 
-    // Twelve infrastructure checks plus one definition-artifact row per kind
+    // Thirteen infrastructure checks plus one definition-artifact row per kind
     // (skills, jobs, activities, auto-tasks, routines).
-    assert_eq!(results.len(), 17, "one row per check: {results:?}");
+    assert_eq!(results.len(), 18, "one row per check: {results:?}");
     assert!(
         results
             .iter()
@@ -252,6 +265,10 @@ fn healthy_fresh_workspace_has_no_failures() {
     );
     assert_eq!(
         status_of(&results, "empty-task-stubs").status,
+        WorkspaceDoctorStatus::Ok
+    );
+    assert_eq!(
+        status_of(&results, "unresolved-task-bundles").status,
         WorkspaceDoctorStatus::Ok
     );
 }
@@ -1126,6 +1143,97 @@ fn unpublished_task_stub_is_reported_with_path_and_reindex_remediation() {
         Some(
             "Run `orbit task reindex` from the owning checkout to skip or remove empty stub directories."
         )
+    );
+    assert_eq!(
+        status_of(&results, "unresolved-task-bundles").status,
+        WorkspaceDoctorStatus::Ok,
+        "lock-only residue is not unresolved data: {results:?}"
+    );
+}
+
+/// [ORB-12688] Residue and data-bearing missing-`task.yaml` dirs in the same
+/// partition are classified and worded as distinct doctor rows.
+#[test]
+fn unpublished_stub_and_unresolved_bundle_are_classified_distinctly() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let global_root = temp.path().join("global");
+    write_registered_workspace(&global_root, "ws_registered", "registered");
+    write_task_bundle(&global_root, "ws_registered", "ORB-00000");
+    let stub = write_unpublished_stub(&global_root, "ws_registered", "ORB-00001");
+    let unresolved = write_unresolved_bundle(&global_root, "ws_registered", "ORB-00002");
+    let stub_path = stub.to_string_lossy().into_owned();
+    let unresolved_path = unresolved.to_string_lossy().into_owned();
+
+    let results = runtime.doctor_workspace().expect("doctor");
+
+    let stub_row = status_of(&results, "empty-task-stubs");
+    assert_eq!(
+        stub_row.status,
+        WorkspaceDoctorStatus::Warning,
+        "{stub_row:?}"
+    );
+    assert!(
+        stub_row.message.contains("unpublished task-bundle stub"),
+        "stub row names residue: {}",
+        stub_row.message
+    );
+    assert!(
+        stub_row.message.contains(&stub_path),
+        "stub row names the stub path: {}",
+        stub_row.message
+    );
+    assert!(
+        !stub_row.message.contains(&unresolved_path),
+        "stub row must not name retained data: {}",
+        stub_row.message
+    );
+    assert_eq!(
+        stub_row.remediation.as_deref(),
+        Some(
+            "Run `orbit task reindex` from the owning checkout to skip or remove empty stub directories."
+        )
+    );
+
+    let unresolved_row = status_of(&results, "unresolved-task-bundles");
+    assert_eq!(
+        unresolved_row.status,
+        WorkspaceDoctorStatus::Warning,
+        "{unresolved_row:?}"
+    );
+    assert!(
+        unresolved_row.message.contains("retained task data"),
+        "unresolved row names retained data: {}",
+        unresolved_row.message
+    );
+    assert!(
+        !unresolved_row
+            .message
+            .contains("unpublished task-bundle stub"),
+        "unresolved row must not call retained data a stub: {}",
+        unresolved_row.message
+    );
+    assert!(
+        unresolved_row.message.contains(&unresolved_path),
+        "unresolved row names the data-bearing path: {}",
+        unresolved_row.message
+    );
+    assert!(
+        !unresolved_row.message.contains(&stub_path),
+        "unresolved row must not name residue: {}",
+        unresolved_row.message
+    );
+    let remediation = unresolved_row
+        .remediation
+        .as_deref()
+        .expect("unresolved row has a remedy");
+    assert!(
+        !remediation.contains("orbit task reindex"),
+        "unresolved remedy must not advertise reindex: {remediation}"
+    );
+    assert!(
+        remediation.contains("task.yaml"),
+        "unresolved remedy names restoring the envelope: {remediation}"
     );
 }
 
