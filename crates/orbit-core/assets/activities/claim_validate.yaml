@@ -22,9 +22,11 @@ spec:
       base_sha:
         type: string
       # Set only on the pull-request route, from the number this run's own
-      # publication step observed.
+      # publication step observed. `pr_open` emits `pr_number` as a JSON
+      # string; an exact step-output template forwards that type unchanged,
+      # so the live value is a string. Integers remain accepted.
       pull_request:
-        type: [integer, "null"]
+        type: [string, integer, "null"]
   output_schema_json:
     type: object
     required: [candidate, validation]
