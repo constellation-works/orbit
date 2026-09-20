@@ -718,7 +718,7 @@
         "required": false
       },
       {
-        "description": "Optional named crew to use when running this task",
+        "description": "Optional named crew to use when running this task; omitted, one is drawn from the complexity pool or the configured default",
         "name": "crew",
         "param_type": "string",
         "required": false
@@ -1080,7 +1080,7 @@
         "required": false
       },
       {
-        "description": "Named crew to use when running this task (empty string clears)",
+        "description": "Named crew to use when running this task (empty string draws a fresh one)",
         "name": "crew",
         "param_type": "string",
         "required": false

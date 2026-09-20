@@ -380,8 +380,10 @@ fn auto_complexity_pool_is_captured_at_submission_and_retained_by_real_resume() 
         );
     }
     let _worker = WorkerOverride::shell("sleep 5");
+    // A record with no crew of its own, so the coordinator's pool decides:
+    // [ORB-12717] assigns a crew to anything created through `add_task`.
     let task = runtime
-        .add_task(TaskAddParams {
+        .add_crew_less_task_for_tests(TaskAddParams {
             title: "Automatic crew persistence".into(),
             description: "Admission and resume preserve crew evidence".into(),
             plan: "Validate persisted input".into(),

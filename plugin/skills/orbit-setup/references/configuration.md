@@ -149,10 +149,12 @@ Add more with `orbit docs add <path>` rather than hand-editing.
 
 For ship dispatch, an explicit run crew overrides `task.crew`, which overrides
 `workflow.default_crew`; environment/system fallbacks apply only when no higher
-selection exists. Dispatching a crew-less task stamps the drawn crew onto
-`task.crew` at in-progress; retries reuse it unless cleared with `--crew ""`.
-An explicit `task.crew` is never overwritten. An empty crew string on task
-update clears that override. Discover actual
+selection exists. `task.crew` is fixed when the task is created: a creation
+without a crew draws one from the complexity pool, falling back to
+`default_crew`, and records a `crew_assigned` history entry naming `explicit`,
+`pool:<complexity>`, or `default`. Status transitions never change it, and
+dispatch only reads it. An empty crew string on task update re-draws for the
+task's current complexity rather than leaving the field empty. Discover actual
 crew names through the connected server's crew discovery when available, or
 inspect effective configuration; executor names are not a list of crew names.
 

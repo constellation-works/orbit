@@ -337,7 +337,12 @@ fn filing_succeeds_without_a_system_crew() {
     );
     assert_eq!(output["filed_count"], json!(1));
     let task_id = output["filed"][0]["task_id"].as_str().expect("task id");
-    assert_eq!(runtime.get_task(task_id).expect("task").crew, None);
+    // [ORB-12717] Creation assigns the workspace's own crew; the unresolvable
+    // `system_crew` entry is never written onto a filed task.
+    assert_eq!(
+        runtime.get_task(task_id).expect("task").crew.as_deref(),
+        Some("sol")
+    );
 }
 
 #[test]

@@ -1684,8 +1684,10 @@ fn complexity_pools_drive_allowlist_eligibility_without_reassigning_manual_tasks
     let (_root, runtime, _repo) = runtime_with_workspace_config(Some(
         "[workflow]\ndefault_crew = \"opus\"\nmedium_complexity_crews = [\"grok\", \"terra\"]\n",
     ));
+    // [ORB-12717] assigns a crew at creation, so the dispatch-time pool route
+    // this covers is only reachable by a record filed before that change.
     let unassigned = runtime
-        .add_task(TaskAddParams {
+        .add_crew_less_task_for_tests(TaskAddParams {
             title: "Pool-eligible task".into(),
             description: "Configured pool permits this task despite its excluded default".into(),
             plan: "Inspect classification".into(),
@@ -1738,8 +1740,9 @@ fn complexity_pools_drive_allowlist_eligibility_without_reassigning_manual_tasks
 }
 
 /// [ORB-12604] A crew parked at weight 0 holds no ticket, so it cannot make a
-/// task eligible for a drain restricted to it. The task is excluded for the
-/// same reason a disjoint pool is, naming the whole pool it could not draw.
+/// task eligible for a drain restricted to it. [ORB-12717] The draw now runs
+/// when the task is created, so the parked member never becomes the task's
+/// crew and a drain restricted to it excludes the task as `crew_not_allowed`.
 #[test]
 fn a_pool_member_parked_at_weight_zero_is_not_a_permitted_crew() {
     let (_root, runtime, _repo) = runtime_with_workspace_config(Some(
@@ -1756,6 +1759,11 @@ fn a_pool_member_parked_at_weight_zero_is_not_a_permitted_crew() {
         })
         .expect("task");
     assert_eq!(
+        task.crew.as_deref(),
+        Some("terra"),
+        "the parked member holds no ticket in the creation-time draw"
+    );
+    assert_eq!(
         classify_with(&runtime, json!({"allowed_crews": ["terra"]}))["loose_task_ids"],
         json!([task.id])
     );
@@ -1768,7 +1776,7 @@ fn a_pool_member_parked_at_weight_zero_is_not_a_permitted_crew() {
         .expect("readiness");
     let excluded = readiness_task(&readiness, &task.id);
     assert_eq!(excluded["reason"], "crew_not_allowed");
-    assert_eq!(excluded["crew"], "grok, terra");
+    assert_eq!(excluded["crew"], "terra");
 }
 
 #[test]
@@ -1776,7 +1784,7 @@ fn classifier_uses_captured_cli_pool_instead_of_current_configuration() {
     let (_root, runtime, _repo) =
         runtime_with_workspace_config(Some("[workflow]\nmedium_complexity_crews = [\"grok\"]\n"));
     let task = runtime
-        .add_task(TaskAddParams {
+        .add_crew_less_task_for_tests(TaskAddParams {
             title: "Captured pool task".into(),
             description: "CLI override controls eligibility".into(),
             plan: "Inspect classifier against coordinator input".into(),

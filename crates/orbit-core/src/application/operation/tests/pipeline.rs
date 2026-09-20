@@ -965,6 +965,20 @@ fn grant_bound_drain_uses_complexity_override_without_widening_authority() {
             },
         )
         .expect("assess complexity");
+    // Leave the record crew-less — the shape [ORB-12717] reserves for tasks
+    // filed before it — so the drain's pool override is what routes it.
+    runtime
+        .stores()
+        .task_records()
+        .update(
+            &task.id,
+            crate::application::task::TaskRecordUpdateParams {
+                actor: "tester".to_string(),
+                crew: Some(None),
+                ..Default::default()
+            },
+        )
+        .expect("clear the crew assigned at creation");
     let grant = enable(
         runtime,
         std::slice::from_ref(&task.id),

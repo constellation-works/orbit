@@ -136,7 +136,7 @@ impl Tool for OrbitTaskUpdateTool {
             },
             ToolParam {
                 name: "crew".to_string(),
-                description: "Named crew to use when running this task (empty string clears)"
+                description: "Named crew to use when running this task (empty string draws a fresh one)"
                     .to_string(),
                 param_type: "string".to_string(),
                 required: false,

@@ -903,7 +903,9 @@ fn filing_still_succeeds_in_a_workspace_with_no_system_crew_entry() {
         .cloned()
         .expect("filing still succeeds without a system crew");
     let task = runtime.get_task(&task_id).expect("read filed task");
-    assert_eq!(task.crew, None);
+    // [ORB-12717] Creation assigns the workspace's own crew; the unresolvable
+    // `system_crew` entry is never written onto a filed task.
+    assert_eq!(task.crew.as_deref(), Some("sol"));
 }
 
 #[test]

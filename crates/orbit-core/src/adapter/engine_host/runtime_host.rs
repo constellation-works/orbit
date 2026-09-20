@@ -198,15 +198,6 @@ impl RuntimeHost for OrbitRuntime {
     /// claimed leaf has already been refused upstream, and an unbound ordinary
     /// run keeps the pre-existing local admission unchanged.
     fn admit_task_for_workflow(&self, task_id: &str, workflow: &str) -> Result<Task, OrbitError> {
-        self.admit_task_for_workflow_from_run(task_id, workflow, None)
-    }
-
-    fn admit_task_for_workflow_from_run(
-        &self,
-        task_id: &str,
-        workflow: &str,
-        job_run_id: Option<&str>,
-    ) -> Result<Task, OrbitError> {
         if let Some(binding) = self.worker_invocation() {
             if task_id != binding.task_id {
                 return Err(OrbitError::PolicyDenied(format!(
@@ -225,7 +216,7 @@ impl RuntimeHost for OrbitRuntime {
             }
             return Ok(task);
         }
-        OrbitRuntime::admit_task_for_workflow_as_system(self, task_id, workflow, job_run_id)
+        OrbitRuntime::admit_task_for_workflow_as_system(self, task_id, workflow)
     }
 
     fn update_task_from_activity(

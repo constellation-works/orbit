@@ -405,7 +405,7 @@ fn blocked_task_is_rejected_by_workflow_admission() {
         .ensure_task_can_enter_workflow_as_system(&task_id, "worktree_setup")
         .expect_err("blocked task must not be admissible into a workflow");
     runtime
-        .admit_task_for_workflow_as_system(&task_id, "worktree_setup", None)
+        .admit_task_for_workflow_as_system(&task_id, "worktree_setup")
         .expect_err("system admission must reject a blocked task");
 
     // A blocked task is not returned by backlog discovery (it lists `Backlog`).

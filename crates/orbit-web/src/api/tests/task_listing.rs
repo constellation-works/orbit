@@ -352,24 +352,24 @@ async fn list_rows_resolve_crew_without_reading_the_task_job_run() {
     );
 }
 
-/// [ORB-12678] Once a dispatched task carries the stamped crew, list rows and
-/// the detail projection agree — the list path never needs a job-run read.
+/// [ORB-12717] A task carries its crew from creation, so list rows and the
+/// detail projection agree on it — the list path never needs a job-run read.
 #[tokio::test]
-async fn list_and_detail_agree_on_stamped_task_crew() {
+async fn list_and_detail_agree_on_the_tasks_own_crew() {
     let runtime = Arc::new(OrbitRuntime::in_memory().unwrap());
     let registry = runtime.configured_crew_registry_projection();
-    let stamped = registry
+    let assigned = registry
         .crews
         .iter()
         .find(|crew| !crew.is_default)
         .or(registry.crews.first())
         .expect("in-memory runtime registers at least one crew");
-    let task = super::tasks::seed_backlog_task(&runtime, "Stamped crew task");
+    let task = super::tasks::seed_backlog_task(&runtime, "Assigned crew task");
     runtime
         .update_task_with_identity(
             &task.id,
             TaskUpdateParams {
-                crew: Some(Some(stamped.name.clone())),
+                crew: Some(Some(assigned.name.clone())),
                 status: Some(TaskStatus::InProgress),
                 ..Default::default()
             },
@@ -386,12 +386,12 @@ async fn list_and_detail_agree_on_stamped_task_crew() {
         .iter()
         .find(|row| row["id"] == json!(task.id))
         .unwrap();
-    assert_eq!(row["crew"], json!(stamped.name));
-    assert_eq!(row["resolved_crew"], json!(stamped.name));
-    assert_eq!(row["crew_model"], json!(stamped.model));
-    assert_eq!(detail["crew"], json!(stamped.name));
-    assert_eq!(detail["resolved_crew"], json!(stamped.name));
-    assert_eq!(detail["crew_model"], json!(stamped.model));
+    assert_eq!(row["crew"], json!(assigned.name));
+    assert_eq!(row["resolved_crew"], json!(assigned.name));
+    assert_eq!(row["crew_model"], json!(assigned.model));
+    assert_eq!(detail["crew"], json!(assigned.name));
+    assert_eq!(detail["resolved_crew"], json!(assigned.name));
+    assert_eq!(detail["crew_model"], json!(assigned.model));
     assert_eq!(row["resolved_crew"], detail["resolved_crew"]);
     assert_eq!(row["crew_model"], detail["crew_model"]);
 }

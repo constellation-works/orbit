@@ -315,17 +315,6 @@ pub trait RuntimeHost: Send + Sync {
     fn admit_task_for_workflow(&self, _task_id: &str, _workflow: &str) -> Result<Task, OrbitError> {
         Err(unsupported_runtime_capability("admit_task_for_workflow"))
     }
-    /// Workflow admission that can stamp the dispatching run's drawn crew.
-    /// Defaults to [`Self::admit_task_for_workflow`] so test hosts stay unchanged.
-    fn admit_task_for_workflow_from_run(
-        &self,
-        task_id: &str,
-        workflow: &str,
-        job_run_id: Option<&str>,
-    ) -> Result<Task, OrbitError> {
-        let _ = job_run_id;
-        self.admit_task_for_workflow(task_id, workflow)
-    }
     fn update_task_from_activity(
         &self,
         task_id: &str,

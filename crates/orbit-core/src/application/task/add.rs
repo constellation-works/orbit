@@ -6,10 +6,16 @@ use orbit_types::task::{
     Task, TaskStatus, TaskType, normalize_required_tools, normalize_task_dependencies,
     normalize_task_tags,
 };
+use sha2::{Digest, Sha256};
 
 use crate::OrbitRuntime;
+use crate::application::job::crew_pools::random_crew_ticket;
 
-use super::helpers::{authored_role_value, build_task_comments, effective_actor_label};
+use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
+use super::helpers::{
+    SYSTEM_ACTOR_LABEL, authored_role_value, build_task_comments, crew_assigned_history,
+    effective_actor_label,
+};
 use super::params::TaskAddParams;
 use super::paths::normalize_context_files_for_write;
 
@@ -93,6 +99,26 @@ impl OrbitRuntime {
         self.add_task_admitted(params, agent, model, None)
     }
 
+    /// The record shape every task had before [ORB-12717] moved crew
+    /// assignment into creation: `crew` genuinely unset. Dispatch still routes
+    /// such a task through the complexity pools, and the tests that cover that
+    /// fallback need a record `add_task` no longer produces.
+    #[cfg(test)]
+    pub(crate) fn add_crew_less_task_for_tests(
+        &self,
+        params: TaskAddParams,
+    ) -> Result<Task, OrbitError> {
+        let task = self.add_task(params)?;
+        self.stores().task_records().update(
+            &task.id,
+            StoreTaskUpdateParams {
+                actor: SYSTEM_ACTOR_LABEL.to_string(),
+                crew: Some(None),
+                ..Default::default()
+            },
+        )
+    }
+
     pub(crate) fn add_task_admitted(
         &self,
         mut params: TaskAddParams,
@@ -141,6 +167,17 @@ impl OrbitRuntime {
         let comments = build_task_comments(params.comment.clone(), create_label.as_str())?;
         let dependencies = normalize_task_dependencies(params.dependencies.clone())?;
         self.validate_crew_name(params.crew.as_deref())?;
+        // [ORB-12717] Crew is decided once, here, and never by a later status
+        // transition. A caller-supplied crew is kept verbatim; otherwise the
+        // complexity pools (then `default_crew`) choose one for this task.
+        let crew_assignment = self.creation_crew_assignment(
+            Some(params.complexity),
+            params.crew.as_deref(),
+            &mut creation_crew_ticket(action_key),
+        )?;
+        params.crew = crew_assignment
+            .as_ref()
+            .map(|assignment| assignment.crew.clone());
         params.orchestrator = self.canonical_crew_name(params.orchestrator.as_deref())?;
         if params.orchestrator.is_some()
             && !matches!(initial_status, TaskStatus::Proposed | TaskStatus::Backlog)
@@ -189,6 +226,19 @@ impl OrbitRuntime {
                 },
                 action_key,
             )?;
+            // The create contract carries no history, so the provenance entry
+            // is a second write inside the same mutation as the insert.
+            let task = match &crew_assignment {
+                Some(assignment) => self.stores().task_records().update(
+                    &task.id,
+                    StoreTaskUpdateParams {
+                        actor: SYSTEM_ACTOR_LABEL.to_string(),
+                        append_history: vec![crew_assigned_history(assignment)],
+                        ..Default::default()
+                    },
+                )?,
+                None => task,
+            };
             Ok((
                 task.clone(),
                 OrbitEvent::TaskAdded {
@@ -198,6 +248,30 @@ impl OrbitRuntime {
         })?;
 
         Ok(task)
+    }
+}
+
+/// Tickets for the creation-time crew draw.
+///
+/// An idempotent create (an auto-task mint) reserves its task id against a
+/// digest of these very parameters, so a retried mint that drew a different
+/// crew would be refused as a changed input. A keyed create therefore draws
+/// from the action key, which makes the retry reproduce the first draw; an
+/// ordinary create draws from the system RNG.
+fn creation_crew_ticket(
+    action_key: Option<&str>,
+) -> impl FnMut() -> Result<u64, OrbitError> + use<> {
+    let action_key = action_key.map(ToOwned::to_owned);
+    let mut round: u64 = 0;
+    move || match &action_key {
+        Some(key) => {
+            let digest = Sha256::digest(format!("crew:{key}:{round}").as_bytes());
+            round += 1;
+            let mut ticket = [0u8; 8];
+            ticket.copy_from_slice(&digest[..8]);
+            Ok(u64::from_be_bytes(ticket))
+        }
+        None => random_crew_ticket(),
     }
 }
 

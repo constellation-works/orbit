@@ -1193,9 +1193,12 @@ fn the_no_diff_expected_exemption_does_not_relax_dependency_readiness() {
     assert_eq!(output["excluded"], json!([]));
 }
 
+/// A legacy record with no crew of its own: [ORB-12717] assigns one at
+/// creation, so only a task filed before that change still reaches discovery's
+/// complexity-pool routing.
 fn seed_pool_routed_task(runtime: &OrbitRuntime, title: &str) -> String {
     runtime
-        .add_task(TaskAddParams {
+        .add_crew_less_task_for_tests(TaskAddParams {
             title: title.to_string(),
             description: "Fixture task without a crew of its own".to_string(),
             acceptance_criteria: vec!["Fixture task is observable.".to_string()],

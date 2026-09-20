@@ -99,7 +99,7 @@ impl Tool for OrbitTaskAddTool {
             },
             ToolParam {
                 name: "crew".to_string(),
-                description: "Optional named crew to use when running this task".to_string(),
+                description: "Optional named crew to use when running this task; omitted, one is drawn from the complexity pool or the configured default".to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },
