@@ -27,7 +27,7 @@ use orbit_types::workflow::activity_job::{
 };
 
 use crate::ConfigRoots;
-use crate::crew_pools::reject_unpoolable_crew_name;
+use crate::crew_pools::reject_unpoolable_crew_name_in_config;
 use crate::layering::{load_layered_resolved, value_at_path};
 use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
@@ -205,7 +205,7 @@ impl ResolvedConfig {
             &document,
             std::env::var(RETIRED_BACKEND_ENV).ok().as_deref(),
         )?;
-        let mut crews = crews_from_raw(parsed.crews.as_ref())?;
+        let mut crews = crews_from_raw(parsed.crews.as_ref(), config_path)?;
         let snapshot = ConfigSnapshot::admit(&document, config_path, &crews)?;
         // One document is one layer. The layered loader replaces this with
         // the exact global/workspace resolution; a single file (or the
@@ -356,6 +356,7 @@ fn reject_stale_agent_tables(
 
 fn crews_from_raw(
     raw: Option<&BTreeMap<String, RawCrewEntry>>,
+    config_path: &Path,
 ) -> Result<BTreeMap<String, Crew>, OrbitError> {
     let Some(raw_crews) = raw else {
         return Ok(default_crews());
@@ -368,7 +369,7 @@ fn crews_from_raw(
                 "[crews] names must not be empty".to_string(),
             ));
         }
-        reject_unpoolable_crew_name(trimmed, "[crews]")?;
+        reject_unpoolable_crew_name_in_config(trimmed, "[crews]", config_path)?;
         let crew = Crew {
             name: trimmed.to_string(),
             assignment: crew_assignment_from_raw(trimmed, entry)?,

@@ -11,6 +11,9 @@
 //!   table key replaces the global table rather than merging into it;
 //! - the replace-only keys below never inherit from global once a distinct
 //!   workspace file exists;
+//! - a crew name containing `:` is refused per layer, before the merge, so the
+//!   error names the file that defines it — the only way back from a persisted
+//!   colon-named crew is editing that file;
 //! - an explicit workspace `operation.preset` resets the preset-managed
 //!   `operation.*` keys, so a global explicit value for one of them is not
 //!   inherited past a workspace preset selection [ORB-11332]. The typed
@@ -24,6 +27,7 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
+use crate::crew_pools::reject_unpoolable_crew_names_in_document;
 use crate::operation::{
     OperationLayer, OperationLayerSource, OperationPolicy, OperationPreset, PRESET_MANAGED_KEYS,
 };
@@ -169,6 +173,13 @@ pub(crate) fn load_layered_resolved(
         None
     };
     let persistence = PersistenceConfig::default_for_roots(roots.global(), roots.workspace());
+
+    // Merging erases which file a crew came from, and a colon-named crew is
+    // only repairable by hand-editing that file, so each layer is checked
+    // while its own path is still known.
+    for document in [global.as_ref(), workspace.as_ref()].into_iter().flatten() {
+        reject_unpoolable_crew_names_in_document(&document.value, &document.path)?;
+    }
 
     if global.is_none() && workspace.is_none() {
         return Ok(LoadedResolvedConfig {

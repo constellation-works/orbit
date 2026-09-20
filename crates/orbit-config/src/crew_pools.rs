@@ -1,8 +1,10 @@
 //! Named crew pools for automatic task admission. Empty pools disable selection.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{Crew, resolve_crew};
 use orbit_types::task::TaskComplexity;
 use serde::{Deserialize, Serialize};
@@ -222,13 +224,72 @@ fn parse_entry<'a>(raw: &'a str, setting: &str) -> Result<(&'a str, Option<u32>)
 /// admission and `crews.<name>.<field>` keys run this check so the refusal
 /// lands where the crew is defined and names the grammar that reserves the
 /// character. `context` prefixes the message with the surface being admitted.
+///
+/// Use [`reject_unpoolable_crew_name_in_config`] whenever the name came from a
+/// file: a persisted colon-named crew fails every command, `orbit config`
+/// included, so the refusal has to say which file to hand-edit.
 pub(crate) fn reject_unpoolable_crew_name(name: &str, context: &str) -> Result<(), OrbitError> {
     if name.contains(WEIGHT_SEPARATOR) {
-        return Err(OrbitError::InvalidInput(format!(
-            "{context}: crew name '{name}' must not contain '{WEIGHT_SEPARATOR}'; \
-             workflow.*_complexity_crews entries are written 'name' or 'name:weight', so the \
-             pool grammar reserves that separator"
+        return Err(OrbitError::InvalidInput(unpoolable_crew_name_message(
+            name, context,
         )));
+    }
+    Ok(())
+}
+
+/// Refuse a persisted crew name the pool grammar cannot express, naming the
+/// file that holds it and the only repair available.
+///
+/// A crew named with `:` was admissible before this rule existed, so an
+/// upgrade can turn a working `config.toml` into one every Orbit command —
+/// including every `orbit config` subcommand, each of which opens a runtime
+/// and so loads this same config — refuses. Hand-editing the file is the way
+/// back, and the refusal is the only place an operator sees it, so it names
+/// the file and the table to rename.
+pub(crate) fn reject_unpoolable_crew_name_in_config(
+    name: &str,
+    context: &str,
+    config_path: &Path,
+) -> Result<(), OrbitError> {
+    if name.contains(WEIGHT_SEPARATOR) {
+        let path = redact_home_dir(&config_path.display().to_string());
+        let grammar = unpoolable_crew_name_message(name, context);
+        return Err(OrbitError::InvalidInput(format!(
+            "{grammar}. The crew is defined in '{path}'; Orbit refuses to load that config, so \
+             `orbit config set` cannot repair it either. Edit '{path}' and rename or remove the \
+             [crews.\"{name}\"] table, then rerun the command"
+        )));
+    }
+    Ok(())
+}
+
+fn unpoolable_crew_name_message(name: &str, context: &str) -> String {
+    format!(
+        "{context}: crew name '{name}' must not contain '{WEIGHT_SEPARATOR}'; \
+         workflow.*_complexity_crews entries are written 'name' or 'name:weight', so the pool \
+         grammar reserves that separator"
+    )
+}
+
+/// Refuse every colon-named crew a config document defines, naming that exact
+/// file.
+///
+/// The layered loader merges global over workspace before resolving, so the
+/// merged document alone cannot say which file a crew came from. Scanning each
+/// layer first keeps the refusal pointed at the file an operator has to edit.
+pub(crate) fn reject_unpoolable_crew_names_in_document(
+    document: &toml::Value,
+    config_path: &Path,
+) -> Result<(), OrbitError> {
+    let Some(crews) = document
+        .as_table()
+        .and_then(|table| table.get("crews"))
+        .and_then(toml::Value::as_table)
+    else {
+        return Ok(());
+    };
+    for name in crews.keys() {
+        reject_unpoolable_crew_name_in_config(name.trim(), "[crews]", config_path)?;
     }
     Ok(())
 }
