@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "refresh": "./scripts/refresh-dashboard-vendor.sh",
+  "assets": [
+    {
+      "name": "DOMPurify",
+      "npm_package": "dompurify",
+      "version": "3.4.8",
+      "upstream": "https://github.com/cure53/DOMPurify",
+      "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.8.tgz",
+      "npm_file": "dist/purify.min.js",
+      "path": "purify.min.js",
+      "sha256": "b656113abe5f9b5f2c30c8b10462b7b4e947e10a49f561058822bc48e9601b4a"
+    },
+    {
+      "name": "marked",
+      "npm_package": "marked",
+      "version": "18.0.5",
+      "upstream": "https://github.com/markedjs/marked",
+      "source": "https://registry.npmjs.org/marked/-/marked-18.0.5.tgz",
+      "npm_file": "lib/marked.umd.js",
+      "path": "marked.umd.js",
+      "sha256": "2dc4769dfde29f51c7aca1a539c6407c789c8ea644cf8b7d01ded28a9c1d800b"
+    }
+  ]
+}

@@ -86,6 +86,8 @@ build/
 .gstack/
 .locks
 *.lock
+# npm lockfiles are the Dependabot / GitHub security-alert manifest for JS pins.
+!package-lock.json
 .vscode
 .grok
 .gemini
