@@ -210,6 +210,13 @@ Re-review ignored advisories on or before their date and drop the entry once an
 upstream fix lands. Never ignore an advisory that has an available patched
 release — bump the dependency instead.
 
+If cargo-deny reports `advisory-not-detected` for an ignored entry, treat it as
+the signal to retire that exception: verify that the advisory no longer matches
+the current dependency graph or advisory policy, then remove the entry and its
+stale rationale and rerun the supply-chain checks. If the dependency or
+advisory is later reintroduced, review it afresh against its current use and
+dependents rather than carrying the old exception forward.
+
 **Isolated advisory database override.** In managed runners or sandboxed validation
 where `~/.cargo/advisory-dbs` is read-only (such as containerized workers), configure
 an explicit writable advisory database path via `CARGO_DENY_DB_PATH` (or

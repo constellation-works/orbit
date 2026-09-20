@@ -16,20 +16,12 @@
 # tagged with a re-review date — drop it once an upstream fix lands.
 yanked = "deny"
 ignore = [
-    # git2 / libgit2 unsoundness in `Remote::list()` and blame `Signature`.
-    # No fixed release yet; orbit invokes git2 only against local, trusted
-    # repositories (branch/status/worktree ops), not attacker-controlled remotes
-    # via these APIs. Re-review by 2027-01-04.
-    { id = "RUSTSEC-2026-0183", reason = "libgit2 Remote::list UB; no fix released; local trusted repos only. Re-review 2027-01-04." },
-    { id = "RUSTSEC-2026-0184", reason = "git2 BlameHunk Signature UB; no fix released; local trusted repos only. Re-review 2027-01-04." },
-    # `paste` is unmaintained (not a vulnerability), pulled transitively via
-    # tokenizers -> fastembed (embeddings). No maintained drop-in; low risk.
-    # Re-review by 2027-01-04.
-    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; transitive via fastembed/tokenizers; no vuln. Re-review 2027-01-04." },
-    # rsa Marvin timing sidechannel. No constant-time release yet. Orbit uses
-    # rsa only for public-key release verification; Marvin concerns private-key
-    # decryption/signing, which the binary never performs. Re-review by 2027-01-04.
-    { id = "RUSTSEC-2023-0071", reason = "rsa used only for PKCS#1 v1.5 public-key verification of release checksums (orbit-common::security::release); Marvin concerns private-key decryption/signing, which the binary never performs. Re-review 2027-01-04." },
+    # rsa Marvin timing sidechannel. `rsa` is a direct dependency of
+    # orbit-common for release signature verification and a dev-dependency of
+    # orbit-cmd for signing test fixtures. Production Orbit only verifies
+    # PKCS#1 v1.5 signatures with public keys; it does not decrypt or sign with
+    # private keys. Re-review by 2027-01-04.
+    { id = "RUSTSEC-2023-0071", reason = "rsa is used by orbit-common::security::release for PKCS#1 v1.5 public-key verification and by orbit-cmd update tests only to sign fixtures; production does not perform private-key decryption/signing, so Marvin timing concerns do not apply. Re-review 2027-01-04." },
 ]
 
 [licenses]
