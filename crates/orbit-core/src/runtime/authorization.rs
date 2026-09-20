@@ -17,6 +17,8 @@
 //! [`AuditEventStatus::Denied`]; the two rows answer different questions
 //! ("what was refused" versus "what call failed").
 
+use std::collections::BTreeSet;
+
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
     CallerCapabilities, CallerEnvelope, CallerProvenance, GovernedOperation, OperationSurface,
@@ -25,7 +27,7 @@ use orbit_common::governance::authorization::{
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_store::contracts::AuditEventInsertParams;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::tool::ToolSessionContext;
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 
 use crate::OrbitRuntime;
 use crate::runtime::tool_exec::CapabilityEnforcement;
@@ -284,4 +286,27 @@ impl OrbitRuntime {
             );
         }
     }
+}
+
+/// What a caller the chokepoint has already admitted actually holds.
+///
+/// A handler that has to draw one more distinction *inside* an authorized call
+/// asks here instead of reading `effective_capabilities` off the session. A
+/// session's asserted set is not where every surface keeps its authority:
+/// `orbit tool run` builds a session with no capabilities at all and expresses
+/// the caller's authority in the process envelope, so a raw session read
+/// refuses the owner on the owner's own machine [ORB-12582].
+///
+/// The resolution is the shared one, in the shared order: a session that
+/// asserts grants is taken at its word, and the process envelope is consulted
+/// only for a session that asserts nothing. An MCP session is therefore never
+/// widened by whatever process happens to host its server — and a session that
+/// asserts nothing does not reach a handler that calls this, because the
+/// governed floor on that handler's tool refused it first.
+pub(crate) fn resolved_caller_capabilities(
+    session: &ToolSessionContext,
+) -> BTreeSet<McpCapability> {
+    CallerCapabilities::resolve(&CallerEnvelope::from_process_env(session))
+        .grants()
+        .clone()
 }

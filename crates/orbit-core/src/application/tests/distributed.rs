@@ -45,7 +45,13 @@ fn follower_session() -> ToolSessionContext {
     }
 }
 
-/// The owner's own local session, which is how an owner-local drain calls in.
+/// An owner-local MCP session: served by this machine's own server, so it
+/// carries the capability that server grants.
+///
+/// `orbit tool run` builds a different envelope — no capabilities at all, with
+/// the caller's authority in the process envelope — which is why the owner-local
+/// CLI route is covered end to end by `crates/orbit-cli/tests/tool_list.rs`
+/// rather than by a session synthesized here [ORB-12582].
 fn owner_local_session() -> ToolSessionContext {
     ToolSessionContext {
         caller_machine_id: Some(OWNER.to_string()),
@@ -530,6 +536,11 @@ fn claim_mutation_requires_trusted_invocation_context() {
 
 #[test]
 fn the_read_only_surface_serves_an_owner_local_session_and_refuses_a_replica() {
+    let _env = orbit_common::test_env::unset([
+        "ORBIT_MANAGED_RUN_CONTEXT",
+        "ORBIT_TASK_ACTOR_KIND",
+        "ORBIT_ACTIVITY_TOOLS",
+    ]);
     let (_root, runtime, _repo_root) = test_runtime();
 
     let local = run_as(
@@ -558,6 +569,13 @@ fn the_read_only_surface_serves_an_owner_local_session_and_refuses_a_replica() {
     }
 }
 
+/// The identification floor, on the surface that resolves a session and
+/// nothing else [ORB-12582].
+///
+/// An MCP session's capabilities come from the server process that serves it,
+/// so a session asserting none is a caller this destination cannot name — and
+/// the governed row, not a capability read inside the application function, is
+/// what refuses it.
 #[test]
 fn a_session_without_agent_capability_reaches_neither_read_only_tool() {
     let (_root, runtime, _repo_root) = test_runtime();
@@ -570,12 +588,23 @@ fn a_session_without_agent_capability_reaches_neither_read_only_tool() {
         ("orbit.drain.probe", json!({})),
         ("orbit.drain.receipt.lookup", json!({"request_id": "req-1"})),
     ] {
-        let error = run_as(&runtime, anonymous.clone(), tool, input)
+        let error = runtime
+            .execute_tool_command_dispatch_with_session_context(
+                tool,
+                input,
+                None,
+                None,
+                ToolEntryPoint::Mcp,
+                anonymous.clone(),
+            )
             .expect_err("agent capability required");
-        assert!(
-            matches!(error, orbit_common::OrbitError::CapabilityRefused(_)),
-            "{tool}: {error}"
-        );
+        match error {
+            orbit_common::OrbitError::CapabilityDenied(message) => {
+                assert!(message.contains(tool), "{tool}: {message}");
+                assert!(message.contains("agent"), "{tool}: {message}");
+            }
+            other => panic!("expected a capability denial for {tool}, got: {other}"),
+        }
     }
 }
 
