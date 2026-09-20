@@ -5,22 +5,22 @@
     {
       "name": "DOMPurify",
       "npm_package": "dompurify",
-      "version": "3.4.8",
+      "version": "3.4.15",
       "upstream": "https://github.com/cure53/DOMPurify",
-      "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.8.tgz",
+      "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.15.tgz",
       "npm_file": "dist/purify.min.js",
       "path": "purify.min.js",
-      "sha256": "b656113abe5f9b5f2c30c8b10462b7b4e947e10a49f561058822bc48e9601b4a"
+      "sha256": "f263b05369e050fa175d4ecb9c9358eb4253602d510297adfb31df48b2f1c4d5"
     },
     {
       "name": "marked",
       "npm_package": "marked",
-      "version": "18.0.5",
+      "version": "18.0.13",
       "upstream": "https://github.com/markedjs/marked",
-      "source": "https://registry.npmjs.org/marked/-/marked-18.0.5.tgz",
+      "source": "https://registry.npmjs.org/marked/-/marked-18.0.13.tgz",
       "npm_file": "lib/marked.umd.js",
       "path": "marked.umd.js",
-      "sha256": "2dc4769dfde29f51c7aca1a539c6407c789c8ea644cf8b7d01ded28a9c1d800b"
+      "sha256": "b147274a9ce27d17276587167e49483d719f6893eeca3a3667a59797661d3556"
     }
   ]
 }
