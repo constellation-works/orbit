@@ -6,6 +6,7 @@
 
 mod admission;
 mod gate;
+mod handoff_console;
 
 use std::fs;
 use std::path::{Path, PathBuf};

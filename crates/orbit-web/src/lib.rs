@@ -71,6 +71,7 @@ const DIAGNOSTICS_JS: &str = include_str!("../assets/dashboard/diagnostics.js");
 const ROUTER_JS: &str = include_str!("../assets/dashboard/router.js");
 const RUNS_JS: &str = include_str!("../assets/dashboard/runs.js");
 const RUN_DETAIL_JS: &str = include_str!("../assets/dashboard/run-detail.js");
+const DISTRIBUTED_JS: &str = include_str!("../assets/dashboard/distributed.js");
 const AUTOMATION_JS: &str = include_str!("../assets/dashboard/automation.js");
 const OPERATIONS_JS: &str = include_str!("../assets/dashboard/operations.js");
 const DASHBOARD_CSP: &str = concat!(
@@ -135,6 +136,7 @@ struct DashboardAssets {
     router_js: DashboardAsset,
     runs_js: DashboardAsset,
     run_detail_js: DashboardAsset,
+    distributed_js: DashboardAsset,
     operations_js: DashboardAsset,
     automation_js: DashboardAsset,
 }
@@ -209,6 +211,10 @@ impl DashboardAssets {
                 "application/javascript; charset=utf-8",
                 RUN_DETAIL_JS.as_bytes(),
             )?,
+            distributed_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                DISTRIBUTED_JS.as_bytes(),
+            )?,
             operations_js: DashboardAsset::new(
                 "application/javascript; charset=utf-8",
                 OPERATIONS_JS.as_bytes(),
@@ -258,8 +264,10 @@ pub struct ServeArgs {
     #[arg(long, value_name = "SELECTOR")]
     pub workspace: Option<String>,
 
-    /// Grant operator capability for Operations controls without a TTY or
-    /// ORBIT_OPERATOR. `orbit web connect` passes this by default.
+    /// Grant operator capability for the dashboard's governed controls —
+    /// Operations, and the owner's handoff approve/revoke/recover actions —
+    /// without a TTY or ORBIT_OPERATOR. `orbit web connect` passes this by
+    /// default.
     #[arg(long)]
     pub operator: bool,
 }
@@ -466,6 +474,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         .route("/static/router.js", get(serve_router_js_route))
         .route("/static/runs.js", get(serve_runs_js_route))
         .route("/static/run-detail.js", get(serve_run_detail_js_route))
+        .route("/static/distributed.js", get(serve_distributed_js_route))
         .route("/static/operations.js", get(serve_operations_js_route))
         .route("/static/automation.js", get(serve_automation_js_route))
         .merge(health_router())
@@ -620,6 +629,7 @@ dashboard_route_handler!(serve_diagnostics_js_route, diagnostics_js);
 dashboard_route_handler!(serve_router_js_route, router_js);
 dashboard_route_handler!(serve_runs_js_route, runs_js);
 dashboard_route_handler!(serve_run_detail_js_route, run_detail_js);
+dashboard_route_handler!(serve_distributed_js_route, distributed_js);
 dashboard_route_handler!(serve_operations_js_route, operations_js);
 dashboard_route_handler!(serve_automation_js_route, automation_js);
 
@@ -805,6 +815,11 @@ async fn serve_runs_js() -> Response {
 #[cfg(test)]
 async fn serve_run_detail_js() -> Response {
     dashboard_asset_response(&TEST_DASHBOARD_ASSETS.run_detail_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_distributed_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.distributed_js, &HeaderMap::new())
 }
 
 #[cfg(test)]

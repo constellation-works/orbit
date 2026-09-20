@@ -8,10 +8,11 @@ use std::process::Command;
 
 use crate::{
     DASHBOARD_CSP, serve_app_js, serve_audit_js, serve_automation_js, serve_common_js,
-    serve_dashboard_css, serve_diagnostics_js, serve_field_editor_js, serve_index,
-    serve_index_with_headers, serve_inter_font, serve_jetbrains_mono_font, serve_log_tail_js,
-    serve_markdown_js, serve_marked_js, serve_operations_js, serve_purify_js, serve_reliability_js,
-    serve_router_js, serve_run_detail_js, serve_runs_js, serve_scoreboard_js, serve_tasks_js,
+    serve_dashboard_css, serve_diagnostics_js, serve_distributed_js, serve_field_editor_js,
+    serve_index, serve_index_with_headers, serve_inter_font, serve_jetbrains_mono_font,
+    serve_log_tail_js, serve_markdown_js, serve_marked_js, serve_operations_js, serve_purify_js,
+    serve_reliability_js, serve_router_js, serve_run_detail_js, serve_runs_js, serve_scoreboard_js,
+    serve_tasks_js,
 };
 
 // The recent-history, aggregate-request, and route-selection assertions
@@ -75,6 +76,7 @@ async fn dashboard_html_and_js_routes_emit_csp() {
         ("router", serve_router_js().await),
         ("runs", serve_runs_js().await),
         ("run_detail", serve_run_detail_js().await),
+        ("distributed", serve_distributed_js().await),
         ("operations", serve_operations_js().await),
         ("automation", serve_automation_js().await),
     ];
@@ -3366,6 +3368,13 @@ const requests = [];
 let hold = null;
 globalThis.fetch = async (path, opts = {}) => {
   const body = opts.body ? JSON.parse(opts.body) : null;
+  // ORB-12516: the task detail also reads claim provenance. It is read-only and
+  // owned by its own scenario, so it is answered here and kept out of the
+  // request log this harness asserts task writes against.
+  if (String(path).startsWith("/api/distributed/claims")) {
+    const empty = JSON.stringify({ schema_version: 1, owner_workspace: true, claims: [], capabilities: {} });
+    return { ok: true, status: 200, text: async () => empty, json: async () => JSON.parse(empty) };
+  }
   requests.push({ path: String(path), method: opts.method || "GET", body });
   if (hold) await hold;
   const selectors = body && Array.isArray(body.context_files) ? body.context_files : [];
@@ -5041,8 +5050,16 @@ const taskGets = requests.filter((url) => url.startsWith("/api/tasks/POLA-00001"
 if (!taskGets[0] || !taskGets[0].includes("workspace=ws_polaris")) {
   throw new Error(`existing-task jump must query the selected workspace first; got ${JSON.stringify(taskGets)}`);
 }
-if (requests.some((url) => !url.startsWith("/api/tasks/POLA-00001"))) {
-  throw new Error(`same-workspace jump must not refresh dashboard panels: ${JSON.stringify(requests)}`);
+// ORB-12516: the pinned task's own detail reads its claim provenance, scoped to
+// the same workspace. That is the jumped-to task's data, not a panel refresh.
+const panelRefreshes = requests.filter(
+  (url) => !url.startsWith("/api/tasks/POLA-00001") && !url.startsWith("/api/distributed/claims"),
+);
+if (panelRefreshes.length) {
+  throw new Error(`same-workspace jump must not refresh dashboard panels: ${JSON.stringify(panelRefreshes)}`);
+}
+if (requests.some((url) => url.startsWith("/api/distributed/claims") && !url.includes("workspace=ws_polaris"))) {
+  throw new Error(`the claim read must stay in the jumped-to task's workspace: ${JSON.stringify(requests)}`);
 }
 if (err.textContent.includes("not found")) throw new Error(`existing task reported missing: ${err.textContent}`);
 if (wrap.classList.contains("error")) throw new Error("successful jump must not leave the error state");
@@ -5244,6 +5261,22 @@ fn dashboard_summary_rows_expand_through_the_detail_endpoint() {
         "{}\n{}",
         include_str!("dashboard_keyboard_dom.mjs"),
         include_str!("dashboard_task_detail.mjs")
+    ));
+}
+
+// ORB-12516: claim provenance and the owner's handoff actions are the one
+// dashboard surface where a wrong word is a wrong decision — an expired
+// reservation that reads as a revocation, or a "review" that reads as a code
+// review, would send an operator to fence a live attempt. The scenario drives
+// the shipped module against a fetch stub and asserts what it paints and what
+// it sends. The same file runs in a real Chromium via
+// `dashboard_distributed_browser.mjs`.
+#[test]
+fn dashboard_renders_claim_provenance_and_sends_exact_owner_decisions() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_keyboard_dom.mjs"),
+        include_str!("dashboard_distributed.mjs")
     ));
 }
 

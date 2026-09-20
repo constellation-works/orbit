@@ -238,6 +238,10 @@ async fn list_rows_are_summaries_and_detail_carries_the_bodies() {
         detail_expected["resolved_crew"] = json!(crew.name);
         detail_expected["crew_model"] = json!(crew.model);
     }
+    // ORB-12516: the detail says whether `#runs?run_id=` resolves in *this*
+    // checkout. A task with no run has nothing to navigate to. The list rows
+    // below keep the summary shape and carry no such key.
+    detail_expected["job_run_navigable"] = json!(false);
 
     let mut summary_expected = crate::projections::task_to_json(&task, &statuses);
     let summary_object = summary_expected.as_object_mut().unwrap();

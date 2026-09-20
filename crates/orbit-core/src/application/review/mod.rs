@@ -35,6 +35,10 @@ mod tests;
 pub(crate) use admission::install_review_admission;
 pub(crate) use coverage::exclusions;
 pub(crate) use gate::{review_gate_admit, review_gate_settle};
+/// The owner handoff console [ORB-12516]: what an authorized owner surface
+/// reads and the typed refusals it renders. Adapters above Core cannot reach
+/// `orbit-store`, so these are the only shapes they need.
+pub use handoff::{ExpectedCandidate, HANDOFF_CONSOLE_SCHEMA, HandoffConsoleRefusal};
 pub(crate) use landing::record_review_landing;
 pub use projection::task_review_projection;
 

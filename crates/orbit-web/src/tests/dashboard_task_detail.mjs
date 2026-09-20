@@ -60,6 +60,11 @@ const response = (payload, status = 200) => ({
 globalThis.fetch = async (path, options = {}) => {
   const url = new URL(String(path), "http://dashboard.test");
   const method = options.method || "GET";
+  // ORB-12516: an open detail also reads claim provenance. That read has its
+  // own scenario; answer it and leave it out of the detail-read count below.
+  if (url.pathname === "/api/distributed/claims") {
+    return response({ schema_version: 1, owner_workspace: true, claims: [], capabilities: {} });
+  }
   requests.push({ method, path: url.pathname, body: options.body ? JSON.parse(options.body) : null });
   if (url.pathname !== "/api/tasks/ORB-2") throw new Error(`unexpected request ${method} ${url.pathname}`);
   if (method === "PATCH") return response({ ...fullTask(), status: options.body ? JSON.parse(options.body).status : "review" });

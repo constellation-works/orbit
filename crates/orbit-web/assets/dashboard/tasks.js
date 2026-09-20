@@ -4,6 +4,7 @@
 import { onWorkspaceChange, panelCanRender, el, statusPill, fetchJson, patchJson, postJson, syncNodes, isAggregateView, withWorkspace, makeToggleRow } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
+import { buildDistributedBlock, buildExecutionProvenance, invalidateDistributedConsole } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -1720,6 +1721,15 @@ function buildTaskDetail(task, context) {
     addField(leftCol, "review gate", buildReviewGate(task.review), true, true);
   }
 
+  // ORB-12516: distributed claim provenance and the owner's handoff actions.
+  // The block hides itself when this workspace holds no claim for the task, so
+  // an ordinary single-host detail is unchanged; there is no distributed tab.
+  leftCol.appendChild(
+    buildDistributedBlock(task.id, {
+      onTaskChanged: () => refreshTasks(context),
+    }),
+  );
+
   // ORB-12651: comments block appears in the left/main column after review gate
   if (Array.isArray(task.comments) && task.comments.length > 0) {
     leftCol.appendChild(buildCommentsPanel(task, context));
@@ -1738,9 +1748,31 @@ function buildTaskDetail(task, context) {
     const display = key.endsWith("_at") ? fmtAbsTimeValue(context, v) : String(v);
     const value = el("span", { class: "value" });
     if (key === "job_run_id") {
-      const link = el("a", { text: display });
-      link.href = `#runs?run_id=${encodeURIComponent(display)}`;
-      value.appendChild(link);
+      // ORB-12516: a pulled task's run lives in the executing host's own job
+      // store, so the id alone is a dangling reference. When the recorded
+      // execution machine is this one the link still resolves; otherwise name
+      // the host to inspect rather than linking somewhere it is not.
+      const host = task.job_run_host;
+      if (task.job_run_navigable !== false) {
+        const link = el("a", { text: display });
+        link.href = `#runs?run_id=${encodeURIComponent(display)}`;
+        value.appendChild(link);
+      } else {
+        value.appendChild(el("span", { text: display }));
+        value.appendChild(
+          el("span", {
+            class: "claim-note",
+            text: "no owner-local run for this id — inspect it on the execution host below",
+          }),
+        );
+      }
+      value.appendChild(
+        buildExecutionProvenance(
+          host && host.machine_id
+            ? { known: true, machine_id: host.machine_id, host_id: host.host_id || null }
+            : { known: false },
+        ),
+      );
     } else {
       value.textContent = display;
     }

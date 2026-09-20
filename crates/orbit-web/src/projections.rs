@@ -169,6 +169,12 @@ pub(crate) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStat
         "relations": orbit_types::task::resolve_task_relations(task, status_by_id),
         "source_task_id": task.source_task_id(),
         "job_run_id": task.job_run_id,
+        // Host-qualified execution provenance [ORB-12516]. A pulled task's run
+        // lives in the executing host's own job store, so the run id alone is a
+        // dangling reference without the machine that ran it. Absent stays
+        // absent: a row recorded before execution provenance existed is
+        // *unknown*, never "the owner".
+        "job_run_host": task.job_run_host,
         "crew": task.crew,
         "orchestrator": task.orchestrator,
         "created_at": task.created_at.to_rfc3339(),
@@ -215,6 +221,15 @@ pub(crate) fn task_row_to_json(
         "status_transitions".to_string(),
         dashboard_status_transitions(runtime, task)?,
     );
+    // ORB-12516: whether `#runs?run_id=` can resolve this task's run *here*.
+    // A run recorded against another machine lives in that host's job store, so
+    // the detail names the host to inspect instead of linking to nothing. An
+    // unrecorded host keeps the historical local link — the provenance line
+    // still reads *unknown*, which is what the absent field means.
+    object.insert(
+        "job_run_navigable".to_string(),
+        Value::Bool(job_run_is_locally_navigable(runtime, task)),
+    );
     let registry = runtime.configured_crew_registry_projection();
     if let Some(projection) = dashboard_resolved_crew_projection(runtime, &registry, task)? {
         object.insert("resolved_crew".to_string(), Value::String(projection.name));
@@ -226,6 +241,21 @@ pub(crate) fn task_row_to_json(
         object.insert("review".to_string(), review);
     }
     Ok(value)
+}
+
+fn job_run_is_locally_navigable(runtime: &OrbitRuntime, task: &Task) -> bool {
+    if task.job_run_id.is_none() {
+        return false;
+    }
+    let Some(host) = task.job_run_host.as_ref() else {
+        return true;
+    };
+    // A recorded host has to *match* to navigate: with no local identity there
+    // is nothing to prove the run is here, and an owner-local link would open
+    // the wrong thing or nothing. An unrecorded host is handled above.
+    runtime
+        .automation_machine_identity()
+        .is_some_and(|local| local == host.machine_id)
 }
 
 /// Marker the list rows carry so a client can tell a summary from the full

@@ -8,6 +8,7 @@ mod audit;
 mod auto_tasks;
 mod denials;
 mod diagnostics;
+mod distributed;
 mod frictions;
 mod handlers;
 mod incidents;
