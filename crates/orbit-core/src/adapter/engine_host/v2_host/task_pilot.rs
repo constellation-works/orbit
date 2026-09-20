@@ -31,7 +31,8 @@ mod validation_tools;
 pub(super) use apply::apply;
 #[cfg(test)]
 pub(super) use apply::inject_concurrent_edit_before_locked_apply;
-use source::{GitPathKind, SourceSnapshot, requested_base_branch, resolve_source_snapshot};
+pub(crate) use source::requested_base_branch;
+use source::{GitPathKind, SourceSnapshot, resolve_source_snapshot};
 use validation_tools::ImplementationLane;
 
 const DEFAULT_MAX_PARTITION_SIZE: usize = 5;

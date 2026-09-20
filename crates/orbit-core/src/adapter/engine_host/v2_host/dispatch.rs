@@ -443,7 +443,7 @@ fn resolve_workspace_ship_input(
     if let Some(binding) = runtime.workspace_runtime_binding() {
         return crate::application::workflow::build_ship_input(
             binding.ship_mode,
-            runtime.workflow_base_branch(),
+            runtime.workspace_base_branch(),
             &[],
             COMPLETION_IS_NEVER_WORKSPACE_RESOLVED,
             &[],
@@ -456,7 +456,7 @@ fn resolve_workspace_ship_input(
 
     crate::application::workflow::build_ship_input(
         crate::application::workflow::ShipMode::Local,
-        runtime.workflow_base_branch(),
+        runtime.workspace_base_branch(),
         &[],
         COMPLETION_IS_NEVER_WORKSPACE_RESOLVED,
         &[],

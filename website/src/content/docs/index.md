@@ -135,7 +135,7 @@ next: false
         <tr>
           <th scope="row"><a href="/how-to/task-lifecycle/">One task, one PR</a><span class="orbit-modes-sub">the default · <code>orbit.workflow.ship</code> over MCP</span></th>
           <td><code>orbit run ship "$TASK_ID"</code></td>
-          <td><em>review</em>, with the pull request open and not merged. The base branch is <code>[workflow] base_branch</code> from <code>config.toml</code>, or <code>main</code> when unset; <code>--base</code> overrides it.</td>
+          <td><em>review</em>, with the pull request open and not merged. The base branch is the registered workspace base branch, else <code>[workflow] base_branch</code> from <code>config.toml</code>, or <code>main</code> when unset; <code>--base</code> overrides it.</td>
           <td><code>--complete</code> merges the PR as soon as GitHub allows it and moves the task to <em>done</em> once the merge is verified. Only branch protection holds it back: with no required checks it does not wait for CI.</td>
         </tr>
         <tr>

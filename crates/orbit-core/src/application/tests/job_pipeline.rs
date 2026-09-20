@@ -14,6 +14,7 @@ use orbit_types::workspace::WorkspacePaths;
 use tempfile::TempDir;
 
 use crate::OrbitRuntime;
+use crate::WorkspaceRuntimeBinding;
 use crate::application::job::JobRunListParams;
 #[cfg(unix)]
 use crate::application::job::pipeline::pipeline_worker_log_test_hook::{self, Phase};
@@ -1522,4 +1523,108 @@ fn ship_submission_mixed_explicit_selection_identifies_the_missing_task() {
             .is_empty(),
         "mixed-selection refusal must not persist a run"
     );
+}
+
+fn seed_task_auto_pipeline(runtime: &OrbitRuntime) {
+    let jobs_dir = runtime.paths().global_dir.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");
+    std::fs::write(
+        jobs_dir.join("task_auto_pipeline.yaml"),
+        r#"schemaVersion: 2
+kind: Job
+metadata:
+  name: task_auto_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  steps:
+    - id: nap
+      spec:
+        type: deterministic
+        action: sleep
+        config: {}
+"#,
+    )
+    .expect("seed task_auto_pipeline definition");
+}
+
+fn runtime_with_base_branch(
+    workflow_base: &str,
+    registered_base: Option<&str>,
+) -> (TempDir, OrbitRuntime) {
+    let root = TempDir::new().expect("tempdir");
+    let global_root = root.path().join("global");
+    let repo_root = root.path().join("repo");
+    let workspace_root = repo_root.join(".orbit");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(
+        workspace_root.join("config.toml"),
+        format!("[workflow]\nbase_branch = \"{workflow_base}\"\n"),
+    )
+    .expect("write workflow config");
+    let runtime = match registered_base {
+        Some(base) => OrbitRuntime::from_roots_with_binding(
+            &global_root,
+            &workspace_root,
+            WorkspaceRuntimeBinding {
+                logical_workspace_id: "ws_bound".to_string(),
+                task_partition_id: "ws_bound".to_string(),
+                owner_machine_id: None,
+                repo_root,
+                ship_mode: ShipMode::Pr,
+                base_branch: Some(base.to_string()),
+            },
+        )
+        .expect("bound runtime"),
+        None => OrbitRuntime::from_roots(&global_root, &workspace_root).expect("unbound runtime"),
+    };
+    (root, runtime)
+}
+
+fn submitted_ship_base(runtime: &OrbitRuntime, base: Option<&str>) -> serde_json::Value {
+    seed_task_auto_pipeline(runtime);
+    let invoke = runtime
+        .submit_ship_run(
+            ShipMode::Pr,
+            base,
+            &[],
+            CompletionPolicy::Review,
+            &[],
+            Some("test"),
+            None,
+        )
+        .expect("submit ship");
+    runtime
+        .show_job_run(&invoke.run_id)
+        .expect("show submitted run")
+        .input
+        .expect("persisted input")
+}
+
+#[test]
+fn ship_submission_without_base_uses_the_registered_workspace_branch() {
+    let (_root, runtime) = runtime_with_base_branch("main", Some("agent-main"));
+    let _worker = WorkerOverride::shell("exit 0");
+
+    let input = submitted_ship_base(&runtime, None);
+    assert_eq!(input["base_branch"], "agent-main");
+}
+
+#[test]
+fn ship_submission_without_base_falls_back_to_workflow_config_without_a_binding() {
+    let (_root, runtime) = runtime_with_base_branch("agent-main", None);
+    let _worker = WorkerOverride::shell("exit 0");
+
+    let input = submitted_ship_base(&runtime, None);
+    assert_eq!(input["base_branch"], "agent-main");
+}
+
+#[test]
+fn ship_submission_explicit_base_overrides_the_registered_workspace_branch() {
+    let (_root, runtime) = runtime_with_base_branch("main", Some("agent-main"));
+    let _worker = WorkerOverride::shell("exit 0");
+
+    let input = submitted_ship_base(&runtime, Some("release"));
+    assert_eq!(input["base_branch"], "release");
 }

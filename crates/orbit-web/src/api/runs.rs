@@ -40,7 +40,8 @@ pub(super) struct ShipBody {
     /// mode (ORB-10444) — what the dashboard's one-click Ship sends.
     #[serde(default)]
     mode: Option<String>,
-    /// Base branch override; defaults to the workspace's `[workflow] base_branch`.
+    /// Base branch override; defaults to the registered workspace base
+    /// branch, else `[workflow] base_branch`.
     #[serde(default)]
     base: Option<String>,
     /// [ORB-10709] Token for this workspace's exclusive claim, when another

@@ -65,7 +65,7 @@ pub(crate) fn promote_within_grant(
 
     let status_by_id = runtime.task_status_index()?;
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
-    let branch = runtime.workflow_base_branch().to_string();
+    let branch = runtime.workspace_base_branch().to_string();
     let mut source: Option<(String, InstructionSnapshot)> = None;
 
     for task_id in &grant.task_ids {

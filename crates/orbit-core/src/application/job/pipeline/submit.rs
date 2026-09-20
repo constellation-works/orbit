@@ -154,7 +154,7 @@ impl OrbitRuntime {
             crate::application::workflow::SHIP_WORKFLOW_ALIAS,
         )
         .ok_or_else(|| OrbitError::InvalidInput("unknown workflow 'ship'".to_string()))?;
-        let base = base_branch.unwrap_or_else(|| self.workflow_base_branch());
+        let base = base_branch.unwrap_or_else(|| self.workspace_base_branch());
         let allowed_crews = self.canonical_allowed_crews(allowed_crews)?;
         let allowlist = self.crew_allowlist(&allowed_crews)?;
         let input = crate::application::workflow::build_ship_input(

@@ -377,6 +377,74 @@ fn workspace_ship_input_prefers_the_registry_neutral_runtime_binding() {
 }
 
 #[test]
+fn workspace_ship_input_uses_the_registered_base_branch_over_workflow_config() {
+    let root = tempdir().expect("tempdir");
+    let global = root.path().join("global");
+    let repo = root.path().join("repo");
+    let workspace = repo.join(".orbit");
+    std::fs::create_dir_all(&global).expect("global orbit");
+    std::fs::create_dir_all(&workspace).expect("workspace orbit");
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[workflow]\nbase_branch = \"main\"\n",
+    )
+    .expect("workspace config");
+
+    let runtime = OrbitRuntime::from_roots_with_binding(
+        &global,
+        &workspace,
+        WorkspaceRuntimeBinding {
+            logical_workspace_id: "ws_bound".to_string(),
+            task_partition_id: "ws_bound".to_string(),
+            owner_machine_id: None,
+            repo_root: repo,
+            ship_mode: ShipMode::Pr,
+            base_branch: Some("agent-main".to_string()),
+        },
+    )
+    .expect("bound runtime");
+    let input = runtime
+        .run_deterministic(
+            "resolve_workspace_ship_input",
+            &json!({}),
+            &json!({}),
+            ToolContext::default(),
+        )
+        .expect("resolve bound ship input");
+
+    assert_eq!(input, json!({"mode": "pr", "base_branch": "agent-main"}));
+}
+
+#[test]
+fn workspace_ship_input_falls_back_to_workflow_config_without_a_binding() {
+    let root = tempdir().expect("tempdir");
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).expect("global orbit");
+    std::fs::create_dir_all(&workspace).expect("workspace orbit");
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[workflow]\nbase_branch = \"agent-main\"\n",
+    )
+    .expect("workspace config");
+
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("unbound runtime");
+    let input = runtime
+        .run_deterministic(
+            "resolve_workspace_ship_input",
+            &json!({}),
+            &json!({}),
+            ToolContext::default(),
+        )
+        .expect("resolve unbound ship input");
+
+    assert_eq!(
+        input,
+        json!({"mode": "local", "base_branch": "agent-main", "base_sync": "local"})
+    );
+}
+
+#[test]
 fn promote_agent_main_stub_is_loudly_fenced() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let err = runtime

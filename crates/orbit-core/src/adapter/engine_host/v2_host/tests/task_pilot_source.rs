@@ -10,12 +10,13 @@ use tempfile::TempDir;
 
 use orbit_engine::fetch_remote_base;
 
-use super::super::task_pilot::{apply, prepare};
+use super::super::task_pilot::{apply, prepare, requested_base_branch};
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::v2_host::test_support::{
     runtime_with_workspace_config, runtime_with_workspace_layout,
 };
 use crate::application::task::TaskAddParams;
+use crate::{ShipMode, WorkspaceRuntimeBinding};
 
 const LANDING: &str = "agent-main";
 
@@ -239,6 +240,62 @@ fn zero_input_preparation_uses_a_configured_agent_main_branch() {
 
     assert_eq!(prepared["source"]["base_branch"], LANDING);
     assert_eq!(prepared["source"]["source_revision"], fixture.current_sha);
+}
+
+fn requested_base_runtime(
+    workflow_base: &str,
+    registered_base: Option<&str>,
+) -> (tempfile::TempDir, OrbitRuntime) {
+    let root = tempfile::tempdir().expect("tempdir");
+    let global = root.path().join("global");
+    let repo = root.path().join("repo");
+    let workspace = repo.join(".orbit");
+    std::fs::create_dir_all(&global).expect("global orbit");
+    std::fs::create_dir_all(&workspace).expect("workspace orbit");
+    std::fs::write(
+        workspace.join("config.toml"),
+        format!("[workflow]\nbase_branch = \"{workflow_base}\"\n"),
+    )
+    .expect("workspace config");
+    let runtime = match registered_base {
+        Some(base) => OrbitRuntime::from_roots_with_binding(
+            &global,
+            &workspace,
+            WorkspaceRuntimeBinding {
+                logical_workspace_id: "ws_bound".to_string(),
+                task_partition_id: "ws_bound".to_string(),
+                owner_machine_id: None,
+                repo_root: repo,
+                ship_mode: ShipMode::Pr,
+                base_branch: Some(base.to_string()),
+            },
+        )
+        .expect("bound runtime"),
+        None => OrbitRuntime::from_roots(&global, &workspace).expect("unbound runtime"),
+    };
+    (root, runtime)
+}
+
+#[test]
+fn requested_base_branch_uses_the_registered_workspace_binding() {
+    let (_root, runtime) = requested_base_runtime("main", Some(LANDING));
+
+    assert_eq!(requested_base_branch(&runtime, &json!({})), LANDING);
+    assert_eq!(
+        requested_base_branch(&runtime, &json!({"base_branch": "  "})),
+        LANDING
+    );
+    assert_eq!(
+        requested_base_branch(&runtime, &json!({"base_branch": "feature"})),
+        "feature"
+    );
+}
+
+#[test]
+fn requested_base_branch_falls_back_to_workflow_config_without_a_binding() {
+    let (_root, runtime) = requested_base_runtime(LANDING, None);
+
+    assert_eq!(requested_base_branch(&runtime, &json!({})), LANDING);
 }
 
 #[test]

@@ -50,8 +50,9 @@ pub struct ShipCommand {
     /// (explicit `ship_mode`, else defaults to `pr`).
     #[arg(short = 'm', long, value_enum)]
     pub mode: Option<ShipMode>,
-    /// Base branch for shipment. Defaults to
-    /// `[workflow] base_branch` from `config.toml` (or `main` if unset).
+    /// Base branch for shipment. Defaults to the registered workspace
+    /// base branch, else `[workflow] base_branch` from `config.toml`
+    /// (or `main` if unset).
     #[arg(short = 'b', long)]
     pub base: Option<String>,
     /// Authorize this run to finish delivery and move the tasks it ships to

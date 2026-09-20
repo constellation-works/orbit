@@ -63,12 +63,12 @@ The workspace identity file `.orbit/config.yaml` is a separate artifact (it stor
 
 ```toml
 [workflow]
-base_branch = "main"        # default merge-base for ship
+base_branch = "main"        # config fallback when no registered workspace base_branch is bound
 default_crew = "sol"        # fallback crew when a task has no `crew` set
 system_crew = "system"      # crew for recovery paths with no job step to name one
 ```
 
-- **`base_branch`** — the branch `orbit run ship` rebases against and targets with PRs. Override per-invocation with `--base <branch>`. If your repo uses a two-branch pattern like this repo does (`main` = release, `agent-main` = dev integration), set `base_branch = "agent-main"`.
+- **`base_branch`** — config fallback for ship/auto/pilot when no registered workspace `base_branch` is bound. Delivery defaults prefer the workspace registry value (`orbit workspace show`). Override per-invocation with `--base <branch>`. If your repo uses a two-branch pattern like this repo does (`main` = release, `agent-main` = dev integration), register the workspace with `--base-branch agent-main` (or set this key as a fallback).
 - **`default_crew`** — name of the crew under `[crews.<name>]` used for any task whose own `crew` field is unset. Must match a defined crew or config load fails. See [Per-task crew override](#per-task-crew-override) for how individual tasks select a different crew.
 - **`system_crew`** — name of the crew for system activities that are synthesized at runtime and so have no job step to name a crew on, principally `step_failure_recovery`. Defaults to `system`. A shipped pipeline such as `task_pilot_pipeline` does **not** read this key: its steps name `crew: system` directly, so the definition states which crew does the work. Either way the crew is resolved at dispatch through an explicit crew input, so system work never inherits a failed task's crew or the workspace default. A missing or unusable crew leaves the original failed step failed and emits a diagnostic naming `workflow.system_crew` and the configured crew.
 

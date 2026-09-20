@@ -63,8 +63,8 @@ pub struct ResolvedConfig {
     /// Minutes a deferred delivery-automation reason may persist before it is
     /// escalated (`[automation] stall_window_minutes`; default 60).
     pub automation_stall_window_minutes: u32,
-    /// Default base branch for ship workflows. Sourced from `[workflow]
-    /// base_branch`; defaults to `"main"` when no key is set.
+    /// Config-only `[workflow] base_branch` fallback (default `"main"`).
+    /// Delivery defaults prefer the registered workspace base branch.
     pub workflow_base_branch: String,
     /// Opt-in for unattended ship dispatch (`[workflow] auto_ship`; defaults
     /// to `false`).

@@ -21,8 +21,9 @@ Every one of these is **asynchronous**. The command prints a durable run ID and
 returns; it does not know the eventual outcome. Follow up with
 [`orbit run show`](#inspecting-runs).
 
-Ship workflows default `--base` to `[workflow] base_branch` from `config.toml`,
-or `main` when unset. Pass `--base <branch>` to target a different branch.
+Ship workflows default `--base` to the registered workspace base branch, else
+`[workflow] base_branch` from `config.toml`, or `main` when unset. Pass
+`--base <branch>` to target a different branch.
 
 ## `orbit run ship`
 
