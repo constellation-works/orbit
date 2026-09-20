@@ -220,11 +220,16 @@ next: false
     <a class="orbit-section-link" href="/reference/cli/">CLI reference →</a>
   </div>
 
-  <div class="orbit-card-grid orbit-card-grid-3">
+  <div class="orbit-card-grid orbit-card-grid-4">
     <a class="orbit-card" href="/how-to/continuous-delivery/">
       <h3>Continuous delivery</h3>
       <p>Prepare and approve a backlog, check readiness, then authorize a bounded drain and recover it safely.</p>
       <div class="orbit-card-cmd">orbit run readiness</div>
+    </a>
+    <a class="orbit-card" href="/how-to/distributed-drain/">
+      <h3>Distributed drain</h3>
+      <p>One owner, replica checkouts, SSH access, and a read-only probe. Matching binaries are not pull enablement.</p>
+      <div class="orbit-card-cmd">orbit tool run orbit.drain.probe</div>
     </a>
     <a class="orbit-card" href="/how-to/recurring-work/">
       <h3>Recurring work</h3>
@@ -260,6 +265,7 @@ next: false
         <a href="/how-to/task-lifecycle/">Run a task lifecycle</a>
         <a href="/how-to/dashboard/">Use the dashboard</a>
         <a href="/how-to/continuous-delivery/">Run continuous delivery</a>
+        <a href="/how-to/distributed-drain/">Set up a distributed drain</a>
         <a href="/how-to/recurring-work/">Schedule recurring work</a>
         <a href="/how-to/task-publication/">Publish and restore tasks</a>
         <a href="/how-to/write-activity/">Write an activity</a>

@@ -2,7 +2,9 @@
 
 Remote access reads or operates the accepting host's live store. It does not
 replicate tasks. First identify the owning host and workspace; see
-[multi-host.md](multi-host.md) for owner/replica setup and
+[multi-host.md](multi-host.md) for owner/replica setup,
+[distributed-drain.md](../../orbit/references/setup/distributed-drain.md) for
+the single-owner drain preflight and recovery, and
 [publication.md](publication.md) for offline snapshots.
 
 ## Direct and federated MCP
