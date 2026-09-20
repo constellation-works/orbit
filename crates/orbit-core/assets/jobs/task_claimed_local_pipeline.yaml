@@ -1,0 +1,94 @@
+# Claimed owner-local leaf [ORB-12616].
+#
+# The executable owner-local half of pull-mode drain. A bound claim selects
+# this definition; nothing else can run it, because every step below reads the
+# trusted worker binding and the durable pull admission that created the run,
+# and `execute_pipeline_run_worker` refuses a claimed leaf whose binding does
+# not match its claim.
+#
+# What it deliberately does not contain:
+# - No `reserve_locks` / `release_locks`: the owner froze this task's footprint
+#   inside the admission transaction, and settlement — not this run — releases
+#   it. Re-reserving here would be a second, competing claim.
+# - No backlog rediscovery: the owner already chose the task.
+# - No `git_merge`, `git_push`, `pr_*` or `task_complete`: the run stops at the
+#   typed handoff. Landing is the owner's, behind explicit completion
+#   authority (`task_landing_pipeline`).
+#
+# Failure semantics:
+# - A failed step leaves the worktree for inspection and terminalizes the run.
+#   The drain's settlement then records the failure against the claim and
+#   releases only this claim's reservation.
+# - `claim_validate` fails the run when a required command does not pass on the
+#   exact candidate, so no handoff is ever recorded for unvalidated work.
+#
+schemaVersion: 2
+kind: Job
+metadata:
+  name: task_claimed_local_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 10
+  default_input:
+    task_ids: []
+    base_branch: main
+    # An owner-local claim delivers into the owner's own checkout: there is no
+    # origin to synchronize against and none is required.
+    base_sync: local
+    landing_mode: local
+    allowed_crews: []
+
+  steps:
+    - id: worktree
+      target: activity:worktree_setup
+      retry:
+        max_attempts: 4
+        initial_backoff_ms: 200
+        backoff_cap_ms: 2000
+        backoff_strategy: exponential
+      default_input:
+        task_ids: "{{ input.task_ids }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        landing_mode: "{{ input.landing_mode }}"
+
+    - id: implement_bundle
+      loop:
+        items: "{{ input.task_ids }}"
+        max_iterations: 256
+        steps:
+          - id: implement_one
+            recovery_activity: step_failure_recovery
+            target: activity:agent_implement
+            default_input:
+              task_id: "{{ item }}"
+              workspace_path: "{{ steps.worktree.output.workspace_path }}"
+              repo_root: "{{ steps.worktree.output.workspace_path }}"
+
+    - id: commit
+      recovery_activity: step_failure_recovery
+      target: activity:git_commit
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        scope: all
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_ref: "{{ steps.worktree.output.base_ref }}"
+        base_sha: "{{ steps.worktree.output.base_sha }}"
+
+    # Required validation runs on the committed candidate, before any handoff
+    # exists. There is nothing to publish first: the local candidate is the
+    # delivery.
+    - id: validate
+      target: activity:claim_validate
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.worktree.output.base_sha }}"
+
+    - id: handoff
+      target: activity:claim_handoff
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.worktree.output.base_sha }}"
+        candidate: "{{ steps.validate.output.candidate }}"
+        validation: "{{ steps.validate.output.validation }}"

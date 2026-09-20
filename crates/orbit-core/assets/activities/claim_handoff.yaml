@@ -1,0 +1,51 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: claim_handoff
+spec:
+  type: deterministic
+  description: >
+    Terminate a claimed leaf at its typed delivery handoff. Re-observes the
+    candidate, refuses one the validation evidence no longer pins, and records
+    the handoff as this claim's durable pending settlement before anything is
+    sent to the owner. It merges nothing, completes nothing, and asserts no
+    review: the recorded disposition is `not_required` under `review_policy =
+    none`.
+  input_schema_json:
+    type: object
+    required: [workspace_path, candidate, validation]
+    properties:
+      workspace_path:
+        type: string
+      base_sha:
+        type: string
+      pull_request:
+        type: [integer, "null"]
+      candidate:
+        type: object
+        description: The candidate the required validation actually ran on.
+      validation:
+        type: array
+        items:
+          type: object
+      execution_summary:
+        type: string
+  output_schema_json:
+    type: object
+    required: [handed_off, merged]
+    properties:
+      handed_off:
+        type: boolean
+      merged:
+        type: boolean
+        description: Pinned false; a claimed leaf never lands its own work.
+      task_id:
+        type: string
+      candidate:
+        type: string
+      base:
+        type: string
+      delivery:
+        type: string
+  action: claim_handoff
+  config: {}

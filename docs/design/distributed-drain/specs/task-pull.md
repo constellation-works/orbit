@@ -1,14 +1,14 @@
 ---
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
-last_validated: 2026-09-19
+last_validated: 2026-09-20
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
 feature: distributed-drain
 tags: [distributed-drain, pull, queue, spec]
 related_features: [distributed-drain, federated-mcp, host-registry]
-related_artifacts: [ORB-12488]
+related_artifacts: [ORB-12488, ORB-12616]
 ---
 
 # Spec: `orbit.task.pull`
@@ -242,7 +242,8 @@ substitute for these tests.
 
 claude authored the initial contract under [ORB-12488]; codex revised it after design review,
 2026-09-18; claude reconciled it with the authorization decision and the shipped read-only surface
-under [ORB-12495], 2026-09-19. The feature remains Draft.
+under [ORB-12495], 2026-09-19; claude recorded the executable owner-local claimed leaf under
+[ORB-12616], 2026-09-20. The feature remains Draft.
 
 ## Internal storage accounting
 
@@ -342,7 +343,31 @@ These internal seams do not enable pull, claims, recovery or approval public ent
 
 The internal job-store caller checkpoint preserves request identity, unique leaf
 binding, launch uncertainty and disconnected settlement. Its refill loop is an
-internal adapter seam, not a public pull endpoint. Claimed leaves currently refuse
-legacy generic execution; executable validation and typed handoff integration must
-be completed before this slice satisfies the no-origin owner-local and follower-PR
-acceptance scenarios. See the caller-side implementation status in design §3.
+internal adapter seam, not a public pull endpoint.
+
+[ORB-12616] made the owner-local half executable. A claim's leaf is one of two
+internal handoff-only definitions chosen by the owner-resolved ship mode —
+`task_claimed_pr_pipeline` or `task_claimed_local_pipeline`. Both bypass
+rediscovery and reservation, carry no completion input, contain no merge or
+completion step, and end at the typed handoff. The owner-local one publishes
+nothing at all, so the no-origin scenario needs no remote and no PR
+credentials. Its refill loop now runs against real adapters: admission on the
+owner's commit boundary, binding and settlement on the owner's claim journal,
+and the leaf launched through the existing worker supervisor under the trusted
+process binding.
+
+The owner declares what a claim must pass in
+`workflow.required_validation_commands`. Both endpoints read it, and an empty
+list is fail-closed: the executor refuses before running anything and the claim
+journal refuses the handoff. Each command runs on the exact candidate in the
+executor's worktree, and its captured log is attached to the owner's copy of
+the task as a digest-pinned artifact. The typed handoff is written as the
+claim's durable pending settlement before any owner call, so a disconnect
+leaves one immutable settlement to retry.
+
+Not yet delivered: owner-side acceptance of a *published pull request*
+delivery, which needs an independent provider observation, and therefore the
+follower-PR executable scenario. That settlement is refused explicitly and left
+durable for a later attempt rather than accepted on the executor's word. A
+follower destination still fails on the public mutation gate. See the
+caller-side implementation status in design §3.

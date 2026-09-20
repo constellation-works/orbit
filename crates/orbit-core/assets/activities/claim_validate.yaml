@@ -1,0 +1,51 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: claim_validate
+spec:
+  type: deterministic
+  description: >
+    Independently resolve the candidate and its base from the executor's
+    worktree, refuse a candidate that does not descend from that base, run the
+    commands this owner requires on that exact candidate, and attach one
+    captured log per command to the owner's copy of the task. Task, claim,
+    execution machine and bound run come from the trusted worker binding; a
+    step input that disagrees is refused rather than preferred.
+  input_schema_json:
+    type: object
+    required: [workspace_path]
+    properties:
+      workspace_path:
+        type: string
+      # The immutable base the worktree was created at. Supplied so a
+      # disagreement with the observed base branch tip stops the run.
+      base_sha:
+        type: string
+      # Set only on the pull-request route, from the number this run's own
+      # publication step observed.
+      pull_request:
+        type: [integer, "null"]
+  output_schema_json:
+    type: object
+    required: [candidate, validation]
+    properties:
+      candidate:
+        type: object
+        description: >
+          Repository, branches, candidate and base revisions, and the delivery
+          variant this claim produced.
+      validation:
+        type: array
+        description: Digest-pinned owner artifact references, one per command.
+        items:
+          type: object
+      commands:
+        type: array
+        items:
+          type: string
+      tested_head:
+        type: string
+      validated_base:
+        type: string
+  action: claim_validate
+  config: {}

@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 
 mod base_obsolescence;
+mod claim;
 mod freshness;
 mod git;
 mod landing;

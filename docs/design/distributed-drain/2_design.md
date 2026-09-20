@@ -11,7 +11,7 @@ summary: "One owner, multiple execution hosts: idempotent claims, routed authori
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, resident-orchestrator, activity-job, policy-sandbox]
-related_artifacts: [ORB-12488, ORB-12582]
+related_artifacts: [ORB-12488, ORB-12582, ORB-12616]
 ---
 
 # Distributed Drain — Design
@@ -136,13 +136,49 @@ after a lost binding response. The launch-intent transaction independently
 requires the bound run to remain pending; cancellation cannot be overwritten
 by that checkpoint. Disconnected cancellation settlement remains durable.
 
-This foundation is **not an executable distributed drain**. The internal refill
-loop currently requires injected owner and launcher adapters. Generic workers
-refuse these bound leaves so they cannot run the legacy merge-capable definitions;
-local bindings also refuse generic resume without contacting the owner. Executable
-claimed PR/local variants, independently captured validation and typed handoff
-integration remain unfinished. The public mutation gate remains false, and no
-routine, schedule, ship-sweep entry point or live host changes.
+[ORB-12616] made the **owner-local** half of that foundation executable and
+replaced the injected adapters with real ones.
+
+A claim now selects one of two internal leaf definitions by owner-resolved ship
+mode — `task_claimed_local_pipeline` or `task_claimed_pr_pipeline`, never the
+merge-capable legacy pair. Both bypass rediscovery and reservation (the owner
+froze the footprint inside the admission transaction and settlement releases
+it), expose no `completion` input at all, and end at `claim_handoff`. Neither
+contains `git_merge`, `pr_complete` or `task_complete`; the owner-local one also
+contains no `git_push`, `pr_prepare` or `pr_open`, so it needs no origin.
+
+The two new steps are `claim_validate` and `claim_handoff`. Validation resolves
+the candidate and the base from Git in the executor's worktree, refuses a
+candidate that does not descend from the validated base, runs the commands the
+*owner* declares in `workflow.required_validation_commands` on that exact
+candidate, and attaches one captured `HandoffValidationLog` per command to the
+owner's copy of the task through the routed coordination transport. The handoff
+step re-observes the same identity, refuses a worktree that moved after
+validation, and records the typed `TaskHandoff` as the claim's durable pending
+settlement *before* any owner call — so a disconnect leaves exactly one
+immutable settlement the next refill retries idempotently. An empty owner
+requirement list is fail-closed on both sides.
+
+Execution authority is the trusted worker binding plus the durable admission,
+never a payload. `execute_pipeline_run_worker` admits a claimed leaf only when
+the process binding's task, claim, execution machine, bound run and owner match
+the admission record; an unbound worker gets the same refusal as before. The
+launcher derives that binding from the admission and spawns the leaf through
+the existing supervisor, which records it against the child PID and sets
+`ORBIT_WORKER_CONTEXT_REQUIRED`, so a child that cannot resolve it refuses to
+run. Worktree admission on a bound leaf no longer re-admits locally: it checks
+the binding and reads the owner's already-admitted task. Generic workers still
+refuse these leaves, and a local binding still refuses generic resume.
+
+**What is still not executable.** Only an owner-local destination is served end
+to end. The owner accepts a local candidate from its own Git observation;
+accepting a *published pull request* needs an independent provider observation
+this slice does not implement, so that settlement is refused explicitly and
+left durable for retry, and the follower-PR executable fixture is **not
+delivered**. A follower destination still fails on the public mutation gate,
+which stays false. No routine, schedule, ship-sweep entry point or live host
+changes, and `run auto` / `run ship` cannot name a claimed leaf: every mode they
+admit (`pr`, `local`) renders a legacy pipeline name.
 
 
 `orbit run auto --pull <selector>` binds a local replica checkout to the owner's host-qualified
@@ -155,7 +191,8 @@ The drain retains its window, sleep controls, and detached execution model, but 
 
 1. Reconcile pending local pull requests and claimed-but-not-launched work before requesting more.
 2. Count live leaf runs **and pending admissions not yet represented by a live run** against local
-   capacity. Count bound `task_pr_pipeline` and owner-local `task_local_pipeline` runs, not just
+   capacity. Count every leaf definition — the legacy `task_pr_pipeline` / `task_local_pipeline`
+   pair and the claimed `task_claimed_pr_pipeline` / `task_claimed_local_pipeline` pair — not just
    `workspace_auto.rs::LEAF_JOB_NAME` (`task_auto_pipeline` today). Preserve the configured drain
    ceiling and each pipeline's existing `max_active_runs: 10`; queued bound runs count as pending
    capacity until terminal settlement. Persist a new request ID for each free slot before sending it.
@@ -174,8 +211,10 @@ queued run and idempotent binding; it must never restart a run whose execution b
 
 Do not send an already claimed task through ordinary backlog discovery in `task_auto_pipeline`. Add
 a claimed-task dispatch path that bypasses rediscovery and lock acquisition, verifies the claim, and
-selects `task_pr_pipeline` for PR mode or `task_local_pipeline` for owner-local mode, with the
-handle. A bare `pulled: true` flag is not authority. The `start_epic` branch is removed by §7.
+selects the claimed leaf for the owner-resolved mode — `task_claimed_pr_pipeline` for PR mode or
+`task_claimed_local_pipeline` for owner-local mode — with the handle. These are separate
+handoff-only definitions rather than the legacy merge-capable pair, because a claim settles through
+the owner and a leaf that could merge or complete on its own would bypass that lifecycle. A bare `pulled: true` flag is not authority. The `start_epic` branch is removed by §7.
 Followers cannot execute local mode. The claimed local variant retains local base sync and needs no
 origin or PR credentials; it stops before `git_merge` and emits a local-candidate handoff
 (repository, branch, candidate/base SHAs, validation evidence). The owner consumer performs the
@@ -667,5 +706,8 @@ These are implementation acceptance criteria, not tests reported as passing by t
 - [ORB-12495] — implemented §4.1's probe, the pull spec's receipt lookup, and the claim listing, and
   reconciled this folder with the authorization decision recorded in
   [4_decisions.md](./4_decisions.md#ssh-login-is-the-admission-machine-labels-are-attribution).
+- [ORB-12616] — made the owner-local claimed leaf executable: the two claimed leaf definitions, the
+  `claim_validate` / `claim_handoff` steps, owner-declared required validation, and the real owner
+  and launcher adapters. The follower-PR executable path is explicitly not delivered.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

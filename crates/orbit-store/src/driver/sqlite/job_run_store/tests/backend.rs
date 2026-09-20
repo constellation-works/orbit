@@ -397,7 +397,7 @@ fn local_pull_crash_cuts_preserve_one_leaf_and_launch_uncertainty() {
     assert!(leaf.is_some());
     assert_eq!(
         store
-            .list_job_runs("task_local_pipeline")
+            .list_job_runs("task_claimed_local_pipeline")
             .expect("runs")
             .len(),
         1

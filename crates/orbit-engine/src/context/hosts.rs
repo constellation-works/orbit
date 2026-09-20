@@ -115,6 +115,31 @@ pub struct ReviewLandingRequest {
     pub landed_commit: Option<String>,
 }
 
+/// Trusted execution facts for one claimed distributed leaf [ORB-12616].
+///
+/// The runtime resolves every field from its own process worker binding and
+/// the durable pull admission that created this run. Nothing here may come
+/// from job input, activity payload or environment: an activity compares a
+/// payload against this context, it never adopts one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimExecutionContext {
+    pub workspace_id: String,
+    pub task_id: String,
+    pub claim_id: String,
+    /// Trusted execution machine, as the owner recorded it on the claim.
+    pub machine_id: String,
+    /// The one leaf run bound to this claim.
+    pub run_id: String,
+    /// Owner-resolved ship mode: `local` or `pr`.
+    pub ship_mode: String,
+    pub base_branch: String,
+    pub landing_branch: String,
+    /// Commands the owner requires this candidate to pass. Empty is
+    /// fail-closed: the owner's claim journal refuses a handoff whose
+    /// requirements are unset, so the activity refuses before running one.
+    pub required_commands: Vec<String>,
+}
+
 /// What the owner store knows about one authorized handoff, handed to the
 /// landing activity so it can observe the real world and decide [ORB-12499].
 ///
@@ -377,6 +402,38 @@ pub trait RuntimeHost: Send + Sync {
     /// transaction; an error refuses the step.
     fn record_handoff_landing(&self, _update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
         Err(unsupported_runtime_capability("record_handoff_landing"))
+    }
+
+    // ── Claimed distributed leaf execution [ORB-12616] ─────────────────
+
+    /// The trusted claim this process is executing under. Hosts with no worker
+    /// binding have no claimed execution and refuse: a claimed leaf activity
+    /// must never fall back to an unauthenticated local identity.
+    fn claim_execution_context(&self) -> Result<ClaimExecutionContext, OrbitError> {
+        Err(unsupported_runtime_capability("claim_execution_context"))
+    }
+
+    /// Attach one captured validation log to the claimed task on the owner, so
+    /// the evidence the owner later re-reads lives in the owner's coordination
+    /// store rather than on the executor's disk.
+    fn attach_claim_validation_log(
+        &self,
+        _path: &str,
+        _content: Vec<u8>,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability(
+            "attach_claim_validation_log",
+        ))
+    }
+
+    /// Record the typed handoff as this claim's durable pending settlement.
+    /// It commits locally before any owner call, so a disconnect leaves
+    /// exactly one immutable settlement for an idempotent retry.
+    fn record_claim_handoff(
+        &self,
+        _handoff: &orbit_types::workflow::handoff::TaskHandoff,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability("record_claim_handoff"))
     }
 
     // ── Config accessors (implementors provide these) ──────────────────

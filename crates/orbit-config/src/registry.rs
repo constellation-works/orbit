@@ -312,6 +312,11 @@ define_config_settings! {
         description: "Highest complexity the task pilot may assign: low, medium, hard (default), or xhard. A higher recommendation is refused as a complexity_escalation_blocked finding instead of being applied, so the reserved tier stays an operator decision.",
         resolve: |raw: Option<String>| resolve_pilot_max_complexity(raw),
     },
+    workflow_required_validation_commands: Vec<String> => Vec<String> {
+        key: "workflow.required_validation_commands", value_type: "array<string>",
+        description: "Commands a distributed execution claim must pass on its exact candidate before this owner accepts its delivery handoff; empty means no claimed handoff can be accepted.",
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
     workflow_system_crew: String => String {
         key: "workflow.system_crew", value_type: "string",
         description: "Named crew used by system activities such as step-failure recovery and the task pilot.",

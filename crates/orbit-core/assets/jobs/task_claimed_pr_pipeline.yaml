@@ -1,0 +1,137 @@
+# Claimed pull-request leaf [ORB-12616].
+#
+# The publishing half of pull-mode drain: a bound claim implements, commits,
+# synchronizes onto its base, publishes a branch and opens a pull request, and
+# then stops. It never merges and never completes its task — the owner's
+# landing consumer does that behind explicit completion authority.
+#
+# It shares the claimed local leaf's omissions (no reservation steps, no
+# rediscovery, no `task_complete`) and adds one ordering rule of its own:
+# required validation runs *after* the pull request exists, because the typed
+# handoff pins the delivery identity and every captured log must name the exact
+# candidate and delivery the owner will act on.
+#
+schemaVersion: 2
+kind: Job
+metadata:
+  name: task_claimed_pr_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 10
+  default_input:
+    task_ids: []
+    base_branch: main
+    base_sync: remote
+    landing_branch: ""
+    allowed_crews: []
+    title: null
+    body: null
+
+  steps:
+    - id: worktree
+      target: activity:worktree_setup
+      retry:
+        max_attempts: 4
+        initial_backoff_ms: 200
+        backoff_cap_ms: 2000
+        backoff_strategy: exponential
+      default_input:
+        task_ids: "{{ input.task_ids }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+
+    - id: implement_bundle
+      loop:
+        items: "{{ input.task_ids }}"
+        max_iterations: 256
+        steps:
+          - id: implement_one
+            recovery_activity: step_failure_recovery
+            target: activity:agent_implement
+            default_input:
+              task_id: "{{ item }}"
+              workspace_path: "{{ steps.worktree.output.workspace_path }}"
+              repo_root: "{{ steps.worktree.output.workspace_path }}"
+
+    - id: commit
+      recovery_activity: step_failure_recovery
+      target: activity:git_commit
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        scope: all
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_ref: "{{ steps.worktree.output.base_ref }}"
+        base_sha: "{{ steps.worktree.output.base_sha }}"
+
+    - id: prepare_branch
+      recovery_activity: step_failure_recovery
+      target: activity:pr_prepare
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+
+    - id: sync_base
+      recovery_activity: pr_conflict_recovery
+      target: activity:git_rebase
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        head: "{{ steps.prepare_branch.output.head }}"
+        head_sha: "{{ steps.prepare_branch.output.head_sha }}"
+        base: "{{ steps.prepare_branch.output.base }}"
+        base_ref: "{{ steps.prepare_branch.output.base_ref }}"
+        base_sha: "{{ steps.prepare_branch.output.base_sha }}"
+        remote_sha: "{{ steps.prepare_branch.output.remote_sha }}"
+        commits_behind: "{{ steps.prepare_branch.output.commits_behind }}"
+        sync_required: "{{ steps.prepare_branch.output.sync_required }}"
+
+    - id: push
+      recovery_activity: step_failure_recovery
+      target: activity:git_push
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        branch: "{{ steps.sync_base.output.head }}"
+        base: "{{ steps.sync_base.output.base }}"
+        base_ref: "{{ steps.sync_base.output.base_ref }}"
+        rewrite_performed: "{{ steps.sync_base.output.rewritten }}"
+        rewrite_head_before: "{{ steps.sync_base.output.head_sha_before }}"
+        expected_remote_sha: "{{ steps.sync_base.output.remote_sha_before }}"
+
+    - id: pr_open
+      recovery_activity: step_failure_recovery
+      target: activity:pr_open
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        completed_task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base: "{{ steps.sync_base.output.base }}"
+        base_ref: "{{ steps.sync_base.output.base_ref }}"
+        base_sha: "{{ steps.sync_base.output.base_sha }}"
+        base_sync: "{{ input.base_sync }}"
+        landing_branch: "{{ input.landing_branch }}"
+        head: "{{ steps.sync_base.output.head }}"
+        body: "{{ input.body }}"
+        title: "{{ input.title }}"
+
+    - id: validate
+      target: activity:claim_validate
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.sync_base.output.base_sha }}"
+        pull_request: "{{ steps.pr_open.output.pr_number }}"
+
+    - id: handoff
+      target: activity:claim_handoff
+      default_input:
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        base_sha: "{{ steps.sync_base.output.base_sha }}"
+        pull_request: "{{ steps.pr_open.output.pr_number }}"
+        candidate: "{{ steps.validate.output.candidate }}"
+        validation: "{{ steps.validate.output.validation }}"
