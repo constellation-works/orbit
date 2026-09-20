@@ -468,6 +468,9 @@ fn read_bundle_tolerating_in_flight(bundle_dir: &Path) -> Result<Option<TaskBund
 /// The directory is rechecked after the failed read: a concurrent deletion
 /// can remove it between the registry snapshot and lock acquisition. An old
 /// sentinel file alone is never evidence that a damaged bundle is in flight.
+/// Unpublished stubs (no `task.yaml` and no bundle content) are skipped so
+/// listing of healthy neighbors still succeeds. A data-bearing directory
+/// missing `task.yaml` is corruption, not a stub.
 fn skip_if_in_flight<T>(bundle_dir: &Path, err: OrbitError) -> Result<Option<T>, OrbitError> {
     if is_unpublished_stub(bundle_dir) {
         orbit_common::tracing::debug!(

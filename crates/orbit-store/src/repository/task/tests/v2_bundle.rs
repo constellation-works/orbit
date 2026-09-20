@@ -7,7 +7,9 @@ use std::thread;
 
 use chrono::{TimeZone, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::task::{TASK_ARTIFACT_SCHEMA_VERSION, TaskCommentRowV2, TaskEventRowV2};
+use orbit_types::task::{
+    TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskCommentRowV2, TaskEventRowV2,
+};
 use tempfile::TempDir;
 
 use super::super::v2_bundle::*;
@@ -428,13 +430,9 @@ fn reindex_retains_unresolved_data_and_repairs_healthy_neighbors() {
             .unwrap_err()
             .to_string();
         assert!(error.contains("indexed 1 healthy tasks"), "{error}");
-        for id in ["ORB-00000", "ORB-00001"] {
+        for id in ["ORB-00000", "ORB-00001", "ORB-00003"] {
             assert!(error.contains(id), "{error}");
         }
-        assert!(
-            !error.contains("ORB-00003"),
-            "unpublished stubs are garbage, not unresolved bundles: {error}"
-        );
         assert_eq!(
             store
                 .registry
@@ -461,9 +459,9 @@ fn reindex_retains_unresolved_data_and_repairs_healthy_neighbors() {
             fs::read_to_string(deletion_path(&conflict).join("evidence")).unwrap(),
             "retain me"
         );
-        assert!(
-            !orphan.exists(),
-            "unpublished stub without task.yaml is reaped"
+        assert_eq!(
+            fs::read_to_string(orphan.join("evidence")).unwrap(),
+            "partial create"
         );
         assert!(store.registry.allocator_next_number().unwrap() >= 4);
     }
@@ -511,6 +509,30 @@ fn reindex_reaps_lock_only_stub_and_indexes_healthy_neighbor() {
         1
     );
     assert!(store.read_bundle("ORB-00000").is_ok());
+}
+
+#[test]
+fn listing_reports_data_bearing_bundle_missing_envelope() {
+    let temp = TempDir::new().unwrap();
+    let store = bundle_store(&temp);
+    store.create_bundle(&sample_bundle("ORB-00000")).unwrap();
+
+    let partial = store.bundle_path("ORB-00001").unwrap();
+    fs::create_dir(&partial).unwrap();
+    fs::write(partial.join(TASK_EVENTS_FILE_NAME), "{\"id\":1}\n").unwrap();
+    store
+        .registry
+        .register_task_bundle("ORB-00001", &store.workspace_id, &partial)
+        .unwrap();
+
+    assert!(
+        store.list_bundles().is_err(),
+        "data-bearing bundle missing task.yaml must surface as corruption, not skip"
+    );
+    assert_eq!(
+        fs::read_to_string(partial.join(TASK_EVENTS_FILE_NAME)).unwrap(),
+        "{\"id\":1}\n"
+    );
 }
 
 #[test]
