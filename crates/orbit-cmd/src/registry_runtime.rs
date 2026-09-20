@@ -200,6 +200,11 @@ impl RegisteredRuntimeFactory {
     /// selector inherited from the parent cannot escape that root. An unknown
     /// or mismatched explicit selector fails closed and does not fall back to
     /// cwd.
+    ///
+    /// When cwd is a Git-linked worktree of the selected workspace, Git-versioned
+    /// local definitions use that worktree's `.orbit` while shared task/runtime
+    /// state stays on the registered primary. A logical selector from a cwd that
+    /// is not such a worktree still opens the primary as `local_root`.
     pub fn initialize_with_overrides(
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
@@ -286,19 +291,22 @@ impl RegisteredRuntimeFactory {
             &identity,
         )?;
         let selected = Self::resolve_selector_in(&registry, &selector)?;
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let local_root = local_root_for_runtime_open(&selected, &cwd, read_only);
         if read_only {
             Self::open_registered_checkout_read_only_with_identity(
                 &global_root,
                 &selected.workspace,
                 &selected.checkout,
-                &selected.local_root,
+                &local_root,
                 &identity,
             )
         } else {
-            Self::open_registered_checkout_with_identity(
+            Self::open_registered_checkout_with_identity_and_local_root(
                 &global_root,
                 &selected.workspace,
                 &selected.checkout,
+                &local_root,
                 HostLifetime::ShortLived,
                 &identity,
             )
@@ -425,11 +433,36 @@ impl RegisteredRuntimeFactory {
         host_lifetime: HostLifetime,
         identity: &HostIdentityState,
     ) -> Result<OrbitRuntime, OrbitError> {
+        Self::open_registered_checkout_with_identity_and_local_root(
+            global_root,
+            workspace,
+            checkout,
+            &checkout.orbit_dir,
+            host_lifetime,
+            identity,
+        )
+    }
+
+    /// Open a registered checkout with an explicit Git-versioned `local_root`.
+    ///
+    /// Shared stores stay on `checkout.orbit_dir`. Callers that stand in a
+    /// Git-linked worktree of this checkout pass that worktree's `.orbit` so
+    /// tracked definitions (auto-task YAML) write there instead of the
+    /// registered primary [ORB-12665].
+    fn open_registered_checkout_with_identity_and_local_root(
+        global_root: &Path,
+        workspace: &Workspace,
+        checkout: &WorkspaceCheckout,
+        local_root: &Path,
+        host_lifetime: HostLifetime,
+        identity: &HostIdentityState,
+    ) -> Result<OrbitRuntime, OrbitError> {
         sync_task_prefix_for_identity(global_root, identity)?;
         let binding = workspace_runtime_binding(workspace, checkout)?;
-        OrbitRuntime::from_roots_with_binding_for(
+        OrbitRuntime::from_resolved_roots_with_binding_for(
             global_root,
             &checkout.orbit_dir,
+            local_root,
             binding,
             host_lifetime,
         )
@@ -841,6 +874,46 @@ fn local_root_for_selected_path(checkout: &WorkspaceCheckout, selected: &Path) -
     git_workdir_root(selected)
         .map(|root| root.join(".orbit"))
         .unwrap_or_else(|| checkout.orbit_dir.clone())
+}
+
+/// Runtime `local_root` for a selector open.
+///
+/// Standing in a Git-linked worktree of the selected checkout uses that
+/// worktree's `.orbit` for Git-versioned definitions on both read-only and
+/// writable opens, while `shared_root` stays the registered primary. Otherwise
+/// read-only opens keep an explicit linked-path candidate root, and writable
+/// opens keep the registered primary so a linked path selector from another
+/// cwd cannot retarget mutations [ORB-12665].
+fn local_root_for_runtime_open(
+    selected: &ResolvedWorkspaceSelection,
+    cwd: &Path,
+    read_only: bool,
+) -> PathBuf {
+    if let Some(local_root) = linked_worktree_local_root(&selected.checkout, cwd) {
+        return local_root;
+    }
+    if read_only {
+        selected.local_root.clone()
+    } else {
+        selected.checkout.orbit_dir.clone()
+    }
+}
+
+/// `.orbit` of `cwd` when it is a Git-linked worktree of `checkout`.
+///
+/// Returns `None` when cwd is the registered checkout itself, outside Git, or
+/// a checkout of another repository. Managed jrun worktrees live under
+/// `<repo>/.orbit/state/worktrees/**`, so a path-prefix test is not enough;
+/// Git's common directory is the identity.
+fn linked_worktree_local_root(checkout: &WorkspaceCheckout, cwd: &Path) -> Option<PathBuf> {
+    let worktree = git_workdir_root(cwd)?;
+    if canonical_path(&worktree) == canonical_path(&checkout.repo_root) {
+        return None;
+    }
+    let worktree_common = git_common_dir(&worktree)?;
+    let registered_common =
+        recorded_git_common_dir(checkout).or_else(|| git_common_dir(&checkout.repo_root))?;
+    (worktree_common == registered_common).then(|| worktree.join(".orbit"))
 }
 
 /// Worktree root of `path` from the filesystem `.git` marker, without spawning

@@ -124,8 +124,37 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
         .and_then(|row| row["id"].as_str())
         .unwrap_or_else(|| panic!("expected registered workspace in {workspaces}"));
 
-    let primary = run_orbit_json(
+    let from_worktree_logical = run_orbit_json(
         &linked_worktree,
+        &home,
+        &[
+            "--workspace",
+            workspace_id,
+            "auto-task",
+            "show",
+            "candidate-probe",
+            "--json",
+        ],
+        None,
+    );
+    assert_eq!(
+        from_worktree_logical["description"],
+        "Linked candidate definition"
+    );
+    assert_eq!(
+        from_worktree_logical["definition_source"]["root"],
+        linked_orbit.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        from_worktree_logical["definition_source"]["path"],
+        linked_orbit
+            .join("auto_tasks/candidate-probe.yaml")
+            .to_string_lossy()
+            .as_ref()
+    );
+
+    let primary = run_orbit_json(
+        &main_repo,
         &home,
         &[
             "--workspace",
@@ -196,7 +225,7 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
         None,
     );
     let primary_after_update = run_orbit_json(
-        &linked_worktree,
+        &main_repo,
         &home,
         &[
             "--workspace",
@@ -211,6 +240,23 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
     assert_eq!(
         primary_after_update["description"],
         "Primary definition updated through authoritative routing"
+    );
+    let worktree_after_primary_update = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &[
+            "--workspace",
+            workspace_id,
+            "auto-task",
+            "show",
+            "candidate-probe",
+            "--json",
+        ],
+        None,
+    );
+    assert_eq!(
+        worktree_after_primary_update["description"], "Linked candidate definition",
+        "a logical selector from the linked worktree must keep reading worktree YAML"
     );
     let candidate_after_update = run_orbit_json(
         &main_repo,
@@ -262,6 +308,241 @@ fn auto_task_show_reports_and_honors_the_selected_definition_source() {
             "rejected selector {rejected} reported: {stderr}"
         );
     }
+}
+
+#[test]
+fn auto_task_crud_from_linked_worktree_writes_definition_yaml_to_local_root() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let main_repo = temp.path().join("repo");
+    let linked_worktree = temp.path().join("repo-jrun");
+    let elsewhere = temp.path().join("elsewhere");
+    fs::create_dir_all(&home).expect("create home");
+    fs::create_dir_all(&main_repo).expect("create main repo");
+    fs::create_dir_all(&elsewhere).expect("create unrelated cwd");
+    init_git_repo(&main_repo);
+    run_git(
+        &main_repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "orbit-auto-task-worktree-write",
+            linked_worktree.to_str().expect("utf8 worktree path"),
+        ],
+    );
+    run_orbit_success(&main_repo, &home, &["workspace", "init"], None);
+
+    let main_repo = fs::canonicalize(&main_repo).expect("canonicalize main repo");
+    let linked_worktree = fs::canonicalize(&linked_worktree).expect("canonicalize worktree");
+    let main_orbit = main_repo.join(".orbit");
+    let linked_orbit = linked_worktree.join(".orbit");
+    let workspaces = run_orbit_json(
+        &main_repo,
+        &home,
+        &["workspace", "list", "--format", "json"],
+        None,
+    );
+    let workspace_id = workspaces
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["id"].as_str())
+        .unwrap_or_else(|| panic!("expected registered workspace in {workspaces}"))
+        .to_string();
+    let workspace_name = workspaces
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["name"].as_str())
+        .unwrap_or_else(|| panic!("expected registered workspace name in {workspaces}"))
+        .to_string();
+
+    let added = run_orbit_json(
+        &linked_worktree,
+        &home,
+        &[
+            "--workspace",
+            &workspace_id,
+            "auto-task",
+            "add",
+            "--name",
+            "worktree-crud",
+            "--every-minutes",
+            "60",
+            "--title",
+            "Worktree CRUD",
+            "--description",
+            "Written from the linked worktree",
+            "--json",
+        ],
+        None,
+    );
+    assert_eq!(added["name"], "worktree-crud");
+    let worktree_yaml = linked_orbit.join("auto_tasks/worktree-crud.yaml");
+    let primary_yaml = main_orbit.join("auto_tasks/worktree-crud.yaml");
+    assert!(
+        worktree_yaml.is_file(),
+        "add from a linked worktree must write {}",
+        worktree_yaml.display()
+    );
+    assert!(
+        !primary_yaml.exists(),
+        "add must not write the registered primary checkout"
+    );
+    assert!(
+        !linked_orbit.join("tasks").exists(),
+        "must not invent a worktree-local task store"
+    );
+
+    run_orbit_success(
+        &linked_worktree,
+        &home,
+        &[
+            "--workspace",
+            &workspace_name,
+            "auto-task",
+            "update",
+            "worktree-crud",
+            "--description",
+            "Updated in the worktree",
+        ],
+        None,
+    );
+    run_orbit_success(
+        &linked_worktree,
+        &home,
+        &[
+            "--workspace",
+            &workspace_id,
+            "auto-task",
+            "toggle",
+            "worktree-crud",
+            "off",
+        ],
+        None,
+    );
+    let yaml = fs::read_to_string(&worktree_yaml).expect("read worktree yaml");
+    assert!(
+        yaml.contains("Updated in the worktree"),
+        "update must rewrite worktree YAML: {yaml}"
+    );
+    assert!(
+        yaml.contains("enabled: false"),
+        "toggle must rewrite worktree YAML: {yaml}"
+    );
+    assert!(
+        !primary_yaml.exists(),
+        "update/toggle must not create primary YAML"
+    );
+
+    let from_elsewhere = run_orbit_json(
+        &elsewhere,
+        &home,
+        &[
+            "--workspace",
+            &workspace_id,
+            "auto-task",
+            "add",
+            "--name",
+            "primary-from-elsewhere",
+            "--every-minutes",
+            "60",
+            "--title",
+            "Primary from elsewhere",
+            "--json",
+        ],
+        None,
+    );
+    assert_eq!(from_elsewhere["name"], "primary-from-elsewhere");
+    assert!(
+        main_orbit
+            .join("auto_tasks/primary-from-elsewhere.yaml")
+            .is_file(),
+        "a logical selector from a cwd that is not a linked worktree writes the primary"
+    );
+    assert!(
+        !linked_orbit
+            .join("auto_tasks/primary-from-elsewhere.yaml")
+            .exists()
+    );
+
+    let worktree_root = linked_orbit.to_string_lossy().into_owned();
+    let mut shadowed = cargo_bin_cmd!("orbit");
+    shadowed
+        .current_dir(&linked_worktree)
+        .env(
+            "PATH",
+            stub_first_path(&plant_agent_cli_stub(&home, "codex")),
+        )
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .args([
+            "--root",
+            &worktree_root,
+            "auto-task",
+            "add",
+            "--name",
+            "shadow-store",
+            "--every-minutes",
+            "60",
+            "--title",
+            "Shadow store",
+        ]);
+    clear_inherited_authority_env(&mut shadowed);
+    set_orbit_root_env(&mut shadowed, None);
+    let assert = shadowed.assert().failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("not an Orbit workspace")
+            || stderr.contains("unknown workspace selector")
+            || stderr.contains("workspaces.json"),
+        "--root at the worktree .orbit must be refused as a store shadow: {stderr}"
+    );
+
+    let mut managed = cargo_bin_cmd!("orbit");
+    managed
+        .current_dir(&linked_worktree)
+        .env(
+            "PATH",
+            stub_first_path(&plant_agent_cli_stub(&home, "codex")),
+        )
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("ORBIT_WORKSPACE", &workspace_id)
+        .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
+        .env("ORBIT_RUN_ID", "jrun-auto-task-worktree")
+        .args([
+            "auto-task",
+            "add",
+            "--name",
+            "managed-envelope",
+            "--every-minutes",
+            "60",
+            "--title",
+            "Managed envelope",
+            "--json",
+        ]);
+    clear_inherited_authority_env(&mut managed);
+    set_orbit_root_env(&mut managed, None);
+    managed.env("ORBIT_WORKSPACE", &workspace_id);
+    managed.env("ORBIT_MANAGED_RUN_CONTEXT", "1");
+    managed.env("ORBIT_RUN_ID", "jrun-auto-task-worktree");
+    let managed_assert = managed.assert().success();
+    serde_json::from_slice::<Value>(&managed_assert.get_output().stdout)
+        .expect("managed envelope auto-task add json");
+    assert!(
+        linked_orbit
+            .join("auto_tasks/managed-envelope.yaml")
+            .is_file(),
+        "ORBIT_WORKSPACE from a linked worktree must write worktree YAML"
+    );
+    assert!(
+        !main_orbit.join("auto_tasks/managed-envelope.yaml").exists(),
+        "managed envelope must not write the registered primary checkout"
+    );
+    assert!(
+        !linked_orbit.join("tasks").exists(),
+        "managed envelope must not invent a worktree-local task store"
+    );
 }
 
 /// The real detached worker must bootstrap, claim, and finish its run while an
