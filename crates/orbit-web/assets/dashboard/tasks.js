@@ -38,6 +38,14 @@ const FIELD_SAVED_NOTICE_MS = 4000;
 // retried until the list refreshes or the row is reopened.
 let taskDetails = new Map();
 let taskDetailLoads = new Map();
+// ORB-12645: which comments the operator has opened, and which are showing
+// their Markdown source instead of the rendered body. Both are keyed
+// `<task id>#<index into task.comments>` so a refresh that rebuilds the detail
+// restores the thread the way it was left. The thread order is a page-wide
+// preference, so it persists like the other dashboard presentation prefs.
+let expandedComments = new Set();
+let rawComments = new Set();
+let commentPrefs = loadCommentPrefs();
 
 onWorkspaceChange(() => {
   pinnedExternalTask = null;
@@ -48,6 +56,8 @@ onWorkspaceChange(() => {
   fieldFeedback.clear();
   taskDetails.clear();
   taskDetailLoads.clear();
+  expandedComments.clear();
+  rawComments.clear();
 });
 
 // ORB-10444: task ids whose Ship dispatch this page has already issued. Ship is
@@ -1112,6 +1122,377 @@ async function applyTaskComplexityChange(task, nextValue, context) {
   scheduleFeedbackExpiry(complexityFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
 }
 
+/* ORB-12645: the comment thread.
+
+   Agents write spec-length Markdown here, so a comment is a document rather
+   than a log line: the thread spans the full detail width below the two field
+   columns, every body renders through markdown.js (the same sanitization as
+   any other dashboard-authored body), and anything taller than a screenful is
+   capped until the operator opens it.
+
+   Expansion, the raw/rendered toggle and the thread order are operator state
+   rather than task data, so they live in this module — keyed
+   `<task id>#<index into task.comments>` — and survive the 30 s refresh that
+   rebuilds the detail node. */
+const COMMENT_COLLAPSE_HEIGHT_PX = 300;
+// A rendered body is 13px sans at line-height 1.65 (~22px a line), and the
+// ~72ch measure takes roughly 96 source columns before it wraps.
+const COMMENT_LINE_HEIGHT_PX = 22;
+const COMMENT_WRAP_COLUMNS = 96;
+// Below this an outline would only repeat what the body already shows.
+const COMMENT_OUTLINE_MIN_SECTIONS = 3;
+const COMMENT_PREFS_KEY = "orbit.dashboard.comments";
+// `by` on an agent-written comment names the crew or the agent family that
+// wrote it. A human note carries the operator identity the API sanitizes to
+// (ORB-10444), which is never one of these.
+const AGENT_COMMENT_AUTHORS = new Set(["codex", "claude", "gemini", "grok", "agent", "system", "orbit"]);
+
+function loadCommentPrefs() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(COMMENT_PREFS_KEY) || "{}");
+    return { newestFirst: parsed.newestFirst === true };
+  } catch (_) {
+    return { newestFirst: false };
+  }
+}
+
+function saveCommentPrefs() {
+  try {
+    window.localStorage.setItem(COMMENT_PREFS_KEY, JSON.stringify(commentPrefs));
+  } catch (_) {
+    /* localStorage unavailable (private mode, quota) — thread order is a
+       presentation preference, so losing it costs nothing */
+  }
+}
+
+function commentSourceLines(message) {
+  return String(message ?? "").split("\n");
+}
+
+// The `##` sections of a body: the collapsed card lists them instead of the
+// text it is hiding, and three or more of them earn an outline.
+function commentSections(message) {
+  const titles = [];
+  let fenced = false;
+  for (const line of commentSourceLines(message)) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (fenced) continue;
+    const heading = /^##\s+(.*?)\s*#*$/.exec(line);
+    if (heading && heading[1].trim()) titles.push(heading[1].trim());
+  }
+  return titles;
+}
+
+/* Height has to be known while the card is still detached — the detail is
+   built off-document and measuring it would mean painting the thread a frame
+   late, after a reflow — so it is estimated from the source instead: one row
+   a line, plus a row for every wrap. */
+function estimatedCommentHeight(message) {
+  let rows = 0;
+  for (const line of commentSourceLines(message)) {
+    rows += Math.max(1, Math.ceil(line.length / COMMENT_WRAP_COLUMNS));
+  }
+  return rows * COMMENT_LINE_HEIGHT_PX;
+}
+
+function commentIsLong(message) {
+  return estimatedCommentHeight(message) > COMMENT_COLLAPSE_HEIGHT_PX;
+}
+
+function commentWordCount(message) {
+  return String(message ?? "").split(/\s+/).filter(Boolean).length;
+}
+
+function commentMessage(comment) {
+  return comment && typeof comment.message === "string" ? comment.message : "";
+}
+
+function commentKey(taskId, index) {
+  return `${taskId}#${index}`;
+}
+
+// Stable across a reorder and across the refresh: the position in
+// `task.comments`, never the position on screen.
+function commentAnchorId(taskId, index) {
+  return `comment-${taskId}-${index + 1}`;
+}
+
+function commentInitial(name) {
+  const match = /[a-z0-9]/i.exec(String(name ?? ""));
+  return match ? match[0].toUpperCase() : "?";
+}
+
+function isAgentComment(name, task) {
+  const value = String(name ?? "").trim();
+  if (!value) return false;
+  if (AGENT_COMMENT_AUTHORS.has(value.toLowerCase())) return true;
+  if (isConfiguredCrewValue(value)) return true;
+  const resolved = task && task.resolved_crew ? String(task.resolved_crew) : "";
+  return value === explicitCrewValue(task) || value === resolved;
+}
+
+// The task context carries absolute time only, and a thread also wants the
+// "how long ago" a reader scans for, on the scale the rest of the dashboard
+// uses.
+function commentAge(value) {
+  const at = value ? new Date(value) : null;
+  if (!at || Number.isNaN(at.getTime())) return "";
+  const seconds = (Date.now() - at.getTime()) / 1000;
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+function commentActionButton(label, title) {
+  const button = el("button", { class: "comment-action", text: label, title });
+  button.type = "button";
+  return button;
+}
+
+function copyCommentText(text, button) {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    navigator.clipboard.writeText(text).catch(() => {});
+  }
+  const label = button.textContent;
+  button.textContent = "copied";
+  setTimeout(() => {
+    button.textContent = label;
+  }, 1000);
+}
+
+function commentPermalink(anchorId) {
+  const href = window.location && window.location.href ? String(window.location.href) : "";
+  return `${href.split("#")[0]}#${anchorId}`;
+}
+
+function renderedCommentHeadings(view) {
+  return typeof view.querySelectorAll === "function" ? Array.from(view.querySelectorAll("h2")) : [];
+}
+
+/* The outline follows the reader: whichever heading last crossed the top of
+   the viewport owns the highlight. Observed rather than polled on scroll, and
+   only where the browser supports it — without an observer the outline is
+   still a working set of links. */
+function trackCommentOutline(headings, links) {
+  if (typeof IntersectionObserver !== "function" || headings.length === 0) return;
+  const observer = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const index = headings.indexOf(entry.target);
+        if (index < 0) continue;
+        highlightCommentOutline(links, index);
+      }
+    },
+    { rootMargin: "0px 0px -70% 0px" },
+  );
+  for (const heading of headings) observer.observe(heading);
+}
+
+function highlightCommentOutline(links, index) {
+  links.forEach((link, position) => {
+    link.className = position === index ? "comment-outline-link active" : "comment-outline-link";
+  });
+}
+
+function buildCommentOutline(headings, titles) {
+  const outline = el("nav", { class: "comment-outline" });
+  outline.appendChild(el("div", { class: "comment-outline-title", text: "In this comment" }));
+  const links = [];
+  titles.forEach((title, index) => {
+    const target = headings[index] || null;
+    const link = el("button", { class: "comment-outline-link", text: title });
+    link.type = "button";
+    link.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (target && typeof target.scrollIntoView === "function") {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      highlightCommentOutline(links, index);
+    });
+    links.push(link);
+    outline.appendChild(link);
+  });
+  trackCommentOutline(headings, links);
+  return outline;
+}
+
+function buildCommentCard(task, comment, index, context) {
+  const key = commentKey(task.id, index);
+  const message = commentMessage(comment);
+  const writer = comment && comment.by ? String(comment.by) : "?";
+  const titles = commentSections(message);
+  const long = commentIsLong(message);
+
+  const card = el("article", { class: "comment-card" });
+  card.id = commentAnchorId(task.id, index);
+  card.dataset.commentKey = key;
+
+  const rawToggle = commentActionButton("raw", "Show the Markdown source this comment was written in");
+  const copy = commentActionButton("copy", "Copy this comment's Markdown");
+  const permalink = commentActionButton("#", "Scroll to this comment and copy a link to it");
+  permalink.className = "comment-action permalink";
+  const actions = el("span", { class: "comment-actions" }, [rawToggle, copy, permalink]);
+
+  const size = long
+    ? el("span", {
+        class: "comment-size",
+        text: titles.length > 0
+          ? `${commentWordCount(message)} words · ${titles.length} sections`
+          : `${commentWordCount(message)} words`,
+      })
+    : null;
+  const head = el("div", { class: "comment-head" }, [
+    el("span", { class: "comment-initial", text: commentInitial(writer) }),
+    el("span", {
+      class: isAgentComment(writer, task) ? "comment-by agent" : "comment-by",
+      text: writer,
+    }),
+    isAgentComment(writer, task) ? el("span", { class: "comment-agent-pill", text: "agent" }) : null,
+    el("span", { class: "comment-at", text: fmtAbsTimeValue(context, comment && comment.at) }),
+    el("span", { class: "comment-age", text: commentAge(comment && comment.at) }),
+    size,
+    actions,
+  ]);
+
+  const view = markdownView(message);
+  view.className = "markdown-body comment-body";
+  const headings = renderedCommentHeadings(view);
+  const raw = el("pre", { class: "comment-raw", text: message });
+  raw.style.display = "none";
+  const bodies = el("div", { class: "comment-bodies" }, [view, raw]);
+  // The outline is built from the rendered headings so its entries and its
+  // scroll targets are the same nodes; the parsed `##` titles stand in only
+  // where no renderer is available and the body fell back to plain text.
+  const outlineTitles = headings.length > 0 ? headings.map((h) => String(h.textContent || "")) : titles;
+  const outline = outlineTitles.length >= COMMENT_OUTLINE_MIN_SECTIONS
+    ? buildCommentOutline(headings, outlineTitles)
+    : null;
+  const layout = el("div", { class: outline ? "comment-layout outlined" : "comment-layout" }, [outline, bodies]);
+
+  const summary = el("div", {
+    class: "comment-summary",
+    text: titles.length > 0 ? `sections: ${titles.join(" · ")}` : `${commentWordCount(message)} words`,
+  });
+  const toggle = el("button", { class: "comment-toggle" });
+  toggle.type = "button";
+  const foot = el("div", { class: "comment-foot" }, [summary, toggle]);
+
+  const apply = () => {
+    const expanded = !long || expandedComments.has(key);
+    const showsRaw = rawComments.has(key);
+    card.className = [
+      "comment-card",
+      long ? "long" : "",
+      long && !expanded ? "collapsed" : "",
+      long && expanded ? "expanded" : "",
+      showsRaw ? "raw" : "",
+    ].filter(Boolean).join(" ");
+    view.style.display = showsRaw ? "none" : "";
+    raw.style.display = showsRaw ? "" : "none";
+    if (outline) outline.style.display = showsRaw || !expanded ? "none" : "";
+    rawToggle.textContent = showsRaw ? "rendered" : "raw";
+    rawToggle.setAttribute("aria-pressed", String(showsRaw));
+    toggle.textContent = expanded ? "Collapse" : "Show full comment";
+    // A short comment has nothing to disclose, so its card keeps the density
+    // of the line it replaced: no footer, no empty row under the body.
+    foot.style.display = long ? "" : "none";
+    summary.style.display = long && !expanded ? "" : "none";
+    // The disclosure state belongs to the control that changes it, not to the
+    // card, which is an article rather than a widget.
+    toggle.setAttribute("aria-expanded", String(expanded));
+  };
+
+  toggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (expandedComments.has(key)) expandedComments.delete(key);
+    else expandedComments.add(key);
+    apply();
+  });
+  rawToggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (rawComments.has(key)) rawComments.delete(key);
+    else rawComments.add(key);
+    apply();
+  });
+  copy.addEventListener("click", (event) => {
+    event.stopPropagation();
+    copyCommentText(message, copy);
+  });
+  permalink.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (typeof card.scrollIntoView === "function") {
+      card.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    copyCommentText(commentPermalink(card.id), permalink);
+  });
+
+  card.appendChild(head);
+  card.appendChild(layout);
+  card.appendChild(foot);
+  apply();
+  return card;
+}
+
+function buildCommentsPanel(task, context) {
+  const panel = el("div", { class: "field-block comments-panel" });
+  renderCommentsPanel(panel, task, context);
+  return panel;
+}
+
+/* Rendered in place rather than through renderTasks: the thread's order and
+   each card's disclosure are this panel's own state, and the detail node is
+   diffed on the task payload, which none of them are part of. */
+function renderCommentsPanel(panel, task, context) {
+  const comments = Array.isArray(task.comments) ? task.comments : [];
+  const actions = el("span", { class: "field-actions" });
+  const order = el("button", {
+    class: "comment-pref",
+    text: commentPrefs.newestFirst ? "newest first" : "oldest first",
+    title: "Toggle the order this thread is listed in",
+  });
+  order.type = "button";
+  order.addEventListener("click", (event) => {
+    event.stopPropagation();
+    commentPrefs = { ...commentPrefs, newestFirst: !commentPrefs.newestFirst };
+    saveCommentPrefs();
+    renderCommentsPanel(panel, task, context);
+  });
+  actions.appendChild(order);
+  if (comments.some((comment) => commentIsLong(commentMessage(comment)))) {
+    const collapseAll = el("button", {
+      class: "comment-pref",
+      text: "collapse all",
+      title: "Collapse every expanded comment on this task",
+    });
+    collapseAll.type = "button";
+    collapseAll.addEventListener("click", (event) => {
+      event.stopPropagation();
+      for (let index = 0; index < comments.length; index++) {
+        expandedComments.delete(commentKey(task.id, index));
+      }
+      renderCommentsPanel(panel, task, context);
+    });
+    actions.appendChild(collapseAll);
+  }
+  const head = el("h4", {}, [
+    el("span", { class: "field-title", text: "comments" }),
+    el("span", { class: "field-count", text: String(comments.length) }),
+    actions,
+  ]);
+  const thread = el("div", { class: "comment-thread" });
+  const ordered = comments.map((comment, index) => ({ comment, index }));
+  if (commentPrefs.newestFirst) ordered.reverse();
+  for (const entry of ordered) {
+    thread.appendChild(buildCommentCard(task, entry.comment, entry.index, context));
+  }
+  panel.replaceChildren(head, thread);
+}
+
 function buildTaskDetail(task, context) {
   const detail = el("div", { class: "row-detail split-layout" });
   detail.addEventListener("click", (e) => e.stopPropagation());
@@ -1264,21 +1645,15 @@ function buildTaskDetail(task, context) {
     }
   }
 
-  if (Array.isArray(task.comments) && task.comments.length > 0) {
-    const wrap = el("div");
-    for (const c of task.comments) {
-      const line = el("div", { class: "comment-line" }, [
-        document.createTextNode(`[${fmtAbsTimeValue(context, c.at)}] `),
-        el("span", { class: "author", text: c.by || "?" }),
-        document.createTextNode(`: ${c.message || ""}`),
-      ]);
-      wrap.appendChild(line);
-    }
-    addField(rightCol, "comments", wrap);
-  }
-
   detail.appendChild(leftCol);
   detail.appendChild(rightCol);
+
+  // ORB-12645: the thread is the detail's widest reader, not a side note, so it
+  // spans both columns below them.
+  if (Array.isArray(task.comments) && task.comments.length > 0) {
+    detail.appendChild(buildCommentsPanel(task, context));
+  }
+
   detail.appendChild(buildActionsRow(task, detail, context));
 
   return detail;
@@ -1693,16 +2068,45 @@ async function shipTask(task, detail, btnNode, context) {
 
 /* ORB-10444: human comments on a task. The write goes to the task's existing
    review-thread structure via POST /api/tasks/<id>/comments, which records a
-   human author rather than the server process's ambient identity. */
+   human identity rather than the server process's ambient one.
+
+   ORB-12645: the draft is Markdown and the thread renders it, so the composer
+   says so — in the placeholder, in a hint line naming the marks that carry,
+   and in a preview that runs the draft through the same renderMarkdown() the
+   posted comment will go through. The write itself is unchanged. */
 function showCommentForm(task, detail, actions, context) {
   const form = el("div", { class: "comment-form" });
   form.addEventListener("click", (e) => e.stopPropagation());
   detail.dataset.draft = "comment";
   const ta = el("textarea");
-  ta.placeholder = "comment";
+  ta.id = `comment-draft-${task.id}`;
+  ta.placeholder = "Markdown is rendered — ## heading, - list, `code`, **bold**";
+  const label = el("label", { class: "comment-form-label", text: "Add a comment" });
+  label.htmlFor = ta.id;
+  const hint = el("div", {
+    class: "comment-form-hint",
+    text: "Markdown is rendered: **bold** _italic_ `code` ## heading - list",
+  });
+  const preview = el("div", { class: "comment-preview markdown-body" });
+  preview.style.display = "none";
   const buttons = el("div", { class: "actions" });
+  const previewToggle = el("button", { class: "action preview", text: "preview" });
   const submit = el("button", { class: "action comment", text: "post" });
   const cancel = el("button", { class: "action cancel", text: "cancel" });
+  previewToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (preview.style.display !== "none") {
+      preview.style.display = "none";
+      previewToggle.textContent = "preview";
+      return;
+    }
+    const draft = ta.value.trim();
+    const rendered = draft ? renderMarkdown(draft) : null;
+    if (rendered !== null) preview.innerHTML = rendered;
+    else preview.textContent = draft || "Nothing to preview yet.";
+    preview.style.display = "";
+    previewToggle.textContent = "hide preview";
+  });
   submit.addEventListener("click", async (e) => {
     e.stopPropagation();
     const message = ta.value.trim();
@@ -1736,9 +2140,13 @@ function showCommentForm(task, detail, actions, context) {
     delete detail.dataset.draft;
     form.replaceWith(actions);
   });
+  buttons.appendChild(previewToggle);
   buttons.appendChild(submit);
   buttons.appendChild(cancel);
+  form.appendChild(label);
   form.appendChild(ta);
+  form.appendChild(hint);
+  form.appendChild(preview);
   form.appendChild(buttons);
   actions.replaceWith(form);
   ta.focus();
