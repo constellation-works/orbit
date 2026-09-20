@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use predicates::prelude::*;
+use serde_json::json;
 use tempfile::tempdir;
 
 const INACTIVE_TOOL_NAMES: &[&str] = &[
@@ -322,4 +323,113 @@ fn tool_run_reaches_the_operator_claim_listing() {
         claims.as_array().is_some_and(|claims| claims.is_empty()),
         "a fresh workspace holds no execution claims: {claims}"
     );
+}
+
+/// [ORB-12582] The owner's read-only drain surface answers `orbit tool run` on
+/// the owner's own machine.
+///
+/// `orbit tool list` advertises both tools as active, and the CLI expresses a
+/// caller's authority in the process envelope rather than in the session it
+/// builds — `local_tool_session_context` carries machine identity, transport,
+/// and a trace ID, and no capabilities at all. A capability read inside the
+/// application function therefore refused every `orbit tool run` call while the
+/// same tools answered over MCP. The floor is now a governed row, so this test
+/// spawns the real binary: a session synthesized in a unit test cannot stand in
+/// for the one the CLI actually sends.
+#[test]
+fn tool_run_serves_the_owner_local_read_only_drain_surface() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    std::fs::create_dir_all(&home).expect("create home");
+    std::fs::create_dir_all(work.join(".git")).expect("create work repo");
+
+    orbit_at_home(&work, &home)
+        .args(["workspace", "init", "--name", "drain-read-only-test"])
+        .assert()
+        .success();
+
+    const PROBE: &[&str] = &["tool", "run", "orbit.drain.probe", "--input", "{}"];
+    const LOOKUP: &[&str] = &[
+        "tool",
+        "run",
+        "orbit.drain.receipt.lookup",
+        "--input",
+        r#"{"request_id":"req-never-sent"}"#,
+    ];
+
+    // Both tools are advertised as active, so the surface has to serve them.
+    let listed = orbit_at_home(&work, &home)
+        .args(["tool", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let tools: Vec<serde_json::Value> = serde_json::from_slice(&listed).expect("tool list JSON");
+    for name in ["orbit.drain.probe", "orbit.drain.receipt.lookup"] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("{name} missing from `orbit tool list`"));
+        assert_eq!(tool["status"], "active", "{name}");
+    }
+
+    let probed = orbit_at_home_as_operator(&work, &home)
+        .args(PROBE)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&probed).expect("probe JSON");
+    assert_eq!(report["creates_admission_state"], false);
+    assert_eq!(report["session"]["remote"], false, "{report}");
+    // The reported set is the one the chokepoint resolved, not the empty set
+    // the CLI's session envelope carries.
+    assert!(
+        report["session"]["capabilities"]
+            .as_array()
+            .expect("capabilities")
+            .iter()
+            .any(|capability| capability == "operator"),
+        "{report}"
+    );
+
+    let looked_up = orbit_at_home_as_operator(&work, &home)
+        .args(LOOKUP)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let lookup: serde_json::Value = serde_json::from_slice(&looked_up).expect("lookup JSON");
+    assert_eq!(lookup["outcome"], "not_found", "{lookup}");
+    assert_eq!(lookup["grants_execution_authority"], false);
+
+    // A follower holds `agent` and nothing more, and that is who the surface
+    // exists for: the floor admits it on the CLI as it does over MCP.
+    let as_agent = orbit_at_home(&work, &home)
+        .env("ORBIT_AGENT_MODEL", "codex")
+        .args(PROBE)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let agent_report: serde_json::Value = serde_json::from_slice(&as_agent).expect("agent probe");
+    assert_eq!(agent_report["session"]["capabilities"], json!(["agent"]));
+
+    // A caller the chokepoint cannot identify still gets no answer about the
+    // owner's workspace, and hears which capability it needed.
+    let refused = orbit_at_home(&work, &home)
+        .args(PROBE)
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let refusal = String::from_utf8_lossy(&refused);
+    assert!(refusal.contains("capability denied"), "{refusal}");
+    assert!(refusal.contains("agent"), "{refusal}");
 }

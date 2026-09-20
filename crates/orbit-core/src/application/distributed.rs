@@ -5,12 +5,17 @@
 //!
 //! SSH login establishes owner access [ORB-12564]. There is no destination
 //! callers file, forced-command acceptance, key-bound proof, or replacement
-//! identity registry. What still decides a call here is the session the
-//! destination serves — its `agent`/`operator` capabilities, resolved by the
-//! tool chokepoint — plus the trusted runtime facts this module reads. A
-//! machine label forwarded by an SSH proxy or the federated mux is attribution:
-//! it names a receipt namespace and appears in diagnostics, and it never adds a
-//! capability the session did not already hold.
+//! identity registry. What still decides a call here is the capability the
+//! destination serves this caller — `agent` or `operator` — plus the trusted
+//! runtime facts this module reads. The capability is resolved by the tool
+//! chokepoint and nowhere else: both read-only tools carry a governed row
+//! whose allowed set is `agent` or `operator`, so a caller the chokepoint
+//! cannot identify is refused before any function here runs, and a CLI caller
+//! — whose authority lives in the process envelope rather than in the session
+//! `orbit tool run` builds — is admitted on the same terms as an MCP one
+//! [ORB-12582]. A machine label forwarded by an SSH proxy or the federated mux
+//! is attribution: it names a receipt namespace and appears in diagnostics,
+//! and it never adds a capability the caller did not already hold.
 //!
 //! # What this module does not do
 //!
@@ -32,6 +37,8 @@ use orbit_store::contracts::{
 };
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use serde::Serialize;
+
+use crate::runtime::authorization::resolved_caller_capabilities;
 
 /// Whether the mutating distributed entry points are reachable from any public
 /// surface.
@@ -70,7 +77,9 @@ pub struct DrainProbeReport {
     /// host identity.
     pub owner_machine_id: Option<String>,
     /// Session facts, for diagnostics. Capabilities are what the destination
-    /// serves this session; the caller machine is attribution only.
+    /// resolved for this caller — the set the chokepoint admitted the call on,
+    /// which on the CLI comes from the process envelope rather than from the
+    /// session; the caller machine is attribution only.
     pub session: DrainProbeSession,
     /// Ship configuration the owner would resolve at admission.
     pub ship: AdmissionShipContract,
@@ -133,19 +142,19 @@ pub struct AdmissionReceiptLookup {
 impl crate::OrbitRuntime {
     /// Serve the read-only admission probe for this workspace.
     ///
-    /// Refusal order matches the spec ladder: the selector is resolved by the
-    /// surface that opened this runtime, then destination authority (a replica
-    /// serves no control-plane work), then session capability, then the
-    /// store-owned shape/version/mode/policy ladder — which the probe reports
-    /// rather than raising, because observing a mismatch before admission is
-    /// the whole point of a preflight.
+    /// Refusal order matches the spec ladder: caller capability first, at the
+    /// tool chokepoint every surface traverses, then the selector resolved by
+    /// the surface that opened this runtime, then destination authority (a
+    /// replica serves no control-plane work), then the store-owned
+    /// shape/version/mode/policy ladder — which the probe reports rather than
+    /// raising, because observing a mismatch before admission is the whole
+    /// point of a preflight.
     pub fn drain_probe(
         &self,
         session: &ToolSessionContext,
         declared: &DeclaredCallerContract,
     ) -> Result<DrainProbeReport, OrbitError> {
         self.ensure_distributed_owner_workspace()?;
-        ensure_session_agent_capability(session)?;
         let ship = self.owner_ship_contract();
         let mut diagnostics = Vec::new();
         let refusal = self.declared_contract_refusal(session, declared, &ship, &mut diagnostics)?;
@@ -182,7 +191,6 @@ impl crate::OrbitRuntime {
         lookup_schema: u32,
     ) -> Result<AdmissionReceiptLookup, OrbitError> {
         self.ensure_distributed_owner_workspace()?;
-        ensure_session_agent_capability(session)?;
         if lookup_schema != ADMISSION_RECEIPT_LOOKUP_SCHEMA {
             // An incompatible lookup protocol refuses; the remedy is owner
             // claim inspection and deliberate recovery, never a replacement
@@ -209,7 +217,10 @@ impl crate::OrbitRuntime {
                 )
             })?,
             Some(requested) => {
-                if !session.has_capability(McpCapability::Operator)
+                // Input-dependent, so it cannot be a tool-name-keyed governed
+                // row; it asks the shared resolution instead of the session so
+                // the answer matches the chokepoint's on every surface.
+                if !resolved_caller_capabilities(session).contains(&McpCapability::Operator)
                     && session_machine.as_deref() != Some(requested)
                 {
                     return Err(OrbitError::CapabilityRefused(
@@ -382,19 +393,6 @@ fn review_policy_label(policy: orbit_config::ReviewPolicy) -> String {
     .to_string()
 }
 
-/// Every distributed caller needs the workspace's `agent` capability; an
-/// operator session holds it too.
-fn ensure_session_agent_capability(session: &ToolSessionContext) -> Result<(), OrbitError> {
-    if session.has_capability(McpCapability::Agent)
-        || session.has_capability(McpCapability::Operator)
-    {
-        return Ok(());
-    }
-    Err(OrbitError::CapabilityRefused(
-        "the distributed drain surface requires the workspace's agent capability".into(),
-    ))
-}
-
 /// The machine a session may speak for. A remote session's forwarded label
 /// names its receipt namespace and nothing else; a local session uses the
 /// accepting machine's own identity.
@@ -433,8 +431,7 @@ fn trusted_identity(machine_id: &str, session: &ToolSessionContext) -> Admission
 
 fn probe_session(session: &ToolSessionContext) -> DrainProbeSession {
     DrainProbeSession {
-        capabilities: session
-            .effective_capabilities
+        capabilities: resolved_caller_capabilities(session)
             .iter()
             .map(ToString::to_string)
             .collect(),

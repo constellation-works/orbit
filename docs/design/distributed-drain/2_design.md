@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-09-19
-last_validated: 2026-09-19
+last_updated: 2026-09-20
+last_validated: 2026-09-20
 status: Draft
 feature: distributed-drain
 doc_role: design
@@ -11,7 +11,7 @@ summary: "One owner, multiple execution hosts: idempotent claims, routed authori
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, resident-orchestrator, activity-job, policy-sandbox]
-related_artifacts: [ORB-12488]
+related_artifacts: [ORB-12488, ORB-12582]
 ---
 
 # Distributed Drain — Design
@@ -382,6 +382,17 @@ the probe reports the first refusal admission would raise by running the same or
 pull, binding, settlement, handoff, approval — are not registered tools and are refused by one
 named gate (`application::distributed::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`), so the
 incomplete feature cannot be enabled by configuration.
+
+[ORB-12582] moved the `agent`-or-`operator` requirement out of the application function and into
+the governed-operation registry, where every other tool's requirement lives. Both read-only tools
+carry a row allowing `agent` or `operator`: an identification floor rather than an operator gate,
+so a follower holding only `agent` is served and a caller the chokepoint cannot identify is not.
+Reading session capabilities inside the application function had made the two surfaces differ
+after all — an MCP session carries the capability its server stamped, while `orbit tool run`
+carries none and expresses the caller's authority in the process envelope only the chokepoint
+resolves, so the owner's own machine was refused its own preflight. Cross-attempt receipt
+inspection still requires `operator`, resolved through the same shared rule
+(`runtime::authorization::resolved_caller_capabilities`) rather than off the session.
 
 ## 5. Transport and authority routing
 

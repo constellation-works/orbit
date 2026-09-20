@@ -241,7 +241,7 @@ pub const DASHBOARD_OPERATION_REVOKE: GovernedOperation = GovernedOperation {
 /// site never names a capability; it names an operation and the chokepoint
 /// resolves the requirement here.
 ///
-/// Two rules govern what belongs on this list:
+/// Three rules govern what belongs on this list:
 ///
 /// 1. **Out-of-scope destruction, not all destruction.** The pipeline's own git
 ///    path — worktree force-removal, `branch -D`, `git clean -fd`, `checkout -B`,
@@ -253,6 +253,17 @@ pub const DASHBOARD_OPERATION_REVOKE: GovernedOperation = GovernedOperation {
 ///    alongside `Operator`; the run stamps that grant onto the tool context it
 ///    builds, so the sanction travels with the run rather than with ambient
 ///    process state.
+/// 3. **An identification floor, where answering an unidentified caller is the
+///    accident.** A row that lists [`McpCapability::Agent`] is not an operator
+///    gate; it says every ordinary caller may perform the operation and a
+///    caller this process cannot identify at all may not. The distributed
+///    drain's read-only surface is the case [ORB-12582]: a follower holds
+///    `agent` and nothing more, so `agent` is exactly who must reach it, while
+///    a session that asserts no capability gets no answer about the owner's
+///    workspace. Writing the floor here rather than as a session read inside
+///    the application function is what makes the CLI and MCP answers identical
+///    — only the chokepoint can see the process envelope a CLI caller's
+///    authority actually lives in.
 pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     GovernedOperation {
         id: "orbit.workflow.ship",
@@ -325,6 +336,25 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "execution-claim inspection is the operator's recovery surface: it names every \
                     in-flight attempt, the machine running it, and its landing state",
+    },
+    // Rule 3 above: an identification floor, not an operator gate. A follower's
+    // session holds `agent` and must reach both tools; a caller the chokepoint
+    // resolves to nothing gets no answer about the owner's workspace
+    // [ORB-12582].
+    GovernedOperation {
+        id: "orbit.drain.probe",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Agent, McpCapability::Operator],
+        rationale: "the owner's admission preflight answers for this workspace — its identity, \
+                    binary, ship contract, and review policy — so the caller has to be someone \
+                    this process can name",
+    },
+    GovernedOperation {
+        id: "orbit.drain.receipt.lookup",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Agent, McpCapability::Operator],
+        rationale: "receipt reconciliation reads a caller's own admission history on the owner, \
+                    so the caller has to be someone this process can name",
     },
     GovernedOperation {
         id: "orbit.task.delete",

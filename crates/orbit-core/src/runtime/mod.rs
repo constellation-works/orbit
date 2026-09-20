@@ -13,7 +13,7 @@
 
 pub(crate) mod assets;
 pub mod audit;
-mod authorization;
+pub(crate) mod authorization;
 pub mod builder;
 pub(crate) mod command_exec;
 mod coordination_audit;

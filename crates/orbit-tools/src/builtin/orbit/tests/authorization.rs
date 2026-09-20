@@ -67,13 +67,16 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     // is not the only thing standing between an agent and the operation
     // [ORB-10453].
     // [ORB-12495] Claim inspection: off MCP beside the other coordination-hold
-    // tools, governed so cross-attempt inspection is an operator act. The
-    // read-only probe and receipt lookup beside it are ungoverned, because a
-    // follower's `agent` session is exactly who must call them.
+    // tools, governed so cross-attempt inspection is an operator act.
     // [ORB-12581] Unadvertised, but registered active: `orbit tool run` is the
     // operator's only route to it, and the governed row — not placement — is
     // what refuses an agent.
     ("orbit.drain.claims", Placement::Unadvertised),
+    // [ORB-12582] The read-only drain surface beside it: advertised, because a
+    // follower reaches it over MCP, and governed to the `agent` floor in
+    // AGENT_FLOOR_GOVERNED_TOOLS below rather than to `operator`.
+    ("orbit.drain.probe", Placement::Advertised),
+    ("orbit.drain.receipt.lookup", Placement::Advertised),
     ("orbit.semantic.uninstall", Placement::Unadvertised),
     ("orbit.task.delete", Placement::Unadvertised),
     ("orbit.task.locks.release", Placement::Unadvertised),
@@ -81,6 +84,20 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.task.reject", Placement::Unadvertised),
     ("orbit.workspace.claim.release", Placement::Unadvertised),
 ];
+
+/// Advertised governed tools whose allowed set names `agent` on purpose.
+///
+/// The rule below forbids that pairing everywhere else, because governing an
+/// operation the ordinary MCP caller already holds the capability for buys
+/// nothing. The distributed drain's read-only surface is the one place it buys
+/// something [ORB-12582]: the row is an *identification floor*, not an operator
+/// gate. `agent` is exactly who must call the probe and the receipt lookup — a
+/// follower's session holds it and nothing more — while a caller the chokepoint
+/// resolves to no capability at all is refused before the owner answers a
+/// question about its own workspace. The floor has to be a governed row rather
+/// than a session read inside the application function, because only the
+/// chokepoint sees the process envelope a CLI caller's authority lives in.
+const AGENT_FLOOR_GOVERNED_TOOLS: &[&str] = &["orbit.drain.probe", "orbit.drain.receipt.lookup"];
 
 /// Reads an agent performs as ordinary work, which must stay ungoverned.
 ///
@@ -189,12 +206,29 @@ fn an_advertised_governed_tool_is_deliberately_out_of_reach_for_an_agent_session
     let advertised = advertised_tool_names(&registry);
 
     for operation in governed_tool_operations().filter(|op| advertised.contains(op.id)) {
+        let agent_floor = AGENT_FLOOR_GOVERNED_TOOLS.contains(&operation.id);
+        let lists_agent = operation.allowed.contains(&McpCapability::Agent);
         assert!(
-            !operation.allowed.contains(&McpCapability::Agent),
+            !lists_agent || agent_floor,
             "'{}' is advertised to every MCP session and governed, yet lists `agent` among its \
              allowed capabilities — governing an operation the ordinary MCP caller already \
-             holds the capability for buys nothing and hides the entries that do refuse",
+             holds the capability for buys nothing and hides the entries that do refuse. If it \
+             is an identification floor, declare it in AGENT_FLOOR_GOVERNED_TOOLS",
             operation.id
+        );
+        assert!(
+            lists_agent || !agent_floor,
+            "'{}' is declared an identification floor but no longer allows `agent`, so a \
+             follower's session — the caller the floor exists to admit — is now refused",
+            operation.id
+        );
+    }
+
+    for name in AGENT_FLOOR_GOVERNED_TOOLS {
+        assert!(
+            governed_tool_operations().any(|operation| operation.id == *name),
+            "'{name}' is declared an identification floor but is no longer governed at all, so \
+             an unidentified caller reaches it again"
         );
     }
 }

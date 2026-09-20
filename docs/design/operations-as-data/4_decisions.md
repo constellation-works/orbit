@@ -1,8 +1,8 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-09-19
-last_validated: 2026-09-19
+last_updated: 2026-09-20
+last_validated: 2026-09-20
 status: Accepted
 feature: operations-as-data
 doc_role: decisions
@@ -11,7 +11,7 @@ summary: Decision log for the operations-as-data registry — the split spec/han
 tags: [operations-as-data, architecture, adr-0209]
 paths: ["crates/orbit-common/src/governance/operation.rs", "crates/orbit-common/src/governance/authorization.rs", "crates/orbit-common/src/governance/friction/**", "crates/orbit-tools/src/builtin/orbit/tests/authorization.rs"]
 related_features: [operations-as-data]
-related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563]
+related_artifacts: [ORB-10358, ORB-10453, ORB-10478, ORB-12563, ORB-12582]
 ---
 
 # Operations as Data — Decisions
@@ -258,6 +258,40 @@ The MCP surface is a different case and is not reopened here: `orbit mcp serve -
 - A caller that wants a read-only remote must say so (`--no-operator`).
 - A pre-existing `orbit web serve` without `--operator` stays read-only until it is restarted; connect says so instead of leaving the user to discover disabled buttons.
 - Local `orbit web serve` without a TTY still needs `--operator` or `ORBIT_OPERATOR=1`; the new default applies to `connect`, not to a headless local serve.
+
+## A governed row may be an identification floor, not only an operator gate
+
+**Recorded:** 2026-09-20 · [ORB-12582] · **Implemented** in [ORB-12582]
+**Paths:** `crates/orbit-common/src/governance/authorization.rs`, `crates/orbit-core/src/application/distributed.rs`, `crates/orbit-core/src/runtime/authorization.rs`, `crates/orbit-tools/src/builtin/orbit/tests/authorization.rs`, `crates/orbit-cli/tests/tool_list.rs`
+
+### Context
+
+The distributed drain's read-only surface — `orbit.drain.probe` and `orbit.drain.receipt.lookup` [ORB-12495] — required the workspace's `agent` capability and checked it by reading `session.effective_capabilities` inside the application function, because the requirement admits an agent and therefore could not be expressed as an operator row under [MCP advertisement is placement; the capability chokepoint is permission](#mcp-advertisement-is-placement-the-capability-chokepoint-is-permission) decision 4.
+
+That read is only correct on one surface. An MCP session's capabilities are stamped onto the session at `initialize`; a CLI caller's are not, and never were: `orbit tool run` builds its envelope in `local_tool_session_context` with machine identity, transport, and a trace ID, and expresses authority as `CapabilityEnforcement::Enforce` over the process envelope, which only the chokepoint resolves. The session's capability set is empty by construction, so both tools refused every `orbit tool run` call — including the owner's own, on the owner's own checkout — while `orbit tool list` advertised them as active and the MCP server answered the same calls normally. The unit test that should have caught it synthesized `effective_capabilities: {Agent}` for its "owner-local session", a session no production CLI caller sends.
+
+### Decision
+
+1. **The requirement is a governed row like every other.** Both tools list `allowed: [Agent, Operator]` in `GOVERNED_OPERATIONS`, and the application functions perform no capability check of their own. The chokepoint already knows how to resolve a caller on every surface — session grants, then `ORBIT_OPERATOR`, then agent envelope, then interactive terminal, then nothing — so routing the decision through it is what makes the CLI and MCP answers identical, which is the property the surface was documented to have.
+
+2. **A row that lists `agent` is a floor, and is declared as one.** It says every caller this process can identify may perform the operation and a caller it cannot may not. That is a third reason to appear in the registry, beside out-of-scope destruction and the `Runner` carve-out, and it is written into the registry's own documentation. The pairing rule from decision 4 of the previous entry stands for every other advertised governed tool; the exception is enumerated in `AGENT_FLOOR_GOVERNED_TOOLS` in the guardrail test, which now asserts both directions — an undeclared advertised tool may not list `agent`, and a declared one must.
+
+3. **A handler that needs one more distinction asks for the resolved set.** The receipt lookup's cross-attempt rule (naming another machine's receipt namespace requires `operator`) is input-dependent and cannot be a tool-name-keyed row, so it calls `runtime::authorization::resolved_caller_capabilities`, which applies the shared resolution rather than reading the session. The probe's reported `session.capabilities` come from the same place, so its diagnostics name what the chokepoint actually resolved instead of an empty set.
+
+4. **The owner-local CLI route is covered by the binary, not by a synthesized session.** `crates/orbit-cli/tests/tool_list.rs` spawns `orbit tool run` for both tools against a temp workspace, beside the equivalent coverage [ORB-12581] added for `orbit.drain.claims`.
+
+### Rejected alternatives
+
+- **Have `local_tool_session_context` state the capabilities the CLI caller holds.** Attractive — it is the other half of the same observation — but session grants outrank the override in `CallerCapabilities::resolve`, so pre-resolving `ORBIT_OPERATOR=1` into the session would erase `CallerProvenance::OperatorOverride` and with it the `warn!` and the audit row that make the escape hatch loud. The chokepoint must see the raw envelope.
+- **Leave the check in the application function and widen it to accept a CLI caller.** Rejected: it would be a second capability resolver, disagreeing with the chokepoint the moment either changed — the precise failure mode the chokepoint exists to prevent.
+- **Stamp the resolved capability set back onto the session context for every tool call.** Tempting, and it would let any handler read the session safely, but the tool host captures the session before the chokepoint runs, so the stamp would have to move the resolution ahead of the decision or be applied in two places. A named helper for the one handler that needs it is smaller and keeps a single resolution point.
+
+### Consequences
+
+- The owner's own machine can call its own read-only drain surface. Both tools answer `orbit tool run` for an operator (TTY or `ORBIT_OPERATOR=1`) and for an agent envelope, matching what `orbit tool list` advertises, and continue to answer an `agent` MCP session.
+- A capability-less MCP session is still refused, and now with a denial that names the operation, the required capability, and the remedy for its surface, rather than a bare `capability_refused`.
+- Cost: a CLI caller with no session grant, no agent envelope, and no TTY — a bare shell script or a cron entry — is refused both tools and must identify itself, the same trade the original chokepoint entry recorded for governed operations generally.
+- Cost: the guardrail table now has an exception list. It is two names long and asserted in both directions, so adding a third requires the same deliberate line as adding a governed tool does.
 
 ## Task References
 
