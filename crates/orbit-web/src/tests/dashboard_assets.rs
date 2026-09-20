@@ -2036,6 +2036,224 @@ if (find(body, (node) => node.tag === "textarea")) throw new Error("the cancelle
     );
 }
 
+/// ORB-12645: comments are the dashboard's long-form channel — agents post
+/// spec-length Markdown — so the thread renders as its own full-width panel
+/// below the two detail columns: Markdown bodies, a cap with a fade over a
+/// long one, per-comment actions, an outline for a sectioned body, and a
+/// composer that says its draft is Markdown.
+#[test]
+fn dashboard_renders_task_comments_as_a_collapsible_markdown_thread() {
+    run_dashboard_javascript_test(
+        r###"
+class Node {
+  constructor(tag = "") { this.tag = tag; this.children = []; this.dataset = {}; this.style = {}; this.listeners = {}; this.className = ""; this._text = ""; this.parentNode = null; this.disabled = false; this.scrolled = 0; }
+  appendChild(child) { if (child == null) return child; this.children.push(child); child.parentNode = this; return child; }
+  insertBefore(child, before) { const old = child.parentNode; if (old) old.children = old.children.filter((candidate) => candidate !== child); const index = this.children.indexOf(before); this.children.splice(index < 0 ? this.children.length : index, 0, child); child.parentNode = this; return child; }
+  removeChild(child) { this.children = this.children.filter((candidate) => candidate !== child); child.parentNode = null; return child; }
+  replaceChildren(...next) { for (const child of this.children) child.parentNode = null; this.children = []; for (const child of next) this.appendChild(child); }
+  replaceWith(next) { const parent = this.parentNode; if (!parent) return; parent.children = parent.children.map((candidate) => candidate === this ? next : candidate); next.parentNode = parent; this.parentNode = null; }
+  addEventListener(name, callback) { this.listeners[name] = callback; }
+  setAttribute(name, value) { this[name] = String(value); }
+  focus() {}
+  scrollIntoView() { this.scrolled += 1; }
+  querySelectorAll(selector) { const out = []; const walk = (node) => { for (const child of node.children) { if (child.tag === selector) out.push(child); walk(child); } }; walk(this); return out; }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  set textContent(value) { this._text = String(value); this.children = []; }
+  set innerHTML(value) { this.textContent = value; }
+  get innerHTML() { return this.textContent; }
+  get lastElementChild() { return this.children[this.children.length - 1]; }
+  get classList() { return { add: (...names) => { this.className = `${this.className} ${names.join(" ")}`.trim(); }, remove: () => {}, toggle: () => {} }; }
+}
+const byId = new Map();
+const get = (id) => byId.get(id) || (byId.set(id, new Node()), byId.get(id));
+globalThis.document = {
+  getElementById: get,
+  createElement: (tag) => new Node(tag),
+  createTextNode: (text) => Object.assign(new Node(), { textContent: text }),
+};
+const store = new Map();
+globalThis.window = {
+  location: new URL("http://dashboard.test/#tasks"),
+  addEventListener: () => {}, confirm: () => false,
+  localStorage: { getItem: (key) => (store.has(key) ? store.get(key) : null), setItem: (key, value) => store.set(key, String(value)) },
+};
+window.location.href = "http://dashboard.test/#tasks?status=all";
+const copied = [];
+Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: (text) => { copied.push(text); return Promise.resolve(); } } }, configurable: true });
+globalThis.setTimeout = () => 0;
+const sanitized = [];
+globalThis.marked = {
+  use: () => {},
+  parse: (source) => String(source).split("\n").map((line) => {
+    const heading = /^##\s+(.*)$/.exec(line);
+    if (heading) return `<h2>${heading[1]}</h2>`;
+    return line ? `<p>${line}</p>` : "";
+  }).join(""),
+  parseInline: (source) => String(source),
+};
+globalThis.DOMPurify = {
+  isSupported: true,
+  sanitize: (html) => { sanitized.push(String(html)); return String(html).replace(/<script[\s\S]*?<\/script>/g, "").replace(/ style="[^"]*"/g, ""); },
+};
+
+const paragraph = "A long paragraph line that easily runs past the rendered measure and wraps more than once in the card. ";
+const longBody = [
+  "## Findings", paragraph, paragraph, paragraph,
+  "## Risks", paragraph, paragraph,
+  "## Next steps", paragraph, paragraph, "- do the thing", "- then the other thing",
+].join("\n");
+const comments = [
+  { at: "2026-09-19T10:00:00Z", by: "dani", message: "Looks right to me." },
+  { at: "2026-09-20T09:00:00Z", by: "codex", message: longBody },
+  { at: "2026-09-20T09:30:00Z", by: "dani", message: "<script>alert(1)</script> and <span style=\"color:red\">inline</span>" },
+];
+const task = { id: "ORB-1", title: "Threaded", status: "review", updated_at: "2026-09-20T10:00:00Z", history: [], artifacts: [], comments };
+const statuses = ["in-progress", "review", "blocked", "proposed", "backlog", "someday", "done", "rejected", "archived"];
+const context = {
+  getTasks: () => [task], getTasksMeta: () => null, getSearchQuery: () => "",
+  getActiveStatuses: () => new Set(["review"]), statusOrder: statuses,
+  statusUpdateTargets: statuses, fmtAbsTime: (value) => `abs:${value}`,
+  refreshDashboard: () => Promise.resolve(),
+};
+const { renderTasks } = await import("./tasks.js");
+function find(node, predicate) {
+  if (predicate(node)) return node;
+  for (const child of node.children || []) { const match = find(child, predicate); if (match) return match; }
+  return null;
+}
+function collect(node, predicate, out = []) {
+  if (predicate(node)) out.push(node);
+  for (const child of node.children || []) collect(child, predicate, out);
+  return out;
+}
+const has = (node, name) => String(node.className).split(" ").includes(name);
+const body = get("tasks-body");
+renderTasks([task], context);
+find(body, (node) => node.dataset.key === "task-ORB-1").listeners.click();
+const detail = find(body, (node) => node.dataset.key === "detail-ORB-1");
+if (!detail) throw new Error("the task detail did not render");
+
+// 1. the thread is a full-width sibling of the two columns, ahead of the actions row.
+const panel = detail.children.find((node) => has(node, "comments-panel"));
+if (!panel) throw new Error("the comments panel is not a direct child of the detail");
+const order = detail.children.map((node) => node.className);
+if (order.indexOf("detail-side") > order.indexOf("field-block comments-panel")) throw new Error(`the thread must follow both columns: ${order}`);
+if (!detail.children[detail.children.length - 1].className.includes("actions")) throw new Error("the actions row must stay last");
+if (find(panel, (node) => has(node, "field-count")).textContent !== "3") throw new Error("the panel must count its comments");
+
+const cards = () => collect(panel, (node) => has(node, "comment-card"));
+if (cards().length !== 3) throw new Error(`expected three cards, got ${cards().length}`);
+if (cards()[0].id !== "comment-ORB-1-1") throw new Error(`oldest first by default: ${cards()[0].id}`);
+
+// 2. a long comment is capped, lists its sections, and opens and closes.
+const long = cards()[1];
+if (!has(long, "long") || !has(long, "collapsed")) throw new Error(`a long comment must start collapsed: ${long.className}`);
+const summary = find(long, (node) => has(node, "comment-summary"));
+if (!summary.textContent.includes("Findings") || !summary.textContent.includes("Next steps")) throw new Error(`the collapsed card must list its sections: ${summary.textContent}`);
+const toggle = find(long, (node) => has(node, "comment-toggle"));
+if (toggle.textContent !== "Show full comment") throw new Error(`unexpected toggle label: ${toggle.textContent}`);
+toggle.listeners.click({ stopPropagation: () => {} });
+if (!has(long, "expanded") || has(long, "collapsed")) throw new Error(`the card did not expand: ${long.className}`);
+if (toggle.textContent !== "Collapse") throw new Error(`the expanded card must offer a collapse: ${toggle.textContent}`);
+const short = cards()[0];
+if (has(short, "long") || find(short, (node) => has(node, "comment-foot")).style.display !== "none") throw new Error("a short comment must not be capped or carry a disclosure footer");
+
+// 3. the outline appears for a body with three or more sections.
+const outline = find(long, (node) => has(node, "comment-outline"));
+if (!outline || !outline.textContent.includes("In this comment")) throw new Error("an expanded multi-section comment needs its outline");
+const links = collect(outline, (node) => has(node, "comment-outline-link"));
+if (links.length !== 3 || links[0].textContent !== "Findings") throw new Error(`the outline must name each section: ${links.map((l) => l.textContent)}`);
+
+// 4. identity, time and the per-comment actions.
+const head = find(long, (node) => has(node, "comment-head"));
+if (find(head, (node) => has(node, "comment-initial")).textContent !== "C") throw new Error("the card needs an initial chip");
+if (!find(head, (node) => has(node, "comment-agent-pill"))) throw new Error("an agent-written comment needs its pill");
+if (!head.textContent.includes("abs:2026-09-20T09:00:00Z")) throw new Error(`the card needs the absolute time: ${head.textContent}`);
+if (!find(head, (node) => has(node, "comment-age")).textContent.trim()) throw new Error("the card needs a relative time beside the absolute one");
+if (find(cards()[0], (node) => has(node, "comment-agent-pill"))) throw new Error("a human comment must not be pilled as an agent");
+const raw = find(long, (node) => node.title && node.title.includes("Markdown source"));
+raw.listeners.click({ stopPropagation: () => {} });
+const rawView = find(long, (node) => has(node, "comment-raw"));
+if (rawView.style.display === "none" || !rawView.textContent.includes("## Findings")) throw new Error("raw must show the original text");
+if (find(long, (node) => has(node, "comment-body")).style.display !== "none") throw new Error("raw must replace the rendered body");
+raw.listeners.click({ stopPropagation: () => {} });
+if (rawView.style.display !== "none") throw new Error("raw must toggle back");
+find(long, (node) => node.title && node.title.startsWith("Copy")).listeners.click({ stopPropagation: () => {} });
+if (copied[copied.length - 1] !== longBody) throw new Error("copy must yield the comment's Markdown");
+const permalink = find(long, (node) => has(node, "permalink"));
+permalink.listeners.click({ stopPropagation: () => {} });
+if (long.scrolled !== 1) throw new Error("the permalink must scroll to its comment");
+if (copied[copied.length - 1] !== "http://dashboard.test/#comment-ORB-1-2") throw new Error(`unexpected permalink: ${copied[copied.length - 1]}`);
+
+// 5. bodies render as Markdown, sanitized.
+const renderedBody = find(long, (node) => has(node, "comment-body"));
+if (!renderedBody.className.includes("markdown-body") || !renderedBody.innerHTML.includes("<h2>Findings</h2>")) throw new Error(`the body must render Markdown: ${renderedBody.innerHTML.slice(0, 80)}`);
+if (sanitized.length === 0) throw new Error("rendering must go through the sanitizing wrapper");
+const hostile = find(cards()[2], (node) => has(node, "comment-body"));
+if (hostile.innerHTML.includes("<script") || hostile.innerHTML.includes("style=")) throw new Error(`a hostile comment rendered live: ${hostile.innerHTML}`);
+
+// 6. thread order is an operator preference that persists; collapse all folds the thread.
+const orderToggle = find(panel, (node) => node.textContent === "oldest first");
+orderToggle.listeners.click({ stopPropagation: () => {} });
+if (cards()[0].id !== "comment-ORB-1-3") throw new Error(`newest first did not reorder: ${cards()[0].id}`);
+if (!String(store.get("orbit.dashboard.comments")).includes("true")) throw new Error("the order preference must persist");
+const reopened = cards().find((card) => card.id === "comment-ORB-1-2");
+if (!has(reopened, "expanded")) throw new Error("a rebuilt card must keep its disclosure");
+find(panel, (node) => node.textContent === "collapse all").listeners.click({ stopPropagation: () => {} });
+if (!has(cards().find((card) => card.id === "comment-ORB-1-2"), "collapsed")) throw new Error("collapse all must fold the thread");
+
+// 7. the refresh keeps the operator's disclosure.
+find(cards().find((card) => card.id === "comment-ORB-1-2"), (node) => has(node, "comment-toggle")).listeners.click({ stopPropagation: () => {} });
+task.updated_at = "2026-09-20T11:00:00Z";
+renderTasks([task], context);
+const rebuilt = find(get("tasks-body"), (node) => node.dataset.key === "detail-ORB-1");
+if (rebuilt === detail) throw new Error("the detail should have been rebuilt by the changed task");
+const rebuiltCard = find(rebuilt, (node) => node.id === "comment-ORB-1-2");
+if (!has(rebuiltCard, "expanded")) throw new Error("the refresh dropped the operator's expansion");
+
+// 8. the composer states that Markdown is rendered and previews the draft.
+find(rebuilt, (node) => node.className === "action comment").listeners.click({ stopPropagation: () => {} });
+const form = find(rebuilt, (node) => node.className === "comment-form");
+if (!form.textContent.includes("Add a comment")) throw new Error("the composer must label its field");
+const textarea = find(form, (node) => node.tag === "textarea");
+if (!textarea.placeholder.includes("Markdown")) throw new Error(`the placeholder must say Markdown is rendered: ${textarea.placeholder}`);
+if (!find(form, (node) => has(node, "comment-form-hint")).textContent.includes("## heading")) throw new Error("the composer needs its Markdown hint line");
+textarea.value = "## Draft\nbody";
+const previewToggle = find(form, (node) => node.className === "action preview");
+previewToggle.listeners.click({ stopPropagation: () => {} });
+const preview = find(form, (node) => has(node, "comment-preview"));
+if (preview.style.display === "none" || !preview.innerHTML.includes("<h2>Draft</h2>")) throw new Error(`the preview must render the draft: ${preview.innerHTML}`);
+previewToggle.listeners.click({ stopPropagation: () => {} });
+if (preview.style.display !== "none") throw new Error("the preview must toggle back off");
+"###,
+    );
+
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+    assert!(
+        css.contains(".row-detail.split-layout > .comments-panel {")
+            && css.contains("grid-column: 1 / -1;"),
+        "the thread must span both detail columns"
+    );
+    assert!(
+        css.contains(".comment-card.collapsed .comment-bodies {")
+            && css.contains("max-height: 300px;"),
+        "a collapsed comment must be capped"
+    );
+    assert!(
+        css.contains(".comment-card.collapsed .comment-bodies::after"),
+        "the cap must be marked by a fade rather than a hard cut"
+    );
+    assert!(
+        css.contains(".comment-card.expanded .comment-head {") && css.contains("position: sticky;"),
+        "an expanded card must keep its header on screen"
+    );
+    assert!(
+        !css.contains(".comment-line"),
+        "the single-line comment rendering is retired"
+    );
+}
+
 /// ORB-11655: the Audit summary and the Diagnostics side card are their own
 /// scroll boxes. Emptying them on the 30 s tick collapsed their height and
 /// dropped the operator's scroll position, so they diff by keyed card instead.

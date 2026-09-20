@@ -1617,8 +1617,7 @@
         color: var(--fg-mute);
       }
       
-      .row-detail .history-line,
-      .row-detail .comment-line {
+      .row-detail .history-line {
         font-family: var(--font-mono);
         font-size: 12px;
         color: var(--fg-dim);
@@ -1627,13 +1626,255 @@
         border-radius: 4px;
         overflow-wrap: anywhere;
       }
-      .row-detail .history-line:nth-child(odd),
-      .row-detail .comment-line:nth-child(odd) {
+      .row-detail .history-line:nth-child(odd) {
         background: rgba(255, 255, 255, 0.02);
       }
       
-      .row-detail .history-line .actor,
-      .row-detail .comment-line .author { color: var(--accent-hover); font-weight: 500; }
+      .row-detail .history-line .actor { color: var(--accent-hover); font-weight: 500; }
+
+      /* ORB-12645: the comment thread. It sits below both detail columns at
+         full width, each card renders Markdown at the ~72ch measure the eye
+         tracks, and a body over ~300px stays capped behind a fade until the
+         operator opens it. */
+      .row-detail.split-layout > .comments-panel {
+        grid-column: 1 / -1;
+      }
+      .comments-panel .comment-thread {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .comment-pref {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        letter-spacing: 0;
+        text-transform: none;
+        color: var(--fg-dim);
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        padding: 2px 6px;
+        cursor: pointer;
+      }
+      .comment-pref:hover { color: var(--fg); border-color: var(--fg-dim); }
+      .comment-pref:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+      .comments-panel h4 .field-actions { gap: 6px; }
+
+      .comment-card {
+        border: 1px solid var(--hair);
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.015);
+        padding: 10px 12px 8px 12px;
+      }
+      .comment-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--hair);
+        margin-bottom: 10px;
+      }
+      /* The header is the card's handle: while a long comment is open it stays
+         on screen so the author and the actions never scroll away from the
+         body they belong to. */
+      .comment-card.expanded .comment-head {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: var(--bg-elev);
+        margin: -10px -12px 10px -12px;
+        padding: 10px 12px 8px 12px;
+      }
+      .comment-initial {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid var(--border);
+        color: var(--fg-dim);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        flex: none;
+      }
+      .comment-by { color: var(--fg); font-size: 12px; font-weight: 600; }
+      .comment-by.agent { color: var(--accent-hover); }
+      .comment-agent-pill {
+        font-family: var(--font-mono);
+        font-size: 9px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--accent);
+        border: 1px solid var(--accent);
+        border-radius: 3px;
+        padding: 1px 4px;
+      }
+      .comment-at,
+      .comment-age,
+      .comment-size {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        color: var(--fg-mute);
+      }
+      .comment-actions {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .comment-action {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        color: var(--fg-mute);
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 3px;
+        padding: 2px 5px;
+        cursor: pointer;
+      }
+      .comment-action:hover { color: var(--fg); border-color: var(--border); }
+      .comment-action:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+
+      .comment-layout { display: block; }
+      .comment-layout.outlined {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 180px;
+        gap: 16px;
+        align-items: start;
+      }
+      /* The outline reads as a margin note, so it follows the body in the DOM
+         (and in a narrow viewport) but sits beside it when there is room. */
+      .comment-layout.outlined .comment-outline { grid-column: 2; grid-row: 1; }
+      .comment-layout.outlined .comment-bodies { grid-column: 1; grid-row: 1; }
+      @media (max-width: 1000px) {
+        .comment-layout.outlined { display: block; }
+      }
+      .comment-bodies { min-width: 0; }
+      .comment-body {
+        font-size: 13px;
+        line-height: 1.65;
+        max-width: 72ch;
+      }
+      .comment-body h2 { scroll-margin-top: 48px; }
+      .comment-raw {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        line-height: 1.6;
+        color: var(--fg-dim);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        margin: 0;
+      }
+      .comment-card.collapsed .comment-bodies {
+        position: relative;
+        max-height: 300px;
+        overflow: hidden;
+      }
+      .comment-card.collapsed .comment-bodies::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 72px;
+        pointer-events: none;
+        background: linear-gradient(to bottom, rgba(5, 5, 5, 0), var(--bg-elev));
+      }
+      .comment-outline {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        border-left: 1px solid var(--hair);
+        padding-left: 10px;
+        position: sticky;
+        top: 48px;
+      }
+      .comment-outline-title {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--fg-mute);
+        margin-bottom: 4px;
+      }
+      .comment-outline-link {
+        text-align: left;
+        background: transparent;
+        border: none;
+        border-left: 2px solid transparent;
+        padding: 2px 0 2px 6px;
+        margin-left: -12px;
+        color: var(--fg-dim);
+        font-family: var(--font-sans);
+        font-size: 11px;
+        line-height: 1.4;
+        cursor: pointer;
+      }
+      .comment-outline-link:hover { color: var(--fg); }
+      .comment-outline-link.active { color: var(--accent-hover); border-left-color: var(--accent); }
+      .comment-outline-link:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+
+      .comment-foot {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+      }
+      .comment-summary {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        color: var(--fg-mute);
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1 1 auto;
+      }
+      .comment-toggle {
+        font-family: var(--font-sans);
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--accent);
+        background: transparent;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 3px 10px;
+        cursor: pointer;
+        flex: none;
+      }
+      .comment-toggle:hover { background: rgba(110, 159, 255, 0.1); }
+      .comment-toggle:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 2px; }
+
+      .comment-form-label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--fg-dim);
+        font-weight: 600;
+      }
+      .comment-form-hint {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        color: var(--fg-mute);
+      }
+      .comment-preview {
+        border: 1px dashed var(--border);
+        border-radius: 6px;
+        padding: 10px 12px;
+        max-height: 320px;
+        overflow-y: auto;
+      }
+      .action.preview {
+        border: 1px solid var(--border);
+        color: var(--fg-dim);
+      }
+      .action.preview:hover:not(:disabled) {
+        border-color: var(--fg);
+        color: var(--fg);
+      }
 
       .row-detail .actions {
         display: flex;
