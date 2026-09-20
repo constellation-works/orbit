@@ -307,21 +307,25 @@ function buildClaimActions(claim, capabilities, handlers) {
       );
       return;
     }
-    const button = el("button", { class: `claim-action ${key}`, text: label });
-    button.type = "button";
-    button.setAttribute("data-action", key);
+    let input = null;
     if (opts.reasonRequired) {
-      const input = el("input", { class: "claim-reason" });
+      input = el("input", { class: "claim-reason" });
       input.type = "text";
       input.placeholder = opts.reasonPlaceholder || "reason";
       input.setAttribute("aria-label", `${label} reason`);
       input.setAttribute("data-reason-for", key);
       row.appendChild(input);
-      button.addEventListener("click", () => onRun(input.value));
-    } else {
-      button.addEventListener("click", () => onRun(null));
     }
-    row.appendChild(button);
+
+    const choices = opts.statusChoices || [{ value: null, label }];
+    for (const choice of choices) {
+      const button = el("button", { class: `claim-action ${key}`, text: choice.label });
+      button.type = "button";
+      button.setAttribute("data-action", key);
+      if (choice.value) button.setAttribute("data-status", choice.value);
+      button.addEventListener("click", () => onRun(input ? input.value : null, choice.value));
+      row.appendChild(button);
+    }
   };
 
   if (handoff && claim.phase === "handed_off" && authority.state === "not_authorized") {
@@ -341,8 +345,15 @@ function buildClaimActions(claim, capabilities, handlers) {
       "recover",
       "Recover claim",
       "claim_recover",
-      (reason) => handlers.onRecover && handlers.onRecover(claim, reason),
-      { reasonRequired: true, reasonPlaceholder: "why this attempt is over" },
+      (reason, status) => handlers.onRecover && handlers.onRecover(claim, reason, status),
+      {
+        reasonRequired: true,
+        reasonPlaceholder: "why this attempt is over",
+        statusChoices: [
+          { value: "blocked", label: "Recover claim → blocked" },
+          { value: "backlog", label: "Recover claim → backlog" },
+        ],
+      },
     );
   }
 
@@ -386,7 +397,7 @@ export function revokeHandoff(claim, reason) {
   });
 }
 
-export function recoverClaim(claim, reason, status = "blocked") {
+export function recoverClaim(claim, reason, status) {
   return postJson(`/api/distributed/claims/${encodeURIComponent(claim.claim_id)}/recover`, {
     expected_phase: claim.phase,
     status,
@@ -430,7 +441,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
         buildClaimPanel(claim, capabilities, {
           onApprove: (target) => act(() => approveHandoff(target)),
           onRevoke: (target, reason) => act(() => revokeHandoff(target, reason)),
-          onRecover: (target, reason) => act(() => recoverClaim(target, reason)),
+          onRecover: (target, reason, status) => act(() => recoverClaim(target, reason, status)),
         }),
       );
     }
