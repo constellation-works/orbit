@@ -168,6 +168,17 @@ fn normalize_missing_generation_root(root: &Path) -> Result<PathBuf, OrbitError>
     }
 }
 
+/// The directory whose generation records identify one authority.
+///
+/// Two spellings of the same authority — `~/.orbit` and a `--root` naming it
+/// through a symlink, say — collapse to one value here. A caller that admits
+/// against several roots at once must compare them this way before locking:
+/// flock treats a second open of the same file as a foreign holder, so locking
+/// one authority twice would refuse the update against itself.
+pub fn authority_root(root: &Path) -> Result<PathBuf, OrbitError> {
+    validated_generation_root(root)
+}
+
 /// Join an allow-listed generation record name onto a validated root.
 ///
 /// The original caller string never reaches `Path::join`; only the matching

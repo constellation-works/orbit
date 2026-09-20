@@ -68,12 +68,10 @@ pub struct UpdateRequest {
 /// build one directly so the whole flow runs against fixtures without touching
 /// a real installation.
 pub struct UpdateEnvironment {
-    /// Generation-admission authority for this invocation.
-    ///
-    /// Same resolution as client pins and `orbit update --preflight`: `--root`,
-    /// then `ORBIT_ROOT`, otherwise the host-global root (`~/.orbit`, or
-    /// `ORBIT_REGISTRY_ROOT` in a managed run).
-    pub global_root: PathBuf,
+    /// Generation-admission authorities for this invocation, in the order they
+    /// are locked. Built by [`admission_authorities`]; `--preflight` reports
+    /// the same list.
+    pub admission_roots: Vec<PathBuf>,
     /// The executable to replace.
     pub executable: PathBuf,
     /// Process snapshot of the running binary's version (`CARGO_PKG_VERSION`
@@ -123,7 +121,7 @@ impl UpdateEnvironment {
                 },
             );
         Ok(Self {
-            global_root: orbit_core::runtime::resolve_generation_root(root_override)?,
+            admission_roots: admission_authorities(root_override)?,
             install_channel: InstallChannel::detect_with_homebrew_ownership(
                 &executable,
                 channel::managed_install_dir().as_deref(),
@@ -138,6 +136,86 @@ impl UpdateEnvironment {
             workspace,
         })
     }
+}
+
+/// Every generation authority that can hold a live pin on the host binary.
+///
+/// Two authorities can, and a root override splits them. The invocation's own
+/// resolution comes first — `--root`, then `ORBIT_ROOT`, otherwise the
+/// host-global root (`~/.orbit`, or `ORBIT_REGISTRY_ROOT` in a managed run) —
+/// because that is the authority this process would pin as a client. The
+/// host-global root follows whenever the override named something else: what
+/// `orbit update` replaces is `current_exe()`, which no root override moves,
+/// and every client started without an override pins the host-global root. An
+/// upgrade that locked only the override would replace the binary those
+/// clients are running and strand every later host-global process behind a
+/// digest mismatch it can never win.
+///
+/// Identical authorities spelled differently collapse to one entry: flock
+/// would treat a second open of the same lock as a foreign holder and refuse
+/// the update against itself.
+pub fn admission_authorities(root_override: Option<&Path>) -> Result<Vec<PathBuf>, OrbitError> {
+    let resolved = orbit_core::runtime::resolve_generation_root(root_override)?;
+    let host_global = orbit_core::runtime::resolve_global_root()?;
+    let mut roots = vec![resolved];
+    if orbit_common::fs::generation::authority_root(&host_global)?
+        != orbit_common::fs::generation::authority_root(&roots[0])?
+    {
+        roots.push(host_global);
+    }
+    Ok(roots)
+}
+
+/// Take exclusive admission on every authority, refusing if any is live.
+///
+/// Returns one admission per root, in the same order: with an override in play
+/// the operator otherwise cannot tell which set of clients to quiesce, so both
+/// this refusal and a later pin failure name the authority they came from.
+pub fn acquire_admissions(
+    roots: &[PathBuf],
+) -> Result<Vec<orbit_common::fs::generation::GenerationUpdate>, OrbitError> {
+    if roots.is_empty() {
+        return Err(OrbitError::InvalidInput(
+            "no generation authority to admit against; refusing to replace an executable \
+             no live client could be observed through"
+                .to_string(),
+        ));
+    }
+    roots
+        .iter()
+        .map(|root| {
+            orbit_common::fs::generation::GenerationUpdate::acquire(root)
+                .map_err(|error| naming_authority(root, &error))
+        })
+        .collect()
+}
+
+/// Pin the candidate generation in every authority admission was taken on.
+///
+/// `admissions` is what [`acquire_admissions`] returned for `roots`, so the
+/// two are index-aligned.
+fn pin_candidate(
+    roots: &[PathBuf],
+    admissions: Vec<orbit_common::fs::generation::GenerationUpdate>,
+    digest: &str,
+) -> Result<Vec<orbit_common::fs::generation::GenerationGuard>, OrbitError> {
+    roots
+        .iter()
+        .zip(admissions)
+        .map(|(root, admission)| {
+            admission
+                .pin(digest)
+                .map_err(|error| naming_authority(root, &error))
+        })
+        .collect()
+}
+
+/// Say which authority an admission failure came from.
+fn naming_authority(root: &Path, error: &OrbitError) -> OrbitError {
+    OrbitError::Execution(format!(
+        "{error}. The generation authority is '{}'",
+        root.display()
+    ))
 }
 
 /// How an update run ended.
@@ -267,8 +345,7 @@ pub fn run_update(
         return Err(OrbitError::InvalidInput(remediation));
     }
 
-    let admission =
-        orbit_common::fs::generation::GenerationUpdate::acquire(&environment.global_root)?;
+    let admissions = acquire_admissions(&environment.admission_roots)?;
     let install_dir = environment.executable.parent().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
             "'{}' has no parent directory",
@@ -307,7 +384,7 @@ pub fn run_update(
         // the documented way to finish a run whose convergence failed.
         converge::require_admission_contract(&executable)?;
         let digest = orbit_common::fs::generation::executable_generation(&executable)?;
-        let _generation = admission.pin(&digest)?;
+        let _generations = pin_candidate(&environment.admission_roots, admissions, &digest)?;
         return Ok(finish(
             environment,
             &executable,
@@ -360,8 +437,8 @@ pub fn run_update(
         }
     }
 
-    let _generation = match admission.pin(&digest) {
-        Ok(guard) => guard,
+    let _generations = match pin_candidate(&environment.admission_roots, admissions, &digest) {
+        Ok(guards) => guards,
         Err(error) => {
             report.outcome = UpdateOutcome::NeedsRecovery;
             report.recovery = Some(format!(

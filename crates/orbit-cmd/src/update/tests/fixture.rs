@@ -211,7 +211,7 @@ impl Fixture {
 
     fn environment_with_workspace(&self, workspace_cwd: Option<PathBuf>) -> UpdateEnvironment {
         UpdateEnvironment {
-            global_root: self._root.path().join("global"),
+            admission_roots: vec![self._root.path().join("global")],
             install_channel: InstallChannel::Managed {
                 install_dir: self.executable.parent().expect("bin dir").to_path_buf(),
             },

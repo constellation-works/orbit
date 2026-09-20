@@ -98,19 +98,26 @@ opening state. The updater requires this protocol before replacing an executable
 a missing/incompatible candidate is refused, including pre-fix downgrades.
 
 Use `orbit update --preflight --json` against the configured executable and
-same authority before a wrapper changes the installation. Exit 0 reports
-`schema_version: 1`, `admitted: true`, `reservation: false` and
-`contract: executable-generation-v1`; exit 1 refuses admission on stderr.
+same authorities before a wrapper changes the installation. Exit 0 reports
+`schema_version: 1`, `admitted: true`, `reservation: false`,
+`contract: executable-generation-v1`, and the `admission_roots` it locked;
+exit 1 refuses admission on stderr and names the refusing authority.
 `--root`, then `ORBIT_ROOT`, otherwise isolated `HOME=` / the host-global
-root selects that authority (scratch init in a read-only `~/.orbit`
-sandbox). `orbit update` admits against the same resolved path for that
-invocation; a green preflight is not evidence for an update that would
-consult a different root. It opens no runtime or stores and may create
-coordination lock files. It is an observation, not a reservation. `orbit
-update` reacquires and holds admission through replacement, then pins the
-candidate through convergence. External installers must quiesce clients; a
-standalone preflight is not race-free. `orbit update --check` checks
-releases, not running-client compatibility.
+root selects the first authority, reported as `global_root` (scratch init in
+a read-only `~/.orbit` sandbox stays unblocked). When an override names
+something other than the host-global root, the host-global root is locked
+*as well*: the replaced executable is the running host binary, which no root
+override moves, and clients started without an override pin the host-global
+root. A root override therefore isolates state, not host-binary replacement —
+a live client on either authority refuses the upgrade. `orbit update` admits
+against that same set for the invocation; a green preflight is not evidence
+for an update that would resolve different roots. It opens no runtime or
+stores and may create coordination lock files. It is an observation, not a
+reservation. `orbit update` reacquires and holds admission through
+replacement, then pins the candidate in every locked authority through
+convergence. External installers must quiesce clients; a standalone preflight
+is not race-free. `orbit update --check` checks releases, not running-client
+compatibility.
 
 Participating CLI/MCP processes pin their executable generation for their entire
 lifetime. An update refuses while any is live, and a different executable cannot

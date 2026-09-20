@@ -1,5 +1,5 @@
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::Args;
 use orbit_cmd::update::{
@@ -63,20 +63,26 @@ impl UpdateCommand {
             .into());
         }
         if self.preflight {
-            // Same `resolve_generation_root` `UpdateEnvironment::from_process` uses
-            // for exclusive admission, so a green preflight names the file the
-            // following `orbit update` will lock.
-            let root = orbit_core::runtime::resolve_generation_root(root_override)?;
-            let _admission = orbit_common::fs::generation::GenerationUpdate::acquire(&root)?;
+            // Same `admission_authorities` `UpdateEnvironment::from_process`
+            // uses for exclusive admission, so a green preflight names every
+            // file the following `orbit update` will lock — including the
+            // host-global root a `--root`/`ORBIT_ROOT` override does not move
+            // the replaced executable out of.
+            let roots = orbit_cmd::update::admission_authorities(root_override)?;
+            let _admissions = orbit_cmd::update::acquire_admissions(&roots)?;
             return Ok(Payload::detail(
                 serde_json::json!({
                     "schema_version": 1,
                     "admitted": true,
                     "reservation": false,
-                    "global_root": root,
+                    "global_root": roots.first(),
+                    "admission_roots": roots,
                     "contract": orbit_common::fs::generation::GENERATION_CONTRACT
                 }),
-                "Upgrade admission available. This observation does not reserve admission; use orbit update for guarded replacement.",
+                format!(
+                    "Upgrade admission available on {}. This observation does not reserve admission; use orbit update for guarded replacement.",
+                    describe_authorities(&roots)
+                ),
             ).into());
         }
         let environment = UpdateEnvironment::from_process(root_override)?;
@@ -95,6 +101,15 @@ impl UpdateCommand {
             .with_exit_code(exit_code)
             .into())
     }
+}
+
+/// Name every authority the probe locked, in the order `orbit update` takes them.
+fn describe_authorities(roots: &[PathBuf]) -> String {
+    roots
+        .iter()
+        .map(|root| root.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" and ")
 }
 
 fn format_report(report: &UpdateReport) -> String {
