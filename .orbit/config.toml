@@ -16,10 +16,10 @@ auto_ship = true
 base_branch = "agent-main"
 default_crew = "opus"
 system_crew = "luna"
-hard_complexity_crews = ["opus","astra"]
+hard_complexity_crews = ["opus"]
 medium_complexity_crews = ["grok"]
-low_complexity_crews = ["gemini-flash"]
-xhard_complexity_crews = ["opus","astra"]
+low_complexity_crews = ["luna"]
+xhard_complexity_crews = ["opus"]
 
 [crews.opus]
 backend = "cli"
