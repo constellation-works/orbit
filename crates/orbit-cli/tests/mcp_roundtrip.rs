@@ -21,13 +21,11 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
 use orbit_common::test_env;
-#[cfg(target_os = "linux")]
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
-#[cfg(target_os = "linux")]
 /// Path of the checked-in `tools/list` snapshot, relative to the crate root.
 const SNAPSHOT_RELATIVE_PATH: &str = "tests/snapshots/mcp_tools_list.json";
 
