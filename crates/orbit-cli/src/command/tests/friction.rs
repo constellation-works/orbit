@@ -261,6 +261,7 @@ type AuditCase = (
     &'static str,
     Option<&'static str>,
     Option<bool>,
+    bool,
 );
 
 /// Audit metadata is derived from the registry too — `operation.rs` no longer
@@ -268,31 +269,39 @@ type AuditCase = (
 #[test]
 fn audit_metadata_is_derived_from_the_registry() {
     let cases: &[AuditCase] = &[
-        (&["orbit", "friction", "list"], "list", None, None),
+        (&["orbit", "friction", "list"], "list", None, None, true),
         (
             &["orbit", "friction", "list", "--json"],
             "list",
             None,
             Some(true),
+            true,
         ),
         (
             &["orbit", "friction", "show", "F2026-05-001"],
             "show",
             Some("F2026-05-001"),
             None,
+            false,
         ),
         (
             &["orbit", "friction", "resolve", "F2026-05-001"],
             "resolve",
             Some("F2026-05-001"),
             None,
+            false,
         ),
-        (&["orbit", "friction", "stats"], "stats", None, None),
+        (&["orbit", "friction", "stats"], "stats", None, None, false),
     ];
 
-    for (args, subcommand, target_id, json_preference) in cases {
+    for (args, subcommand, target_id, json_preference, read_only) in cases {
         let operation = Cli::parse_from(args.iter().copied()).command.operation();
-        assert_eq!(operation.runtime_need, RuntimeNeed::Required, "{args:?}");
+        let expected_runtime_need = if *read_only {
+            RuntimeNeed::ReadOnly
+        } else {
+            RuntimeNeed::Required
+        };
+        assert_eq!(operation.runtime_need, expected_runtime_need, "{args:?}");
         assert_eq!(
             operation.json_error_preference, *json_preference,
             "{args:?}"
