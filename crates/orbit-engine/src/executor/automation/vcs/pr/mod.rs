@@ -18,7 +18,11 @@ pub(crate) mod tests;
 pub(in crate::executor::automation) use attribution::ship_done_attribution;
 pub(in crate::executor::automation::vcs) use body::meaningful_execution_summary;
 pub(in crate::executor::automation) use complete::pr_complete;
+pub(in crate::executor::automation::vcs) use delivery::{
+    DeliveryPin, PrMergeState, classify_pr_state,
+};
 pub(in crate::executor::automation) use merge::git_merge;
+pub(in crate::executor::automation::vcs) use merge::resolve_merge_capabilities;
 pub(in crate::executor::automation::vcs) use open::open_or_reuse_unchecked;
 pub(in crate::executor::automation) use open::pr_open;
 pub(in crate::executor::automation) use promote::pr_promote;

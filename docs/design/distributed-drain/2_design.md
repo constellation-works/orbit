@@ -290,10 +290,9 @@ reconciliation. Grant-backed acceptance and merge-intent publication recheck the
 SQLite commit transaction, including hard revocation. A historical replay is an advisory recorded
 outcome, never renewed permission to execute or merge.
 
-The outbox is durable without a live drain or ship sweep. Its consumer, actual external merge,
-and Git/provider observation adapters are separate integration work; public distributed writes
-remain gated. No scheduler, destination caller registry, routine enablement or live rollout is
-introduced by this foundation.
+The outbox is durable without a live drain or ship sweep. Public distributed writes remain gated,
+and no scheduler, destination caller registry, routine enablement or live rollout is introduced by
+this foundation.
 
 Completion defaults to `review`. Pull eligibility or `agent` access alone does not authorize a
 merge. Any `completion: done` must reference durable, explicitly granted completion authority
@@ -335,6 +334,32 @@ store. A changed head/base or a conflict stops landing with durable evidence. Re
 an explicitly authorized new attempt and require fresh validation and a new handoff; the owner
 does not silently rebase unvalidated code. No-diff completion uses the existing typed evidence
 checks and the same completion-authority boundary.
+
+### Landing consumer implementation status
+
+The owner landing consumer now exists as a durable job. Recording completion authority — accepting
+a completion-authorized handoff, or approving a review-only one — dispatches `task_landing_pipeline`
+from the outbox in the same call, so no drain, ship sweep, routine or schedule is involved.
+Handoff identity keys one durable landing attempt and the job's action key; a merged handoff refuses
+re-dispatch, a live owner job is left alone, and a pending request whose job never started or whose
+job died is picked up by the next explicit dispatch pass as the next attempt. Landing a named
+handoff is also an explicit owner operation, which is how a stopped attempt is retried and an
+uncertain one reconciled.
+
+Its `handoff_land` step observes rather than assumes. The pinned `pr_complete` delivery identity is
+reused directly — the same branch, base and head-commit pins, the same merged-with-merge-commit
+evidence and the same provider-state classification — with no follower run or path involved: the
+owner checks the head on every poll, resolves candidate and base objects in its own checkout, and
+verifies that the validated base is still reachable from the landing ref. The merge intent is
+durable before the external call; a lost reply or a crash leaves recorded uncertainty that the next
+attempt resolves against the provider's actual state or the local target ref before anything is
+retried, and the store refuses revocation, recovery and reassignment until it does. Changed
+identity, a conflict, an unsatisfied protection or an exhausted check budget records a durable stop
+and leaves the task in review. Owner-local candidates fast-forward the local landing branch and are
+verified from the ref; no-diff delivery verifies its covering commit on the landing ref and makes no
+external call. Every completion re-runs the authorization, candidate and validation-artifact checks
+inside the transaction that moves `review -> done`, and the observation the activity supplies must
+equal the accepted candidate exactly.
 
 ## 4. Follower preconditions
 

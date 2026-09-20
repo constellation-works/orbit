@@ -17,7 +17,8 @@ use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
 use crate::context::{
-    PrConfig, ReviewLandingRequest, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
+    HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, PrConfig,
+    ReviewLandingRequest, RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate,
 };
 
 use super::super::super::freshness::BranchFreshness;
@@ -60,6 +61,13 @@ pub struct PrOpenTestHost {
     provider_completion: bool,
     activity_updates: Mutex<Vec<(String, TaskActivityUpdate)>>,
     review_landings: Mutex<Vec<ReviewLandingRequest>>,
+    /// Stand-in for the owner coordination store [ORB-12499]: the accepted
+    /// handoff a landing attempt runs against, plus the steps it recorded. It
+    /// enforces the guards the real store enforces — one unresolved merge
+    /// intent at a time, and no completion while one is outstanding — so a
+    /// test sees the same refusals without a coordination store.
+    landing: Mutex<Option<HandoffLandingContext>>,
+    landing_updates: Mutex<Vec<HandoffLandingUpdate>>,
 }
 
 impl PrOpenTestHost {
@@ -84,7 +92,47 @@ impl PrOpenTestHost {
             provider_completion: false,
             activity_updates: Mutex::new(Vec::new()),
             review_landings: Mutex::new(Vec::new()),
+            landing: Mutex::new(None),
+            landing_updates: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Seed the authorized handoff this host will hand to a landing attempt.
+    pub fn with_landing_context(self, context: HandoffLandingContext) -> Self {
+        *self.landing.lock().expect("landing lock") = Some(context);
+        self
+    }
+
+    pub fn landing_updates(&self) -> Vec<HandoffLandingUpdate> {
+        self.landing_updates
+            .lock()
+            .expect("landing updates lock")
+            .clone()
+    }
+
+    /// The landing steps in order, as step names: `publish_intent`,
+    /// `resolve_intent:<merged>`, `complete`, `stop`.
+    pub fn landing_steps(&self) -> Vec<String> {
+        self.landing_updates()
+            .iter()
+            .map(|update| match &update.step {
+                HandoffLandingStep::PublishIntent { .. } => "publish_intent".to_string(),
+                HandoffLandingStep::ResolveIntent { merged, .. } => {
+                    format!("resolve_intent:{merged}")
+                }
+                HandoffLandingStep::Complete => "complete".to_string(),
+                HandoffLandingStep::Stop => "stop".to_string(),
+            })
+            .collect()
+    }
+
+    /// The merge intent this owner has recorded and not resolved.
+    pub fn unresolved_merge_intent(&self) -> Option<String> {
+        self.landing
+            .lock()
+            .expect("landing lock")
+            .as_ref()
+            .and_then(|context| context.unresolved_merge_intent.clone())
     }
 
     #[cfg(unix)]
@@ -129,6 +177,13 @@ impl PrOpenTestHost {
             .lock()
             .expect("VCS errors lock")
             .insert(operation.to_string(), message.to_string());
+    }
+
+    pub fn clear_vcs_error(&self, operation: &str) {
+        self.vcs_errors
+            .lock()
+            .expect("VCS errors lock")
+            .remove(operation);
     }
 
     pub fn queue_vcs_error(&self, operation: &str, message: &str) {
@@ -517,11 +572,84 @@ impl RuntimeHost for PrOpenTestHost {
             .unwrap_or((None, None)))
     }
 
+    fn handoff_landing_context(
+        &self,
+        handoff_id: &str,
+    ) -> Result<HandoffLandingContext, OrbitError> {
+        self.landing
+            .lock()
+            .expect("landing lock")
+            .clone()
+            .filter(|context| context.handoff_id == handoff_id)
+            .ok_or_else(|| {
+                OrbitError::Execution(format!("no accepted handoff '{handoff_id}' on this owner"))
+            })
+    }
+
+    fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
+        let mut landing = self.landing.lock().expect("landing lock");
+        let context = landing
+            .as_mut()
+            .filter(|context| context.handoff_id == update.handoff_id)
+            .ok_or_else(|| {
+                OrbitError::Execution("no accepted handoff on this owner".to_string())
+            })?;
+        // The owner refuses any authority decision that does not carry an
+        // observation of the exact accepted candidate.
+        if matches!(
+            update.step,
+            HandoffLandingStep::PublishIntent { .. } | HandoffLandingStep::Complete
+        ) && update.observed.as_ref() != Some(&context.candidate)
+        {
+            return Err(OrbitError::Execution(
+                "landing decisions require an observation of the accepted candidate".to_string(),
+            ));
+        }
+        match &update.step {
+            HandoffLandingStep::PublishIntent { intent_id } => {
+                if context.unresolved_merge_intent.is_some() {
+                    return Err(OrbitError::Execution(
+                        "merge intent already unresolved".to_string(),
+                    ));
+                }
+                context.unresolved_merge_intent = Some(intent_id.clone());
+            }
+            HandoffLandingStep::ResolveIntent { intent_id, .. } => {
+                if context.unresolved_merge_intent.as_deref() != Some(intent_id.as_str()) {
+                    return Err(OrbitError::Execution("merge intent mismatch".to_string()));
+                }
+                context.unresolved_merge_intent = None;
+            }
+            HandoffLandingStep::Complete | HandoffLandingStep::Stop => {
+                if context.unresolved_merge_intent.is_some() {
+                    return Err(OrbitError::Execution(
+                        "unresolved external merge intent".to_string(),
+                    ));
+                }
+            }
+        }
+        self.landing_updates
+            .lock()
+            .expect("landing updates lock")
+            .push(update.clone());
+        Ok(())
+    }
+
     fn run_private_vcs_operation(
         &self,
         operation: &str,
         input: Value,
     ) -> Result<Value, OrbitError> {
+        // An external merge without a durable intent is exactly what the
+        // ordering rule forbids, so the fake provider refuses it outright.
+        if operation == operations::PR_MERGE
+            && self.landing.lock().expect("landing lock").is_some()
+            && self.unresolved_merge_intent().is_none()
+        {
+            return Err(OrbitError::Execution(
+                "merge requested before any merge intent was recorded".to_string(),
+            ));
+        }
         self.vcs_calls
             .lock()
             .expect("VCS calls lock")

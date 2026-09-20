@@ -3,6 +3,7 @@
 mod base_obsolescence;
 mod freshness;
 mod git;
+mod landing;
 mod operations;
 
 /// Isolate PATH in a child test process so real private VCS operations can run

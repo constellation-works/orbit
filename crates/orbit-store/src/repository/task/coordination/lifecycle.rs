@@ -258,12 +258,11 @@ impl TaskCommitBoundary {
         {
             return Err(invalid("stale_claim"));
         }
-        let expected_status = if claim.phase == ExecutionClaimPhase::HandedOff {
-            TaskStatus::Review
-        } else if claim.phase == ExecutionClaimPhase::Failed {
-            TaskStatus::Blocked
-        } else {
-            TaskStatus::InProgress
+        let expected_status = match claim.phase {
+            ExecutionClaimPhase::HandedOff => TaskStatus::Review,
+            ExecutionClaimPhase::Failed => TaskStatus::Blocked,
+            ExecutionClaimPhase::Landed => TaskStatus::Done,
+            _ => TaskStatus::InProgress,
         };
         if bundle.envelope.status != expected_status {
             return Err(invalid("stale_claim"));
@@ -477,6 +476,46 @@ impl TaskCommitBoundary {
                 params.status_note = Some(reason.clone());
                 release = true;
                 state.last_event = "claim_revoked".into();
+            }
+            ClaimMutation::DispatchLanding {
+                handoff_id,
+                job_run_id,
+            } => {
+                self.dispatch_landing_attempt(
+                    auth,
+                    &state,
+                    handoff_id,
+                    job_run_id.as_ref(),
+                    &mut params,
+                    &mut handoff_effects,
+                )?;
+                state.last_event = "landing_dispatched".into();
+            }
+            ClaimMutation::CompleteLanding {
+                handoff_id,
+                evidence: proof,
+            } => {
+                self.complete_landing_attempt(
+                    auth,
+                    &state,
+                    handoff_id,
+                    proof,
+                    &mut params,
+                    &mut handoff_effects,
+                )?;
+                state.claim.phase = ExecutionClaimPhase::Landed;
+                state.last_event = "landing_completed".into();
+            }
+            ClaimMutation::StopLanding { handoff_id, reason } => {
+                self.stop_landing_attempt(
+                    auth,
+                    &state,
+                    handoff_id,
+                    reason,
+                    &mut params,
+                    &mut handoff_effects,
+                )?;
+                state.last_event = "landing_stopped".into();
             }
             ClaimMutation::MergeIntent {
                 intent_id,

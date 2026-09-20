@@ -280,13 +280,40 @@ new execution or landing permission. The summary-only legacy handoff variant ref
 distributed tools. Trusted observations must come from provider/Git state and owner validation
 policy. No-diff observations additionally require the existing already-landed Git checks; their
 report shape, scope projection, criteria and log requirements are shared with the local verifier.
-The durable pending outbox survives restart without an active drain or sweep; dispatch and actual
-external merge reconciliation belong to the dependent consumer slice.
+The durable pending outbox survives restart without an active drain or sweep.
 Generic tool/friction omitted-context fencing and transport propagation remain integration work;
 public distributed entry points must stay disabled until that proof passes.
 
 Journal intent schema 2 carries replayable evidence. The reader still accepts schema 1 intents;
 older executors refuse schema 2 rather than silently applying a transition without its evidence.
+
+### Owner landing consumer
+
+Recording completion authority dispatches the owner-local `task_landing_pipeline` from the outbox in
+the same call, so authorized work lands with no drain, ship sweep, routine or schedule running.
+Handoff identity keys one durable landing attempt and the dispatch key: a merged handoff refuses
+re-dispatch, a live owner job is not dispatched twice, and a pending request whose job never started
+or whose job is terminal is recovered as the next attempt by an explicit dispatch pass.
+`OrbitRuntime::dispatch_landing_requests`, `land_handoff` and `landing_attempts` are internal
+owner-domain seams alongside the handoff ones; landing a named handoff is how a stopped attempt is
+retried and an uncertain one reconciled.
+
+| Operation | Required owner behavior |
+|---|---|
+| Dispatch landing | Operator context, current unrevoked authorization and no landing invalidation; open exactly one attempt per handoff and attach only the job that owns it |
+| Publish merge intent | Recorded durably before the external call, after rechecking authority, candidate observation and pinned validation evidence |
+| Reconcile merge intent | Resolve against the provider's actual state or the owner-local target ref; an unresolved intent blocks completion, revocation, recovery and reassignment |
+| Complete landing | Requires an open attempt, a resolved intent, current authority and verified merge evidence; moves `review -> done`, settles the attempt and the outbox request atomically |
+| Stop landing | Durable evidence for changed identity, conflict, refused protection or an exhausted check budget; the task stays in review and a repair needs fresh validation and a new handoff |
+
+The landing step observes the pull request, the owner checkout's landing ref or the no-diff covering
+commit itself; it reuses the pinned `pr_complete` delivery identity and merged-with-merge-commit
+evidence without a follower run or path, checks the head on every poll, resolves candidate and base
+objects locally, and requires the validated base to remain reachable from the landing ref. An
+observation that is not the accepted candidate is refused before any external merge. Owner-local
+candidates fast-forward the local landing branch and are verified from the ref; no-diff delivery
+makes no external call and still requires typed evidence and completion authority. The owner never
+rebases unvalidated code and no administrative bypass exists.
 
 ### Worker coordination transport
 

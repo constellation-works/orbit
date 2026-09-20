@@ -98,6 +98,10 @@ pub(crate) const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/activities/pr_failure_handoff.yaml"),
     ),
     (
+        "handoff_land",
+        include_str!("../../assets/activities/handoff_land.yaml"),
+    ),
+    (
         "pr_conflict_recovery",
         include_str!("../../assets/activities/pr_conflict_recovery.yaml"),
     ),

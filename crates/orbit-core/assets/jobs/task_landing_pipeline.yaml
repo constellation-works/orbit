@@ -1,0 +1,44 @@
+# Owner landing pipeline [ORB-12499].
+#
+# The durable consumer of one authorized handoff. It is dispatched by the
+# owner's handoff outbox — accepting a completion-authorized handoff or
+# approving a review-only one records the request — so landing never depends on
+# a drain or the ship sweep running.
+#
+# Failure semantics:
+# - One live attempt per handoff. Handoff identity is the dispatch key, and the
+#   owner's claim journal refuses a second merge intent while one is unresolved.
+# - The merge intent is durable before the external call, so a lost reply or a
+#   crash leaves uncertainty the next attempt reconciles against real provider
+#   or Git state before anything is retried.
+# - A stopped landing (changed head or base, conflict, unsatisfied branch
+#   protection, exhausted check budget) fails the run with the task still in
+#   review and durable evidence recorded against the attempt. Repairing the
+#   candidate requires fresh validation and a new handoff, not a resume.
+#
+schemaVersion: 2
+kind: Job
+metadata:
+  name: task_landing_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  # Landing is serial per handoff; the ceiling only bounds unrelated handoffs
+  # landing at the same time.
+  max_active_runs: 10
+  default_input:
+    handoff_id: ""
+    task_id: ""
+    # How long a pull request may sit waiting for its required checks before the
+    # attempt stops. Null keeps the activity's own budget.
+    max_wait_seconds: null
+    poll_interval_seconds: null
+
+  steps:
+    - id: land
+      target: activity:handoff_land
+      default_input:
+        handoff_id: "{{ input.handoff_id }}"
+        task_id: "{{ input.task_id }}"
+        max_wait_seconds: "{{ input.max_wait_seconds }}"
+        poll_interval_seconds: "{{ input.poll_interval_seconds }}"

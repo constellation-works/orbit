@@ -185,7 +185,7 @@ fn merge_with_rebase_retry(
 /// Locate the linked worktree that already has `base` checked out. Git refuses
 /// to check the same branch out in the primary checkout, so stacked local
 /// pipelines must merge directly in the owning worktree.
-pub(super) fn checkout_holding_branch(
+pub(in crate::executor::automation::vcs) fn checkout_holding_branch(
     repo_root: &Path,
     base: &str,
 ) -> Result<Option<PathBuf>, OrbitError> {
@@ -263,7 +263,10 @@ fn parse_divergence_count(
 /// Uses [`git_output_raw`] rather than [`git_output`]: the latter trims the
 /// whole output, which would misalign the index/worktree columns of a
 /// single-line result by one byte (see `git_output`'s doc comment).
-pub(super) fn ensure_clean_checkout(path: &Path, label: &str) -> Result<(), OrbitError> {
+pub(in crate::executor::automation::vcs) fn ensure_clean_checkout(
+    path: &Path,
+    label: &str,
+) -> Result<(), OrbitError> {
     let status = git_output_raw(path, &["status", "--porcelain"])?;
     if status.trim().is_empty() {
         return Ok(());

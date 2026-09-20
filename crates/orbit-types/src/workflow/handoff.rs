@@ -126,15 +126,51 @@ pub struct HandoffRevocation {
 pub enum LandingStartState {
     Pending,
     Revoked,
+    /// The owner consumer verified this handoff's merge evidence and completed it.
+    Completed,
 }
 
-/// Durable outbox. A later consumer owns dispatch and external reconciliation.
+/// Durable outbox consumed by the owner landing job. A pending request survives
+/// restart without a drain or ship sweep; only verified completion or explicit
+/// revocation settles it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LandingStartRequest {
     pub handoff_id: String,
     pub authorization_id: String,
     pub state: LandingStartState,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LandingAttemptState {
+    /// One owner landing job owns this handoff until it merges or stops.
+    Dispatched,
+    /// Merged and completed against verified external evidence.
+    Merged,
+    /// Stopped with durable evidence; a repair needs fresh validation and a new handoff.
+    Stopped,
+}
+
+/// The owner's durable record of landing work for one handoff. Handoff identity
+/// deduplicates job creation: a second dispatch for a live attempt is refused
+/// rather than starting a second merge.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LandingAttempt {
+    pub handoff_id: String,
+    pub authorization_id: String,
+    pub task_id: String,
+    pub claim_id: String,
+    pub attempt: u32,
+    pub state: LandingAttemptState,
+    /// The owner-local job run carrying this attempt, once it is submitted. An
+    /// attempt reserved before submission records it on the next dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// Existing no-diff delivery contract shared with the local verifier.

@@ -60,6 +60,14 @@ pub(super) fn handoff(f: &Coordinated, c: &ExecutionClaim) -> TaskHandoff {
     };
     logs(f, c, h, 0)
 }
+pub(super) fn with_validation_logs(
+    f: &Coordinated,
+    c: &ExecutionClaim,
+    h: TaskHandoff,
+) -> TaskHandoff {
+    logs(f, c, h, 0)
+}
+
 fn logs(f: &Coordinated, c: &ExecutionClaim, mut h: TaskHandoff, exit_code: i32) -> TaskHandoff {
     let artifacts: Vec<_> = ["build", "test"]
         .iter()
@@ -104,7 +112,9 @@ fn logs(f: &Coordinated, c: &ExecutionClaim, mut h: TaskHandoff, exit_code: i32)
         .expect("persist owner logs");
     h
 }
-fn fixture(ship: AdmissionShipContract) -> (TempDir, Coordinated, ExecutionClaim, TaskHandoff) {
+pub(super) fn fixture(
+    ship: AdmissionShipContract,
+) -> (TempDir, Coordinated, ExecutionClaim, TaskHandoff) {
     let tmp = TempDir::new().expect("temp");
     let f = Coordinated::open(tmp.path());
     f.create_task("typed handoff");
@@ -146,7 +156,7 @@ fn fixture(ship: AdmissionShipContract) -> (TempDir, Coordinated, ExecutionClaim
     let h = handoff(&f, &c);
     (tmp, f, c, h)
 }
-fn accept(
+pub(super) fn accept(
     f: &Coordinated,
     c: &ExecutionClaim,
     h: &TaskHandoff,
@@ -157,7 +167,7 @@ fn accept(
         &ClaimMutation::AcceptHandoff(h.clone()),
     )
 }
-fn approve(
+pub(super) fn approve(
     f: &Coordinated,
     c: &ExecutionClaim,
     h: &TaskHandoff,
@@ -173,7 +183,7 @@ fn approve(
         },
     )
 }
-fn starts(f: &Coordinated) -> Vec<LandingStartRequest> {
+pub(super) fn starts(f: &Coordinated) -> Vec<LandingStartRequest> {
     f.backends
         .task
         .task
