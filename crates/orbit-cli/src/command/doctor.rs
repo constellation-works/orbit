@@ -234,7 +234,6 @@ pub(crate) fn state_directory_permissions_row(runtime: &OrbitRuntime) -> Workspa
             (workspace.join("state"), true),
             (workspace.join("tasks"), true),
             (workspace.join("frictions"), true),
-            (workspace.join("knowledge"), true),
         ];
         for (configured_root, descend) in configured_roots {
             let root = match configured_root.canonicalize() {

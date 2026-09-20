@@ -5,7 +5,7 @@ tags: [operations, backup, restore, state, sqlite, task-publication]
 paths: ["crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-common/src/types/workspace.rs", "crates/orbit-config/src/**", "crates/orbit-registry/**", "crates/orbit-store/**", "crates/orbit-web/src/state.rs"]
 related_features: [orbit-core, remote-access, task-publication]
 related_artifacts: [ORB-10014, ORB-10294, ORB-10473, ORB-11077, ORB-11376, ORB-11426]
-last_validated: 2026-09-06
+last_validated: 2026-09-20
 ---
 
 # Inventory and Protect Orbit State
@@ -18,10 +18,17 @@ restore a store database, or move task bundles between machines.
 Two roots hold Orbit state. **Workspace state** lives in `<repo>/.orbit/`;
 **user/machine state** lives in `~/.orbit/` (override with `--root <dir>`, highest
 precedence). Path layout is defined in
-`crates/orbit-common/src/types/workspace.rs` (`WorkspacePaths`) and
+`crates/orbit-types/src/workspace/registry.rs` (`WorkspacePaths`) and
 `crates/orbit-config/src/persistence.rs` (`PersistenceConfig`).
 
 ### Workspace `.orbit/`
+
+`orbit workspace init` scaffolds `.orbit/resources/` plus
+`.orbit/state/{audit,job-runs,logs,scoreboard,worktrees}`. It does not create
+`.orbit/knowledge` or `.orbit/state/diagnostics`; leftover empty copies from
+older inits are unused and may be `rmdir`'d. Init tolerates both absence and
+presence. Path fields live on `WorkspacePaths` in
+`crates/orbit-types/src/workspace/registry.rs`.
 
 | Path | What it is | Authoritative or regenerable |
 |---|---|---|
@@ -34,9 +41,9 @@ precedence). Path layout is defined in
 | `state/layout.lock` | advisory lock taken during layout upgrades | transient |
 | `state/semantic.db` | semantic/vector index (docs and tasks) | regenerable (`orbit semantic index`) |
 | `state/scoreboard/` | rolling counters (`pr.json`, `task_review.json`, `tokens.json`, …) | mostly regenerable |
-| `state/job-runs/` | legacy file-based run bundles; new runs live in SQLite | not used for new runs; retain if old run evidence matters |
+| `state/job-runs/` | run-definition snapshots (`jrun-*.job.yaml`); new run history lives in SQLite | retain if old run evidence matters |
 | `state/audit/blobs/` | redacted content-addressed blobs referenced by global `v2_audit_events` | preserve with audit history when detailed output matters |
-| `state/logs/`, `state/diagnostics/`, `state/worktrees/` | workspace-local scratch and diagnostics | regenerable |
+| `state/logs/`, `state/worktrees/` | workspace-local worker stdio logs and linked worktrees | regenerable |
 
 ### Global `~/.orbit/`
 

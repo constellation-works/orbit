@@ -480,10 +480,8 @@ fn ensure_workspace_dirs(paths: &WorkspacePaths) -> Result<(), OrbitError> {
         &paths.audit_dir,
         &paths.job_runs_dir,
         &paths.logs_dir,
-        &paths.diagnostics_dir,
         &paths.scoreboard_dir,
         &paths.worktrees_dir,
-        &paths.knowledge_dir,
     ] {
         create_private_dir_all(dir).map_err(|e| OrbitError::Io(e.to_string()))?;
     }
