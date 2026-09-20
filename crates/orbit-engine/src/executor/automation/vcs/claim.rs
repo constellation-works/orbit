@@ -133,10 +133,14 @@ pub(super) fn slug(remote_url: &str) -> Option<String> {
 ///
 /// `source` names the branch to read, or `None` for whatever is checked out.
 /// `fallback_repository` is used when the checkout has no remote to name.
-/// `base_sync` is the run's sync mode (`local` or `remote`): the base is
-/// resolved through [`resolve_worktree_start_point`], the same mapping every
-/// other step of the claimed pipeline uses, so a remote-sync claim observes
-/// `origin/<base>` rather than a lagging local `refs/heads/<base>`.
+/// `base_sync` is the run's sync mode (`local` or `remote`): the base *ref*
+/// is resolved through [`resolve_worktree_start_point`], the same mapping
+/// every other step of the claimed pipeline uses, so a remote-sync claim
+/// still fetches `origin/<base>` rather than a lagging local
+/// `refs/heads/<base>`. The recorded base is then the merge-base of the
+/// candidate and that ref — the tip the candidate sits on — not the live
+/// fetched tip. A later advance of `origin/<base>` is therefore not a
+/// refusal of a candidate that was synchronized onto the earlier SHA.
 pub fn observe_candidate(
     workspace_path: &Path,
     source: Option<&str>,
@@ -169,14 +173,30 @@ pub fn observe_candidate(
         }
     };
     let base_ref = resolve_worktree_start_point(workspace_path, base_branch, sync_mode)?;
-    let base = revision(workspace_path, &base_ref)?;
+    let tip = revision(workspace_path, &base_ref)?;
+    // Same rule as `synchronized_base`: the candidate is judged against the
+    // merge-base it sits on, not against a tip that can move under a fetch.
+    if !git_command_success(
+        workspace_path,
+        &["merge-base", &candidate.commit, &base_ref],
+    )? {
+        return Err(refused(format!(
+            "candidate '{}' does not descend from validated base '{}'",
+            candidate.commit, tip.commit
+        )));
+    }
+    let merge_base = git_output(
+        workspace_path,
+        &["merge-base", &candidate.commit, &base_ref],
+    )?;
+    let base = revision(workspace_path, &merge_base)?;
     if base.commit == candidate.commit {
         return Err(refused(
             "the candidate is the base itself; a claimed leaf hands off delivered work, and \
              no-diff delivery is not part of this route",
         ));
     }
-    let ancestor = super::git::git_command_success(
+    let ancestor = git_command_success(
         workspace_path,
         &[
             "merge-base",
@@ -209,9 +229,9 @@ pub fn observe_candidate(
 }
 
 /// The executor's own observation: whatever is checked out, against the base
-/// this claim was admitted for. A `base_sha` carried from `worktree_setup` is
-/// compared, never preferred: a disagreement means the base moved under the
-/// run, which is a refusal on both readings.
+/// this claim was synchronized onto. A `base_sha` carried from `sync_base`
+/// must be contained in the candidate (an ancestor), never compared to the
+/// live `origin/<base>` tip: a later advance of that tip is not a refusal.
 fn observe(
     workspace_path: &Path,
     context: &ClaimExecutionContext,
@@ -226,13 +246,23 @@ fn observe(
         &context.workspace_id,
         &claimed_base_sync(context, input)?,
     )?;
-    if let Some(declared) = input_string_field(input, "base_sha")
-        && declared != candidate.base.commit
-    {
-        return Err(refused(format!(
-            "declared base '{declared}' is not the observed base '{}' of branch '{}'",
-            candidate.base.commit, context.base_branch
-        )));
+    if let Some(declared) = input_string_field(input, "base_sha") {
+        let contains_declared = git_command_success(
+            workspace_path,
+            &[
+                "merge-base",
+                "--is-ancestor",
+                "--end-of-options",
+                &declared,
+                &candidate.candidate.commit,
+            ],
+        )?;
+        if !contains_declared {
+            return Err(refused(format!(
+                "candidate '{}' does not descend from validated base '{declared}'",
+                candidate.candidate.commit
+            )));
+        }
     }
     Ok(candidate)
 }
