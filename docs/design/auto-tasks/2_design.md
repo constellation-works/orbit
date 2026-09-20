@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-09-14
-last_validated: 2026-09-14
+last_updated: 2026-09-20
+last_validated: 2026-09-20
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -11,7 +11,7 @@ summary: Current implementation of the auto-task record, due-math, host-local cu
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/operations.js"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730]
+related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665]
 ---
 
 # Auto-tasks — Design
@@ -53,9 +53,17 @@ the registered primary checkout ([Route tracked auto-task definitions through th
 `auto-task show` reports `definition_source.root` and
 `definition_source.path` in JSON, plus the same root and path in plain text, so
 the inspected YAML is never implicit. A logical `--workspace` name or `ws_*`
-ID selects the registered primary checkout even when the command is launched
-from a linked worktree. To validate a candidate definition in isolation, pass
-that linked checkout's absolute path instead:
+ID issued from a cwd that is **not** a Git-linked worktree of that workspace
+still opens the registered primary checkout. When the same logical selector
+(or the managed `ORBIT_WORKSPACE` envelope) is issued from a Git-linked
+worktree of that workspace, definition CRUD uses that worktree's `.orbit` as
+`local_root` while `shared_root` stays the registered primary store. That is
+what lets `orbit auto-task add` (and update/toggle) write
+`.orbit/auto_tasks/<name>.yaml` in a managed `jrun-*` worktree instead of the
+read-only primary bind mount.
+
+To inspect a candidate definition in isolation from a cwd that is not that
+worktree, pass the linked checkout's absolute path:
 
 ```bash
 orbit --workspace /absolute/path/to/linked-worktree auto-task show <name> --json
@@ -63,12 +71,14 @@ orbit --workspace /absolute/path/to/linked-worktree auto-task show <name> --json
 
 The path must resolve to the registered checkout or a Git-linked worktree for
 it; unrelated and invalid selectors fail closed. Only the read-only `show`
-operation opens that path as a candidate local definition root. Writable
-auto-task operations retain the registered primary checkout as their local
-root even when given a linked path, and shared task/runtime state always
-remains there. Candidate inspection therefore neither redirects a mutation,
-creates a worktree-local shadow store, nor uses `--root` as a candidate-source
-override.
+and `list` operations open that explicit path as a candidate local definition
+root. Writable auto-task operations given a linked path from another cwd
+retain the registered primary checkout as their local root. Shared
+task/runtime state always remains on the registered primary; `--root` pointed
+at a worktree `.orbit` is still refused as a store shadow. Candidate
+inspection therefore neither redirects a mutation from an unrelated cwd,
+creates a worktree-local shadow task store, nor uses `--root` as a
+candidate-source override.
 
 ## 2. Due computation and catch-up collapse
 

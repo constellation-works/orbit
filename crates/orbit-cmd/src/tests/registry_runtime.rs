@@ -1,11 +1,14 @@
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Mutex, MutexGuard, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_core::OrbitRuntime;
 use orbit_core::runtime::OrbitRuntimeRoots;
+use orbit_core::{
+    AutoTaskAddParams, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, OrbitRuntime,
+    TaskPriority, TaskStatus, TaskType,
+};
 use orbit_store::maintenance::task_registry::{WorkspaceConfig, write_workspace_config};
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
@@ -1987,6 +1990,234 @@ fn add_linked_worktree(primary: &Path, linked: &Path) {
             linked.to_str().expect("utf8 linked worktree path"),
             "HEAD",
         ],
+    );
+}
+
+struct CurrentDirGuard {
+    _lock: MutexGuard<'static, ()>,
+    previous: PathBuf,
+}
+
+impl CurrentDirGuard {
+    fn enter(path: &Path) -> Self {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let lock = LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = std::env::current_dir().expect("capture cwd");
+        std::env::set_current_dir(path)
+            .unwrap_or_else(|error| panic!("enter {}: {error}", path.display()));
+        Self {
+            _lock: lock,
+            previous,
+        }
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.previous);
+    }
+}
+
+fn add_probe_definition(runtime: &OrbitRuntime, name: &str, description: &str) {
+    runtime
+        .auto_task_add(AutoTaskAddParams {
+            name: name.to_string(),
+            description: description.to_string(),
+            schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+            template: AutoTaskTemplate {
+                title: description.to_string(),
+                description: String::new(),
+                acceptance_criteria: vec![],
+                task_type: TaskType::Chore,
+                tags: vec![],
+                required_tools: vec![],
+                priority: TaskPriority::Medium,
+                complexity: None,
+                crew: None,
+                status: TaskStatus::Backlog,
+            },
+            dedupe: DedupePolicy::SkipIfOpen,
+        })
+        .unwrap_or_else(|error| panic!("auto-task add {name}: {error}"));
+}
+
+#[test]
+fn logical_selector_from_linked_worktree_writes_auto_task_yaml_to_worktree_local_root() {
+    let fixture = path_selector_fixture();
+    let linked = canonical_test_path(&fixture.linked);
+    let linked_orbit = linked.join(".orbit");
+    let primary_definition = fixture.primary_orbit.join("auto_tasks/worktree-write.yaml");
+    let worktree_definition = linked_orbit.join("auto_tasks/worktree-write.yaml");
+
+    let _cwd = CurrentDirGuard::enter(&linked);
+    let runtime =
+        RegisteredRuntimeFactory::initialize_with_overrides(Some(&fixture.global), Some("primary"))
+            .expect("logical selector from a linked worktree must open");
+    assert_eq!(
+        canonical_test_path(&runtime.shared_root()),
+        canonical_test_path(&fixture.primary_orbit),
+        "shared_root stays the registered primary store"
+    );
+    assert_eq!(
+        canonical_test_path(&runtime.local_root()),
+        linked_orbit,
+        "local_root is the linked worktree .orbit"
+    );
+
+    add_probe_definition(
+        &runtime,
+        "worktree-write",
+        "Written from the linked worktree",
+    );
+    assert!(
+        worktree_definition.is_file(),
+        "definition YAML must land under the worktree local_root: {}",
+        worktree_definition.display()
+    );
+    assert!(
+        !primary_definition.exists(),
+        "definition YAML must not land in the registered primary checkout"
+    );
+    assert!(
+        !linked_orbit.join("tasks").exists(),
+        "must not invent a worktree-local task store"
+    );
+
+    let shown = runtime
+        .auto_task_show("worktree-write")
+        .expect("show worktree definition")
+        .expect("definition exists on the worktree local_root");
+    assert_eq!(shown.description, "Written from the linked worktree");
+
+    runtime
+        .auto_task_toggle("worktree-write", false)
+        .expect("toggle on the worktree local_root");
+    let yaml = std::fs::read_to_string(&worktree_definition).expect("read worktree yaml");
+    assert!(
+        yaml.contains("enabled: false"),
+        "toggle must rewrite the worktree YAML: {yaml}"
+    );
+    assert!(
+        !primary_definition.exists(),
+        "toggle must not create primary YAML"
+    );
+}
+
+#[test]
+fn logical_selector_from_unrelated_cwd_keeps_registered_primary_local_root() {
+    let fixture = path_selector_fixture();
+    let elsewhere = fixture._root.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("unrelated cwd");
+
+    let _cwd = CurrentDirGuard::enter(&elsewhere);
+    let runtime = RegisteredRuntimeFactory::initialize_with_overrides(
+        Some(&fixture.global),
+        Some("ws_primary"),
+    )
+    .expect("logical selector from an unrelated cwd must open the primary");
+    assert_eq!(
+        canonical_test_path(&runtime.shared_root()),
+        canonical_test_path(&fixture.primary_orbit)
+    );
+    assert_eq!(
+        canonical_test_path(&runtime.local_root()),
+        canonical_test_path(&fixture.primary_orbit),
+        "a logical selector from a cwd that is not a linked worktree of that workspace opens the primary"
+    );
+
+    add_probe_definition(&runtime, "primary-write", "Written from an unrelated cwd");
+    assert!(
+        fixture
+            .primary_orbit
+            .join("auto_tasks/primary-write.yaml")
+            .is_file()
+    );
+    assert!(
+        !canonical_test_path(&fixture.linked)
+            .join(".orbit/auto_tasks/primary-write.yaml")
+            .exists(),
+        "unrelated cwd must not write worktree YAML"
+    );
+}
+
+#[test]
+fn linked_worktree_root_override_is_not_a_store_and_invalid_selectors_fail_closed() {
+    let fixture = path_selector_fixture();
+    let linked = canonical_test_path(&fixture.linked);
+    let worktree_orbit = linked.join(".orbit");
+    std::fs::create_dir_all(&worktree_orbit).expect("worktree local orbit");
+
+    let unknown = match RegisteredRuntimeFactory::initialize_with_overrides(
+        Some(&fixture.global),
+        Some("no-such-workspace"),
+    ) {
+        Ok(_) => panic!("unknown selector must fail closed"),
+        Err(error) => error,
+    };
+    unsupported_workspace_message(unknown, "no-such-workspace");
+
+    let outside = fixture._root.path().to_string_lossy().into_owned();
+    let unrelated = match RegisteredRuntimeFactory::initialize_with_overrides(
+        Some(&fixture.global),
+        Some(&outside),
+    ) {
+        Ok(_) => panic!("unrelated path selector must fail closed"),
+        Err(error) => error,
+    };
+    unsupported_workspace_message(unrelated, &outside);
+
+    let shadowed =
+        RegisteredRuntimeFactory::initialize_with_overrides(Some(&worktree_orbit), Some("primary"));
+    match shadowed {
+        Ok(_) => panic!("--root pointed at a worktree .orbit must not open as a store"),
+        Err(error) => {
+            let message = error.to_string();
+            assert!(
+                message.contains("unknown workspace selector")
+                    || message.contains("not an Orbit workspace")
+                    || message.contains("workspaces.json")
+                    || message.contains("host.toml"),
+                "worktree .orbit as --root must be refused as a store shadow: {message}"
+            );
+        }
+    }
+}
+
+#[test]
+fn read_only_linked_path_selector_from_primary_keeps_candidate_local_root() {
+    let fixture = path_selector_fixture();
+    let linked = canonical_test_path(&fixture.linked);
+    let linked_orbit = linked.join(".orbit");
+    let linked_selector = linked.to_string_lossy().into_owned();
+
+    let _cwd = CurrentDirGuard::enter(&fixture.primary_repo);
+    let read_only = RegisteredRuntimeFactory::initialize_read_only_with_overrides(
+        Some(&fixture.global),
+        Some(&linked_selector),
+    )
+    .expect("read-only linked path selector");
+    assert_eq!(
+        canonical_test_path(&read_only.shared_root()),
+        canonical_test_path(&fixture.primary_orbit)
+    );
+    assert_eq!(
+        canonical_test_path(&read_only.local_root()),
+        linked_orbit,
+        "read-only show/list may open a linked candidate root"
+    );
+
+    let writable = RegisteredRuntimeFactory::initialize_with_overrides(
+        Some(&fixture.global),
+        Some(&linked_selector),
+    )
+    .expect("writable linked path selector from the primary");
+    assert_eq!(
+        canonical_test_path(&writable.local_root()),
+        canonical_test_path(&fixture.primary_orbit),
+        "writable explicit-linked-selector from another cwd must not retarget mutations"
     );
 }
 
