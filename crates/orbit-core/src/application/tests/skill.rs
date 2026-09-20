@@ -53,6 +53,51 @@ fn collect_relative_files(root: &Path) -> Result<BTreeSet<PathBuf>, String> {
     Ok(files)
 }
 
+fn normalize_relative_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(c) => {
+                normalized.push(c);
+            }
+            _ => {
+                normalized.push(component);
+            }
+        }
+    }
+    normalized
+}
+
+fn extract_markdown_links(content: &str) -> Vec<String> {
+    let mut links = Vec::new();
+    let bytes = content.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if bytes[i] == b']' && i + 1 < n && bytes[i + 1] == b'(' {
+            let start = i + 2;
+            let mut j = start;
+            while j < n && bytes[j] != b')' && bytes[j] != b'\n' {
+                j += 1;
+            }
+            if j < n && bytes[j] == b')' {
+                let target = content[start..j].trim();
+                if !target.is_empty() {
+                    links.push(target.to_string());
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    links
+}
+
 #[test]
 fn asset_dirs_match_default_skill_ids() {
     let dir = assets_skills_dir();
@@ -82,6 +127,39 @@ fn asset_dirs_match_default_skill_ids() {
     assert!(
         missing_from_registry.is_empty() && missing_from_disk.is_empty(),
         "skill catalogs disagree:\n  in assets/skills/ but NOT in default_skill_ids(): {missing_from_registry:?}\n  in default_skill_ids() but NOT in assets/skills/: {missing_from_disk:?}\nfix by editing crates/orbit-core/src/application/skill.rs::DEFAULT_SKILL_FILES or moving the asset directory under assets/skills/_archive/.",
+    );
+}
+
+/// The non-archived asset files under `assets/skills/` must match
+/// `DEFAULT_SKILL_FILES` file-for-file, preventing un-materialized skill
+/// references (ORB-12662).
+#[test]
+fn asset_files_match_default_skill_files() {
+    let dir = assets_skills_dir();
+    let all_files = collect_relative_files(&dir)
+        .unwrap_or_else(|e| panic!("collect_relative_files({}): {e}", dir.display()));
+
+    let on_disk: BTreeSet<String> = all_files
+        .into_iter()
+        .filter(|relative| {
+            !relative
+                .components()
+                .any(|c| c.as_os_str().to_string_lossy().starts_with('_'))
+        })
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+        .collect();
+
+    let registered: BTreeSet<String> = DEFAULT_SKILL_FILES
+        .iter()
+        .map(|(path, _)| (*path).to_string())
+        .collect();
+
+    let missing_from_registry: Vec<&String> = on_disk.difference(&registered).collect();
+    let missing_from_disk: Vec<&String> = registered.difference(&on_disk).collect();
+
+    assert!(
+        missing_from_registry.is_empty() && missing_from_disk.is_empty(),
+        "skill catalogs disagree at file granularity:\n  in assets/skills/ but NOT in DEFAULT_SKILL_FILES: {missing_from_registry:?}\n  in DEFAULT_SKILL_FILES but NOT in assets/skills/: {missing_from_disk:?}\nfix by editing crates/orbit-core/src/application/skill.rs::DEFAULT_SKILL_FILES or moving the asset file under an `_`-prefixed directory (e.g. assets/skills/_archive/).",
     );
 }
 
@@ -122,6 +200,58 @@ fn router_links_every_shipped_reference() {
         missing.is_empty(),
         "a shipped skill's own router does not link these shipped references, so they are \
          unreachable: {missing:?}\nfix by adding a row to that skill's ## References table.",
+    );
+}
+
+/// Every markdown link between shipped skill files must resolve to a
+/// registered file in `DEFAULT_SKILL_FILES`.
+///
+/// Shipped skills link to other shipped skills and references (both within
+/// the same skill and across companion skills). If a linked target is not
+/// registered in `DEFAULT_SKILL_FILES`, it is never materialized by
+/// `orbit workspace init` or `orbit workspace sync`, leading to broken links
+/// in consumer environments (ORB-12662).
+#[test]
+fn shipped_skill_markdown_links_resolve_to_shipped_files() {
+    let registered: BTreeSet<&str> = DEFAULT_SKILL_FILES.iter().map(|(path, _)| *path).collect();
+
+    let mut dangling: Vec<String> = Vec::new();
+
+    for (source_path, content) in DEFAULT_SKILL_FILES {
+        let source_parent = Path::new(source_path)
+            .parent()
+            .unwrap_or_else(|| Path::new(""));
+
+        for link_target in extract_markdown_links(content) {
+            let url = link_target
+                .split_whitespace()
+                .next()
+                .unwrap_or(&link_target);
+            let target_path = url.split('#').next().unwrap_or(url).trim();
+
+            if target_path.is_empty()
+                || target_path.starts_with("http://")
+                || target_path.starts_with("https://")
+                || target_path.starts_with("mailto:")
+            {
+                continue;
+            }
+
+            let resolved = normalize_relative_path(&source_parent.join(target_path));
+            let resolved_str = resolved.to_string_lossy().replace('\\', "/");
+
+            if !registered.contains(resolved_str.as_str()) {
+                dangling.push(format!(
+                    "  {source_path} links to `{link_target}` (resolves to `{resolved_str}`), which is not in DEFAULT_SKILL_FILES"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        dangling.is_empty(),
+        "shipped skill files contain links to unregistered skill files:\n{}\nfix by adding the target file to crates/orbit-core/src/application/skill.rs::DEFAULT_SKILL_FILES or updating the link target.",
+        dangling.join("\n"),
     );
 }
 
