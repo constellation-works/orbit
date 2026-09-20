@@ -206,9 +206,10 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
     // underivable summary still refuses delivery here.
     reject_failed_delivery(&task)?;
 
-    // ADR-0219: an explicitly side-effect-only task skips this phase instead of
-    // failing it. Read the tag before any gate so the carve-out is reachable
-    // from every failure branch below, not just the empty-stage one (ORB-10380).
+    // ADR-0219: an explicitly side-effect-only task may skip a *clean* commit
+    // phase instead of failing it. ORB-12683: a moved HEAD means there is
+    // already work to deliver, so the tag must not skip before the tree is
+    // inspected — fall through to already_committed / leftover-work handling.
     let no_diff_expected = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
     let allow_empty = input
         .get("allow_empty")
@@ -223,9 +224,6 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         PinnedHead::Matched(base_sha) => (Some(base_sha), false),
         PinnedHead::Unpinned => (None, false),
         PinnedHead::Changed { base_sha, head_sha } => {
-            if no_diff_expected {
-                return Ok(skipped_no_diff_expected_result(&task.id));
-            }
             let preserved_failure_head = commit_head_matches_failure_handoff(
                 host,
                 input,
@@ -235,7 +233,7 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
                 &base_sha,
                 &head_sha,
             )?;
-            if !preserved_failure_head && !allow_moved_head {
+            if !preserved_failure_head && !allow_moved_head && !no_diff_expected {
                 return Err(changed_head_error(
                     &task.id,
                     &workspace_path,
