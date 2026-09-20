@@ -246,6 +246,8 @@ fn stale_companion_warns_even_when_semantic_index_is_empty() {
 
     let temp = tempfile::tempdir().expect("tempdir");
     orbit_common::test_env::harden_dir(temp.path());
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).expect("create home");
     let script = temp.path().join("stale-companion");
     fs::write(
         &script,
@@ -260,8 +262,11 @@ printf '%s\n' '{"id":0,"result":{"model_id":"fake","dim":0,"max_input_tokens":0,
     permissions.set_mode(0o700);
     fs::set_permissions(&script, permissions).expect("make stale companion executable");
 
+    let home_path = home.to_string_lossy().into_owned();
     let script_path = script.to_string_lossy().into_owned();
     let _env = orbit_common::test_env::scoped([
+        ("HOME", Some(home_path.as_str())),
+        ("USERPROFILE", Some(home_path.as_str())),
         ("ORBIT_SEARCH_COMPANION", Some(script_path.as_str())),
         ("ORBIT_SEARCH_COMPANION_ALLOW_UNSAFE", Some("1")),
     ]);
@@ -288,6 +293,49 @@ printf '%s\n' '{"id":0,"result":{"model_id":"fake","dim":0,"max_input_tokens":0,
             "Run `orbit semantic install` to install the matching companion, then rerun `orbit doctor`."
         )
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn matching_companion_skips_when_semantic_index_is_empty() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    orbit_common::test_env::harden_dir(temp.path());
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).expect("create home");
+    let script = temp.path().join("matching-companion");
+    fs::write(
+        &script,
+        format!(
+            r#"#!/bin/sh
+printf '%s\n' '{{"id":0,"result":{{"model_id":"fake","dim":0,"max_input_tokens":0,"version":"{}"}}}}'
+"#,
+            env!("CARGO_PKG_VERSION")
+        ),
+    )
+    .expect("write matching companion");
+    let mut permissions = fs::metadata(&script)
+        .expect("matching companion metadata")
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script, permissions).expect("make matching companion executable");
+
+    let home_path = home.to_string_lossy().into_owned();
+    let script_path = script.to_string_lossy().into_owned();
+    let _env = orbit_common::test_env::scoped([
+        ("HOME", Some(home_path.as_str())),
+        ("USERPROFILE", Some(home_path.as_str())),
+        ("ORBIT_SEARCH_COMPANION", Some(script_path.as_str())),
+        ("ORBIT_SEARCH_COMPANION_ALLOW_UNSAFE", Some("1")),
+    ]);
+    let runtime = workspace_runtime(&temp);
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "semantic-index");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Skipped, "{row:?}");
+    assert_eq!(row.message, "no semantic embeddings indexed yet");
+    assert_eq!(row.remediation, None);
 }
 
 /// [ORB-12259] A docs corpus that has never been embedded reads `ok` from
