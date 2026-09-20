@@ -38,6 +38,9 @@ const settle = async () => {
 };
 const buttons = (root) => Array.from(root.querySelectorAll("button.claim-action"));
 const button = (root, label) => buttons(root).find((node) => node.textContent.includes(label));
+const recoveryButton = (root, status) => buttons(root).find(
+  (node) => node.getAttribute("data-action") === "recover" && node.getAttribute("data-status") === status,
+);
 const reasonInput = (root) => root.querySelector("input.claim-reason");
 
 const CANDIDATE = "a".repeat(40);
@@ -357,12 +360,14 @@ const mount = async (taskId = "ORB-2") => {
   sent.length = 0;
   consoleBody = console_([claim({ phase: "running", handoff: null, unsettled: true })]);
   const block = await mount();
-  const recover = button(block, "Recover claim");
-  assert.ok(recover, "an unsettled claim can be recovered");
+  const blockedRecover = recoveryButton(block, "blocked");
+  const backlogRecover = recoveryButton(block, "backlog");
+  assert.ok(blockedRecover, "an unsettled claim can be recovered as blocked");
+  assert.ok(backlogRecover, "an unsettled claim can be recovered as backlog");
   assert.ok(block.textContent.includes("never automatic — there is no heartbeat"), block.textContent);
 
   reasonInput(block).value = "host was rebuilt";
-  press(recover);
+  press(blockedRecover);
   await settle();
 
   assert.equal(sent[0].path, "/api/distributed/claims/claim-1/recover");
@@ -371,6 +376,14 @@ const mount = async (taskId = "ORB-2") => {
   assert.equal(sent[0].body.expected_phase, "running");
   assert.equal(sent[0].body.status, "blocked");
   assert.equal(sent[0].body.reason, "host was rebuilt");
+
+  // The retry choice is an independent operator decision, not a UI default.
+  sent.length = 0;
+  reasonInput(block).value = "host was rebuilt; retry elsewhere";
+  press(recoveryButton(block, "backlog"));
+  await settle();
+  assert.equal(sent[0].body.status, "backlog");
+  assert.equal(sent[0].body.reason, "host was rebuilt; retry elsewhere");
 }
 
 // --- a stale action re-reads before the operator decides again ---------------

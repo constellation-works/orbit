@@ -340,13 +340,12 @@ Deliberate recovery is operator-driven:
 2. Reconcile an uncertain merge intent **before** reassignment. Database
    revocation cannot cancel a request already sent to GitHub.
 3. Revoke the old claim, invalidate pending landing authority, release only
-   that reservation, and choose the task transition (`blocked` to diagnose or
-   `backlog` to retry) in one authorized recovery. On the owner's dashboard
-   that is **Recover claim** on the task's distributed panel, which requires a
-   reason and the phase you were shown, and refuses if the claim moved on. There
-   is still no CLI verb and no registered tool for it; do not invent one, and do
-   not admit a second attempt by shipping the task again while the old claim is
-   unfenced.
+   that reservation, and choose the task transition in one authorized recovery.
+   On the owner's dashboard, use **Recover claim → blocked** to diagnose or
+   **Recover claim → backlog** to retry. Both controls require a reason and the
+   phase you were shown, and refuse if the claim moved on. There is still no CLI
+   verb and no registered tool for it; do not invent one, and do not admit a
+   second attempt by shipping the task again while the old claim is unfenced.
 4. A sleeping worker that returns receives `stale_claim`. Its local compute
    and an in-flight GitHub write cannot be undone; its old candidate cannot
    become authoritative.
