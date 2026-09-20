@@ -18,6 +18,7 @@ pub(super) mod dispatch;
 pub(super) mod duplicate_tasks;
 pub(super) mod leaf_occupancy;
 pub(super) mod pipeline_actions;
+pub(crate) mod pull;
 pub(super) mod sandbox;
 pub(super) mod scan_unresolved;
 pub(super) mod task_context;

@@ -79,6 +79,14 @@ impl OrbitRuntime {
         // Refuse before show_job_run can reconcile local liveness. Settled claims
         // retain immutable bindings, so even a revoked attempt cannot resume.
         let recorded = self.get_job_run_backend(source_run_id)?;
+        if self
+            .stores()
+            .jobs()
+            .local_pull_for_run(source_run_id)?
+            .is_some()
+        {
+            return Err(OrbitError::JobValidation("claimed execution cannot use generic resume; deliberately recover and admit a new attempt".into()));
+        }
         // [ORB-12575] Read the claims as an ordinary participant, not through
         // the doctor's non-repairing inspection. A worker killed mid-commit
         // leaves the partition's pending marker behind, and resume is the

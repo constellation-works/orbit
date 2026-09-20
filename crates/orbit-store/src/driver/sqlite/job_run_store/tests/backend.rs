@@ -268,3 +268,514 @@ fn execution_location_is_trusted_immutable_and_legacy_unknown() {
     );
     assert_eq!(trusted.list_job_runs("job").expect("list").len(), 2);
 }
+
+fn pull_fixture() -> (
+    TempDir,
+    SqliteJobRunStore,
+    crate::contracts::PullDestination,
+    crate::contracts::AdmissionRequest,
+) {
+    use crate::contracts::{
+        AdmissionRequest, AdmissionRunContext, AdmissionShipContract, PullDestination,
+    };
+    let temp = TempDir::new().expect("temp");
+    let store = SqliteJobRunStore::new(
+        Store::open(&temp.path().join("pull.db")).expect("store"),
+        "ws",
+    );
+    let parent = store
+        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
+        .expect("parent");
+    store
+        .write_run_state(
+            &parent.run_id,
+            &orbit_types::workflow::PipelineState::new(
+                parent.run_id.clone(),
+                parent.job_id,
+                serde_json::json!({}),
+            ),
+        )
+        .expect("state");
+    let destination = PullDestination {
+        owner_machine_id: "owner".into(),
+        owner_workspace_id: "ws".into(),
+        selector: "owner/ws".into(),
+        execution_machine_id: "owner".into(),
+    };
+    let request = AdmissionRequest {
+        request_id: "one".into(),
+        caller_version: "1".into(),
+        caller_schema: 1,
+        caller_review_policy: "none".into(),
+        run_context: AdmissionRunContext {
+            run_id: parent.run_id,
+            job_name: "workspace_auto_pipeline".into(),
+            host_id: None,
+        },
+        ship: AdmissionShipContract {
+            mode: "local".into(),
+            base_branch: "main".into(),
+            landing_branch: "main".into(),
+            review_policy: "none".into(),
+            completion: "review".into(),
+            authorization_reference: None,
+        },
+    };
+    (temp, store, destination, request)
+}
+
+fn pull_receipt(
+    request: &crate::contracts::AdmissionRequest,
+) -> crate::contracts::AdmissionReceipt {
+    use crate::contracts::*;
+    AdmissionReceipt {
+        schema_version: 1,
+        request: request.clone(),
+        machine_id: "owner".into(),
+        claim: Some(ExecutionClaim {
+            claim_id: "claim".into(),
+            task_id: "task".into(),
+            request_id: request.request_id.clone(),
+            executed_on: ExecutionLocation {
+                machine_id: "owner".into(),
+                host_id: None,
+            },
+            run_context: request.run_context.clone(),
+            footprint: vec!["file:src.rs".into()],
+            reservation_id: "reservation".into(),
+            reservation_expires_at: "later".into(),
+            phase: ExecutionClaimPhase::Claimed,
+        }),
+        task: Some(AdmissionTaskSummary {
+            id: "task".into(),
+            title: "task".into(),
+            complexity: None,
+            crew: None,
+            context_files: vec!["file:src.rs".into()],
+        }),
+        invalid_candidates: vec![],
+        deferred_conflicts: vec![],
+        queue_depth: 0,
+    }
+}
+
+#[test]
+fn local_pull_crash_cuts_preserve_one_leaf_and_launch_uncertainty() {
+    if isolated_pull_test(
+        "driver::sqlite::job_run_store::tests::backend::local_pull_crash_cuts_preserve_one_leaf_and_launch_uncertainty",
+    ) {
+        return;
+    }
+    use crate::contracts::{LocalPullMutation as M, LocalPullPhase as P};
+    let (temp, store, destination, request) = pull_fixture();
+    store
+        .allocate_pull_request(&destination, &request, 1)
+        .expect("allocate")
+        .expect("slot");
+    let receipt = pull_receipt(&request);
+    let mut leaf = None;
+    for mutation in [
+        M::Receive(Box::new(receipt.clone())),
+        M::CreateLeaf,
+        M::Bound,
+    ] {
+        let before = store
+            .mutate_local_pull(&destination, "one", &mutation)
+            .expect("transition");
+        // Drop and reopen the database after each committed cut, replaying the
+        // same operation as a caller that lost its response.
+        let reopened = SqliteJobRunStore::new(
+            Store::open(&temp.path().join("pull.db")).expect("reopen"),
+            "ws",
+        );
+        let after = reopened
+            .mutate_local_pull(&destination, "one", &mutation)
+            .expect("replay");
+        assert_eq!(before, after);
+        leaf = after.leaf_run_id;
+    }
+    assert!(leaf.is_some());
+    assert_eq!(
+        store
+            .list_job_runs("task_local_pipeline")
+            .expect("runs")
+            .len(),
+        1
+    );
+    let mut second = request.clone();
+    second.request_id = "two".into();
+    assert!(
+        store
+            .allocate_pull_request(&destination, &second, 1)
+            .expect("capacity")
+            .is_none()
+    );
+    assert_eq!(
+        store
+            .mutate_local_pull(&destination, "one", &M::LaunchIntent)
+            .expect("intent")
+            .phase,
+        P::Launching
+    );
+    assert!(
+        store
+            .mutate_local_pull(&destination, "one", &M::LaunchIntent)
+            .expect_err("uncertain")
+            .to_string()
+            .contains("deliberate recovery")
+    );
+    store
+        .mutate_local_pull(&destination, "one", &M::Launched)
+        .expect("launched");
+    assert!(
+        store
+            .mutate_local_pull(&destination, "one", &M::LaunchIntent)
+            .is_err()
+    );
+}
+
+#[test]
+fn local_pull_pending_and_terminal_unsettled_each_hold_one_slot() {
+    if isolated_pull_test(
+        "driver::sqlite::job_run_store::tests::backend::local_pull_pending_and_terminal_unsettled_each_hold_one_slot",
+    ) {
+        return;
+    }
+    use crate::contracts::{ClaimEvidence, ClaimMutation, LocalPullMutation as M};
+    let (_temp, store, destination, request) = pull_fixture();
+    store
+        .allocate_pull_request(&destination, &request, 1)
+        .expect("allocate");
+    let mut next = request.clone();
+    next.request_id = "next".into();
+    assert!(
+        store
+            .allocate_pull_request(&destination, &next, 1)
+            .expect("pending capacity")
+            .is_none()
+    );
+    store
+        .mutate_local_pull(
+            &destination,
+            "one",
+            &M::Receive(Box::new(pull_receipt(&request))),
+        )
+        .expect("receipt");
+    let record = store
+        .mutate_local_pull(&destination, "one", &M::CreateLeaf)
+        .expect("leaf");
+    store
+        .finalize_job_run(
+            record.leaf_run_id.as_deref().expect("id"),
+            orbit_types::workflow::JobRunState::Cancelled,
+            Utc::now(),
+            None,
+        )
+        .expect("cancel");
+    assert!(
+        store
+            .allocate_pull_request(&destination, &next, 1)
+            .expect("terminal capacity")
+            .is_none()
+    );
+    let fail = M::Settle(Box::new(ClaimMutation::Fail(ClaimEvidence {
+        summary: Some("cancelled".into()),
+        ..Default::default()
+    })));
+    store
+        .mutate_local_pull(&destination, "one", &fail)
+        .expect("durable failure");
+    assert!(
+        store
+            .allocate_pull_request(&destination, &next, 1)
+            .expect("settlement capacity")
+            .is_none()
+    );
+    store
+        .mutate_local_pull(&destination, "one", &M::Settled)
+        .expect("acknowledged");
+    assert!(
+        store
+            .allocate_pull_request(&destination, &next, 1)
+            .expect("free")
+            .is_some()
+    );
+    assert_eq!(
+        store
+            .mutate_local_pull(&destination, "one", &M::CreateLeaf)
+            .expect("permanent binding")
+            .leaf_run_id,
+        record.leaf_run_id
+    );
+}
+
+#[test]
+fn local_pull_launch_intent_refuses_a_cancelled_bound_leaf() {
+    if isolated_pull_test(
+        "driver::sqlite::job_run_store::tests::backend::local_pull_launch_intent_refuses_a_cancelled_bound_leaf",
+    ) {
+        return;
+    }
+    use crate::contracts::{LocalPullMutation as M, LocalPullPhase};
+    let (_temp, store, destination, request) = pull_fixture();
+    store
+        .allocate_pull_request(&destination, &request, 1)
+        .expect("allocate")
+        .expect("slot");
+    for mutation in [
+        M::Receive(Box::new(pull_receipt(&request))),
+        M::CreateLeaf,
+        M::Bound,
+    ] {
+        store
+            .mutate_local_pull(&destination, "one", &mutation)
+            .expect("prepare");
+    }
+    let record = store.local_pull_admissions().expect("record").remove(0);
+    let leaf = record.leaf_run_id.expect("leaf");
+    store
+        .finalize_job_run(&leaf, JobRunState::Cancelled, Utc::now(), None)
+        .expect("cancel");
+    let error = store
+        .mutate_local_pull(&destination, "one", &M::LaunchIntent)
+        .expect_err("must not launch");
+    assert!(error.to_string().contains("no longer queued"), "{error}");
+    assert_eq!(
+        store.local_pull_admissions().expect("record")[0].phase,
+        LocalPullPhase::Bound
+    );
+    assert_eq!(
+        store.get_job_run(&leaf).expect("read").expect("leaf").state,
+        JobRunState::Cancelled
+    );
+}
+
+#[test]
+fn local_pull_capacity_replaces_wrapper_with_queued_descendant() {
+    if isolated_pull_test(
+        "driver::sqlite::job_run_store::tests::backend::local_pull_capacity_replaces_wrapper_with_queued_descendant",
+    ) {
+        return;
+    }
+    use orbit_types::workflow::ChildDispatch;
+    let (_temp, store, destination, request) = pull_fixture();
+    let wrapper = store
+        .insert_job_run("task_auto_pipeline", 1, Utc::now(), None, None)
+        .expect("wrapper");
+    let gate = store
+        .insert_job_run("task_gate_pipeline", 1, Utc::now(), None, None)
+        .expect("gate");
+    let leaf = store
+        .insert_job_run("task_pr_pipeline", 1, Utc::now(), None, None)
+        .expect("leaf");
+    for (parent, child) in [(&wrapper, &gate), (&gate, &leaf)] {
+        let mut state = PipelineState::new(
+            parent.run_id.clone(),
+            parent.job_id.clone(),
+            serde_json::json!({}),
+        );
+        state.child_dispatches.push(ChildDispatch::submitted(
+            child.run_id.clone(),
+            child.job_id.clone(),
+            "invoke_and_wait".into(),
+            true,
+            true,
+            Utc::now(),
+        ));
+        store.write_run_state(&parent.run_id, &state).expect("link");
+    }
+    // Wrapper + gate + actual queued leaf occupy exactly one global slot.
+    assert!(
+        store
+            .allocate_pull_request(&destination, &request, 1)
+            .expect("full")
+            .is_none()
+    );
+    assert!(
+        store
+            .allocate_pull_request(&destination, &request, 2)
+            .expect("one free")
+            .is_some()
+    );
+    let mut next = request.clone();
+    next.request_id = "another".into();
+    assert!(
+        store
+            .allocate_pull_request(&destination, &next, 2)
+            .expect("pending uses second slot")
+            .is_none()
+    );
+    store
+        .mark_job_run_running(&leaf.run_id, Utc::now(), std::process::id())
+        .expect("start leaf");
+    store
+        .finalize_job_run(&leaf.run_id, JobRunState::Success, Utc::now(), None)
+        .expect("finish leaf");
+    // The still-live wrapper resumes representing its slot after the leaf ends.
+    assert!(
+        store
+            .allocate_pull_request(&destination, &next, 2)
+            .expect("wrapper remains")
+            .is_none()
+    );
+    store
+        .mark_job_run_running(&wrapper.run_id, Utc::now(), std::process::id())
+        .expect("start wrapper");
+    store
+        .finalize_job_run(&wrapper.run_id, JobRunState::Success, Utc::now(), None)
+        .expect("finish wrapper");
+    assert!(
+        store
+            .allocate_pull_request(&destination, &next, 2)
+            .expect("slot released")
+            .is_some()
+    );
+}
+
+#[test]
+fn local_pull_idle_is_permanent_and_follower_local_is_refused() {
+    if isolated_pull_test(
+        "driver::sqlite::job_run_store::tests::backend::local_pull_idle_is_permanent_and_follower_local_is_refused",
+    ) {
+        return;
+    }
+    let (_temp, store, mut destination, request) = pull_fixture();
+    destination.execution_machine_id = "follower".into();
+    assert!(
+        store
+            .allocate_pull_request(&destination, &request, 10)
+            .is_err()
+    );
+    destination.execution_machine_id = "owner".into();
+    store
+        .allocate_pull_request(&destination, &request, 1)
+        .expect("allocate");
+    let mut idle = pull_receipt(&request);
+    idle.claim = None;
+    idle.task = None;
+    store
+        .mutate_local_pull(
+            &destination,
+            "one",
+            &crate::contracts::LocalPullMutation::Receive(Box::new(idle)),
+        )
+        .expect("idle");
+    assert_eq!(
+        store
+            .allocate_pull_request(&destination, &request, 1)
+            .expect("retry")
+            .expect("receipt")
+            .phase,
+        crate::contracts::LocalPullPhase::Idle
+    );
+    let mut changed = request.clone();
+    changed.ship.base_branch = "changed".into();
+    assert!(
+        store
+            .allocate_pull_request(&destination, &changed, 1)
+            .is_err()
+    );
+}
+
+fn isolated_pull_test(name: &str) -> bool {
+    const CHILD: &str = "ORBIT_TEST_LOCAL_PULL_CHILD";
+    if std::env::var(CHILD).ok().as_deref() == Some(name) {
+        return false;
+    }
+    let home = tempfile::tempdir().expect("isolated home");
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    let output = command
+        .args(["--exact", name, "--nocapture"])
+        .env(CHILD, name)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .output()
+        .expect("isolated pull child");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{name}: {stdout}\n{stderr}");
+    assert!(
+        stdout.contains("test result: ok. 1 passed;"),
+        "child did not execute exact test: {stdout}"
+    );
+    true
+}
+
+#[test]
+fn local_pull_concurrent_allocation_obeys_shared_ceiling() {
+    if isolated_pull_test(
+        "driver::sqlite::job_run_store::tests::backend::local_pull_concurrent_allocation_obeys_shared_ceiling",
+    ) {
+        return;
+    }
+    let (_temp, store, destination, request) = pull_fixture();
+    // Bootstrap the feature before independent connections race for admission.
+    store.local_pull_admissions().expect("initialize");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(12));
+    let mut workers = Vec::new();
+    for index in 0..12 {
+        let jobs = store.clone();
+        let destination = destination.clone();
+        let mut request = request.clone();
+        request.request_id = format!("request-{index}");
+        let barrier = barrier.clone();
+        workers.push(std::thread::spawn(move || {
+            barrier.wait();
+            jobs.allocate_pull_request(&destination, &request, 3)
+                .expect("allocate")
+                .is_some()
+        }));
+    }
+    let admitted = workers
+        .into_iter()
+        .map(|worker| usize::from(worker.join().expect("join")))
+        .sum::<usize>();
+    assert_eq!(admitted, 3);
+    assert_eq!(store.local_pull_admissions().expect("pending").len(), 3);
+}
+
+#[test]
+fn local_pull_pipeline_limit_and_live_parent_reduction_are_authoritative() {
+    if isolated_pull_test(
+        "driver::sqlite::job_run_store::tests::backend::local_pull_pipeline_limit_and_live_parent_reduction_are_authoritative",
+    ) {
+        return;
+    }
+    let (_temp, store, destination, request) = pull_fixture();
+    for index in 0..11 {
+        let mut next = request.clone();
+        next.request_id = format!("request-{index}");
+        assert_eq!(
+            store
+                .allocate_pull_request(&destination, &next, 20)
+                .expect("allocate")
+                .is_some(),
+            index < 10
+        );
+    }
+    let mut pr = request.clone();
+    pr.ship.mode = "pr".into();
+    pr.request_id = "pr".into();
+    assert!(
+        store
+            .allocate_pull_request(&destination, &pr, 20)
+            .expect("other pipeline")
+            .is_some()
+    );
+    store
+        .update_run_state(&request.run_context.run_id, &mut |_, state| {
+            assert!(state.set_drain_worker_limit(1, 20, "operator".into(), None, None));
+            Ok(())
+        })
+        .expect("reduce live limit");
+    pr.request_id = "after-reduction".into();
+    assert!(
+        store
+            .allocate_pull_request(&destination, &pr, 20)
+            .expect("live ceiling")
+            .is_none()
+    );
+}

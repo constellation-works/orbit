@@ -26,3 +26,5 @@ mod task_pilot_source;
 mod task_pilot_validation_tools;
 mod v2_host;
 mod workspace_auto;
+
+mod pull;

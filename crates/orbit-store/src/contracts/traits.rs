@@ -494,6 +494,39 @@ pub trait TaskReservationStoreBackend: Send + Sync {
 }
 
 pub trait JobRunStoreBackend: Send + Sync {
+    /// Local permanent binding, independent of owner connectivity.
+    fn local_pull_for_run(&self, _run_id: &str) -> Result<Option<LocalPullAdmission>, OrbitError> {
+        Ok(None)
+    }
+    /// Reserve local capacity and persist the request before transport.
+    fn allocate_pull_request(
+        &self,
+        _destination: &PullDestination,
+        _request: &super::AdmissionRequest,
+        _ceiling: usize,
+    ) -> Result<Option<LocalPullAdmission>, OrbitError> {
+        Err(OrbitError::Store(
+            "local pull persistence unavailable".into(),
+        ))
+    }
+
+    fn local_pull_admissions(&self) -> Result<Vec<LocalPullAdmission>, OrbitError> {
+        Err(OrbitError::Store(
+            "local pull persistence unavailable".into(),
+        ))
+    }
+
+    fn mutate_local_pull(
+        &self,
+        _destination: &PullDestination,
+        _request_id: &str,
+        _mutation: &LocalPullMutation,
+    ) -> Result<LocalPullAdmission, OrbitError> {
+        Err(OrbitError::Store(
+            "local pull persistence unavailable".into(),
+        ))
+    }
+
     /// Configure trusted runtime identity for future insertions only. Neither
     /// caller input nor updates to existing runs can rewrite their origin.
     fn with_execution_location(

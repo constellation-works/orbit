@@ -68,6 +68,45 @@ impl SqliteJobRunStore {
 }
 
 impl JobRunStoreBackend for SqliteJobRunStore {
+    fn local_pull_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<crate::contracts::LocalPullAdmission>, OrbitError> {
+        super::pull::for_run(&self.store, &self.workspace_id, run_id)
+    }
+    fn allocate_pull_request(
+        &self,
+        destination: &crate::contracts::PullDestination,
+        request: &crate::contracts::AdmissionRequest,
+        ceiling: usize,
+    ) -> Result<Option<crate::contracts::LocalPullAdmission>, OrbitError> {
+        super::pull::allocate(
+            &self.store,
+            &self.workspace_id,
+            destination,
+            request,
+            ceiling,
+        )
+    }
+    fn local_pull_admissions(
+        &self,
+    ) -> Result<Vec<crate::contracts::LocalPullAdmission>, OrbitError> {
+        super::pull::list(&self.store, &self.workspace_id)
+    }
+    fn mutate_local_pull(
+        &self,
+        destination: &crate::contracts::PullDestination,
+        request_id: &str,
+        mutation: &crate::contracts::LocalPullMutation,
+    ) -> Result<crate::contracts::LocalPullAdmission, OrbitError> {
+        super::pull::mutate(
+            &self.store,
+            &self.workspace_id,
+            destination,
+            request_id,
+            mutation,
+        )
+    }
     fn with_execution_location(
         &self,
         location: Option<orbit_types::task::ExecutionLocation>,
