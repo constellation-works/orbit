@@ -27,6 +27,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`.
 - Lints are enforced via `[workspace.lints]`: no `unwrap`/`expect` at crate boundaries (propagate `OrbitError`), no `print!` (use `tracing`), no lock guards across `.await`.
 - Default to `pub(crate)`; workspace deps via `.workspace = true`; bounded channels; typed `thiserror` variants.
 - Unit tests live in a sibling `tests/` dir mirroring source filenames ([`test_layout.md`](docs/design-patterns/test_layout.md)); crate-root `tests/` is integration only.
+- Before writing a test, weigh what it guards and what it costs: assert what the code guarantees (parses, required fields present, structural safeguards), not policy that lives in config or prompts — crew, model, schedule, complexity, prose wording. A test that pins those turns every ops edit into a red CI; if a pin is truly warranted, cite the incident it guards in the assertion message.
 - Never expose internal task/friction IDs in user-facing output, CLI help (Clap renders `///`), or MCP text.
 - Fixtures that mutate Orbit state must run in an isolated child process — see [`CONTRIBUTING.md`](CONTRIBUTING.md#safe-mutable-cli-fixtures).
 - Prefer the fewest moving parts: delete dead code and stale docs together, keep compatibility only for an external contract or persisted format, ~800 lines per file is a split signal.
