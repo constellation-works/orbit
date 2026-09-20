@@ -42,7 +42,7 @@ use crate::context::{
 
 use super::super::ci::bounded_u64;
 use super::super::input::input_string_field;
-use super::git::{git_command_success, git_output, git_success};
+use super::git::{fetch_remote_base, git_command_success, git_output, git_success};
 use super::operations;
 use super::pr::{DeliveryPin, PrMergeState, classify_pr_state, resolve_merge_capabilities};
 use super::review_gate::revision;
@@ -64,22 +64,83 @@ pub(in crate::executor::automation) fn handoff_land<H: RuntimeHost + ?Sized>(
         OrbitError::InvalidInput("handoff_land: handoff_id is required".to_string())
     })?;
     let context = host.handoff_landing_context(&handoff_id)?;
+    // Every containment judgement below reads the landing ref, so the owner's
+    // view of it is refreshed once before any of them run.
+    let view = LandingView::refresh(
+        &context.workspace_path,
+        &context.candidate.landing_branch,
+        &context.candidate.delivery,
+    );
 
     // An intent recorded but never resolved is this owner's own uncertainty
     // about an external write. Nothing else may happen until real state says
     // what became of it.
     if let Some(intent_id) = context.unresolved_merge_intent.clone()
-        && let Some(landed) = reconcile_intent(host, &context, &intent_id)?
+        && let Some(landed) = reconcile_intent(host, &context, &intent_id, &view)?
     {
         return Ok(landed);
     }
 
     match context.candidate.delivery.clone() {
-        HandoffDelivery::PullRequest { number } => land_pull_request(host, &context, number, input),
-        HandoffDelivery::LocalCandidate => land_local_candidate(host, &context),
+        HandoffDelivery::PullRequest { number } => {
+            land_pull_request(host, &context, number, input, &view)
+        }
+        HandoffDelivery::LocalCandidate => land_local_candidate(host, &context, &view),
         HandoffDelivery::AlreadyLanded {
             covering_commit, ..
-        } => land_already_landed(host, &context, &covering_commit),
+        } => land_already_landed(host, &context, &covering_commit, &view),
+    }
+}
+
+/// The owner's view of the landing branch, refreshed once per attempt.
+///
+/// Containment is judged against `origin/<landing branch>`, a remote-tracking
+/// ref that only moves when this checkout fetches it. A merge another consumer
+/// performed on the provider, or a covering commit another machine landed,
+/// leaves that ref behind the real branch — and judging against it unrefreshed
+/// turns ordinary freshness into a durable refusal whose evidence says the
+/// opposite of what is true [ORB-12631]. Fetching the branch also brings the
+/// objects reachable from it, which is how a base or covering commit the owner
+/// has never seen becomes readable here.
+struct LandingView {
+    refreshed: bool,
+}
+
+impl LandingView {
+    /// Fetch the landing branch from `origin`, best effort.
+    ///
+    /// Owner-local delivery has no remote to read, and a fetch that cannot run
+    /// (no `origin`, no network) leaves the judgement to the refs already
+    /// present rather than replacing a freshness problem with a different
+    /// failure: what the owner still cannot verify is refused below either way.
+    fn refresh(workspace: &Path, landing_branch: &str, delivery: &HandoffDelivery) -> Self {
+        if matches!(delivery, HandoffDelivery::LocalCandidate)
+            || !git_command_success(workspace, &["remote", "get-url", "origin"]).unwrap_or(false)
+        {
+            return Self { refreshed: false };
+        }
+        match fetch_remote_base(workspace, landing_branch) {
+            Ok(()) => Self { refreshed: true },
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    landing_branch,
+                    "handoff_land: landing ref not refreshed; containment is judged against the \
+                     owner's existing view"
+                );
+                Self { refreshed: false }
+            }
+        }
+    }
+
+    /// Names the state a refusal was decided against, so an operator reading
+    /// "no longer reachable" knows whether the owner's view was current.
+    fn clause(&self) -> &'static str {
+        if self.refreshed {
+            " (refreshed from 'origin')"
+        } else {
+            ""
+        }
     }
 }
 
@@ -92,6 +153,7 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
     intent_id: &str,
+    view: &LandingView,
 ) -> Result<Option<Value>, OrbitError> {
     let candidate = &context.candidate;
     let (merged, evidence) = match &candidate.delivery {
@@ -168,7 +230,7 @@ fn reconcile_intent<H: RuntimeHost + ?Sized>(
     if !merged {
         return Ok(None);
     }
-    let observed = observe_or_stop(host, context, None)?;
+    let observed = observe_or_stop(host, context, None, view)?;
     Ok(Some(complete(host, context, observed, &evidence)?))
 }
 
@@ -177,6 +239,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
     context: &HandoffLandingContext,
     number: u64,
     input: &Value,
+    view: &LandingView,
 ) -> Result<Value, OrbitError> {
     let candidate = &context.candidate;
     let pr_number = number.to_string();
@@ -215,7 +278,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                 "pull_request": number,
                 "candidate": candidate.candidate.commit,
             });
-            let observed = observe_or_stop(host, context, Some(&status))?;
+            let observed = observe_or_stop(host, context, Some(&status), view)?;
             if let Some(intent_id) = intent {
                 record(
                     host,
@@ -287,7 +350,7 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
                                  #{pr_number}: {error}"
                         ))
                     })?;
-                let observed = observe_or_stop(host, context, Some(&status))?;
+                let observed = observe_or_stop(host, context, Some(&status), view)?;
                 if observed.repository != capabilities.repository {
                     return Err(stop(
                         host,
@@ -357,10 +420,11 @@ fn land_pull_request<H: RuntimeHost + ?Sized>(
 fn land_local_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
+    view: &LandingView,
 ) -> Result<Value, OrbitError> {
     let candidate = &context.candidate;
     let workspace = context.workspace_path.clone();
-    let observed = observe_or_stop(host, context, None)?;
+    let observed = observe_or_stop(host, context, None, view)?;
     let landing = resolve_landing_ref(&workspace, &candidate.landing_branch, &candidate.delivery)?;
 
     if contains_commit(&workspace, &landing, &candidate.candidate.commit)? {
@@ -447,9 +511,10 @@ fn land_already_landed<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
     covering_commit: &str,
+    view: &LandingView,
 ) -> Result<Value, OrbitError> {
     let workspace = context.workspace_path.clone();
-    let observed = observe_or_stop(host, context, None)?;
+    let observed = observe_or_stop(host, context, None, view)?;
     let landing = resolve_landing_ref(
         &workspace,
         &context.candidate.landing_branch,
@@ -460,14 +525,16 @@ fn land_already_landed<H: RuntimeHost + ?Sized>(
             host,
             context,
             &format!(
-                "covering commit {covering_commit} is not contained in landing ref '{landing}', \
-                 so this delivery is not already landed"
+                "covering commit {covering_commit} is not contained in landing ref \
+                 '{landing}'{}, so this delivery is not already landed",
+                view.clause()
             ),
         )?);
     }
     let evidence = json!({
         "delivery": "already_landed",
         "landing_ref": landing,
+        "landing_ref_refreshed": view.refreshed,
         "covering_commit": covering_commit,
         "verified": "landing_ref_contains_covering_commit",
         "external_merge": false,
@@ -484,8 +551,9 @@ fn observe_or_stop<H: RuntimeHost + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
     status: Option<&Value>,
+    view: &LandingView,
 ) -> Result<HandoffCandidate, OrbitError> {
-    match observe_candidate(context, status) {
+    match observe_candidate(context, status, view) {
         Ok(observed) => Ok(observed),
         Err(error) => Err(stop(host, context, &error.to_string())?),
     }
@@ -503,6 +571,7 @@ fn observe_or_stop<H: RuntimeHost + ?Sized>(
 fn observe_candidate(
     context: &HandoffLandingContext,
     status: Option<&Value>,
+    view: &LandingView,
 ) -> Result<HandoffCandidate, OrbitError> {
     let candidate = &context.candidate;
     let workspace = &context.workspace_path;
@@ -515,8 +584,10 @@ fn observe_candidate(
         && !contains_commit(workspace, &landing, &observed_base.commit)?
     {
         return Err(OrbitError::Execution(format!(
-            "handoff_land: validated base {} is no longer reachable from landing ref '{landing}'",
-            observed_base.commit
+            "handoff_land: validated base {} is no longer reachable from landing ref \
+             '{landing}'{}",
+            observed_base.commit,
+            view.clause()
         )));
     }
     let (source_branch, base_branch) = match status {
