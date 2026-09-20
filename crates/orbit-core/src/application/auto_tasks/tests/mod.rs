@@ -3,6 +3,7 @@ use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 
 use crate::application::auto_tasks::crud::AutoTaskAddParams;
 
+mod change_probe;
 mod crud;
 mod mint;
 mod scheduler;

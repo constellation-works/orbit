@@ -8,7 +8,8 @@ use orbit_store::compose::auto_task::{
     CursorSession, cursor_state_path, load_cursor_state, with_cursor_lock,
 };
 use orbit_types::workflow::{
-    AutoTaskCursor, AutoTaskDefinition, AutoTaskPendingClaim, DedupePolicy,
+    AutoTaskCursor, AutoTaskDefinition, AutoTaskPendingClaim, AutoTaskSkipRecord, DedupePolicy,
+    SkipIfUnchanged,
 };
 use std::path::PathBuf;
 
@@ -36,7 +37,38 @@ pub trait AutoTaskDispatch {
     ) -> Result<Option<String>, OrbitError>;
 
     fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError>;
+
+    /// Evidence for a `skip_if_unchanged` precondition: the tip of the
+    /// configured ref, the cursor the last completed sweep recorded, and
+    /// whether the tip is already covered by it. Hosts that cannot answer
+    /// report [`ChangeProbe::Unknown`] (or an error) and the scheduler mints.
+    fn probe_change_since_last_sweep(
+        &self,
+        definition: &AutoTaskDefinition,
+        precondition: &SkipIfUnchanged,
+    ) -> Result<ChangeProbe, OrbitError>;
 }
+
+/// What a host could establish about the integration branch since the last
+/// completed sweep. Fail-open is the scheduler's rule, not the host's: only
+/// [`ChangeProbe::Unchanged`] ever suppresses a mint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangeProbe {
+    /// The ref's tip is already covered by the recorded cursor.
+    Unchanged {
+        cursor: String,
+        tip: String,
+        cursor_task_id: Option<String>,
+    },
+    /// The ref advanced past the recorded cursor.
+    Changed { cursor: String, tip: String },
+    /// Nothing conclusive — no completed sweep, an unreadable cursor, or git
+    /// could not answer. The scheduler mints and records `reason`.
+    Unknown { reason: String },
+}
+
+/// Machine-readable reason token recorded for a suppressed mint.
+pub const UNCHANGED_SINCE_LAST_SWEEP: &str = "unchanged_since_last_sweep";
 
 /// Per-definition outcome of one scheduler pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +221,27 @@ fn dry_run_definition(
                     ..skipped(definition, "dedupe_open")
                 });
             }
+            if let Some(precondition) = &definition.skip_if_unchanged
+                && let ChangeProbe::Unchanged {
+                    cursor: cursor_sha,
+                    tip,
+                    cursor_task_id,
+                } = probe(host, definition, precondition)
+            {
+                let reason = skip_reason(&AutoTaskSkipRecord {
+                    at: now.to_rfc3339(),
+                    slot: slot.clone(),
+                    reason: UNCHANGED_SINCE_LAST_SWEEP.to_string(),
+                    reference: precondition.reference.clone(),
+                    cursor_sha,
+                    tip_sha: tip,
+                    cursor_task_id,
+                });
+                return Ok(AutoTaskFireReport {
+                    slot: Some(slot),
+                    ..skipped(definition, &reason)
+                });
+            }
             Ok(AutoTaskFireReport {
                 slot: Some(slot),
                 ..action(definition, "would_fire")
@@ -220,6 +273,7 @@ fn fire_locked(
                 last_fired_at: None,
                 last_task_id: None,
                 pending: None,
+                last_skip: None,
             },
         );
         session.save()?;
@@ -240,6 +294,53 @@ fn fire_locked(
                     blocking_task_id: Some(blocking_task_id),
                     ..skipped(definition, "dedupe_open")
                 });
+            }
+            if let Some(precondition) = &definition.skip_if_unchanged {
+                match probe(host, definition, precondition) {
+                    ChangeProbe::Unchanged {
+                        cursor: cursor_sha,
+                        tip,
+                        cursor_task_id,
+                    } => {
+                        let record = AutoTaskSkipRecord {
+                            at: now.to_rfc3339(),
+                            slot: slot.clone(),
+                            reason: UNCHANGED_SINCE_LAST_SWEEP.to_string(),
+                            reference: precondition.reference.clone(),
+                            cursor_sha: cursor_sha.clone(),
+                            tip_sha: tip.clone(),
+                            cursor_task_id: cursor_task_id.clone(),
+                        };
+                        let reason = skip_reason(&record);
+                        // The slot is deliberately left unconsumed: the next
+                        // commit past the cursor fires the pending occurrence
+                        // immediately, exactly as `dedupe_open` does.
+                        session.state.definitions.insert(
+                            definition.name.clone(),
+                            AutoTaskCursor {
+                                last_skip: Some(record),
+                                ..cursor
+                            },
+                        );
+                        session.save()?;
+                        return Ok(AutoTaskFireReport {
+                            slot: Some(slot),
+                            ..skipped(definition, &reason)
+                        });
+                    }
+                    ChangeProbe::Changed { .. } => {}
+                    // Fail open, and say why: an unanswerable precondition
+                    // must never be the reason a sweep stops running.
+                    ChangeProbe::Unknown { reason } => {
+                        let mut report = fire_slot(host, definition, session, cursor, slot, now)?;
+                        if report.reason.is_none() {
+                            report.reason = Some(format!(
+                                "{UNCHANGED_SINCE_LAST_SWEEP} precondition inconclusive; minted: {reason}"
+                            ));
+                        }
+                        return Ok(report);
+                    }
+                }
             }
             fire_slot(host, definition, session, cursor, slot, now)
         }
@@ -387,6 +488,41 @@ fn fire_slot(
     }
 }
 
+/// Ask the host, folding a host-side error into the fail-open answer so a
+/// broken probe can never stop a definition from minting.
+fn probe(
+    host: &dyn AutoTaskDispatch,
+    definition: &AutoTaskDefinition,
+    precondition: &SkipIfUnchanged,
+) -> ChangeProbe {
+    match host.probe_change_since_last_sweep(definition, precondition) {
+        Ok(probe) => probe,
+        Err(error) => ChangeProbe::Unknown {
+            reason: format!("probe failed: {error}"),
+        },
+    }
+}
+
+/// The audit row's reason: the token plus the two SHAs it was decided on.
+fn skip_reason(record: &AutoTaskSkipRecord) -> String {
+    format!(
+        "{}: {} tip {} is already covered by cursor {}{}",
+        record.reason,
+        record.reference,
+        short_sha(&record.tip_sha),
+        short_sha(&record.cursor_sha),
+        record
+            .cursor_task_id
+            .as_ref()
+            .map(|id| format!(" from {id}"))
+            .unwrap_or_default()
+    )
+}
+
+fn short_sha(sha: &str) -> &str {
+    sha.get(..12).unwrap_or(sha)
+}
+
 fn checkpoint_consumed(
     session: &mut CursorSession,
     definition: &AutoTaskDefinition,
@@ -404,6 +540,8 @@ fn checkpoint_consumed(
             last_fired_at: Some(now.to_rfc3339()),
             last_task_id: Some(task_id.to_string()),
             pending: None,
+            // A fire supersedes any earlier precondition skip.
+            last_skip: None,
         },
     );
     session.save()

@@ -41,8 +41,9 @@ pub use activity_job::{
 };
 pub use auto_task::{
     AUTO_TASK_SCHEMA_VERSION, AUTO_TASK_TAG_PREFIX, AutoTaskDefinition, AutoTaskSchedule,
-    AutoTaskTemplate, DedupePolicy, MAX_AUTO_TASK_INTERVAL_MINUTES, auto_task_tag,
-    is_valid_auto_task_name,
+    AutoTaskTemplate, DedupePolicy, MAX_AUTO_TASK_INTERVAL_MINUTES, SWEEP_CURSOR_ARTIFACT,
+    SWEEP_CURSOR_SCHEMA_VERSION, SkipIfUnchanged, SweepCursorRecord, SweepCursorSelector,
+    auto_task_tag, is_valid_auto_task_name,
 };
 pub use child_dispatch::{
     ChildCancellation, ChildCancellationPolicy, ChildDispatch, ChildDispatchPhase,
@@ -82,6 +83,8 @@ pub use ship::{CompletionPolicy, ShipMode, resolved_ship_mode};
 pub use skill::Skill;
 
 mod auto_task_cursor;
-pub use auto_task_cursor::{AutoTaskCursor, AutoTaskCursorState, AutoTaskPendingClaim};
+pub use auto_task_cursor::{
+    AutoTaskCursor, AutoTaskCursorState, AutoTaskPendingClaim, AutoTaskSkipRecord,
+};
 
 pub mod automation;

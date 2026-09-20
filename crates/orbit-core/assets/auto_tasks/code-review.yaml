@@ -80,12 +80,22 @@ template:
     ## Record the cursor
 
     Always record the reviewed range and the new last-reviewed commit in the
-    persisted execution summary — the next sweep's window starts there.
+    persisted execution summary — the next sweep's window starts there. Record
+    the same commit as this task's machine-readable cursor artifact, which the
+    scheduler reads to decide whether the next tick has anything to review:
+    write `{"schema_version":1,"ref":"<integration branch>","cursor":"<full 40-character commit SHA>"}`
+    to a gitignored scratch file inside the checkout (for example
+    `target/sweep-cursor.json`) and attach it with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":"target/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
+    Write it on every completed sweep, including an empty window: the commit it
+    names is the one this sweep examined through, and a completed sweep without
+    it leaves the next tick no cursor to compare the branch tip against.
   acceptance_criteria:
   - The review window was derived from the previous sweep's recorded cursor, or the current HEAD was seeded as the baseline on the first run.
   - Every filed finding was verified against live code, is non-duplicate, and carries file:line evidence with a severity-appropriate priority and the `code-review` tag.
   - Every filed finding carries a `regression_from` relation targeting the task whose landed commit introduced the defect, or its description states why no task in the window can be held responsible.
   - The reviewed range and the new last-reviewed commit are recorded in the persisted execution summary.
+  - The new last-reviewed commit is attached as this task's `sweep-cursor.json` artifact (`schema_version` 1, the integration branch, and the full commit SHA).
   - A window with no confirmed findings succeeds as a no-op.
   task_type: chore
   tags:
@@ -98,6 +108,15 @@ template:
   crew: system
   status: backlog
 dedupe: skip_if_open
+skip_if_unchanged:
+  ref: __ORBIT_BASE_BRANCH__
+  cursor:
+    tags:
+    - code-review
+    - no-diff-expected
+    legacy_tags:
+    - code-review-sweep
+    - no-diff-expected
 created_by: system
 created_at: 2026-08-23T00:00:00Z
 updated_by: system

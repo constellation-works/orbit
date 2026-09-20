@@ -21,6 +21,7 @@ fn cursor(baseline: &str, last_slot: Option<&str>) -> AutoTaskCursor {
         last_fired_at: last_slot.map(|_| "2026-01-01T01:00:05+00:00".to_string()),
         last_task_id: last_slot.map(|_| "ORB-1".to_string()),
         pending: None,
+        last_skip: None,
     }
 }
 

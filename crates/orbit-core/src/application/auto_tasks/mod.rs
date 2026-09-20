@@ -14,10 +14,12 @@
 //!   native), with catch-up collapse.
 //! - [`state`] — host-local, workspace-scoped last-fired cursors.
 //! - [`scheduler`] — the evaluator called by the host tick.
+//! - `change_probe` — the `skip_if_unchanged` precondition's evidence.
 //! - [`crud`] — the shared add/list/show/update/toggle/mint domain surface.
 
 use std::borrow::Cow;
 
+mod change_probe;
 pub mod crud;
 pub use orbit_automation::auto_tasks::loader;
 pub use orbit_automation::auto_tasks::schedule;

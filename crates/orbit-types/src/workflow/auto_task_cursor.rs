@@ -32,6 +32,31 @@ pub struct AutoTaskCursor {
     /// consumed-slot checkpoint so a retry can reconcile or refuse to remint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending: Option<AutoTaskPendingClaim>,
+    /// Most recent `skip_if_unchanged` decision, so an operator surface can
+    /// explain why a due definition minted nothing. Cleared by the next fire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_skip: Option<AutoTaskSkipRecord>,
+}
+
+/// One recorded mint-time precondition skip.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutoTaskSkipRecord {
+    /// Wall-clock time of the skip (RFC 3339, UTC).
+    pub at: String,
+    /// Scheduled slot that was left unconsumed.
+    pub slot: String,
+    /// Machine-readable reason token, e.g. `unchanged_since_last_sweep`.
+    pub reason: String,
+    /// Branch whose tip was compared.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// Cursor commit recorded by the last completed sweep.
+    pub cursor_sha: String,
+    /// Tip commit of `ref` at the time of the skip.
+    pub tip_sha: String,
+    /// Sweep task the cursor was read from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_task_id: Option<String>,
 }
 
 /// In-flight admission evidence for one scheduled slot.
