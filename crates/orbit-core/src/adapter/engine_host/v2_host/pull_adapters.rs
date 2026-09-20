@@ -6,15 +6,18 @@
 //!
 //! What "real" means here, and where it stops:
 //!
-//! - **Owner-local is served end to end.** Owner and executor are the same
-//!   machine and workspace, so admission runs on this owner's commit boundary,
-//!   binding and settlement run on this owner's claim journal, and the handoff
-//!   observation is read from this owner's checkout.
+//! - **Owner-local is served end to end, for both delivery shapes.** Owner and
+//!   executor are the same machine and workspace, so admission runs on this
+//!   owner's commit boundary and binding and settlement run on this owner's
+//!   claim journal. A local candidate is observed from this owner's checkout;
+//!   a published pull request is observed from the provider *and* this
+//!   checkout [ORB-12500].
 //! - **A follower destination is refused, not faked.** Routed distributed
-//!   mutations are still behind [`ensure_distributed_mutation_available`]; the
-//!   entry-point switch is [ORB-12500]'s. A follower drain therefore fails
-//!   with that gate's message rather than silently pretending to reach an
-//!   owner.
+//!   mutations are still behind [`ensure_distributed_mutation_available`]: the
+//!   routed peer that would speak this protocol over the federated transport
+//!   does not exist, and no mutating distributed entry point is a registered
+//!   tool. A follower drain therefore fails with that gate's message rather
+//!   than silently pretending to reach an owner.
 //!
 //! Nothing here reads authority from a payload. The destination is caller-side
 //! durable identity built by the drain from its runtime; each claim mutation
@@ -114,34 +117,45 @@ impl OwnerPullPeer<'_> {
         )
     }
 
-    /// The owner's own reading of a local candidate.
+    /// The owner's own reading of the candidate a claim is settling.
     ///
-    /// Read from the owner checkout with the shared observation rule, so the
-    /// worker's handoff payload contributes nothing but the branch name to
-    /// look at. Anything that disagrees is refused by the claim journal, which
-    /// compares this observation against the submitted candidate.
+    /// Read from the owner checkout — and, for a published delivery, from the
+    /// provider — with the shared observation rules, so the worker's handoff
+    /// payload contributes nothing but the identity to look *at*. Anything
+    /// that disagrees is refused by the claim journal, which compares this
+    /// observation against the submitted candidate.
+    ///
+    /// Already-landed delivery keeps its refusal: no-diff work carries the
+    /// existing typed already-landed report through its own verifier and is
+    /// not a route a claimed leaf takes.
     fn observe(&self, handoff: &TaskHandoff) -> Result<HandoffObservation, OrbitError> {
-        match handoff.candidate.delivery {
-            HandoffDelivery::LocalCandidate => {}
-            HandoffDelivery::PullRequest { .. } | HandoffDelivery::AlreadyLanded { .. } => {
+        let candidate = match handoff.candidate.delivery {
+            HandoffDelivery::LocalCandidate => orbit_engine::observe_candidate(
+                &self.runtime.paths().repo_root,
+                Some(&handoff.candidate.source_branch),
+                &handoff.candidate.base_branch,
+                &handoff.candidate.landing_branch,
+                HandoffDelivery::LocalCandidate,
+                &handoff.workspace_id,
+                // An owner-local candidate has no origin to fetch and must
+                // keep reading the local base it was synchronized onto.
+                "local",
+            )?,
+            // [ORB-12500] The owner reads the published pull request itself:
+            // the provider names the delivery, and the candidate and base
+            // objects are resolved in this checkout.
+            HandoffDelivery::PullRequest { .. } => orbit_engine::observe_published_candidate(
+                self.runtime,
+                &self.runtime.paths().repo_root,
+                &handoff.candidate,
+            )?,
+            HandoffDelivery::AlreadyLanded { .. } => {
                 return Err(refused(
-                    "owner-side acceptance of a published pull-request or already-landed \
-                     delivery is not part of this slice; only a local candidate is observed here",
+                    "already-landed delivery carries its own typed report through the no-diff \
+                     verifier; a claimed leaf does not hand one off",
                 ));
             }
-        }
-        let candidate = orbit_engine::observe_candidate(
-            &self.runtime.paths().repo_root,
-            Some(&handoff.candidate.source_branch),
-            &handoff.candidate.base_branch,
-            &handoff.candidate.landing_branch,
-            HandoffDelivery::LocalCandidate,
-            &handoff.workspace_id,
-            // Owner-local settlement is the only observation this adapter
-            // performs; it has no origin to fetch and must keep reading the
-            // local base the candidate was synchronized onto.
-            "local",
-        )?;
+        };
         let required_commands = self
             .runtime
             .workflow_required_validation_commands()

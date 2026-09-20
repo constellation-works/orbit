@@ -56,7 +56,7 @@ pub use context::{
     TaskActivityUpdate, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT,
     blocked_workflow_failure_update,
 };
-pub use executor::automation::vcs::claim::observe_candidate;
+pub use executor::automation::vcs::claim::{observe_candidate, observe_published_candidate};
 pub use executor::automation::vcs::review_gate;
 pub use executor::automation::vcs::{
     WorktreeGcOptions, WorktreeGcResult, collect_worktrees, fetch_remote_base,

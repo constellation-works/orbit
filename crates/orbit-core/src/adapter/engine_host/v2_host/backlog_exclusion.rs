@@ -116,6 +116,24 @@ fn active_task_lock_holders(
     holders
 }
 
+/// The tasks a live claim is currently executing [ORB-12500].
+fn live_claim_task_ids(
+    runtime: &OrbitRuntime,
+    action: &str,
+) -> Result<std::collections::BTreeSet<String>, DispatchError> {
+    Ok(runtime
+        .inspect_execution_claims()
+        .map_err(|error| DispatchError::DeterministicActionFailed {
+            action: action.to_string(),
+            message: format!("read execution claims: {error}"),
+        })?
+        .into_iter()
+        .map(|inspection| inspection.claim)
+        .filter(|claim| claim.phase.protects_footprint())
+        .map(|claim| claim.task_id)
+        .collect())
+}
+
 /// The holders keyed by anchor, so one backlog task's overlap check is a
 /// prefix lookup per requested selector rather than a pass over every held
 /// one.
@@ -198,6 +216,11 @@ pub(super) fn list_backlog_tasks(
     } else {
         let mut tasks = Vec::new();
         let mut excluded = Vec::new();
+        // [ORB-12500] An override picks which task ships; it does not let a
+        // task a live claim is already executing be dispatched beside itself.
+        // Discovery reaches the same rule through the claim footprints
+        // `backlog_snapshot` merges into its holders.
+        let claimed_tasks = live_claim_task_ids(runtime, action)?;
         // The hierarchy the inherited-only diagnostic reads, materialized only
         // if an override actually names such a root: the explicit path is
         // deliberately a per-id load, and one selected ship should not pay for
@@ -217,6 +240,27 @@ pub(super) fn list_backlog_tasks(
                     conflicts: Vec::new(),
                     crew: None,
                     detail: None,
+                });
+                continue;
+            }
+            if claimed_tasks.contains(&task.id) {
+                excluded.push(BacklogTaskExclusion {
+                    conflicts: task
+                        .context_files
+                        .iter()
+                        .map(|requested_file| BacklogTaskConflict {
+                            requested_file: requested_file.clone(),
+                            locking_task_id: task.id.clone(),
+                        })
+                        .collect(),
+                    id: task.id,
+                    reason: BacklogTaskExclusionReason::ContextLockConflict,
+                    crew: None,
+                    detail: Some(
+                        "A live execution claim holds this task. It settles or is deliberately \
+                         recovered; it is never dispatched a second time."
+                            .to_string(),
+                    ),
                 });
                 continue;
             }
@@ -332,6 +376,14 @@ pub(super) fn backlog_snapshot(
             })?;
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let workspace_root = runtime.paths().repo_root.as_path();
+    // [ORB-12500] Claims need no separate holder entry here. A claimed task is
+    // `in-progress` or `review`, so its surface is already in this map, and
+    // the claim journal refuses every ordinary mutation of a claimed task —
+    // including narrowing its `context_files` — so the recomputed lock cannot
+    // drift from the footprint the claim froze. Consulting the claim ledger on
+    // this path would only add a way for the drain's hot loop to fail on a
+    // journal awaiting repair. The paths that can reach a claimed task
+    // directly, rather than through the backlog, consult it themselves.
     let lock_holders = active_task_lock_holders(&task_lookup, workspace_root);
     // `task_lookup` iterates in task-ID order rather than the store's
     // created-at order; `sort_tasks_for_automatic_dispatch` is a total order

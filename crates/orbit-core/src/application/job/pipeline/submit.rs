@@ -138,6 +138,18 @@ impl OrbitRuntime {
         claim_token: Option<&str>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         self.require_workspace_claim("orbit.workflow.ship", claim_token)?;
+        // [ORB-12500] Explicit shipment converges on the same admission
+        // decision the drain, the retained sweep and pull admission make: a
+        // replica serves no owner coordination, and a task a live claim is
+        // already executing is settled or recovered, never shipped beside
+        // itself. Saturation does not stand an operator's explicit invocation
+        // down — the leaf definition's own `max_active_runs` bounds it.
+        self.drain_entry_admission(
+            crate::application::distributed::DrainEntryPoint::ExplicitShip,
+            task_ids,
+            false,
+        )?
+        .into_result()?;
         let workflow = crate::application::workflow::find_workflow(
             crate::application::workflow::SHIP_WORKFLOW_ALIAS,
         )
@@ -206,6 +218,14 @@ impl OrbitRuntime {
         claim_token: Option<&str>,
     ) -> Result<PipelineInvokeResult, OrbitError> {
         self.require_workspace_claim("orbit.workflow.auto", claim_token)?;
+        // [ORB-12500] An explicit owner drain is owner coordination work; a
+        // replica executes through pull instead of running one locally.
+        self.drain_entry_admission(
+            crate::application::distributed::DrainEntryPoint::OwnerDrain,
+            &[],
+            false,
+        )?
+        .into_result()?;
         let workflow = crate::application::workflow::find_workflow(
             crate::application::workflow::AUTO_WORKFLOW_ALIAS,
         )

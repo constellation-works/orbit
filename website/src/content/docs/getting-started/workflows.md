@@ -107,6 +107,13 @@ orbit run ship-sweep --dry-run
 orbit run ship-sweep --json
 ```
 
+A workspace is also reported as skipped when the sweep would be starting work
+beside work already running. `ship_in_flight` means this host's drain slots are
+occupied — by a live leaf run or by work already admitted for one — and the
+unattended sweep stands down rather than adding to it. `replica_checkout` means
+the workspace is a replica of another machine: backlog selection and delivery
+belong to its owner, so the sweep does nothing there.
+
 ## Completing work with `--complete`
 
 By default a successful task ends in `review`, and a separate operator action

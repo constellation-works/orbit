@@ -9,14 +9,14 @@ use std::path::Path;
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_core::{
-    JobRunState, OrbitError, TaskReferenceIndex, TaskStatus, task_dependencies_ready_with_index,
+    DrainEntryPoint, DrainEntryRefusal, OrbitError, TaskReferenceIndex, TaskStatus,
+    task_dependencies_ready_with_index,
 };
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceStatus};
 use serde_json::{Value, json};
 
 use super::ship::ShipMode;
-use super::support::TASK_AUTO_PIPELINE_JOB;
 use crate::command::{CommandOut, Payload};
 
 #[derive(Args)]
@@ -196,6 +196,23 @@ pub(crate) fn sweep_active_workspace(
 ) -> Result<SweepReport, OrbitError> {
     let runtime = RegisteredRuntimeFactory::open_registered_checkout(global_root, ws, checkout)?;
 
+    // [ORB-12500] The independent CLI reads the same admission decision the
+    // YAML wrapper, the seeded routine and pull admission read, instead of its
+    // own `task_auto_pipeline` history scan — which could not see a claimed
+    // leaf or a pending admission and would have started a legacy drain
+    // beside them.
+    //
+    // The decision is taken once, here, but reported in two places. A replica
+    // stands down immediately: its owner-only coordination work belongs to
+    // the owner, and its task reads are not even the population this sweep
+    // would be counting. Saturation is reported further down, so a workspace
+    // that never opted in still reports `auto_ship_disabled` rather than a
+    // host-wide busy signal it has no stake in.
+    let admission = runtime.drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)?;
+    if let Some(refusal @ DrainEntryRefusal::Replica { .. }) = admission.refusal.as_ref() {
+        return Ok(SweepReport::skipped(ws, refusal.code(), 0));
+    }
+
     let tasks = runtime.list_tasks()?;
     let status_by_id = runtime.task_status_index()?;
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
@@ -218,17 +235,8 @@ pub(crate) fn sweep_active_workspace(
         return Ok(SweepReport::skipped(ws, "no_ready_backlog", 0));
     }
 
-    let in_flight = runtime
-        .job_history(TASK_AUTO_PIPELINE_JOB)?
-        .iter()
-        .any(|run| {
-            matches!(
-                run.state,
-                JobRunState::Pending | JobRunState::Running | JobRunState::Retrying
-            )
-        });
-    if in_flight {
-        return Ok(SweepReport::skipped(ws, "ship_in_flight", ready_backlog));
+    if let Some(refusal) = admission.refusal.as_ref() {
+        return Ok(SweepReport::skipped(ws, refusal.code(), ready_backlog));
     }
 
     if dry_run {

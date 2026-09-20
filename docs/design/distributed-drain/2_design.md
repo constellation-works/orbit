@@ -199,17 +199,36 @@ launch leaves a `Launching` record that every generic path refuses — the drain
 refuses to relaunch it, `orbit job resume` refuses it, and nothing settles or
 revokes it on a guess. Deliberate recovery remains the only way forward.
 
-**What is still not executable.** The executor half of PR delivery now runs end
-to end — real worktree, commit, push to a real remote, `pr_open`, owner-required
-validation on the published candidate, and a typed `PullRequest` handoff
-recorded as the claim's durable pending settlement. What the *owner* still
-cannot do is accept it: an independent provider observation of a published pull
-request is not implemented, so that settlement is refused explicitly and left
-durable for retry. Only an owner-local destination is served at all; a follower
-destination still fails on the public mutation gate, which stays false. No
-routine, schedule, ship-sweep entry point or live host changes, and `run auto` /
-`run ship` cannot name a claimed leaf: every mode they admit (`pr`, `local`)
-renders a legacy pipeline name.
+[ORB-12500] closed the owner's half of published delivery and converged the
+retained entry points on one admission decision.
+
+**Both delivery shapes now settle.** The owner accepts a published
+pull-request handoff from its own observation
+(`orbit_engine::observe_published_candidate`): it reads the pull request from
+the provider, pins the reported head branch, base branch and head commit
+against the submitted candidate, refuses a closed-without-merge or
+self-contradictory state, and then resolves the candidate and base objects in
+*its own* checkout with the same tree-identity and ancestry rules the executor
+applied. A merged pull request is observable rather than refused — the external
+write already happened, refusing it here would only strand the settlement, and
+completion still needs separately recorded authority. `landing_branch` is the
+one field carried from the submitted candidate, because it is owner-resolved
+ship configuration rather than anything a pull request reports. Accepted
+revisions are resolved through one shared rule that handoff acceptance and the
+landing attempt both call, so the owner cannot read a candidate one way when it
+accepts the work and another way when it lands it. Already-landed delivery
+keeps its refusal: no-diff work carries its own typed report through the
+existing verifier and is not a route a claimed leaf takes.
+
+**What is still not executable.** Only an owner-local destination is served at
+all. The routed follower peer — a `PullPeer` speaking the pull protocol over
+the federated SSH transport — does not exist, and no mutating distributed
+entry point is a registered tool, so `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`
+stays false and a follower destination still fails on that gate.
+`orbit run auto --pull <selector>` is not implemented. No routine, schedule or
+live host changes, and `run auto` / `run ship` still render a legacy pipeline
+name for every mode they admit (`pr`, `local`) — what changed for them is the
+admission decision they make first, described in [§7.3](#73-ship-sweep).
 
 
 `orbit run auto --pull <selector>` binds a local replica checkout to the owner's host-qualified
@@ -671,6 +690,39 @@ coordination work; followers execute through pull. Scheduled invocation confers 
 authority. Landing is driven by durable accepted-handoff/approval requests and continues when no
 ship sweep or drain is running.
 
+[ORB-12500] implemented that convergence as one shared decision,
+`OrbitRuntime::drain_entry_admission`, which every retained entry point takes before it dispatches
+anything: an explicit `orbit run ship` (and the MCP and dashboard surfaces behind
+`submit_ship_run`), an explicit `orbit run auto`, and the independent registry-driven
+`orbit run ship-sweep` CLI. The seeded routine and `workspace_ship_pipeline` reach it through the
+drain beneath them, so the wrapper and the independent CLI cannot diverge. The decision reads three
+things and reports all of them:
+
+- **Destination authority.** A replica serves no owner coordination from any of these entry points.
+  The unattended sweep reports it before it reads a backlog at all, because a replica's task reads
+  are not the population it would be counting.
+- **One capacity reading.** `JobRunStoreBackend::drain_leaf_occupancy` — the same reading the pull
+  allocator commits against, counting legacy wrappers, every leaf definition and pending admissions
+  no run represents yet. The independent CLI used its own `task_auto_pipeline` history scan, which
+  could not see a claimed leaf or a pending admission and would have started a legacy drain beside
+  them. Saturation stands the *unattended* sweep down; it does not stand an operator's explicit
+  invocation down, whose own leaf definition bounds it.
+- **The claim ledger.** A task a live claim is executing is settled or deliberately recovered, never
+  admitted a second time. Both paths that can reach a claimed task by name — `submit_ship_run` and
+  an explicit task override in `list_backlog_tasks` — consult the ledger and refuse. Automatic
+  discovery needs no separate reading: a claimed task is `in-progress` or `review`, so its surface
+  is already a status-derived holder, and the claim journal refuses every ordinary mutation of a
+  claimed task (including narrowing its `context_files`), so the recomputed lock cannot drift from
+  the footprint the claim froze. Consulting the ledger on the drain's hot loop would only add a way
+  for it to fail on a journal awaiting repair.
+
+The decision also reports the owner's review policy and the verdict the claim contract's own ordered
+ladder (`orbit_store::admission_refusal`) would return, so a preflight and a retained entry cannot
+disagree about it. It is reported rather than raised: v1 admits only `review_policy = none` through
+the *claim* contract, while a workspace configured for `before-pr` or `after-landing` keeps shipping
+through its legacy leaf and its review gate. Enablement, schedules and `auto_ship` semantics are
+untouched, and a scheduled invocation still confers no completion authority.
+
 ## 8. Required validation scenarios
 
 These are implementation acceptance criteria, not tests reported as passing by this draft.
@@ -750,5 +802,10 @@ These are implementation acceptance criteria, not tests reported as passing by t
   the integrated acceptance fixtures: an owner-local no-origin claim that executes, validates and
   hands off without PR credentials or a merge; a published PR claim that hands off a typed
   `PullRequest` delivery without merging; and a stopped parent that revokes no child.
+- [ORB-12500] — implemented the owner's observation of a published pull request, so both delivery
+  shapes settle end to end, and converged the retained entry points on one shared admission
+  decision (destination authority, one capacity reading, and the claim ledger). It did **not** open
+  the public mutation gate: the routed follower peer and the mutating distributed tools are not
+  implemented, so `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` is still false.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
