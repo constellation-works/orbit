@@ -75,7 +75,9 @@ impl DiagnosticsCommands for OrbitRuntime {
 }
 
 /// Ascending list of `YYYY-MM` subdirectories under `state/diagnostics/<category>/`.
-fn list_jsonl_months(root: &Path, category: &str) -> Result<Vec<String>, OrbitError> {
+// Widened to pub(crate) so sibling `src/tests/diagnostics.rs` can cover
+// partition enumeration after the test-layout migration.
+pub(crate) fn list_jsonl_months(root: &Path, category: &str) -> Result<Vec<String>, OrbitError> {
     let category_dir = validated_diagnostics_category_dir(root, category)?;
     if !category_dir.exists() {
         return Ok(Vec::new());
@@ -92,7 +94,9 @@ fn list_jsonl_months(root: &Path, category: &str) -> Result<Vec<String>, OrbitEr
 }
 
 /// `true` for a `YYYY-MM` directory name (e.g. `2026-03`).
-fn is_year_month(name: &str) -> bool {
+// Widened to pub(crate) so sibling `src/tests/diagnostics.rs` can pin the
+// canonical month-name form after the test-layout migration.
+pub(crate) fn is_year_month(name: &str) -> bool {
     let bytes = name.as_bytes();
     bytes.len() == 7
         && bytes[..4].iter().all(u8::is_ascii_digit)
@@ -131,7 +135,9 @@ fn validated_diagnostics_category_dir(root: &Path, category: &str) -> Result<Pat
 /// Resolve a diagnostics month after converting the accepted text into a
 /// canonical value. The original caller-provided string never reaches a path
 /// operation, so traversal and separator characters cannot affect the lookup.
-fn validated_diagnostics_month_dir(
+// Widened to pub(crate) so sibling `src/tests/diagnostics.rs` can reject
+// unknown categories after the test-layout migration.
+pub(crate) fn validated_diagnostics_month_dir(
     root: &Path,
     category: &str,
     year_month: &str,
@@ -157,7 +163,9 @@ fn validated_diagnostics_category_name(category: &str) -> Result<&'static str, O
     }
 }
 
-fn validated_year_month(year_month: &str) -> Result<String, OrbitError> {
+// Widened to pub(crate) so sibling `src/tests/diagnostics.rs` can pin the
+// rebuilt YYYY-MM components after the test-layout migration.
+pub(crate) fn validated_year_month(year_month: &str) -> Result<String, OrbitError> {
     if !is_year_month(year_month) {
         return Err(OrbitError::InvalidInput(format!(
             "diagnostics month must use YYYY-MM format: {year_month}"
@@ -225,7 +233,9 @@ fn diagnostics_jsonl_files(root: &Path, month_dir: &Path) -> Result<Vec<PathBuf>
     Ok(files)
 }
 
-fn read_jsonl_month<T: DeserializeOwned>(
+// Widened to pub(crate) so sibling `src/tests/diagnostics.rs` can reject
+// path traversal and out-of-tree JSONL symlinks after the test-layout migration.
+pub(crate) fn read_jsonl_month<T: DeserializeOwned>(
     root: &Path,
     category: &str,
     year_month: &str,
@@ -310,7 +320,11 @@ fn read_jsonl_month_limited<T: DeserializeOwned>(
     Ok(entries)
 }
 
-fn parse_jsonl_values<T: DeserializeOwned>(line: &str) -> Result<Vec<T>, serde_json::Error> {
+// Widened to pub(crate) so sibling `src/tests/diagnostics.rs` can cover
+// concatenated-object recovery after the test-layout migration.
+pub(crate) fn parse_jsonl_values<T: DeserializeOwned>(
+    line: &str,
+) -> Result<Vec<T>, serde_json::Error> {
     match serde_json::from_str::<T>(line) {
         Ok(entry) => Ok(vec![entry]),
         Err(single_value_error) => {
@@ -329,110 +343,5 @@ fn parse_jsonl_values<T: DeserializeOwned>(line: &str) -> Result<Vec<T>, serde_j
                 Err(single_value_error)
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::{Value, json};
-
-    use super::{
-        is_year_month, list_jsonl_months, parse_jsonl_values, read_jsonl_month,
-        validated_diagnostics_month_dir, validated_year_month,
-    };
-
-    #[test]
-    fn parse_jsonl_values_recovers_concatenated_objects() {
-        let values = parse_jsonl_values::<Value>(r#"{"step":"one"}{"step":"two"}"#).unwrap();
-
-        assert_eq!(values, vec![json!({"step": "one"}), json!({"step": "two"})]);
-    }
-
-    #[test]
-    fn parse_jsonl_values_rejects_trailing_garbage() {
-        let err = parse_jsonl_values::<Value>(r#"{"step":"one"}oops"#).unwrap_err();
-
-        assert!(err.to_string().contains("trailing characters"));
-    }
-
-    #[test]
-    fn is_year_month_accepts_only_canonical_form() {
-        assert!(is_year_month("2026-03"));
-        assert!(!is_year_month("2026-3"));
-        assert!(!is_year_month("26-03"));
-        assert!(!is_year_month("2026/03"));
-        assert!(!is_year_month(""));
-    }
-
-    #[test]
-    fn validated_year_month_rebuilds_only_the_allowed_components() {
-        assert_eq!(validated_year_month("2026-03").unwrap(), "2026-03");
-        assert!(validated_year_month("2026/03").is_err());
-        assert!(validated_year_month("../secrets").is_err());
-    }
-
-    #[test]
-    fn validated_month_dir_rejects_unknown_categories() {
-        let root = tempfile::tempdir().expect("tempdir");
-
-        let error = validated_diagnostics_month_dir(root.path(), "secrets", "2026-03").unwrap_err();
-
-        assert!(matches!(error, orbit_common::OrbitError::InvalidInput(_)));
-    }
-
-    #[test]
-    fn read_month_rejects_path_traversal() {
-        let root = tempfile::tempdir().expect("tempdir");
-
-        let error = read_jsonl_month::<Value>(root.path(), "metrics", "../secrets").unwrap_err();
-
-        assert!(matches!(error, orbit_common::OrbitError::InvalidInput(_)));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn read_month_rejects_jsonl_symlink_outside_month() {
-        let root = tempfile::tempdir().expect("tempdir");
-        let outside = tempfile::tempdir().expect("outside tempdir");
-        let month_dir = root
-            .path()
-            .join("state")
-            .join("diagnostics")
-            .join("metrics")
-            .join("2026-03");
-        std::fs::create_dir_all(&month_dir).unwrap();
-        let outside_file = outside.path().join("outside.jsonl");
-        std::fs::write(&outside_file, r#"{"value":1}"#).unwrap();
-        std::os::unix::fs::symlink(&outside_file, month_dir.join("entries.jsonl")).unwrap();
-
-        let error = read_jsonl_month::<Value>(root.path(), "metrics", "2026-03").unwrap_err();
-
-        assert!(matches!(error, orbit_common::OrbitError::InvalidInput(_)));
-    }
-
-    #[test]
-    fn list_jsonl_months_returns_sorted_existing_partitions() {
-        let root = tempfile::tempdir().expect("tempdir");
-        let category_dir = root
-            .path()
-            .join("state")
-            .join("diagnostics")
-            .join("metrics");
-        std::fs::create_dir_all(category_dir.join("2026-01")).unwrap();
-        std::fs::create_dir_all(category_dir.join("2025-12")).unwrap();
-        std::fs::write(category_dir.join("not-a-month.txt"), "ignored").unwrap();
-
-        let months = list_jsonl_months(root.path(), "metrics").unwrap();
-
-        assert_eq!(months, vec!["2025-12".to_string(), "2026-01".to_string()]);
-    }
-
-    #[test]
-    fn list_jsonl_months_missing_category_dir_is_empty() {
-        let root = tempfile::tempdir().expect("tempdir");
-
-        let months = list_jsonl_months(root.path(), "metrics").unwrap();
-
-        assert!(months.is_empty());
     }
 }
