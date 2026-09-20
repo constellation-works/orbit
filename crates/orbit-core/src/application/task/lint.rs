@@ -266,7 +266,8 @@ fn lint_acceptance_criteria(acceptance_criteria: &[String], findings: &mut Vec<T
     }
 }
 
-fn context_entry_covers_path(entry: &str, mentioned_path: &str) -> bool {
+// pub(super) widened for sibling-layout tests in task/tests/lint.rs
+pub(super) fn context_entry_covers_path(entry: &str, mentioned_path: &str) -> bool {
     let Ok(entry_anchor) = anchor_path(entry) else {
         return false;
     };
@@ -282,26 +283,4 @@ fn context_entry_covers_path(entry: &str, mentioned_path: &str) -> bool {
         || mentioned_anchor
             .strip_prefix(format!("{entry_anchor}/").as_str())
             .is_some()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::context_entry_covers_path;
-
-    #[test]
-    fn context_entry_covers_file_line_mentions() {
-        assert!(context_entry_covers_path(
-            "file:crates/orbit-cli/src/command/ship.rs",
-            "crates/orbit-cli/src/command/ship.rs:274"
-        ));
-        assert!(context_entry_covers_path(
-            "symbol:crates/x.rs#run:function",
-            "crates/x.rs:42"
-        ));
-        assert!(context_entry_covers_path("dir:src", "src/lib.rs"));
-        assert!(!context_entry_covers_path(
-            "file:src/lib.rs",
-            "tests/lib.rs"
-        ));
-    }
 }

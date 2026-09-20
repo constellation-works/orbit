@@ -53,6 +53,9 @@ pub mod metrics;
 mod paths;
 pub mod runtime;
 
+#[cfg(test)]
+mod tests;
+
 // Store metric/scoreboard projections consumed by the dashboard's JSON API.
 pub use orbit_store::scoreboard_summary;
 pub use orbit_store::skill_store as skill_catalog;

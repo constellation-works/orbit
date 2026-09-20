@@ -8,4 +8,5 @@ mod managed_asset_manifest;
 mod managed_assets;
 mod routine;
 mod skill;
+mod workflow;
 mod workspace_sync;
