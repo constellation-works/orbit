@@ -1281,7 +1281,7 @@ function renderedCommentHeadings(view) {
    only where the browser supports it — without an observer the outline is
    still a working set of links. */
 function trackCommentOutline(headings, links) {
-  if (typeof IntersectionObserver !== "function" || headings.length === 0) return;
+  if (typeof IntersectionObserver !== "function" || headings.length === 0) return null;
   const observer = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
@@ -1294,6 +1294,7 @@ function trackCommentOutline(headings, links) {
     { rootMargin: "0px 0px -70% 0px" },
   );
   for (const heading of headings) observer.observe(heading);
+  return observer;
 }
 
 function highlightCommentOutline(links, index) {
@@ -1320,8 +1321,18 @@ function buildCommentOutline(headings, titles) {
     links.push(link);
     outline.appendChild(link);
   });
-  trackCommentOutline(headings, links);
+  outline.links = links;
   return outline;
+}
+
+function disconnectCommentCards(container) {
+  if (!container) return;
+  for (const child of container.children || []) {
+    if (typeof child.disconnectOutline === "function") {
+      child.disconnectOutline();
+    }
+    disconnectCommentCards(child);
+  }
 }
 
 function buildCommentCard(task, comment, index, context) {
@@ -1377,6 +1388,20 @@ function buildCommentCard(task, comment, index, context) {
     : null;
   const layout = el("div", { class: outline ? "comment-layout outlined" : "comment-layout" }, [outline, bodies]);
 
+  let outlineObserver = null;
+  const startTracking = () => {
+    if (outlineObserver || !outline || headings.length === 0) return;
+    outlineObserver = trackCommentOutline(headings, outline.links);
+  };
+  const stopTracking = () => {
+    if (outlineObserver) {
+      outlineObserver.disconnect();
+      outlineObserver = null;
+    }
+  };
+  card.disconnectOutline = stopTracking;
+  card.teardown = stopTracking;
+
   const summary = el("div", {
     class: "comment-summary",
     text: titles.length > 0 ? `sections: ${titles.join(" · ")}` : `${commentWordCount(message)} words`,
@@ -1408,6 +1433,11 @@ function buildCommentCard(task, comment, index, context) {
     // The disclosure state belongs to the control that changes it, not to the
     // card, which is an article rather than a widget.
     toggle.setAttribute("aria-expanded", String(expanded));
+    if (!expanded || showsRaw) {
+      stopTracking();
+    } else {
+      startTracking();
+    }
   };
 
   toggle.addEventListener("click", (event) => {
@@ -1531,6 +1561,7 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
    each card's disclosure are this panel's own state, and the detail node is
    diffed on the task payload, which none of them are part of. */
 function renderCommentsPanel(panel, task, context) {
+  disconnectCommentCards(panel);
   const isCollapsed = panel.classList && typeof panel.classList.contains === "function"
     ? panel.classList.contains("collapsed")
     : String(panel.className || "").split(/\s+/).includes("collapsed");
@@ -1604,6 +1635,7 @@ function renderCommentsPanel(panel, task, context) {
 function buildTaskDetail(task, context) {
   const detail = el("div", { class: "row-detail split-layout" });
   detail.addEventListener("click", (e) => e.stopPropagation());
+  detail.teardown = () => disconnectCommentCards(detail);
 
   const leftCol = el("div", { class: "detail-main" });
   const rightCol = el("div", { class: "detail-side" });
@@ -2377,6 +2409,7 @@ function buildPinnedTask(ptask, context) {
   actions.appendChild(dismiss);
 
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
+  wrap.teardown = () => disconnectCommentCards(wrap);
   wrap.dataset.key = `pinned-${ptask.id}`;
   wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${detailFeedbackSignature(ptask.id)}`;
   return wrap;
@@ -2563,19 +2596,24 @@ export function renderTasks(tasks, context) {
           nodes.push(draft);
         } else {
           const state = taskDetailState(t, context);
-          const detail = state.task
-            ? buildTaskDetail(state.task, context)
-            : buildTaskDetailPlaceholder(t, state, context);
-          detail.dataset.key = key;
-          // The row's `aria-controls` points here, so the detail needs a real id.
-          detail.id = key;
           // Diff by full task object stringified, plus the feedback the detail's
           // own controls render (the row hash only covers status and crew). A
           // placeholder diffs on its read state instead; a detail rendered from
           // the cached projection must not be rebuilt just because a refresh
           // has a read in flight.
           const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-          detail.dataset.hash = `${JSON.stringify(state.task || t)}-${readState}-${detailFeedbackSignature(t.id)}`;
+          const detailHash = `${JSON.stringify(state.task || t)}-${readState}-${detailFeedbackSignature(t.id)}`;
+          const existingDetail = existingRowNodes.get(key);
+          let detail = existingDetail && existingDetail.dataset.hash === detailHash ? existingDetail : null;
+          if (!detail) {
+            detail = state.task
+              ? buildTaskDetail(state.task, context)
+              : buildTaskDetailPlaceholder(t, state, context);
+            detail.dataset.key = key;
+            // The row's `aria-controls` points here, so the detail needs a real id.
+            detail.id = key;
+            detail.dataset.hash = detailHash;
+          }
           nodes.push(detail);
         }
       }
