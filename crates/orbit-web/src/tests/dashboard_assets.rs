@@ -5227,6 +5227,41 @@ fn dashboard_tasks_dock_and_splitter_assets_match_specification() {
 }
 
 #[test]
+fn dashboard_tasks_layout_grid_items_share_explicit_row_on_desktop() {
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+    let desktop = css
+        .split("@media (min-width: 761px) {")
+        .nth(1)
+        .expect("desktop tasks-layout placement media query must exist");
+    let desktop = desktop
+        .split("\n      }")
+        .next()
+        .expect("desktop tasks-layout placement media query must close");
+
+    for selector in [
+        "main.tasks-layout > .col-tasks",
+        "main.tasks-layout > #side-dock",
+        "main.tasks-layout > .dock-splitter",
+    ] {
+        let start = desktop.find(selector).unwrap_or_else(|| {
+            panic!("{selector} must be placed in the desktop tasks-layout media query")
+        });
+        let rule = &desktop[start..];
+        let body_start = rule
+            .find('{')
+            .expect("each desktop placement rule must have a body");
+        let body_end = rule
+            .find('}')
+            .expect("each desktop placement rule must close");
+        let body = &rule[body_start..=body_end];
+        assert!(
+            body.contains("grid-row: 1;"),
+            "{selector} must declare grid-row: 1 so CSS Grid places every item in step 1 and cannot auto-place #side-dock onto row 2"
+        );
+    }
+}
+
+#[test]
 fn dashboard_persisted_dock_width_clamp_and_wrap_toggle_behavior() {
     let script = r#"
 // Setup mock window & localStorage before importing shipped modules
