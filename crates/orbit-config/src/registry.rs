@@ -294,17 +294,17 @@ define_config_settings! {
     },
     workflow_hard_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.hard_complexity_crews", value_type: "array<string>",
-        description: "Weighted crew pool for unassigned hard-complexity tasks in auto drains; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
+        description: "Weighted crew pool for unassigned hard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
     workflow_low_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.low_complexity_crews", value_type: "array<string>",
-        description: "Weighted crew pool for unassigned low-complexity tasks in auto drains; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
+        description: "Weighted crew pool for unassigned low-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
     workflow_medium_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.medium_complexity_crews", value_type: "array<string>",
-        description: "Weighted crew pool for unassigned medium-complexity tasks in auto drains; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
+        description: "Weighted crew pool for unassigned medium-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
     workflow_pilot_max_complexity: TaskComplexity => String {
@@ -319,7 +319,7 @@ define_config_settings! {
     },
     workflow_xhard_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.xhard_complexity_crews", value_type: "array<string>",
-        description: "Weighted crew pool for unassigned xhard-complexity tasks in auto drains; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
+        description: "Weighted crew pool for unassigned xhard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.",
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
 }

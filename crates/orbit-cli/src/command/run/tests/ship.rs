@@ -320,6 +320,19 @@ fn interactive_ship_inherits_the_shared_in_flight_guard() {
         .expect("captured review admission");
     assert_eq!(review["timing"], "none");
     assert_eq!(review["timing_source"], "built-in");
+    // [ORB-12606] An ordinary ship captures the complexity-pool policy the same
+    // way a drain does. This workspace configures no pool and the fixture task
+    // carries no crew, so the selection is the default chain.
+    let input = persisted.as_object_mut().expect("run input object");
+    input
+        .remove("auto_crew_pools")
+        .expect("captured crew pools");
+    let selection = input
+        .remove("crew_selection")
+        .expect("captured crew selection");
+    assert_eq!(selection["task_id"], task_id);
+    assert_eq!(selection["source"], "default");
+    assert_eq!(input.remove("crew").expect("admitted crew"), "opus");
     assert_eq!(
         persisted,
         json!({

@@ -1,5 +1,6 @@
-//! Capture auto policy on the coordinator and freeze each task's selection in
-//! its admitted run input. Descendant pipelines inherit the same task choice.
+//! Capture pool policy on the admitting pipeline and freeze each task's
+//! selection in its run input. Descendant pipelines inherit the same task
+//! choice.
 
 use std::collections::BTreeMap;
 
@@ -17,6 +18,21 @@ use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
 use crate::runtime::run_input::{non_empty, singular_task_id_from_input};
 
 const POOLS_KEY: &str = "auto_crew_pools";
+/// The pipelines complexity-pool routing applies to: the two workspace
+/// coordinators and the task-carrying delivery pipelines [ORB-12606].
+///
+/// Policy is captured by whichever of these is admitted without a
+/// policy-bearing parent, so an ordinary `run ship` routes a crew-less task
+/// exactly as a drain does. System, review and preparation jobs are absent
+/// from the list and keep their own crew selection.
+const POLICY_PIPELINES: [&str; 6] = [
+    "workspace_auto_pipeline",
+    "workspace_ship_pipeline",
+    "task_auto_pipeline",
+    "task_gate_pipeline",
+    "task_local_pipeline",
+    "task_pr_pipeline",
+];
 const SELECTION_KEY: &str = "crew_selection";
 const COMPLEXITIES: [TaskComplexity; 4] = [
     TaskComplexity::Low,
@@ -176,16 +192,7 @@ impl OrbitRuntime {
         if resuming {
             return Ok(());
         }
-        // Only auto coordinators and delivery pipelines carry this policy.
-        // System, review and preparation jobs keep their own crew selection.
-        if !matches!(
-            job_name,
-            "workspace_auto_pipeline"
-                | "task_auto_pipeline"
-                | "task_gate_pipeline"
-                | "task_local_pipeline"
-                | "task_pr_pipeline"
-        ) {
+        if !POLICY_PIPELINES.contains(&job_name) {
             return Ok(());
         }
         if !input.is_object() {
@@ -193,39 +200,69 @@ impl OrbitRuntime {
                 "pipeline run input must be a JSON object".to_string(),
             ));
         }
-        if job_name == "workspace_auto_pipeline" {
-            input[POOLS_KEY] = json!(self.capture_auto_crew_pools(input)?);
-            return Ok(());
+        let parent_input = parent_run_id
+            .map(|run_id| self.get_job_run_backend(run_id))
+            .transpose()?
+            .flatten()
+            .and_then(|run| run.input)
+            .filter(|parent| parent.get(POOLS_KEY).is_some());
+        match parent_input {
+            // A descendant runs under the policy its coordinator froze,
+            // including that run's overrides and crew allowlist.
+            Some(parent) => {
+                input[POOLS_KEY] = parent[POOLS_KEY].clone();
+                // Keep separately explicit constraints authoritative through every child.
+                if let Some(allowed) = parent.get("allowed_crews") {
+                    input["allowed_crews"] = allowed.clone();
+                }
+                let Some(task_id) = auto_task_id(input).map(ToOwned::to_owned) else {
+                    return Ok(());
+                };
+                if let Some(selection) = parent.get(SELECTION_KEY)
+                    && selection.get("task_id").and_then(Value::as_str) == Some(&task_id)
+                {
+                    input["crew"] = selection["crew"].clone();
+                    input[SELECTION_KEY] = selection.clone();
+                    return Ok(());
+                }
+                self.capture_auto_task_selection(input, &task_id, random)
+            }
+            // A top-level submission — a drain, a ship wrapper, or an ordinary
+            // `run ship` — captures the effective policy itself. A submission
+            // naming exactly one task then draws that task's crew here; a
+            // multi-task or discovery run leaves each leaf to draw at its own
+            // admission, so siblings stay independent.
+            None => {
+                input[POOLS_KEY] = json!(self.capture_auto_crew_pools(input)?);
+                let Some(task_id) = auto_task_id(input).map(ToOwned::to_owned) else {
+                    return Ok(());
+                };
+                self.capture_auto_task_selection(input, &task_id, random)
+            }
         }
-        let Some(parent_id) = parent_run_id else {
-            return Ok(());
-        };
-        let Some(parent) = self.get_job_run_backend(parent_id)? else {
-            return Ok(());
-        };
-        let Some(parent_input) = parent.input.as_ref() else {
-            return Ok(());
-        };
-        let Some(pools_value) = parent_input.get(POOLS_KEY) else {
-            return Ok(());
-        };
-        input[POOLS_KEY] = pools_value.clone();
-        // Keep separately explicit constraints authoritative through every child.
-        if let Some(allowed) = parent_input.get("allowed_crews") {
-            input["allowed_crews"] = allowed.clone();
-        }
-        let Some(task_id) = auto_task_id(input).map(ToOwned::to_owned) else {
-            return Ok(());
-        };
-        if let Some(selection) = parent_input.get(SELECTION_KEY)
-            && selection.get("task_id").and_then(Value::as_str) == Some(&task_id)
-        {
-            input["crew"] = selection["crew"].clone();
-            input[SELECTION_KEY] = selection.clone();
-            return Ok(());
-        }
+    }
 
-        self.capture_auto_task_selection(input, &task_id, random)
+    /// Report a submission-time crew exclusion against the crew that will
+    /// actually run [ORB-12606]. A task routed by a pool is excluded only when
+    /// the allowlist permits none of the pool's members, which is exactly what
+    /// admission will decide; a task with one candidate is named directly.
+    pub(crate) fn enforce_admitted_crew_allowlist(
+        &self,
+        task: &Task,
+        input: &Value,
+        allowlist: &CrewAllowlist,
+        origin: &str,
+    ) -> Result<(), OrbitError> {
+        let pools = self.auto_crew_pools_for_input(input)?;
+        let explicit = input
+            .get("crew")
+            .and_then(Value::as_str)
+            .and_then(non_empty);
+        let (candidates, source) = self.auto_task_crew_candidates(task, &pools, explicit)?;
+        if let [only] = candidates.as_slice() {
+            return enforce_crew_allowlist(Some(allowlist), &only.crew, origin);
+        }
+        permitted_candidates(candidates, &source, Some(allowlist)).map(|_| ())
     }
 
     fn capture_auto_task_selection(

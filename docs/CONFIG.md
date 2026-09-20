@@ -891,8 +891,10 @@ This means you can mix-and-match in a single ship run: route a tricky refactor t
 
 ### Automatic crew pools by complexity
 
-Auto drains can randomly select a crew for each task that has no explicit
-`task.crew`:
+Orbit can randomly select a crew for each task that has no explicit
+`task.crew`. The pools are the routing policy for every pipeline that carries a task —
+`orbit run auto`, `orbit run ship`, `orbit.workflow.ship`, and the
+`ship-sweep` routine alike — not just the unattended drain:
 
 ```sh
 orbit run auto --medium-complexity-crews grok,terra
@@ -953,8 +955,10 @@ Use `--low-complexity-crews`, `--medium-complexity-crews`,
 `--hard-complexity-crews`, and `--xhard-complexity-crews` for run overrides,
 including with `--grant`. Each
 provided CLI pool replaces only its matching configuration pool for that
-drain. Configuration arrays replace their corresponding global arrays when
-specified in the workspace file. Set/get/show use the same fields:
+drain. They are `orbit run auto` options; a ship has no override flag and
+draws from configuration. Configuration arrays replace their corresponding
+global arrays when specified in the workspace file. Set/get/show use the same
+fields:
 
 ```sh
 orbit config set workflow.medium_complexity_crews '["grok", "terra"]'
@@ -962,8 +966,9 @@ orbit config get workflow.medium_complexity_crews
 orbit config show
 ```
 
-For automatic task admission the order is an explicit run-input crew, an
-explicit task crew, the matching nonempty complexity pool, then the existing
+For task admission — by a drain or by an ordinary ship — the order is an
+explicit run-input `crew`, an explicit task crew, the matching nonempty
+complexity pool, then the existing
 default crew resolution chain. Low, medium, hard and xhard are the task
 complexity values; unset or `unassessed` complexity uses the default chain. An
 omitted pool inherits configuration; an absent or empty effective pool uses the
@@ -974,8 +979,10 @@ Names are trimmed and resolved against the configured registry; bare pools are
 deduplicated, so repeated entries never add draw weight.
 
 Pools are selection preferences. They do not install a crew allowlist or
-restrict manual assignments, ordinary `run ship`, or explicit activity crews.
-When a separately supplied `--allow-crew` restricts the drain, the draw
+restrict manual assignments or explicit activity crews: a task with a
+`task.crew`, a run submitted with an explicit `crew`, and the system, review
+and preparation jobs all keep the crew they name, whichever pipeline admits
+them. When a separately supplied `--allow-crew` restricts the run, the draw
 renormalises over the pool's permitted members: their weights keep their
 ratios, and an excluded member's share is redistributed among them. A pool
 whose permitted members all weigh `0` has nothing to draw and counts as
@@ -985,7 +992,10 @@ outside the allowlist is also excluded. The allowlist still applies to system
 and review activities at dispatch, and operation grants keep their scope and
 admission limits.
 
-The coordinator captures effective pools in run input `auto_crew_pools`.
+The admitting run captures the effective pools in run input
+`auto_crew_pools`: whichever of the drain, ship or delivery pipelines is
+submitted without a parent already carrying them freezes the policy, and every
+descendant inherits that frozen copy rather than re-reading configuration.
 Each admitted leaf records `crew` and `crew_selection`, including
 the task ID, complexity, source (`task.crew`, `run_input.<complexity>_complexity_crews`,
 `workflow.<complexity>_complexity_crews`, `explicit`, or `default`), and the
