@@ -504,3 +504,97 @@ fn a_landing_decision_requires_an_observation_of_the_accepted_candidate() {
         TaskStatus::Review
     );
 }
+
+#[test]
+fn a_reconciled_attempt_publishes_a_new_merge_intent_for_the_same_handoff() {
+    use orbit_engine::{HandoffLandingStep, HandoffLandingUpdate};
+
+    // The lost-merge-reply path end to end: attempt one sends, learns nothing,
+    // and dies. Attempt two reconciles the intent as not merged and must be
+    // able to send again — the evidence it publishes is byte-identical to
+    // attempt one's, so only the attempt tells the two mutations apart.
+    let owner = owner("review", None);
+    owner.accept();
+    owner.approve("approval");
+    let handoff_id = owner.handoff_id();
+    let intent_id = format!("{handoff_id}:42");
+    let publish = || {
+        owner.runtime.record_handoff_landing(&HandoffLandingUpdate {
+            handoff_id: handoff_id.clone(),
+            step: HandoffLandingStep::PublishIntent {
+                intent_id: intent_id.clone(),
+            },
+            observed: Some(owner.handoff.candidate.clone()),
+            evidence: "pull request merge requested for the pinned candidate".into(),
+        })
+    };
+    let unresolved = || {
+        owner
+            .runtime
+            .handoff_landing_context(&handoff_id)
+            .expect("landing context")
+            .unresolved_merge_intent
+    };
+    // Kill the run the open attempt is carrying, the way a crashed landing job
+    // leaves it, and let recovery open the next attempt.
+    let crash_and_recover = || {
+        let run_id = owner
+            .attempt()
+            .expect("attempt")
+            .job_run_id
+            .expect("the attempt carries a job");
+        owner
+            .runtime
+            .cancel_job_run(&run_id)
+            .expect("terminalize the dead run");
+        owner
+            .runtime
+            .dispatch_landing_requests()
+            .expect("recovery pass");
+    };
+
+    publish().expect("attempt one publishes its intent");
+    assert_eq!(unresolved().as_deref(), Some(intent_id.as_str()));
+    assert!(
+        publish()
+            .expect_err("one attempt sends once")
+            .to_string()
+            .contains("merge intent replay requires reconciliation"),
+        "a persisted send intent never authorizes a second external merge"
+    );
+
+    // The job died with the intent outstanding; recovery opens attempt two.
+    crash_and_recover();
+    assert_eq!(owner.attempt().expect("attempt").attempt, 2);
+
+    let reconcile = || {
+        owner.runtime.record_handoff_landing(&HandoffLandingUpdate {
+            handoff_id: handoff_id.clone(),
+            step: HandoffLandingStep::ResolveIntent {
+                intent_id: intent_id.clone(),
+                merged: false,
+            },
+            observed: None,
+            evidence: "pull request is still open".into(),
+        })
+    };
+    reconcile().expect("reconcile the intent as not merged");
+    assert_eq!(unresolved(), None);
+
+    publish().expect("the reconciled attempt publishes a fresh intent");
+    assert_eq!(unresolved().as_deref(), Some(intent_id.as_str()));
+
+    // The same loss again: resolving is attempt-scoped too, so attempt three
+    // clears its own uncertainty instead of replaying attempt two's receipt and
+    // finding the intent still unresolved.
+    crash_and_recover();
+    assert_eq!(owner.attempt().expect("attempt").attempt, 3);
+    reconcile().expect("reconcile again");
+    assert_eq!(unresolved(), None);
+    publish().expect("attempt three publishes too");
+
+    assert_eq!(
+        owner.runtime.get_task(&owner.task_id).expect("task").status,
+        TaskStatus::Review
+    );
+}

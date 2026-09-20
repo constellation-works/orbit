@@ -315,3 +315,89 @@ fn an_owner_local_candidate_lands_through_the_same_authority_boundary() {
     assert_eq!(attempt(&f, &handoff_id).state, LandingAttemptState::Merged);
     assert_eq!(starts(&f)[0].state, LandingStartState::Completed);
 }
+
+fn unresolved(f: &Coordinated) -> Option<String> {
+    f.boundary()
+        .inspect_execution_claims()
+        .expect("inspect")
+        .into_iter()
+        .next()
+        .expect("claim")
+        .unresolved_merge_intent
+}
+
+#[test]
+fn a_reconciled_attempt_publishes_a_fresh_intent_while_a_replay_stays_refused() {
+    // The first attempt sends a merge request and never learns what became of
+    // it. Reconciling against real state says "not merged", which has to leave
+    // the next attempt able to send again — otherwise one lost reply wedges the
+    // handoff in review forever. What stays refused is a replay of the very
+    // mutation that already carried launch authority.
+    for delivery in [
+        HandoffDelivery::PullRequest { number: 42 },
+        HandoffDelivery::LocalCandidate,
+    ] {
+        let mut ship = super::admission::request("first").ship;
+        let intent_id = match &delivery {
+            HandoffDelivery::PullRequest { number } => format!("pr:{number}"),
+            _ => {
+                ship.mode = "local".into();
+                "local".to_string()
+            }
+        };
+        let (_tmp, f, c, mut h) = fixture(ship);
+        h.candidate.delivery = delivery;
+        let h = super::handoff::with_validation_logs(&f, &c, h);
+        let handoff_id = authorized(&f, &c, &h);
+        let publish = |mutation_id: &str| {
+            f.boundary().mutate_execution_claim(
+                Some(&operator(&c).with_handoff_observation(observation(&h))),
+                mutation_id,
+                &intent(&intent_id, false),
+            )
+        };
+        let resolve = |mutation_id: &str| {
+            f.boundary().mutate_execution_claim(
+                Some(&operator(&c)),
+                mutation_id,
+                &intent(&intent_id, true),
+            )
+        };
+
+        // Attempt one publishes, then the external merge is lost.
+        dispatch(&f, &c, "open", &handoff_id, Some("landing-run-1")).expect("open");
+        publish(&format!("landing-intent:{intent_id}:1")).expect("first intent");
+        assert_eq!(unresolved(&f).as_deref(), Some(intent_id.as_str()));
+        assert!(
+            publish(&format!("landing-intent:{intent_id}:1"))
+                .expect_err("the same attempt may not send twice")
+                .to_string()
+                .contains("merge intent replay requires reconciliation"),
+            "a persisted send intent never authorizes a second external merge"
+        );
+
+        // Attempt two opens, reads real state, and records "not merged".
+        dispatch(&f, &c, "reopen", &handoff_id, None).expect("reopen");
+        assert_eq!(attempt(&f, &handoff_id).attempt, 2);
+        resolve(&format!("landing-resolve:{intent_id}:false:2")).expect("reconcile as not merged");
+        assert_eq!(unresolved(&f), None);
+
+        // The reconciled attempt may send again, and its own replay is refused
+        // exactly like the first attempt's was.
+        publish(&format!("landing-intent:{intent_id}:2")).expect("fresh intent after reconciling");
+        assert_eq!(unresolved(&f).as_deref(), Some(intent_id.as_str()));
+        assert!(
+            publish(&format!("landing-intent:{intent_id}:2"))
+                .expect_err("still one send per attempt")
+                .to_string()
+                .contains("merge intent replay requires reconciliation")
+        );
+
+        // And this attempt reaches a real outcome instead of looping.
+        resolve(&format!("landing-resolve:{intent_id}:true:2")).expect("reconcile as merged");
+        complete(&f, &c, &h, "complete", &handoff_id, "merged as abc").expect("complete");
+        assert_eq!(f.task(&c.task_id).status, TaskStatus::Done);
+        assert_eq!(attempt(&f, &handoff_id).state, LandingAttemptState::Merged);
+        assert_eq!(starts(&f)[0].state, LandingStartState::Completed);
+    }
+}

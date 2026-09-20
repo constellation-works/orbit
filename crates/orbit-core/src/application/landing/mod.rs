@@ -280,9 +280,16 @@ impl OrbitRuntime {
             .landing_attempt(&update.handoff_id)?
             .ok_or_else(|| missing_attempt(&update.handoff_id))?
             .attempt;
+        // Every landing mutation id is scoped to the attempt that performs it.
+        // The store refuses a replayed unresolved merge intent outright — a
+        // persisted send intent is uncertainty, never permission to send again —
+        // so an id held stable across attempts would let one failed merge
+        // wedge the handoff forever: the next attempt reconciles the intent,
+        // then can never publish a fresh one. Scoping keeps that refusal exactly
+        // where it belongs, inside the attempt that published.
         let (mutation_id, mutation) = match &update.step {
             HandoffLandingStep::PublishIntent { intent_id } => (
-                format!("landing-intent:{intent_id}"),
+                format!("landing-intent:{intent_id}:{attempt}"),
                 ClaimMutation::MergeIntent {
                     intent_id: intent_id.clone(),
                     resolved: false,
@@ -290,7 +297,7 @@ impl OrbitRuntime {
                 },
             ),
             HandoffLandingStep::ResolveIntent { intent_id, merged } => (
-                format!("landing-resolve:{intent_id}:{merged}"),
+                format!("landing-resolve:{intent_id}:{merged}:{attempt}"),
                 ClaimMutation::MergeIntent {
                     intent_id: intent_id.clone(),
                     resolved: true,
