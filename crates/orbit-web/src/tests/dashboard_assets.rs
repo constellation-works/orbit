@@ -5254,25 +5254,54 @@ const {
   getDockMaxWidth,
 } = await import('./log-tail.js');
 
-// 1. Clamp logic: [336px, 60vw]
+// 1. Clamp logic: derived from Tasks grid available width
+// Viewport 1200px: rail is 216px, padding (40px) + gap (20px) = 60px.
+// Grid track space: min(1800, 1200 - 216) - 60 = 924px. Dock max: 60% = 554px.
 const minW = 336;
-const maxW = Math.round(1200 * 0.6); // 720
-if (getDockMaxWidth() !== 720) throw new Error(`expected max 720, got ${getDockMaxWidth()}`);
+const maxW1200 = Math.round(924 * 0.6); // 554
+if (getDockMaxWidth() !== 554) throw new Error(`expected max 554 at 1200px, got ${getDockMaxWidth()}`);
 if (clampDockWidth(200) !== minW) throw new Error(`expected clamp to ${minW}, got ${clampDockWidth(200)}`);
-if (clampDockWidth(500) !== 500) throw new Error(`expected 500, got ${clampDockWidth(500)}`);
-if (clampDockWidth(1000) !== maxW) throw new Error(`expected clamp to ${maxW}, got ${clampDockWidth(1000)}`);
+if (clampDockWidth(450) !== 450) throw new Error(`expected 450, got ${clampDockWidth(450)}`);
+if (clampDockWidth(1000) !== maxW1200) throw new Error(`expected clamp to ${maxW1200}, got ${clampDockWidth(1000)}`);
 
 // 2. Persisted dock width restore & clamp
 saveDockWidthPref(250);
 if (loadDockWidthPref() !== minW) throw new Error(`expected restore clamped to ${minW}, got ${loadDockWidthPref()}`);
-saveDockWidthPref(600);
-if (loadDockWidthPref() !== 600) throw new Error(`expected restore 600, got ${loadDockWidthPref()}`);
+saveDockWidthPref(450);
+if (loadDockWidthPref() !== 450) throw new Error(`expected restore 450, got ${loadDockWidthPref()}`);
 saveDockWidthPref(2000);
-if (loadDockWidthPref() !== maxW) throw new Error(`expected restore clamped to ${maxW}, got ${loadDockWidthPref()}`);
+if (loadDockWidthPref() !== maxW1200) throw new Error(`expected restore clamped to ${maxW1200}, got ${loadDockWidthPref()}`);
 saveDockWidthPref(null);
 if (loadDockWidthPref() !== null) throw new Error(`expected null after removal, got ${loadDockWidthPref()}`);
 
-// 3. Mock DOM for applyDockWidth and splitter interaction
+// 3. Viewport wider than 1800px layout cap (e.g. 2900px, 3440px ultrawide)
+// The 1800px cap and 60px padding/gap saturate track space at 1740px.
+// Dock max width is capped at 60% of grid (1044px), leaving 40% (696px) for tasks.
+window.innerWidth = 2900;
+const maxWUltrawide = Math.round(1740 * 0.6); // 1044
+if (getDockMaxWidth() !== 1044) throw new Error(`expected max 1044 at 2900px, got ${getDockMaxWidth()}`);
+if (clampDockWidth(2000) !== maxWUltrawide) throw new Error(`expected clamp to ${maxWUltrawide} at 2900px, got ${clampDockWidth(2000)}`);
+saveDockWidthPref(2000);
+if (loadDockWidthPref() !== maxWUltrawide) throw new Error(`expected restore clamped to ${maxWUltrawide}, got ${loadDockWidthPref()}`);
+const remainingTaskWidth = 1740 - getDockMaxWidth();
+if (remainingTaskWidth < 336) throw new Error(`expected task column to retain usable width, got ${remainingTaskWidth}`);
+
+// Dragging or pressing End at >= 2900px clamps to maxWUltrawide (1044px), leaves task list visible, no overflow
+const endKeyWidth = clampDockWidth(getDockMaxWidth());
+if (endKeyWidth !== 1044) throw new Error(`expected End key width 1044, got ${endKeyWidth}`);
+const dragExcessWidth = clampDockWidth(3000);
+if (dragExcessWidth !== 1044) throw new Error(`expected drag excess clamped to 1044, got ${dragExcessWidth}`);
+
+// Ultrawide 3440px also saturates at the 1800px layout cap (1740px grid tracks)
+window.innerWidth = 3440;
+if (getDockMaxWidth() !== 1044) throw new Error(`expected max 1044 at 3440px, got ${getDockMaxWidth()}`);
+
+// Viewport shrink from ultrawide to 1200px re-clamps restored dock width
+window.innerWidth = 1200;
+if (loadDockWidthPref() !== maxW1200) throw new Error(`expected re-clamp to ${maxW1200} after shrink, got ${loadDockWidthPref()}`);
+saveDockWidthPref(null);
+
+// 4. Mock DOM for applyDockWidth and splitter interaction
 const styles = {};
 const layout = {
   style: {
@@ -5299,6 +5328,11 @@ globalThis.document = {
   },
 };
 
+// When layout clientWidth is available from rendered DOM, derive from layout.clientWidth - 60
+layout.clientWidth = 1800;
+if (getDockMaxWidth() !== 1044) throw new Error(`expected max 1044 from layout clientWidth 1800, got ${getDockMaxWidth()}`);
+delete layout.clientWidth;
+
 // applyDockWidth
 applyDockWidth(480);
 if (styles['--dock-w'] !== '480px') throw new Error(`expected --dock-w 480px, got ${styles['--dock-w']}`);
@@ -5309,7 +5343,7 @@ applyDockWidth(null);
 if (styles['--dock-w'] !== undefined) throw new Error(`expected --dock-w removed, got ${styles['--dock-w']}`);
 if (attrs['aria-valuenow'] !== '400') throw new Error(`expected default aria-valuenow 400, got ${attrs['aria-valuenow']}`);
 
-// 4. Wrap toggle behavior and persistence
+// 5. Wrap toggle behavior and persistence
 const streamClasses = new Set();
 const logStream = {
   classList: {

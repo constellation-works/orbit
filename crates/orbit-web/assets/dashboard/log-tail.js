@@ -60,8 +60,18 @@ const LOG_WRAP_PREFS_KEY = "orbit.dashboard.logWrap";
 let logWrap = false;
 
 export function getDockMaxWidth() {
-  const vpWidth = typeof window !== "undefined" && window.innerWidth ? window.innerWidth : 1200;
-  return Math.round(vpWidth * 0.6);
+  const layout = typeof document !== "undefined"
+    ? (document.querySelector(".tab-pane[data-tab=\"tasks\"] > main.tasks-layout") || document.querySelector("main.tasks-layout"))
+    : null;
+  let gridWidth;
+  if (layout && typeof layout.clientWidth === "number" && layout.clientWidth > 0) {
+    gridWidth = Math.max(0, layout.clientWidth - 60);
+  } else {
+    const vpWidth = typeof window !== "undefined" && window.innerWidth ? window.innerWidth : 1200;
+    const rail = vpWidth > 760 ? 216 : 0;
+    gridWidth = Math.max(0, Math.min(1800, vpWidth - rail) - 60);
+  }
+  return Math.round(gridWidth * 0.6);
 }
 
 export function clampDockWidth(width) {
@@ -126,7 +136,19 @@ export function applyDockWidth(width) {
   }
 }
 
+let dockResizeWired = false;
+function wireDockResize() {
+  if (dockResizeWired) return;
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    dockResizeWired = true;
+    window.addEventListener("resize", () => {
+      fitLogPanelToViewport();
+    });
+  }
+}
+
 function wireDockSplitter() {
+  wireDockResize();
   const splitter = $("dock-splitter");
   if (!splitter || typeof splitter.addEventListener !== "function") return;
 
@@ -347,6 +369,7 @@ function wireLogPanelResize() {
   logPanelResizeWired = true;
   wireDockModeToggle();
   applyDockMode();
+  wireDockResize();
 }
 
 function getLogClass(level, code) {
