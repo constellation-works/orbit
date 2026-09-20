@@ -39,7 +39,8 @@ For research, state a falsifiable hypothesis, validation method, and what
 would refute it; a simulation of assumed equations does not validate nature.
 See [task-authoring.md](../../orbit/references/task-authoring.md).
 
-Create as `proposed` with required `complexity` (`low`, `medium`, or `hard`).
+Create as `proposed` with required `complexity` (`low`, `medium`, `hard`, or
+`xhard`).
 Use the current session's preparation authorization; task creation alone does
 not grant implementation or completion. Leave `context_files` empty unless
 modification targets are already verified. Selectors identify modification/deletion

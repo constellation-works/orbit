@@ -159,7 +159,11 @@ fn schema_exposes_only_trimmed_create_task_fields() {
         .expect("complexity param");
     assert_eq!(complexity.param_type, "string");
     assert!(complexity.required);
-    assert!(complexity.description.contains("low, medium, or hard"));
+    assert!(
+        complexity
+            .description
+            .contains("low, medium, hard, or xhard")
+    );
     assert!(
         !complexity
             .description

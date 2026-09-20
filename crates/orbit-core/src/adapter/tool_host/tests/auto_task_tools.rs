@@ -115,6 +115,25 @@ fn explicit_template_complexity_roundtrips_through_tools_and_minting() {
     )
     .expect("mint assessed definition");
     assert_eq!(minted["complexity"], json!("hard"));
+
+    // [ORB-12605] The reserved top tier is an ordinary template value.
+    let raised = run_tool_as_operator(
+        &runtime,
+        "orbit.auto_task.update",
+        json!({
+            "name": "assessed-chore",
+            "template": {"title": "Assessed chore", "complexity": "xhard"}
+        }),
+    )
+    .expect("update template to the reserved tier");
+    assert_eq!(raised["template"]["complexity"], json!("xhard"));
+    let minted_xhard = run_tool_as_operator(
+        &runtime,
+        "orbit.auto_task.mint",
+        json!({"name": "assessed-chore"}),
+    )
+    .expect("mint xhard definition");
+    assert_eq!(minted_xhard["complexity"], json!("xhard"));
 }
 
 /// ORB-12253: a minted task's `complexity: "unassessed"` must never block a

@@ -26,6 +26,7 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   the run starts. The drain is asynchronous, so this prints the durable run ID\n\
                   and returns without knowing the eventual outcome.\n\n\
                   Complexity pools select only for tasks without an explicit crew.\n\
+                  The tiers are low, medium, hard and xhard; xhard is the reserved top tier.\n\
                   Each CLI pool replaces its matching workflow pool for this drain.\n\
                   Empty pools and unset complexity use the existing default crew chain.\n\
                   Selections are recorded at admission and retained on retries/resume.\n\
@@ -93,6 +94,12 @@ pub struct AutoCommand {
     /// flag with no names to disable it.
     #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
     pub hard_complexity_crews: Option<Vec<String>>,
+    /// Random crew pool for unassigned xhard-complexity tasks, the reserved
+    /// top tier. Entries are `crew` or `crew:weight` (relative, non-negative
+    /// whole numbers), all bare or all weighted. Overrides the matching
+    /// workflow pool; pass the flag with no names to disable it.
+    #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
+    pub xhard_complexity_crews: Option<Vec<String>>,
     /// Bind this drain to an operation-mode grant (see `orbit operation`).
     /// Completion, scope, and limits come from the grant; `--complete` is
     /// not accepted alongside it.
@@ -110,7 +117,7 @@ pub struct AutoCommand {
     /// start a drain.
     #[arg(
         long,
-        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "grant", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews"]
+        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "grant", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews"]
     )]
     pub stop: bool,
 }
@@ -124,6 +131,7 @@ impl Execute for AutoCommand {
             low: self.low_complexity_crews,
             medium: self.medium_complexity_crews,
             hard: self.hard_complexity_crews,
+            xhard: self.xhard_complexity_crews,
         };
         let for_seconds = self
             .for_duration

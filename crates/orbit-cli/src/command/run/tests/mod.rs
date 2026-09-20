@@ -175,6 +175,7 @@ fn auto_stop_with_no_coordinator_is_idle() {
         low_complexity_crews: None,
         medium_complexity_crews: None,
         hard_complexity_crews: None,
+        xhard_complexity_crews: None,
         for_duration: None,
         concurrency: None,
         complete: false,
@@ -959,6 +960,8 @@ fn workspace_auto_complexity_pools_parse_independently_and_allow_explicit_empty(
         "grok,terra",
         "--low-complexity-crews",
         "luna",
+        "--xhard-complexity-crews",
+        "astra:70,fable:30",
         "--hard-complexity-crews",
     ]);
     let RunSubcommand::Auto(args) = command.command else {
@@ -970,6 +973,10 @@ fn workspace_auto_complexity_pools_parse_independently_and_allow_explicit_empty(
     );
     assert_eq!(args.low_complexity_crews, Some(vec!["luna".into()]));
     assert_eq!(args.hard_complexity_crews, Some(vec![]));
+    assert_eq!(
+        args.xhard_complexity_crews,
+        Some(vec!["astra:70".into(), "fable:30".into()])
+    );
     assert!(
         args.allow_crew.is_empty(),
         "pools must not become an allowlist"
@@ -982,6 +989,7 @@ fn workspace_auto_complexity_pools_parse_independently_and_allow_explicit_empty(
         "--low-complexity-crews",
         "--medium-complexity-crews",
         "--hard-complexity-crews",
+        "--xhard-complexity-crews",
     ] {
         assert_cli_rejects(
             &["orbit", "run", "auto", "--stop", flag, "terra"],
@@ -999,6 +1007,7 @@ fn workspace_auto_help_explains_complexity_pools_and_precedence() {
     let help = error.to_string();
     for text in [
         "--medium-complexity-crews grok,terra",
+        "low, medium, hard and xhard",
         "without an explicit crew",
         "replaces its matching workflow pool",
         "retries/resume",

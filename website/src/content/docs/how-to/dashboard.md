@@ -157,7 +157,7 @@ are split across the two detail columns:
 |---|---|
 | **description** | Left detail column, always shown for an editable task. Click **edit** to open the Markdown editor. |
 | **acceptance criteria** | Left detail column, in the collapsed-by-default **acceptance criteria** section. Click **edit**; enter one criterion per line. |
-| **complexity** | Right detail column, in the **properties** card. Choose **low**, **medium**, or **hard**; the change saves immediately. **unassessed** is displayed when already stored but is not an option. |
+| **complexity** | Right detail column, in the **properties** card. Choose **low**, **medium**, **hard**, or **xhard**; the change saves immediately. **unassessed** is displayed when already stored but is not an option. |
 | **tags** | Right detail column, in the **properties** card. Click the card-header **edit** button and enter comma- or newline-separated tags. |
 | **context files** | Right detail column, in the **context files** section. Click **edit**; enter one selector per line. The section header shows the current count. |
 

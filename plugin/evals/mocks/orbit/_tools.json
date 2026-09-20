@@ -490,11 +490,12 @@
             "type": "boolean"
           },
           "complexity": {
-            "description": "Task complexity level (low, medium, or hard)",
+            "description": "Task complexity level (low, medium, hard, or xhard)",
             "enum": [
               "low",
               "medium",
-              "hard"
+              "hard",
+              "xhard"
             ],
             "type": "string"
           },
@@ -847,7 +848,7 @@
             "type": "string"
           },
           "complexity": {
-            "description": "Optional task complexity level (low, medium, or hard)",
+            "description": "Optional task complexity level (low, medium, hard, or xhard)",
             "type": "string"
           },
           "context": {

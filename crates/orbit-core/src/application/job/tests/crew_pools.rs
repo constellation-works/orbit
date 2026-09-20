@@ -74,6 +74,7 @@ fn complexity_pools_override_matching_config_and_select_independently_without_we
 low_complexity_crews = ["luna"]
 medium_complexity_crews = ["astra"]
 hard_complexity_crews = ["sol"]
+xhard_complexity_crews = ["fable"]
 "#,
     );
     let parent = coordinator(
@@ -99,14 +100,55 @@ hard_complexity_crews = ["sol"]
         runtime.get_task(&first.id).expect("unchanged task").crew,
         None
     );
-    for (complexity, crew) in [(TaskComplexity::Low, "luna"), (TaskComplexity::Hard, "sol")] {
+    for (complexity, crew) in [
+        (TaskComplexity::Low, "luna"),
+        (TaskComplexity::Hard, "sol"),
+        (TaskComplexity::XHard, "fable"),
+    ] {
         let selected = admit(&runtime, &parent, &task(&runtime, complexity, None), 0);
         assert_eq!(selected["crew"], crew);
         assert_eq!(
             selected["crew_selection"]["source"],
             format!("workflow.{complexity}_complexity_crews")
         );
+        assert_eq!(
+            selected["crew_selection"]["complexity"],
+            json!(complexity.as_str())
+        );
     }
+}
+
+/// [ORB-12605] The reserved top tier behaves like every other pool: a run
+/// override replaces the configured pool, and an empty effective pool falls
+/// back to the default crew chain rather than stranding the task.
+#[test]
+fn xhard_pool_overrides_config_and_an_empty_pool_falls_back_to_the_default_chain() {
+    let (_root, runtime, _, _) =
+        test_runtime_with_workspace_config("[workflow]\nxhard_complexity_crews = [\"sol\"]\n");
+    let overridden = coordinator(&runtime, json!({"xhard_complexity_crews": ["fable"]}));
+    let selected = admit(
+        &runtime,
+        &overridden,
+        &task(&runtime, TaskComplexity::XHard, None),
+        0,
+    );
+    assert_eq!(selected["crew"], "fable");
+    assert_eq!(
+        selected["crew_selection"]["source"],
+        "run_input.xhard_complexity_crews"
+    );
+    assert_eq!(selected["crew_selection"]["complexity"], "xhard");
+
+    let (_root, unset, _, _) = test_runtime_with_workspace_config("");
+    let empty = coordinator(&unset, json!({}));
+    let fallback = admit(
+        &unset,
+        &empty,
+        &task(&unset, TaskComplexity::XHard, None),
+        0,
+    );
+    assert_eq!(fallback["crew"], "opus");
+    assert_eq!(fallback["crew_selection"]["source"], "default");
 }
 
 #[test]

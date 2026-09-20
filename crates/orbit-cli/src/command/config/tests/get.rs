@@ -116,7 +116,7 @@ fn complexity_pools_set_get_show_agree_and_invalid_edits_do_not_write() {
     let (_root, runtime, global_root, workspace_root) = test_runtime();
     let path = workspace_root.join("config.toml");
     fs::write(&path, "[workflow]\ndefault_crew = \"opus\"\n").expect("config");
-    for complexity in ["low", "medium", "hard"] {
+    for complexity in ["low", "medium", "hard", "xhard"] {
         let key = format!("workflow.{complexity}_complexity_crews");
         set_args(&key, r#"["terra", "grok", "terra"]"#)
             .execute(&runtime)

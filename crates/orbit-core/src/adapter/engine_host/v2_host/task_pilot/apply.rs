@@ -54,6 +54,14 @@ const STORAGE_APPLY_ATTEMPTS: usize = 3;
 /// and the host's in the same assessment.
 const CONTEXT_ATTACHMENT_WARNINGS: &str = "context_attachment_warnings";
 
+/// Field carrying the escalation findings this boundary records when a pilot
+/// recommends above `workflow.pilot_max_complexity` [ORB-12605]. The reserved
+/// top tier routes work to the most capable — and most expensive — crews, so
+/// raising a task into it stays an operator decision: the assessment is
+/// refused rather than applied, and the finding names what was asked for and
+/// the cap that refused it.
+const COMPLEXITY_ESCALATION_BLOCKED: &str = "complexity_escalation_blocked";
+
 /// Selector budget for a proposal at each recommended complexity.
 ///
 /// Context selectors are both the executor's reading list and the task's lock
@@ -69,7 +77,37 @@ fn context_selector_cap(complexity: TaskComplexity) -> usize {
         TaskComplexity::Unassessed | TaskComplexity::Low => 10,
         TaskComplexity::Medium => 20,
         TaskComplexity::Hard => 40,
+        TaskComplexity::XHard => 60,
     }
+}
+
+/// The escalation finding for a recommendation above the workspace cap, or
+/// `None` when the recommendation is within it. The finding and the task's
+/// error text share one detail so the apply result and the repair prompt
+/// describe the refusal identically.
+fn complexity_escalation_finding(
+    task_id: &str,
+    recommended: TaskComplexity,
+    cap: TaskComplexity,
+) -> Option<(Value, String)> {
+    if recommended.assessment_rank() <= cap.assessment_rank() {
+        return None;
+    }
+    let detail = format!(
+        "recommended complexity {recommended} is above workflow.pilot_max_complexity ({cap}), so \
+         this assessment was not applied; an operator raises the cap or sets the complexity \
+         directly"
+    );
+    Some((
+        json!({
+            "task_id": task_id,
+            "finding": COMPLEXITY_ESCALATION_BLOCKED,
+            "recommended_complexity": recommended.as_str(),
+            "pilot_max_complexity": cap.as_str(),
+            "detail": detail,
+        }),
+        detail,
+    ))
 }
 
 /// Report an over-budget proposal without refusing it. Genuinely large-surface
@@ -232,6 +270,8 @@ pub(in super::super) fn apply(
     let mut task_results = Vec::with_capacity(prepared_before.len());
     let mut ci_sweep_admission = Vec::new();
     let mut resulting_fingerprints = BTreeMap::new();
+    let mut escalation_findings = Vec::new();
+    let pilot_max_complexity = runtime.context.settings().pilot_max_complexity();
 
     for (position, expected) in expected_partitions.iter().enumerate() {
         let expected_index = expected
@@ -444,6 +484,19 @@ pub(in super::super) fn apply(
                     continue;
                 }
             };
+            if let Some((finding, detail)) =
+                complexity_escalation_finding(task_id, complexity, pilot_max_complexity)
+            {
+                escalation_findings.push(finding);
+                // `invalid` routes the task to a repair partition, where the
+                // pilot sees this error and can reassess inside the cap.
+                outcomes.push(task_outcome(
+                    task_id,
+                    "invalid",
+                    Some(format!("{COMPLEXITY_ESCALATION_BLOCKED}: {detail}")),
+                ));
+                continue;
+            }
             let current = match runtime.get_task(task_id) {
                 Ok(task) => task,
                 Err(OrbitError::NotFound { .. }) => {
@@ -805,6 +858,7 @@ pub(in super::super) fn apply(
         "non_repairable_outcomes": non_repairable_outcomes,
         "tasks": task_results,
         "ci_sweep_admission": ci_sweep_admission,
+        "complexity_escalation_blocked": escalation_findings,
     }))
 }
 

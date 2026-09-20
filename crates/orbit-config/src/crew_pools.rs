@@ -28,6 +28,8 @@ pub struct ComplexityCrewPools {
     pub medium: Option<Vec<String>>,
     /// Pool for hard-complexity tasks.
     pub hard: Option<Vec<String>>,
+    /// Pool for xhard-complexity tasks, the reserved top tier.
+    pub xhard: Option<Vec<String>>,
 }
 
 impl ComplexityCrewPools {
@@ -37,6 +39,7 @@ impl ComplexityCrewPools {
             TaskComplexity::Low => self.low.as_deref(),
             TaskComplexity::Medium => self.medium.as_deref(),
             TaskComplexity::Hard => self.hard.as_deref(),
+            TaskComplexity::XHard => self.xhard.as_deref(),
             TaskComplexity::Unassessed => None,
         }
     }

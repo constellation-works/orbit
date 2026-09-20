@@ -700,7 +700,7 @@
         "required": false
       },
       {
-        "description": "Task complexity level (low, medium, or hard)",
+        "description": "Task complexity level (low, medium, hard, or xhard)",
         "name": "complexity",
         "param_type": "string",
         "required": true
@@ -1026,7 +1026,7 @@
         "required": false
       },
       {
-        "description": "Optional task complexity level (low, medium, or hard)",
+        "description": "Optional task complexity level (low, medium, hard, or xhard)",
         "name": "complexity",
         "param_type": "string",
         "required": false

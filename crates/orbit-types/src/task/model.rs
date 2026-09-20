@@ -91,15 +91,16 @@ pub fn complexity_bucket(value: Option<&str>) -> &str {
     }
 }
 
-/// Stable display order: `unset`, then `low` / `medium` / `hard`, then any
-/// unexpected label alphabetically.
+/// Stable display order: `unset`, then `low` / `medium` / `hard` / `xhard`,
+/// then any unexpected label alphabetically.
 pub fn complexity_bucket_ord(label: &str) -> (u8, &str) {
     match label {
         UNSET_BUCKET => (0, ""),
         "low" => (1, ""),
         "medium" => (2, ""),
         "hard" => (3, ""),
-        other => (4, other),
+        "xhard" => (4, ""),
+        other => (5, other),
     }
 }
 
@@ -271,7 +272,9 @@ impl FromStr for TaskPriority {
 
 /// How much work a task is expected to take.
 ///
-/// `Low` / `Medium` / `Hard` are operator assessments. `Unassessed` is the
+/// `Low` / `Medium` / `Hard` / `XHard` are operator assessments, in ascending
+/// order of expected effort. This scale is deliberately distinct from the
+/// provider effort scale in `identity::agent_pair`. `Unassessed` is the
 /// explicit non-answer for automated creation (auto-task mint, unlabeled
 /// import). It is never a silent stand-in for `Medium`. Human and agent
 /// create *and update* surfaces accept only assessed values, so an agent
@@ -285,6 +288,12 @@ pub enum TaskComplexity {
     Low,
     Medium,
     Hard,
+    /// Reserved top tier for the most capable (and most expensive) crews.
+    /// Spelled `xhard` everywhere, so neither serde's snake_case rename nor
+    /// clap's kebab-case value naming may split it into `x_hard`/`x-hard`.
+    #[serde(rename = "xhard")]
+    #[cfg_attr(feature = "clap", value(name = "xhard"))]
+    XHard,
     /// Explicit non-answer for automated creation. Not offered on CLI
     /// `--complexity` (clap skips it) and rejected on human/agent create and
     /// update surfaces so agents cannot dodge an assessment.
@@ -306,6 +315,7 @@ impl FromStr for TaskComplexity {
             "low" => Ok(TaskComplexity::Low),
             "medium" => Ok(TaskComplexity::Medium),
             "hard" => Ok(TaskComplexity::Hard),
+            "xhard" => Ok(TaskComplexity::XHard),
             "unassessed" => Ok(TaskComplexity::Unassessed),
             other => Err(format!("unknown task complexity: {other}")),
         }
@@ -318,13 +328,29 @@ impl TaskComplexity {
             TaskComplexity::Low => "low",
             TaskComplexity::Medium => "medium",
             TaskComplexity::Hard => "hard",
+            TaskComplexity::XHard => "xhard",
             TaskComplexity::Unassessed => "unassessed",
         }
     }
 
-    /// `low` / `medium` / `hard` — values an operator or agent may assign.
+    /// `low` / `medium` / `hard` / `xhard` — values an operator or agent may
+    /// assign.
     pub fn is_assessed(self) -> bool {
         !matches!(self, TaskComplexity::Unassessed)
+    }
+
+    /// Ascending rank of the assessed tiers, for comparing one assessment
+    /// against another or against a policy ceiling. [`TaskComplexity::Unassessed`]
+    /// is the absence of an assessment, so it ranks below every assessed tier
+    /// and never reads as an escalation.
+    pub fn assessment_rank(self) -> u8 {
+        match self {
+            TaskComplexity::Unassessed => 0,
+            TaskComplexity::Low => 1,
+            TaskComplexity::Medium => 2,
+            TaskComplexity::Hard => 3,
+            TaskComplexity::XHard => 4,
+        }
     }
 
     /// Reject [`TaskComplexity::Unassessed`] on human/agent create and update
@@ -334,7 +360,7 @@ impl TaskComplexity {
             Ok(self)
         } else {
             Err(
-                "complexity must be an assessed value (low, medium, or hard); \
+                "complexity must be an assessed value (low, medium, hard, or xhard); \
                  unassessed is reserved for automated creation"
                     .to_string(),
             )

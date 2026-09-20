@@ -140,7 +140,7 @@ fn schema_exposes_complexity() {
 
     assert_eq!(param.param_type, "string");
     assert!(!param.required);
-    assert!(param.description.contains("low, medium, or hard"));
+    assert!(param.description.contains("low, medium, hard, or xhard"));
 }
 
 #[test]

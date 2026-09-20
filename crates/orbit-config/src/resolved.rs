@@ -74,6 +74,10 @@ pub struct ResolvedConfig {
     pub default_crew: Option<String>,
     /// Automatic admission pools; explicit task assignments take precedence.
     pub complexity_crews: crate::ComplexityCrewPools,
+    /// Highest complexity the task pilot may assign on its own
+    /// (`[workflow] pilot_max_complexity`; defaults to `hard`). A higher
+    /// recommendation is reported instead of applied.
+    pub pilot_max_complexity: orbit_types::task::TaskComplexity,
     /// Crew used by system activities such as step-failure recovery and the
     /// task pilot. Resolution of the named crew is deliberately
     /// deferred to dispatch so a bad system crew does not stop unrelated
@@ -112,7 +116,9 @@ impl ResolvedConfig {
                 low: Some(snapshot.workflow_low_complexity_crews.clone()),
                 medium: Some(snapshot.workflow_medium_complexity_crews.clone()),
                 hard: Some(snapshot.workflow_hard_complexity_crews.clone()),
+                xhard: Some(snapshot.workflow_xhard_complexity_crews.clone()),
             },
+            pilot_max_complexity: snapshot.workflow_pilot_max_complexity,
             system_crew: snapshot.workflow_system_crew.clone(),
             operation: OperationPolicy::built_in(),
             tasks_id_start: snapshot.tasks_id_start,
@@ -242,7 +248,9 @@ impl ResolvedConfig {
                 low: Some(snapshot.workflow_low_complexity_crews.clone()),
                 medium: Some(snapshot.workflow_medium_complexity_crews.clone()),
                 hard: Some(snapshot.workflow_hard_complexity_crews.clone()),
+                xhard: Some(snapshot.workflow_xhard_complexity_crews.clone()),
             },
+            pilot_max_complexity: snapshot.workflow_pilot_max_complexity,
             system_crew: snapshot.workflow_system_crew.clone(),
             operation,
             tasks_id_start: snapshot.tasks_id_start,

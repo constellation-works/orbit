@@ -76,7 +76,8 @@ spec:
     # unchanged so the leaf jobs this run admits inherit the same window.
     allowed_crews: []
     # Complexity pools are captured by Core at coordinator admission from
-    # workflow configuration and low/medium/hard_complexity_crews run overrides.
+    # workflow configuration and low/medium/hard/xhard_complexity_crews run
+    # overrides.
     # Omit defaults here: an omitted override inherits configuration, while []
     # explicitly disables a pool. Child admission inherits auto_crew_pools and
     # freezes crew_selection per task; templates must not reroll selections.

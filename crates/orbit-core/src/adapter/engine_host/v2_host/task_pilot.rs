@@ -620,7 +620,7 @@ pub(super) fn member_ready(assessment: &Value) -> bool {
             assessment
                 .get("recommended_complexity")
                 .and_then(Value::as_str),
-            Some("low" | "medium" | "hard")
+            Some("low" | "medium" | "hard" | "xhard")
         )
         && assessment["disposition"] == "selectors"
         && [
@@ -652,7 +652,8 @@ fn validate_recommendations(
         action_failed(
             action,
             format!(
-                "task {task_id} recommended_complexity must be low, medium, hard, or unassessed"
+                "task {task_id} recommended_complexity must be low, medium, hard, xhard, or \
+                 unassessed"
             ),
         )
     })?;

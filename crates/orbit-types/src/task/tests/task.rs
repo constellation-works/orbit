@@ -196,9 +196,53 @@ updated_at: 2026-01-01T00:00:00Z
         assert!(!TaskComplexity::Unassessed.is_assessed());
         assert!(TaskComplexity::Low.is_assessed());
         assert!(TaskComplexity::Unassessed.require_assessed().is_err());
+        assert!(
+            TaskComplexity::Unassessed
+                .require_assessed()
+                .expect_err("unassessed is refused")
+                .contains("xhard"),
+            "the refusal must name every assessed value an operator may pick"
+        );
         assert_eq!(
             TaskComplexity::Hard.require_assessed().expect("assessed"),
             TaskComplexity::Hard
+        );
+    }
+
+    /// [ORB-12605] `xhard` is one word on every surface: serde's snake_case
+    /// rename and clap's kebab-case value naming would both otherwise split it
+    /// into `x_hard` / `x-hard`, which no operator or agent writes.
+    #[test]
+    fn task_complexity_xhard_round_trips_as_one_word_and_outranks_hard() {
+        use crate::task::TaskComplexity;
+        use std::str::FromStr;
+
+        assert_eq!(
+            TaskComplexity::from_str("xhard").expect("parse"),
+            TaskComplexity::XHard
+        );
+        assert_eq!(TaskComplexity::XHard.as_str(), "xhard");
+        assert_eq!(TaskComplexity::XHard.to_string(), "xhard");
+        assert_eq!(
+            serde_json::to_string(&TaskComplexity::XHard).expect("ser"),
+            "\"xhard\""
+        );
+        assert_eq!(
+            serde_json::from_str::<TaskComplexity>("\"xhard\"").expect("de"),
+            TaskComplexity::XHard
+        );
+        assert!(TaskComplexity::XHard.is_assessed());
+        assert_eq!(
+            TaskComplexity::XHard.require_assessed().expect("assessed"),
+            TaskComplexity::XHard
+        );
+        assert!(
+            TaskComplexity::XHard.assessment_rank() > TaskComplexity::Hard.assessment_rank(),
+            "xhard is the top assessed tier"
+        );
+        assert!(
+            TaskComplexity::Unassessed.assessment_rank() < TaskComplexity::Low.assessment_rank(),
+            "the absence of an assessment never reads as an escalation"
         );
     }
 
@@ -739,6 +783,7 @@ mod unlabeled_bucket {
         assert_eq!(labeled_or_unset(Some("extreme")), "extreme");
         assert_eq!(complexity_bucket(Some("extreme")), "extreme");
         assert!(complexity_bucket_ord("unset") < complexity_bucket_ord("low"));
-        assert!(complexity_bucket_ord("hard") < complexity_bucket_ord("extreme"));
+        assert!(complexity_bucket_ord("hard") < complexity_bucket_ord("xhard"));
+        assert!(complexity_bucket_ord("xhard") < complexity_bucket_ord("extreme"));
     }
 }

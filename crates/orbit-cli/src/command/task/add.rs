@@ -53,7 +53,7 @@ pub struct TaskAddArgs {
     /// Priority level
     #[arg(long, value_enum, default_value_t = TaskPriority::Medium)]
     pub priority: TaskPriority,
-    /// Task complexity (low, medium, or hard)
+    /// Task complexity (low, medium, hard, or xhard)
     #[arg(long, value_enum)]
     pub complexity: TaskComplexity,
     /// Task type

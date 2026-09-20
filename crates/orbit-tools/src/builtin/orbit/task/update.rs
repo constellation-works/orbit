@@ -77,7 +77,7 @@ impl Tool for OrbitTaskUpdateTool {
             },
             ToolParam {
                 name: "complexity".to_string(),
-                description: "Optional task complexity level (low, medium, or hard)".to_string(),
+                description: "Optional task complexity level (low, medium, hard, or xhard)".to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },

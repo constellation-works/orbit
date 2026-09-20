@@ -2642,7 +2642,7 @@ expand();
 // reporting saving… while the write is in flight and saved once it lands.
 const complexitySelect = find(body, (node) => node.className === "task-complexity-select mono");
 const offered = complexitySelect.children.filter((option) => option.value).map((option) => option.value);
-if (JSON.stringify(offered) !== JSON.stringify(["low", "medium", "hard"])) {
+if (JSON.stringify(offered) !== JSON.stringify(["low", "medium", "hard", "xhard"])) {
   throw new Error(`complexity offered the wrong options: ${JSON.stringify(offered)}`);
 }
 if (complexitySelect.children.some((option) => option.value === "unassessed")) {

@@ -898,7 +898,13 @@ The equivalent configuration is:
 low_complexity_crews = ["luna"]
 medium_complexity_crews = ["grok", "terra"]
 hard_complexity_crews = ["astra"]
+xhard_complexity_crews = ["fable", "astra"]
 ```
+
+The tiers are `low`, `medium`, `hard` and `xhard`. `xhard` is the reserved top
+tier: it exists to route the work an operator judges worth the most capable —
+and most expensive — crews, and the task pilot may not assign it on its own
+(see [`workflow.pilot_max_complexity`](#capping-what-the-task-pilot-may-assign)).
 
 #### Weighting a pool
 
@@ -934,8 +940,9 @@ The draw takes one ticket in `[0, total_weight)` and walks the pool in
 canonical name order, so `medium_complexity_crews = ["grok:70", "opus:10",
 "sol:20"]` sends 70% of unassigned medium work to `grok` and 10% to `opus`.
 
-Use `--low-complexity-crews`, `--medium-complexity-crews`, and
-`--hard-complexity-crews` for run overrides, including with `--grant`. Each
+Use `--low-complexity-crews`, `--medium-complexity-crews`,
+`--hard-complexity-crews`, and `--xhard-complexity-crews` for run overrides,
+including with `--grant`. Each
 provided CLI pool replaces only its matching configuration pool for that
 drain. Configuration arrays replace their corresponding global arrays when
 specified in the workspace file. Set/get/show use the same fields:
@@ -948,9 +955,9 @@ orbit config show
 
 For automatic task admission the order is an explicit run-input crew, an
 explicit task crew, the matching nonempty complexity pool, then the existing
-default crew resolution chain. Low, medium and hard are the task complexity
-values; unset or `unassessed` complexity uses the default chain. An omitted
-pool inherits configuration; an absent or empty effective pool uses the
+default crew resolution chain. Low, medium, hard and xhard are the task
+complexity values; unset or `unassessed` complexity uses the default chain. An
+omitted pool inherits configuration; an absent or empty effective pool uses the
 default chain. `medium_complexity_crews = []` disables that configured pool;
 `orbit run auto --medium-complexity-crews` (with no names) disables it for one
 drain. Blank entries such as `""` and unknown crew names fail before dispatch.
@@ -982,6 +989,24 @@ and retries/resumes retain the admitted selection even if configuration or
 the task assignment changes later. Different tasks, including a parent and its
 children, receive independent draws at their own admission. No choice rewrites
 `task.crew`; a newly admitted run outside the retry lineage can select again.
+
+#### Capping what the task pilot may assign
+
+The task pilot writes `complexity`, so without a ceiling it could raise its own
+work into the reserved pool. `workflow.pilot_max_complexity` is that ceiling:
+
+```toml
+[workflow]
+pilot_max_complexity = "hard"   # default; "low", "medium" and "xhard" also valid
+```
+
+A pilot assessment whose `recommended_complexity` is above the cap is **not
+applied** — neither its complexity nor its `context_files` — and the apply
+result carries a `complexity_escalation_blocked` finding naming the
+recommendation and the cap. The task is routed to the pilot's repair partition,
+where the same detail is the error it reassesses against. Raising the key to
+`xhard` lets the pilot assign the top tier itself. `unassessed` is not a
+ceiling and is rejected for this key.
 
 ### Setting `task.crew`
 

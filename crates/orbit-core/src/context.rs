@@ -15,6 +15,7 @@ use orbit_store::contracts::{
 };
 use orbit_tools::ToolRegistry;
 use orbit_types::identity::{Crew, require_canonical_agent_family};
+use orbit_types::task::TaskComplexity;
 use orbit_types::workspace::WorkspacePaths;
 
 use crate::skill_catalog::SkillCatalog;
@@ -382,6 +383,9 @@ pub(crate) struct OrbitRuntimeSettings {
     crews: std::collections::BTreeMap<String, Crew>,
     default_crew: Option<String>,
     complexity_crews: orbit_config::ComplexityCrewPools,
+    /// Highest complexity the task pilot may assign on its own
+    /// (`[workflow] pilot_max_complexity`; defaults to `hard`).
+    pilot_max_complexity: TaskComplexity,
     system_crew: String,
     /// Resolved operation-mode preferences with provenance (`[operation]`).
     /// Preferences only; authority is a separate durable grant [ORB-11332].
@@ -401,6 +405,7 @@ impl OrbitRuntimeSettings {
         crews: std::collections::BTreeMap<String, Crew>,
         default_crew: Option<String>,
         complexity_crews: orbit_config::ComplexityCrewPools,
+        pilot_max_complexity: TaskComplexity,
         system_crew: String,
         operation: orbit_config::OperationPolicy,
     ) -> Self {
@@ -415,6 +420,7 @@ impl OrbitRuntimeSettings {
             crews,
             default_crew,
             complexity_crews,
+            pilot_max_complexity,
             system_crew,
             operation,
         }
@@ -446,6 +452,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn complexity_crews(&self) -> &orbit_config::ComplexityCrewPools {
         &self.complexity_crews
+    }
+
+    pub(crate) fn pilot_max_complexity(&self) -> TaskComplexity {
+        self.pilot_max_complexity
     }
 
     pub(crate) fn default_crew(&self) -> Option<&str> {

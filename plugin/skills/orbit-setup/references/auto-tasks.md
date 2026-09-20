@@ -44,14 +44,14 @@ review it in a PR like any other definition.
 | `--type` | `feature`, `bug`, `refactor`, `chore`. Defaults to `chore`. |
 | `--tag` | Repeatable, and worth setting: it is how the minted tasks are found later. A provenance tag is added automatically. |
 | `--required-tool` | Repeatable exact canonical tool name. Scheduled fires and manual `mint` copy the normalized list onto each task. |
-| `--complexity` | Optional assessed complexity: `low`, `medium`, or `hard`. It is copied to every minted task. |
+| `--complexity` | Optional assessed complexity: `low`, `medium`, `hard`, or `xhard`. It is copied to every minted task. |
 | `--status` | Status the minted task enters. Defaults to `backlog`; use `proposed` when a human should approve each instance before it becomes shippable work. |
 | `--crew` | Crew override for minted tasks. |
 | `--dedupe` | `skip-if-open` (default) or `always`. `skip_if_open` is also accepted. The definition file, the JSON document, and `show` all print the canonical `skip_if_open` / `always` token. |
 
 ## Minted tasks inherit template complexity
 
-Set `template.complexity` (or `--complexity`) to `low`, `medium`, or `hard` to
+Set `template.complexity` (or `--complexity`) to `low`, `medium`, `hard`, or `xhard` to
 give every minted task an explicit assessment. The value round-trips through
 the definition YAML, list/show surfaces, and both scheduled and manual minting.
 It also allows automatic crew selection to use the matching
