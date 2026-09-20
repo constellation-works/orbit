@@ -814,18 +814,15 @@ struct LiveLeafRun {
 }
 
 fn live_leaf_runs(runtime: &OrbitRuntime, action: &str) -> Result<Vec<LiveLeafRun>, DispatchError> {
-    // Reconcile first: one orphaned `running` row — a worker killed by a
-    // reboot or an OOM — would occupy a slot forever, and the drain would keep
-    // shipping at a quietly lower parallelism, which is exactly the kind of
-    // thing nobody notices.
+    // Reconcile first, unscoped: occupancy now counts every live leaf
+    // definition (`task_pr_pipeline`, `task_local_pipeline`, and the claimed
+    // pair), not just wrappers. One orphaned `running` row — a worker killed
+    // by a reboot or an OOM — would occupy a slot forever, and the drain
+    // would keep shipping at a quietly lower parallelism, which is exactly
+    // the kind of thing nobody notices [ORB-12649].
     runtime
-        .reconcile_stale_job_runs(Some(LEAF_JOB_NAME))
-        .map_err(|err| {
-            action_failed(
-                action,
-                format!("reconcile stale {LEAF_JOB_NAME} runs: {err}"),
-            )
-        })?;
+        .reconcile_stale_job_runs(None)
+        .map_err(|err| action_failed(action, format!("reconcile stale job runs: {err}")))?;
     read_live_leaf_runs(runtime)
         .map_err(|error| action_failed(action, format!("list live {LEAF_JOB_NAME} runs: {error}")))
 }

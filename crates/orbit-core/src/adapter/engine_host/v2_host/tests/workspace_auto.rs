@@ -4,7 +4,7 @@ use chrono::{SecondsFormat, Utc};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
 use orbit_types::task::{Task, TaskComplexity, TaskPriority, TaskStatus, TaskType};
-use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
+use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, JobRunState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -1059,6 +1059,70 @@ fn claimed_leaves_and_pending_admissions_consume_the_legacy_drain_ceiling() {
         saturated["pending_backlog"].as_u64().expect("pending") > 0,
         "saturation is not an empty backlog"
     );
+}
+
+/// [ORB-12649] Shared occupancy counts non-wrapper leaf rows that the
+/// classifier used to leave unreconciled. An orphaned `task_pr_pipeline` (or
+/// claimed) worker would eat a slot forever; a drain iteration must regain it
+/// without an external query or workspace reopen.
+#[test]
+fn an_orphaned_non_wrapper_leaf_does_not_consume_a_drain_slot() {
+    for job_name in [
+        "task_pr_pipeline",
+        "task_claimed_pr_pipeline",
+        "task_claimed_local_pipeline",
+    ] {
+        let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+        let healthy = classify_with(&runtime, json!({ "max_active_leaf_runs": 3 }));
+        assert_eq!(healthy["free_slots"], 3, "{job_name}: healthy free_slots");
+        assert_eq!(
+            healthy["active_leaf_runs"], 0,
+            "{job_name}: healthy occupancy"
+        );
+
+        let jobs = runtime.stores().jobs();
+        let orphan = jobs
+            .insert_job_run(job_name, 1, Utc::now(), None, None)
+            .expect("insert orphaned leaf");
+        jobs.mark_job_run_running(&orphan.run_id, Utc::now(), 999_999)
+            .expect("mark orphaned leaf running with a dead pid");
+
+        let occupancy_before = jobs
+            .drain_leaf_occupancy()
+            .expect("raw occupancy before classify");
+        assert_eq!(
+            occupancy_before.occupied, 1,
+            "{job_name} must occupy a slot on the raw reading"
+        );
+
+        let recovered = classify_with(&runtime, json!({ "max_active_leaf_runs": 3 }));
+        assert_eq!(
+            recovered["free_slots"], healthy["free_slots"],
+            "{job_name}: drain iteration must regain the orphaned slot"
+        );
+        assert_eq!(
+            recovered["active_leaf_runs"], 0,
+            "{job_name}: occupied after classify"
+        );
+        assert_eq!(
+            recovered["leaf_occupancy_by_pipeline"]
+                .get(job_name)
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            0,
+            "{job_name} must not remain in the occupancy breakdown"
+        );
+
+        let stored = runtime
+            .get_job_run_backend(&orphan.run_id)
+            .expect("read orphaned run")
+            .expect("orphaned run exists");
+        assert_eq!(
+            stored.state,
+            JobRunState::Interrupted,
+            "{job_name} must be finalized by the drain iteration"
+        );
+    }
 }
 
 /// A leaf handed to a detached child stays `backlog` until that child moves it
