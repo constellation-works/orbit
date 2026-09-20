@@ -27,7 +27,11 @@ fn set_args(key: &str, value: &str) -> ConfigSetArgs {
 }
 
 fn show_args(scope: ConfigScopeArg) -> ConfigShowArgs {
-    ConfigShowArgs { scope, json: true }
+    ConfigShowArgs {
+        scope,
+        all: false,
+        json: true,
+    }
 }
 
 fn write_sol_crew(path: &std::path::Path) {

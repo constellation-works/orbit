@@ -484,6 +484,59 @@ fn admission_registry_snapshot_and_lookup_are_complete() {
     );
 }
 
+#[test]
+fn every_registry_row_declares_a_section_and_a_unique_order() {
+    use std::collections::BTreeMap;
+
+    use crate::registry::{CONFIG_KEY_REGISTRY, ConfigSection};
+
+    // Section assignment is declared per row, so a new key cannot be added
+    // without a home in `orbit config show`/`keys`.
+    let mut by_section: BTreeMap<ConfigSection, Vec<(u16, &str)>> = BTreeMap::new();
+    for descriptor in CONFIG_KEY_REGISTRY {
+        assert!(
+            ConfigSection::ORDER.contains(&descriptor.section),
+            "key {} has a section that is never rendered",
+            descriptor.key
+        );
+        by_section
+            .entry(descriptor.section)
+            .or_default()
+            .push((descriptor.order, descriptor.key));
+    }
+
+    for (section, mut rows) in by_section {
+        rows.sort_unstable();
+        let orders: Vec<u16> = rows.iter().map(|(order, _)| *order).collect();
+        let mut unique = orders.clone();
+        unique.dedup();
+        assert_eq!(
+            orders.len(),
+            unique.len(),
+            "{section:?} has duplicate relevance ordinals: {rows:?}"
+        );
+        // A section that claims a shared prefix must keep it: the rendering
+        // strips that prefix from every label it prints.
+        if let Some(prefix) = section.key_prefix() {
+            for (_, key) in &rows {
+                assert!(
+                    key.starts_with(&format!("{prefix}.")),
+                    "{key} is not under the {prefix} prefix its section declares"
+                );
+            }
+        }
+    }
+
+    // Crews have no fixed registry rows; the section exists for the
+    // dynamically named crew tables the effective view folds into it.
+    assert!(
+        !CONFIG_KEY_REGISTRY
+            .iter()
+            .any(|descriptor| descriptor.section == ConfigSection::Crews),
+        "crew tables are not fixed registry rows"
+    );
+}
+
 fn sol_crew_document() -> &'static str {
     "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-5.6-sol\"\nprovider = \"codex\"\n# keep this comment\n"
 }

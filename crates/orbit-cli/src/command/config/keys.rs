@@ -19,6 +19,7 @@ impl Execute for ConfigKeysArgs {
                 json!({
                     "key": entry.key,
                     "type": entry.value_type,
+                    "section": entry.section.token(),
                     "description": entry.description,
                 })
             })
@@ -27,8 +28,11 @@ impl Execute for ConfigKeysArgs {
             .iter()
             .map(|entry| {
                 format!(
-                    "{:<36}  {:<24}  {}",
-                    entry.key, entry.value_type, entry.description
+                    "{:<36}  {:<24}  {:<13}  {}",
+                    entry.key,
+                    entry.value_type,
+                    entry.section.token(),
+                    entry.description
                 )
             })
             .collect::<Vec<_>>()

@@ -2,6 +2,7 @@ mod command;
 mod get;
 mod keys;
 mod path;
+mod render;
 mod set;
 mod show;
 mod support;
