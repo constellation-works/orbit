@@ -54,11 +54,229 @@ function saveLogPanelPrefs(prefs) {
 
 let logPanelPrefs = loadLogPanelPrefs();
 
+const DOCK_WIDTH_PREFS_KEY = "orbit.dashboard.dockWidth";
+const DOCK_MIN_WIDTH = 336;
+const LOG_WRAP_PREFS_KEY = "orbit.dashboard.logWrap";
+let logWrap = false;
+
+export function getDockMaxWidth() {
+  const vpWidth = typeof window !== "undefined" && window.innerWidth ? window.innerWidth : 1200;
+  return Math.round(vpWidth * 0.6);
+}
+
+export function clampDockWidth(width) {
+  const min = DOCK_MIN_WIDTH;
+  const max = Math.max(min, getDockMaxWidth());
+  return Math.min(Math.max(width, min), max);
+}
+
+export function loadDockWidthPref() {
+  try {
+    const raw = window.localStorage.getItem(DOCK_WIDTH_PREFS_KEY);
+    if (raw === null) return null;
+    const parsed = Number.parseFloat(raw);
+    if (!Number.isFinite(parsed)) return null;
+    return clampDockWidth(parsed);
+  } catch (_) {
+    return null;
+  }
+}
+
+export function saveDockWidthPref(width) {
+  try {
+    if (width === null) {
+      window.localStorage.removeItem(DOCK_WIDTH_PREFS_KEY);
+    } else {
+      window.localStorage.setItem(DOCK_WIDTH_PREFS_KEY, String(Math.round(width)));
+    }
+  } catch (_) {
+    /* localStorage unavailable */
+  }
+}
+
+export function applyDockWidth(width) {
+  const layout = document.querySelector("main.tasks-layout");
+  const splitter = $("dock-splitter");
+  if (!layout || !layout.style) return;
+  if (width === null) {
+    if (typeof layout.style.removeProperty === "function") {
+      layout.style.removeProperty("--dock-w");
+    } else if (typeof layout.style.setProperty === "function") {
+      layout.style.setProperty("--dock-w", "");
+    } else {
+      delete layout.style["--dock-w"];
+    }
+    if (splitter && typeof splitter.setAttribute === "function") {
+      const dock = $("side-dock");
+      const curW = dock && typeof dock.getBoundingClientRect === "function" && dock.getBoundingClientRect().width > 0
+        ? Math.round(dock.getBoundingClientRect().width)
+        : DOCK_MIN_WIDTH;
+      splitter.setAttribute("aria-valuenow", String(curW));
+    }
+  } else {
+    const clamped = clampDockWidth(width);
+    if (typeof layout.style.setProperty === "function") {
+      layout.style.setProperty("--dock-w", `${clamped}px`);
+    } else {
+      layout.style["--dock-w"] = `${clamped}px`;
+    }
+    if (splitter && typeof splitter.setAttribute === "function") {
+      splitter.setAttribute("aria-valuenow", String(clamped));
+    }
+  }
+}
+
+function wireDockSplitter() {
+  const splitter = $("dock-splitter");
+  if (!splitter || typeof splitter.addEventListener !== "function") return;
+
+  const persistedWidth = loadDockWidthPref();
+  if (persistedWidth !== null) {
+    applyDockWidth(persistedWidth);
+  } else {
+    applyDockWidth(null);
+  }
+
+  splitter.addEventListener("dblclick", () => {
+    saveDockWidthPref(null);
+    applyDockWidth(null);
+  });
+
+  splitter.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") {
+      return;
+    }
+    e.preventDefault();
+    const dock = $("side-dock");
+    const currentW = loadDockWidthPref() ?? (dock && typeof dock.getBoundingClientRect === "function" && dock.getBoundingClientRect().width > 0
+      ? Math.round(dock.getBoundingClientRect().width)
+      : DOCK_MIN_WIDTH);
+    const min = DOCK_MIN_WIDTH;
+    const max = Math.max(min, getDockMaxWidth());
+
+    let nextW = null;
+    if (e.key === "ArrowLeft") {
+      nextW = clampDockWidth(currentW + 16);
+    } else if (e.key === "ArrowRight") {
+      nextW = clampDockWidth(currentW - 16);
+    } else if (e.key === "Home") {
+      nextW = min;
+    } else if (e.key === "End") {
+      nextW = max;
+    }
+
+    if (nextW !== null) {
+      saveDockWidthPref(nextW);
+      applyDockWidth(nextW);
+    }
+  });
+
+  let isDragging = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  const onPointerMove = (e) => {
+    if (!isDragging) return;
+    const deltaX = startX - e.clientX;
+    const newWidth = clampDockWidth(startWidth + deltaX);
+    applyDockWidth(newWidth);
+  };
+
+  const onPointerUp = () => {
+    if (!isDragging) return;
+    isDragging = false;
+    if (splitter.classList && typeof splitter.classList.remove === "function") {
+      splitter.classList.remove("dragging");
+    }
+    if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    }
+
+    const dock = $("side-dock");
+    const finalW = dock && typeof dock.getBoundingClientRect === "function" && dock.getBoundingClientRect().width > 0
+      ? Math.round(dock.getBoundingClientRect().width)
+      : startWidth;
+    const clamped = clampDockWidth(finalW);
+    saveDockWidthPref(clamped);
+    applyDockWidth(clamped);
+  };
+
+  splitter.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    isDragging = true;
+    if (splitter.classList && typeof splitter.classList.add === "function") {
+      splitter.classList.add("dragging");
+    }
+    startX = e.clientX;
+    const dock = $("side-dock");
+    startWidth = dock && typeof dock.getBoundingClientRect === "function" && dock.getBoundingClientRect().width > 0
+      ? Math.round(dock.getBoundingClientRect().width)
+      : (loadDockWidthPref() ?? DOCK_MIN_WIDTH);
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", onPointerUp);
+      window.addEventListener("pointercancel", onPointerUp);
+    }
+    if (typeof e.preventDefault === "function") e.preventDefault();
+  });
+}
+
+export function loadLogWrapPref() {
+  try {
+    return window.localStorage.getItem(LOG_WRAP_PREFS_KEY) === "true";
+  } catch (_) {
+    return false;
+  }
+}
+
+export function saveLogWrapPref(wrap) {
+  try {
+    window.localStorage.setItem(LOG_WRAP_PREFS_KEY, String(wrap));
+  } catch (_) {
+    /* localStorage unavailable */
+  }
+}
+
+export function applyLogWrap(wrap) {
+  const stream = document.querySelector(".log-stream");
+  const btn = $("log-wrap-lines");
+  if (stream && stream.classList && typeof stream.classList.toggle === "function") {
+    stream.classList.toggle("wrap", wrap);
+  }
+  if (btn) {
+    if (btn.classList && typeof btn.classList.toggle === "function") {
+      btn.classList.toggle("on", wrap);
+    }
+    if (typeof btn.setAttribute === "function") {
+      btn.setAttribute("aria-pressed", String(wrap));
+    }
+  }
+}
+
+function wireLogWrapToggle() {
+  logWrap = loadLogWrapPref();
+  applyLogWrap(logWrap);
+
+  const btn = $("log-wrap-lines");
+  if (btn && typeof btn.addEventListener === "function") {
+    btn.addEventListener("click", () => {
+      logWrap = !logWrap;
+      saveLogWrapPref(logWrap);
+      applyLogWrap(logWrap);
+    });
+  }
+}
+
 // Kept as the exported name because app.js (refreshDashboard) and router.js
 // (setActiveTab) both call it. The dock is sized by the CSS grid now, so there
 // is no viewport arithmetic left — this only re-asserts the current mode.
 export function fitLogPanelToViewport() {
   applyDockMode();
+  const width = loadDockWidthPref();
+  applyDockWidth(width);
+  applyLogWrap(loadLogWrapPref());
 }
 
 function applyDockMode() {
@@ -177,6 +395,8 @@ function renderLogEvent(ev, isFresh) {
 
 export function initLogTail() {
   wireLogPanelResize();
+  wireDockSplitter();
+  wireLogWrapToggle();
   fitLogPanelToViewport();
   fetchJson("/api/log?limit=50").then((payload) => {
     const inner = $("logInner");
@@ -260,6 +480,8 @@ function flushBufferedLogs() {
   if (btnBuffered) btnBuffered.style.display = "none";
   enforceLogBounds();
   if (!wasEmpty) applyLogFilters();
+  const stream = $("side-dock") ? $("side-dock").querySelector(".log-stream") : document.querySelector(".log-stream");
+  if (stream) stream.scrollTop = 0;
 }
 
 function enforceLogBounds() {
@@ -352,6 +574,8 @@ function connectLogStream() {
         applyLogFilters();
         enforceLogBounds();
         setTimeout(() => row.classList.remove("fresh"), 600);
+        const stream = $("side-dock") ? $("side-dock").querySelector(".log-stream") : document.querySelector(".log-stream");
+        if (stream) stream.scrollTop = 0;
       } else {
         logBuffered.push(ev);
         const btn = $("log-buffered-count");

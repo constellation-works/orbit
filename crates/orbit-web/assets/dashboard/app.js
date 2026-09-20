@@ -338,7 +338,7 @@ function renderLocksPanel(payload) {
       header.appendChild(el("span", {
         class: "lock-job mono",
         text: `job_run=${task.job_run_id}`,
-        title: task.job_run_id,
+        title: `job_run=${task.job_run_id}`,
       }));
     }
     group.appendChild(header);

@@ -5025,3 +5025,240 @@ fn dashboard_css_shows_focus_on_every_operable_row() {
         );
     }
 }
+
+#[test]
+fn dashboard_tasks_dock_and_splitter_assets_match_specification() {
+    let index = include_str!("../../assets/dashboard/index.html");
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+
+    // Acceptance criteria 1 & 6: Tasks tab dock column is clamp(336px, 32%, 720px) by default,
+    // defined in dashboard.css (inline 336px style removed); no new inline style attributes.
+    let tasks_section = index
+        .find(r#"<section class="tab-pane" data-tab="tasks">"#)
+        .expect("tasks tab-pane must exist");
+    let after_tasks = &index[tasks_section..];
+    assert!(
+        after_tasks.starts_with(
+            "<section class=\"tab-pane\" data-tab=\"tasks\">\n      <main class=\"tasks-layout\">"
+        ),
+        "Tasks tab main.tasks-layout must not carry an inline style attribute"
+    );
+    assert!(
+        !index.contains("336px;\">"),
+        "Tasks tab inline 336px style must be removed"
+    );
+    assert!(
+        css.contains("clamp(336px, 32%, 720px)"),
+        "dashboard.css must declare clamp(336px, 32%, 720px) for the Tasks tab dock column"
+    );
+    assert!(
+        css.contains("var(--dock-w,"),
+        "dashboard.css must support dynamic --dock-w on main.tasks-layout"
+    );
+
+    // Acceptance criterion 2: A col-resize splitter between task list and dock
+    // with role=separator, aria-valuenow, and hidden below 760px.
+    assert!(
+        index.contains(r#"id="dock-splitter""#)
+            && index.contains(r#"role="separator""#)
+            && index.contains(r#"aria-orientation="vertical""#),
+        "the dock splitter must exist with role=separator and vertical orientation"
+    );
+    assert!(
+        !index.contains(r#"id="dock-splitter" style="#)
+            && !index.contains(r#"class="dock-splitter" style="#),
+        "dock splitter must not carry an inline style attribute"
+    );
+    assert!(
+        css.contains(".dock-splitter") && css.contains("col-resize"),
+        "the dock splitter must have cursor: col-resize"
+    );
+    assert!(
+        css.contains("@media (max-width: 760px)") && css.contains(".dock-splitter"),
+        "the dock splitter must be hidden below 760px"
+    );
+
+    // Acceptance criterion 3: Log lines not ellipsized; inner track expands horizontally;
+    // message column runs to natural width.
+    assert!(
+        css.contains(".log-stream .inner") && css.contains("width: max-content;"),
+        "log stream inner track must expand with width: max-content"
+    );
+    assert!(
+        css.contains(".log-line") && css.contains("grid-template-columns: 56px 62px max-content;"),
+        "log lines must use max-content for message column to avoid truncation"
+    );
+    assert!(
+        css.contains(".log-line .m")
+            && css.contains("overflow: visible;")
+            && css.contains("text-overflow: unset;"),
+        "log line message must not truncate with ellipsis"
+    );
+
+    // Acceptance criterion 4: Wrap toggle (id log-wrap-lines) next to follow with aria-pressed;
+    // persists in orbit.dashboard.logWrap.
+    assert!(
+        index.contains(r#"id="log-wrap-lines""#)
+            && index.contains(r#"class="seg"#)
+            && index.contains(r#"aria-pressed="#),
+        "log wrap toggle button must exist beside follow with aria-pressed"
+    );
+    assert!(
+        !index.contains(r#"id="log-wrap-lines" style="#),
+        "log wrap button must not carry an inline style attribute"
+    );
+    assert!(
+        css.contains(".log-stream.wrap .inner") && css.contains("width: auto;"),
+        "wrapped stream must use width: auto on inner track"
+    );
+    assert!(
+        css.contains(".log-stream.wrap .log-line")
+            && css.contains("grid-template-columns: 56px 62px minmax(0, 1fr);"),
+        "wrapped stream must wrap across line width"
+    );
+    assert!(
+        css.contains(".log-stream.wrap .log-line .m") && css.contains("white-space: pre-wrap;"),
+        "wrapped stream message must pre-wrap"
+    );
+
+    // Acceptance criterion 5: Locked files pane scrolls horizontally; file paths and job_run ids
+    // shown in full with title tooltip; thin scrollbar.
+    assert!(
+        css.contains("#locks-body") && css.contains("overflow: auto;"),
+        "#locks-body must be overflow: auto on both axes"
+    );
+    assert!(
+        css.contains(".lock-task-group") && css.contains("width: max-content;"),
+        "lock-task-group must expand to max-content to allow horizontal scrolling"
+    );
+    assert!(
+        css.contains(".dock-pane #locks-body") && css.contains("scrollbar-width: thin;"),
+        "locks pane must use thin scrollbar matching log-stream"
+    );
+    assert!(
+        !css.contains(".lock-file-row {\n        padding: 2px 0 2px 16px;\n        color: var(--fg-dim);\n        font-size: 11px;\n        overflow: hidden;"),
+        "lock-file-row must not have overflow: hidden or text-overflow: ellipsis"
+    );
+    assert!(
+        !css.contains(".lock-job {\n        color: var(--fg-dim);\n        font-size: 11px;\n        overflow: hidden;"),
+        "lock-job must not have overflow: hidden or text-overflow: ellipsis"
+    );
+}
+
+#[test]
+fn dashboard_persisted_dock_width_clamp_and_wrap_toggle_behavior() {
+    let script = r#"
+// Setup mock window & localStorage before importing shipped modules
+const store = new Map();
+globalThis.window = {
+  location: { search: '' },
+  innerWidth: 1200,
+  localStorage: {
+    getItem: (key) => store.get(key) ?? null,
+    setItem: (key, val) => store.set(key, String(val)),
+    removeItem: (key) => store.delete(key),
+  },
+  addEventListener: () => {},
+  removeEventListener: () => {},
+};
+
+const {
+  clampDockWidth,
+  loadDockWidthPref,
+  saveDockWidthPref,
+  applyDockWidth,
+  loadLogWrapPref,
+  saveLogWrapPref,
+  applyLogWrap,
+  getDockMaxWidth,
+} = await import('./log-tail.js');
+
+// 1. Clamp logic: [336px, 60vw]
+const minW = 336;
+const maxW = Math.round(1200 * 0.6); // 720
+if (getDockMaxWidth() !== 720) throw new Error(`expected max 720, got ${getDockMaxWidth()}`);
+if (clampDockWidth(200) !== minW) throw new Error(`expected clamp to ${minW}, got ${clampDockWidth(200)}`);
+if (clampDockWidth(500) !== 500) throw new Error(`expected 500, got ${clampDockWidth(500)}`);
+if (clampDockWidth(1000) !== maxW) throw new Error(`expected clamp to ${maxW}, got ${clampDockWidth(1000)}`);
+
+// 2. Persisted dock width restore & clamp
+saveDockWidthPref(250);
+if (loadDockWidthPref() !== minW) throw new Error(`expected restore clamped to ${minW}, got ${loadDockWidthPref()}`);
+saveDockWidthPref(600);
+if (loadDockWidthPref() !== 600) throw new Error(`expected restore 600, got ${loadDockWidthPref()}`);
+saveDockWidthPref(2000);
+if (loadDockWidthPref() !== maxW) throw new Error(`expected restore clamped to ${maxW}, got ${loadDockWidthPref()}`);
+saveDockWidthPref(null);
+if (loadDockWidthPref() !== null) throw new Error(`expected null after removal, got ${loadDockWidthPref()}`);
+
+// 3. Mock DOM for applyDockWidth and splitter interaction
+const styles = {};
+const layout = {
+  style: {
+    setProperty: (k, v) => { styles[k] = v; },
+    removeProperty: (k) => { delete styles[k]; },
+  },
+};
+const attrs = {};
+const splitter = {
+  setAttribute: (k, v) => { attrs[k] = String(v); },
+  getAttribute: (k) => attrs[k],
+};
+globalThis.document = {
+  querySelector: (sel) => {
+    if (sel === 'main.tasks-layout') return layout;
+    if (sel === '.log-stream') return logStream;
+    return null;
+  },
+  getElementById: (id) => {
+    if (id === 'dock-splitter') return splitter;
+    if (id === 'log-wrap-lines') return wrapBtn;
+    if (id === 'side-dock') return { getBoundingClientRect: () => ({ width: 400 }) };
+    return null;
+  },
+};
+
+// applyDockWidth
+applyDockWidth(480);
+if (styles['--dock-w'] !== '480px') throw new Error(`expected --dock-w 480px, got ${styles['--dock-w']}`);
+if (attrs['aria-valuenow'] !== '480') throw new Error(`expected aria-valuenow 480, got ${attrs['aria-valuenow']}`);
+
+// Reset to default (null) removes property
+applyDockWidth(null);
+if (styles['--dock-w'] !== undefined) throw new Error(`expected --dock-w removed, got ${styles['--dock-w']}`);
+if (attrs['aria-valuenow'] !== '400') throw new Error(`expected default aria-valuenow 400, got ${attrs['aria-valuenow']}`);
+
+// 4. Wrap toggle behavior and persistence
+const streamClasses = new Set();
+const logStream = {
+  classList: {
+    toggle: (c, val) => { if (val) streamClasses.add(c); else streamClasses.delete(c); },
+    contains: (c) => streamClasses.has(c),
+  },
+};
+const btnClasses = new Set();
+const btnAttrs = {};
+const wrapBtn = {
+  classList: {
+    toggle: (c, val) => { if (val) btnClasses.add(c); else btnClasses.delete(c); },
+    contains: (c) => btnClasses.has(c),
+  },
+  setAttribute: (k, v) => { btnAttrs[k] = String(v); },
+};
+
+// Default off
+if (loadLogWrapPref() !== false) throw new Error('expected default logWrap false');
+applyLogWrap(false);
+if (streamClasses.has('wrap')) throw new Error('expected no wrap class on stream');
+if (btnAttrs['aria-pressed'] !== 'false') throw new Error('expected aria-pressed false');
+
+// Toggle on
+saveLogWrapPref(true);
+if (loadLogWrapPref() !== true) throw new Error('expected logWrap true from localStorage');
+applyLogWrap(true);
+if (!streamClasses.has('wrap')) throw new Error('expected wrap class on stream');
+if (!btnClasses.has('on')) throw new Error('expected on class on wrap button');
+if (btnAttrs['aria-pressed'] !== 'true') throw new Error('expected aria-pressed true');
+"#;
+    run_dashboard_javascript_test(script);
+}

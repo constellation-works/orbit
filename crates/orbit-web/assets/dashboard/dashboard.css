@@ -3583,7 +3583,11 @@
         flex: 1 1 auto;
         min-height: 0;
       }
-      .dock-pane #locks-body { overflow-y: auto; }
+      .dock-pane #locks-body {
+        overflow: auto;
+        scrollbar-width: thin;
+        scrollbar-color: var(--border) transparent;
+      }
 
       /* ORB-10972: always-on ambient line, present on every tab. Replaces what
          the collapsed log panel used to do. */
@@ -4473,10 +4477,11 @@
       /* LOG TAIL */
       main.tasks-layout {
         align-items: stretch;
+        grid-template-columns: minmax(0, 1fr) var(--dock-w, clamp(336px, 32%, 720px));
       }
       @media (max-width: 1250px) {
         main.tasks-layout {
-          grid-template-columns: minmax(0, 2fr) minmax(280px, 1.15fr) !important;
+          grid-template-columns: minmax(0, 2fr) var(--dock-w, minmax(280px, 1.15fr)) !important;
         }
       }
       /* ORB-10874: below ~760px the two-column task/log layout has no room
@@ -4498,6 +4503,43 @@
           min-height: 100%;
         }
         .col-log { min-height: 320px; }
+      }
+      .dock-splitter {
+        width: 6px;
+        cursor: col-resize;
+        user-select: none;
+        touch-action: none;
+        background: transparent;
+        transition: background 0.15s ease;
+      }
+      .dock-splitter:hover,
+      .dock-splitter.dragging {
+        background: var(--border-hover, var(--border));
+      }
+      .dock-splitter:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      @media (min-width: 761px) {
+        main.tasks-layout > .col-tasks {
+          grid-column: 1;
+        }
+        main.tasks-layout > #side-dock {
+          grid-column: 2;
+        }
+        main.tasks-layout > .dock-splitter {
+          grid-column: 2;
+          grid-row: 1;
+          justify-self: start;
+          margin-left: -13px;
+          height: 100%;
+          z-index: 5;
+        }
+      }
+      @media (max-width: 760px) {
+        .dock-splitter {
+          display: none !important;
+        }
       }
       .col-log {
         display: flex;
@@ -4521,6 +4563,8 @@
       #locks-body {
         max-height: none;
         overflow: auto;
+        scrollbar-width: thin;
+        scrollbar-color: var(--border) transparent;
       }
       .locks-empty {
         padding: 10px 16px;
@@ -4546,6 +4590,9 @@
         flex-shrink: 0;
       }
       .lock-task-group {
+        width: max-content;
+        min-width: 100%;
+        box-sizing: border-box;
         padding: 8px 12px 9px;
         border-bottom: 1px solid rgba(255, 255, 255, 0.04);
       }
@@ -4555,6 +4602,7 @@
       .lock-task-header {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 8px;
         min-width: 0;
         margin-bottom: 4px;
@@ -4578,16 +4626,12 @@
       .lock-job {
         color: var(--fg-dim);
         font-size: 11px;
-        overflow: hidden;
-        text-overflow: ellipsis;
         white-space: nowrap;
       }
       .lock-file-row {
         padding: 2px 0 2px 16px;
         color: var(--fg-dim);
         font-size: 11px;
-        overflow: hidden;
-        text-overflow: ellipsis;
         white-space: nowrap;
       }
       /* ORB-10972: #log-panel is a pane of the dock now — it fills the dock's
@@ -4617,6 +4661,7 @@
       .log-stream {
         flex: 1; overflow: auto; position: relative;
         min-height: 0;
+        container-type: inline-size;
         background:
           linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px) 0 0 / 100% 22px,
           var(--bg-elev);
@@ -4626,10 +4671,12 @@
       .log-stream .inner {
         padding: 8px 0;
         font-family: var(--font-mono);
+        width: max-content;
+        min-width: 100%;
       }
       .log-line {
         display: grid;
-        grid-template-columns: 56px 62px minmax(0, 1fr);
+        grid-template-columns: 56px 62px max-content;
         gap: 10px;
         padding: 0 14px 0 12px;
         border-left: 2px solid transparent;
@@ -4657,18 +4704,26 @@
       .log-line .lv.err  { color: var(--status-blocked); }
       .log-line .lv.deny { color: var(--status-review); }
       /* collapsed: single line, truncated */
-      .log-line .m  { color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+      .log-line .m  { color: var(--fg-dim); white-space: nowrap; overflow: visible; text-overflow: unset; min-width: 0; }
       /* expanded: full message wraps below the grid row */
       .log-line.expanded .m {
         grid-column: 1 / -1;
         white-space: pre-wrap;
         word-break: break-all;
+        overflow-wrap: anywhere;
         overflow: visible;
         text-overflow: unset;
+        box-sizing: border-box;
+        width: 100%;
+        max-width: calc(100cqw - 26px);
         padding: 4px 0 8px;
         border-top: 1px dashed rgba(255,255,255,0.06);
         line-height: 1.6;
       }
+      .log-stream.wrap .inner { width: auto; }
+      .log-stream.wrap .log-line { grid-template-columns: 56px 62px minmax(0, 1fr); }
+      .log-stream.wrap .log-line .m { white-space: pre-wrap; overflow-wrap: anywhere; }
+      .log-stream.wrap .log-line.expanded .m { width: auto; max-width: 100%; }
       .log-line .m b { color: var(--fg); font-weight: 500; }
       .log-line .m code {
         font-family: var(--font-mono); font-size: 11.5px; color: var(--accent-hi);
@@ -4708,13 +4763,15 @@
          <span>s they replaced never carried. */
       .log-foot button { font: inherit; background: none; border: none; color: inherit; padding: 0; }
       .log-foot .filter-pill:focus-visible,
+      .log-foot .seg:focus-visible,
       .log-foot .seg.right:focus-visible,
       .log-foot .count:focus-visible {
         outline: 2px solid var(--accent-hover);
         outline-offset: 2px;
       }
-      .log-foot .seg { display: inline-flex; align-items: center; gap: 6px; }
+      .log-foot .seg { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
       .log-foot .seg b { color: var(--fg); font-weight: 500; }
+      .log-foot .seg.on { color: var(--accent); }
       .log-foot .filter-pill {
         padding: 2px 8px; border: 1px solid var(--border); border-radius: 3px;
         color: var(--fg); cursor: pointer;
