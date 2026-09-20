@@ -4520,12 +4520,18 @@
         outline: 2px solid var(--accent);
         outline-offset: 1px;
       }
+      /* Overlay the splitter on the dock's left edge. Every grid item needs
+         an explicit row: CSS Grid places definite row+column items first, so
+         a splitter-only grid-row occupies the dock's cell and auto-places
+         #side-dock onto row 2. */
       @media (min-width: 761px) {
         main.tasks-layout > .col-tasks {
           grid-column: 1;
+          grid-row: 1;
         }
         main.tasks-layout > #side-dock {
           grid-column: 2;
+          grid-row: 1;
         }
         main.tasks-layout > .dock-splitter {
           grid-column: 2;
