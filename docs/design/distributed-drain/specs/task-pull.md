@@ -307,3 +307,12 @@ read locally, with origins and task run links derived from runtime claim provena
 
 These internal seams do not enable pull, claims, recovery or approval public entry points.
 `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` remains false. No schedules or live hosts change.
+
+### Caller checkpoint status
+
+The internal job-store caller checkpoint preserves request identity, unique leaf
+binding, launch uncertainty and disconnected settlement. Its refill loop is an
+internal adapter seam, not a public pull endpoint. Claimed leaves currently refuse
+legacy generic execution; executable validation and typed handoff integration must
+be completed before this slice satisfies the no-origin owner-local and follower-PR
+acceptance scenarios. See the caller-side implementation status in design §3.

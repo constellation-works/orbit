@@ -458,3 +458,50 @@ pub enum JobRunOrder {
     /// with `run_id ASC` as the deterministic tiebreak.
     Recency,
 }
+
+/// Caller-side durable identity. Constructed by the internal drain from its
+/// runtime destination; it is not an authorization-bearing tool payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullDestination {
+    pub owner_machine_id: String,
+    pub owner_workspace_id: String,
+    pub selector: String,
+    pub execution_machine_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalPullPhase {
+    Requested,
+    Claimed,
+    Created,
+    Bound,
+    Launching,
+    Launched,
+    Settling,
+    Settled,
+    Idle,
+}
+
+/// Immutable request and binding with a monotone local execution checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalPullAdmission {
+    pub destination: PullDestination,
+    pub request: super::AdmissionRequest,
+    pub receipt: Option<super::AdmissionReceipt>,
+    pub leaf_run_id: Option<String>,
+    pub phase: LocalPullPhase,
+    pub settlement: Option<super::ClaimMutation>,
+}
+
+/// Each transition commits before the next network or process side effect.
+#[derive(Debug, Clone)]
+pub enum LocalPullMutation {
+    Receive(Box<super::AdmissionReceipt>),
+    CreateLeaf,
+    Bound,
+    LaunchIntent,
+    Launched,
+    Settle(Box<super::ClaimMutation>),
+    Settled,
+}

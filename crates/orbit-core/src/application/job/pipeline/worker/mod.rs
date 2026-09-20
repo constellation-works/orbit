@@ -31,6 +31,11 @@ mod tests;
 impl OrbitRuntime {
     pub fn execute_pipeline_run_worker(&self, run_id: &str) -> Result<(), OrbitError> {
         self.preflight_pipeline_worker_store()?;
+        if self.stores().jobs().local_pull_for_run(run_id)?.is_some() {
+            return Err(OrbitError::JobValidation(
+                "claimed leaves require the internal handoff execution adapter; generic pipeline execution is unavailable".into(),
+            ));
+        }
 
         // [ORB-10070] Claim the queued run for this worker process so orphan
         // reconciliation can tell a pending run whose worker is alive and

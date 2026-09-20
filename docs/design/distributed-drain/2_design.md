@@ -123,6 +123,28 @@ fallback crew configuration must resolve equivalently on each participant.
 
 ## 3. Pull-mode drain and the pulled leaf pipeline
 
+### Caller-side implementation status
+
+The internal caller foundation uses the job store's `local_pull` feature migration
+for immutable requests, returned receipts, unique claim-to-leaf bindings, launch
+intent and pending settlement. Capacity allocation and leaf creation share SQLite
+writer transactions with job state. A launch intent with no acknowledgment is
+uncertain and refuses replay; a terminal leaf keeps pending capacity until its
+settlement is acknowledged. Stopping parent admission leaves its children intact.
+Queued-leaf cancellation is reconciled before binding or launching, including
+after a lost binding response. The launch-intent transaction independently
+requires the bound run to remain pending; cancellation cannot be overwritten
+by that checkpoint. Disconnected cancellation settlement remains durable.
+
+This foundation is **not an executable distributed drain**. The internal refill
+loop currently requires injected owner and launcher adapters. Generic workers
+refuse these bound leaves so they cannot run the legacy merge-capable definitions;
+local bindings also refuse generic resume without contacting the owner. Executable
+claimed PR/local variants, independently captured validation and typed handoff
+integration remain unfinished. The public mutation gate remains false, and no
+routine, schedule, ship-sweep entry point or live host changes.
+
+
 `orbit run auto --pull <selector>` binds a local replica checkout to the owner's host-qualified
 selector copied from federated discovery. Verify that the local checkout belongs to that logical
 workspace and repository. Persist the owner machine, workspace identity, selector, and claim in run
