@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
 
 use crate::update::channel::{
@@ -719,23 +719,36 @@ fn a_fresh_fixture_install_directory_holds_only_the_executable() {
     assert!(Path::new(&fixture.executable).exists());
 }
 
+/// Both authorities an override splits the invocation into, in the order
+/// `admission_authorities` builds them.
+fn split_authorities(environment: &mut UpdateEnvironment) -> (PathBuf, PathBuf) {
+    let host_global = environment.admission_roots[0].clone();
+    std::fs::create_dir_all(&host_global).expect("host-global generation root");
+    let override_root = host_global
+        .parent()
+        .expect("fixture root")
+        .join("override-root");
+    std::fs::create_dir_all(&override_root).expect("override generation root");
+    environment.admission_roots = vec![override_root.clone(), host_global.clone()];
+    (override_root, host_global)
+}
+
 #[test]
 fn live_client_on_overridden_root_refuses_update_while_host_global_is_quiet() {
     use orbit_common::fs::generation::GenerationGuard;
     let fixture = Fixture::new("0.18.0");
     fixture.publish("0.19.0", FakeBinary::Healthy);
     let mut environment = fixture.environment();
-    let override_root = environment
-        .global_root
-        .parent()
-        .expect("fixture root")
-        .join("override-root");
-    std::fs::create_dir_all(&override_root).expect("override generation root");
-    environment.global_root = override_root.clone();
+    let (override_root, _host_global) = split_authorities(&mut environment);
     let _client = GenerationGuard::for_process(&override_root).expect("live client on override");
     let before = std::fs::read(&fixture.executable).expect("installed bytes");
     let error = run_update(&environment, &request()).expect_err("override pin must refuse");
-    assert!(error.to_string().contains("upgrade admission refused"));
+    let message = error.to_string();
+    assert!(message.contains("upgrade admission refused"), "{message}");
+    assert!(
+        message.contains(&override_root.display().to_string()),
+        "the refusal must name the authority holding the pin: {message}"
+    );
     assert_eq!(
         std::fs::read(&fixture.executable).expect("installed bytes"),
         before
@@ -743,24 +756,56 @@ fn live_client_on_overridden_root_refuses_update_while_host_global_is_quiet() {
     assert!(fixture.invocations().is_empty());
 }
 
+/// The binary an override-rooted update replaces is still the host-global one,
+/// so a client pinned there refuses it just as one pinned on the override does.
 #[test]
-fn host_global_pin_does_not_block_update_that_admits_against_an_override() {
+fn live_host_global_client_refuses_an_update_admitting_against_an_override() {
     use orbit_common::fs::generation::GenerationGuard;
     let fixture = Fixture::new("0.18.0");
     fixture.publish("0.19.0", FakeBinary::Healthy);
     let mut environment = fixture.environment();
-    let host_global = environment.global_root.clone();
-    std::fs::create_dir_all(&host_global).expect("host-global generation root");
-    let override_root = host_global
-        .parent()
-        .expect("fixture root")
-        .join("override-root");
-    std::fs::create_dir_all(&override_root).expect("override generation root");
-    environment.global_root = override_root;
+    let (_override_root, host_global) = split_authorities(&mut environment);
     let _host_client = GenerationGuard::for_process(&host_global).expect("live host-global pin");
-    let report = run_update(&environment, &request()).expect("override authority is distinct");
+    let before = std::fs::read(&fixture.executable).expect("installed bytes");
+    let error = run_update(&environment, &request()).expect_err("host-global pin must refuse");
+    let message = error.to_string();
+    assert!(message.contains("upgrade admission refused"), "{message}");
+    assert!(
+        message.contains(&host_global.display().to_string()),
+        "the refusal must name the authority holding the pin: {message}"
+    );
+    assert_eq!(
+        std::fs::read(&fixture.executable).expect("installed bytes"),
+        before
+    );
+    assert_eq!(fixture.installed_reports(), "orbit 0.18.0");
+    assert!(fixture.invocations().is_empty());
+}
+
+/// With both authorities quiet the update proceeds, and each one records the
+/// candidate: a host-global record left naming the replaced generation would
+/// strand every later host-global process behind a mismatch.
+#[test]
+fn an_override_update_pins_the_candidate_in_every_authority_it_locked() {
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+    let mut environment = fixture.environment();
+    let (override_root, host_global) = split_authorities(&mut environment);
+
+    let report = run_update(&environment, &request()).expect("both authorities are quiet");
+
     assert_eq!(report.outcome, UpdateOutcome::Updated);
     assert_eq!(fixture.installed_reports(), "orbit 0.19.0");
+    let installed = orbit_common::fs::generation::executable_generation(&fixture.executable)
+        .expect("installed digest");
+    for root in [override_root, host_global] {
+        assert_eq!(
+            std::fs::read_to_string(root.join(".generation.lock")).expect("generation record"),
+            format!("1:{installed}\n"),
+            "{} does not record the installed generation",
+            root.display()
+        );
+    }
 }
 
 #[test]
@@ -774,7 +819,8 @@ fn live_generation_refuses_before_installation_or_candidate_execution() {
         let fixture = Fixture::new("0.18.0");
         fixture.publish("0.19.0", behavior);
         let environment = fixture.environment();
-        let _client = GenerationGuard::for_process(&environment.global_root).expect("live client");
+        let _client =
+            GenerationGuard::for_process(&environment.admission_roots[0]).expect("live client");
         let before = std::fs::read(&fixture.executable).expect("installed bytes");
         let error = run_update(&environment, &request()).expect_err("live clients refuse");
         assert!(error.to_string().contains("upgrade admission refused"));

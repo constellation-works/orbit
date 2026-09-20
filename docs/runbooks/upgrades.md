@@ -87,22 +87,43 @@ or incompatible protocol refuses, including a downgrade to an unprotected build.
 
 `orbit update --preflight --json` is the wrapper-facing admission probe. It
 opens no runtime, migrates no store, downloads nothing, and changes no binary
-or managed resource. It uses OS locks under the **generation authority**,
-resolved once for the invocation: `--root`, then `ORBIT_ROOT`, otherwise the
-host-global root (normally `~/.orbit/`; managed children retain their supplied
-registry root). Isolated `HOME=` is the other working isolation — it relocates
-`~/.orbit` itself, which is what in-process MCP roundtrip fixtures use. A
-read-only unpinned `~/.orbit` (the agent-executor / Cowork sandbox) therefore
-cannot block `orbit --root <scratch> init` or `--root` / isolated-HOME
-`--preflight`. `orbit update` acquires exclusive admission against **that same
-resolved path** — a live client pinned under `--root` or `ORBIT_ROOT` refuses
-the upgrade, and a green preflight is only evidence for an update that used
-the same invocation's root resolution. There is no path where preflight
-consults an override while the following `orbit update` admits against a
-different root. Coordination lock files may be created. Exit 0 returns:
+or managed resource. It uses OS locks under every **generation authority** the
+invocation can be refused by, in the order the update takes them:
+
+1. The invocation's own resolution — `--root`, then `ORBIT_ROOT`, otherwise the
+   host-global root (normally `~/.orbit/`; managed children retain their
+   supplied registry root). This is the authority this process would pin as a
+   client, and it is reported as `global_root`.
+2. The host-global root as well, whenever a `--root` / `ORBIT_ROOT` override
+   named something else. A root override does not move what `orbit update`
+   replaces: the executable is the running one (`~/.orbit/bin/orbit` for a
+   managed install), and every client started *without* an override — including
+   the persistent `orbit mcp serve` processes this protocol exists for — pins
+   the host-global root. Admitting against the override alone would replace the
+   binary those clients are running and leave their record naming a generation
+   no later host-global process could ever take over from.
+
+Both are listed in `admission_roots`, and a refusal names the authority that
+holds the live pin. So a live client refuses the upgrade whether it is pinned
+under `--root`/`ORBIT_ROOT` or on the host-global root, and a green preflight
+is only evidence for an update that used the same invocation's root resolution.
+There is no path where preflight consults a different set of authorities than
+the following `orbit update` locks.
+
+Isolated `HOME=` is the other working isolation — it relocates `~/.orbit`
+itself, which is what in-process MCP roundtrip fixtures use, and it moves the
+host-global authority with it. What a root override protects is *state*
+isolation, not host-binary replacement: a read-only unpinned `~/.orbit` (the
+agent-executor / Cowork sandbox) still cannot block `orbit --root <scratch>
+init` or `--root` / isolated-HOME `--preflight`, because an unpinned root
+refuses nothing — but a `--root` override never exempts a host-binary
+replacement from the host-global root's live clients, and an environment with
+no resolvable home has no host-global authority to observe them through, so
+`orbit update` refuses there rather than replacing blind. Coordination lock
+files may be created. Exit 0 returns:
 
 ```json
-{"schema_version":1,"admitted":true,"reservation":false,"contract":"executable-generation-v1","global_root":"/home/operator/.orbit"}
+{"schema_version":1,"admitted":true,"reservation":false,"contract":"executable-generation-v1","global_root":"/srv/project","admission_roots":["/srv/project","/home/operator/.orbit"]}
 ```
 
 Exit 1 with `upgrade admission refused` on stderr means stop before installation.
@@ -110,8 +131,9 @@ Exit 1 with `upgrade admission refused` on stderr means stop before installation
 observation, **not a reservation**. Constellation's wrapper should call it using
 the configured executable, user, environment and authority, without an ad-hoc
 MCP server or alternate store. Use `orbit update` for replacement through the
-supported installer: it acquires admission again against that same authority
-and retains it across staging and replacement. `--check` only checks release availability and is not this probe.
+supported installer: it acquires admission again against that same set of
+authorities, retains it across staging and replacement, and pins the candidate
+generation in each of them. `--check` only checks release availability and is not this probe.
 External installers do not hold Orbit's admission across their file operations;
 they must quiesce clients before replacement. A preflight alone does not make an
 external installer race-free.

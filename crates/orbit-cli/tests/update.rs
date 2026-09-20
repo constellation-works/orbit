@@ -368,6 +368,103 @@ fn update_and_preflight_admit_against_the_same_overridden_root() {
         report["global_root"],
         home.join(".orbit").to_string_lossy().as_ref()
     );
+    assert_eq!(
+        report["admission_roots"],
+        serde_json::json!([home.join(".orbit").to_string_lossy()]),
+        "without an override the host-global root is the only authority"
+    );
+}
+
+/// A root override moves neither the replaced executable nor the clients that
+/// pin the host-global root, so the host-global pin has to refuse the upgrade
+/// through both spellings of the override — and preflight has to name the same
+/// pair of authorities the update will lock.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling() {
+    use orbit_common::fs::generation::{GenerationGuard, executable_generation};
+
+    let temp = tempdir().expect("fixture tempdir");
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    let scratch = temp.path().join("scratch");
+    fs::create_dir_all(&home).expect("create home");
+    init_git_repo(&repo);
+    let mirror = mirror_publishing("99.0.0");
+    initialize_root(&repo, &home, mirror.path(), &scratch, "scratch");
+
+    let executable = install_test_binary(&temp.path().join("managed-bin"));
+    let scratch_arg = scratch.to_string_lossy();
+    let host_global = home.join(".orbit");
+
+    // Quiet: the override preflight still reports the host-global authority.
+    let preflight = installed_orbit(&executable, &repo, &home, mirror.path())
+        .args([
+            "update",
+            "--preflight",
+            "--json",
+            "--root",
+            scratch_arg.as_ref(),
+        ])
+        .output()
+        .expect("preflight against overridden root");
+    assert!(
+        preflight.status.success(),
+        "quiet preflight failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&preflight.stdout),
+        String::from_utf8_lossy(&preflight.stderr)
+    );
+    let report: Value = serde_json::from_slice(&preflight.stdout).expect("preflight JSON");
+    assert_eq!(report["global_root"], scratch_arg.as_ref());
+    assert_eq!(
+        report["admission_roots"],
+        serde_json::json!([scratch_arg.as_ref(), host_global.to_string_lossy()]),
+        "an override must not drop the host-global authority from the report"
+    );
+
+    let digest = executable_generation(&executable).expect("installed digest");
+    let _client = GenerationGuard::acquire(&host_global, &digest).expect("live host-global pin");
+    let before = fs::read(&executable).expect("installed bytes");
+
+    let root_update = installed_orbit(&executable, &repo, &home, mirror.path())
+        .args([
+            "update",
+            "--version",
+            "99.0.0",
+            "--json",
+            "--root",
+            scratch_arg.as_ref(),
+        ])
+        .output()
+        .expect("update against overridden root");
+    assert_admission_refused(&root_update, "update --root under a host-global pin");
+    assert_eq!(
+        fs::read(&executable).expect("installed bytes"),
+        before,
+        "--root update replaced the binary under a live host-global pin"
+    );
+
+    let env_update = installed_orbit(&executable, &repo, &home, mirror.path())
+        .env("ORBIT_ROOT", &scratch)
+        .args(["update", "--version", "99.0.0", "--json"])
+        .output()
+        .expect("update against ORBIT_ROOT");
+    assert_admission_refused(&env_update, "update ORBIT_ROOT under a host-global pin");
+    assert_eq!(
+        fs::read(&executable).expect("installed bytes"),
+        before,
+        "ORBIT_ROOT update replaced the binary under a live host-global pin"
+    );
+
+    let refused_preflight = installed_orbit(&executable, &repo, &home, mirror.path())
+        .env("ORBIT_ROOT", &scratch)
+        .args(["update", "--preflight", "--json"])
+        .output()
+        .expect("preflight against ORBIT_ROOT");
+    assert_admission_refused(
+        &refused_preflight,
+        "preflight ORBIT_ROOT under a host-global pin",
+    );
 }
 
 fn assert_admission_refused(output: &std::process::Output, label: &str) {
