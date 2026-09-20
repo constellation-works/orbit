@@ -24,7 +24,7 @@
 // currentness and merge certainty inside the transaction that would change
 // anything.
 
-import { el, fetchJson, postJson, makeToggleRow, isAggregateView } from './common.js';
+import { el, fetchJson, postJson, makeToggleRow, isAggregateView, getWorkspaceRevision } from './common.js';
 
 const CONSOLE_PATH = "/api/distributed/claims";
 
@@ -52,16 +52,25 @@ export function loadDistributedConsole({ force = false } = {}) {
   if (force) invalidateDistributedConsole();
   if (cachedConsole) return Promise.resolve(cachedConsole);
   if (!inflightConsole) {
-    inflightConsole = fetchJson(CONSOLE_PATH)
+    // Revision plus request identity: a response issued for workspace A must
+    // not populate the memo after a switch (or a forced re-read) the way
+    // requestPanel rejects A→B→A and overlapping refreshes.
+    const revision = getWorkspaceRevision();
+    const request = fetchJson(CONSOLE_PATH)
       .then((payload) => {
-        cachedConsole = payload || {};
+        const body = payload || {};
+        if (inflightConsole !== request || revision !== getWorkspaceRevision()) {
+          return body;
+        }
+        cachedConsole = body;
         inflightConsole = null;
         return cachedConsole;
       })
       .catch((error) => {
-        inflightConsole = null;
+        if (inflightConsole === request) inflightConsole = null;
         throw error;
       });
+    inflightConsole = request;
   }
   return inflightConsole;
 }
