@@ -240,7 +240,10 @@ spec:
        capable and most expensive crews; a workspace caps what this lane may
        assign (`workflow.pilot_max_complexity`, `hard` by default) and refuses
        an assessment above that cap outright, so recommend `xhard` only for a
-       repair `hard` genuinely understates.
+       repair `hard` genuinely understates. A task that already carries a
+       complexity above that cap is the exception: an operator assigned it, so
+       the ceiling for that task is the tier it carries, its selectors apply
+       normally, and it keeps that tier whatever this assessment recommends.
        Whenever the pilot has produced selectors and a rationale, return an
        assessed complexity (`low`, `medium`, `hard`, or `xhard`) with an appropriate
        `confidence` level (`high`, `medium`, or `low`) expressing uncertainty.

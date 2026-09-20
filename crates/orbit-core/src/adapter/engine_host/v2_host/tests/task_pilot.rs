@@ -118,6 +118,22 @@ fn partition_result(partition_index: usize, task_ids: &[String], tasks: Vec<Valu
     })
 }
 
+/// A backlog task an operator placed in the reserved top tier, carrying no
+/// selectors yet — the state in which the pilot's automatic lane meets it.
+fn seed_reserved_task(runtime: &OrbitRuntime, title: &str) -> Task {
+    let task = seed_task(runtime, title, TaskStatus::Backlog, &[], &[]);
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                complexity: Some(TaskComplexity::XHard),
+                ..TaskUpdateParams::default()
+            },
+        )
+        .expect("operator assigns the reserved tier");
+    task
+}
+
 /// Materialize `count` workspace files and return the canonical `file:`
 /// selectors naming them, so an over-attachment fixture proposes selectors
 /// that all resolve.
@@ -1433,6 +1449,10 @@ fn pilot_recommendation_above_the_cap_is_refused_with_a_finding() {
     assert_eq!(finding["task_id"], task.id);
     assert_eq!(finding["recommended_complexity"], "xhard");
     assert_eq!(finding["pilot_max_complexity"], "hard");
+    // The task carries nothing above the cap, so the cap alone is the ceiling
+    // the recommendation exceeded [ORB-12622].
+    assert_eq!(finding["current_complexity"], "unassessed");
+    assert_eq!(finding["assignable_ceiling"], "hard");
     assert!(
         finding["detail"]
             .as_str()
@@ -1462,5 +1482,116 @@ fn pilot_recommendation_above_the_cap_is_refused_with_a_finding() {
     assert!(
         stored.context_files.is_empty(),
         "the refused assessment applies nothing at all"
+    );
+}
+
+/// [ORB-12622] The cap keeps the reserved tier an operator decision, which
+/// refusing or rewriting the operator's own assignment would defeat. A task
+/// already above the cap keeps the complexity it carries and still receives
+/// its selectors — whether the pilot re-states that tier or recommends a
+/// lower one — and neither case is an escalation.
+#[test]
+fn a_task_above_the_cap_keeps_its_complexity_and_receives_selectors() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "src/restated.rs");
+    write_workspace_file(&repo_root, "src/lowered.rs");
+    let restated = seed_reserved_task(&runtime, "operator-xhard-restated");
+    let lowered = seed_reserved_task(&runtime, "operator-xhard-lowered");
+    let task_ids = vec![restated.id.clone(), lowered.id.clone()];
+    let prepared_snapshot = prepared(&runtime, &repo_root, &task_ids);
+    let result = partition_result(
+        0,
+        &task_ids,
+        vec![
+            selector_assessment_with_complexity(&restated, vec!["file:src/restated.rs"], "xhard"),
+            selector_assessment_with_complexity(&lowered, vec!["file:src/lowered.rs"], "medium"),
+        ],
+    );
+
+    let output = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": prepared_snapshot,
+            "results": [result],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("a reserved-tier task is scopeable under the default cap");
+
+    assert_eq!(output["status"], "succeeded");
+    assert_eq!(
+        output["complexity_escalation_blocked"],
+        json!([]),
+        "re-stating or lowering within the task's own tier escalates nothing"
+    );
+    for (task, selector) in [
+        (&restated, "file:src/restated.rs"),
+        (&lowered, "file:src/lowered.rs"),
+    ] {
+        let stored = runtime.get_task(&task.id).expect("task after apply");
+        assert_eq!(
+            stored.complexity,
+            Some(TaskComplexity::XHard),
+            "task {} must keep the operator's reserved tier",
+            task.id
+        );
+        assert_eq!(stored.context_files, vec![selector.to_string()]);
+    }
+}
+
+/// [ORB-12622] The automatic lane is exactly how a reserved-tier task reaches
+/// the pilot: an operator's `xhard` task carries no selectors yet, so nothing
+/// excludes it from routine discovery. End to end it must be selected, scoped,
+/// and left at the tier the operator assigned.
+#[test]
+fn automatic_discovery_scopes_a_reserved_tier_task_without_demoting_it() {
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    write_workspace_file(&repo_root, "src/reserved.rs");
+    let task = seed_reserved_task(&runtime, "operator-xhard-backlog");
+
+    let prepared_snapshot = prepare(
+        &runtime,
+        "prepare_task_pilot",
+        &json!({ "workspace_path": repo_root }),
+    )
+    .expect("automatic discovery");
+
+    assert_eq!(prepared_snapshot["mode"], "automatic");
+    assert_eq!(
+        prepared_snapshot["task_ids"],
+        json!([task.id]),
+        "an assessed task without selectors is a routine automatic candidate"
+    );
+    assert_eq!(prepared_snapshot["tasks"][0]["complexity"], "xhard");
+
+    let result = partition_result(
+        0,
+        std::slice::from_ref(&task.id),
+        vec![selector_assessment_with_complexity(
+            &task,
+            vec!["file:src/reserved.rs"],
+            "xhard",
+        )],
+    );
+    let output = apply(
+        &runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": prepared_snapshot,
+            "results": [result],
+            "workspace_path": repo_root,
+        }),
+    )
+    .expect("the automatic lane applies a reserved-tier assessment");
+
+    assert_eq!(output["status"], "succeeded");
+    assert_eq!(output["complexity_escalation_blocked"], json!([]));
+    assert_eq!(output["applied_count"], 1);
+    let stored = runtime.get_task(&task.id).expect("task after apply");
+    assert_eq!(stored.complexity, Some(TaskComplexity::XHard));
+    assert_eq!(
+        stored.context_files,
+        vec!["file:src/reserved.rs".to_string()]
     );
 }
