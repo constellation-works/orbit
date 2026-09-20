@@ -16,21 +16,25 @@ use super::super::operations;
 use super::attribution::ship_done_attribution;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum MergeStrategy {
+pub(in crate::executor::automation::vcs) enum MergeStrategy {
     Squash,
     Rebase,
     Merge,
 }
 
-/// Repository capabilities needed to request a permitted PR merge.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct MergeCapabilities {
-    pub(super) strategy: MergeStrategy,
-    pub(super) auto_merge_allowed: bool,
+/// Repository capabilities needed to request a permitted PR merge, with the
+/// provider's own name for the repository they belong to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::executor::automation::vcs) struct MergeCapabilities {
+    pub(in crate::executor::automation::vcs) strategy: MergeStrategy,
+    pub(in crate::executor::automation::vcs) auto_merge_allowed: bool,
+    /// `owner/name` as the provider reports it. The owner landing consumer
+    /// compares this to the repository the handoff claims [ORB-12499].
+    pub(in crate::executor::automation::vcs) repository: String,
 }
 
 impl MergeStrategy {
-    pub(super) const fn as_str(self) -> &'static str {
+    pub(in crate::executor::automation::vcs) const fn as_str(self) -> &'static str {
         match self {
             Self::Squash => "squash",
             Self::Rebase => "rebase",
@@ -47,7 +51,7 @@ pub(super) fn resolve_merge_strategy<H: RuntimeHost + ?Sized>(
     Ok(resolve_merge_capabilities(host, workspace_path, pr_number)?.strategy)
 }
 
-pub(super) fn resolve_merge_capabilities<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn resolve_merge_capabilities<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &str,
     pr_number: &str,
@@ -77,30 +81,36 @@ pub(super) fn resolve_merge_capabilities<H: RuntimeHost + ?Sized>(
     let merge = capability("allow_merge_commit")?;
     let linear = capability("requires_linear_history")?;
     let auto_merge_allowed = capability("allow_auto_merge")?;
-
-    if squash {
-        return Ok(MergeCapabilities {
-            strategy: MergeStrategy::Squash,
-            auto_merge_allowed,
-        });
-    }
-    if rebase {
-        return Ok(MergeCapabilities {
-            strategy: MergeStrategy::Rebase,
-            auto_merge_allowed,
-        });
-    }
-    if merge && !linear {
-        return Ok(MergeCapabilities {
-            strategy: MergeStrategy::Merge,
-            auto_merge_allowed,
-        });
-    }
-
-    let repository_name = repository
+    let reported_repository = repository
         .get("name_with_owner")
         .and_then(Value::as_str)
-        .unwrap_or("repository");
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let permitted = |strategy| {
+        let repository = reported_repository.ok_or_else(|| {
+            OrbitError::Execution(
+                "merge strategy resolution: repository capabilities omitted name_with_owner"
+                    .to_string(),
+            )
+        })?;
+        Ok(MergeCapabilities {
+            strategy,
+            auto_merge_allowed,
+            repository: repository.to_string(),
+        })
+    };
+
+    if squash {
+        return permitted(MergeStrategy::Squash);
+    }
+    if rebase {
+        return permitted(MergeStrategy::Rebase);
+    }
+    if merge && !linear {
+        return permitted(MergeStrategy::Merge);
+    }
+
+    let repository_name = reported_repository.unwrap_or("repository");
     let base_branch = repository
         .get("base_branch")
         .and_then(Value::as_str)

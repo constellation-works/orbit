@@ -258,6 +258,20 @@ impl RuntimeHost for OrbitRuntime {
         crate::application::review::record_review_landing(self, request)
     }
 
+    fn handoff_landing_context(
+        &self,
+        handoff_id: &str,
+    ) -> Result<orbit_engine::HandoffLandingContext, OrbitError> {
+        OrbitRuntime::handoff_landing_context(self, handoff_id)
+    }
+
+    fn record_handoff_landing(
+        &self,
+        update: &orbit_engine::HandoffLandingUpdate,
+    ) -> Result<(), OrbitError> {
+        OrbitRuntime::record_handoff_landing(self, update)
+    }
+
     fn apply_task_automation_update(
         &self,
         task_id: &str,

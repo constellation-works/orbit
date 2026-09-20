@@ -52,6 +52,13 @@ pub trait TaskStoreBackend: Send + Sync {
         Err(OrbitError::Store("handoff outbox unavailable".into()))
     }
 
+    /// The owner's landing attempts, one per handoff. Read-only inspection.
+    fn landing_attempts(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::LandingAttempt>, OrbitError> {
+        Err(OrbitError::Store("landing attempts unavailable".into()))
+    }
+
     /// Internal lifecycle seam; unavailable backends fail closed.
     fn mutate_execution_claim(
         &self,

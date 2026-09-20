@@ -31,7 +31,7 @@ use super::super::git::{base_sync_mode_from_input, resolve_worktree_start_point}
 /// Every field is optional because it mirrors an upstream pipeline checkpoint
 /// that a given invocation may not carry. An absent pin is not permission: it
 /// only means this run has nothing to compare against for that dimension.
-pub(super) struct DeliveryPin {
+pub(in crate::executor::automation::vcs) struct DeliveryPin {
     head: Option<String>,
     base: Option<String>,
     candidate_sha: Option<String>,
@@ -39,7 +39,7 @@ pub(super) struct DeliveryPin {
 
 /// What a merged pull request proved, recorded on the activity output and in
 /// the durable authorization note.
-pub(super) struct DeliveryEvidence {
+pub(in crate::executor::automation::vcs) struct DeliveryEvidence {
     pr_number: String,
     merged_at: String,
     head_ref: Option<String>,
@@ -49,7 +49,23 @@ pub(super) struct DeliveryEvidence {
 }
 
 impl DeliveryPin {
-    pub(super) fn from_input(input: &Value) -> Self {
+    /// Pin an identity the caller already holds exactly, rather than one read
+    /// out of pipeline run input. The owner landing consumer has no run
+    /// checkpoints: its pins come from the accepted handoff candidate
+    /// [ORB-12499], so every dimension is always pinned.
+    pub(in crate::executor::automation::vcs) fn pinned(
+        head: &str,
+        base: &str,
+        candidate_sha: &str,
+    ) -> Self {
+        Self {
+            head: Some(head.to_string()),
+            base: Some(base.strip_prefix("origin/").unwrap_or(base).to_string()),
+            candidate_sha: Some(candidate_sha.to_string()),
+        }
+    }
+
+    pub(in crate::executor::automation::vcs) fn from_input(input: &Value) -> Self {
         Self {
             head: input_string_field(input, "head"),
             base: input_string_field(input, "base").map(|base| {
@@ -66,7 +82,10 @@ impl DeliveryPin {
     /// The bounded conflict recovery rebases and lease-pushes the *same*
     /// branch, so the published SHA legitimately moves once. Without this the
     /// repaired candidate would look like somebody else's head at merge time.
-    pub(super) fn adopt_refreshed_candidate(&mut self, candidate_sha: Option<&str>) {
+    pub(in crate::executor::automation::vcs) fn adopt_refreshed_candidate(
+        &mut self,
+        candidate_sha: Option<&str>,
+    ) {
         if let Some(candidate_sha) = candidate_sha.map(str::trim).filter(|sha| !sha.is_empty()) {
             self.candidate_sha = Some(candidate_sha.to_string());
         }
@@ -76,7 +95,7 @@ impl DeliveryPin {
     ///
     /// Applied on every poll, so a branch or base that was repointed while the
     /// run waited never receives a merge request in the first place.
-    pub(super) fn ensure_candidate_identity(
+    pub(in crate::executor::automation::vcs) fn ensure_candidate_identity(
         &self,
         status: &Value,
         pr_number: &str,
@@ -85,11 +104,31 @@ impl DeliveryPin {
         self.ensure_matches(status, pr_number, "baseRefName", self.base.as_deref())
     }
 
+    /// The full pinned identity, including the head commit.
+    ///
+    /// `pr_complete` leaves the head to the conditional provider mutation,
+    /// which enforces it atomically. The owner landing consumer checks it on
+    /// every poll as well [ORB-12499]: a candidate that moved has to stop with
+    /// evidence an operator can read, not fail inside a merge request.
+    pub(in crate::executor::automation::vcs) fn ensure_pinned_candidate(
+        &self,
+        status: &Value,
+        pr_number: &str,
+    ) -> Result<(), OrbitError> {
+        self.ensure_candidate_identity(status, pr_number)?;
+        self.ensure_matches(
+            status,
+            pr_number,
+            "headRefOid",
+            self.candidate_sha.as_deref(),
+        )
+    }
+
     /// The gate the guarded `review -> done` transition runs behind.
     ///
     /// A merged state is only delivery when the provider also names the merge
     /// commit and the head it merged is the candidate this run authorized.
-    pub(super) fn ensure_delivered(
+    pub(in crate::executor::automation::vcs) fn ensure_delivered(
         &self,
         status: &Value,
         pr_number: &str,
@@ -159,7 +198,11 @@ impl DeliveryPin {
     /// base turned the same suite green. The answer is best effort: it needs a
     /// readable local checkout, and a refusal is never withheld because the
     /// diagnosis was unavailable.
-    pub(super) fn base_advance_note(&self, input: &Value, workspace_path: &str) -> Option<String> {
+    pub(in crate::executor::automation::vcs) fn base_advance_note(
+        &self,
+        input: &Value,
+        workspace_path: &str,
+    ) -> Option<String> {
         let (candidate_sha, base) = (self.candidate_sha.as_deref()?, self.base.as_deref()?);
         let workspace = Path::new(workspace_path);
         let base_ref =
@@ -186,7 +229,7 @@ impl DeliveryPin {
 }
 
 impl DeliveryEvidence {
-    pub(super) fn as_json(&self) -> Value {
+    pub(in crate::executor::automation::vcs) fn as_json(&self) -> Value {
         json!({
             "pr_number": self.pr_number,
             "merged_at": self.merged_at,
@@ -200,7 +243,7 @@ impl DeliveryEvidence {
     /// The provenance appended to the durable completion note, so a later
     /// reader of task history can tell an evidence-backed automatic completion
     /// apart from any other writer of the same transition.
-    pub(super) fn authorization_fragment(&self) -> String {
+    pub(in crate::executor::automation::vcs) fn authorization_fragment(&self) -> String {
         format!(
             "delivered by pull request #{} merged as {}",
             self.pr_number, self.merge_commit
@@ -214,4 +257,74 @@ fn reported(value: Option<&Value>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// What GitHub's reported PR state means for a completion or landing attempt.
+pub(in crate::executor::automation::vcs) enum PrMergeState {
+    Merged,
+    Closed,
+    /// The provider's answer disagrees with itself about whether this PR
+    /// merged. Completion refuses rather than picking the convenient half.
+    Contradictory(String),
+    /// Merging is refused by a gate this run must not bypass.
+    Blocked(String),
+    /// GitHub reports a content conflict. The local rebase boundary must prove
+    /// actual unmerged entries before an agent may be launched.
+    Conflict,
+    /// Ready to merge now.
+    Mergeable,
+    /// Required checks are still in flight.
+    Pending,
+}
+
+pub(in crate::executor::automation::vcs) fn classify_pr_state(
+    pull_request: &Value,
+) -> PrMergeState {
+    let state = pull_request
+        .get("state")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    if state == "MERGED" {
+        return PrMergeState::Merged;
+    }
+    // [ORB-11982] A merge timestamp on a pull request the provider does not
+    // report as merged is the shape F2026-09-102 recorded: an open PR that
+    // nonetheless looks delivered. Only the authoritative `state` may close a
+    // run, so the disagreement itself becomes the refusal.
+    let merged_at = pull_request
+        .get("mergedAt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(merged_at) = merged_at {
+        return PrMergeState::Contradictory(format!(
+            "state '{state}' alongside merge timestamp {merged_at}"
+        ));
+    }
+    if state == "CLOSED" {
+        return PrMergeState::Closed;
+    }
+
+    let merge_state = pull_request
+        .get("mergeStateStatus")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    match merge_state.as_str() {
+        // Mergeable now: no gate outstanding, or only non-required signals.
+        "CLEAN" | "HAS_HOOKS" | "UNSTABLE" => PrMergeState::Mergeable,
+        // Required checks still running.
+        "PENDING" => PrMergeState::Pending,
+        // Requires human action this run is not authorized to substitute for.
+        "BLOCKED" => PrMergeState::Blocked("required reviews or checks are not satisfied".into()),
+        "DIRTY" => PrMergeState::Conflict,
+        "BEHIND" => {
+            PrMergeState::Blocked("the branch is behind its base and must be updated".into())
+        }
+        "DRAFT" => PrMergeState::Blocked("the pull request is still a draft".into()),
+        // An empty or unrecognized merge state is treated as still settling:
+        // GitHub reports UNKNOWN while it computes mergeability.
+        _ => PrMergeState::Pending,
+    }
 }

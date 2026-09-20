@@ -58,6 +58,10 @@ pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/jobs/task_gate_pipeline.yaml"),
     ),
     (
+        "task_landing_pipeline",
+        include_str!("../../../assets/jobs/task_landing_pipeline.yaml"),
+    ),
+    (
         "task_local_pipeline",
         include_str!("../../../assets/jobs/task_local_pipeline.yaml"),
     ),

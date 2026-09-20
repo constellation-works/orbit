@@ -238,6 +238,8 @@ pub enum ExecutionClaimPhase {
     HandedOff,
     Failed,
     Revoked,
+    /// The owner landing consumer verified the merge and completed the task.
+    Landed,
 }
 
 impl ExecutionClaimPhase {
@@ -417,6 +419,24 @@ pub enum ClaimMutation {
         intent_id: String,
         resolved: bool,
         evidence: String,
+    },
+    /// Reserve the single live landing attempt for a handoff, or record the
+    /// owner job that carries the reserved attempt. Handoff identity is the
+    /// deduplication key; a stopped attempt reopens as the next attempt.
+    DispatchLanding {
+        handoff_id: String,
+        job_run_id: Option<String>,
+    },
+    /// Complete an authorized landing against verified external merge evidence.
+    /// Refused while a merge intent is unresolved or the authority is stale.
+    CompleteLanding {
+        handoff_id: String,
+        evidence: String,
+    },
+    /// Stop the live attempt with durable evidence, leaving the task in review.
+    StopLanding {
+        handoff_id: String,
+        reason: String,
     },
 }
 

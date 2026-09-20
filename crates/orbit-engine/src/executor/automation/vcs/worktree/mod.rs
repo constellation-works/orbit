@@ -2,6 +2,10 @@ mod cleanup;
 mod dependency_delivery;
 mod gc;
 mod merge;
+
+pub(in crate::executor::automation::vcs) use merge::{
+    checkout_holding_branch, ensure_clean_checkout,
+};
 mod setup;
 
 use std::collections::BTreeSet;

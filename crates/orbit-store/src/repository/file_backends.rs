@@ -33,6 +33,12 @@ impl TaskStoreBackend for TaskV2Store {
         self.claim_boundary()?.landing_start_requests()
     }
 
+    fn landing_attempts(
+        &self,
+    ) -> Result<Vec<orbit_types::workflow::handoff::LandingAttempt>, OrbitError> {
+        self.claim_boundary()?.landing_attempts()
+    }
+
     fn mutate_execution_claim(
         &self,
         context: Option<&crate::contracts::ClaimInvocation>,

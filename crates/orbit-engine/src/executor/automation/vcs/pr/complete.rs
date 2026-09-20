@@ -48,7 +48,7 @@ use super::super::git::{base_sync_mode_from_input, resolve_worktree_start_point}
 use super::super::handoff::load_handoff_context;
 use super::super::operations;
 use super::super::push::push_batch_changes;
-use super::delivery::{DeliveryEvidence, DeliveryPin};
+use super::delivery::{DeliveryEvidence, DeliveryPin, PrMergeState, classify_pr_state};
 use super::merge::{MergeCapabilities, MergeStrategy, resolve_merge_capabilities};
 
 /// Default budget for waiting out required checks before giving up.
@@ -192,7 +192,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
 
     loop {
         let status = read_pr_status(host, workspace_path, pr_number)?;
-        match classify(&status) {
+        match classify_pr_state(&status) {
             PrMergeState::Merged => {
                 let evidence = pin.ensure_delivered(&status, pr_number)?;
                 let landed_commit = status.pointer("/mergeCommit/oid").and_then(Value::as_str);
@@ -203,7 +203,7 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                     outcome: json!({
                         "merged": true,
                         "pr_number": pr_number,
-                        "strategy": merge_capabilities.map(|capabilities| capabilities.strategy.as_str()),
+                        "strategy": merge_capabilities.as_ref().map(|capabilities| capabilities.strategy.as_str()),
                         "auto_merge_requested": auto_merge_requested,
                         "waited_seconds": waited_seconds,
                         "max_wait_seconds": max_wait_seconds,
@@ -350,74 +350,6 @@ fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                  #{pr_number} to merge (budget {max_wait_seconds}s); the task stays in review"
             )));
         }
-    }
-}
-
-/// What GitHub's reported PR state means for a completion attempt.
-enum PrMergeState {
-    Merged,
-    Closed,
-    /// The provider's answer disagrees with itself about whether this PR
-    /// merged. Completion refuses rather than picking the convenient half.
-    Contradictory(String),
-    /// Merging is refused by a gate this run must not bypass.
-    Blocked(String),
-    /// GitHub reports a content conflict. The local rebase boundary must prove
-    /// actual unmerged entries before an agent may be launched.
-    Conflict,
-    /// Ready to merge now.
-    Mergeable,
-    /// Required checks are still in flight.
-    Pending,
-}
-
-fn classify(pull_request: &Value) -> PrMergeState {
-    let state = pull_request
-        .get("state")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    if state == "MERGED" {
-        return PrMergeState::Merged;
-    }
-    // [ORB-11982] A merge timestamp on a pull request the provider does not
-    // report as merged is the shape F2026-09-102 recorded: an open PR that
-    // nonetheless looks delivered. Only the authoritative `state` may close a
-    // run, so the disagreement itself becomes the refusal.
-    let merged_at = pull_request
-        .get("mergedAt")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if let Some(merged_at) = merged_at {
-        return PrMergeState::Contradictory(format!(
-            "state '{state}' alongside merge timestamp {merged_at}"
-        ));
-    }
-    if state == "CLOSED" {
-        return PrMergeState::Closed;
-    }
-
-    let merge_state = pull_request
-        .get("mergeStateStatus")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_ascii_uppercase();
-    match merge_state.as_str() {
-        // Mergeable now: no gate outstanding, or only non-required signals.
-        "CLEAN" | "HAS_HOOKS" | "UNSTABLE" => PrMergeState::Mergeable,
-        // Required checks still running.
-        "PENDING" => PrMergeState::Pending,
-        // Requires human action this run is not authorized to substitute for.
-        "BLOCKED" => PrMergeState::Blocked("required reviews or checks are not satisfied".into()),
-        "DIRTY" => PrMergeState::Conflict,
-        "BEHIND" => {
-            PrMergeState::Blocked("the branch is behind its base and must be updated".into())
-        }
-        "DRAFT" => PrMergeState::Blocked("the pull request is still a draft".into()),
-        // An empty or unrecognized merge state is treated as still settling:
-        // GitHub reports UNKNOWN while it computes mergeability.
-        _ => PrMergeState::Pending,
     }
 }
 
@@ -615,8 +547,8 @@ fn resolved_capabilities<H: RuntimeHost + ?Sized>(
     pr_number: &str,
     selected: &mut Option<MergeCapabilities>,
 ) -> Result<MergeCapabilities, OrbitError> {
-    if let Some(capabilities) = *selected {
-        return Ok(capabilities);
+    if let Some(capabilities) = selected {
+        return Ok(capabilities.clone());
     }
     let capabilities =
         resolve_merge_capabilities(host, workspace_path, pr_number).map_err(|error| {
@@ -625,7 +557,7 @@ fn resolved_capabilities<H: RuntimeHost + ?Sized>(
              #{pr_number}: {error}; the task stays in review"
             ))
         })?;
-    *selected = Some(capabilities);
+    *selected = Some(capabilities.clone());
     Ok(capabilities)
 }
 

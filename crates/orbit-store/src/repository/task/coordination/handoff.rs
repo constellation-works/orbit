@@ -384,8 +384,12 @@ impl TaskCommitBoundary {
             return Ok(());
         };
         let mut start: LandingStartRequest = decode(&old.payload_json)?;
-        if start.state == LandingStartState::Revoked {
-            return Ok(());
+        match start.state {
+            LandingStartState::Revoked => return Ok(()),
+            LandingStartState::Completed => {
+                return Err(invalid("handoff has already landed"));
+            }
+            LandingStartState::Pending => {}
         }
         let revocation = HandoffRevocation {
             authorization_id: start.authorization_id.clone(),
@@ -396,6 +400,61 @@ impl TaskCommitBoundary {
         params.rows.push(row(REVOCATION, id, &revocation)?);
         start.state = LandingStartState::Revoked;
         effects.replacements.push((old, row(START, id, &start)?));
+        Ok(())
+    }
+
+    /// The unrevoked completion authorization scoped to exactly this handoff
+    /// and candidate. Every landing decision re-reads it; a historical row is
+    /// never permission on its own.
+    pub(super) fn current_landing_authorization(
+        &self,
+        accepted: &AcceptedHandoff,
+    ) -> Result<HandoffAuthorization, OrbitError> {
+        let raw = self
+            .coordination_rows(AUTHORIZATION)?
+            .into_iter()
+            .find(|r| r.row_id == accepted.handoff_id)
+            .ok_or_else(|| invalid("handoff awaits completion approval"))?;
+        let authorization: HandoffAuthorization = decode(&raw.payload_json)?;
+        if authorization.handoff_id != accepted.handoff_id
+            || authorization.candidate != accepted.handoff.candidate
+        {
+            return Err(invalid("completion authorization scope mismatch"));
+        }
+        if self
+            .coordination_rows(REVOCATION)?
+            .iter()
+            .any(|r| r.row_id == accepted.handoff_id)
+        {
+            return Err(invalid("landing authority revoked"));
+        }
+        Ok(authorization)
+    }
+
+    /// Move a pending outbox request to its settled state. Only a pending
+    /// request settles: completion cannot resurrect a revoked request, and
+    /// revocation cannot reopen a completed one.
+    pub(super) fn settle_landing_request(
+        &self,
+        handoff_id: &str,
+        state: LandingStartState,
+        effects: &mut ClaimCommitEffects,
+    ) -> Result<(), OrbitError> {
+        let Some(old) = self
+            .coordination_rows(START)?
+            .into_iter()
+            .find(|r| r.row_id == handoff_id)
+        else {
+            return Err(invalid("no pending landing request for this handoff"));
+        };
+        let mut start: LandingStartRequest = decode(&old.payload_json)?;
+        if start.state != LandingStartState::Pending {
+            return Err(invalid("landing request is no longer pending"));
+        }
+        start.state = state;
+        effects
+            .replacements
+            .push((old, row(START, handoff_id, &start)?));
         Ok(())
     }
 
@@ -416,26 +475,12 @@ impl TaskCommitBoundary {
             return Err(invalid("validation requirements changed"));
         }
         self.validate_handoff_evidence(&accepted.handoff, &accepted.required_commands)?;
-        let raw = self
-            .coordination_rows(AUTHORIZATION)?
-            .into_iter()
-            .find(|r| r.row_id == accepted.handoff_id)
-            .ok_or_else(|| invalid("handoff awaits completion approval"))?;
-        let authorization: HandoffAuthorization = decode(&raw.payload_json)?;
-        if authorization.handoff_id != accepted.handoff_id
-            || authorization.workspace_id != self.workspace_id
+        let authorization = self.current_landing_authorization(&accepted)?;
+        if authorization.workspace_id != self.workspace_id
             || authorization.task_id != auth.task_id
             || authorization.claim_id != auth.claim_id
-            || authorization.candidate != accepted.handoff.candidate
         {
             return Err(invalid("completion authorization scope mismatch"));
-        }
-        if self
-            .coordination_rows(REVOCATION)?
-            .iter()
-            .any(|r| r.row_id == accepted.handoff_id)
-        {
-            return Err(invalid("landing authority revoked"));
         }
         if let HandoffAuthorizationSource::Grant { grant_id } = authorization.source {
             effects.completion_grant = Some((grant_id, auth.task_id.clone()));
