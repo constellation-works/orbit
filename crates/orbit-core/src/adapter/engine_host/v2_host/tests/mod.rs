@@ -8,6 +8,7 @@ mod code_scanning_consolidation;
 mod code_scanning_groups;
 mod dependabot_alert_tasks;
 mod dispatch;
+mod duplicate_tasks;
 mod leaf_occupancy;
 mod pipeline_actions;
 #[cfg(target_os = "linux")]

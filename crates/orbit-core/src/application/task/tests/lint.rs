@@ -5,6 +5,7 @@
 use chrono::Utc;
 use orbit_types::task::{TaskHistoryEntry, TaskStatus, TaskType};
 
+use super::super::lint::context_entry_covers_path;
 use super::test_runtime;
 use crate::adapter::tool_host::test_support::create_context_task;
 use crate::application::task::{TaskAddParams, TaskLintSeverity, TaskRecordUpdateParams};
@@ -156,4 +157,21 @@ fn an_out_of_workspace_selector_is_a_path_validity_error() {
         finding.message.contains("file:../outside.rs"),
         "{finding:?}"
     );
+}
+
+#[test]
+fn context_entry_covers_file_line_mentions() {
+    assert!(context_entry_covers_path(
+        "file:crates/orbit-cli/src/command/ship.rs",
+        "crates/orbit-cli/src/command/ship.rs:274"
+    ));
+    assert!(context_entry_covers_path(
+        "symbol:crates/x.rs#run:function",
+        "crates/x.rs:42"
+    ));
+    assert!(context_entry_covers_path("dir:src", "src/lib.rs"));
+    assert!(!context_entry_covers_path(
+        "file:src/lib.rs",
+        "tests/lib.rs"
+    ));
 }

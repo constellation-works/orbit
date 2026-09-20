@@ -296,7 +296,8 @@ fn covering_owner_from_comments(rejected_id: &str, comments: &[TaskComment]) -> 
     owner
 }
 
-fn covering_owner_from_message(rejected_id: &str, message: &str) -> Option<String> {
+// pub(super) widened for sibling-layout tests in v2_host/tests/duplicate_tasks.rs
+pub(super) fn covering_owner_from_message(rejected_id: &str, message: &str) -> Option<String> {
     let lowered = message.to_ascii_lowercase();
     let mut owner = None;
     for marker in COVERING_OWNER_MARKERS {
@@ -397,7 +398,8 @@ fn searchable_task_text(task: &Task, comments: &[TaskComment]) -> String {
 /// Searching canonical anchors in canonical task text therefore preserves
 /// token boundaries (`time` cannot match `runtime`) while tolerating normal
 /// prose and Markdown punctuation differences.
-fn canonical_text(value: &str) -> String {
+// pub(super) widened for sibling-layout tests in v2_host/tests/duplicate_tasks.rs
+pub(super) fn canonical_text(value: &str) -> String {
     let mut out = String::with_capacity(value.len().saturating_add(2));
     out.push(' ');
     let mut separated = true;
@@ -447,44 +449,4 @@ pub(in crate::adapter::engine_host::v2_host) fn is_open_status(status: TaskStatu
 fn recently_completed(task: &Task) -> bool {
     task.status == TaskStatus::Done
         && task.updated_at >= chrono::Utc::now() - chrono::Duration::days(30)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{canonical_text, covering_owner_from_message};
-
-    #[test]
-    fn canonical_text_preserves_token_boundaries() {
-        let searchable = canonical_text("Update runtime in Cargo.lock");
-        assert!(!searchable.contains(&canonical_text("time")));
-        assert!(searchable.contains(&canonical_text("runtime")));
-    }
-
-    #[test]
-    fn covering_owner_parses_duplicate_and_covering_phrases() {
-        assert_eq!(
-            covering_owner_from_message(
-                "ORB-11513",
-                "Duplicate of active ORB-11511: both cite Wrangler 4.129.0.",
-            )
-            .as_deref(),
-            Some("ORB-11511")
-        );
-        assert_eq!(
-            covering_owner_from_message(
-                "ORB-11526",
-                "Covering implementation is active ORB-11511 (same Wrangler missing-name error).",
-            )
-            .as_deref(),
-            Some("ORB-11511")
-        );
-        assert_eq!(
-            covering_owner_from_message("ORB-11513", "Won't fix; infrastructure flake."),
-            None
-        );
-        assert_eq!(
-            covering_owner_from_message("ORB-11513", "Duplicate of active ORB-11513 itself."),
-            None
-        );
-    }
 }

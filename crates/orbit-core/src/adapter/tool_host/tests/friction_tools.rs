@@ -4,10 +4,14 @@
 //! These are the boundary tests for the record handle: what an author can set,
 //! what the surface refuses, and what a caller who sets nothing gets.
 
+use chrono::{TimeZone, Utc};
 use orbit_common::governance::friction::FRICTION_TITLE_MAX_CHARS;
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
+use orbit_store::contracts::StoredFrictionRecord;
+use orbit_types::record::{FrictionRecord, FrictionStatus};
 use serde_json::{Value, json};
 
+use super::super::friction_tools::record_to_json;
 use super::super::test_support::{invalid_input_message, run_tool_as_operator, test_runtime};
 
 /// A structured report whose opening line labels a section rather than the
@@ -271,4 +275,56 @@ fn update_still_requires_at_least_one_mutable_field() {
     ));
 
     assert!(message.contains("`title`"), "{message}");
+}
+
+fn stored_record(title: Option<&str>, body: &str) -> StoredFrictionRecord {
+    StoredFrictionRecord {
+        record: FrictionRecord {
+            id: "F2026-05-007".to_string(),
+            title: title.map(ToString::to_string),
+            model: "codex".to_string(),
+            created_at: Utc.with_ymd_and_hms(2026, 5, 17, 4, 5, 0).unwrap(),
+            status: FrictionStatus::Resolved,
+            tags: vec!["tooling".to_string()],
+            resolved_at: Some(Utc.with_ymd_and_hms(2026, 5, 17, 4, 10, 0).unwrap()),
+            during_task: None,
+            resolved_by_task: Some("ORB-00093".to_string()),
+            body: body.to_string(),
+        },
+        path: Some("frictions/2026-05/F007.md".into()),
+    }
+}
+
+#[test]
+fn record_to_json_includes_resolved_by_task() {
+    let value = record_to_json(stored_record(None, "Resolved by task")).unwrap();
+
+    assert_eq!(value["resolved_by_task"], json!("ORB-00093"));
+}
+
+#[test]
+fn record_to_json_prefers_the_stored_title() {
+    let value = record_to_json(stored_record(
+        Some("Queued runs never reach a worker"),
+        "## What happened\n\nSomething else entirely.",
+    ))
+    .unwrap();
+
+    assert_eq!(value["title"], json!("Queued runs never reach a worker"));
+}
+
+/// A record written before the field existed still projects a usable
+/// handle, so the corpus needs no rewrite to become readable.
+#[test]
+fn record_to_json_derives_a_title_for_a_record_without_one() {
+    let value = record_to_json(stored_record(
+        None,
+        "## What happened\n\nThe worker exited before claiming the run.\n\n## Evidence\n\nOne log line.",
+    ))
+    .unwrap();
+
+    assert_eq!(
+        value["title"],
+        json!("The worker exited before claiming the run.")
+    );
 }
