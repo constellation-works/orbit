@@ -56,7 +56,13 @@ fn required_workspace(input: &Value) -> Result<std::path::PathBuf, OrbitError> {
 
 /// The delivery this claim's ship mode produces. `pr` needs the number the
 /// run's own `pr_open` step observed; `local` publishes nothing.
-fn delivery(context: &ClaimExecutionContext, input: &Value) -> Result<HandoffDelivery, OrbitError> {
+///
+/// `pub(super)` so the sibling unit test can hit this seam with a
+/// `pr_open`-shaped string without observing Git [ORB-12640].
+pub(super) fn delivery(
+    context: &ClaimExecutionContext,
+    input: &Value,
+) -> Result<HandoffDelivery, OrbitError> {
     match context.ship_mode.as_str() {
         "local" => Ok(HandoffDelivery::LocalCandidate),
         "pr" => {
@@ -80,7 +86,7 @@ fn delivery(context: &ClaimExecutionContext, input: &Value) -> Result<HandoffDel
 }
 
 /// The PR number this step was handed, in either shape the run can produce
-/// [ORB-12617].
+/// [ORB-12617] [ORB-12640].
 ///
 /// `pr_open` reports `pr_number` as a *string* — a provider selector rather
 /// than a quantity — and an exact step-output template forwards the source

@@ -19,8 +19,9 @@ spec:
         type: string
       base_sha:
         type: string
+      # Same shape as `claim_validate`: `pr_open` emits a JSON string.
       pull_request:
-        type: [integer, "null"]
+        type: [string, integer, "null"]
       candidate:
         type: object
         description: The candidate the required validation actually ran on.
