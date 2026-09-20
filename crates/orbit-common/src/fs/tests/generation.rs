@@ -356,7 +356,10 @@ fn shared_child() {
     let _ = std::io::stdin().read(&mut [0u8; 1]);
 }
 
-#[cfg(unix)]
+// APFS rejects directory names containing invalid UTF-8 with EILSEQ, so these
+// byte-preservation fixtures are meaningful only on Unix filesystems that
+// accept arbitrary path bytes.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn non_utf8_missing_root_creates_lock_files_under_exact_byte_path() {
     use std::os::unix::ffi::OsStrExt;
@@ -382,7 +385,7 @@ fn non_utf8_missing_root_creates_lock_files_under_exact_byte_path() {
     assert_eq!(entries[0].as_bytes(), invalid_bytes);
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn distinct_non_utf8_roots_do_not_share_authority() {
     use std::os::unix::ffi::OsStrExt;
