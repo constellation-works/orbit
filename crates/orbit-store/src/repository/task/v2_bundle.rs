@@ -18,8 +18,8 @@ use orbit_types::task::{
 use crate::driver::file::task_bundle::bundle_lock_target;
 pub(crate) use crate::driver::file::task_bundle::{TaskBundleV2, TaskDocumentV2};
 use crate::driver::file::task_bundle::{
-    append_jsonl_row, cleanup_partial_bundle_best_effort, publish_envelope, read_bundle_at,
-    read_bundle_lightweight_at, read_envelope_at, write_bundle_at,
+    append_jsonl_row, cleanup_partial_bundle_best_effort, is_unpublished_stub, publish_envelope,
+    read_bundle_at, read_bundle_lightweight_at, read_envelope_at, write_bundle_at,
 };
 use crate::driver::sqlite::task_registry::{TaskBundleBinding, TaskRegistryStore};
 use crate::fs::yaml::write_yaml_durable_with;
@@ -469,6 +469,15 @@ fn read_bundle_tolerating_in_flight(bundle_dir: &Path) -> Result<Option<TaskBund
 /// can remove it between the registry snapshot and lock acquisition. An old
 /// sentinel file alone is never evidence that a damaged bundle is in flight.
 fn skip_if_in_flight<T>(bundle_dir: &Path, err: OrbitError) -> Result<Option<T>, OrbitError> {
+    if is_unpublished_stub(bundle_dir) {
+        orbit_common::tracing::debug!(
+            target: "orbit.store.task_bundle_v2",
+            bundle_dir = %bundle_dir.display(),
+            error = %err,
+            "skipped an unpublished task-bundle stub",
+        );
+        return Ok(None);
+    }
     if bundle_dir.try_exists().unwrap_or(true) {
         return Err(err);
     }

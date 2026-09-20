@@ -341,6 +341,25 @@ fn sync_bundle_parent(bundle_dir: &Path) -> std::io::Result<()> {
     sync_parent_dir(&directory)
 }
 
+/// True when `bundle_dir` is a directory that never published `task.yaml`.
+///
+/// Aborted creates leave this residue — often only a zero-byte
+/// `.task.yaml.lock` — which is not a bundle and must not fail reindex or
+/// listing of healthy neighbors. A present `task.yaml` that cannot be loaded
+/// is corrupt and stays fail-closed.
+pub(crate) fn is_unpublished_stub(bundle_dir: &Path) -> bool {
+    bundle_dir.is_dir() && !bundle_dir.join(TASK_ENVELOPE_FILE_NAME).is_file()
+}
+
+/// Remove an unpublished stub directory. No-op when `task.yaml` is present,
+/// so a healthy or merely corrupt bundle is never deleted this way.
+pub(crate) fn reap_unpublished_stub(bundle_dir: &Path) -> Result<(), OrbitError> {
+    if !is_unpublished_stub(bundle_dir) {
+        return Ok(());
+    }
+    cleanup_partial_bundle(bundle_dir)
+}
+
 /// Canonical full-bundle read: parse every sidecar and hash every artifact blob.
 pub(crate) fn read_bundle_at(bundle_dir: &Path) -> Result<TaskBundleV2, OrbitError> {
     read_bundle_at_with(bundle_dir, ArtifactPayloadCheck::Verify)

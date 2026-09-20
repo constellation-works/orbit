@@ -5,7 +5,7 @@ tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-cmd/src/doctor.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
 related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12244, ORB-12259]
-last_validated: 2026-09-12
+last_validated: 2026-09-20
 ---
 
 # Check Orbit Health
@@ -30,6 +30,7 @@ Every check degrades to a row rather than aborting unless the store itself canno
 | `task-reservations` | active reservations whose owner run or terminal task association proves the reservation stale |
 | `task-relations` | unresolved relation/dependency targets that would block a task-index rebuild |
 | `orphan-task-stores` | task-store partitions (`~/.orbit/tasks/workspaces/<ws_id>/`) that no workspace binding on this host claims |
+| `empty-task-stubs` | `ORB-*` directories under those partitions that never published `task.yaml` (aborted creates; often only `.task.yaml.lock`) |
 | `artifacts-*` | skills, jobs, activities, auto-tasks, and routines on disk: stale, deprecated, residual, catalog-invalid, or a previously reconciled shipped default that is missing |
 | `clock-unit` | the installed launchd/systemd sweep unit invokes this Orbit binary (path and `--version`); skipped when no unit is installed |
 

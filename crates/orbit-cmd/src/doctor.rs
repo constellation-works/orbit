@@ -10,7 +10,9 @@
 //! reservations whose owner or terminal task association is conclusively
 //! inactive, task
 //! relation/dependency targets that no longer resolve in the registry
-//! (grandfathered relations that block index rebuilds — ORB-10305).
+//! (grandfathered relations that block index rebuilds — ORB-10305), and
+//! unpublished `ORB-*` stub directories that never received `task.yaml`
+//! (aborted creates that used to fail `orbit task reindex` closed).
 //!
 //! Every check degrades rather than errors: subsystems that are absent in a
 //! fresh workspace report [`WorkspaceDoctorStatus::Skipped`], and probe
@@ -27,6 +29,7 @@ use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::artifact_health::{ArtifactFinding, RetiredActivityBackendRepair};
 use orbit_store::maintenance::migration::SUPPORTED_SCHEMA_VERSION;
+use orbit_types::task::{TASK_ENVELOPE_FILE_NAME, is_valid_orb_task_id};
 use orbit_types::workspace::WorkspacePaths;
 use serde::Serialize;
 
@@ -171,6 +174,7 @@ impl DoctorCommands for OrbitRuntime {
             doctor_check_task_relations(self),
             doctor_check_stalled_automation(self),
             doctor_check_orphan_task_stores(self),
+            doctor_check_empty_task_stubs(self),
         ];
         results.extend(doctor_check_definition_artifacts(self));
         Ok(results)
@@ -664,6 +668,88 @@ fn describe_partitions(partitions: &[task_store::UnclaimedPartition]) -> String 
         })
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+/// Directories named for a valid task id that never published `task.yaml`.
+/// Aborted creates leave this residue (often only `.task.yaml.lock`) and
+/// used to fail `orbit task reindex` closed for the whole workspace.
+fn doctor_check_empty_task_stubs(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    let stubs = match collect_unpublished_task_stubs(&runtime.global_root()) {
+        Ok(stubs) => stubs,
+        Err(error) => {
+            return check(
+                "empty-task-stubs",
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot scan task-store partitions for unpublished bundle stubs: {error}"),
+            );
+        }
+    };
+    if stubs.is_empty() {
+        return check(
+            "empty-task-stubs",
+            WorkspaceDoctorStatus::Ok,
+            "no unpublished task-bundle stub directories".to_string(),
+        );
+    }
+    let noun = if stubs.len() == 1 {
+        "directory"
+    } else {
+        "directories"
+    };
+    actionable_check(
+        "empty-task-stubs",
+        WorkspaceDoctorStatus::Warning,
+        format!(
+            "{} unpublished task-bundle stub {noun} (valid ORB-* name, no task.yaml): {}",
+            stubs.len(),
+            stubs
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
+        "Run `orbit task reindex` from the owning checkout to skip or remove empty stub directories."
+            .to_string(),
+    )
+}
+
+fn collect_unpublished_task_stubs(global_root: &Path) -> Result<Vec<PathBuf>, OrbitError> {
+    let workspaces_dir = task_store::task_workspaces_dir(global_root);
+    let partitions = match std::fs::read_dir(&workspaces_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "read {}: {error}",
+                workspaces_dir.display()
+            )));
+        }
+    };
+    let mut stubs = Vec::new();
+    for partition in partitions.flatten() {
+        let partition = partition.path();
+        if !partition.is_dir() {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&partition) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if path.is_dir()
+                && is_valid_orb_task_id(name)
+                && !path.join(TASK_ENVELOPE_FILE_NAME).is_file()
+            {
+                stubs.push(path);
+            }
+        }
+    }
+    stubs.sort();
+    Ok(stubs)
 }
 
 /// Delete one dead-holder lock only after acquiring its advisory lock. A
