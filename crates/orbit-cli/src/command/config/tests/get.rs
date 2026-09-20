@@ -131,8 +131,29 @@ fn complexity_pools_set_get_show_agree_and_invalid_edits_do_not_write() {
         let shown = super::super::show::effective_json(&runtime, effective.values());
         assert_eq!(shown["settings"][&key], value["value"]);
         assert_eq!(shown["provenance"][&key]["scope"], "workspace");
+        // [ORB-12604] Weights round-trip through the same three surfaces, and
+        // a malformed pool is refused before anything reaches disk.
+        set_args(&key, r#"["grok:70", "terra:30"]"#)
+            .execute(&runtime)
+            .expect("set a weighted pool");
+        let weighted = json_value(
+            get_args(&key, true)
+                .execute(&runtime)
+                .expect("get weighted"),
+        );
+        assert_eq!(
+            weighted["value"],
+            serde_json::json!(["grok:70", "terra:30"])
+        );
         let before = fs::read(&path).expect("before");
-        for invalid in [r#"["unknown-pool-crew"]"#, r#"[""]"#] {
+        for invalid in [
+            r#"["unknown-pool-crew"]"#,
+            r#"[""]"#,
+            r#"["grok:70", "terra"]"#,
+            r#"["grok:70", "grok:30"]"#,
+            r#"["grok:-1"]"#,
+            r#"["grok:0", "terra:0"]"#,
+        ] {
             let error = set_args(&key, invalid)
                 .execute(&runtime)
                 .expect_err("invalid pool");

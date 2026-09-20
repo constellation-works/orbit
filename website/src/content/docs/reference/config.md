@@ -127,9 +127,9 @@ These are the keys `orbit config set` accepts, as printed by `orbit config keys`
 | `workflow.default_crew` | string | Crew used when a task declares none and no override is given. |
 | `workflow.system_crew` | string | Crew used by system activities such as step-failure recovery and the task pilot. |
 | `workflow.auto_ship` | bool | Opt in to unattended ship dispatch via the routine/sweep scheduler. |
-| `workflow.low_complexity_crews` | array&lt;string&gt; | Random crew pool for unassigned low-complexity tasks in auto drains; empty disables the pool. |
-| `workflow.medium_complexity_crews` | array&lt;string&gt; | Random crew pool for unassigned medium-complexity tasks in auto drains; empty disables the pool. |
-| `workflow.hard_complexity_crews` | array&lt;string&gt; | Random crew pool for unassigned hard-complexity tasks in auto drains; empty disables the pool. |
+| `workflow.low_complexity_crews` | array&lt;string&gt; | Weighted crew pool for unassigned low-complexity tasks in auto drains; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool. |
+| `workflow.medium_complexity_crews` | array&lt;string&gt; | Weighted crew pool for unassigned medium-complexity tasks in auto drains; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool. |
+| `workflow.hard_complexity_crews` | array&lt;string&gt; | Weighted crew pool for unassigned hard-complexity tasks in auto drains; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool. |
 | `tasks.id_start` | integer | Floor for this machine's task-id allocator. Forward-only; lets machines hold disjoint ID ranges. |
 | `automation.stall_window_minutes` | integer | Minutes a deferred delivery-automation reason may persist before the evaluator logs a warning and files one friction (1–1440). |
 | `scoring.enabled` | bool | Whether scoreboard metrics are recorded for task runs. |

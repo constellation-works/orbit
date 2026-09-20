@@ -163,6 +163,51 @@ pub(crate) fn format_child_dispatch_lines(state: Option<&PipelineState>) -> Vec<
         .collect()
 }
 
+/// Explain how an auto drain chose this run's crew, including the odds it drew
+/// against [ORB-12604].
+///
+/// Absent for manually dispatched runs, which record no selection. A pool
+/// admitted before weights existed lists plain names, and is rendered as the
+/// bare names it was stored as.
+pub(crate) fn format_crew_selection_line(input: Option<&serde_json::Value>) -> Option<String> {
+    let selection = input?.get("crew_selection")?.as_object()?;
+    let text = |key: &str| {
+        selection
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("-")
+    };
+    let pool = selection
+        .get("eligible_pool")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|entry| match entry {
+            serde_json::Value::String(name) => name.clone(),
+            entry => {
+                let name = entry
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("-");
+                match entry.get("weight").and_then(serde_json::Value::as_u64) {
+                    Some(weight) => format!("{name}:{weight}"),
+                    None => name.to_string(),
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut line = format!(
+        "Crew Selection: {} source={} complexity={}",
+        text("crew"),
+        text("source"),
+        text("complexity"),
+    );
+    if !pool.is_empty() {
+        line.push_str(&format!(" eligible={}", pool.join(", ")));
+    }
+    Some(line)
+}
+
 /// Show backlog admission exclusions retained in the pipeline checkpoint.
 ///
 /// The structured state remains the source of truth; this projection is only

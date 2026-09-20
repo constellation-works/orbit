@@ -208,6 +208,40 @@ fn set_rejects_invalid_value_and_leaves_file_byte_identical() {
 }
 
 #[test]
+fn set_rejects_a_malformed_weighted_pool_and_admits_a_valid_one() {
+    let dir = tempdir().expect("tempdir");
+    let path = config_path(dir.path());
+    let original = "[workflow]\nmedium_complexity_crews = [\"grok\"]\n";
+    fs::write(&path, original).expect("write config");
+
+    let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+    store
+        .set_value("workflow.medium_complexity_crews", r#"["grok:70", "sol"]"#)
+        .expect("set_value only mutates the in-memory document");
+    let error = store
+        .validate()
+        .expect_err("a pool mixing bare and weighted entries must fail validation");
+    assert!(
+        error
+            .to_string()
+            .contains("workflow.medium_complexity_crews"),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read(&path).expect("read config after failed validate"),
+        original.as_bytes()
+    );
+
+    store
+        .set_value(
+            "workflow.medium_complexity_crews",
+            r#"["grok:70", "sol:30"]"#,
+        )
+        .expect("set a weighted pool");
+    store.validate().expect("weighted pools admit");
+}
+
+#[test]
 fn set_rejects_unknown_key_with_suggestions() {
     let dir = tempdir().expect("tempdir");
     let path = config_path(dir.path());

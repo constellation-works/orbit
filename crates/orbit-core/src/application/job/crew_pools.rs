@@ -4,7 +4,9 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_config::{ComplexityCrewPools, canonical_crew_pool};
+use orbit_config::{
+    ComplexityCrewPools, CrewPoolEntry, canonical_crew_pool, canonical_crew_pool_entries,
+};
 use orbit_types::identity::Crew;
 use orbit_types::task::{Task, TaskComplexity};
 use serde::{Deserialize, Serialize};
@@ -24,8 +26,19 @@ const COMPLEXITIES: [TaskComplexity; 3] = [
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CapturedCrewPool {
-    crews: Vec<String>,
+    /// Weighted members. A pool captured before weights existed is a plain
+    /// name list, which [`CrewPoolEntry`] still deserialises at weight 1.
+    crews: Vec<CrewPoolEntry>,
     source: String,
+}
+
+/// One crew a task may be admitted to, with the tickets it holds in the draw.
+/// A crew chosen outside a pool — explicit, `task.crew`, or the default chain —
+/// is the only candidate and holds a single ticket.
+#[derive(Debug, Clone)]
+pub(crate) struct CrewCandidate {
+    pub(crate) crew: Crew,
+    pub(crate) weight: u32,
 }
 
 pub(crate) type CapturedCrewPools = BTreeMap<String, CapturedCrewPool>;
@@ -65,8 +78,14 @@ impl OrbitRuntime {
                         format!("workflow.{key}"),
                     ),
                 };
-                let crews = canonical_crew_pool(&names, self.context.settings().crews(), &source)?;
-                Ok((complexity.to_string(), CapturedCrewPool { crews, source }))
+                let pool = canonical_crew_pool(&names, self.context.settings().crews(), &source)?;
+                Ok((
+                    complexity.to_string(),
+                    CapturedCrewPool {
+                        crews: pool.entries,
+                        source,
+                    },
+                ))
             })
             .collect()
     }
@@ -99,12 +118,14 @@ impl OrbitRuntime {
         task: &Task,
         pools: &CapturedCrewPools,
         explicit: Option<&str>,
-    ) -> Result<(Vec<Crew>, String), OrbitError> {
+    ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
         if explicit.and_then(non_empty).is_some()
             || task.crew.as_deref().and_then(non_empty).is_some()
         {
             return Ok((
-                vec![self.resolve_crew_for_task(explicit, task.crew.as_deref())?],
+                vec![sole_candidate(
+                    self.resolve_crew_for_task(explicit, task.crew.as_deref())?,
+                )],
                 if explicit.and_then(non_empty).is_some() {
                     "explicit"
                 } else {
@@ -117,15 +138,26 @@ impl OrbitRuntime {
             && let Some(pool) = pools.get(complexity.as_str())
             && !pool.crews.is_empty()
         {
-            let names =
-                canonical_crew_pool(&pool.crews, self.context.settings().crews(), &pool.source)?;
-            let crews = names
+            let entries = canonical_crew_pool_entries(
+                &pool.crews,
+                self.context.settings().crews(),
+                &pool.source,
+            )?;
+            let crews = entries
                 .iter()
-                .map(|name| self.resolve_crew_for_task(Some(name), None))
-                .collect::<Result<Vec<_>, _>>()?;
+                .map(|entry| {
+                    Ok(CrewCandidate {
+                        crew: self.resolve_crew_for_task(Some(&entry.name), None)?,
+                        weight: entry.weight,
+                    })
+                })
+                .collect::<Result<Vec<_>, OrbitError>>()?;
             return Ok((crews, pool.source.clone()));
         }
-        Ok((vec![self.effective_task_crew(task)?], "default".to_string()))
+        Ok((
+            vec![sole_candidate(self.effective_task_crew(task)?)],
+            "default".to_string(),
+        ))
     }
 
     /// Called before the existing durable insert. Resume input already contains
@@ -210,16 +242,20 @@ impl OrbitRuntime {
         let (crews, source) = self.auto_task_crew_candidates(&task, &pools, explicit)?;
         let allowlist = self.crew_allowlist_from_input(input)?;
         let candidates = permitted_candidates(crews, &source, allowlist.as_ref())?;
-        let index = random_index(candidates.len(), random)?;
-        let selected = &candidates[index];
+        let selected = weighted_draw(&candidates, &source, random)?;
         input[SELECTION_KEY] = json!({
             "task_id": task.id,
-            "crew": selected.name,
+            "crew": selected.crew.name,
             "source": source,
             "complexity": task.complexity,
-            "eligible_pool": candidates.iter().map(|crew| &crew.name).collect::<Vec<_>>(),
+            // The odds this draw ran on, renormalised over the permitted
+            // members, so `orbit run show` can explain the choice.
+            "eligible_pool": candidates
+                .iter()
+                .map(|candidate| json!({"name": candidate.crew.name, "weight": candidate.weight}))
+                .collect::<Vec<_>>(),
         });
-        input["crew"] = json!(selected.name);
+        input["crew"] = json!(selected.crew.name);
         Ok(())
     }
 }
@@ -239,23 +275,33 @@ fn auto_task_id(input: &Value) -> Option<&str> {
     singular_task_id_from_input(input)
 }
 
+fn sole_candidate(crew: Crew) -> CrewCandidate {
+    CrewCandidate { crew, weight: 1 }
+}
+
+/// The members this run may actually draw, renormalised over the allowlist.
+///
+/// A parked crew (weight `0`) holds no ticket, so it neither wins a draw nor
+/// rescues a pool the allowlist has otherwise emptied.
 fn permitted_candidates(
-    crews: Vec<Crew>,
+    candidates: Vec<CrewCandidate>,
     source: &str,
     allowlist: Option<&CrewAllowlist>,
-) -> Result<Vec<Crew>, OrbitError> {
-    if crews.len() == 1 {
-        enforce_crew_allowlist(allowlist, &crews[0], source)?;
-        return Ok(crews);
+) -> Result<Vec<CrewCandidate>, OrbitError> {
+    if candidates.len() == 1 {
+        enforce_crew_allowlist(allowlist, &candidates[0].crew, source)?;
+        return Ok(candidates);
     }
-    let names = crews
+    let names = candidates
         .iter()
-        .map(|crew| crew.name.as_str())
+        .map(|candidate| candidate.crew.name.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    let permitted = crews
+    let permitted = candidates
         .into_iter()
-        .filter(|crew| allowlist.is_none_or(|list| list.permits(crew)))
+        .filter(|candidate| {
+            candidate.weight > 0 && allowlist.is_none_or(|list| list.permits(&candidate.crew))
+        })
         .collect::<Vec<_>>();
     if permitted.is_empty() {
         return Err(OrbitError::InvalidInput(format!(
@@ -265,21 +311,54 @@ fn permitted_candidates(
     Ok(permitted)
 }
 
-fn random_index(
-    len: usize,
+/// Draw one ticket in `[0, total_weight)` and walk the cumulative weights.
+/// An all-bare pool weighs one ticket per member, so it draws exactly as the
+/// uniform selector it replaces did, on the same ticket.
+fn weighted_draw<'a>(
+    candidates: &'a [CrewCandidate],
+    source: &str,
     random: &mut impl FnMut() -> Result<u64, OrbitError>,
-) -> Result<usize, OrbitError> {
-    if len <= 1 {
-        return Ok(0);
+) -> Result<&'a CrewCandidate, OrbitError> {
+    if let [only] = candidates {
+        return Ok(only);
     }
-    let bound = len as u64;
-    // Rejection sampling avoids modulo bias for pools whose size is not a
-    // power of two. No random draw occurs for explicit or singleton choices.
+    let total = candidates
+        .iter()
+        .map(|candidate| u64::from(candidate.weight))
+        .sum();
+    let ticket = random_ticket(total, source, random)?;
+    let mut cumulative = 0;
+    for candidate in candidates {
+        cumulative += u64::from(candidate.weight);
+        if ticket < cumulative {
+            return Ok(candidate);
+        }
+    }
+    // `permitted_candidates` keeps only positive weights, so the walk always
+    // lands inside the pool; report the impossible rather than fall through to
+    // an arbitrary member.
+    Err(OrbitError::Execution(format!(
+        "crew pool from {source} drew ticket {ticket} outside its {total} weighted tickets"
+    )))
+}
+
+fn random_ticket(
+    bound: u64,
+    source: &str,
+    random: &mut impl FnMut() -> Result<u64, OrbitError>,
+) -> Result<u64, OrbitError> {
+    if bound == 0 {
+        return Err(OrbitError::InvalidInput(format!(
+            "crew pool from {source} has no member with a weight above 0"
+        )));
+    }
+    // Rejection sampling avoids modulo bias for totals that are not a power of
+    // two. No random draw occurs for explicit or singleton choices.
     let threshold = bound.wrapping_neg() % bound;
     loop {
         let ticket = random()?;
         if ticket >= threshold {
-            return Ok((ticket % bound) as usize);
+            return Ok(ticket % bound);
         }
     }
 }

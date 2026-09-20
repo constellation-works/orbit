@@ -383,7 +383,15 @@ pub(super) fn backlog_snapshot(
     if let Some(allowlist) = allowlist {
         backlog.retain(|task| {
             match runtime.auto_task_crew_candidates(task, pools, None) {
-                Ok((crews, _)) if crews.iter().any(|crew| allowlist.permits(crew)) => true,
+                // A parked pool member (weight 0) is never drawn, so it cannot
+                // make a task eligible under this restriction either.
+                Ok((crews, _))
+                    if crews.iter().any(|candidate| {
+                        candidate.weight > 0 && allowlist.permits(&candidate.crew)
+                    }) =>
+                {
+                    true
+                }
                 // An unresolvable crew fails closed under an explicit
                 // restriction: the drain cannot show it is permitted, and
                 // guessing would spend a budget the operator scoped.
@@ -395,7 +403,7 @@ pub(super) fn backlog_snapshot(
                         crew: Some(match resolution {
                             Ok((crews, _)) => crews
                                 .into_iter()
-                                .map(|crew| crew.name)
+                                .map(|candidate| candidate.crew.name)
                                 .collect::<Vec<_>>()
                                 .join(", "),
                             Err(error) => format!("<unresolved: {error}>"),
