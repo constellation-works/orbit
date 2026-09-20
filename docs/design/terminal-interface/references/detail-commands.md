@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Reference: Detail Commands Behind Truncatable List Columns"
-last_validated: 2026-08-30
+last_validated: 2026-09-20
 ---
 
 # Reference: Detail Commands Behind Truncatable List Columns
@@ -15,15 +15,18 @@ Only *flexible* columns are ever truncated — fixed columns render whole or are
 | List view | Truncatable columns | Detail command |
 |-----------|--------------------|----------------|
 | `orbit tool list` | `REQUIRED INPUT`, `DESCRIPTION` | `orbit tool show <name>` |
+| `orbit audit list` | `TOOL` | `orbit audit show <id>` |
+| `orbit auto-task list` | `TITLE` | `orbit auto-task show <name>` |
 | `orbit task list` | `TITLE` | `orbit task show <id>` |
 | `orbit task show` (related docs) | `SUMMARY`, `EXCERPT`, `PATH` | `orbit docs show <path>` |
 | `orbit job list` | `TARGET_ID` | `orbit job show <job_id>` |
-| `orbit run history` | `ERROR_MESSAGE` | `orbit run show <run_id>` |
+| `orbit run history` | `ERROR_MESSAGE` | `orbit run show <run_id> -s <step>` |
 | `orbit run events` | `SUMMARY` | `orbit run trace <run_id>`, `orbit run logs <run_id>` |
 | `orbit run show` (step summary) | `TARGET`, `ERROR MESSAGE` | `orbit run show <run_id> -s <step>` |
 | `orbit routine list` | `SOURCE` | `orbit routine show <name>` |
 | `orbit executor list` | `COMMAND` | `orbit executor show <name>` |
 | `orbit policy list` | `DESCRIPTION`, `FSPROFILES` | `orbit policy show <name>` |
+| `orbit operation list` | `RIGHTS`, `TASKS` | `orbit operation show <id>` |
 | `orbit docs list` | `PATH`, `SUMMARY`, `TAGS`, `RELATED` | `orbit docs show <path>` |
 | `orbit skill list` | `SUMMARY` | `orbit skill show <id>` |
 | `orbit friction list` | `TAGS`, `TITLE` | `orbit friction show <id>` |
