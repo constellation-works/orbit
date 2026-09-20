@@ -2,7 +2,7 @@
 title: Terminal Interface — Decisions
 owner: claude
 last_updated: 2026-08-11
-last_validated: 2026-08-30
+last_validated: 2026-09-20
 status: Accepted
 feature: terminal-interface
 doc_role: decisions

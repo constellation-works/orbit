@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary: Terminal Interface"
-last_validated: 2026-08-30
+last_validated: 2026-09-20
 ---
 
 # Glossary: Terminal Interface
