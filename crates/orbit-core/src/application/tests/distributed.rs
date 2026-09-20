@@ -21,6 +21,7 @@ use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::adapter::command::ToolEntryPoint;
 use crate::adapter::tool_host::test_support::{create_context_task, test_runtime};
 use crate::application::distributed::{
     DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED, ensure_distributed_mutation_available,
@@ -575,6 +576,93 @@ fn a_session_without_agent_capability_reaches_neither_read_only_tool() {
             matches!(error, orbit_common::OrbitError::CapabilityRefused(_)),
             "{tool}: {error}"
         );
+    }
+}
+
+/// Every read-only drain tool has an entry point that actually resolves
+/// [ORB-12581].
+///
+/// The probe and the receipt lookup are advertised, so MCP reaches them. Claim
+/// inspection is not advertised and has no subcommand of its own, which leaves
+/// `orbit tool run` as its only route — and that route applies
+/// `ensure_tool_agent_facing`, so registering it inactive made the documented
+/// operator command fail on every surface. This drives the whole CLI dispatch
+/// path, not just the registry, so a registration no entry point can reach
+/// cannot land again.
+#[test]
+fn the_operator_reaches_claim_inspection_through_the_cli_tool_route() {
+    let _env = orbit_common::test_env::unset([
+        "ORBIT_MANAGED_RUN_CONTEXT",
+        "ORBIT_TASK_ACTOR_KIND",
+        "ORBIT_ACTIVITY_TOOLS",
+    ]);
+    let (_root, runtime, _repo_root) = test_runtime();
+
+    let advertised = runtime
+        .list_mcp_tool_definitions()
+        .expect("mcp definitions")
+        .into_iter()
+        .map(|definition| definition.schema.name)
+        .collect::<BTreeSet<_>>();
+    assert!(advertised.contains("orbit.drain.probe"));
+    assert!(advertised.contains("orbit.drain.receipt.lookup"));
+    assert!(
+        !advertised.contains("orbit.drain.claims"),
+        "claim inspection stays an operator surface, off MCP"
+    );
+
+    // The gate `orbit tool run` applies before dispatch, for every read-only
+    // drain tool: an unadvertised tool must still be reachable there.
+    for name in [
+        "orbit.drain.probe",
+        "orbit.drain.receipt.lookup",
+        "orbit.drain.claims",
+    ] {
+        runtime
+            .ensure_tool_agent_facing(name)
+            .unwrap_or_else(|error| panic!("{name} is reachable from no entry point: {error}"));
+    }
+
+    let claims = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.drain.claims",
+            json!({}),
+            None,
+            None,
+            ToolEntryPoint::Cli,
+            operator_session(),
+        )
+        .expect("the operator route lists claims")
+        .value;
+    assert_eq!(claims, json!([]), "a fresh owner holds no claims");
+}
+
+/// The same route refuses an agent — placement is not what governs it.
+#[test]
+fn an_agent_session_is_refused_claim_inspection_on_the_same_route() {
+    let _env = orbit_common::test_env::unset([
+        "ORBIT_MANAGED_RUN_CONTEXT",
+        "ORBIT_TASK_ACTOR_KIND",
+        "ORBIT_ACTIVITY_TOOLS",
+    ]);
+    let (_root, runtime, _repo_root) = test_runtime();
+
+    let error = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.drain.claims",
+            json!({}),
+            None,
+            None,
+            ToolEntryPoint::Cli,
+            owner_local_session(),
+        )
+        .expect_err("an agent session must not read across attempts");
+    match error {
+        orbit_common::OrbitError::CapabilityDenied(message) => {
+            assert!(message.contains("orbit.drain.claims"), "{message}");
+            assert!(message.contains("operator"), "{message}");
+        }
+        other => panic!("expected a capability denial, got: {other}"),
     }
 }
 

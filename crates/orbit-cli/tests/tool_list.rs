@@ -50,6 +50,18 @@ fn orbit_at_home(work: &std::path::Path, home: &std::path::Path) -> assert_cmd::
     command
 }
 
+/// The same invocation as [`orbit_at_home`], claiming operator capability the
+/// way the denial message asks for it. A test binary is not a terminal, so the
+/// chokepoint would otherwise resolve it as an unidentified caller.
+fn orbit_at_home_as_operator(
+    work: &std::path::Path,
+    home: &std::path::Path,
+) -> assert_cmd::Command {
+    let mut command = orbit_at_home(work, home);
+    command.env("ORBIT_OPERATOR", "1");
+    command
+}
+
 #[test]
 fn tool_list_all_shows_inactive_lock_reservation_with_required_input_shape() {
     let temp = tempdir().expect("tempdir");
@@ -259,4 +271,55 @@ fn tool_run_rejects_inactive_tools() {
         // the payload and nothing else.
         .stdout(predicate::str::is_empty())
         .stderr(predicate::str::contains("inactive"));
+}
+
+/// [ORB-12581] `orbit.drain.claims` is off the MCP surface and has no
+/// subcommand of its own, so `orbit tool run` is the operator's only route to
+/// it — the one both copies of the shipped `tool-surface.md` name. Registering
+/// it inactive made that command fail on every surface, with a refusal that
+/// no capability could clear.
+#[test]
+fn tool_run_reaches_the_operator_claim_listing() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    std::fs::create_dir_all(&home).expect("create home");
+    std::fs::create_dir_all(work.join(".git")).expect("create work repo");
+
+    orbit_at_home(&work, &home)
+        .args(["workspace", "init", "--name", "drain-claims-test"])
+        .assert()
+        .success();
+
+    const CLAIMS: &[&str] = &["tool", "run", "orbit.drain.claims", "--input", "{}"];
+
+    // Unidentified callers are refused by the governed-operation registry —
+    // not by the agent-surface gate, which would be unclearable.
+    let refused = orbit_at_home(&work, &home)
+        .args(CLAIMS)
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let refusal = String::from_utf8_lossy(&refused);
+    assert!(refusal.contains("capability denied"), "{refusal}");
+    assert!(refusal.contains("operator"), "{refusal}");
+    assert!(
+        !refusal.contains("inactive on the agent tool surface"),
+        "the operator route must not be closed by placement:\n{refusal}"
+    );
+
+    let listed = orbit_at_home_as_operator(&work, &home)
+        .args(CLAIMS)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let claims: serde_json::Value = serde_json::from_slice(&listed).expect("claim listing JSON");
+    assert!(
+        claims.as_array().is_some_and(|claims| claims.is_empty()),
+        "a fresh workspace holds no execution claims: {claims}"
+    );
 }

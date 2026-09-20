@@ -48,10 +48,14 @@ pub fn register(registry: &mut ToolRegistry) {
     registry.register_inactive(auto_task::toggle::OrbitAutoTaskToggleTool);
     // The distributed drain's read-only half. The probe and receipt lookup are
     // advertised because a follower must reach them over federated MCP before
-    // it can enable pull at all; claim inspection stays an operator surface
-    // beside the other coordination-hold tools. No mutating distributed entry
-    // point is registered: `orbit-core`'s distributed gate refuses them, and
-    // registering one would be how an incomplete feature turns itself on.
+    // it can enable pull at all. Claim inspection is registered active but
+    // unadvertised: it is an operator surface, and the operator reaches it
+    // with `orbit tool run orbit.drain.claims` rather than through a dedicated
+    // subcommand, so `register_inactive` would leave it with no entry point at
+    // all [ORB-12581]. What keeps it operator-only is its `GOVERNED_OPERATIONS`
+    // row, which refuses an agent on every surface. No mutating distributed
+    // entry point is registered: `orbit-core`'s distributed gate refuses them,
+    // and registering one would be how an incomplete feature turns itself on.
     registry.register_mcp(
         drain::probe::OrbitDrainProbeTool,
         McpToolScope::WorkspaceRequired,
@@ -60,7 +64,7 @@ pub fn register(registry: &mut ToolRegistry) {
         drain::receipt_lookup::OrbitDrainReceiptLookupTool,
         McpToolScope::WorkspaceRequired,
     );
-    registry.register_inactive(drain::claims::OrbitDrainClaimsTool);
+    registry.register(drain::claims::OrbitDrainClaimsTool);
     registry.register_inactive(docs::OrbitDocsListTool);
     registry.register_inactive(docs::OrbitDocsShowTool);
     registry.register_inactive(docs::OrbitDocsAddTool);
