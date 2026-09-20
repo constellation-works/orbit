@@ -60,6 +60,7 @@ const PURIFY_JS: &str = include_str!("../assets/dashboard/purify.min.js");
 // L-0021: Keep embedded dashboard JS modules in sync with /static routes.
 const APP_JS: &str = include_str!("../assets/dashboard/app.js");
 const COMMON_JS: &str = include_str!("../assets/dashboard/common.js");
+const CONFIG_JS: &str = include_str!("../assets/dashboard/config.js");
 const MARKDOWN_JS: &str = include_str!("../assets/dashboard/markdown.js");
 const TASKS_JS: &str = include_str!("../assets/dashboard/tasks.js");
 const FIELD_EDITOR_JS: &str = include_str!("../assets/dashboard/field-editor.js");
@@ -125,6 +126,7 @@ struct DashboardAssets {
     purify_js: DashboardAsset,
     app_js: DashboardAsset,
     common_js: DashboardAsset,
+    config_js: DashboardAsset,
     markdown_js: DashboardAsset,
     tasks_js: DashboardAsset,
     field_editor_js: DashboardAsset,
@@ -166,6 +168,10 @@ impl DashboardAssets {
             common_js: DashboardAsset::new(
                 "application/javascript; charset=utf-8",
                 COMMON_JS.as_bytes(),
+            )?,
+            config_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                CONFIG_JS.as_bytes(),
             )?,
             markdown_js: DashboardAsset::new(
                 "application/javascript; charset=utf-8",
@@ -463,6 +469,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         .route("/static/purify.min.js", get(serve_purify_js_route))
         .route("/static/app.js", get(serve_app_js_route))
         .route("/static/common.js", get(serve_common_js_route))
+        .route("/static/config.js", get(serve_config_js_route))
         .route("/static/markdown.js", get(serve_markdown_js_route))
         .route("/static/tasks.js", get(serve_tasks_js_route))
         .route("/static/field-editor.js", get(serve_field_editor_js_route))
@@ -618,6 +625,7 @@ dashboard_route_handler!(serve_marked_js_route, marked_js);
 dashboard_route_handler!(serve_purify_js_route, purify_js);
 dashboard_route_handler!(serve_app_js_route, app_js);
 dashboard_route_handler!(serve_common_js_route, common_js);
+dashboard_route_handler!(serve_config_js_route, config_js);
 dashboard_route_handler!(serve_markdown_js_route, markdown_js);
 dashboard_route_handler!(serve_tasks_js_route, tasks_js);
 dashboard_route_handler!(serve_field_editor_js_route, field_editor_js);
@@ -760,6 +768,11 @@ async fn serve_app_js() -> Response {
 #[cfg(test)]
 async fn serve_common_js() -> Response {
     dashboard_asset_response(&TEST_DASHBOARD_ASSETS.common_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_config_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.config_js, &HeaderMap::new())
 }
 
 #[cfg(test)]

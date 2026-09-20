@@ -3,7 +3,7 @@ orbit config — effective
 Layers (later wins)          built-in defaults → global <global-root>/config.toml (absent) → workspace <workspace-root>/config.toml (absent)
 
 Delivery (workflow.*)        how tasks are shipped
-  base_branch                      main                  default  Default base branch for ship workflows.
+  base_branch                      main                  default  Config fallback for ship/auto/pilot base branch when no registered workspace base_branch is bound.
   default_crew                     opus                  default  Named crew used when a task does not declare `crew` and no CLI override is given.
   system_crew                      system                default  Named crew used by system activities such as step-failure recovery and the task pilot.
   auto_ship                        false                 default  Opt-in for unattended ship dispatch via the routine/sweep scheduler.

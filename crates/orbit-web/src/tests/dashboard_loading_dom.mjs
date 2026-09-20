@@ -23,6 +23,12 @@ class Node {
     return child;
   }
   append(...children) { for (const child of children) this.appendChild(child); }
+  replaceChildren(...children) {
+    for (const child of this.children) child.parentNode = null;
+    this.children = [];
+    this._text = "";
+    for (const child of children) this.appendChild(child);
+  }
   insertBefore(child, before) {
     if (child.parentNode) child.parentNode.removeChild(child);
     const index = this.children.indexOf(before);

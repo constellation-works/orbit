@@ -28,9 +28,20 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value as JsonValue, json};
 
 const DEFAULT_WORKFLOW_BASE_BRANCH: &str = "main";
+/// Approval policies `execution.codex.approval_policy` admits.
+const CODEX_APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
 /// The pilot may assess up to `hard` on its own; `xhard` reserves the most
 /// capable crews for work an operator escalated deliberately.
 const DEFAULT_PILOT_MAX_COMPLEXITY: TaskComplexity = TaskComplexity::Hard;
+/// The tiers `workflow.pilot_max_complexity` admits, in ascending order. The
+/// admission error and the choice list an editor offers both read this, so a
+/// retired tier cannot survive in one of them.
+const PILOT_MAX_COMPLEXITY_CHOICES: &[TaskComplexity] = &[
+    TaskComplexity::Low,
+    TaskComplexity::Medium,
+    TaskComplexity::Hard,
+    TaskComplexity::XHard,
+];
 const DEFAULT_WORKFLOW_CREW: &str = "opus";
 /// Name of the crew seeded for the bounded system lane. `orbit init` writes
 /// both this crew table and the `workflow.system_crew` key that points at it,
@@ -250,7 +261,7 @@ define_config_settings! {
         key: "execution.codex.approval_policy", value_type: "string",
         description: "Codex approval policy: one of untrusted, on-request, never.",
         section: ConfigSection::Execution, order: 20,
-        resolve: |raw: Option<String>| resolve_optional_choice(raw, "execution.codex.approval_policy", &["untrusted", "on-request", "never"]),
+        resolve: |raw: Option<String>| resolve_optional_choice(raw, "execution.codex.approval_policy", CODEX_APPROVAL_POLICIES),
     },
     codex_sandbox: String => String {
         key: "execution.codex.sandbox", value_type: "string",
@@ -528,12 +539,42 @@ fn resolve_pilot_max_complexity(raw: Option<String>) -> Result<TaskComplexity, O
     raw.trim()
         .parse::<TaskComplexity>()
         .ok()
-        .filter(|complexity| complexity.is_assessed())
+        .filter(|complexity| PILOT_MAX_COMPLEXITY_CHOICES.contains(complexity))
         .ok_or_else(|| {
             OrbitError::InvalidInput(format!(
-                "workflow.pilot_max_complexity must be one of low, medium, hard, xhard (got '{raw}')"
+                "workflow.pilot_max_complexity must be one of {} (got '{raw}')",
+                complexity_choice_labels().join(", ")
             ))
         })
+}
+
+fn complexity_choice_labels() -> Vec<&'static str> {
+    PILOT_MAX_COMPLEXITY_CHOICES
+        .iter()
+        .map(|complexity| complexity.as_str())
+        .collect()
+}
+
+/// Every literal a key's resolver accepts, or an empty list when the key is
+/// free-form.
+///
+/// The choices are read from the same constants the resolvers admit against,
+/// so an editor that offers them cannot drift from what a write would accept,
+/// and a retired choice disappears from both at once.
+pub fn config_key_options(key: &str) -> Vec<&'static str> {
+    match key {
+        "execution.codex.sandbox" => CODEX_PROVIDER_SANDBOX_MODES.to_vec(),
+        "execution.codex.approval_policy" => CODEX_APPROVAL_POLICIES.to_vec(),
+        "workflow.pilot_max_complexity" => complexity_choice_labels(),
+        "operation.completion" => CompletionPreference::CHOICES.to_vec(),
+        "operation.delivery_cap" => DeliveryCap::CHOICES.to_vec(),
+        "operation.preparation" => PreparationPreference::CHOICES.to_vec(),
+        "operation.preset" => OperationPreset::CHOICES.to_vec(),
+        "operation.promotion" => PromotionPreference::CHOICES.to_vec(),
+        "operation.recovery" => RecoveryPreference::CHOICES.to_vec(),
+        "operation.review_policy" => ReviewPolicy::CHOICES.to_vec(),
+        _ => Vec::new(),
+    }
 }
 
 /// Admit one `workflow.*_complexity_crews` value in place, replacing it with

@@ -14,7 +14,7 @@ use axum::http::uri::Authority;
 use axum::http::{HeaderValue, Method, Request, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use chrono::{DateTime, Duration, TimeZone, Timelike, Utc};
 use serde::Deserialize;
 use serde_json::json;
@@ -24,6 +24,7 @@ use url::Url;
 mod audit;
 mod auto_tasks;
 mod automation;
+mod config;
 mod crews;
 mod denials;
 mod diagnostics;
@@ -554,6 +555,20 @@ pub(super) fn router() -> Router<crate::state::DashboardState> {
             get(tasks::get_task).patch(tasks::update_task_action),
         )
         .route("/crews", get(crews::list_crews))
+        // Config inspection and editing [ORB-12724]. Workspace-scoped like the
+        // rest of the API: `?workspace=` selects which `.orbit/config.toml`
+        // layers over the global file.
+        .route("/config/effective", get(config::get_effective_config))
+        .route("/config/file", get(config::get_config_file))
+        .route("/config/keys", get(config::get_config_keys))
+        .route(
+            "/config/keys/:key",
+            put(config::put_config_key).delete(config::delete_config_key),
+        )
+        .route(
+            "/config/crews/:name",
+            put(config::put_config_crew).delete(config::delete_config_crew),
+        )
         .route("/tasks/:id/artifacts/*path", get(tasks::get_task_artifact))
         .route(
             "/automation/:kind/:name/coverage/:batch/evidence",

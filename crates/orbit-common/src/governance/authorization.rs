@@ -253,6 +253,14 @@ pub const DASHBOARD_HANDOFF_REVOKE: GovernedOperation = GovernedOperation {
     rationale: "revocation cancels a pending landing request for work already handed off; only an operator decides that",
 };
 
+/// Configuration write from the dashboard's Config tab [ORB-12724].
+pub const DASHBOARD_CONFIG_SET: GovernedOperation = GovernedOperation {
+    id: "config.set",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "config.toml governs sandboxing, crews, and unattended delivery for every surface on this machine",
+};
+
 /// Deliberate recovery of an execution claim from the dashboard [ORB-12516].
 pub const DASHBOARD_CLAIM_RECOVER: GovernedOperation = GovernedOperation {
     id: "claim.recover",
@@ -462,6 +470,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_HANDOFF_APPROVE,
     DASHBOARD_HANDOFF_REVOKE,
     DASHBOARD_CLAIM_RECOVER,
+    DASHBOARD_CONFIG_SET,
 ];
 
 /// Look up the governed tool operation for `tool_name`, if any.

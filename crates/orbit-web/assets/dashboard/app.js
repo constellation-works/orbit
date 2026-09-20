@@ -12,6 +12,7 @@ import { renderMarkdown } from './markdown.js';
 import { initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, setRunDetailSubtab, } from './router.js';
 import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations } from './operations.js';
+import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './config.js';
 import {
   renderRunDetailEmpty,
   renderRunDetailMeta,
@@ -169,6 +170,10 @@ function routerContext() {
     setKnowledgeSubtab: (v) => { activeKnowledgeSubtab = v; },
     getOperationsSubtab: () => activeOperationsSubtab,
     setOperationsSubtab: (v) => { activeOperationsSubtab = v; },
+    // ORB-12724: the Config sub-view is owned by config.js, which needs it to
+    // decide which endpoint a refresh reads; the router only routes to it.
+    getConfigSubtab,
+    setConfigSubtab,
     getRunId: getActiveRunId,
     setRunId: setActiveRunId,
     getRunSubtab: getActiveRunSubtab,
@@ -1301,6 +1306,11 @@ function activeRefreshJobs() {
     return jobs;
   }
 
+  if (activeTab === "config") {
+    jobs.push(fetchAndRenderConfig());
+    return jobs;
+  }
+
   if (activeTab === "run-detail") {
     if (!getActiveRunId()) {
       renderRunDetailEmpty("No run selected.");
@@ -1652,6 +1662,7 @@ setScopeChangeListener(() => {
   refreshDashboard();
 });
 initOperations({ getWorkspaces: () => dashboardWorkspaces, formatAbsoluteTime: fmtAbsTime });
+initConfig();
 
 initRuns(runsContext());
 initRunDetail(runDetailContext());
