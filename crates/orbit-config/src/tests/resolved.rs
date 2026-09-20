@@ -320,35 +320,73 @@ fn codex_crew_effort_accepts_every_supported_value() {
 }
 
 #[test]
-fn crew_effort_fails_closed_for_invalid_values_and_unsupported_providers() {
-    let invalid = load_config(
-        "[crews.terra]\nmodel = \"gpt-5.6-terra\"\nprovider = \"codex\"\neffort = \"medium-low\"\n\n[workflow]\ndefault_crew = \"terra\"\n",
+fn crew_effort_invalid_value_is_ignored_and_crew_still_loads() {
+    // [ORB-12720] `effort = "hard"` is a natural slip from task complexity;
+    // one optional property must not fail every command.
+    let config = load_config(
+        "[crews.astra]\nmodel = \"gpt-6-astra\"\nprovider = \"codex\"\neffort = \"hard\"\n\n[workflow]\ndefault_crew = \"astra\"\n",
     )
-    .expect_err("invalid effort must fail config admission");
+    .expect("invalid optional effort must not fail config admission");
+    let crew = config.crews.get("astra").expect("astra crew");
+    assert_eq!(crew.assignment.effort, None);
+    assert_eq!(config.ignored_crew_properties.len(), 1);
+    let ignored = &config.ignored_crew_properties[0];
+    assert_eq!(ignored.crew, "astra");
+    assert_eq!(ignored.property, "effort");
+    assert_eq!(ignored.value, "hard");
+    assert_eq!(ignored.accepted, ReasoningEffort::VALUES);
     assert!(
-        invalid
-            .to_string()
-            .contains("expected one of low, medium, high, xhigh, max")
+        ignored.error_message.contains("expected one of"),
+        "{ignored:?}"
     );
+    assert!(
+        ignored
+            .warning_message()
+            .contains("ignoring [crews.astra].effort")
+    );
+}
 
-    let unsupported = load_config(
+#[test]
+fn crew_effort_unsupported_provider_is_ignored_and_crew_still_loads() {
+    let config = load_config(
         "[crews.gemini]\nmodel = \"gemini\"\nprovider = \"gemini\"\neffort = \"high\"\n\n[workflow]\ndefault_crew = \"gemini\"\n",
     )
-    .expect_err("unsupported provider must not silently ignore effort");
+    .expect("unsupported provider effort must not fail config admission");
+    let crew = config.crews.get("gemini").expect("gemini crew");
+    assert_eq!(crew.assignment.effort, None);
+    assert_eq!(config.ignored_crew_properties.len(), 1);
+    let ignored = &config.ignored_crew_properties[0];
+    assert_eq!(ignored.crew, "gemini");
+    assert_eq!(ignored.property, "effort");
+    assert_eq!(ignored.value, "high");
+    assert_eq!(ignored.accepted, "omit the key");
     assert!(
-        unsupported
-            .to_string()
-            .contains("does not support configured reasoning effort")
+        ignored
+            .error_message
+            .contains("does not support configured reasoning effort"),
+        "{ignored:?}"
     );
+}
 
-    let agy_xhigh = load_config(
+#[test]
+fn crew_effort_provider_specific_unsupported_value_is_ignored() {
+    let config = load_config(
         "[crews.antigravity]\nmodel = \"gemini-3.8-flash-high\"\nprovider = \"antigravity\"\neffort = \"xhigh\"\n\n[workflow]\ndefault_crew = \"antigravity\"\n",
     )
-    .expect_err("agy does not accept xhigh");
-    assert!(
-        agy_xhigh.to_string().contains("low, medium, high"),
-        "{agy_xhigh}"
+    .expect("agy xhigh must be ignored, not fail admission");
+    let crew = config.crews.get("antigravity").expect("antigravity crew");
+    assert_eq!(crew.assignment.effort, None);
+    assert_eq!(config.ignored_crew_properties.len(), 1);
+    assert_eq!(
+        config.ignored_crew_properties[0].accepted,
+        "low, medium, high"
     );
+}
+
+#[test]
+fn crew_effort_invalid_does_not_relax_required_fields_or_model_migration() {
+    load_config("[crews.codex]\nprovider = \"codex\"\neffort = \"hard\"\n")
+        .expect_err("missing model still fails even when effort is also invalid");
 
     let agy_legacy_model = load_config(
         "[crews.antigravity]\nmodel = \"gemini-3.8-flash\"\nprovider = \"antigravity\"\n\n[workflow]\ndefault_crew = \"antigravity\"\n",
@@ -386,11 +424,28 @@ fn grok_crew_effort_enforces_the_verified_model_contract() {
         ("grok-4.5", "xhigh", "low, medium, high"),
         ("grok-unknown", "high", "verified only"),
     ] {
-        let error = load_config(&format!(
+        let config = load_config(&format!(
             "[crews.grok]\nmodel = \"{model}\"\nprovider = \"grok\"\neffort = \"{effort}\"\n\n[workflow]\ndefault_crew = \"grok\"\n"
         ))
-        .expect_err("unsupported Grok model-effort pair must fail config admission");
-        assert!(error.to_string().contains(expected), "{error}");
+        .unwrap_or_else(|error| panic!("unsupported Grok model-effort pair must load: {error}"));
+        assert_eq!(
+            config
+                .crews
+                .get("grok")
+                .expect("grok crew")
+                .assignment
+                .effort,
+            None,
+            "{model} {effort}"
+        );
+        assert_eq!(config.ignored_crew_properties.len(), 1, "{model} {effort}");
+        assert!(
+            config.ignored_crew_properties[0]
+                .error_message
+                .contains(expected),
+            "{model} {effort}: {}",
+            config.ignored_crew_properties[0].error_message
+        );
     }
 }
 

@@ -249,6 +249,23 @@ impl ConfigStore {
         self.snapshot().map(|_| ())
     }
 
+    /// Admission plus a write-time refusal for `orbit config set`.
+    ///
+    /// Load ignores an invalid optional crew property so the workspace stays
+    /// usable. A deliberate `set` of that same key still fails closed: the
+    /// operator asked to persist a value that admission would drop.
+    pub fn validate_for_set(&self, key: &str) -> Result<(), OrbitError> {
+        let resolved = self.resolved()?;
+        if let Some(ignored) = resolved
+            .ignored_crew_properties
+            .iter()
+            .find(|property| property.config_key() == key)
+        {
+            return Err(OrbitError::InvalidInput(ignored.error_message.clone()));
+        }
+        Ok(())
+    }
+
     /// Atomically write the current in-memory document to `self.path`
     /// (temp file + rename, via `orbit_common::fs::io::atomic_write_text`).
     /// Callers should call [`Self::validate`] first: `save` does not

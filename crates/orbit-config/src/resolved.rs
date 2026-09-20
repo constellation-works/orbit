@@ -45,6 +45,51 @@ pub struct PrSettings {
     pub task_url_template: Option<String>,
 }
 
+/// An optional per-crew setting that was present in `config.toml` but dropped
+/// at admission because it had no safe typed value.
+///
+/// Required crew fields still fail closed. Optional tunables such as `effort`
+/// are ignored so one mistyped key cannot take the workspace down.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IgnoredCrewProperty {
+    /// Home-redacted path of the config file that supplied the value.
+    pub config: String,
+    /// Crew table name (`[crews.<name>]`).
+    pub crew: String,
+    /// Property that was ignored (`effort`).
+    pub property: String,
+    /// Offending raw value.
+    pub value: String,
+    /// Accepted values, or guidance to omit the key.
+    pub accepted: String,
+    /// Former hard-error text, reused when `orbit config set` refuses to
+    /// persist a value that admission would ignore.
+    pub error_message: String,
+}
+
+impl IgnoredCrewProperty {
+    /// Dotted `crews.<name>.<field>` key this warning belongs to.
+    pub fn config_key(&self) -> String {
+        format!("crews.{}.{}", self.crew, self.property)
+    }
+
+    /// Operator-facing warning line for doctor / config surfaces.
+    pub fn warning_message(&self) -> String {
+        format!(
+            "ignoring [crews.{}].{} = '{}' in {}; accepted: {}",
+            self.crew, self.property, self.value, self.config, self.accepted
+        )
+    }
+
+    /// Corrective edit naming the file, key, and accepted values.
+    pub fn remediation(&self) -> String {
+        format!(
+            "Edit {}: set [crews.{}].{} to one of {}, or remove the key.",
+            self.config, self.crew, self.property, self.accepted
+        )
+    }
+}
+
 /// Every setting a runtime consumer needs, admitted and defaulted.
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
@@ -92,6 +137,8 @@ pub struct ResolvedConfig {
     /// Applied forward-only on runtime build so machines can hold disjoint id
     /// ranges. `None` leaves the allocator untouched.
     pub tasks_id_start: Option<u32>,
+    /// Optional crew tunables ignored at admission (warn-and-unset).
+    pub ignored_crew_properties: Vec<IgnoredCrewProperty>,
 }
 
 impl ResolvedConfig {
@@ -123,6 +170,7 @@ impl ResolvedConfig {
             system_crew: snapshot.workflow_system_crew.clone(),
             operation: OperationPolicy::built_in(),
             tasks_id_start: snapshot.tasks_id_start,
+            ignored_crew_properties: Vec::new(),
             snapshot,
         }
     }
@@ -205,7 +253,8 @@ impl ResolvedConfig {
             &document,
             std::env::var(RETIRED_BACKEND_ENV).ok().as_deref(),
         )?;
-        let mut crews = crews_from_raw(parsed.crews.as_ref(), config_path)?;
+        let (mut crews, ignored_crew_properties) =
+            crews_from_raw(parsed.crews.as_ref(), config_path)?;
         let snapshot = ConfigSnapshot::admit(&document, config_path, &crews)?;
         // One document is one layer. The layered loader replaces this with
         // the exact global/workspace resolution; a single file (or the
@@ -255,6 +304,7 @@ impl ResolvedConfig {
             system_crew: snapshot.workflow_system_crew.clone(),
             operation,
             tasks_id_start: snapshot.tasks_id_start,
+            ignored_crew_properties,
             snapshot,
         })
     }
@@ -357,11 +407,12 @@ fn reject_stale_agent_tables(
 fn crews_from_raw(
     raw: Option<&BTreeMap<String, RawCrewEntry>>,
     config_path: &Path,
-) -> Result<BTreeMap<String, Crew>, OrbitError> {
+) -> Result<(BTreeMap<String, Crew>, Vec<IgnoredCrewProperty>), OrbitError> {
     let Some(raw_crews) = raw else {
-        return Ok(default_crews());
+        return Ok((default_crews(), Vec::new()));
     };
     let mut crews = BTreeMap::new();
+    let mut ignored = Vec::new();
     for (name, entry) in raw_crews {
         let trimmed = name.trim();
         if trimmed.is_empty() {
@@ -372,7 +423,7 @@ fn crews_from_raw(
         reject_unpoolable_crew_name_in_config(trimmed, "[crews]", config_path)?;
         let crew = Crew {
             name: trimmed.to_string(),
-            assignment: crew_assignment_from_raw(trimmed, entry)?,
+            assignment: crew_assignment_from_raw(trimmed, entry, config_path, &mut ignored)?,
             description: normalized_crew_description(entry.description.as_deref()),
             tags: normalized_crew_tags(&entry.tags),
         };
@@ -382,7 +433,7 @@ fn crews_from_raw(
             )));
         }
     }
-    Ok(crews)
+    Ok((crews, ignored))
 }
 
 /// [ORB-10877] Shipped job steps name the `system` crew directly so the
@@ -448,7 +499,12 @@ fn normalized_crew_tags(raw: &[String]) -> Vec<String> {
     tags
 }
 
-fn crew_assignment_from_raw(crew: &str, raw: &RawCrewEntry) -> Result<CrewAssignment, OrbitError> {
+fn crew_assignment_from_raw(
+    crew: &str,
+    raw: &RawCrewEntry,
+    config_path: &Path,
+    ignored: &mut Vec<IgnoredCrewProperty>,
+) -> Result<CrewAssignment, OrbitError> {
     let has_legacy = raw.planner.is_some() || raw.implementer.is_some() || raw.reviewer.is_some();
     if has_legacy {
         return Err(OrbitError::InvalidInput(format!(
@@ -464,39 +520,117 @@ fn crew_assignment_from_raw(crew: &str, raw: &RawCrewEntry) -> Result<CrewAssign
     }
     Ok(CrewAssignment {
         model,
-        provider,
+        provider: provider.clone(),
         effort: crew_effort_from_raw(
             crew,
             raw.effort.as_deref(),
-            raw.provider.as_deref(),
+            &provider,
             raw.model.as_deref(),
-        )?,
+            config_path,
+            ignored,
+        ),
     })
 }
 
-/// Validate the provider-model-specific crew setting at config admission.
+/// Optional crew effort: invalid or provider-unsupported values are ignored
+/// so a mistyped optional key cannot fail every command. [ORB-12720]
 fn crew_effort_from_raw(
     crew: &str,
     raw_effort: Option<&str>,
-    raw_provider: Option<&str>,
+    provider: &str,
     raw_model: Option<&str>,
-) -> Result<Option<ReasoningEffort>, OrbitError> {
-    let Some(raw_effort) = raw_effort else {
-        return Ok(None);
+    config_path: &Path,
+    ignored: &mut Vec<IgnoredCrewProperty>,
+) -> Option<ReasoningEffort> {
+    let raw_effort = raw_effort?;
+    let effort = match raw_effort.parse::<ReasoningEffort>() {
+        Ok(effort) => effort,
+        Err(error) => {
+            ignore_optional_crew_property(
+                ignored,
+                config_path,
+                crew,
+                "effort",
+                raw_effort,
+                ReasoningEffort::VALUES,
+                format!("[crews.{crew}].{error}"),
+            );
+            return None;
+        }
     };
-    let effort = raw_effort
-        .parse::<ReasoningEffort>()
-        .map_err(|error| OrbitError::InvalidInput(format!("[crews.{crew}].{error}")))?;
-    let provider = required_crew_field(crew, "provider", raw_provider)?;
-    let provider = Provider::resolve_name(&provider).map_err(|_| {
-        OrbitError::InvalidInput(format!(
-            "[crews.{crew}].effort requires a supported effort provider; provider '{provider}' is unsupported"
-        ))
-    })?;
-    effort
-        .validate_for_provider_model(provider.provider.as_str(), raw_model)
-        .map_err(|error| OrbitError::InvalidInput(format!("[crews.{crew}].effort {error}")))?;
-    Ok(Some(effort))
+    let provider_id = match Provider::resolve_name(provider) {
+        Ok(identity) => identity,
+        Err(_) => {
+            ignore_optional_crew_property(
+                ignored,
+                config_path,
+                crew,
+                "effort",
+                raw_effort,
+                "omit the key",
+                format!(
+                    "[crews.{crew}].effort requires a supported effort provider; provider '{provider}' is unsupported"
+                ),
+            );
+            return None;
+        }
+    };
+    if let Err(error) = effort.validate_for_provider_model(provider_id.provider.as_str(), raw_model)
+    {
+        ignore_optional_crew_property(
+            ignored,
+            config_path,
+            crew,
+            "effort",
+            raw_effort,
+            effort_accepted_values(provider_id.provider.as_str(), raw_model),
+            format!("[crews.{crew}].effort {error}"),
+        );
+        return None;
+    }
+    Some(effort)
+}
+
+fn effort_accepted_values(provider: &str, model: Option<&str>) -> &'static str {
+    match provider {
+        "antigravity" => "low, medium, high",
+        "opencode" => "high, max",
+        "grok" => match model.map(str::trim).filter(|model| !model.is_empty()) {
+            Some("grok-4.6") => "low, medium, high, xhigh",
+            Some("grok-4.5") => "low, medium, high",
+            _ => "omit the key",
+        },
+        "claude" | "codex" | "pi" => ReasoningEffort::VALUES,
+        _ => "omit the key",
+    }
+}
+
+fn ignore_optional_crew_property(
+    ignored: &mut Vec<IgnoredCrewProperty>,
+    config_path: &Path,
+    crew: &str,
+    property: &str,
+    value: &str,
+    accepted: &str,
+    error_message: String,
+) {
+    let config = redact_home_dir(&config_path.display().to_string());
+    tracing::warn!(
+        config = %config,
+        crew = %crew,
+        property = %property,
+        value = %value,
+        accepted = %accepted,
+        "ignoring [crews.{crew}].{property}"
+    );
+    ignored.push(IgnoredCrewProperty {
+        config,
+        crew: crew.to_string(),
+        property: property.to_string(),
+        value: value.to_string(),
+        accepted: accepted.to_string(),
+        error_message,
+    });
 }
 
 /// [ORB-10801] `[crews.<name>] backend` selected the agent execution backend.

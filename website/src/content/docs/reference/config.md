@@ -80,8 +80,15 @@ it must name one of those crews.
 ### Reasoning effort
 
 `effort` is omitted by default, which leaves the provider's own model default
-alone. When set, Orbit validates it while loading `config.toml` and passes it
-through the provider's documented argument.
+alone. When set to a supported value, Orbit passes it through the provider's
+documented argument. An invalid or provider-unsupported `effort` is **ignored
+for that crew** (treated as unset) so a slip such as `effort = "hard"` — the
+task-complexity word — cannot take every command down. Load emits a warning
+naming the config path, crew, property, offending value, and accepted values;
+`orbit doctor` lists each ignored property with the corrective edit.
+`orbit config set` still refuses to persist a value that admission would
+drop. Missing `provider`/`model`, a retired backend, and unknown pool
+references still fail closed.
 
 | Provider | Accepted values | Rendered as |
 |---|---|---|
@@ -92,7 +99,7 @@ through the provider's documented argument.
 | `opencode` | `high`, `max` | `--variant` |
 | `grok` with `grok-4.6` | `low`, `medium`, `high`, `xhigh` | `--reasoning-effort` |
 | `grok` with `grok-4.5` | `low`, `medium`, `high` | `--reasoning-effort` |
-| others | Not supported — configuring `effort` is rejected. | — |
+| others | Not supported — configuring `effort` is ignored with a warning. | — |
 
 The narrower sets are narrow on purpose. `antigravity` omits `xhigh`/`max`
 because `agy --effort` does not define them; `opencode` omits everything but
@@ -100,11 +107,12 @@ because `agy --effort` does not define them; `opencode` omits everything but
 provider `--model` selected and OpenCode publishes no provider-independent
 vocabulary. Grok is the only model-specific case, and effort is verified only
 for `grok-4.5` and `grok-4.6` — any other Grok model with `effort` set is
-rejected.
+ignored with a warning rather than remapped.
 
-Orbit rejects an unsupported provider/model/effort combination outright rather
-than silently downgrading, remapping, or ignoring it. Availability can still
-depend on the selected model on the provider's side.
+Orbit does not silently downgrade or remap an unsupported
+provider/model/effort combination onto a nearby value. The optional key is
+dropped for that crew and a warning records what was ignored. Availability can
+still depend on the selected model on the provider's side.
 
 Choose capability with the model first, then use `effort` to adjust the
 reasoning budget inside it.

@@ -511,6 +511,47 @@ fn invalid_config_fails_the_config_check() {
 }
 
 #[test]
+fn ignored_optional_crew_effort_is_a_config_warning() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+
+    fs::write(
+        temp.path().join("repo").join(".orbit").join("config.toml"),
+        "[workflow]\ndefault_crew = \"astra\"\n\n[crews.astra]\nmodel = \"gpt-6-astra\"\nprovider = \"codex\"\neffort = \"hard\"\n",
+    )
+    .expect("write config with invalid optional effort");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let config_rows: Vec<_> = results
+        .iter()
+        .filter(|row| row.check_name == "config")
+        .collect();
+    assert_eq!(config_rows.len(), 1, "{results:?}");
+    let config = config_rows[0];
+    assert_eq!(config.status, WorkspaceDoctorStatus::Warning, "{config:?}");
+    assert!(
+        config.message.contains("ignoring [crews.astra].effort"),
+        "finding names the ignored property: {}",
+        config.message
+    );
+    assert!(
+        config.message.contains("hard"),
+        "finding names the offending value: {}",
+        config.message
+    );
+    let remediation = config.remediation.as_deref().expect("corrective edit");
+    assert!(
+        remediation.contains("[crews.astra].effort"),
+        "{remediation}"
+    );
+    assert!(
+        remediation.contains("low, medium, high, xhigh, max")
+            || remediation.contains("remove the key"),
+        "{remediation}"
+    );
+}
+
+#[test]
 fn unopenable_store_database_fails_the_database_check() {
     let temp = tempfile::tempdir().expect("tempdir");
     let runtime = workspace_runtime(&temp);

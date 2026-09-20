@@ -164,8 +164,8 @@ pub trait DoctorCommands {
 
 impl DoctorCommands for OrbitRuntime {
     fn doctor_workspace(&self) -> Result<Vec<WorkspaceDoctorResult>, OrbitError> {
-        let mut results = vec![
-            doctor_check_config(self),
+        let mut results = doctor_check_config(self);
+        results.extend([
             doctor_check_database(self),
             doctor_check_disk_space(self),
             doctor_check_semantic_index(self),
@@ -176,7 +176,7 @@ impl DoctorCommands for OrbitRuntime {
             doctor_check_task_relations(self),
             doctor_check_stalled_automation(self),
             doctor_check_orphan_task_stores(self),
-        ];
+        ]);
         results.extend(doctor_check_unpublished_bundle_dirs(self));
         results.extend(doctor_check_definition_artifacts(self));
         Ok(results)
@@ -234,31 +234,43 @@ impl DoctorCommands for OrbitRuntime {
 }
 
 /// Parse + validate the effective (workspace-over-global) `config.toml`.
-fn doctor_check_config(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+fn doctor_check_config(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
     let path = match runtime.config_path() {
         Ok(path) => path,
         Err(error) => {
-            return check(
+            return vec![check(
                 "config",
                 WorkspaceDoctorStatus::Error,
                 format!("cannot select effective config: {error}"),
-            );
+            )];
         }
     };
-    match orbit_config::validate_layered_config(&orbit_config::ConfigRoots::new(
+    match orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
         runtime.global_root(),
         runtime.data_root(),
     )) {
-        Ok(_) => check(
+        Ok(config) if config.ignored_crew_properties.is_empty() => vec![check(
             "config",
             WorkspaceDoctorStatus::Ok,
             format!("valid ({})", path.display()),
-        ),
-        Err(error) => check(
+        )],
+        Ok(config) => config
+            .ignored_crew_properties
+            .iter()
+            .map(|ignored| {
+                actionable_check(
+                    "config",
+                    WorkspaceDoctorStatus::Warning,
+                    ignored.warning_message(),
+                    ignored.remediation(),
+                )
+            })
+            .collect(),
+        Err(error) => vec![check(
             "config",
             WorkspaceDoctorStatus::Error,
             format!("invalid ({}): {error}", path.display()),
-        ),
+        )],
     }
 }
 
