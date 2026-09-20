@@ -16,6 +16,7 @@
 // activation, and scroll-to-step.
 
 import { el, syncNodes, stateCell, positiveIntParam, makeToggleRow } from './common.js';
+import { buildExecutionProvenance } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -174,6 +175,17 @@ export function renderRunDetailMeta() {
   addCell("started", run.started_at ? fmtAbsTime(run.started_at) : "-");
   addCell("finished", run.finished_at ? fmtAbsTime(run.finished_at) : "-");
   addCell("duration", run.duration_ms != null ? fmtDuration(run.duration_ms) : "-");
+  // ORB-12516: with more than one execution host, a run id alone no longer says
+  // where it ran. The store field is the truth; a row without one is *unknown*,
+  // never assumed to be this machine.
+  {
+    const cell = el("div");
+    cell.appendChild(el("div", { class: "label", text: "executed on" }));
+    const value = el("div", { class: "value" });
+    value.appendChild(buildExecutionProvenance(runExecutionLocation(run)));
+    cell.appendChild(value);
+    grid.appendChild(cell);
+  }
 
   const wrap = el("div");
   const back = el("button", { class: "back-action", text: "← back to runs" });
@@ -196,6 +208,14 @@ export function renderRunDetailMeta() {
   const children = buildChildDispatches(run);
   if (children) wrap.appendChild(children);
   syncNodes(meta, [wrap]);
+}
+
+/// Normalize the run's stored `executed_on` into the shape the shared
+/// provenance renderer reads. An absent field is explicitly unknown.
+function runExecutionLocation(run) {
+  const location = run && run.executed_on;
+  if (!location || !location.machine_id) return { known: false };
+  return { known: true, machine_id: location.machine_id, host_id: location.host_id || null };
 }
 
 // [ORB-10971] The child Runs this run dispatched, from the durable dispatch

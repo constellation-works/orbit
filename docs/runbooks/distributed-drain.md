@@ -6,8 +6,9 @@ paths:
   - "crates/orbit-tools/src/builtin/orbit/drain/**"
   - "crates/orbit-core/src/application/distributed.rs"
   - "crates/orbit-cli/src/command/task/lint.rs"
+  - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
-related_artifacts: [ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
+related_artifacts: [ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
 last_validated: 2026-09-20
 ---
 
@@ -16,9 +17,12 @@ last_validated: 2026-09-20
 Use this runbook to collapse two independent owners, match follower
 prerequisites, inspect the live read-only drain surface, migrate leftover
 epic/child/review state, and recover a claimed attempt. Installing matching
-binaries is not a rollout. Public pull, binding, settlement, handoff approval,
-and `orbit run auto --pull` are not registered; do not invent them or try to
-turn the gated mutation surface on.
+binaries is not a rollout. Public pull, binding, settlement, routed handoff
+acceptance, and `orbit run auto --pull` are not registered; do not invent them
+or try to turn the gated mutation surface on. The owner's own dashboard does
+carry approve, revoke and recover for the claims this checkout holds — that is
+an operator surface on the owner, not a routed entry point, and it does not
+enable anything for a follower.
 
 ## Prerequisites and safety
 
@@ -264,6 +268,10 @@ lifecycle integration slice lands:
 - run binding, settlement, accept-handoff, approve-handoff, revoke-handoff
 - `orbit run auto --pull <selector>`
 
+The owner's dashboard approve/revoke/recover actions are **not** on that list:
+they are owner-local operator mutations against this checkout's own claims, not
+routed entry points a follower can reach. They change nothing about the gate.
+
 `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` cannot be turned on by
 configuration. Do not register a local tool, write a callers file, or start a
 second owner store to simulate pull. Owner-local claimed leaves already exist
@@ -286,6 +294,19 @@ ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'
 It reports phase, age, reservation expiry, execution machine, bound run, last
 event, unresolved merge intent, and landing invalidation. **Nothing in this
 listing reclaims, rebinds, or repairs a claim.**
+
+The owner's dashboard shows the same state, plus the accepted handoff, inside
+the task detail it belongs to — there is no distributed tab, and the panel
+appears only for a task this workspace holds a claim for:
+
+```bash
+orbit web serve --operator
+```
+
+`GET /api/distributed/claims` is the read; a replica answers that the owner
+machine holds claim state rather than showing an empty list. Read-only
+inspection needs no operator authority; the three actions below do, and the
+server re-resolves that for every call regardless of what the page rendered.
 
 Also inspect the task, lock surface, and recorded run:
 
@@ -320,9 +341,12 @@ Deliberate recovery is operator-driven:
    revocation cannot cancel a request already sent to GitHub.
 3. Revoke the old claim, invalidate pending landing authority, release only
    that reservation, and choose the task transition (`blocked` to diagnose or
-   `backlog` to retry) in one authorized recovery. Public revoke/approve tools
-   are not registered yet; do not invent a CLI verb. Until they are, keep the
-   claim fenced and do not admit a second attempt by shipping the task again.
+   `backlog` to retry) in one authorized recovery. On the owner's dashboard
+   that is **Recover claim** on the task's distributed panel, which requires a
+   reason and the phase you were shown, and refuses if the claim moved on. There
+   is still no CLI verb and no registered tool for it; do not invent one, and do
+   not admit a second attempt by shipping the task again while the old claim is
+   unfenced.
 4. A sleeping worker that returns receives `stale_claim`. Its local compute
    and an in-flight GitHub write cannot be undone; its old candidate cannot
    become authoritative.
@@ -332,17 +356,23 @@ ship-sweep. Followers never merge. Review-only work stays in `review` until
 explicit completion authority is recorded.
 
 Handoff **approval** and **revocation** are owner-operator mutations (agent
-capability cannot approve). They are internal owner-domain seams today, not
-`orbit tool run` entry points. Document the contract so you do not substitute
-`--complete` on a follower, `orbit job resume`, or a dashboard control that
-does not exist:
+capability cannot approve). They are owner-domain seams reached from the
+owner's dashboard — `POST /api/distributed/handoffs/<handoff-id>/approve` and
+`.../revoke`, governed as `handoff.approve` and `handoff.revoke` — and they are
+still not `orbit tool run` entry points. Never substitute `--complete` on a
+follower or `orbit job resume`:
 
 - Approval records one immutable candidate-scoped authorization and one
-  landing-start request. Retries of the same mutation ID must not create a
-  second grant.
-- Revocation invalidates pending landing permission. Unresolved merge intent
-  still has to be reconciled first.
-- Pull eligibility and `agent` access never grant merge rights.
+  landing-start request, and it does not merge. It carries the exact candidate
+  and base commits you were shown, so a stale page is refused with
+  `stale_claim` rather than approving whatever the owner now holds. Retries of
+  the same request ID replay that decision instead of creating a second grant.
+- Revocation invalidates pending landing permission and leaves the task in
+  `review`; it requires a reason. Unresolved merge intent still has to be
+  reconciled first — the dashboard refuses with `uncertain_merge_intent`, and
+  so does the store.
+- Pull eligibility and `agent` access never grant merge rights. A replica
+  refuses all three actions with `replica_checkout`; route them to the owner.
 
 ## Migration recipe: leftover epic, child, review, and reservations
 
@@ -410,6 +440,7 @@ ORBIT_OPERATOR=1 orbit tool run orbit.drain.probe --input '{
   "caller_review_policy": "none"
 }'
 ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'
+curl -s -H 'Host: localhost:7878' http://localhost:7878/api/distributed/claims?workspace=<workspace-id>
 ```
 
 From a follower session aimed at the owner selector, repeat the probe with

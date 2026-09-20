@@ -11,7 +11,7 @@ summary: "One owner, multiple execution hosts: idempotent claims, routed authori
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-core/src/runtime/task/locks.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, resident-orchestrator, activity-job, policy-sandbox]
-related_artifacts: [ORB-12488, ORB-12582, ORB-12616]
+related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616]
 ---
 
 # Distributed Drain — Design
@@ -453,6 +453,48 @@ fast-forward the local landing branch and are verified from the ref; no-diff del
 covering commit on the landing ref and makes no external call. Every completion re-runs the
 authorization, candidate and validation-artifact checks inside the transaction that moves `review ->
 done`, and the observation the activity supplies must equal the accepted candidate exactly.
+
+### Owner dashboard surface
+
+[ORB-12516] gave the owner's own operator a place to read claim state and act on
+it: the existing task and run views, not a console of its own. There is no
+distributed tab, route or navigation entry, so the incomplete feature gains no
+public surface — the panel appears on a task detail only when this workspace
+actually holds a claim for it, and a replica says the owner machine holds that
+state rather than rendering an empty view.
+
+What it reads is one owner-domain projection over the records above
+(`application::review::handoff`): host-qualified execution machine and host,
+claim phase with the bound run, the frozen footprint, reservation expiry, the
+accepted handoff's candidate/base/validation and typed `none` disposition, and
+the handoff's authority and landing state. The vocabulary is load-bearing, since
+a misread here becomes a wrong decision: an elapsed reservation is reported as a
+diagnostic that is explicitly *not* revocation and *not* proof the attempt died;
+`review` is named as a delivery handoff awaiting completion authority rather
+than a code review that passed; merged is named as a merge into the landing
+branch rather than a deployment; and a run bound to another machine names the
+host to inspect instead of an owner-local link, which would resolve against the
+wrong job store. Absent execution provenance stays *unknown*.
+
+Acting is the same three canonical transactions the landing consumer uses —
+`approve_task_handoff`, `revoke_task_handoff`, `ClaimMutation::Recover` — behind
+three `OperationSurface::Dashboard` rows in the governed-operation registry
+(`handoff.approve`, `handoff.revoke`, `claim.recover`, operator only). No second
+authority model and no disabled-button boundary: the capability the read
+projects is the one each mutation re-resolves, every action carries the exact
+identity the operator was shown (the candidate/base commit pair for a handoff,
+the phase for a claim) plus a replay identity that makes a retry idempotent, and
+the observation an approval commits is rebuilt from the owner's own accepted
+record rather than from the payload. Stale identity, a replica checkout and an
+unresolved merge intent are distinct typed refusals, because the operator's next
+move differs: refresh, act on the owner, or reconcile the merge first.
+
+Adapters above Core cannot depend on `orbit-store` — `ClaimInvocation` and
+`HandoffObservation` are deliberately not constructible outside trusted runtime
+code — so the HTTP layer holds no lifecycle state at all. The gated routed
+entry points are unaffected: these are owner-local operator actions, and
+`DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED` still refuses pull, binding and
+settlement from a follower.
 
 ## 4. Follower preconditions
 

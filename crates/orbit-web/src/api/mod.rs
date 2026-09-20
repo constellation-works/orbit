@@ -27,6 +27,7 @@ mod automation;
 mod crews;
 mod denials;
 mod diagnostics;
+mod distributed;
 mod frictions;
 mod incidents;
 mod jobs;
@@ -581,6 +582,23 @@ pub(super) fn router() -> Router<crate::state::DashboardState> {
         .route("/workflows/ship", post(runs::ship_workflow_action))
         .route("/workflows/auto", post(runs::auto_drain_workflow_action))
         .route("/workflows/auto/readiness", get(runs::auto_drain_readiness))
+        // Distributed-drain claim provenance and the owner's handoff actions
+        // [ORB-12516]. There is no dedicated distributed tab: these feed the
+        // existing task and run views, so the incomplete feature gains no
+        // public navigation entry of its own.
+        .route("/distributed/claims", get(distributed::list_claims))
+        .route(
+            "/distributed/handoffs/:id/approve",
+            post(distributed::approve_handoff_action),
+        )
+        .route(
+            "/distributed/handoffs/:id/revoke",
+            post(distributed::revoke_handoff_action),
+        )
+        .route(
+            "/distributed/claims/:id/recover",
+            post(distributed::recover_claim_action),
+        )
         .route("/operation/explain", get(operation::explain_operation))
         .route("/operation/stop", post(operation::stop_operation_action))
         .route(

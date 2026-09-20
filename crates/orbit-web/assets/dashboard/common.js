@@ -449,7 +449,14 @@ export function requestJson(path, method, body) {
       }
     }
     if (!res.ok) {
-      throw new Error(body.error || `${path}: HTTP ${res.status}`);
+      const error = new Error(body.error || `${path}: HTTP ${res.status}`);
+      // The typed code is the actionable half of a refusal: a stale conflict is
+      // resolved by refreshing, an uncertain one is not. Dropping it left every
+      // caller guessing from prose.
+      error.status = res.status;
+      if (body.code) error.code = body.code;
+      if (body.remedy) error.remedy = body.remedy;
+      throw error;
     }
     return body;
   });

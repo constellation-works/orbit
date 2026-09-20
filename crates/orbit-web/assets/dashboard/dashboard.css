@@ -3384,6 +3384,126 @@
       .child-dispatch-meta { color: var(--fg-dim); }
       .child-dispatch-error { color: var(--state-failed); }
 
+      /* ORB-12516: distributed claim provenance and the owner's handoff
+         actions, rendered inside the existing task detail and run meta rather
+         than in a view of their own. Wrapping is deliberate everywhere: a
+         machine id, a selector and a commit are all long, and the detail
+         column is narrow on a laptop. */
+      .exec-origin {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--fg-dim);
+        overflow-wrap: anywhere;
+      }
+      .exec-origin.unknown {
+        color: var(--fg-mute);
+        font-style: italic;
+      }
+      .claim-panel {
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        padding: 10px 12px;
+        margin-bottom: 10px;
+        font-size: 12px;
+      }
+      .claim-panel:last-child { margin-bottom: 0; }
+      .claim-line {
+        display: grid;
+        grid-template-columns: minmax(90px, 140px) 1fr;
+        gap: 8px;
+        padding: 3px 0;
+        align-items: baseline;
+      }
+      .claim-line > .label {
+        color: var(--fg-dim);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .claim-line > .value { overflow-wrap: anywhere; }
+      .claim-line .mono, .claim-footprint .mono { font-family: var(--font-mono); font-size: 11px; }
+      .claim-line.expired > .value { color: var(--state-failed); }
+      .claim-line.remote > .value { color: var(--fg-dim); }
+      .claim-note {
+        grid-column: 1 / -1;
+        color: var(--fg-mute);
+        font-size: 11px;
+        line-height: 1.4;
+        overflow-wrap: anywhere;
+      }
+      .claim-footprint { max-height: 180px; overflow-y: auto; }
+      .claim-warning {
+        border-left: 2px solid var(--state-failed);
+        padding: 6px 10px;
+        margin: 8px 0;
+        color: var(--fg);
+      }
+      .claim-warning .label {
+        color: var(--fg-dim);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-right: 8px;
+      }
+      .handoff-panel {
+        margin-top: 10px;
+        padding-top: 8px;
+        border-top: 1px solid var(--border);
+      }
+      .handoff-panel h5 {
+        margin: 0 0 6px 0;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--fg-dim);
+      }
+      .claim-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 10px;
+        padding-top: 8px;
+        border-top: 1px solid var(--border);
+      }
+      .claim-action {
+        background: var(--bg-elev);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        padding: 4px 10px;
+        font: inherit;
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .claim-action:hover { color: var(--fg); border-color: var(--fg-dim); }
+      .claim-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+      .claim-reason {
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 2px;
+        padding: 4px 8px;
+        font: inherit;
+        font-size: 11px;
+        min-width: 0;
+        flex: 1 1 160px;
+      }
+      /* An unauthorized action is explained, not hidden: the operator learns
+         why, and the server refuses the call either way. */
+      .claim-action-denied { color: var(--fg-mute); font-size: 11px; font-style: italic; }
+      .claim-feedback {
+        padding: 6px 10px;
+        margin-bottom: 8px;
+        font-size: 11px;
+        border-left: 2px solid var(--border);
+        overflow-wrap: anywhere;
+      }
+      .claim-feedback.ok { border-left-color: var(--state-success); }
+      .claim-feedback.error { border-left-color: var(--state-failed); }
+      .claim-feedback.stale { border-left-color: var(--state-running); }
+      .claim-feedback.uncertain { border-left-color: var(--state-failed); }
+
       .step-row {
         display: grid;
         grid-template-columns: 60px 1fr 100px 80px 80px;

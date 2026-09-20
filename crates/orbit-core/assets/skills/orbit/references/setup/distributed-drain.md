@@ -126,6 +126,12 @@ ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims --input '{}'
 
 It inspects. It does not reclaim.
 
+The owner's dashboard reads the same claim state, plus the accepted handoff,
+inside the task detail (`orbit web serve --operator`, then
+`GET /api/distributed/claims`). There is no distributed tab; the panel appears
+only for a task this workspace holds a claim for, and a replica reports that
+the owner machine holds that state.
+
 ## Recovery
 
 Generic resume of a claimed leaf is refused:
@@ -135,11 +141,17 @@ orbit job resume <run-id>
 ```
 
 Inspect the claim, task, locks, and the run on the execution host named by
-`job_run_host`. Reconcile an uncertain merge intent before any reassignment.
-Public approve/revoke/pull tools are not registered; do not invent them, do not
-ship the same task again, and do not treat `--complete` on a follower as
-landing. Followers never merge. A returning worker after revocation receives
-`stale_claim`.
+`job_run_host`. Reconcile an uncertain merge intent before any reassignment — a
+revocation or recovery is refused with `uncertain_merge_intent` until it is.
+
+Approve, revoke and recover are owner-operator actions on the owner's dashboard
+(`handoff.approve`, `handoff.revoke`, `claim.recover`). They carry the exact
+candidate or phase the operator was shown and are refused with `stale_claim`
+when the owner moved on. There is still no registered tool and no CLI verb for
+them: do not invent one, do not ship the same task again, and do not treat
+`--complete` on a follower as landing. Followers never merge, and a replica
+refuses all three with `replica_checkout`. A returning worker after revocation
+receives `stale_claim`.
 
 ## Leftover epic and review state
 

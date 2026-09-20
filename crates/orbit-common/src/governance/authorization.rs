@@ -235,6 +235,32 @@ pub const DASHBOARD_OPERATION_REVOKE: GovernedOperation = GovernedOperation {
     rationale: "revocation withdraws completion authority from admitted work; only an operator decides that",
 };
 
+/// Record completion authority for a distributed delivery handoff from the
+/// dashboard [ORB-12516].
+pub const DASHBOARD_HANDOFF_APPROVE: GovernedOperation = GovernedOperation {
+    id: "handoff.approve",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "approving a handoff authorizes the owner to merge that exact candidate; a follower's agent access never decides that",
+};
+
+/// Withdraw completion authority for a distributed delivery handoff from the
+/// dashboard [ORB-12516].
+pub const DASHBOARD_HANDOFF_REVOKE: GovernedOperation = GovernedOperation {
+    id: "handoff.revoke",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "revocation cancels a pending landing request for work already handed off; only an operator decides that",
+};
+
+/// Deliberate recovery of an execution claim from the dashboard [ORB-12516].
+pub const DASHBOARD_CLAIM_RECOVER: GovernedOperation = GovernedOperation {
+    id: "claim.recover",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "recovery fences a live attempt on another host and moves its task; there is no heartbeat, so a human decides the attempt is over",
+};
+
 /// Every governed operation, declared exactly once.
 ///
 /// This is the single enumerable place the required capability lives. A call
@@ -433,6 +459,9 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_AUTO_DRAIN_COMPLETE,
     DASHBOARD_OPERATION_STOP,
     DASHBOARD_OPERATION_REVOKE,
+    DASHBOARD_HANDOFF_APPROVE,
+    DASHBOARD_HANDOFF_REVOKE,
+    DASHBOARD_CLAIM_RECOVER,
 ];
 
 /// Look up the governed tool operation for `tool_name`, if any.

@@ -25,6 +25,7 @@ HANDLER_FILES = {
     "crews.rs",
     "denials.rs",
     "diagnostics.rs",
+    "distributed.rs",
     "frictions.rs",
     "health.rs",
     "incidents.rs",
