@@ -208,7 +208,7 @@ Each entrypoint loads only the relevant references on demand. `orbit skill docto
 └── host.toml                    # machine identity: machine_id, host_id, task_prefix
 ```
 
-`orbit workspace init` seeds a `.gitignore` that keeps runtime state out of the repo while `auto_tasks/`, `resources/`, `routines/`, and `config.toml` stay in. Day-2 operations (backup, stuck runs, DB recovery, health checks, upgrades) are in the [runbooks](docs/INDEX.md#runbooks).
+`orbit workspace init` seeds a `.gitignore` that ignores all of `.orbit/` as per-user checkout state. Seeded defaults come from the binary via `init` / `workspace sync`. Day-2 operations (backup, stuck runs, DB recovery, health checks, upgrades) are in the [runbooks](docs/INDEX.md#runbooks).
 
 ---
 

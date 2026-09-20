@@ -15,9 +15,10 @@ use super::due::parse_cron;
 /// Directory under a source workspace's `.orbit/` holding routine YAML files.
 pub const ROUTINES_DIR: &str = "routines";
 
-/// Subdirectory of [`ROUTINES_DIR`] holding machine-local routine definitions
-/// (gitignored by convention). The directory is the origin contract — the
-/// sweep never shells out to `git check-ignore`.
+/// Subdirectory of [`ROUTINES_DIR`] that older checkouts used for definitions
+/// that were not git-committed. `.orbit/` is now ignored in full, so this is
+/// an ordinary subdirectory: files here still load for one release, then the
+/// special-case scan will be dropped.
 pub const LOCAL_ROUTINES_SUBDIR: &str = "local";
 
 /// Job names a prior release shipped as routine targets that this release no
@@ -73,25 +74,25 @@ pub fn manual_retirement_advice(path: &Path) -> String {
     )
 }
 
-/// Where a routine definition came from — the directory decides, not git
-/// status. Both origins are evaluated identically on the checkout's host;
-/// the distinction is provenance, reported so an operator can tell a shared
-/// definition from an uncommitted one.
+/// Where a routine definition was found on disk. The directory decides; git
+/// status is not consulted. Both locations are evaluated identically.
+///
+/// `Local` remains only so existing `.orbit/routines/local/` files keep
+/// loading for one release. It is not a git-uncommitted origin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoutineOrigin {
-    /// A git-committed definition under `.orbit/routines/` (excluding
-    /// `local/`), shared with every checkout of the repository.
-    Committed,
-    /// A machine-local definition under `.orbit/routines/local/`, belonging to
-    /// this checkout alone.
+    /// A definition under `.orbit/routines/` (excluding `local/`).
+    Workspace,
+    /// A definition under `.orbit/routines/local/`. Accepted as a plain
+    /// subdirectory for one release; not a distinct git origin.
     Local,
 }
 
 impl RoutineOrigin {
-    /// Stable lowercase label for reporting (`committed` / `local`).
+    /// Stable lowercase label for reporting (`workspace` / `local`).
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Committed => "committed",
+            Self::Workspace => "workspace",
             Self::Local => "local",
         }
     }
@@ -102,7 +103,7 @@ impl RoutineOrigin {
 pub struct LoadedRoutine {
     /// The parsed definition.
     pub definition: RoutineDefinition,
-    /// Whether the definition is committed or machine-local.
+    /// Directory the definition was loaded from (`workspace` or `local/`).
     pub origin: RoutineOrigin,
     /// Registry name of the source workspace.
     pub source_workspace: String,
@@ -119,7 +120,7 @@ pub struct LoadedRoutine {
 pub struct RetiredRoutine {
     /// The routine name the definition declares.
     pub name: String,
-    /// Whether the definition is committed or machine-local.
+    /// Directory the definition was loaded from (`workspace` or `local/`).
     pub origin: RoutineOrigin,
     /// Registry name of the source workspace.
     pub source_workspace: String,
@@ -208,20 +209,25 @@ fn load_source_workspace(
 
     let mut catalog_errors = std::collections::BTreeSet::new();
 
-    // Committed definitions: top-level YAML files. The `local/` subdirectory is
-    // a directory (never a file) so it is skipped here and scanned separately.
+    // Top-level YAML files. The `local/` subdirectory is a directory (never a
+    // file) so it is skipped here and scanned separately for one release.
     load_origin_dir(
         &routines_dir,
-        RoutineOrigin::Committed,
+        RoutineOrigin::Workspace,
         source,
         catalog,
         &mut catalog_errors,
         collection,
     );
 
-    // Local definitions: `.orbit/routines/local/`, this checkout's own.
+    // `.orbit/routines/local/` remains loadable as a plain subdirectory.
     let local_dir = routines_dir.join(LOCAL_ROUTINES_SUBDIR);
     if local_dir.is_dir() {
+        tracing::info!(
+            workspace = %source.workspace,
+            path = %local_dir.display(),
+            ".orbit/routines/local/ is no longer a distinct origin; definitions there load as ordinary workspace routines and the subdirectory will be dropped as a special case in a later release"
+        );
         load_origin_dir(
             &local_dir,
             RoutineOrigin::Local,
@@ -234,8 +240,8 @@ fn load_source_workspace(
 }
 
 /// Load every top-level YAML file in `dir` under `origin`. Only regular files
-/// are considered, so a committed scan of `.orbit/routines/` never treats the
-/// `local/` subdirectory as a definition.
+/// are considered, so a scan of `.orbit/routines/` never treats the `local/`
+/// subdirectory as a definition.
 fn load_origin_dir(
     dir: &Path,
     origin: RoutineOrigin,
@@ -430,12 +436,11 @@ struct RoutineLoadOutcome {
     catalog_error: Option<String>,
 }
 
-/// Names must be unique across every routine source *and origin* on a host; a
-/// collision is a load-time error and every colliding definition is treated as
-/// absent (fail-closed — firing an arbitrary winner would make behavior depend
-/// on iteration order, and a committed and a local definition must never
-/// silently shadow one another). Each colliding definition's error names all
-/// conflicting sources so both origins are visible.
+/// Names must be unique across every routine source on a host; a collision is
+/// a load-time error and every colliding definition is treated as absent
+/// (fail-closed — firing an arbitrary winner would make behavior depend on
+/// iteration order). Each colliding definition's error names all conflicting
+/// sources.
 fn drop_name_collisions(collection: &mut RoutineCollection) {
     // Collect a stable, sorted descriptor of every source per name.
     let mut sources_by_name: BTreeMap<String, Vec<String>> = BTreeMap::new();

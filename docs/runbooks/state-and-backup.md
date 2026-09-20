@@ -123,42 +123,26 @@ Older worktrees may still contain worktree-local `.orbit/graph`, while the share
 contain `.orbit/knowledge/graph`. `orbit doctor --remove-graph` removes exactly those two
 locations and is safe to repeat. Ordinary `orbit doctor` is read-only with respect to both.
 
-### Git-committed versus local state
+### Per-user `.orbit/` state
 
-`orbit workspace init` manages a selective `.gitignore` block. It keeps generated state
-local while allowing the versioned configuration and definition directories that Orbit
-owns today:
+`orbit workspace init` manages a `.gitignore` block that ignores the whole of
+`.orbit/` as per-user checkout state. There are no `!` re-includes. Seeded
+defaults for routines, auto-tasks, and resources come from the binary via
+`init` / `workspace sync`, not from git. Task publication is the mechanism for
+sharing task records across owners.
 
 ```gitignore
-.orbit/*
-!.orbit/auto_tasks/
-!.orbit/resources/
-!.orbit/routines/
-!.orbit/config.toml
-.orbit/**/*.lock
+# Orbit per-user state — not a repository artifact.
+.orbit/
 ```
 
-Any additional operator-authored paths require an explicit repository policy; do not
-assume workspace initialization commits them.
+If git still tracks files under `.orbit/` from an older block, `orbit doctor`
+reports them. Sync rewrites the ignore block but does not run git; untrack once
+with `git rm -r --cached .orbit`.
 
-#### Finalizing generated onboarding files
-
-`orbit workspace init` updates `.gitignore` and creates untracked definition files under
-`.orbit/auto_tasks/` and `.orbit/routines/`. Orbit intentionally does not auto-commit,
-stash, or discard working-tree modifications.
-
-For local delivery (`--ship-mode local`), the base branch landing checkout must be clean
-to ensure safe fast-forward merges. Operators should review and finalize generated
-onboarding definitions before dispatching local implementation workflows:
-
-```bash
-git add .gitignore .orbit/auto_tasks .orbit/routines
-git commit -m "chore: initialize Orbit workspace definitions"
-```
-
-If local shipping is attempted while the landing checkout remains dirty, the workflow
-fails early before agent implementation runs, reporting the unmerged or dirty landing
-state so operators can safely commit or remediate the files without lost work.
+`orbit workspace init` updates `.gitignore` and writes definition files under
+`.orbit/`. Those files are ignored, so they do not dirty the checkout. Orbit
+intentionally does not auto-commit, stash, or discard operator modifications.
 
 ### Recover a missing or corrupt checkout identity
 

@@ -142,10 +142,10 @@ Publishing `proposed/` puts the decision under review in the same PR as the
 change that motivates it, and means an ADR authored inside a managed job
 worktree lands on that run's branch instead of stranding on the box until an
 operator reconciles it. Only the rebuildable `adrs/index.sqlite*` and the
-host-local `*.lock` files stay ignored. The managed `.gitignore` block that
-`orbit workspace init` writes carries this policy to every workspace; re-init
-over an older block retires that block's `proposed/` and `superseded/` ignore
-lines rather than leaving them to out-rank the appended re-include.
+host-local `*.lock` files stay ignored. That partition-tracking policy is
+historical: [Per-user ownership of `.orbit/` (no git re-includes)](../routines/4_decisions.md#per-user-ownership-of-orbit-no-git-re-includes)
+now ignores the whole of `.orbit/`. The managed `.gitignore` block still
+retires superseded lines so re-init converges.
 
 Publishing every partition makes a duplicate ID reachable. Acceptance is a
 directory rename, so a branch cut before acceptance still carries

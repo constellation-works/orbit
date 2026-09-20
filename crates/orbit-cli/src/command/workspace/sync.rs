@@ -11,6 +11,7 @@ use orbit_core::{
 use orbit_registry::workspace_registry;
 use orbit_registry::{HostIdentityState, inspect_host_identity};
 
+use super::support::ensure_orbit_gitignore_entry;
 use crate::command::{CommandOut, Payload};
 
 #[derive(Args)]
@@ -56,6 +57,12 @@ impl WorkspaceSyncArgs {
         // directory basename, so convergence renders the same binding that
         // `orbit workspace init` recorded [ORB-12107].
         let routine_identity = RoutineSeedIdentity::new(&workspace.name)?;
+        if !self.check {
+            // Rewrite the managed `.gitignore` block in place. Sync never
+            // runs git on the operator's behalf; doctor names the
+            // `git rm -r --cached .orbit` step when files are still tracked.
+            ensure_orbit_gitignore_entry(&checkout.repo_root, &checkout.orbit_dir)?;
+        }
         let report = reconcile_workspace_managed_artifacts(
             &global_root,
             &checkout.orbit_dir,

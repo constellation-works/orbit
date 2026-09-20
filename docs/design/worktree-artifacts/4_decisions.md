@@ -101,9 +101,7 @@ died with the worktree unless an operator ran `orbit adr reconcile` first.
 
 The ignore policy is generated, not hand-maintained. `ORBIT_GITIGNORE_BLOCK` in
 `crates/orbit-cli/src/command/workspace/support.rs` is the managed block that
-`orbit workspace init` writes and rewrites into every workspace, and it still
-ignored both `.orbit/adrs/proposed/` and `.orbit/adrs/superseded/` — the latter
-already contradicting [Publish superseded ADR bodies as durable decision history](#publish-superseded-adr-bodies-as-durable-decision-history). A hand-edited `.gitignore` was therefore
+`orbit workspace init` writes and rewrites into every workspace. [Per-user ownership of `.orbit/` (no git re-includes)](../routines/4_decisions.md#per-user-ownership-of-orbit-no-git-re-includes) later ignores the whole of `.orbit/`, retiring the partition re-includes this entry described. A hand-edited `.gitignore` was therefore
 reverted on the next init or re-register.
 
 Tracking the proposed partition also makes a latent ambiguity reachable.

@@ -82,8 +82,9 @@ spec:
     # workspace base branch, or explicit workflow.base_branch config when no
     # registration is available. The resolved input is persisted for collect
     # and every pilot. Missing authority fails admission; GitHub's default is
-    # the release identity. Override with run input or a trusted job catalog,
-    # never the ignored workspace copy of this shipped named job.
+    # the release identity. Override with run input or a trusted job catalog.
+    # The workspace copy of this job is user-owned per-checkout state, not a
+    # second source of defaults.
     integration_branch: ""
     max_tasks: 5
     max_investigated_runs: 6

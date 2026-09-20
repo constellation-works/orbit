@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_updated: 2026-09-20
+last_validated: 2026-09-20
 status: Accepted
 feature: auto-tasks
 doc_role: overview
@@ -17,7 +17,7 @@ related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-1
 # Auto-tasks — Overview
 
 Auto-tasks turn recurring chores into **data instead of code**. An auto-task
-definition is a git-versioned YAML record with a schedule, an `enabled` toggle,
+definition is a YAML record under `.orbit/auto_tasks/` (per-user checkout state) with a schedule, an `enabled` toggle,
 a task template, and a dedupe policy. One generic scheduler pass reads the
 enabled definitions, fires the due ones, and mints a task from each template.
 Adding a new periodic chore is a new definition (`orbit auto-task add`), never
@@ -48,7 +48,7 @@ becomes just the first definition.
   a knob in the identity `config.yaml` ([L-0014] keeps runtime config out of
   `config.yaml`).
 - **Cursor** — per-definition last-fired state, host-local at
-  `<orbit_dir>/state/auto-tasks.json`, so the git-versioned definition is never
+  `<orbit_dir>/state/auto-tasks.json`, so the definition YAML is never
   churned by a scheduler fire.
 - **Scheduler** — the host clock tick calls the evaluator directly after routine
   evaluation. No job run is created; fire evidence is the minted task, the cursor,

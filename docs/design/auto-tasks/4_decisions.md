@@ -11,7 +11,7 @@ summary: Decision log for the auto-task primitive, including its move from a rou
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-12237, ORB-12698]
+related_artifacts: [ORB-12237, ORB-12698, ORB-12718]
 ---
 
 # Auto-tasks — Decisions
@@ -20,11 +20,19 @@ This document preserves the feature's non-obvious decisions and their reasoning.
 
 ---
 
+## Auto-task definitions are per-user checkout state, not git-versioned records
+
+**Recorded:** 2026-09-20 · [ORB-12718]
+**Supersedes:** the git-versioned-definitions half of [Auto-task primitive: file-backed recurring task templates + one generic scheduler routine](#auto-task-primitive-file-backed-recurring-task-templates--one-generic-scheduler-routine). File-backed YAML, host-local cursors, catch-up collapse, dedupe, provenance, and CRUD stand.
+**See:** [Per-user ownership of `.orbit/` (no git re-includes)](../routines/4_decisions.md#per-user-ownership-of-orbit-no-git-re-includes).
+
+`.orbit/auto_tasks/` is this checkout owner's schedule of recurring work. `orbit workspace init` / `workspace sync` seed the shipped defaults from the binary. Git no longer carries a copy. `.orbit/learnings/` is ignored with the rest of `.orbit/`; shared knowledge is docs and task publication.
+
 ## Auto-task primitive: file-backed recurring task templates + one generic scheduler routine
 
 **Recorded:** 2026-07-12 02:58:04.684957Z · [ORB-10149], [ORB-10148]
 **Paths:** `crates/orbit-core/src/application/auto_tasks/**`
-**Superseded in part by:** [Auto-task definitions are evaluated by the host tick, not fired by a routine](#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine). The primitive (file-backed definitions, host-local cursors, catch-up collapse, dedupe, provenance, CRUD) stands; "one generic scheduler routine" does not.
+**Superseded in part by:** [Auto-task definitions are evaluated by the host tick, not fired by a routine](#auto-task-definitions-are-evaluated-by-the-host-tick-not-fired-by-a-routine) (the scheduler-routine half) and [Auto-task definitions are per-user checkout state, not git-versioned records](#auto-task-definitions-are-per-user-checkout-state-not-git-versioned-records) (the git-versioned half). The primitive (file-backed definitions, host-local cursors, catch-up collapse, dedupe, provenance, CRUD) stands.
 
 ### Context
 
@@ -139,6 +147,7 @@ The scheduler pass was already a stateless, cursor-driven due evaluator — the 
 
 ## Task References
 
+- [ORB-12718] — auto-task definitions are per-user checkout state, not git-versioned records.
 - [ORB-12237] — moves auto-task evaluation into the host clock tick and retires the scheduler routine/job/activity.
 - [ORB-10149] — Shipped the auto-task primitive (record, scheduler, CRUD, assets).
 - [ORB-10148] — Added the QA definition and no-diff workflow exemption.

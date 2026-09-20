@@ -3,8 +3,9 @@
 //!
 //! Every periodic need in orbit used to be bespoke code (qa-sweep, ship-sweep,
 //! …). Auto-tasks replace that pattern with a primitive: a definition is a
-//! git-versioned YAML record ([`loader`]) with a schedule, an `enabled` toggle,
-//! a task template, and a dedupe policy. A single generic scheduler
+//! YAML record ([`loader`]) under `.orbit/auto_tasks/` with a schedule, an
+//! `enabled` toggle, a task template, and a dedupe policy. That directory is
+//! per-user state, not a repository artifact. A single generic scheduler
 //! ([`scheduler`]) fires the due, enabled definitions and mints tasks from
 //! their templates — periodic work becomes data, not code. The host scheduler
 //! tick runs the evaluator directly for each registered owner checkout.

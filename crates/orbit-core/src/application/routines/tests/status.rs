@@ -15,7 +15,7 @@ fn loaded(path: std::path::PathBuf) -> LoadedRoutine {
     let raw = fs::read_to_string(&path).expect("read fixture");
     LoadedRoutine {
         definition: parse_routine_yaml(&raw).expect("parse fixture"),
-        origin: RoutineOrigin::Committed,
+        origin: RoutineOrigin::Workspace,
         source_workspace: "polaris".to_string(),
         source_orbit_dir: path.parent().expect("fixture parent").to_path_buf(),
         path,
@@ -110,7 +110,7 @@ fn display_status(
     RoutineStatus {
         routine: LoadedRoutine {
             definition: parse_routine_yaml(yaml).expect("parse fixture"),
-            origin: RoutineOrigin::Committed,
+            origin: RoutineOrigin::Workspace,
             source_workspace: "orbit".to_string(),
             source_orbit_dir: PathBuf::from("/tmp"),
             path: PathBuf::from("/tmp/nightly.yaml"),

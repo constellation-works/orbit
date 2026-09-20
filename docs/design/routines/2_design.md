@@ -526,17 +526,16 @@ an additional owner therefore creates an independent schedule on that host.
 - **No cross-host coordination.** Every owner checkout runs every enabled definition
   against its own store by design [ORB-12236]; "exactly one of N hosts" has no mechanism.
   The residual case is a definition with a repo-global side effect, which the author must
-  dedupe itself, keep under `.orbit/routines/local/` on one machine, or pause elsewhere
+  dedupe itself or pause on the extra owners
   ([3_vision.md §1](./3_vision.md#1-open-questions)).
-- **Definition staleness.** Sweep reads whatever revision of the source workspace is on
-  disk; definitions are only as fresh as the last `git pull`. A pull-the-sources routine
-  can narrow the window but cannot fix its own staleness (it, too, is a definition). Editing
-  routines on the host that runs them has no staleness; the other host lags by one sync.
+- **Definition locality.** Sweep reads whatever is on this checkout's disk. Definitions
+  do not converge via git; each owner edits their own `.orbit/routines/`. A fresh clone
+  gets shipped defaults from `orbit workspace init`.
 - **Scheduled execution is a real capability escalation.** A routine source workspace is
   scheduled code execution on every host that trusts it. Targets are catalog-resolved (no
   inline commands) and run under existing activity/job policy, but note the sandbox caveat
   recorded in [External Executor Protocol for dynamic out-of-process executor registration (retired)](../executors/4_decisions.md#external-executor-protocol-for-dynamic-out-of-process-executor-registration-retired): enforcement depends on which runtime path the target takes.
-  PR review on the source workspace is part of the security boundary.
+  Review of this checkout's definitions is part of the security boundary.
 - **Minute granularity, host-local time.** Cron is evaluated in host-local time; DST folds
   can skip or double a slot exactly as classic cron does. The idempotency key (name + slot)
   prevents double *fires* for the same slot but cannot invent a skipped slot.

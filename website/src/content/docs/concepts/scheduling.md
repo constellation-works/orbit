@@ -83,8 +83,7 @@ Invariants that shape how routines behave:
 
 - **No host field.** A definition is evaluated by every machine with a
   registered owner checkout and an enabled clock, each against its own store.
-  Registration is the opt-in; to keep a routine on one machine, put it under
-  `.orbit/routines/local/` there or pause it elsewhere.
+  Registration is the opt-in; to keep a routine off a machine, pause it there.
 - **Versioned enable, host-local pause.** `enabled` lives in the file and is a
   reviewed change; `orbit routine pause` is a per-host override that is never
   synced and survives reboots. Use pause for "not on this machine right now",

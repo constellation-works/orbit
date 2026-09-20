@@ -210,9 +210,9 @@ fn healthy_fresh_workspace_has_no_failures() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let results = runtime.doctor_workspace().expect("doctor");
 
-    // Thirteen infrastructure checks plus one definition-artifact row per kind
+    // Fourteen infrastructure checks plus one definition-artifact row per kind
     // (skills, jobs, activities, auto-tasks, routines).
-    assert_eq!(results.len(), 18, "one row per check: {results:?}");
+    assert_eq!(results.len(), 19, "one row per check: {results:?}");
     assert!(
         results
             .iter()
@@ -2012,5 +2012,74 @@ fn automation_consumer_check_passes_without_any_stalled_consumer() {
         "{}",
         row.message
     );
+    assert_eq!(row.remediation, None);
+}
+
+#[test]
+fn tracked_orbit_files_skips_without_git() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let runtime = workspace_runtime(&temp);
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "tracked-orbit-files");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Skipped);
+    assert_eq!(row.remediation, None);
+}
+
+#[test]
+fn tracked_orbit_files_warn_until_untracked() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let runtime = workspace_runtime(&temp);
+    let repo_root = temp.path().join("repo");
+    fs::write(repo_root.join(".orbit").join("config.toml"), "# test\n")
+        .expect("write tracked config");
+
+    let git_init = std::process::Command::new("git")
+        .args([
+            "-C",
+            repo_root.to_str().expect("utf8 repo"),
+            "init",
+            "--quiet",
+        ])
+        .status()
+        .expect("git init");
+    assert!(git_init.success(), "initialize git repo");
+    let add = std::process::Command::new("git")
+        .args([
+            "-C",
+            repo_root.to_str().expect("utf8 repo"),
+            "add",
+            ".orbit/config.toml",
+        ])
+        .status()
+        .expect("git add");
+    assert!(add.success(), "track .orbit/config.toml");
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "tracked-orbit-files");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning);
+    assert!(row.message.contains("tracked file"), "{}", row.message);
+    assert_eq!(
+        row.remediation.as_deref(),
+        Some("git rm -r --cached .orbit")
+    );
+
+    let untrack = std::process::Command::new("git")
+        .args([
+            "-C",
+            repo_root.to_str().expect("utf8 repo"),
+            "rm",
+            "-r",
+            "--cached",
+            "--quiet",
+            ".orbit",
+        ])
+        .status()
+        .expect("git rm --cached");
+    assert!(untrack.success(), "untrack .orbit");
+
+    let after = runtime.doctor_workspace().expect("doctor after untrack");
+    let row = status_of(&after, "tracked-orbit-files");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Ok);
+    assert_eq!(row.message, "no tracked files under .orbit/");
     assert_eq!(row.remediation, None);
 }

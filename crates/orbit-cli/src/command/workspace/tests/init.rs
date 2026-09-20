@@ -1621,6 +1621,7 @@ fn workspace_init_under_home_with_global_orbit_creates_repo_orbit() {
             std::fs::read_to_string(workspace.join(".gitignore")).expect("read .gitignore"),
             orbit_gitignore_block()
         );
+        assert!(!orbit_gitignore_block().contains('!'));
         assert!(!orbit_gitignore_block().contains(".orbit/adrs"));
 
         env.restore_now();
@@ -1669,9 +1670,8 @@ fn workspace_init_appends_orbit_to_existing_gitignore() {
 
 #[test]
 fn workspace_init_replaces_legacy_bare_orbit_gitignore_line_with_managed_block() {
-    // A bare `.orbit` line (written by earlier init versions) ignores the whole
-    // directory, so artifact re-includes can never apply. Init must
-    // replace the legacy line with the managed block, not merely append.
+    // A rooted `/.orbit/` line is a non-canonical spelling of the desired
+    // ignore. Init must replace it with the managed block, not merely append.
     let workspace = tempdir().expect("workspace tempdir");
     let home = tempdir().expect("home tempdir");
     std::fs::create_dir_all(workspace.path().join(".git")).expect("create .git");
@@ -1700,7 +1700,7 @@ fn workspace_init_replaces_legacy_bare_orbit_gitignore_line_with_managed_block()
     assert_eq!(
         std::fs::read_to_string(workspace.path().join(".gitignore")).expect("read .gitignore"),
         expected,
-        "legacy bare `.orbit` must be replaced by the managed block"
+        "non-canonical `/.orbit/` must be replaced by the managed block"
     );
 
     // Re-init is idempotent: the block is not duplicated or reordered.
@@ -1770,21 +1770,89 @@ fn workspace_init_retires_adr_store_gitignore_lines() {
         std::fs::read_to_string(workspace.path().join(".gitignore")).expect("read .gitignore");
     assert_eq!(converged, expected, "re-init must converge on one block");
     for retired in [
+        ".orbit/*",
         "!.orbit/adrs/",
         ".orbit/adrs/index.sqlite*",
         ".orbit/adrs/proposed/",
         ".orbit/adrs/superseded/",
+        "!.orbit/auto_tasks/",
+        "!.orbit/resources/",
+        "!.orbit/routines/",
+        "!.orbit/config.toml",
+        ".orbit/**/*.lock",
     ] {
         assert!(
             !converged.lines().any(|line| line.trim() == retired),
-            "retired ADR store line `{retired}` must be absent"
+            "retired gitignore line `{retired}` must be absent"
         );
     }
     assert_eq!(
-        converged.matches(".orbit/*\n").count(),
+        converged.matches(".orbit/\n").count(),
         1,
-        "the managed block must appear exactly once"
+        "the managed `.orbit/` line must appear exactly once"
     );
+    assert!(
+        !orbit_gitignore_block().contains('!'),
+        "the managed block must not re-include anything under `.orbit/`"
+    );
+}
+
+#[test]
+fn workspace_init_rewrites_previous_reinclude_managed_block() {
+    // Workspaces initialized before ORB-12718 re-included auto_tasks, resources,
+    // routines, and config.toml. Re-init must drop every negation.
+    let workspace = tempdir().expect("workspace tempdir");
+    let home = tempdir().expect("home tempdir");
+    std::fs::create_dir_all(workspace.path().join(".git")).expect("create .git");
+    let previous_managed_block = concat!(
+        "target/\n",
+        ".orbit/*\n",
+        "!.orbit/auto_tasks/\n",
+        "!.orbit/resources/\n",
+        "!.orbit/routines/\n",
+        "!.orbit/config.toml\n",
+        ".orbit/**/*.lock\n",
+    );
+    std::fs::write(workspace.path().join(".gitignore"), previous_managed_block)
+        .expect("write .gitignore");
+
+    let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
+
+    WorkspaceInitArgs {
+        name: None,
+        base_branch: Some("main".to_string()),
+        ship_mode: None,
+        role: None,
+        owner: None,
+        task_id_start: None,
+        mcp: false,
+        inject_agent_rules: false,
+        refresh_defaults: false,
+        force: false,
+    }
+    .execute_without_runtime(None)
+    .expect("workspace init");
+
+    let converged =
+        std::fs::read_to_string(workspace.path().join(".gitignore")).expect("read .gitignore");
+    assert_eq!(
+        converged,
+        format!("target/\n{}", orbit_gitignore_block()),
+        "previous re-include block must be rewritten to the per-user ignore"
+    );
+    for retired in [
+        ".orbit/*",
+        "!.orbit/auto_tasks/",
+        "!.orbit/resources/",
+        "!.orbit/routines/",
+        "!.orbit/config.toml",
+        ".orbit/**/*.lock",
+    ] {
+        assert!(
+            !converged.lines().any(|line| line.trim() == retired),
+            "retired negation `{retired}` must not survive"
+        );
+    }
 }
 
 #[test]
@@ -2231,16 +2299,18 @@ fn workspace_init_guidance_and_generated_onboarding_files_lifecycle() {
         .expect("git init");
     assert!(git_init.success());
 
-    // Verify guidance explicitly explains generated files and operator remediation
+    // Verify guidance names the managed gitignore and does not tell operators
+    // to commit per-user `.orbit/` files.
     assert!(ONBOARDING_FINALIZE_GUIDANCE.contains(".gitignore"));
-    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains(".orbit/auto_tasks"));
-    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains(".orbit/routines"));
-    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains("review and commit"));
+    assert!(ONBOARDING_FINALIZE_GUIDANCE.contains(".orbit/"));
+    assert!(!ONBOARDING_FINALIZE_GUIDANCE.contains("review and commit"));
+    assert!(!ONBOARDING_FINALIZE_GUIDANCE.contains(".orbit/auto_tasks"));
+    assert!(!ONBOARDING_FINALIZE_GUIDANCE.contains(".orbit/routines"));
     assert!(ONBOARDING_FINALIZE_GUIDANCE.contains("does not auto-commit or discard"));
     assert_eq!(
         onboarding_finalize_guidance(workspace.path(), &workspace.path().join(".orbit")),
         ONBOARDING_FINALIZE_GUIDANCE,
-        "checkout-local initialization must retain the commit guidance"
+        "checkout-local initialization must retain the gitignore guidance"
     );
 
     WorkspaceInitArgs {
@@ -2263,7 +2333,7 @@ fn workspace_init_guidance_and_generated_onboarding_files_lifecycle() {
     assert!(workspace.path().join(".orbit/auto_tasks").is_dir());
     assert!(workspace.path().join(".orbit/routines").is_dir());
 
-    // Git status shows dirt from generated files
+    // Git status shows the managed `.gitignore` and nothing under `.orbit/`.
     let status_output = std::process::Command::new("git")
         .args(["status", "--porcelain"])
         .current_dir(workspace.path())
@@ -2274,5 +2344,8 @@ fn workspace_init_guidance_and_generated_onboarding_files_lifecycle() {
         status_str.contains(".gitignore"),
         "git status: {status_str}"
     );
-    assert!(status_str.contains(".orbit/"), "git status: {status_str}");
+    assert!(
+        !status_str.lines().any(|line| line.contains(".orbit/")),
+        "git status after init must not show `.orbit/`: {status_str}"
+    );
 }

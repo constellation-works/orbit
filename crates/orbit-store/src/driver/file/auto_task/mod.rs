@@ -1,11 +1,9 @@
 //! Auto-task scheduler cursor state [ORB-10149]: per-definition last-fired
 //! bookkeeping, host-local and workspace-scoped.
 //!
-//! Cursors live in `<orbit_dir>/state/auto-tasks.json` — workspace-local,
-//! gitignored runtime state.
-//! The git-versioned definition YAML is never rewritten by a scheduler fire,
-//! so the store stays churn-free and a definition edit never races the
-//! scheduler.
+//! Cursors live in `<orbit_dir>/state/auto-tasks.json` — workspace-local
+//! runtime state. The definition YAML is never rewritten by a scheduler fire,
+//! so a definition edit never races the scheduler.
 //!
 //! Slot admission and persistence share one stable sidecar lock
 //! (`.auto-tasks.json.lock`). The data file is replaced by rename, so the

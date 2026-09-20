@@ -123,20 +123,15 @@ Three things to know about what it seeded and how to finalize:
 - **Every routine and auto-task ships disabled.** The automation layer is
   installed but dark until someone reviews and opts in. Do not assume a fresh
   workspace schedules anything. → [automation.md](automation.md)
-- **Definitions belong in git; state does not.** `orbit workspace init` seeds a
-  `.gitignore` pattern that ignores `.orbit/` and then re-includes the versioned
-  definition directories. Keep it.
-- **Finalize generated files before local shipping.** `orbit workspace init`
-  updates `.gitignore` and creates untracked definitions in `.orbit/auto_tasks/`
-  and `.orbit/routines/`. Orbit intentionally does not auto-commit, stash, or
-  discard operator modifications. When using local delivery (`--ship-mode local`),
-  the landing base checkout must be clean before running workflows. Review and
-  commit the generated onboarding files to finalize setup safely:
-
-  ```bash
-  git add .gitignore .orbit/auto_tasks .orbit/routines
-  git commit -m "chore: initialize Orbit workspace definitions"
-  ```
+- **`.orbit/` is per-user state.** `orbit workspace init` seeds a `.gitignore`
+  that ignores the whole of `.orbit/` with no re-includes. Keep it. Seeded
+  routines, auto-tasks, and resources come from the binary, not from git.
+- **Generated definition files are ignored.** `orbit workspace init` updates
+  `.gitignore` and writes files under `.orbit/auto_tasks/` and
+  `.orbit/routines/`. Those paths do not dirty the checkout. Orbit
+  intentionally does not auto-commit, stash, or discard operator
+  modifications. Review the managed `.gitignore` entry; if git still tracks
+  an older `.orbit/` tree, `orbit doctor` names `git rm -r --cached .orbit`.
 
 Ordinary `orbit mcp init` installs agent-only authority, unlike the operator
 bootstrap above. Re-registering a client is not a way to preserve or grant

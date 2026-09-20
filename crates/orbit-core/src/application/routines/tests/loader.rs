@@ -1,8 +1,8 @@
-//! Origin-aware routine loading tests [ORB-10258]: committed definitions under
-//! `.orbit/routines/` and machine-local ones under `.orbit/routines/local/`
-//! both load and are evaluated on this host [ORB-12236]; a definition still
+//! Origin-aware routine loading tests [ORB-10258]: definitions under
+//! `.orbit/routines/` and leftover ones under `.orbit/routines/local/` both
+//! load and are evaluated on this host [ORB-12236]; a definition still
 //! carrying the retired `hosts:` key loads with a warning that names its file;
-//! and a name defined by more than one origin fails deterministically naming
+//! and a name defined by more than one source fails deterministically naming
 //! both sources.
 //!
 //! These drive `collect_routines` over a real seeded source workspace (the same
@@ -180,21 +180,21 @@ where
     (result, logs)
 }
 
-// ---- committed origin -----------------------------------------------------
+// ---- workspace origin -----------------------------------------------------
 
 #[test]
-fn committed_routine_loads_with_committed_origin() {
+fn workspace_routine_loads_with_workspace_origin() {
     let ws = seed_source_workspace();
-    write_routine(&ws.routines_dir, "nightly.yaml", &definition("committed"));
+    write_routine(&ws.routines_dir, "nightly.yaml", &definition("nightly"));
 
     let collection = collect(&ws);
-    let routine = find(&collection, "committed").expect("committed routine loads");
-    assert_eq!(routine.origin, RoutineOrigin::Committed);
+    let routine = find(&collection, "nightly").expect("workspace routine loads");
+    assert_eq!(routine.origin, RoutineOrigin::Workspace);
     assert!(collection.errors.is_empty(), "{:?}", collection.errors);
 }
 
 #[test]
-fn disabled_committed_routine_still_loads() {
+fn disabled_workspace_routine_still_loads() {
     let ws = seed_source_workspace();
     write_routine(
         &ws.routines_dir,
@@ -205,7 +205,7 @@ fn disabled_committed_routine_still_loads() {
 
     let collection = collect(&ws);
     let routine = find(&collection, "committed-disabled").expect("disabled routine loads");
-    assert_eq!(routine.origin, RoutineOrigin::Committed);
+    assert_eq!(routine.origin, RoutineOrigin::Workspace);
     assert!(!routine.definition.enabled);
 }
 
@@ -247,7 +247,7 @@ fn local_routine_loads_offline_with_local_origin() {
 // ---- cross-origin duplicate names -----------------------------------------
 
 #[test]
-fn duplicate_name_across_committed_and_local_fails_deterministically() {
+fn duplicate_name_across_workspace_and_local_fails_deterministically() {
     let ws = seed_source_workspace();
     write_routine(&ws.routines_dir, "dup.yaml", &definition("dup-name"));
     write_routine(&ws.local_dir, "dup.yaml", &definition("dup-name"));
@@ -272,7 +272,7 @@ fn duplicate_name_across_committed_and_local_fails_deterministically() {
     // Both origins are reported in each row so the conflict is diagnosable.
     for message in &collision_errors {
         assert!(
-            message.contains("committed origin") && message.contains("local origin"),
+            message.contains("workspace origin") && message.contains("local origin"),
             "collision names both sources: {message}"
         );
     }
@@ -311,7 +311,7 @@ fn routine_targeting_a_retired_job_is_skipped_not_failed() {
         .find(|routine| routine.name == "auto-task-scheduler-polaris")
         .expect("the definition is reported as retired");
     assert_eq!(retired.job, "auto_task_scheduler_pipeline");
-    assert_eq!(retired.origin, RoutineOrigin::Committed);
+    assert_eq!(retired.origin, RoutineOrigin::Workspace);
     assert_eq!(retired.source_workspace, "polaris");
     assert_eq!(
         retired.path,
