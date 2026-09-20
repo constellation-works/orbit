@@ -632,6 +632,292 @@ fn local_pull_capacity_replaces_wrapper_with_queued_descendant() {
     );
 }
 
+/// Link `parent -> child` the way a dispatching pipeline records it.
+fn link_dispatch(
+    store: &SqliteJobRunStore,
+    parent: &orbit_types::workflow::JobRun,
+    child_run_id: &str,
+    child_job_id: &str,
+) {
+    use orbit_types::workflow::ChildDispatch;
+    let mut state = store
+        .read_run_state(&parent.run_id)
+        .expect("read parent state")
+        .unwrap_or_else(|| {
+            PipelineState::new(
+                parent.run_id.clone(),
+                parent.job_id.clone(),
+                serde_json::json!({}),
+            )
+        });
+    state.child_dispatches.push(ChildDispatch::submitted(
+        child_run_id.to_string(),
+        child_job_id.to_string(),
+        "invoke_and_wait".into(),
+        true,
+        true,
+        Utc::now(),
+    ));
+    store
+        .write_run_state(&parent.run_id, &state)
+        .expect("link dispatch");
+}
+
+/// Take one admission all the way to a queued, bound leaf.
+fn admit_queued_leaf(
+    store: &SqliteJobRunStore,
+    destination: &crate::contracts::PullDestination,
+    request: &crate::contracts::AdmissionRequest,
+    ceiling: usize,
+) -> Option<String> {
+    use crate::contracts::LocalPullMutation as M;
+    store
+        .allocate_pull_request(destination, request, ceiling)
+        .expect("allocate")?;
+    let mut receipt = pull_receipt(request);
+    if let Some(claim) = receipt.claim.as_mut() {
+        claim.claim_id = format!("claim-{}", request.request_id);
+        claim.task_id = format!("task-{}", request.request_id);
+    }
+    if let Some(task) = receipt.task.as_mut() {
+        task.id = format!("task-{}", request.request_id);
+    }
+    store
+        .mutate_local_pull(
+            destination,
+            &request.request_id,
+            &M::Receive(Box::new(receipt)),
+        )
+        .expect("receive");
+    Some(
+        store
+            .mutate_local_pull(destination, &request.request_id, &M::CreateLeaf)
+            .expect("create leaf")
+            .leaf_run_id
+            .expect("leaf run"),
+    )
+}
+
+/// [ORB-12617] Legacy and claimed admission share one ceiling.
+///
+/// The transitions the mixed drain has to get right are the two ends of a
+/// wrapper's life: a wrapper whose lineage reaches a queued *claimed* leaf is
+/// that leaf, not a second occupant, and the slot comes back when the claim
+/// settles — not when the leaf goes terminal, because an unsettled terminal
+/// leaf is still work the owner is holding a reservation for.
+#[test]
+fn mixed_wrapper_and_claimed_leaf_share_one_slot_until_the_claim_settles() {
+    if isolated_pull_test(
+        "driver::sqlite::job_run_store::tests::backend::mixed_wrapper_and_claimed_leaf_share_one_slot_until_the_claim_settles",
+    ) {
+        return;
+    }
+    use crate::contracts::{ClaimEvidence, ClaimMutation, LocalPullMutation as M};
+    let (_temp, store, destination, request) = pull_fixture();
+
+    let leaf = admit_queued_leaf(&store, &destination, &request, 4).expect("claimed leaf");
+    let occupancy = store.drain_leaf_occupancy().expect("occupancy");
+    assert_eq!(occupancy.occupied, 1);
+    assert_eq!(occupancy.for_pipeline("task_claimed_local_pipeline"), 1);
+
+    // wrapper -> gate -> that same queued claimed leaf. Three live runs, one
+    // piece of work, one slot.
+    let wrapper = store
+        .insert_job_run("task_auto_pipeline", 1, Utc::now(), None, None)
+        .expect("wrapper");
+    let gate = store
+        .insert_job_run("task_gate_pipeline", 1, Utc::now(), None, None)
+        .expect("gate");
+    link_dispatch(&store, &wrapper, &gate.run_id, &gate.job_id);
+    link_dispatch(&store, &gate, &leaf, "task_claimed_local_pipeline");
+    let occupancy = store.drain_leaf_occupancy().expect("occupancy");
+    assert_eq!(
+        occupancy.occupied, 1,
+        "a wrapper is replaced by the claimed leaf beneath it, not counted beside it"
+    );
+    assert_eq!(occupancy.for_pipeline("task_claimed_local_pipeline"), 1);
+
+    // The leaf terminalizes. The claim is not settled, so the work still holds
+    // its slot — and it is still one slot, not one for the record and one for
+    // the wrapper that has lost its live descendant.
+    store
+        .mark_job_run_running(&leaf, Utc::now(), std::process::id())
+        .expect("start leaf");
+    store
+        .finalize_job_run(&leaf, JobRunState::Success, Utc::now(), None)
+        .expect("terminal leaf");
+    let occupancy = store.drain_leaf_occupancy().expect("occupancy");
+    assert_eq!(
+        occupancy.occupied, 1,
+        "a terminal but unsettled claim keeps exactly the slot it already had"
+    );
+    assert_eq!(occupancy.for_pipeline("task_claimed_local_pipeline"), 1);
+
+    // Settlement releases it. The wrapper is still live and now represents
+    // itself again, which is one slot and not zero.
+    let settlement = ClaimMutation::Fail(ClaimEvidence {
+        summary: Some("fixture settlement".into()),
+        ..Default::default()
+    });
+    store
+        .mutate_local_pull(
+            &destination,
+            &request.request_id,
+            &M::Settle(Box::new(settlement)),
+        )
+        .expect("settle");
+    store
+        .mutate_local_pull(&destination, &request.request_id, &M::Settled)
+        .expect("settled");
+    let occupancy = store.drain_leaf_occupancy().expect("occupancy");
+    assert_eq!(occupancy.occupied, 1, "the live wrapper still holds a slot");
+    assert_eq!(occupancy.for_pipeline("task_claimed_local_pipeline"), 0);
+    store
+        .mark_job_run_running(&wrapper.run_id, Utc::now(), std::process::id())
+        .expect("start wrapper");
+    store
+        .finalize_job_run(&wrapper.run_id, JobRunState::Success, Utc::now(), None)
+        .expect("finish wrapper");
+    assert_eq!(store.drain_leaf_occupancy().expect("occupancy").occupied, 0);
+}
+
+/// [ORB-12617] The per-definition `max_active_runs: 10` is enforced against the
+/// same reading, and it is *per definition*: ten claimed local leaves do not
+/// consume the claimed PR definition's allowance, and a legacy leaf running
+/// beside them is a separate definition again. What they do share is the
+/// global ceiling.
+#[test]
+fn mixed_admission_respects_the_per_pipeline_maximum_and_the_shared_ceiling() {
+    if isolated_pull_test(
+        "driver::sqlite::job_run_store::tests::backend::mixed_admission_respects_the_per_pipeline_maximum_and_the_shared_ceiling",
+    ) {
+        return;
+    }
+    let (_temp, store, destination, request) = pull_fixture();
+    // A legacy leaf is already running outside any wrapper.
+    store
+        .insert_job_run("task_pr_pipeline", 1, Utc::now(), None, None)
+        .expect("legacy leaf");
+    assert_eq!(
+        store.drain_leaf_occupancy().expect("occupancy").occupied,
+        1,
+        "a legacy leaf occupies the same ceiling a claimed one does"
+    );
+
+    // Ten claimed local leaves fit under a generous global ceiling.
+    for index in 0..10 {
+        let mut next = request.clone();
+        next.request_id = format!("local-{index}");
+        assert!(
+            admit_queued_leaf(&store, &destination, &next, 64).is_some(),
+            "claimed local leaf {index} is within the definition's allowance"
+        );
+    }
+    let occupancy = store.drain_leaf_occupancy().expect("occupancy");
+    assert_eq!(occupancy.occupied, 11);
+    assert_eq!(occupancy.for_pipeline("task_claimed_local_pipeline"), 10);
+    assert_eq!(occupancy.for_pipeline("task_pr_pipeline"), 1);
+
+    // The eleventh is refused by the definition's own maximum, with the
+    // global ceiling nowhere near reached.
+    let mut eleventh = request.clone();
+    eleventh.request_id = "local-10".into();
+    assert!(
+        store
+            .allocate_pull_request(&destination, &eleventh, 64)
+            .expect("allocate")
+            .is_none(),
+        "the eleventh claimed local leaf exceeds that definition's max_active_runs"
+    );
+
+    // A different definition has its own allowance, and takes a shared slot.
+    let mut pr = request.clone();
+    pr.request_id = "pr-0".into();
+    pr.ship.mode = "pr".into();
+    assert!(
+        admit_queued_leaf(&store, &destination, &pr, 64).is_some(),
+        "the claimed PR definition has its own allowance"
+    );
+    assert_eq!(
+        store.drain_leaf_occupancy().expect("occupancy").occupied,
+        12
+    );
+
+    // ...but not its own ceiling: at the shared ceiling nothing is admitted,
+    // whichever definition asks.
+    let mut refused = request.clone();
+    refused.request_id = "pr-1".into();
+    refused.ship.mode = "pr".into();
+    assert!(
+        store
+            .allocate_pull_request(&destination, &refused, 12)
+            .expect("allocate")
+            .is_none(),
+        "the shared ceiling is shared: legacy and claimed leaves both count"
+    );
+}
+
+/// [ORB-12617] An admission that has been requested but has no run yet is
+/// capacity nothing else can see. It must hold a slot from the moment it is
+/// durable, or a crash between request and leaf creation would let the next
+/// pass over-admit.
+#[test]
+fn an_unrepresented_pending_admission_holds_a_slot_of_its_own() {
+    if isolated_pull_test(
+        "driver::sqlite::job_run_store::tests::backend::an_unrepresented_pending_admission_holds_a_slot_of_its_own",
+    ) {
+        return;
+    }
+    let (_temp, store, destination, request) = pull_fixture();
+    store
+        .allocate_pull_request(&destination, &request, 2)
+        .expect("allocate")
+        .expect("admitted");
+    let occupancy = store.drain_leaf_occupancy().expect("occupancy");
+    assert_eq!(occupancy.occupied, 1);
+    assert_eq!(
+        occupancy.for_pipeline("task_claimed_local_pipeline"),
+        1,
+        "a request with no run yet still counts against its definition"
+    );
+    let mut second = request.clone();
+    second.request_id = "two".into();
+    store
+        .allocate_pull_request(&destination, &second, 2)
+        .expect("allocate")
+        .expect("second slot");
+    assert_eq!(store.drain_leaf_occupancy().expect("occupancy").occupied, 2);
+    let mut third = request.clone();
+    third.request_id = "three".into();
+    assert!(
+        store
+            .allocate_pull_request(&destination, &third, 2)
+            .expect("allocate")
+            .is_none(),
+        "two unrepresented admissions fill a ceiling of two"
+    );
+}
+
+/// [ORB-12617] A workspace that has never pulled must not grow pull schema
+/// merely because the legacy drain asked how full it is.
+#[test]
+fn reading_occupancy_creates_no_pull_schema() {
+    let store = SqliteJobRunStore::new(Store::open_in_memory().expect("store"), "ws");
+    store
+        .insert_job_run("task_local_pipeline", 1, Utc::now(), None, None)
+        .expect("legacy leaf");
+    let occupancy = store.drain_leaf_occupancy().expect("occupancy");
+    assert_eq!(occupancy.occupied, 1);
+    assert_eq!(occupancy.for_pipeline("task_local_pipeline"), 1);
+    assert!(
+        store
+            .local_pull_for_run("missing")
+            .expect("lookup")
+            .is_none(),
+        "the feature schema is still absent, so the run lookup short-circuits"
+    );
+}
+
 #[test]
 fn local_pull_idle_is_permanent_and_follower_local_is_refused() {
     if isolated_pull_test(

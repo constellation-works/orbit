@@ -93,6 +93,9 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     ) -> Result<Vec<crate::contracts::LocalPullAdmission>, OrbitError> {
         super::pull::list(&self.store, &self.workspace_id)
     }
+    fn drain_leaf_occupancy(&self) -> Result<crate::contracts::DrainLeafOccupancy, OrbitError> {
+        super::pull::drain_occupancy(&self.store, &self.workspace_id)
+    }
     fn mutate_local_pull(
         &self,
         destination: &crate::contracts::PullDestination,

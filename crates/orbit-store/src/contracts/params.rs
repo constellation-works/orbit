@@ -483,6 +483,35 @@ pub enum LocalPullPhase {
     Idle,
 }
 
+/// How much of a drain's leaf capacity is spoken for, across both admission
+/// paths [ORB-12617].
+///
+/// Legacy `task_auto_pipeline` wrappers, the leaf definitions they dispatch,
+/// the claimed leaf definitions a pulled claim binds, and pending pull
+/// admissions that have no live run yet all compete for the same configured
+/// ceiling. Counting them in one place is what keeps a wrapper and the leaf it
+/// dispatched from consuming two slots, and what stops a pending admission
+/// from consuming none.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DrainLeafOccupancy {
+    /// Distinct occupied slots. A wrapper is replaced by its live leaf
+    /// descendants rather than counted beside them, and a terminal leaf keeps
+    /// its slot until its claim settles.
+    pub occupied: usize,
+    /// Occupancy per leaf job definition, so each definition's own
+    /// `max_active_runs` can be checked against the same reading. Includes
+    /// pending admissions no live run represents yet.
+    pub per_pipeline: std::collections::BTreeMap<String, usize>,
+}
+
+impl DrainLeafOccupancy {
+    /// Live runs and pending admissions of one leaf definition.
+    #[must_use]
+    pub fn for_pipeline(&self, job_id: &str) -> usize {
+        self.per_pipeline.get(job_id).copied().unwrap_or(0)
+    }
+}
+
 /// Immutable request and binding with a monotone local execution checkpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalPullAdmission {

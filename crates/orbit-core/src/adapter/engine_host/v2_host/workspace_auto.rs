@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
+use orbit_store::contracts::DrainLeafOccupancy;
 use orbit_types::task::{TaskStatus, unmet_task_dependencies_with_index};
 use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit, OperationAdmission};
 use serde_json::{Value, json};
@@ -136,12 +137,19 @@ pub(super) fn classify_workspace_auto_tasks(
         .map_or(max_active_leaf_runs, |operation| {
             max_active_leaf_runs.min(u64::from(operation.leaf_ceiling))
         });
+    // [ORB-12617] Slots are shared with pull-mode admission, so the occupancy
+    // that decides this wave is the store's one reading of both paths — live
+    // wrappers, every leaf definition they or a claim bind, and pending
+    // admissions no run represents yet — not this classifier's own wrapper
+    // count.
+    let occupancy = shared_leaf_occupancy(runtime)
+        .map_err(|error| action_failed(action, format!("read shared leaf occupancy: {error}")))?;
     let free_slots = if admissions_stopped || !operation_open {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
             .unwrap_or(usize::MAX)
-            .saturating_sub(live_leaves.len())
+            .saturating_sub(occupancy.occupied)
     };
 
     let pools = runtime
@@ -224,7 +232,9 @@ pub(super) fn classify_workspace_auto_tasks(
         "deferred_conflicts": selection.deferred_json(),
         "candidate_pool_size": examined.len(),
         "candidate_pool_truncated": candidate_pool_truncated,
-        "active_leaf_runs": live_leaves.len(),
+        "active_leaf_runs": occupancy.occupied,
+        "wrapper_leaf_runs": live_leaves.len(),
+        "leaf_occupancy_by_pipeline": occupancy.per_pipeline,
         "free_slots": free_slots,
         "max_active_leaf_runs": max_active_leaf_runs,
         "submitted_max_active_leaf_runs": submitted_max_active_leaf_runs,
@@ -374,12 +384,13 @@ pub fn explain_workspace_auto_readiness(
         .map_or(max_active_leaf_runs, |operation| {
             max_active_leaf_runs.min(u64::from(operation.leaf_ceiling))
         });
+    let shared_occupancy = shared_leaf_occupancy(runtime)?;
     let free_slots = if admissions_stopped || grant_closed {
         0
     } else {
         usize::try_from(max_active_leaf_runs)
             .unwrap_or(usize::MAX)
-            .saturating_sub(live_leaves.len())
+            .saturating_sub(shared_occupancy.occupied)
     };
     let pending = snapshot
         .admissible_leaves
@@ -584,7 +595,13 @@ pub fn explain_workspace_auto_readiness(
         },
         "capacity": {
             "max_active_leaf_runs": max_active_leaf_runs,
-            "active_leaf_runs": live_leaves.len(),
+            "active_leaf_runs": shared_occupancy.occupied,
+            // [ORB-12617] The wrapper subset of that occupancy, and what the
+            // rest of it is: a legacy drain reporting no free slots with no
+            // wrapper running is saturated by claimed leaves, and the
+            // breakdown is the only thing that says so.
+            "wrapper_leaf_runs": live_leaves.len(),
+            "leaf_occupancy_by_pipeline": shared_occupancy.per_pipeline,
             "free_slots": free_slots,
             // [ORB-11973] The same occupancy, broken down by what each slot is
             // doing. A drain with every slot parked in `task_gate_pipeline` is
@@ -811,6 +828,17 @@ fn live_leaf_runs(runtime: &OrbitRuntime, action: &str) -> Result<Vec<LiveLeafRu
         })?;
     read_live_leaf_runs(runtime)
         .map_err(|error| action_failed(action, format!("list live {LEAF_JOB_NAME} runs: {error}")))
+}
+
+/// The one capacity reading legacy and pull admission share [ORB-12617].
+///
+/// Wrapper runs alone are no longer the whole story: a pulled claim binds a
+/// `task_claimed_*_pipeline` run with no wrapper above it, and an admission
+/// that has been requested but has no run yet still holds a slot. Counting
+/// those here — from the same store transaction the pull allocator checks — is
+/// what stops the two paths from each admitting a full ceiling.
+fn shared_leaf_occupancy(runtime: &OrbitRuntime) -> Result<DrainLeafOccupancy, OrbitError> {
+    runtime.stores().jobs().drain_leaf_occupancy()
 }
 
 fn read_live_leaf_runs(runtime: &OrbitRuntime) -> Result<Vec<LiveLeafRun>, OrbitError> {

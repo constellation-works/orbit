@@ -939,6 +939,128 @@ fn leaves_are_offered_only_up_to_the_free_leaf_run_slots() {
     assert_eq!(partial["pending_backlog"], 3);
 }
 
+/// [ORB-12617] The legacy drain allocates against the *shared* ceiling.
+///
+/// A pulled claim binds a `task_claimed_*_pipeline` run with no wrapper above
+/// it, and an admission that has been requested but never reached a run holds
+/// capacity nothing else can see. Counting only `task_auto_pipeline` runs here
+/// would let the two admission paths each fill the whole ceiling, so the
+/// classifier reads the same occupancy the pull allocator commits against.
+#[test]
+fn claimed_leaves_and_pending_admissions_consume_the_legacy_drain_ceiling() {
+    let (_root, runtime, _repo_root) = runtime_with_workspace_layout();
+    let seeded: Vec<_> = (0..4)
+        .map(|index| {
+            seed_list_backlog_task(
+                &runtime,
+                &format!("Loose {index}"),
+                TaskStatus::Backlog,
+                TaskPriority::Medium,
+                TaskType::Chore,
+                None,
+                vec![],
+            )
+        })
+        .collect();
+    let jobs = runtime.stores().jobs();
+
+    // A claimed leaf nothing dispatched: no wrapper, but a real occupant.
+    jobs.insert_job_run("task_claimed_local_pipeline", 1, Utc::now(), None, None)
+        .expect("claimed leaf");
+    let mixed = classify_with(&runtime, json!({ "max_active_leaf_runs": 3 }));
+    assert_eq!(mixed["active_leaf_runs"], 1);
+    assert_eq!(
+        mixed["wrapper_leaf_runs"], 0,
+        "the occupant is not a wrapper, and the breakdown says so"
+    );
+    assert_eq!(
+        mixed["leaf_occupancy_by_pipeline"]["task_claimed_local_pipeline"],
+        1
+    );
+    assert_eq!(mixed["free_slots"], 2);
+    assert_eq!(
+        mixed["loose_task_ids"],
+        json!([seeded[0].id, seeded[1].id]),
+        "a claimed leaf costs the legacy drain a slot"
+    );
+
+    // A live wrapper takes the second slot; readiness reads the same numbers.
+    seed_live_leaf_run(&runtime, &[seeded[0].id.as_str()]);
+    let both = classify_with(&runtime, json!({ "max_active_leaf_runs": 3 }));
+    assert_eq!(both["active_leaf_runs"], 2);
+    assert_eq!(both["wrapper_leaf_runs"], 1);
+    assert_eq!(both["free_slots"], 1);
+    let explained = readiness(&runtime, &[], Some(3));
+    assert_eq!(explained["capacity"]["active_leaf_runs"], 2);
+    assert_eq!(explained["capacity"]["wrapper_leaf_runs"], 1);
+    assert_eq!(explained["capacity"]["free_slots"], 1);
+    assert_eq!(
+        explained["capacity"]["leaf_occupancy_by_pipeline"]["task_claimed_local_pipeline"],
+        1
+    );
+
+    // The last slot goes to an admission that has no run at all yet.
+    let parent = jobs
+        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
+        .expect("drain run");
+    jobs.write_run_state(
+        &parent.run_id,
+        &orbit_types::workflow::PipelineState::new(
+            parent.run_id.clone(),
+            parent.job_id.clone(),
+            json!({}),
+        ),
+    )
+    .expect("drain state");
+    jobs.allocate_pull_request(
+        &orbit_store::contracts::PullDestination {
+            owner_machine_id: "owner".into(),
+            owner_workspace_id: runtime.workspace_id().expect("workspace"),
+            selector: "owner/ws".into(),
+            execution_machine_id: "owner".into(),
+        },
+        &orbit_store::contracts::AdmissionRequest {
+            request_id: "pending".into(),
+            caller_version: "1".into(),
+            caller_schema: 1,
+            caller_review_policy: "none".into(),
+            run_context: orbit_store::contracts::AdmissionRunContext {
+                run_id: parent.run_id,
+                job_name: "workspace_auto_pipeline".into(),
+                host_id: None,
+            },
+            ship: orbit_store::contracts::AdmissionShipContract {
+                mode: "local".into(),
+                base_branch: "main".into(),
+                landing_branch: "main".into(),
+                review_policy: "none".into(),
+                completion: "review".into(),
+                authorization_reference: None,
+            },
+        },
+        3,
+    )
+    .expect("allocate")
+    .expect("the third slot was free");
+
+    let saturated = classify_with(&runtime, json!({ "max_active_leaf_runs": 3 }));
+    assert_eq!(saturated["active_leaf_runs"], 3);
+    assert_eq!(saturated["free_slots"], 0);
+    assert_eq!(
+        saturated["leaf_occupancy_by_pipeline"]["task_claimed_local_pipeline"], 2,
+        "the pending admission counts against its definition as well as the ceiling"
+    );
+    assert_eq!(saturated["loose_task_ids"], json!([]));
+    assert_eq!(
+        saturated["idle"], true,
+        "a drain saturated by claimed work admits nothing this pass"
+    );
+    assert!(
+        saturated["pending_backlog"].as_u64().expect("pending") > 0,
+        "saturation is not an empty backlog"
+    );
+}
+
 /// A leaf handed to a detached child stays `backlog` until that child moves it
 /// to `in-progress`. Without reading the child's own input, the very next
 /// iteration would hand the same task to a second child.

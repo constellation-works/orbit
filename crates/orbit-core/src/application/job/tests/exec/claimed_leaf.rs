@@ -12,7 +12,7 @@
 //! launcher's real binding derivation is still what produces the runtime the
 //! pipeline runs under.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -23,9 +23,10 @@ use orbit_types::workflow::PipelineState;
 use orbit_types::workflow::handoff::{HandoffDelivery, HandoffValidationLog};
 use serde_json::json;
 
+use super::review_gate::git_stdout;
 use super::{git_in, resolved_job, seed_default_catalogs, try_execute_job};
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::v2_host::pull::{PullDrain, PullLauncher};
+use crate::adapter::engine_host::v2_host::pull::{PullDrain, PullLauncher, PullPeer};
 use crate::adapter::engine_host::v2_host::pull_adapters::{LeafPullLauncher, OwnerPullPeer};
 use crate::application::distributed::owner_binary_version;
 use crate::application::task::TaskAddParams;
@@ -33,6 +34,8 @@ use crate::application::task::TaskAddParams;
 const BASE_BRANCH: &str = "agent-main";
 const MACHINE: &str = "owner-machine";
 const VALIDATION: &str = "echo claimed-candidate-validated";
+/// The number the fixture `gh` reports for every pull request it creates.
+const FIXTURE_PR_NUMBER: u64 = 4242;
 
 fn workspace_config() -> String {
     format!(
@@ -64,6 +67,30 @@ fn init_remoteless_repo(repo_root: &Path) {
         String::from_utf8_lossy(&remotes.stdout).trim().is_empty(),
         "the fixture checkout must have no push remote"
     );
+}
+
+/// A checkout shaped like a follower's: a real repository with a real
+/// `origin` it can publish to. The remote is a local bare repository, so the
+/// push half of PR delivery is genuine Git rather than a stub.
+fn init_published_repo(repo_root: &Path, origin: &Path) {
+    std::fs::create_dir_all(origin).expect("origin dir");
+    git_in(origin, &["init", "--bare", "--initial-branch", BASE_BRANCH]);
+    git_in(repo_root, &["init"]);
+    git_in(repo_root, &["config", "user.name", "Orbit Test"]);
+    git_in(
+        repo_root,
+        &["config", "user.email", "orbit-test@example.invalid"],
+    );
+    git_in(
+        repo_root,
+        &["remote", "add", "origin", &origin.to_string_lossy()],
+    );
+    std::fs::create_dir_all(repo_root.join("src")).expect("src");
+    std::fs::write(repo_root.join("src/lib.rs"), "// base\n").expect("seed source");
+    git_in(repo_root, &["add", "."]);
+    git_in(repo_root, &["commit", "-m", "initial"]);
+    git_in(repo_root, &["checkout", "-b", BASE_BRANCH]);
+    git_in(repo_root, &["push", "-u", "origin", BASE_BRANCH]);
 }
 
 /// Replace the seeded agent loop with a deterministic local command, so the
@@ -128,6 +155,10 @@ struct InProcessLauncher<'a> {
     real: LeafPullLauncher<'a>,
     runtime: &'a OrbitRuntime,
     repo_root: PathBuf,
+    /// The leaf definition the admission selected. Asserted against the run's
+    /// own `job_id` so the fixture cannot execute a definition the claim did
+    /// not choose.
+    job_name: &'static str,
     launched: RefCell<Vec<String>>,
     outcome: RefCell<Option<Result<bool, String>>>,
 }
@@ -139,16 +170,16 @@ impl PullLauncher for InProcessLauncher<'_> {
         self.launched
             .borrow_mut()
             .push(binding.bound_run_id.clone());
-        let job = resolved_job(self.runtime, "task_claimed_local_pipeline");
-        let input = self
+        let run = self
             .runtime
             .stores()
             .jobs()
             .get_job_run(&binding.bound_run_id)
             .expect("leaf run")
-            .expect("leaf run row")
-            .input
-            .expect("leaf run input");
+            .expect("leaf run row");
+        assert_eq!(run.job_id, self.job_name);
+        let job = resolved_job(self.runtime, self.job_name);
+        let input = run.input.expect("leaf run input");
         let outcome = try_execute_job(
             self.runtime,
             &self.repo_root,
@@ -220,6 +251,18 @@ fn owner_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf, PathBuf) {
     (root, runtime, repo_root, global_root)
 }
 
+/// The same owner, on a checkout that has somewhere to publish.
+fn publishing_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf, PathBuf) {
+    let (root, runtime, repo_root, global_root) =
+        super::test_runtime_with_workspace_config(&workspace_config());
+    seed_default_catalogs(&global_root);
+    stub_agent_implement(&global_root);
+    init_published_repo(&repo_root, &root.path().join("origin.git"));
+    seed_local_shell_executor(&runtime);
+    let runtime = runtime.with_automation_machine_identity(Some(MACHINE.to_string()));
+    (root, runtime, repo_root, global_root)
+}
+
 fn seed_claimable_task(runtime: &OrbitRuntime) -> String {
     runtime
         .add_task(TaskAddParams {
@@ -254,6 +297,7 @@ fn owner_local_claim_executes_validates_and_hands_off_without_merging() {
         real: LeafPullLauncher { runtime: &runtime },
         runtime: &runtime,
         repo_root: repo_root.clone(),
+        job_name: "task_claimed_local_pipeline",
         launched: RefCell::new(Vec::new()),
         outcome: RefCell::new(None),
     };
@@ -364,7 +408,6 @@ fn owner_local_claim_executes_validates_and_hands_off_without_merging() {
     // Settlement is idempotent against the real owner: a disconnected drain
     // that retries the same persisted settlement replays the recorded
     // acceptance instead of creating a second handoff or a second transition.
-    use crate::adapter::engine_host::v2_host::pull::PullPeer;
     peer.settle(&record).expect("replayed settlement");
     assert_eq!(
         runtime.get_task(&task_id).expect("task").status,
@@ -390,7 +433,6 @@ fn owner_side_acceptance_of_a_published_pull_request_is_refused_for_now() {
     ) {
         return;
     }
-    use crate::adapter::engine_host::v2_host::pull::PullPeer;
     let (_root, runtime, _repo_root, _global) = owner_runtime();
     let task_id = seed_claimable_task(&runtime);
     let drain = drain_run(&runtime);
@@ -560,12 +602,597 @@ fn a_hand_submitted_claimed_definition_is_refused_before_it_does_any_work() {
     );
 }
 
+/// Where a fault injection severs the pull protocol [ORB-12617].
+///
+/// Each cut is the *response* half of a step whose owner-side effect already
+/// committed, except [`Cut::AfterCreate`], which is the executor dying with a
+/// created leaf it never announced. That asymmetry is the point: the caller
+/// cannot tell a lost reply from a call that never landed, so every cut must
+/// be replayable without producing a second claim or a second leaf.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Cut {
+    /// The owner admitted and committed the claim; the receipt never arrived.
+    Request,
+    /// The leaf run exists locally; the process died before it called bind.
+    AfterCreate,
+    /// The owner recorded the binding; the acknowledgment never arrived.
+    Bind,
+    /// The owner is unreachable when the settlement is delivered.
+    Settle,
+}
+
+/// The real [`OwnerPullPeer`], with one severable response.
+struct CuttingPeer<'a> {
+    owner: OwnerPullPeer<'a>,
+    cut: RefCell<Option<Cut>>,
+    requests: Cell<usize>,
+    binds: Cell<usize>,
+    settlements: Cell<usize>,
+}
+
+impl<'a> CuttingPeer<'a> {
+    fn new(runtime: &'a OrbitRuntime) -> Self {
+        Self {
+            owner: OwnerPullPeer { runtime },
+            cut: RefCell::new(None),
+            requests: Cell::new(0),
+            binds: Cell::new(0),
+            settlements: Cell::new(0),
+        }
+    }
+
+    /// Arm the next cut. Consumed the first time its step runs, so the retry
+    /// after it is an ordinary call.
+    fn cut(&self, cut: Cut) {
+        *self.cut.borrow_mut() = Some(cut);
+    }
+
+    fn take(&self, cut: Cut) -> bool {
+        let mut armed = self.cut.borrow_mut();
+        if *armed == Some(cut) {
+            *armed = None;
+            return true;
+        }
+        false
+    }
+}
+
+impl PullPeer for CuttingPeer<'_> {
+    fn request(
+        &self,
+        destination: &PullDestination,
+        request: &AdmissionRequest,
+    ) -> Result<AdmissionReceipt, OrbitError> {
+        self.requests.set(self.requests.get() + 1);
+        // The owner commits first; only the reply is lost.
+        let receipt = self.owner.request(destination, request)?;
+        if self.take(Cut::Request) {
+            return Err(OrbitError::Execution("fixture severed the receipt".into()));
+        }
+        Ok(receipt)
+    }
+
+    fn bind(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        if self.take(Cut::AfterCreate) {
+            return Err(OrbitError::Execution(
+                "fixture killed the executor before it announced its leaf".into(),
+            ));
+        }
+        self.binds.set(self.binds.get() + 1);
+        self.owner.bind(admission)?;
+        if self.take(Cut::Bind) {
+            return Err(OrbitError::Execution(
+                "fixture severed the bind acknowledgment".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn settle(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        if self.take(Cut::Settle) {
+            return Err(OrbitError::Execution(
+                "fixture disconnected the owner".into(),
+            ));
+        }
+        self.owner.settle(admission)?;
+        self.settlements.set(self.settlements.get() + 1);
+        Ok(())
+    }
+}
+
+/// Derives the real binding the way [`LeafPullLauncher`] does, and stops there.
+///
+/// Enough to prove the launch seam was reached with a usable bound runtime,
+/// without spending a whole pipeline execution on each of four cuts. The
+/// end-to-end execution is
+/// [`owner_local_claim_executes_validates_and_hands_off_without_merging`]'s.
+struct BindingOnlyLauncher<'a> {
+    real: LeafPullLauncher<'a>,
+    launched: RefCell<Vec<String>>,
+    fail: Cell<bool>,
+}
+
+impl PullLauncher for BindingOnlyLauncher<'_> {
+    fn launch(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        let bound = self.real.bound_runtime(admission)?;
+        let binding = bound.worker_invocation().expect("bound").clone();
+        self.launched.borrow_mut().push(binding.bound_run_id);
+        if self.fail.get() {
+            return Err(OrbitError::Execution("fixture failed the launch".into()));
+        }
+        Ok(())
+    }
+}
+
+fn claimed_runs(runtime: &OrbitRuntime) -> Vec<String> {
+    runtime
+        .stores()
+        .jobs()
+        .list_job_runs("task_claimed_local_pipeline")
+        .expect("claimed runs")
+        .into_iter()
+        .map(|run| run.run_id)
+        .collect()
+}
+
+/// [ORB-12617] Every request/create/bind/launch cut, against the real owner
+/// and the real launcher binding.
+///
+/// The invariant under all four is the same one the protocol exists for: one
+/// claim, one leaf, and no state the next pass cannot resume from. The claim
+/// is admitted once no matter how many times the request is replayed, the leaf
+/// is created once no matter how many times the executor restarts before
+/// announcing it, and the binding is idempotent against the owner's claim
+/// journal rather than against the caller's memory of it.
+#[test]
+fn fault_injection_at_every_cut_yields_at_most_one_leaf_per_claim() {
+    if isolated_claimed_test(
+        "application::job::tests::exec::claimed_leaf::fault_injection_at_every_cut_yields_at_most_one_leaf_per_claim",
+    ) {
+        return;
+    }
+    let (_root, runtime, _repo_root, _global) = owner_runtime();
+    let task_id = seed_claimable_task(&runtime);
+    let drain = drain_run(&runtime);
+    let destination = destination(&runtime, MACHINE);
+    let template = admission_request(&runtime, &drain, "local");
+    let peer = CuttingPeer::new(&runtime);
+    let launcher = BindingOnlyLauncher {
+        real: LeafPullLauncher { runtime: &runtime },
+        launched: RefCell::new(Vec::new()),
+        fail: Cell::new(false),
+    };
+    let jobs = runtime.stores().jobs();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+
+    // Cut 1 — the owner admitted the claim and the receipt was lost.
+    peer.cut(Cut::Request);
+    assert!(drain.refill(&destination, &template, 1).is_err());
+    let record = jobs.local_pull_admissions().expect("records").remove(0);
+    assert_eq!(record.phase, LocalPullPhase::Requested);
+    assert!(record.leaf_run_id.is_none());
+    assert!(claimed_runs(&runtime).is_empty());
+
+    // Cut 2 — the receipt is replayed onto the same request and the leaf is
+    // created, then the executor dies before it announces it.
+    peer.cut(Cut::AfterCreate);
+    assert!(drain.refill(&destination, &template, 1).is_err());
+    let record = jobs.local_pull_admissions().expect("records").remove(0);
+    assert_eq!(record.phase, LocalPullPhase::Created);
+    let leaf = record.leaf_run_id.clone().expect("created leaf");
+    assert_eq!(claimed_runs(&runtime), vec![leaf.clone()]);
+    assert_eq!(peer.binds.get(), 0);
+
+    // Cut 3 — the owner records the binding; the acknowledgment is lost. The
+    // retry binds the *same* run against the owner's journal.
+    peer.cut(Cut::Bind);
+    assert!(drain.refill(&destination, &template, 1).is_err());
+    assert_eq!(
+        jobs.local_pull_admissions().expect("records")[0].phase,
+        LocalPullPhase::Created,
+        "an unacknowledged bind is not a binding the caller may assume"
+    );
+    assert!(launcher.launched.borrow().is_empty());
+
+    // Cut 4 — binding replays, the launch is reached and fails, and the owner
+    // is unreachable for the settlement it produced.
+    launcher.fail.set(true);
+    peer.cut(Cut::Settle);
+    assert!(drain.refill(&destination, &template, 1).is_err());
+    let record = jobs.local_pull_admissions().expect("records").remove(0);
+    assert_eq!(
+        record.phase,
+        LocalPullPhase::Settling,
+        "a failed launch leaves one immutable settlement the next pass retries"
+    );
+    assert!(matches!(record.settlement, Some(ClaimMutation::Fail(_))));
+    assert_eq!(record.leaf_run_id.as_deref(), Some(leaf.as_str()));
+    assert_eq!(
+        launcher.launched.borrow().as_slice(),
+        std::slice::from_ref(&leaf)
+    );
+    assert_eq!(peer.binds.get(), 2, "the bind was retried, not skipped");
+
+    // The retry settles idempotently. Nothing anywhere created a second claim
+    // or a second leaf across four interruptions.
+    drain
+        .refill(&destination, &template, 0)
+        .expect("settlement retry");
+    assert_eq!(
+        jobs.local_pull_admissions().expect("records")[0].phase,
+        LocalPullPhase::Settled
+    );
+    assert_eq!(peer.settlements.get(), 1);
+    assert_eq!(claimed_runs(&runtime), vec![leaf]);
+    assert_eq!(
+        jobs.local_pull_admissions().expect("records").len(),
+        1,
+        "one request survived every cut"
+    );
+    let claims = runtime.inspect_execution_claims().expect("claims");
+    assert_eq!(claims.len(), 1, "one claim, however often it was requested");
+    assert_eq!(claims[0].claim.task_id, task_id);
+    assert_eq!(claims[0].claim.phase, ExecutionClaimPhase::Failed);
+}
+
+/// [ORB-12617] An execution that may already have started is not resumable.
+///
+/// The launch-intent record is committed before the process is spawned, so a
+/// caller that finds one cannot know whether a worker is live. Every generic
+/// path must refuse it, and — just as importantly — nothing may quietly settle
+/// or revoke it on the assumption that it failed.
+#[test]
+fn an_uncertain_launch_refuses_generic_resume_and_waits_for_deliberate_recovery() {
+    if isolated_claimed_test(
+        "application::job::tests::exec::claimed_leaf::an_uncertain_launch_refuses_generic_resume_and_waits_for_deliberate_recovery",
+    ) {
+        return;
+    }
+    let (_root, runtime, _repo_root, _global) = owner_runtime();
+    let task_id = seed_claimable_task(&runtime);
+    let drain = drain_run(&runtime);
+    let destination = destination(&runtime, MACHINE);
+    let template = admission_request(&runtime, &drain, "local");
+    let peer = CuttingPeer::new(&runtime);
+    let launcher = KillingLauncher {
+        real: LeafPullLauncher { runtime: &runtime },
+    };
+    let jobs = runtime.stores().jobs();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+
+    // The launch intent commits, then the process dies mid-spawn. Unwinding
+    // out of `launch` is this fixture's kill: the drain never reaches its
+    // acknowledgment, so the durable record stops at the one checkpoint that
+    // means "a worker may be running right now".
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let killed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drain.refill(&destination, &template, 1)
+    }));
+    std::panic::set_hook(previous);
+    assert!(killed.is_err(), "the fixture kills the launching process");
+
+    let record = jobs.local_pull_admissions().expect("records").remove(0);
+    assert_eq!(record.phase, LocalPullPhase::Launching);
+    assert!(record.settlement.is_none());
+    let leaf = record.leaf_run_id.clone().expect("leaf");
+
+    // A later pass finds the uncertainty and refuses to guess either way: it
+    // neither relaunches nor settles.
+    let error = drain
+        .refill(&destination, &template, 1)
+        .expect_err("an uncertain launch is not resumable");
+    assert!(
+        error
+            .to_string()
+            .contains("deliberate recovery is required"),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("never generic resume"),
+        "{error}"
+    );
+
+    // Generic resume and generic execution both refuse the bound leaf.
+    let error = runtime
+        .submit_resume_run(&leaf, None, None)
+        .expect_err("generic resume is refused");
+    assert!(
+        error.to_string().contains("deliberately recover"),
+        "{error}"
+    );
+    let error = runtime
+        .execute_pipeline_run_worker(&leaf)
+        .expect_err("generic execution is refused");
+    assert!(
+        error.to_string().contains("handoff execution adapter"),
+        "{error}"
+    );
+
+    // Nothing settled, nothing revoked, and the leaf was never re-created on
+    // a guess that the first attempt died.
+    let record = jobs.local_pull_admissions().expect("records").remove(0);
+    assert_eq!(record.phase, LocalPullPhase::Launching);
+    assert!(record.settlement.is_none());
+    assert_eq!(claimed_runs(&runtime), vec![leaf.clone()]);
+    assert_eq!(
+        jobs.get_job_run(&leaf).expect("leaf").expect("run").state,
+        orbit_types::workflow::JobRunState::Pending
+    );
+    let claims = runtime.inspect_execution_claims().expect("claims");
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].claim.task_id, task_id);
+    assert_eq!(
+        claims[0].claim.phase,
+        ExecutionClaimPhase::Running,
+        "an uncertain attempt keeps its authority until a human takes it away"
+    );
+}
+
+/// Unwinds out of the launch seam, after the real binding is derived — the
+/// fixture's stand-in for a process killed between the launch-intent commit
+/// and any acknowledgment of the spawn.
+struct KillingLauncher<'a> {
+    real: LeafPullLauncher<'a>,
+}
+
+impl PullLauncher for KillingLauncher<'_> {
+    fn launch(&self, admission: &LocalPullAdmission) -> Result<(), OrbitError> {
+        let _bound = self.real.bound_runtime(admission)?;
+        panic!("fixture kills the launching process");
+    }
+}
+
+/// [ORB-12617] Stopping a drain stops admission, not execution.
+///
+/// The parent's job is to decide whether more work starts. A claimed child is
+/// already carrying an owner-side reservation, so cancelling the parent must
+/// leave both the run and the claim exactly where they were — otherwise
+/// closing a drain window would strand the owner holding a footprint for work
+/// nobody is allowed to finish.
+#[test]
+fn stopping_parent_admission_leaves_a_live_claimed_child_alone() {
+    if isolated_claimed_test(
+        "application::job::tests::exec::claimed_leaf::stopping_parent_admission_leaves_a_live_claimed_child_alone",
+    ) {
+        return;
+    }
+    let (_root, runtime, _repo_root, _global) = owner_runtime();
+    seed_claimable_task(&runtime);
+    let parent = drain_run(&runtime);
+    let destination = destination(&runtime, MACHINE);
+    let template = admission_request(&runtime, &parent, "local");
+    let peer = CuttingPeer::new(&runtime);
+    let launcher = BindingOnlyLauncher {
+        real: LeafPullLauncher { runtime: &runtime },
+        launched: RefCell::new(Vec::new()),
+        fail: Cell::new(false),
+    };
+    let jobs = runtime.stores().jobs();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    drain.refill(&destination, &template, 1).expect("admit");
+    let leaf = jobs.local_pull_admissions().expect("records")[0]
+        .leaf_run_id
+        .clone()
+        .expect("leaf");
+
+    jobs.finalize_job_run(
+        &parent,
+        orbit_types::workflow::JobRunState::Cancelled,
+        chrono::Utc::now(),
+        None,
+    )
+    .expect("stop the parent drain");
+
+    let requests_before = peer.requests.get();
+    assert_eq!(
+        drain
+            .refill(&destination, &template, 10)
+            .expect("a stopped parent admits nothing"),
+        0
+    );
+    assert_eq!(
+        peer.requests.get(),
+        requests_before,
+        "a stopped parent does not even ask the owner for more work"
+    );
+    assert_eq!(
+        jobs.get_job_run(&leaf).expect("leaf").expect("run").state,
+        orbit_types::workflow::JobRunState::Pending,
+        "the child run survives its parent"
+    );
+    let claims = runtime.inspect_execution_claims().expect("claims");
+    assert_eq!(claims.len(), 1);
+    assert_eq!(
+        claims[0].claim.phase,
+        ExecutionClaimPhase::Running,
+        "stopping admission revokes nothing"
+    );
+    assert_eq!(
+        claims[0].bound_run.as_ref().map(|run| run.run_id.as_str()),
+        Some(leaf.as_str())
+    );
+}
+
+/// [ORB-12617] A published claimed PR leaf hands off, and stops there.
+///
+/// This is the executor half of a follower's delivery, run on the real
+/// `task_claimed_pr_pipeline`: a real worktree, a real commit, a real push to
+/// a real (local, bare) `origin`, a real `pr_open` against a fixture `gh`, the
+/// owner's required validation on the published candidate, and the typed
+/// handoff. Nothing merges and nothing completes: the definition contains no
+/// merge step to reach, and the durable settlement the run leaves behind is a
+/// handoff for the owner's landing consumer to act on later.
+///
+/// The destination is owner-local because that is the only destination this
+/// slice serves at all — a genuine follower destination is refused at the
+/// distributed-mutation gate rather than faked, which the tail of this test
+/// pins. The leaf definition, its steps and the handoff it produces are
+/// chosen by the owner-resolved *ship mode*, not by the executing machine, so
+/// they are the same ones a follower runs.
+#[test]
+fn a_published_pr_claim_hands_off_a_pull_request_without_merging() {
+    if isolated_claimed_test(
+        "application::job::tests::exec::claimed_leaf::a_published_pr_claim_hands_off_a_pull_request_without_merging",
+    ) {
+        return;
+    }
+    let (_root, runtime, repo_root, _global) = publishing_runtime();
+    let task_id = seed_claimable_task(&runtime);
+    let drain = drain_run(&runtime);
+    let destination = destination(&runtime, MACHINE);
+    let template = admission_request(&runtime, &drain, "pr");
+
+    let peer = OwnerPullPeer { runtime: &runtime };
+    let launcher = InProcessLauncher {
+        real: LeafPullLauncher { runtime: &runtime },
+        runtime: &runtime,
+        repo_root: repo_root.clone(),
+        job_name: "task_claimed_pr_pipeline",
+        launched: RefCell::new(Vec::new()),
+        outcome: RefCell::new(None),
+    };
+    let jobs = runtime.stores().jobs();
+    let drain = PullDrain {
+        jobs,
+        peer: &peer,
+        launcher: &launcher,
+    };
+    // The settlement is the one thing this slice cannot complete: accepting a
+    // *published* pull request needs an owner-side provider observation that
+    // is not implemented yet, so the refill ends on that refusal with the
+    // handoff already durable. The run itself must have succeeded.
+    let admitted = drain.refill(&destination, &template, 1);
+    assert_eq!(
+        launcher.outcome.borrow().clone(),
+        Some(Ok(true)),
+        "the claimed PR pipeline must run to its handoff"
+    );
+    let error = admitted.expect_err("owner acceptance of a published PR is not implemented yet");
+    assert!(
+        error.to_string().contains("not part of this slice"),
+        "{error}"
+    );
+    let leaf = launcher.launched.borrow()[0].clone();
+    assert_eq!(
+        jobs.get_job_run(&leaf).expect("leaf").expect("row").job_id,
+        "task_claimed_pr_pipeline"
+    );
+
+    // The handoff is durable, typed, and names the published pull request.
+    let record = jobs.local_pull_admissions().expect("records").remove(0);
+    assert_eq!(
+        record.phase,
+        LocalPullPhase::Settling,
+        "a handoff the owner cannot accept yet stays pending, not lost"
+    );
+    let Some(ClaimMutation::AcceptHandoff(handoff)) = record.settlement.clone() else {
+        panic!("a claimed PR leaf settles with a typed handoff: {record:?}");
+    };
+    assert_eq!(
+        handoff.candidate.delivery,
+        HandoffDelivery::PullRequest {
+            number: FIXTURE_PR_NUMBER
+        },
+        "the delivery names the pull request pr_open actually observed"
+    );
+    assert_eq!(handoff.task_id, task_id);
+    assert_eq!(handoff.validation.len(), 2, "both required commands ran");
+    assert_eq!(
+        handoff.candidate.base_branch, BASE_BRANCH,
+        "the candidate is pinned to the base it was admitted for"
+    );
+
+    // Nothing merged. The base branch is untouched on both sides, the task is
+    // not complete, and no landing authority was published.
+    let local_base = git_stdout(&repo_root, &["rev-parse", BASE_BRANCH]);
+    assert_eq!(handoff.candidate.base.commit, local_base);
+    assert_ne!(handoff.candidate.candidate.commit, local_base);
+    assert_eq!(
+        git_stdout(
+            &repo_root,
+            &["rev-parse", &format!("refs/remotes/origin/{BASE_BRANCH}")],
+        ),
+        local_base,
+        "the published branch is the candidate's; the base on origin never moved"
+    );
+    assert_ne!(
+        runtime.get_task(&task_id).expect("task").status,
+        TaskStatus::Done,
+        "a claimed leaf never completes its own task"
+    );
+    assert!(
+        runtime.landing_start_requests().expect("outbox").is_empty(),
+        "handing off is not authorizing a landing"
+    );
+
+    // And a genuine follower destination is refused rather than served.
+    let follower = PullDestination {
+        execution_machine_id: "follower-machine".into(),
+        ..destination.clone()
+    };
+    let error = peer
+        .request(&follower, &template)
+        .expect_err("this adapter serves only its own machine");
+    assert!(
+        error.to_string().contains("distributed") || error.to_string().contains("not this machine"),
+        "{error}"
+    );
+}
+
 /// Records nothing and fails the launch, so the fixture can inspect a queued
 /// but never-executed claimed leaf.
 struct RefusingLauncher;
 impl PullLauncher for RefusingLauncher {
     fn launch(&self, _admission: &LocalPullAdmission) -> Result<(), OrbitError> {
         Err(OrbitError::Execution("fixture withholds the launch".into()))
+    }
+}
+
+/// A `gh` that serves exactly the three calls `pr_open` makes, and fails
+/// loudly on anything else.
+///
+/// Installed ahead of the real one for every isolated child, so a fixture can
+/// never quietly reach a live GitHub account — and a step that starts calling
+/// some other `gh` subcommand fails instead of silently doing something real.
+fn install_fixture_gh(bin: &Path) {
+    // `pr_view`'s selector guard accepts a bare number or a github.com PR URL,
+    // so the fixture speaks that shape. Nothing here is ever contacted: every
+    // call the run makes is answered by this script.
+    let url = format!("https://github.com/orbit-fixture/repo/pull/{FIXTURE_PR_NUMBER}");
+    std::fs::create_dir_all(bin).expect("fixture bin");
+    let script = format!(
+        r#"#!/bin/sh
+case "$1 $2" in
+  "pr list") printf '[]
+' ;;
+  "pr create") printf '{url}
+' ;;
+  "pr view") printf '{{"number":{FIXTURE_PR_NUMBER},"title":"fixture","body":"fixture","headRefName":"fixture","files":[],"commits":[],"url":"{url}"}}
+' ;;
+  *) echo "fixture gh does not implement: $*" >&2; exit 1 ;;
+esac
+"#
+    );
+    let path = bin.join("gh");
+    std::fs::write(&path, script).expect("write fixture gh");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("fixture gh is executable");
     }
 }
 
@@ -577,6 +1204,16 @@ fn isolated_claimed_test(name: &str) -> bool {
         return false;
     }
     let home = tempfile::tempdir().expect("isolated home");
+    let bin = home.path().join("bin");
+    install_fixture_gh(&bin);
+    let path = match std::env::var_os("PATH") {
+        Some(inherited) => {
+            let mut entries = vec![bin.clone()];
+            entries.extend(std::env::split_paths(&inherited));
+            std::env::join_paths(entries).expect("fixture PATH")
+        }
+        None => bin.clone().into_os_string(),
+    };
     let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
     orbit_common::test_env::clear_inherited_authority(|key| {
         command.env_remove(key);
@@ -586,6 +1223,7 @@ fn isolated_claimed_test(name: &str) -> bool {
         .env(CHILD, name)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
+        .env("PATH", path)
         .output()
         .expect("isolated claimed-leaf child");
     let stdout = String::from_utf8_lossy(&output.stdout);
