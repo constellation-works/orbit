@@ -14,11 +14,11 @@ sandbox = "danger-full-access"
 [workflow]
 auto_ship = true
 base_branch = "agent-main"
-default_crew = "opus"
+default_crew = "sonnet"
 system_crew = "luna"
-hard_complexity_crews = ["opus"]
+hard_complexity_crews = ["opus", "sol"]
 medium_complexity_crews = ["grok"]
-low_complexity_crews = ["luna"]
+low_complexity_crews = ["luna:80", "gemini-flash:20"]
 xhard_complexity_crews = ["opus"]
 
 [crews.opus]
@@ -83,4 +83,4 @@ roots = ["docs/"]
 
 [operation]
 review_crew = "luna"
-review_policy = "none"
+review_policy = "after-landing"

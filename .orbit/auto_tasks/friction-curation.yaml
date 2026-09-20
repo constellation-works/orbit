@@ -41,7 +41,7 @@ template:
   - friction-curation
   - no-diff-expected
   priority: medium
-  complexity: medium
+  complexity: hard
   crew: grok
   status: backlog
 dedupe: skip_if_open

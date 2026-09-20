@@ -3,7 +3,7 @@ name: qa-sweep
 description: Hands-on validation of recent workspace changes
 enabled: false
 schedule:
-  every_minutes: 60
+  every_minutes: 120
 template:
   title: Perform QA validation
   description: |

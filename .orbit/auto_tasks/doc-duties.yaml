@@ -138,7 +138,7 @@ template:
   - docs
   - staleness
   priority: medium
-  complexity: medium
+  complexity: easy
   crew: luna
   status: backlog
 dedupe: skip_if_open

@@ -3,7 +3,7 @@ name: ci-failure-remediation
 description: Recurring evidence-first remediation of current GitHub Actions failures without duplicating the PR-only CI task hook
 enabled: false
 schedule:
-  every_minutes: 30
+  every_minutes: 120
 template:
   title: Remediate current GitHub Actions failures
   description: |
@@ -139,7 +139,7 @@ template:
   - github-actions
   - no-diff-expected
   priority: high
-  complexity: hard
+  complexity: medium
   crew: luna
   status: backlog
 dedupe: skip_if_open

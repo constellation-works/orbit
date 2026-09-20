@@ -3,7 +3,7 @@ name: code-review
 description: Post-merge code review of changes merged since the last completed sweep
 enabled: true
 schedule:
-  every_minutes: 30
+  every_minutes: 60
 template:
   title: Review recently merged changes
   description: |-
@@ -102,7 +102,7 @@ template:
   - code-review
   - no-diff-expected
   priority: medium
-  complexity: medium
+  complexity: hard
   crew: opus
   status: backlog
 dedupe: skip_if_open

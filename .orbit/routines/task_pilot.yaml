@@ -20,7 +20,7 @@ description: >
   definition to opt this workspace into scheduled task preflight.
 enabled: true
 trigger:
-  cron: "*/30 * * * *"
+  cron: "*/20 * * * *"
   missed_run: skip
 target: job:task_pilot_pipeline
 policy:
