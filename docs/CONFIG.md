@@ -108,27 +108,31 @@ tags = ["implementation", "review"]
 ```
 
 `effort` is omitted by default, which leaves the provider's existing model
-default unchanged. When set, Orbit validates it while loading `config.toml`
-and passes it through the provider's documented argv: Codex receives
-`model_reasoning_effort`, Claude receives `--effort`, Antigravity receives
-`--effort` (`low`/`medium`/`high` only), and Grok receives
-`--reasoning-effort`. The installed Claude CLI (2.1.261, checked September
-2026) advertises all five values, so Orbit forwards `low`, `medium`, `high`,
-`xhigh`, and `max` exactly; [Claude's effort documentation](https://code.claude.com/docs/en/model-config)
-notes that availability can still depend on the selected model. Grok Build
-1.0.13 advertises `--reasoning-effort` (with `--effort` as an alias), and
+default unchanged. When set to a supported value, Orbit passes it through the
+provider's documented argv: Codex receives `model_reasoning_effort`, Claude
+receives `--effort`, Antigravity receives `--effort` (`low`/`medium`/`high`
+only), and Grok receives `--reasoning-effort`. The installed Claude CLI
+(2.1.261, checked September 2026) advertises all five values, so Orbit
+forwards `low`, `medium`, `high`, `xhigh`, and `max` exactly; [Claude's
+effort documentation](https://code.claude.com/docs/en/model-config) notes that
+availability can still depend on the selected model. Grok Build 1.0.13
+advertises `--reasoning-effort` (with `--effort` as an alias), and
 `grok models` currently lists `grok-4.6` and `grok-4.5`. Orbit accepts `low`,
 `medium`, `high`, and `xhigh` for `grok-4.6`, and `low`, `medium`, and `high`
 for `grok-4.5`, matching [xAI's reasoning contract](https://docs.x.ai/developers/model-capabilities/text/reasoning).
-It rejects `max`, unsupported Grok model/effort pairs, Antigravity `xhigh`/`max`,
-OpenCode `low`/`medium`/`xhigh`,
-legacy Gemini CLI model ids on the Antigravity lane, and effort on other
-providers clearly rather than silently downgrading or ignoring a request. A
-selected activity crew (including `workflow.system_crew`) supplies its effort
-together with its provider and model, so it takes precedence over an activity's
-inline baseline in the same way as the rest of that assignment. For the
-standard Codex tiers, use the model-specific crew to choose capability first:
-Terra (`gpt-5.6-terra`) is the medium-low crew; `effort` adjusts the reasoning
+An invalid or provider-unsupported `effort` (including `max` on Grok,
+Antigravity `xhigh`/`max`, OpenCode `low`/`medium`/`xhigh`, effort on
+providers with no contract, or a slip such as `effort = "hard"`) is ignored
+for that crew — treated as unset — with a warning naming the config path,
+crew, property, value, and accepted values. `orbit doctor` lists each ignored
+property; `orbit config set` still refuses to persist a value admission would
+drop. Required crew fields, retired backends, and Antigravity legacy Gemini
+CLI model ids still fail closed rather than being rewritten. A selected
+activity crew (including `workflow.system_crew`) supplies its effort together
+with its provider and model, so it takes precedence over an activity's inline
+baseline in the same way as the rest of that assignment. For the standard
+Codex tiers, use the model-specific crew to choose capability first: Terra
+(`gpt-5.6-terra`) is the medium-low crew; `effort` adjusts the reasoning
 budget inside the chosen Codex model.
 
 Named crew fields are addressable through `orbit config` as

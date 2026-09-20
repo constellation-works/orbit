@@ -53,7 +53,7 @@ impl Execute for ConfigSetArgs {
         };
 
         store.set_value(&self.key, &self.value)?;
-        store.validate()?;
+        store.validate_for_set(&self.key)?;
         store.save()?;
 
         println!(
