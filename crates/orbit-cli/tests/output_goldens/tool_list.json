@@ -264,6 +264,15 @@
   {
     "active": true,
     "builtin": true,
+    "description": "List this workspace's execution claims for inspection and deliberate recovery: phase, age, reservation expiry, execution machine, bound run, last recorded event, unresolved merge intent, and landing invalidation. Age, an expired reservation, and an absent local run are diagnostics, not proof that a worker died — nothing here reclaims, rebinds, or repairs a claim.",
+    "enabled": true,
+    "name": "orbit.drain.claims",
+    "parameters": [],
+    "status": "active"
+  },
+  {
+    "active": true,
+    "builtin": true,
     "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner machine, binary version, distributed-drain protocol schema, the capabilities this session holds, the diagnostic caller machine, the owner-resolved ship configuration, and the review policy. Declaring `caller_version`, `caller_schema`, or `caller_review_policy` also reports the first refusal an admission would raise, in the order admission applies it. It creates no request receipt, reservation, claim, or task transition, and it is never a health check for admission itself.",
     "enabled": true,
     "name": "orbit.drain.probe",

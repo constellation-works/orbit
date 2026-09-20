@@ -70,6 +70,9 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     // tools, governed so cross-attempt inspection is an operator act. The
     // read-only probe and receipt lookup beside it are ungoverned, because a
     // follower's `agent` session is exactly who must call them.
+    // [ORB-12581] Unadvertised, but registered active: `orbit tool run` is the
+    // operator's only route to it, and the governed row — not placement — is
+    // what refuses an agent.
     ("orbit.drain.claims", Placement::Unadvertised),
     ("orbit.semantic.uninstall", Placement::Unadvertised),
     ("orbit.task.delete", Placement::Unadvertised),

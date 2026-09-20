@@ -23,12 +23,18 @@
 //! Orbit has two independent axes, and this module owns exactly one of them.
 //!
 //! *Placement* is [`crate::governance::operation::OperationSpec::mcp_scope`] and its
-//! registry counterparts (`register_mcp` versus `register_inactive`): which
-//! surfaces *list* a tool. It is an audience decision — what an agent reading
-//! `tools/list` is pointed at — and it authorizes nothing. `tools/list` does no
-//! capability filtering, and the tool registry's `execute` never consults
-//! availability, so an unadvertised tool is still reachable through
-//! `orbit tool run`.
+//! registry counterparts (`register_mcp`, `register`, `register_inactive`):
+//! which surfaces *list* a tool. It is an audience decision — what an agent
+//! reading `tools/list` is pointed at — and it authorizes nothing.
+//! `tools/list` does no capability filtering, and the tool registry's
+//! `execute` never consults availability, so a tool registered active but
+//! unadvertised is still reachable through `orbit tool run`.
+//!
+//! `register_inactive` is the one placement that also removes reach: CLI
+//! dispatch applies `ensure_tool_agent_facing` too, so an inactive tool needs
+//! a command that reaches the runtime directly — the way
+//! `orbit task locks release` does — and registering one without that command
+//! leaves it callable from nowhere [ORB-12581].
 //!
 //! *Permission* for exceptional operations is [`GOVERNED_OPERATIONS`], resolved
 //! by [`authorize`] at one chokepoint per surface. A session that arrived over

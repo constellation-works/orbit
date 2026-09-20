@@ -8,8 +8,12 @@
 //!
 //! Placement follows the same rule as the rest of the registry: the probe and
 //! the receipt lookup are advertised because a follower must reach them over
-//! federated MCP before it can enable pull, while claim inspection is an
-//! operator surface reached from the CLI.
+//! federated MCP before it can enable pull, while claim inspection stays off
+//! the MCP surface as an operator surface. Unadvertised is not unreachable:
+//! claim inspection is registered active so `orbit tool run orbit.drain.claims`
+//! resolves, which is the invocation the shipped skill reference names and the
+//! only entry point it has [ORB-12581]. Its operator requirement comes from
+//! the governed-operation registry, not from placement.
 
 pub mod claims;
 pub mod probe;
