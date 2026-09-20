@@ -26,6 +26,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Recurring QA and other task templates | [Auto-tasks](references/auto-tasks.md) |
 | MCP clients, SSH federation or remote dashboard | [Remote access](references/remote-access.md) |
 | Owner/replica roles and multiple machines | [Multi-host](references/multi-host.md) |
+| Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](../orbit/references/setup/distributed-drain.md) |
 | Task snapshots, backup and restore | [Publication](references/publication.md) |
 | Upgrade, resource sync, doctor or worktree GC | [Maintenance](references/maintenance.md) |
 | Scheduler/service logs and host incidents | [Operational logs](references/operational-logs.md) |

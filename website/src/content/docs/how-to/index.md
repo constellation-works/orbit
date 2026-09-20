@@ -20,6 +20,10 @@ sidebar:
     <h3>Run Continuous Delivery</h3>
     <p>Prepare tasks, authorize a bounded delivery window, retune it, and recover safely.</p>
   </a>
+  <a class="orbit-card" href="./distributed-drain/">
+    <h3>Set Up a Distributed Drain</h3>
+    <p>One owner, replica checkouts, SSH access, and a read-only probe. Installation is not pull enablement.</p>
+  </a>
   <a class="orbit-card" href="./recurring-work/">
     <h3>Schedule Recurring Work</h3>
     <p>Drive Orbit unattended with the sweep clock, routines, and auto-tasks.</p>

@@ -183,6 +183,13 @@ with `resume requires an interrupted, failed, or timed-out run`.
 orbit job resume <run_id>
 ```
 
+A **claimed** leaf (distributed-drain execution bound to an immutable claim/run
+pair) cannot use this path. Resume would mint a different run and cannot inherit
+the binding; the command refuses and names deliberate recovery. Inspect the
+claim on the owner with `ORBIT_OPERATOR=1 orbit tool run orbit.drain.claims`,
+reconcile any uncertain merge, and do not ship the same task again. See
+[distributed-drain setup](./distributed-drain.md).
+
 Resume starts a new linked run with `attempt + 1` and `retry_source_run_id` set.
 Checkpointed steps are skipped and their outputs are replayed into the pipeline:
 

@@ -44,6 +44,7 @@ checklist. An injected task snapshot is your starting context.
 | Record a concrete recurring obstacle | [Friction](references/friction.md) |
 | Resolve tool transport, permissions or workspace routing | [Tool surface](references/tool-surface.md) |
 | Understand Orbit nouns | [Concepts](references/concepts.md) |
+| Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](references/setup/distributed-drain.md) |
 
 For dispatch, backlog supervision and failed runs, use
 [orbit-orchestrate](../orbit-orchestrate/SKILL.md). For machine, repository,

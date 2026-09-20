@@ -83,6 +83,7 @@ export default defineConfig({
             { slug: 'how-to/task-lifecycle', label: 'Run a Task Lifecycle' },
             { slug: 'how-to/dashboard', label: 'Use the Dashboard' },
             { slug: 'how-to/continuous-delivery', label: 'Run Continuous Delivery' },
+            { slug: 'how-to/distributed-drain', label: 'Set Up a Distributed Drain' },
             { slug: 'how-to/recurring-work', label: 'Schedule Recurring Work' },
             { slug: 'how-to/task-publication', label: 'Publish and Restore Tasks' },
             { slug: 'how-to/write-activity', label: 'Write an Activity' },

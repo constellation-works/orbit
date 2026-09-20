@@ -92,4 +92,8 @@ routine pins, and the actual executable/version before enabling work there.
 `orbit sweep --dry-run` and `orbit doctor` give local operational evidence.
 From a client, discover through the authoritative MCP connection and use the
 returned workspace selector. For federation, preserve its host qualification.
-See [remote-access.md](remote-access.md).
+See [remote-access.md](remote-access.md). Matching binaries, a replica role and
+a working owner probe are installation, not pull enablement; there is no
+destination callers file and no follower merge. Command-first setup, migration
+and claimed-attempt recovery:
+[distributed-drain.md](../../orbit/references/setup/distributed-drain.md).

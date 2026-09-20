@@ -7,7 +7,10 @@ sidebar:
 
 Use this guide when you want a deliberate, time-bounded period of automatic
 delivery. It separates preparation, human approval, delivery, and recovery so an
-asynchronous run ID is never mistaken for a completed change.
+asynchronous run ID is never mistaken for a completed change. A second machine
+executing the same workspace is a separate owner/replica setup — installation
+is not pull enablement, and `orbit run auto` has no `--pull` flag. See
+[Set Up a Distributed Drain](../distributed-drain/).
 
 ## 1. Prepare proposed work
 
