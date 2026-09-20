@@ -20,8 +20,9 @@ Do not edit the minified blobs by hand.
 3. Confirm `./scripts/check-dashboard-vendor.py` exits 0.
 4. Load the dashboard (`orbit web serve`) and check Markdown rendering.
 
-`make ci-fast` runs the same digest/version check. A swapped blob or a
-Dependabot version bump that does not refresh the copies fails CI.
+`make ci-fast` runs the same digest, `package.json`, and lockfile check. A
+swapped blob, a missing or drifted `package-lock.json`, or a Dependabot
+version bump that does not refresh the copies fails CI.
 
 ## Advisories and new releases
 
