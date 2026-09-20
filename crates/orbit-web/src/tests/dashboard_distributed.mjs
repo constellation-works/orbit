@@ -121,6 +121,8 @@ const console_ = (claims, capabilities) => ({
 let consoleBody = console_([claim()]);
 let nextAction = null; // { status, body } for the next POST, else success
 const sent = [];
+const consoleReads = [];
+let workspaceConsoles = null;
 
 const respond = (payload, status = 200) => ({
   ok: status >= 200 && status < 300,
@@ -132,7 +134,11 @@ const respond = (payload, status = 200) => ({
 globalThis.fetch = async (path, options = {}) => {
   const url = new URL(String(path), "http://dashboard.test");
   const method = (options && options.method) || "GET";
-  if (method === "GET") return respond(consoleBody);
+  if (method === "GET") {
+    const workspace = url.searchParams.get("workspace");
+    consoleReads.push({ path: url.pathname, workspace });
+    return respond((workspaceConsoles && workspaceConsoles[workspace]) || consoleBody);
+  }
   const body = options.body ? JSON.parse(options.body) : null;
   sent.push({ path: url.pathname, body });
   if (nextAction) {
@@ -145,6 +151,8 @@ globalThis.fetch = async (path, options = {}) => {
 
 const distributed = await import("./distributed.js");
 const { buildDistributedBlock, invalidateDistributedConsole, formatExecutionLocation } = distributed;
+const { setWorkspace } = await import("./common.js");
+await import("./tasks.js");
 
 const mount = async (taskId = "ORB-2") => {
   invalidateDistributedConsole();
@@ -210,6 +218,63 @@ const mount = async (taskId = "ORB-2") => {
   // A task this workspace holds no claim for gets no block at all.
   const block = await mount("ORB-999");
   assert.equal(block.style.display, "none", "a task with no claim shows nothing");
+}
+
+// --- workspace switching invalidates the distributed-console cache ---------
+
+{
+  const workspaceA = console_([claim({ task_id: "ORB-workspace-a" })]);
+  const workspaceB = console_([claim({ claim_id: "claim-workspace-b" })]);
+  const authorizedB = claim({ claim_id: "claim-workspace-b" });
+  authorizedB.handoff.authority = {
+    state: "authorized",
+    summary: "completion authority recorded in workspace B",
+    authorization_id: "auth-workspace-b",
+    recorded_at: "2026-09-19T02:00:00+00:00",
+  };
+  workspaceConsoles = {
+    "workspace-a": workspaceA,
+    "workspace-b": workspaceB,
+  };
+  consoleReads.length = 0;
+  sent.length = 0;
+
+  setWorkspace("workspace-a");
+  const oldWorkspaceBlock = buildDistributedBlock("ORB-2");
+  await settle();
+  assert.equal(oldWorkspaceBlock.style.display, "none", "workspace A has no claim for the task");
+  assert.equal(
+    consoleReads.filter((read) => read.path === "/api/distributed/claims" && read.workspace === "workspace-a").length,
+    1,
+    "workspace A claim state is read once",
+  );
+
+  // This is the dashboard selector path: tasks.js observes the workspace
+  // change and must drop the distributed.js memo before the next detail mount.
+  setWorkspace("workspace-b");
+  const newWorkspaceBlock = buildDistributedBlock("ORB-2");
+  await settle();
+  assert.equal(newWorkspaceBlock.style.display, "", "workspace B's live claim renders its panel");
+  assert.equal(
+    consoleReads.filter((read) => read.path === "/api/distributed/claims" && read.workspace === "workspace-b").length,
+    1,
+    "workspace B issues a fresh workspace-scoped claim read",
+  );
+  assert.ok(button(newWorkspaceBlock, "Approve handoff"), "workspace B renders the approve action");
+  assert.ok(button(newWorkspaceBlock, "Recover claim"), "workspace B renders the recover action");
+
+  // An approval repaint proves that the same newly selected workspace can
+  // expose the other capability-gated action from the live claim state.
+  workspaceConsoles["workspace-b"] = console_([authorizedB]);
+  press(button(newWorkspaceBlock, "Approve handoff"));
+  await settle();
+  assert.ok(button(newWorkspaceBlock, "Revoke authority"), "workspace B renders the revoke action after approval");
+
+  workspaceConsoles = null;
+  setWorkspace(null);
+  invalidateDistributedConsole();
+  consoleBody = console_([claim()]);
+  sent.length = 0;
 }
 
 {
