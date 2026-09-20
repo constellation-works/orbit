@@ -119,6 +119,21 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertIn(["check-codeql-extension-schema.py"], calls)
 
+    def test_fast_invokes_dashboard_vendor_check(self):
+        self.prepare_ci()
+        self.write_executable(
+            self.scripts / "check-dashboard-vendor.py",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(["check-dashboard-vendor.py"] + sys.argv[1:]) + "\\n")
+''',
+        )
+        result = self.run_guard("ci-guardrails.sh", "--fast")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertIn(["check-dashboard-vendor.py"], calls)
+
     def test_full_still_checks_workflow_test_matches(self):
         # The full run lists the workflow's filtered tests from one workspace
         # build (the artifacts the nextest pass reuses), never from a

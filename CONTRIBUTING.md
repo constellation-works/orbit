@@ -234,6 +234,24 @@ from upstream [`https://github.com/rustsec/advisory-db`](https://github.com/rust
 environment fixture. Missing, stale, or unrefreshable required data yields an explicit
 failure, never a success-by-skip.
 
+## Vendored dashboard JavaScript
+
+The embedded dashboard vendors DOMPurify and marked as checked-in files under
+[`crates/orbit-web/assets/dashboard/`](crates/orbit-web/assets/dashboard/).
+Pins, upstream URLs, SHA-256 digests, and the refresh command are in
+[`vendor-manifest.json`](crates/orbit-web/assets/dashboard/vendor-manifest.json);
+the procedure is in [`VENDOR.md`](crates/orbit-web/assets/dashboard/VENDOR.md).
+`make ci-fast` runs [`scripts/check-dashboard-vendor.py`](scripts/check-dashboard-vendor.py),
+which fails if a blob no longer matches its recorded digest or if those
+versions drift from `package.json`.
+
+GitHub Dependabot (`npm` ecosystem on that directory in
+[`.github/dependabot.yml`](.github/dependabot.yml)) and GitHub security alerts
+cover new releases and advisories. The workspace `dependabot-alert-sweep` job
+files remediation tasks from those alerts. `cargo-deny` does not see these files.
+
+Refresh with `./scripts/refresh-dashboard-vendor.sh` after changing the pins;
+do not edit the minified blobs by hand.
 
 ## Orbit State
 

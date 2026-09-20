@@ -5,3 +5,12 @@ updates:
     target-branch: "agent-main"
     schedule:
       interval: "weekly"
+  # Dashboard-vendored DOMPurify and marked. The served blobs are checked-in
+  # copies; this manifest is how GitHub security alerts and Dependabot version
+  # PRs see them. A version PR still needs ./scripts/refresh-dashboard-vendor.sh
+  # or the digest check in ci-fast fails. [ORB-12684]
+  - package-ecosystem: "npm"
+    directory: "/crates/orbit-web/assets/dashboard"
+    target-branch: "agent-main"
+    schedule:
+      interval: "weekly"
