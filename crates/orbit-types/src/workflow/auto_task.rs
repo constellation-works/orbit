@@ -35,6 +35,93 @@ pub fn auto_task_tag(name: &str) -> String {
     format!("{AUTO_TASK_TAG_PREFIX}{name}")
 }
 
+/// Artifact path a completed sweep writes its cursor to, and the scheduler's
+/// `skip_if_unchanged` precondition reads back. The cursor is this structured
+/// record — never prose parsed out of an execution summary.
+pub const SWEEP_CURSOR_ARTIFACT: &str = "sweep-cursor.json";
+
+/// Schema version of [`SweepCursorRecord`].
+pub const SWEEP_CURSOR_SCHEMA_VERSION: u32 = 1;
+
+/// The machine-readable cursor a completed sweep records: the revision of
+/// `reference` it examined through. Unknown fields are tolerated so a sweep
+/// may record extra evidence beside the contract this scheduler reads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SweepCursorRecord {
+    /// Schema version marker.
+    pub schema_version: u32,
+    /// Branch the cursor commit belongs to.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// Commit the sweep examined through (full 40-character SHA).
+    pub cursor: String,
+}
+
+impl SweepCursorRecord {
+    /// Reject a record this binary cannot interpret, naming why.
+    pub fn validate(&self) -> Result<(), WorkflowError> {
+        if self.schema_version != SWEEP_CURSOR_SCHEMA_VERSION {
+            return Err(WorkflowError::Invalid(format!(
+                "sweep cursor schema_version {} is not {SWEEP_CURSOR_SCHEMA_VERSION}",
+                self.schema_version
+            )));
+        }
+        if self.cursor.trim().is_empty() {
+            return Err(WorkflowError::Invalid(
+                "sweep cursor must name a commit".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Mint-time precondition: skip the fire while the integration branch has not
+/// advanced past the cursor the last completed sweep recorded.
+///
+/// Opt-in per definition. Dedupe answers "is one still open"; this answers "is
+/// there anything to do" — a quiet branch otherwise dispatches a full agent run
+/// every interval only to report an empty window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkipIfUnchanged {
+    /// Integration branch whose tip is compared against the cursor.
+    #[serde(rename = "ref")]
+    pub reference: String,
+    /// How to find the last completed sweep that recorded a cursor.
+    pub cursor: SweepCursorSelector,
+}
+
+/// How a definition's completed sweeps are recognized. Selection is exactly
+/// the rule the sweep template describes: the newest `done` chore carrying
+/// every tag, `legacy_tags` only when `tags` selects nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SweepCursorSelector {
+    /// Tags a completed sweep carries, matched with AND semantics.
+    pub tags: Vec<String>,
+    /// Tags the same sweep carried under a previous name. Consulted only when
+    /// `tags` selects nothing, so a rename does not reset the cursor.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub legacy_tags: Vec<String>,
+}
+
+impl SkipIfUnchanged {
+    /// Semantic checks: a resolvable ref and at least one selecting tag.
+    pub fn validate(&self, definition_name: &str) -> Result<(), WorkflowError> {
+        if self.reference.trim().is_empty() {
+            return Err(WorkflowError::Invalid(format!(
+                "auto-task '{definition_name}' skip_if_unchanged.ref must not be empty"
+            )));
+        }
+        if self.cursor.tags.iter().all(|tag| tag.trim().is_empty()) {
+            return Err(WorkflowError::Invalid(format!(
+                "auto-task '{definition_name}' skip_if_unchanged.cursor.tags must name at least one tag"
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// A parsed, validated auto-task definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -58,6 +145,10 @@ pub struct AutoTaskDefinition {
     /// How to handle firing while a prior instance is still open.
     #[serde(default)]
     pub dedupe: DedupePolicy,
+    /// Opt-in mint-time precondition: skip while the integration branch has
+    /// not advanced past the last completed sweep's recorded cursor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_if_unchanged: Option<SkipIfUnchanged>,
     /// Actor that created the definition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
@@ -264,6 +355,9 @@ impl AutoTaskDefinition {
                 "auto-task '{}' template.title must not be empty",
                 self.name
             )));
+        }
+        if let Some(precondition) = &self.skip_if_unchanged {
+            precondition.validate(&self.name)?;
         }
         if let Some(complexity) = self.template.complexity {
             complexity.require_assessed().map_err(|error| {

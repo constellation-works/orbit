@@ -21,6 +21,7 @@ fn definition_with_interval(every_minutes: u64) -> AutoTaskDefinition {
             status: TaskStatus::Backlog,
         },
         dedupe: Default::default(),
+        skip_if_unchanged: None,
         created_by: None,
         created_at: String::new(),
         updated_by: None,

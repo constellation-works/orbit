@@ -73,6 +73,40 @@ Without it a stalled backlog accumulates identical tasks every cycle — a weekl
 chore nobody has picked up becomes fifty copies by year's end. Choose `always`
 only when each instance is genuinely independent of the last.
 
+## Skipping a tick when nothing landed
+
+`dedupe` cannot tell whether there is anything to do. A sweep that reviews or
+validates what landed on an integration branch has nothing to do while that
+branch is quiet, yet it still boots a worktree and an agent to say so. The
+optional `skip_if_unchanged` block — a definition-file field, edited in the
+YAML rather than through a CLI flag — suppresses that mint:
+
+```yaml
+skip_if_unchanged:
+  ref: agent-main                      # integration branch whose tip is compared
+  cursor:
+    tags: [code-review, no-diff-expected]
+    legacy_tags: [code-review-sweep, no-diff-expected]
+```
+
+The scheduler resolves the ref's tip, finds the newest `done` chore carrying
+every tag in `cursor.tags` (falling back to `legacy_tags` only when the current
+tags select nothing), and reads that sweep's `sweep-cursor.json` artifact —
+`{"schema_version":1,"ref":"<branch>","cursor":"<commit SHA>"}`, which the
+sweep's own template is responsible for writing. When the tip is already
+covered by that cursor the tick skips without consuming its slot, so the first
+new commit fires the pending occurrence. The skip is reported by
+`orbit clock tick` and kept on the cursor, so `orbit auto-task show <name>`
+and the dashboard name the reason and both SHAs.
+
+It **fails open**: no completed sweep, a missing or malformed cursor, an
+unresolvable ref or commit, or any probe failure mints as before and records
+why. A precondition that cannot be answered never stops a sweep.
+
+The shipped `code-review` and `qa-sweep` defaults carry the block against the
+workspace's base branch. Delivery-triggered definitions do not need it — they
+never fire on a quiet tree.
+
 ## Managing definitions
 
 ```bash

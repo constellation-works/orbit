@@ -461,6 +461,17 @@ fn definition_json(
                 "slot": pending.slot,
                 "task_id": pending.task_id,
             })),
+            // Why a due definition minted nothing, so a quiet panel is
+            // explained rather than merely empty [ORB-12698].
+            "last_skip": cursor.last_skip.as_ref().map(|skip| json!({
+                "at": skip.at,
+                "slot": skip.slot,
+                "reason": skip.reason,
+                "ref": skip.reference,
+                "cursor_sha": skip.cursor_sha,
+                "tip_sha": skip.tip_sha,
+                "cursor_task_id": skip.cursor_task_id,
+            })),
         })),
         "last_minted_task_id": last_minted_task_id,
         "last_minted_task_status": last_minted_task_status,

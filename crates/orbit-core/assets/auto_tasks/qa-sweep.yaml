@@ -55,11 +55,23 @@ template:
     defect). Include the failing command, the exact error, relevant
     environment evidence, and a scope assessment.
 
+    ## Record the cursor
+
+    Record the candidate revision you validated as this task's machine-readable
+    cursor artifact, `sweep-cursor.json`, which the scheduler reads to decide
+    whether the next tick has anything left to validate. Its exact content is
+    `{"schema_version":1,"ref":"<integration branch>","cursor":"<full 40-character commit SHA>"}`;
+    attach it through the workspace's task artifact surface, sourcing it from a
+    scratch file in an ignored directory inside the checkout. Write it on every
+    completed sweep, including one that found nothing to fix — a sweep without
+    it leaves the next tick no cursor to compare the branch tip against.
+
     Your narrative output is advisory; the issues you file are the durable
     side-effect channel.
   acceptance_criteria:
   - Recent changes were exercised through their real user-facing paths.
   - Real, non-duplicate issues were filed on the workspace's configured task or issue surface with evidence and reproduction steps.
+  - The validated candidate revision is attached as this task's `sweep-cursor.json` artifact (`schema_version` 1, the integration branch, and the full commit SHA).
   - Non-duplicate failing tests that block the prescribed validation command were filed as durable issues, with validation impact distinguished from production impact.
   task_type: chore
   tags:
@@ -72,6 +84,12 @@ template:
   crew: system
   status: backlog
 dedupe: skip_if_open
+skip_if_unchanged:
+  ref: __ORBIT_BASE_BRANCH__
+  cursor:
+    tags:
+    - qa-sweep
+    - no-diff-expected
 created_by: system
 created_at: 2026-07-12T00:00:00Z
 updated_by: human

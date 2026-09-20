@@ -11,7 +11,7 @@ summary: Current implementation of the auto-task record, due-math, host-local cu
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/operations.js"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665]
+related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698]
 ---
 
 # Auto-tasks — Design
@@ -29,9 +29,9 @@ and unimplemented; existing scheduling and action semantics remain current.
 
 `AutoTaskDefinition` (`crates/orbit-types/src/workflow/auto_task.rs`) is a
 `deny_unknown_fields` struct: `schemaVersion`, `name`, `description`, `enabled`,
-`schedule`, `template`, `dedupe`, and provenance (`created_by/at`,
-`updated_by/at`). `schedule` is an untagged enum — `{ cron: "…" }` or
-`{ every_minutes: N }`. `template` carries `title`, `description`,
+`schedule`, `template`, `dedupe`, the optional `skip_if_unchanged` (§4b), and
+provenance (`created_by/at`, `updated_by/at`). `schedule` is an untagged enum
+— `{ cron: "…" }` or `{ every_minutes: N }`. `template` carries `title`, `description`,
 `acceptance_criteria`, `task_type`, `tags`, `priority`, optional `complexity`,
 `crew`, and `status` (default `backlog`). An explicit complexity must be an
 assessed `low`, `medium`, or `hard` value and is copied to every minted task.
@@ -115,8 +115,8 @@ absolute and need no cursor.
 
 `state.rs` stores one cursor per definition in
 `<orbit_dir>/state/auto-tasks.json` (`{ baseline_at, last_slot, last_fired_at,
-last_task_id, pending? }`). This is workspace-local, gitignored runtime state
-(the scoreboard precedent, L-0041), so a scheduler fire never rewrites the
+last_task_id, pending?, last_skip? }`). This is workspace-local, gitignored
+runtime state (the scoreboard precedent, L-0041), so a scheduler fire never rewrites the
 git-versioned definition and a definition edit never races the scheduler.
 
 Admission and persistence share one stable sidecar lock,
@@ -133,6 +133,12 @@ instead of rendering a silent never-observed baseline.
 `pending` is durable in-flight evidence: `{ slot, task_id? }`. It is written
 before mint and cleared only after the consumed-slot checkpoint. It is not a
 cross-store exactly-once token.
+
+`last_skip` is the most recent `skip_if_unchanged` decision: `{ at, slot,
+reason, ref, cursor_sha, tip_sha, cursor_task_id? }`. It explains why a due
+definition minted nothing — `orbit auto-task show <name>` renders it under
+`cursor`, and the dashboard carries it on `last_evaluation.last_skip`. A fire
+clears it.
 
 ## 4. The scheduler pass
 
@@ -163,6 +169,56 @@ Recovery on the next locked pass:
 - Checkpoint write failure reports `fired` with the task id and best-effort
   mint evidence; retry reconciles from `pending.task_id` or stays
   unresolved.
+
+### 4b. `skip_if_unchanged`: nothing landed, nothing to mint
+
+`dedupe` answers "is a prior instance still open"; it cannot answer "is there
+anything to do". A periodic review or validation sweep on a quiet integration
+branch therefore booted a worktree and an agent every interval only to report
+an empty window. The optional `skip_if_unchanged` block is the mint-time
+precondition that closes that gap:
+
+```yaml
+skip_if_unchanged:
+  ref: agent-main                      # integration branch whose tip is compared
+  cursor:
+    tags: [code-review, no-diff-expected]
+    legacy_tags: [code-review-sweep, no-diff-expected]
+```
+
+Evaluated after dedupe, on `Fire` only. `orbit-core`'s
+`auto_tasks::change_probe` resolves the ref's tip, selects the sweep whose
+cursor applies, reads that sweep's cursor, and answers `Unchanged`, `Changed`
+or `Unknown`:
+
+- **Cursor task.** The newest `done` chore carrying every tag in `cursor.tags`;
+  `legacy_tags` is consulted only when the current tags select nothing, so a
+  rename does not reset the cursor. Newer `created_at` wins and the
+  lexicographically smaller id breaks a tie. The chore filter is load-bearing:
+  a `bug` finding filed by the sweep shares its tags and never records a
+  cursor. This mirrors the selection the sweep templates describe, which
+  remains the single description of the rule.
+- **Cursor value.** The `sweep-cursor.json` task artifact
+  (`{ schema_version: 1, ref, cursor }`), written by the sweep templates. It is
+  a structured record, never prose parsed out of an execution summary.
+- **Comparison.** `Unchanged` when the tip equals the cursor commit or
+  `git merge-base --is-ancestor <tip> <cursor>` succeeds — both revisions are
+  verified commits first, so a non-zero exit is git's answer, not a failure to
+  answer.
+
+`Unchanged` skips **without claiming or advancing the cursor** (like
+`dedupe_open`), so the first commit past the cursor fires the pending
+occurrence. The skip is recorded as `last_skip` and as the tick report's
+reason, naming both SHAs and the cursor task.
+
+Everything else **fails open and mints**: no completed sweep, no artifact, a
+malformed or foreign-branch record, an unresolvable commit, an unresolvable
+ref, or a probe error. The tick report's reason then says which. A
+precondition that cannot be answered must never be the reason a sweep stops
+running.
+
+`code-review` and `qa-sweep` carry the block; the delivery-triggered
+definitions do not need it (they never fire on a quiet tree).
 
 The host tick calls `run_auto_task_scheduler_at` directly for every registered
 owner checkout after routine evaluation and under the host sweep lock. The pass

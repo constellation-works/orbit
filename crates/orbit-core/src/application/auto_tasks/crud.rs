@@ -62,6 +62,9 @@ impl OrbitRuntime {
             schedule: params.schedule,
             template: params.template,
             dedupe: params.dedupe,
+            // A mint-time precondition is configured in the definition YAML
+            // the workspace owns, not through the create surfaces.
+            skip_if_unchanged: None,
             created_by: Some(actor.clone()),
             created_at: now.clone(),
             updated_by: Some(actor),

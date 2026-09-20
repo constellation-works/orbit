@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Decisions
 owner: claude
-last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_updated: 2026-09-20
+last_validated: 2026-09-20
 status: Accepted
 feature: auto-tasks
 doc_role: decisions
@@ -11,7 +11,7 @@ summary: Decision log for the auto-task primitive, including its move from a rou
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-12237]
+related_artifacts: [ORB-12237, ORB-12698]
 ---
 
 # Auto-tasks — Decisions
@@ -40,6 +40,26 @@ Introduce auto-tasks as git-versioned YAML definitions under `.orbit/auto_tasks/
 - Definitions are workspace-scoped and scheduler fires remain observable through routine health.
 - Host-local cursor state avoids churn in git-versioned definitions.
 - Cost: a second file-backed record convention exists alongside the SQLite-indexed knowledge records, and auto-task definitions are not full-text indexed.
+
+## A quiet integration branch skips the mint, and an unanswerable precondition does not
+
+**Recorded:** 2026-09-20 · [ORB-12698]
+**Paths:** `crates/orbit-automation/src/auto_tasks/scheduler.rs`, `crates/orbit-core/src/application/auto_tasks/change_probe.rs`, `.orbit/auto_tasks/**`
+
+### Context
+
+`code-review` (every 30 minutes) and `qa-sweep` (hourly) mint regardless of whether anything landed. `dedupe: skip_if_open` only prevents a *concurrent* instance, so on a quiet `agent-main` each tick booted a worktree and an agent to report a zero-commit window — seven consecutive no-op dispatches in one morning.
+
+### Decision
+
+Add the opt-in `skip_if_unchanged` precondition, evaluated after dedupe on `Fire`. It compares the configured ref's tip against the cursor recorded by the newest completed sweep, read from that sweep's `sweep-cursor.json` artifact — a structured record the templates write, never prose scraped from an execution summary. A covered tip skips without claiming or advancing the slot and records `last_skip` (reason plus both SHAs). Every other outcome — no completed sweep, missing or malformed cursor, unresolvable ref or commit, probe error — mints and says why.
+
+### Consequences
+
+- A quiet branch costs one git comparison per tick instead of an agent run.
+- The first commit past the cursor fires the pending occurrence immediately, because the slot was never consumed.
+- Sweep templates now owe a durable cursor artifact; a completed sweep that skips it makes the next tick fail open and mint.
+- Cost: the precondition depends on the sweep writing the artifact correctly, so a template regression degrades to the old always-mint behavior rather than announcing itself.
 
 ## No-diff-expected tasks bypass repository change gates
 

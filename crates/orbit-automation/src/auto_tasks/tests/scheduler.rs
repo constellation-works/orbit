@@ -15,8 +15,8 @@ use tempfile::tempdir;
 
 use crate::auto_tasks::loader::auto_tasks_dir;
 use crate::auto_tasks::scheduler::{
-    AutoTaskDispatch, SchedulerFault, SchedulerOptions, inject_scheduler_fault,
-    run_auto_task_scheduler_at, set_admission_overlap_barrier,
+    AutoTaskDispatch, ChangeProbe, SchedulerFault, SchedulerOptions, UNCHANGED_SINCE_LAST_SWEEP,
+    inject_scheduler_fault, run_auto_task_scheduler_at, set_admission_overlap_barrier,
 };
 
 struct TestDispatch {
@@ -26,6 +26,7 @@ struct TestDispatch {
     mint_ids: Mutex<Vec<String>>,
     mint_should_fail: AtomicBool,
     open_instance: Mutex<Option<String>>,
+    probe: Mutex<Option<Result<ChangeProbe, String>>>,
 }
 
 impl TestDispatch {
@@ -37,7 +38,12 @@ impl TestDispatch {
             mint_ids: Mutex::new(Vec::new()),
             mint_should_fail: AtomicBool::new(false),
             open_instance: Mutex::new(None),
+            probe: Mutex::new(None),
         }
+    }
+
+    fn set_probe(&self, probe: Result<ChangeProbe, String>) {
+        *self.probe.lock().expect("probe") = Some(probe);
     }
 
     fn set_open_instance(&self, blocking_task_id: &str) {
@@ -68,6 +74,18 @@ impl AutoTaskDispatch for TestDispatch {
         _definition: &AutoTaskDefinition,
     ) -> Result<Option<String>, OrbitError> {
         Ok(self.open_instance.lock().expect("open_instance").clone())
+    }
+
+    fn probe_change_since_last_sweep(
+        &self,
+        _definition: &AutoTaskDefinition,
+        _precondition: &orbit_types::workflow::SkipIfUnchanged,
+    ) -> Result<ChangeProbe, OrbitError> {
+        match self.probe.lock().expect("probe").clone() {
+            Some(Ok(probe)) => Ok(probe),
+            Some(Err(error)) => Err(OrbitError::Store(error)),
+            None => panic!("definition without skip_if_unchanged must not probe"),
+        }
     }
 
     fn mint_task(&self, _definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
@@ -113,7 +131,184 @@ fn cursor(baseline: &str, last_slot: Option<&str>) -> AutoTaskCursor {
         last_fired_at: last_slot.map(|_| "2026-01-01T01:00:05+00:00".to_string()),
         last_task_id: last_slot.map(|_| "ORB-00000".to_string()),
         pending: None,
+        last_skip: None,
     }
+}
+
+/// A due definition carrying the opt-in `skip_if_unchanged` precondition.
+fn unchanged_fixture(
+    probe: Result<ChangeProbe, String>,
+) -> (tempfile::TempDir, TestDispatch, DateTime<Utc>) {
+    let root = tempdir().expect("temporary root");
+    let definition_root = root.path().join("definitions");
+    let state_dir = root.path().join("state");
+    let definitions = auto_tasks_dir(&definition_root);
+    fs::create_dir_all(&definitions).expect("auto-task definitions directory");
+    fs::write(
+        definitions.join("chore.yaml"),
+        r#"schemaVersion: 1
+name: chore
+schedule:
+  every_minutes: 60
+dedupe: skip_if_open
+skip_if_unchanged:
+  ref: agent-main
+  cursor:
+    tags:
+    - code-review
+    - no-diff-expected
+template:
+  title: Fixture chore
+"#,
+    )
+    .expect("definition fixture");
+    let dispatch = TestDispatch::new(definition_root, state_dir);
+    dispatch.set_probe(probe);
+    let t0 = at(2026, 1, 1, 0, 0);
+    upsert_cursor(
+        &cursor_state_path(&dispatch.state_dir),
+        "chore",
+        cursor(&t0.to_rfc3339(), None),
+    )
+    .expect("baseline cursor");
+    (root, dispatch, t0)
+}
+
+fn unchanged(tip: &str, cursor_sha: &str) -> Result<ChangeProbe, String> {
+    Ok(ChangeProbe::Unchanged {
+        cursor: cursor_sha.to_string(),
+        tip: tip.to_string(),
+        cursor_task_id: Some("ORB-12696".to_string()),
+    })
+}
+
+#[test]
+fn unchanged_tip_skips_the_mint_and_records_both_shas() {
+    let (_root, dispatch, t0) = unchanged_fixture(unchanged("58779d949b23", "58779d949b23"));
+
+    let outcome = run_auto_task_scheduler_at(
+        &dispatch,
+        t0 + Duration::minutes(65),
+        SchedulerOptions::default(),
+    )
+    .expect("pass");
+
+    assert_eq!(outcome.reports[0].action, "skipped");
+    let reason = outcome.reports[0].reason.as_deref().expect("reason");
+    assert!(reason.contains(UNCHANGED_SINCE_LAST_SWEEP), "{reason}");
+    assert!(reason.contains("58779d949b23"), "{reason}");
+    assert!(reason.contains("ORB-12696"), "{reason}");
+    assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
+
+    // The slot stays unconsumed, so the first commit past the cursor fires it.
+    let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
+    let stored = &state.definitions["chore"];
+    assert!(stored.last_slot.is_none());
+    assert!(stored.pending.is_none());
+    let skip = stored.last_skip.as_ref().expect("recorded skip");
+    assert_eq!(skip.reason, UNCHANGED_SINCE_LAST_SWEEP);
+    assert_eq!(skip.reference, "agent-main");
+    assert_eq!(skip.cursor_sha, "58779d949b23");
+    assert_eq!(skip.tip_sha, "58779d949b23");
+    assert_eq!(skip.cursor_task_id.as_deref(), Some("ORB-12696"));
+    assert_eq!(skip.slot, outcome.reports[0].slot.clone().expect("slot"));
+}
+
+#[test]
+fn advanced_tip_mints_exactly_as_before_and_clears_the_recorded_skip() {
+    let (_root, dispatch, t0) = unchanged_fixture(unchanged("58779d949b23", "58779d949b23"));
+    run_auto_task_scheduler_at(
+        &dispatch,
+        t0 + Duration::minutes(65),
+        SchedulerOptions::default(),
+    )
+    .expect("quiet pass");
+
+    dispatch.set_probe(Ok(ChangeProbe::Changed {
+        cursor: "58779d949b23".to_string(),
+        tip: "aa11bb22cc33".to_string(),
+    }));
+    let outcome = run_auto_task_scheduler_at(
+        &dispatch,
+        t0 + Duration::minutes(125),
+        SchedulerOptions::default(),
+    )
+    .expect("pass");
+
+    assert_eq!(outcome.reports[0].action, "fired");
+    assert_eq!(outcome.reports[0].task_id.as_deref(), Some("ORB-00001"));
+    assert_eq!(outcome.reports[0].reason, None);
+    let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
+    let stored = &state.definitions["chore"];
+    assert!(stored.last_slot.is_some());
+    assert!(stored.last_skip.is_none());
+}
+
+#[test]
+fn unresolvable_cursor_fails_open_and_says_why() {
+    let (_root, dispatch, t0) = unchanged_fixture(Ok(ChangeProbe::Unknown {
+        reason: "completed sweep ORB-12696 recorded no sweep-cursor.json".to_string(),
+    }));
+
+    let outcome = run_auto_task_scheduler_at(
+        &dispatch,
+        t0 + Duration::minutes(65),
+        SchedulerOptions::default(),
+    )
+    .expect("pass");
+
+    assert_eq!(outcome.reports[0].action, "fired");
+    assert_eq!(dispatch.minted.load(Ordering::SeqCst), 1);
+    let reason = outcome.reports[0].reason.as_deref().expect("reason");
+    assert!(reason.contains("recorded no sweep-cursor.json"), "{reason}");
+    let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
+    assert!(state.definitions["chore"].last_skip.is_none());
+}
+
+#[test]
+fn probe_failure_fails_open_and_mints() {
+    let (_root, dispatch, t0) =
+        unchanged_fixture(Err("git rev-parse refs/heads/agent-main failed".to_string()));
+
+    let outcome = run_auto_task_scheduler_at(
+        &dispatch,
+        t0 + Duration::minutes(65),
+        SchedulerOptions::default(),
+    )
+    .expect("pass");
+
+    assert_eq!(outcome.reports[0].action, "fired");
+    assert_eq!(dispatch.minted.load(Ordering::SeqCst), 1);
+    let reason = outcome.reports[0].reason.as_deref().expect("reason");
+    assert!(reason.contains("probe failed"), "{reason}");
+    assert!(reason.contains("rev-parse"), "{reason}");
+    let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
+    assert!(state.definitions["chore"].last_slot.is_some());
+}
+
+#[test]
+fn dry_run_reports_the_precondition_skip_without_writing() {
+    let (_root, dispatch, t0) = unchanged_fixture(unchanged("58779d949b23", "58779d949b23"));
+
+    let outcome = run_auto_task_scheduler_at(
+        &dispatch,
+        t0 + Duration::minutes(65),
+        SchedulerOptions { dry_run: true },
+    )
+    .expect("dry run");
+
+    assert_eq!(outcome.reports[0].action, "skipped");
+    assert!(
+        outcome.reports[0]
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains(UNCHANGED_SINCE_LAST_SWEEP)),
+        "{:?}",
+        outcome.reports[0]
+    );
+    assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
+    let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
+    assert!(state.definitions["chore"].last_skip.is_none());
 }
 
 fn due_fixture(name: &str) -> (tempfile::TempDir, TestDispatch, DateTime<Utc>) {

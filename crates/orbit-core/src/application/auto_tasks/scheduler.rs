@@ -3,13 +3,13 @@
 use crate::OrbitRuntime;
 use crate::application::task::TaskAddParams;
 use chrono::{DateTime, Utc};
-use orbit_automation::auto_tasks::scheduler::AutoTaskDispatch;
+use orbit_automation::auto_tasks::scheduler::{AutoTaskDispatch, ChangeProbe};
 pub use orbit_automation::auto_tasks::scheduler::{
     AutoTaskFireReport, AutoTaskSchedulerOutcome, SchedulerOptions,
 };
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
-use orbit_types::workflow::{AutoTaskDefinition, auto_task_tag};
+use orbit_types::workflow::{AutoTaskDefinition, SkipIfUnchanged, auto_task_tag};
 use std::path::PathBuf;
 
 impl AutoTaskDispatch for OrbitRuntime {
@@ -39,6 +39,14 @@ impl AutoTaskDispatch for OrbitRuntime {
 
     fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError> {
         mint_task(self, definition).map(|task| task.id)
+    }
+
+    fn probe_change_since_last_sweep(
+        &self,
+        _definition: &AutoTaskDefinition,
+        precondition: &SkipIfUnchanged,
+    ) -> Result<ChangeProbe, OrbitError> {
+        super::change_probe::probe_change_since_last_sweep(self, precondition)
     }
 }
 

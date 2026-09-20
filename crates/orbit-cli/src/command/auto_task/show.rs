@@ -1,7 +1,9 @@
 use clap::Args;
-use orbit_core::application::auto_tasks::definition_path;
+use orbit_core::application::auto_tasks::{
+    AutoTaskCursor, cursor_state_path, definition_path, load_cursor_state,
+};
 use orbit_core::{OrbitError, OrbitRuntime};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Execute, Payload};
 
@@ -32,6 +34,19 @@ impl Execute for AutoTaskShowArgs {
             "root": definition_root,
             "path": source_path,
         });
+        // The host-local cursor explains why a due definition minted nothing:
+        // an unreadable file is reported, never rendered as "never observed".
+        match load_cursor_state(&cursor_state_path(&runtime.paths().state_dir)) {
+            Ok(state) => {
+                doc["cursor"] = state
+                    .definitions
+                    .get(&self.name)
+                    .map(cursor_to_json)
+                    .unwrap_or(Value::Null);
+            }
+            Err(error) => doc["cursor_state_error"] = json!(error.to_string()),
+        }
+
         if matches!(
             definition.schedule,
             orbit_core::AutoTaskSchedule::Deliveries { .. }
@@ -84,6 +99,39 @@ impl Execute for AutoTaskShowArgs {
         );
         let _ = writeln!(out, "  dedupe: {}", definition.dedupe);
         let _ = writeln!(out, "  template: {}", definition.template.title);
+        if let Some(skip) = definition.skip_if_unchanged.as_ref() {
+            let _ = writeln!(
+                out,
+                "  skip_if_unchanged: ref {} cursor tags [{}]",
+                skip.reference,
+                skip.cursor.tags.join(", ")
+            );
+        }
+        if let Some(skip) = doc
+            .get("cursor")
+            .and_then(|cursor| cursor.get("last_skip"))
+            .and_then(Value::as_object)
+        {
+            let text = |key: &str| {
+                skip.get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or("-")
+                    .to_string()
+            };
+            let _ = writeln!(
+                out,
+                "  last skip: {} at {} — {} tip {} covered by cursor {}{}",
+                text("reason"),
+                text("at"),
+                text("ref"),
+                text("tip_sha"),
+                text("cursor_sha"),
+                skip.get("cursor_task_id")
+                    .and_then(Value::as_str)
+                    .map(|id| format!(" from {id}"))
+                    .unwrap_or_default(),
+            );
+        }
         if let Some(automation) = doc.get("automation") {
             let _ = writeln!(
                 out,
@@ -94,4 +142,10 @@ impl Execute for AutoTaskShowArgs {
         }
         Ok(Payload::detail(doc, out).into())
     }
+}
+
+/// The host-local cursor as stored, including `last_skip` — the most recent
+/// mint-time precondition skip and the two SHAs it was decided on.
+fn cursor_to_json(cursor: &AutoTaskCursor) -> Value {
+    serde_json::to_value(cursor).unwrap_or(Value::Null)
 }

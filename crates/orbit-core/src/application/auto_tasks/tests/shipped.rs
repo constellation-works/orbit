@@ -94,13 +94,45 @@ fn shipped_delivery_defaults_render_the_workspace_base_branch() {
         assert!(!definition.enabled);
     }
 
-    let (_, cron) = DEFAULT_AUTO_TASK_FILES
+    // The periodic sweeps carry the placeholder too: their `skip_if_unchanged`
+    // precondition compares the workspace's own integration branch [ORB-12698].
+    for name in ["code-review", "qa-sweep"] {
+        let (_, yaml) = DEFAULT_AUTO_TASK_FILES
+            .iter()
+            .find(|(stem, _)| *stem == name)
+            .unwrap_or_else(|| panic!("missing shipped default {name}"));
+        assert!(
+            yaml.contains(&format!("\n  ref: {BASE_BRANCH_PLACEHOLDER}\n")),
+            "{name} must carry the base branch placeholder"
+        );
+        let rendered = render_default_auto_task(yaml, "main");
+        let definition = parse_auto_task_yaml(&rendered)
+            .unwrap_or_else(|error| panic!("parse rendered {name}: {error}"));
+        let precondition = definition
+            .skip_if_unchanged
+            .unwrap_or_else(|| panic!("{name} must ship the mint-time precondition"));
+        assert_eq!(precondition.reference, "main");
+        assert!(
+            precondition.cursor.tags.iter().any(|tag| tag == name),
+            "{name} must select its own completed sweeps"
+        );
+        assert!(
+            precondition
+                .cursor
+                .tags
+                .iter()
+                .any(|tag| tag == "no-diff-expected"),
+            "{name} must select completed sweeps, not their findings"
+        );
+    }
+
+    let (_, without_placeholder) = DEFAULT_AUTO_TASK_FILES
         .iter()
-        .find(|(stem, _)| *stem == "qa-sweep")
-        .expect("qa-sweep default");
+        .find(|(stem, _)| *stem == "friction-curation")
+        .expect("friction-curation default");
     assert!(
         matches!(
-            render_default_auto_task(cron, "main"),
+            render_default_auto_task(without_placeholder, "main"),
             std::borrow::Cow::Borrowed(_)
         ),
         "defaults without the placeholder are returned as shipped"
