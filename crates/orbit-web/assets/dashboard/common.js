@@ -239,11 +239,32 @@ export function panelCanRender(bodyId) {
   return !state || state.loaded;
 }
 
+export function teardownNode(node) {
+  if (!node) return;
+  if (typeof node.teardown === "function") {
+    node.teardown();
+  }
+  if (typeof node.cleanup === "function") {
+    node.cleanup();
+  }
+  if (typeof node.disconnectOutline === "function") {
+    node.disconnectOutline();
+  }
+  if (node.children) {
+    for (const child of node.children) {
+      teardownNode(child);
+    }
+  }
+}
+
 export function resetPanel(bodyId, countId) {
   const state = { loaded: false, pending: true, countId };
   panelRequests.set(bodyId, state);
   const body = document.getElementById(bodyId);
-  if (body) body.textContent = "";
+  if (body) {
+    teardownNode(body);
+    body.textContent = "";
+  }
   const count = document.getElementById(countId);
   if (count) count.textContent = "—";
   panelMessage(bodyId, state);
@@ -455,6 +476,13 @@ export function syncNodes(container, newNodesArr) {
     if (node.dataset.key) oldMap.set(node.dataset.key, node);
   }
 
+  const tornDown = new Set();
+  const teardownOnce = (node) => {
+    if (!node || tornDown.has(node)) return;
+    tornDown.add(node);
+    teardownNode(node);
+  };
+
   for (let i = 0; i < newNodesArr.length; i++) {
     const newNode = newNodesArr[i];
     const key = newNode.dataset.key;
@@ -471,6 +499,10 @@ export function syncNodes(container, newNodesArr) {
       nodeToPlace.classList.add("data-new");
     }
 
+    if (newNode !== nodeToPlace) {
+      teardownOnce(newNode);
+    }
+
     if (container.children[i] !== nodeToPlace) {
       if (container.children[i]) {
         container.insertBefore(nodeToPlace, container.children[i]);
@@ -481,7 +513,17 @@ export function syncNodes(container, newNodesArr) {
   }
 
   while (container.children.length > newNodesArr.length) {
-    container.removeChild(container.lastElementChild);
+    const removed = container.lastElementChild;
+    container.removeChild(removed);
+    teardownOnce(removed);
   }
+
+  const currentChildren = new Set(container.children);
+  for (const node of oldNodes) {
+    if (!currentChildren.has(node)) {
+      teardownOnce(node);
+    }
+  }
+
   if (state) panelMessage(container.id, state);
 }

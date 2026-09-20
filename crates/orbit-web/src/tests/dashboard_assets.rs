@@ -2059,10 +2059,20 @@ class Node {
   scrollIntoView() { this.scrolled += 1; }
   querySelectorAll(selector) { const out = []; const walk = (node) => { for (const child of node.children) { if (child.tag === selector) out.push(child); walk(child); } }; walk(this); return out; }
   querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
-  get textContent() { return this._text + this.children.map((child) => child.textContent || "").join(""); }
+  get textContent() { return this.children.length > 0 ? this.children.map((child) => child.textContent || "").join("") : this._text; }
   set textContent(value) { this._text = String(value); this.children = []; }
-  set innerHTML(value) { this.textContent = value; }
-  get innerHTML() { return this.textContent; }
+  set innerHTML(value) {
+    this._text = String(value);
+    this.children = [];
+    const regex = /<([a-z0-9]+)[^>]*>(.*?)<\/\1>/gis;
+    let match;
+    while ((match = regex.exec(this._text)) !== null) {
+      const child = new Node(match[1].toLowerCase());
+      child.textContent = match[2].replace(/<[^>]+>/g, "");
+      this.appendChild(child);
+    }
+  }
+  get innerHTML() { return this._text; }
   get lastElementChild() { return this.children[this.children.length - 1]; }
   set id(value) { this._id = String(value); byId.set(String(value), this); }
   get id() { return this._id || ""; }
@@ -2115,6 +2125,32 @@ globalThis.DOMPurify = {
   isSupported: true,
   sanitize: (html) => { sanitized.push(String(html)); return String(html).replace(/<script[\s\S]*?<\/script>/g, "").replace(/ style="[^"]*"/g, ""); },
 };
+const liveObservers = new Set();
+class FakeIntersectionObserver {
+  constructor(callback, options = {}) {
+    this.callback = callback;
+    this.options = options;
+    this.targets = new Set();
+    this.disconnected = false;
+    liveObservers.add(this);
+  }
+  observe(target) {
+    if (this.disconnected) throw new Error("cannot observe on disconnected observer");
+    this.targets.add(target);
+  }
+  unobserve(target) {
+    this.targets.delete(target);
+  }
+  disconnect() {
+    this.disconnected = true;
+    this.targets.clear();
+    liveObservers.delete(this);
+  }
+  trigger(entries) {
+    this.callback(entries);
+  }
+}
+globalThis.IntersectionObserver = FakeIntersectionObserver;
 
 const paragraph = "A long paragraph line that easily runs past the rendered measure and wraps more than once in the card. ";
 const longBody = [
@@ -2217,6 +2253,7 @@ targetCard.scrolled = 0;
 const cards = () => collect(panel, (node) => has(node, "comment-card"));
 if (cards().length !== 3) throw new Error(`expected three cards, got ${cards().length}`);
 if (cards()[0].id !== "comment-ORB-1-1") throw new Error(`oldest first by default: ${cards()[0].id}`);
+if (liveObservers.size !== 0) throw new Error("collapsed comment must not register an observer");
 
 // 2. a long comment is capped, lists its sections, and opens and closes.
 const long = cards()[1];
@@ -2228,14 +2265,23 @@ if (toggle.textContent !== "Show full comment") throw new Error(`unexpected togg
 toggle.listeners.click({ stopPropagation: () => {} });
 if (!has(long, "expanded") || has(long, "collapsed")) throw new Error(`the card did not expand: ${long.className}`);
 if (toggle.textContent !== "Collapse") throw new Error(`the expanded card must offer a collapse: ${toggle.textContent}`);
+if (liveObservers.size !== 1) throw new Error(`expanding a multi-section comment must register an IntersectionObserver, got ${liveObservers.size}`);
+const observer = Array.from(liveObservers)[0];
+if (observer.targets.size !== 3) throw new Error(`observer must observe each rendered h2, got ${observer.targets.size}`);
 const short = cards()[0];
 if (has(short, "long") || find(short, (node) => has(node, "comment-foot")).style.display !== "none") throw new Error("a short comment must not be capped or carry a disclosure footer");
 
-// 3. the outline appears for a body with three or more sections.
+// 3. the outline appears for a body with three or more sections and highlights as headings intersect.
 const outline = find(long, (node) => has(node, "comment-outline"));
 if (!outline || !outline.textContent.includes("In this comment")) throw new Error("an expanded multi-section comment needs its outline");
 const links = collect(outline, (node) => has(node, "comment-outline-link"));
 if (links.length !== 3 || links[0].textContent !== "Findings") throw new Error(`the outline must name each section: ${links.map((l) => l.textContent)}`);
+const headings = collect(long, (node) => node.tag === "h2");
+if (headings.length !== 3) throw new Error("long comment must render three h2 headings");
+observer.trigger([{ target: headings[1], isIntersecting: true }]);
+if (!has(links[1], "active") || has(links[0], "active")) throw new Error("scrolling past heading must highlight outline entry");
+observer.trigger([{ target: headings[2], isIntersecting: true }]);
+if (!has(links[2], "active") || has(links[1], "active")) throw new Error("scrolling past next heading must move outline highlight");
 
 // 4. identity, time and the per-comment actions.
 const head = find(long, (node) => has(node, "comment-head"));
@@ -2246,10 +2292,12 @@ if (!find(head, (node) => has(node, "comment-age")).textContent.trim()) throw ne
 if (find(cards()[0], (node) => has(node, "comment-agent-pill"))) throw new Error("a human comment must not be pilled as an agent");
 const raw = find(long, (node) => node.title && node.title.includes("Markdown source"));
 raw.listeners.click({ stopPropagation: () => {} });
+if (liveObservers.size !== 0) throw new Error("switching comment to raw must disconnect outline observer");
 const rawView = find(long, (node) => has(node, "comment-raw"));
 if (rawView.style.display === "none" || !rawView.textContent.includes("## Findings")) throw new Error("raw must show the original text");
 if (find(long, (node) => has(node, "comment-body")).style.display !== "none") throw new Error("raw must replace the rendered body");
 raw.listeners.click({ stopPropagation: () => {} });
+if (liveObservers.size !== 1) throw new Error("restoring rendered view must reconnect outline observer");
 if (rawView.style.display !== "none") throw new Error("raw must toggle back");
 find(long, (node) => node.title && node.title.startsWith("Copy")).listeners.click({ stopPropagation: () => {} });
 if (copied[copied.length - 1] !== longBody) throw new Error("copy must yield the comment's Markdown");
@@ -2270,19 +2318,52 @@ const orderToggle = find(panel, (node) => node.textContent === "oldest first");
 orderToggle.listeners.click({ stopPropagation: () => {} });
 if (cards()[0].id !== "comment-ORB-1-3") throw new Error(`newest first did not reorder: ${cards()[0].id}`);
 if (!String(store.get("orbit.dashboard.comments")).includes("true")) throw new Error("the order preference must persist");
+if (liveObservers.size !== 1) throw new Error(`reordering thread must not leak observers: got ${liveObservers.size}`);
+for (const obs of liveObservers) {
+  for (const target of obs.targets) {
+    let curr = target;
+    while (curr.parentNode) curr = curr.parentNode;
+    if (curr !== body) throw new Error("observed targets must belong to attached comment cards after reorder");
+  }
+}
 const reopened = cards().find((card) => card.id === "comment-ORB-1-2");
 if (!has(reopened, "expanded")) throw new Error("a rebuilt card must keep its disclosure");
 find(panel, (node) => node.textContent === "collapse all").listeners.click({ stopPropagation: () => {} });
 if (!has(cards().find((card) => card.id === "comment-ORB-1-2"), "collapsed")) throw new Error("collapse all must fold the thread");
+if (liveObservers.size !== 0) throw new Error("collapse all must disconnect all outline observers");
 
-// 7. the refresh keeps the operator's disclosure.
+// 7. the refresh keeps the operator's disclosure and does not leak observers or retain detached nodes.
 find(cards().find((card) => card.id === "comment-ORB-1-2"), (node) => has(node, "comment-toggle")).listeners.click({ stopPropagation: () => {} });
+if (liveObservers.size !== 1) throw new Error("re-expanding comment must register outline observer");
+for (let i = 0; i < 5; i++) {
+  renderTasks([task], context);
+}
+if (liveObservers.size !== 1) throw new Error(`repeated unchanged refreshes must not accumulate observers, got ${liveObservers.size}`);
+for (const obs of liveObservers) {
+  for (const target of obs.targets) {
+    let curr = target;
+    while (curr.parentNode) curr = curr.parentNode;
+    if (curr !== body) throw new Error("detached card retained live observer after unchanged refresh");
+  }
+}
 task.updated_at = "2026-09-20T11:00:00Z";
 renderTasks([task], context);
 const rebuilt = find(get("tasks-body"), (node) => node.dataset.key === "detail-ORB-1");
 if (rebuilt === detail) throw new Error("the detail should have been rebuilt by the changed task");
 const rebuiltCard = find(rebuilt, (node) => node.id === "comment-ORB-1-2");
 if (!has(rebuiltCard, "expanded")) throw new Error("the refresh dropped the operator's expansion");
+if (liveObservers.size !== 1) throw new Error(`rebuilding detail on changed task must not leak observers, got ${liveObservers.size}`);
+for (const obs of liveObservers) {
+  for (const target of obs.targets) {
+    let curr = target;
+    while (curr.parentNode) curr = curr.parentNode;
+    if (curr !== body) throw new Error("detached card retained live observer after task rebuild");
+  }
+}
+find(body, (node) => node.dataset.key === "task-ORB-1").listeners.click();
+if (liveObservers.size !== 0) throw new Error("collapsing task row must disconnect detail outline observers");
+find(body, (node) => node.dataset.key === "task-ORB-1").listeners.click();
+if (liveObservers.size !== 1) throw new Error("reopening task row must restore outline observer for expanded comment");
 
 // 8. the composer states that Markdown is rendered and previews the draft.
 find(rebuilt, (node) => node.className === "action comment").listeners.click({ stopPropagation: () => {} });
