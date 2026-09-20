@@ -259,13 +259,25 @@ fn a_readonly_record_refuses_a_guarded_update_pin() {
     let before = std::fs::read(&record).expect("record");
     freeze_records(root.path());
 
-    // Observation still resolves: `update --preflight` reports admission
-    // without reserving it, and never writes.
+    // The lock still resolves — a descriptor is all flock needs — but the
+    // admission answers up front that it could never record a candidate, so
+    // an updater refuses before staging instead of discovering it at pin
+    // time, with the executable already replaced.
     let update = GenerationUpdate::acquire(root.path()).expect("read-only admission observation");
+    let upfront = match update.ensure_can_record() {
+        Ok(()) => panic!("a read-only record must refuse before anything is staged"),
+        Err(error) => error.to_string(),
+    };
+    assert!(upfront.contains("cannot be written from here"), "{upfront}");
     let refusal = refusal_of(update.pin(NEW));
     assert!(refusal.contains("cannot be written from here"), "{refusal}");
     assert_eq!(std::fs::read(&record).expect("record"), before);
+
     thaw_records(root.path());
+    let writable = GenerationUpdate::acquire(root.path()).expect("writable admission");
+    writable
+        .ensure_can_record()
+        .expect("a writable record can record a candidate");
 }
 
 #[test]

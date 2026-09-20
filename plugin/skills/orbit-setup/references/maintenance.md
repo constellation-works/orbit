@@ -109,9 +109,12 @@ something other than the host-global root, the host-global root is locked
 *as well*: the replaced executable is the running host binary, which no root
 override moves, and clients started without an override pin the host-global
 root. A root override therefore isolates state, not host-binary replacement —
-a live client on either authority refuses the upgrade. `orbit update` admits
-against that same set for the invocation; a green preflight is not evidence
-for an update that would resolve different roots. It opens no runtime or
+a live client on either authority refuses the upgrade, and so does an
+authority whose `.generation.lock` this process cannot write (a read-only
+`~/.orbit`, say): the update could never record the candidate there, so it is
+refused before anything is staged rather than after the binary is replaced.
+`orbit update` admits against that same set for the invocation; a green
+preflight is not evidence for an update that would resolve different roots. It opens no runtime or
 stores and may create coordination lock files. It is an observation, not a
 reservation. `orbit update` reacquires and holds admission through
 replacement, then pins the candidate in every locked authority through

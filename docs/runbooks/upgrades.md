@@ -103,23 +103,39 @@ invocation can be refused by, in the order the update takes them:
    binary those clients are running and leave their record naming a generation
    no later host-global process could ever take over from.
 
-Both are listed in `admission_roots`, and a refusal names the authority that
-holds the live pin. So a live client refuses the upgrade whether it is pinned
-under `--root`/`ORBIT_ROOT` or on the host-global root, and a green preflight
-is only evidence for an update that used the same invocation's root resolution.
-There is no path where preflight consults a different set of authorities than
-the following `orbit update` locks.
+Both are listed in `admission_roots`, and a refusal names the authority it came
+from. So a live client refuses the upgrade whether it is pinned under
+`--root`/`ORBIT_ROOT` or on the host-global root, and a green preflight is only
+evidence for an update that used the same invocation's root resolution. There is
+no path where preflight consults a different set of authorities than the
+following `orbit update` locks.
+
+Admission also requires each authority's `.generation.lock` to be *writable*,
+and checks that before anything is downloaded, staged or replaced. Writability
+belongs to the record rather than to the lock — a participant can join an
+already-recorded generation from a read-only mount — so an authority that can
+never record a takeover would otherwise only refuse at pin time, once the
+executable had already been swapped. A `~/.orbit` on a read-only mount, or one
+whose record another user owns, therefore refuses `orbit update --root
+<scratch>` up front with `the record cannot be written from here` naming that
+root, rather than replacing the binary and returning `needs_recovery` against a
+host-global record it cannot correct. `--preflight` takes the same admissions,
+so a green preflight is evidence the update can pin every authority it
+reported.
 
 Isolated `HOME=` is the other working isolation — it relocates `~/.orbit`
 itself, which is what in-process MCP roundtrip fixtures use, and it moves the
 host-global authority with it. What a root override protects is *state*
 isolation, not host-binary replacement: a read-only unpinned `~/.orbit` (the
 agent-executor / Cowork sandbox) still cannot block `orbit --root <scratch>
-init` or `--root` / isolated-HOME `--preflight`, because an unpinned root
-refuses nothing — but a `--root` override never exempts a host-binary
-replacement from the host-global root's live clients, and an environment with
-no resolvable home has no host-global authority to observe them through, so
-`orbit update` refuses there rather than replacing blind. Coordination lock
+init`, because that invocation pins only its own resolved root and an unpinned
+root refuses nothing. `orbit update` and its `--preflight` are the exception:
+they admit against the host-global root too, so a `--root` override never
+exempts a host-binary replacement from that root's live clients — nor from a
+record it cannot write — and an environment with no resolvable home has no
+host-global authority to observe them through, so `orbit update` refuses there
+rather than replacing blind. Replace the host binary from outside such a
+sandbox, or give the sandbox a writable host-global root. Coordination lock
 files may be created. Exit 0 returns:
 
 ```json

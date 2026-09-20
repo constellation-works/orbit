@@ -42,11 +42,20 @@ pub struct GenerationUpdate {
 const QUIESCE: &str = "Quiesce the existing Orbit processes through their owning clients, \
      then retry. Do not delete admission files or replay a mutation whose reply was lost";
 
+/// Remedy for a record this process can read but never rewrite.
+const UNWRITABLE: &str = "Run the recorded generation, or retry where the Orbit root is writable. \
+     A read-only mount, or a sandbox that denies writes under this root, \
+     cannot record a takeover";
+
 const ADMISSION_LOCK: &str = ".generation-admission.lock";
 const GENERATION_LOCK: &str = ".generation.lock";
 
 fn refusal(detail: impl std::fmt::Display) -> OrbitError {
     refused(detail, QUIESCE)
+}
+
+fn unwritable(detail: impl std::fmt::Display) -> OrbitError {
+    refused(detail, UNWRITABLE)
 }
 
 fn refused(detail: impl std::fmt::Display, remedy: &str) -> OrbitError {
@@ -237,8 +246,10 @@ fn open(root: &Path, name: &str) -> Result<Record, OrbitError> {
                 writable: false,
             })
             // The read-only retry only explains its own failure. Report why
-            // the participating open was refused.
-            .map_err(|_| refusal(error)),
+            // the participating open was refused — and since not even an
+            // absent record could be created here, the root's writability is
+            // the remedy rather than quiescing processes.
+            .map_err(|_| unwritable(format!("the generation record cannot be opened ({error})"))),
     }
 }
 
@@ -353,6 +364,22 @@ impl GenerationUpdate {
         })
     }
 
+    /// Refuse an admission that could never record a candidate generation.
+    ///
+    /// [`Self::pin`] repeats this check, but an updater only reaches `pin`
+    /// after it has already replaced the executable. A caller that admits
+    /// against several authorities asks each of them this up front, so a root
+    /// whose record is read-only refuses the run while nothing is staged.
+    pub fn ensure_can_record(&self) -> Result<(), OrbitError> {
+        if self.generation.writable {
+            return Ok(());
+        }
+        Err(unwritable(
+            "this authority's generation record cannot be written from here, so a \
+             candidate generation could never be recorded there",
+        ))
+    }
+
     /// After replacement, pin the candidate through convergence. Old pinned
     /// executables cannot enter between the updater and its candidate children.
     pub fn pin(mut self, digest: &str) -> Result<GenerationGuard, OrbitError> {
@@ -362,12 +389,9 @@ impl GenerationUpdate {
         if !self.generation.writable {
             // Admitting here would leave joiners reading a record that names
             // a generation other than the one actually running.
-            return Err(refused(
+            return Err(unwritable(
                 "this executable generation differs from the recorded one and the record \
                  cannot be written from here",
-                "Run the recorded generation, or retry where the Orbit root is writable. \
-                 A read-only mount, or a sandbox that denies writes under this root, \
-                 cannot record a takeover",
             ));
         }
         self.generation

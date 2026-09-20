@@ -808,6 +808,83 @@ fn an_override_update_pins_the_candidate_in_every_authority_it_locked() {
     }
 }
 
+/// A host-global record that cannot be rewritten has to refuse the run up
+/// front. Writability belongs to the record rather than the lock, so a check
+/// deferred to `pin` would only run once the executable had been replaced,
+/// leaving the host-global authority naming a generation that no longer
+/// exists and cannot be corrected from here.
+#[cfg(unix)]
+#[test]
+fn an_unwritable_host_global_record_refuses_an_override_update_before_staging() {
+    use orbit_common::fs::generation::GenerationGuard;
+    const RECORDED: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+    let fixture = Fixture::new("0.18.0");
+    fixture.publish("0.19.0", FakeBinary::Healthy);
+    let mut environment = fixture.environment();
+    let (_override_root, host_global) = split_authorities(&mut environment);
+    drop(GenerationGuard::acquire(&host_global, RECORDED).expect("host-global record"));
+    let record = host_global.join(".generation.lock");
+    let _frozen = ReadOnlyFile::freeze(record.clone());
+    let before = std::fs::read(&fixture.executable).expect("installed bytes");
+
+    let error =
+        run_update(&environment, &request()).expect_err("an unwritable authority must refuse");
+
+    let message = error.to_string();
+    assert!(message.contains("cannot be written from here"), "{message}");
+    assert!(
+        message.contains(&host_global.display().to_string()),
+        "the refusal must name the authority that cannot record the candidate: {message}"
+    );
+    assert_eq!(
+        std::fs::read(&fixture.executable).expect("installed bytes"),
+        before,
+        "the executable must not be replaced"
+    );
+    assert_eq!(fixture.installed_reports(), "orbit 0.18.0");
+    assert_eq!(fixture.install_dir_entries(), vec!["orbit".to_string()]);
+    assert!(fixture.invocations().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(&record).expect("generation record"),
+        format!("1:{RECORDED}\n"),
+        "the refused run must leave the record it could not write intact"
+    );
+}
+
+/// A record frozen for the lifetime of one test, thawed on drop so the
+/// fixture's temporary directory can still be removed.
+#[cfg(unix)]
+struct ReadOnlyFile {
+    path: PathBuf,
+}
+
+#[cfg(unix)]
+impl ReadOnlyFile {
+    fn freeze(path: PathBuf) -> Self {
+        chmod(&path, 0o444);
+        Self { path }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ReadOnlyFile {
+    fn drop(&mut self) {
+        chmod(&self.path, 0o644);
+    }
+}
+
+#[cfg(unix)]
+fn chmod(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(path)
+        .unwrap_or_else(|error| panic!("metadata {}: {error}", path.display()))
+        .permissions();
+    permissions.set_mode(mode);
+    std::fs::set_permissions(path, permissions)
+        .unwrap_or_else(|error| panic!("chmod {}: {error}", path.display()));
+}
+
 #[test]
 fn live_generation_refuses_before_installation_or_candidate_execution() {
     use orbit_common::fs::generation::GenerationGuard;
