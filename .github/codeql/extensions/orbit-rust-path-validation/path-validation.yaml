@@ -106,6 +106,12 @@ extensions:
           "manual",
         ]
       - [
+          "orbit_config::store::validated_config_store_path",
+          "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",
+          "path-injection",
+          "manual",
+        ]
+      - [
           "orbit_cmd::diagnostics::validated_diagnostics_category_dir",
           "ReturnValue.Field[core::result::Result::Ok(0)]",
           "path-injection",
@@ -190,6 +196,13 @@ extensions:
         ]
       - [
           "orbit_common::fs::generation::generation_path_is_contained",
+          "Argument[0]",
+          "true",
+          "path-injection",
+          "manual",
+        ]
+      - [
+          "orbit_config::store::config_store_path_is_contained",
           "Argument[0]",
           "true",
           "path-injection",

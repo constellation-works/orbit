@@ -718,6 +718,84 @@ fn grok_crew_effort_round_trips_supported_value() {
 }
 
 #[test]
+fn open_refuses_a_path_whose_final_component_is_parent_dir() {
+    let dir = tempdir().expect("tempdir");
+    let via_parent = dir.path().join("missing").join("..");
+    let error = match ConfigStore::open(ConfigScope::Workspace, &via_parent) {
+        Err(error) => error,
+        Ok(_) => panic!("a config path ending in '..' must be refused"),
+    };
+    assert!(
+        error.to_string().contains("config path has no file name"),
+        "{error}"
+    );
+}
+
+#[test]
+fn open_treats_a_missing_parent_as_an_empty_document() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir
+        .path()
+        .join("nested")
+        .join("missing")
+        .join("config.toml");
+    let store = ConfigStore::open(ConfigScope::Workspace, &path)
+        .expect("missing parent is an empty document");
+    assert!(!store.exists_on_disk());
+    assert_eq!(
+        store
+            .effective_value("workflow.base_branch")
+            .expect("default still applies"),
+        serde_json::json!("main")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn open_refuses_a_symlinked_config_file() {
+    let dir = tempdir().expect("tempdir");
+    let real = dir.path().join("real.toml");
+    fs::write(&real, "[workflow]\nbase_branch = \"agent-main\"\n").expect("write real config");
+    let link = config_path(dir.path());
+    std::os::unix::fs::symlink(&real, &link).expect("symlink config leaf");
+
+    let error = match ConfigStore::open(ConfigScope::Workspace, &link) {
+        Err(error) => error,
+        Ok(_) => panic!("a symlinked config file must be refused"),
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("config path must not be a symlink"),
+        "{error}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn open_follows_a_symlinked_parent_directory() {
+    let dir = tempdir().expect("tempdir");
+    let real_dir = dir.path().join("real");
+    fs::create_dir(&real_dir).expect("create real parent");
+    fs::write(
+        real_dir.join("config.toml"),
+        "[workflow]\nbase_branch = \"agent-main\"\n",
+    )
+    .expect("write config under real parent");
+    let link_dir = dir.path().join("link");
+    std::os::unix::fs::symlink(&real_dir, &link_dir).expect("symlink parent");
+
+    let store = ConfigStore::open(ConfigScope::Workspace, config_path(&link_dir))
+        .expect("symlinked parent is allowed");
+    assert_eq!(
+        store
+            .effective_value("workflow.base_branch")
+            .expect("read through canonical parent"),
+        serde_json::json!("agent-main")
+    );
+}
+
+#[test]
 fn open_for_workspace_set_fresh_starts_empty() {
     let dir = tempdir().expect("tempdir");
     let workspace_path = config_path(dir.path());
