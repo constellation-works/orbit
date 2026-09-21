@@ -13,7 +13,9 @@
 //! extras a provider declares it requires, and the named `ORBIT_*` execution
 //! envelope below. The `ORBIT_` prefix is *not* a wildcard: privilege-bearing
 //! names in that namespace (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`)
-//! must not reach an untrusted child.
+//! must not reach an untrusted child — including when a `pass`/`extras` list
+//! names one explicitly, since that list can originate from an untrusted
+//! source (a plugin manifest's `env_pass`) and not just operator config.
 //! Credential-name and value-shape heuristics are deliberately *not*
 //! consulted — they cannot classify names an operator's environment actually
 //! uses, and treating them as a gate is what let the bypass exist.
@@ -72,6 +74,17 @@ fn is_orbit_envelope_name(name: &str) -> bool {
             .any(|prefix| name.starts_with(prefix))
 }
 
+/// An `ORBIT_` name that is not part of the named envelope above.
+///
+/// `pass` and `extras` are name lists supplied by a caller (an operator's
+/// `[execution.env] pass`, a plugin manifest's `env_pass`) rather than the
+/// engine itself, so a privilege-bearing name such as `ORBIT_OPERATOR` or
+/// `ORBIT_WORKSPACE_CLAIM_TOKEN` must never become admitted just because it
+/// was named explicitly: the exclusion holds regardless of who is asking.
+fn is_privilege_bearing_orbit_name(name: &str) -> bool {
+    name.starts_with("ORBIT_") && !is_orbit_envelope_name(name)
+}
+
 /// The environment an allowlist-governed agent subprocess is launched with:
 /// [`AGENT_SUBPROCESS_BASELINE_VARS`], the configured `pass` names, the
 /// `extras` a provider declares it requires, and the named Orbit execution
@@ -96,8 +109,17 @@ pub fn allowlisted_child_env_from(
     let admitted: BTreeSet<&str> = AGENT_SUBPROCESS_BASELINE_VARS
         .iter()
         .copied()
-        .chain(pass.iter().map(String::as_str))
-        .chain(extras.iter().copied())
+        .chain(
+            pass.iter()
+                .map(String::as_str)
+                .filter(|name| !is_privilege_bearing_orbit_name(name)),
+        )
+        .chain(
+            extras
+                .iter()
+                .copied()
+                .filter(|name| !is_privilege_bearing_orbit_name(name)),
+        )
         .collect();
     let mut env: BTreeMap<String, String> = parent
         .iter()

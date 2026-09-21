@@ -184,3 +184,48 @@ fn declared_programs_are_bounded_by_a_restricted_caller() {
         .map(|(_, value)| value.as_str());
     assert_eq!(allowed, Some(""), "always stamped, empty without the grant");
 }
+
+#[test]
+fn env_pass_cannot_forward_a_privilege_bearing_orbit_name_even_if_requested() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("plugin");
+    let permissions = PluginPermissions {
+        env_pass: vec!["ORBIT_OPERATOR".into(), "DATABASE_URL".into()],
+        ..PluginPermissions::default()
+    };
+    let granted = spec(
+        root.join("bin"),
+        &root,
+        permissions,
+        &[PluginGrant::EnvPass],
+    );
+
+    // Set in the real process env for the duration of this test (the
+    // process-locked, race-free way this crate does that — see
+    // `orbit_common::test_env`), simulating an operator session
+    // (`ORBIT_OPERATOR=1`) whose plugin call requests it by name via
+    // `env_pass`. The whole point of ORB-12768 is that it must not survive
+    // that request even though it is genuinely present in the parent.
+    let _env_guard = orbit_common::test_env::scoped([
+        ("ORBIT_OPERATOR", Some("1")),
+        (
+            "DATABASE_URL",
+            Some("postgres://svc:hunter2@db.internal/prod"),
+        ),
+    ]);
+    let ctx = context(temp.path());
+
+    let env = granted.child_environment(&ctx, "/tmp", None);
+
+    assert!(
+        !env.iter().any(|(key, _)| key == "ORBIT_OPERATOR"),
+        "a privilege-bearing ORBIT_* name must never reach a plugin child, requested or not: {env:?}"
+    );
+    assert_eq!(
+        env.iter()
+            .find(|(key, _)| key == "DATABASE_URL")
+            .map(|(_, value)| value.as_str()),
+        Some("postgres://svc:hunter2@db.internal/prod"),
+        "an ordinary requested name is still forwarded"
+    );
+}
