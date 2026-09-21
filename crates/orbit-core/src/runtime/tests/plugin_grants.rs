@@ -2,12 +2,15 @@
 //! grants were authorized and for which plugin, and a row it does not cover is
 //! never verified into authority [ORB-12778].
 
+use std::path::Path;
+
 use orbit_types::plugin::InstalledPlugin;
 
 use super::super::plugin_grants::{
-    plugin_grant_witness_path, plugin_grants_digest, record_authorized_grants,
+    plugin_grant_witness_path, plugin_grants_digest, record_authorized_grants, verify_install_path,
     verify_recorded_grants,
 };
+use super::super::plugin_host::plugin_install_path;
 
 fn record(name: &str, enabled: bool, grants: &[&str]) -> InstalledPlugin {
     InstalledPlugin {
@@ -131,5 +134,73 @@ fn a_record_that_cannot_be_read_as_this_hosts_authorization_is_refused() {
         let message = verify_recorded_grants(global_root, &record("demo", true, &["unsandboxed"]))
             .expect_err("an unusable record is not authority");
         assert!(message.contains(expected), "{message}");
+    }
+}
+
+fn record_at(name: &str, install_path: &Path) -> InstalledPlugin {
+    let mut installed = record(name, true, &[]);
+    installed.install_path = install_path.to_string_lossy().into_owned();
+    installed
+}
+
+/// The witness does not cover `install_path` (module docs), so the path is
+/// held to the install root structurally: a row may name any tree under
+/// `plugins/<ns>/`, and nothing else [ORB-12785].
+#[test]
+fn an_install_path_is_accepted_only_strictly_beneath_the_namespace_install_dir() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path();
+    let versioned = plugin_install_path(global_root, "demo", "1.0.0");
+    std::fs::create_dir_all(&versioned).expect("create install dir");
+
+    verify_install_path(global_root, &record_at("demo", &versioned))
+        .expect("the versioned install directory is where `orbit plugin add` places the tree");
+    verify_install_path(
+        global_root,
+        &record_at("demo", &plugin_install_path(global_root, "demo", "2.0.0")),
+    )
+    .expect("a version directory that does not exist yet is still beneath the install root");
+
+    #[cfg(unix)]
+    {
+        let current = super::super::plugin_host::plugin_current_link(global_root, "demo");
+        std::os::unix::fs::symlink(&versioned, &current).expect("link current");
+        verify_install_path(global_root, &record_at("demo", &current))
+            .expect("the host's own `current` link resolves into the install root");
+    }
+
+    let elsewhere = global_root.join("state/logs/evil");
+    std::fs::create_dir_all(&elsewhere).expect("create a tree under a backend write root");
+    for (recorded, why) in [
+        (elsewhere.clone(), "a tree under a backend write root"),
+        (
+            plugin_install_path(global_root, "demo", "1.0.0").join("../../../state/logs/evil"),
+            "a `..` escape spelled beneath the install root",
+        ),
+        (
+            plugin_install_path(global_root, "other", "1.0.0"),
+            "another namespace's install",
+        ),
+        (
+            global_root.join("plugins").join("demo"),
+            "the namespace directory itself rather than a tree beneath it",
+        ),
+        (
+            global_root.join("plugins").join("demo-2").join("1.0.0"),
+            "a sibling whose name merely extends the namespace",
+        ),
+        (
+            Path::new("plugins/demo/1.0.0").to_path_buf(),
+            "a relative path",
+        ),
+    ] {
+        let message =
+            verify_install_path(global_root, &record_at("demo", &recorded)).expect_err(why);
+        assert!(
+            message.contains(&recorded.to_string_lossy().into_owned())
+                && message.contains(&global_root.join("plugins/demo").display().to_string())
+                && message.contains("orbit plugin remove demo"),
+            "{why}: the operator is told the recorded and the expected path: {message}"
+        );
     }
 }

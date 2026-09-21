@@ -2,9 +2,10 @@
 //!
 //! Fail closed per plugin (design `docs/design/plugins/1_scope.md` §4.9): a
 //! plugin whose manifest no longer loads, whose `requires` no longer hold,
-//! whose namespace collides, or whose required grants the operator has not
-//! recorded is reported as one diagnostic and registered inactive; every
-//! built-in and every other plugin is untouched.
+//! whose namespace collides, whose required grants the operator has not
+//! recorded, or whose `plugins` row this host cannot verify is reported as one
+//! diagnostic and registered inactive; every built-in and every other plugin is
+//! untouched.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -29,7 +30,7 @@ use orbit_types::plugin::{
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpToolDefinition, McpToolScope};
 
-use super::plugin_grants::verify_recorded_grants;
+use super::plugin_grants::{verify_install_path, verify_recorded_grants};
 
 /// Why a plugin is not on the active tool surface, and what would fix it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -306,11 +307,16 @@ pub fn load_host_plugins(
         // The grant set a row records is only authority when `orbit plugin
         // enable` wrote it. A backend that can write `orbit.db` can write its
         // own row, so an enabled row is checked against the authorization
-        // witness before anything it claims is honoured [ORB-12778].
+        // witness before anything it claims is honoured [ORB-12778]. The
+        // witness does not cover `install_path`, so the path is checked
+        // structurally beside it: a row that keeps its authorized grant names
+        // but points them at a tree outside `plugins/<ns>/` is a tree the
+        // backend could have written itself, and nothing is read from it
+        // [ORB-12785].
         if plugin.enabled
-            && let Err(message) = verify_recorded_grants(global_root, plugin)
+            && let Err((check, message)) = verify_enabled_row(global_root, plugin)
         {
-            audit_unauthorized_grants(store, plugin, &message);
+            audit_refused_row(store, plugin, check, &message);
             load.diagnostics.push(PluginDiagnostic {
                 plugin: plugin.name.clone(),
                 status: PluginStatus::Inactive,
@@ -378,8 +384,21 @@ pub fn load_host_plugins(
     load
 }
 
-/// Write the refusal of an unauthorized grant set to the audit trail
-/// [ORB-12778].
+/// The row checks that run before anything the row names is read: the grant
+/// witness [ORB-12778], then the install path [ORB-12785]. `Err` carries the
+/// audit subcommand naming the check that refused, and its diagnostic.
+fn verify_enabled_row(
+    global_root: &Path,
+    installed: &InstalledPlugin,
+) -> Result<(), (&'static str, String)> {
+    verify_recorded_grants(global_root, installed).map_err(|message| ("verify_grants", message))?;
+    verify_install_path(global_root, installed)
+        .map_err(|message| ("verify_install_path", message))?;
+    Ok(())
+}
+
+/// Write the refusal of a `plugins` row — an unauthorized grant set
+/// [ORB-12778] or a relocated install [ORB-12785] — to the audit trail.
 ///
 /// The load pass is the only place this is visible, and a refusal that left no
 /// durable record would be indistinguishable from a plugin the operator had
@@ -391,11 +410,11 @@ pub fn load_host_plugins(
 /// not registered either way, and `host_plugin_registry` deliberately opens the
 /// store read-only, so an insert failure here is an expected outcome rather
 /// than a new one to propagate.
-fn audit_unauthorized_grants(store: &Store, installed: &InstalledPlugin, message: &str) {
+fn audit_refused_row(store: &Store, installed: &InstalledPlugin, check: &str, message: &str) {
     let params = AuditEventInsertParams {
-        execution_id: audit_execution_id("plugin-grants"),
+        execution_id: audit_execution_id("plugin-load"),
         command: "plugin.load".to_string(),
-        subcommand: Some("verify_grants".to_string()),
+        subcommand: Some(check.to_string()),
         tool_name: None,
         target_type: Some("plugin".to_string()),
         target_id: Some(installed.name.clone()),
@@ -406,8 +425,8 @@ fn audit_unauthorized_grants(store: &Store, installed: &InstalledPlugin, message
         working_directory: std::env::current_dir()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_else(|_| ".".to_string()),
-        // The claimed set, not the authorized one: what the row asked this
-        // host to honour is the fact an operator investigating needs.
+        // The claimed set and path, not the authorized ones: what the row
+        // asked this host to honour is the fact an operator investigating needs.
         arguments_json: Some(
             serde_json::json!({
                 "plugin": installed.name,
@@ -456,7 +475,8 @@ fn audit_unauthorized_grants(store: &Store, installed: &InstalledPlugin, message
         tracing::error!(
             target: "orbit.core.plugin",
             plugin = %installed.name,
-            "could not audit the refused plugin grant set: {error}",
+            check,
+            "could not audit the refused plugin row: {error}",
         );
     }
 }

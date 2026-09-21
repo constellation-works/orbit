@@ -24,6 +24,7 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::redact_sensitive_env_text;
+use crate::runtime::plugin_grants::verify_install_path;
 use crate::runtime::run_input::{
     managed_run_context_from_env, managed_run_context_run_id_from_env,
 };
@@ -807,7 +808,8 @@ pub(crate) use orbit_tools::plugin::ORBIT_PLUGIN_ENV;
 /// recorded `permissions.orbit_tools` once the host has granted `orbit_tools`.
 /// Identity is the host-issued session (token plus process ancestry), not
 /// `ORBIT_PLUGIN`. Anything else is refused before the tool runs; a missing
-/// install, missing grant, or unloadable manifest refuses everything.
+/// install, missing grant, unloadable manifest, or a row whose install path is
+/// not one this host installed refuses everything.
 fn enforce_plugin_callback_allowlist(
     global_root: &Path,
     plugins: &dyn PluginStoreBackend,
@@ -815,6 +817,7 @@ fn enforce_plugin_callback_allowlist(
 ) -> Result<(), OrbitError> {
     apply_callback_resolution(
         resolve_plugin_callback_session(global_root)?,
+        global_root,
         |plugin| plugins.get_plugin(plugin),
         name,
     )
@@ -831,11 +834,17 @@ fn enforce_plugin_callback_allowlist_from_root(
     let db =
         orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
     let store = Store::open(&db)?;
-    apply_callback_resolution(resolution, |plugin| store.get_plugin(plugin), name)
+    apply_callback_resolution(
+        resolution,
+        global_root,
+        |plugin| store.get_plugin(plugin),
+        name,
+    )
 }
 
 fn apply_callback_resolution(
     resolution: CallbackResolution,
+    global_root: &Path,
     get_plugin: impl Fn(&str) -> Result<Option<InstalledPlugin>, OrbitError>,
     name: &str,
 ) -> Result<(), OrbitError> {
@@ -844,7 +853,7 @@ fn apply_callback_resolution(
         CallbackResolution::Identified(identity) => {
             let installed = get_plugin(&identity.name)?;
             stamp_callback_plugin_provenance(&identity, installed.as_ref());
-            refuse_unless_recorded(installed.as_ref(), &identity.name, name)
+            refuse_unless_recorded(global_root, installed.as_ref(), &identity.name, name)
         }
         CallbackResolution::InvalidCredential(identity) => {
             if let Some(identity) = identity.as_ref() {
@@ -873,12 +882,13 @@ fn apply_callback_resolution(
 }
 
 fn refuse_unless_recorded(
+    global_root: &Path,
     installed: Option<&InstalledPlugin>,
     plugin: &str,
     name: &str,
 ) -> Result<(), OrbitError> {
     let allowed = match installed {
-        Some(installed) => recorded_orbit_tools(installed)?,
+        Some(installed) => recorded_orbit_tools(global_root, installed)?,
         None => Vec::new(),
     };
     if allowed.iter().any(|tool| tool == name) {
@@ -909,7 +919,10 @@ fn take_callback_plugin_provenance() -> Option<PluginProvenance> {
     CALLBACK_PLUGIN_PROVENANCE.with(|cell| cell.replace(None))
 }
 
-fn recorded_orbit_tools(installed: &InstalledPlugin) -> Result<Vec<String>, OrbitError> {
+fn recorded_orbit_tools(
+    global_root: &Path,
+    installed: &InstalledPlugin,
+) -> Result<Vec<String>, OrbitError> {
     if !installed.enabled
         || !installed
             .grants
@@ -918,6 +931,12 @@ fn recorded_orbit_tools(installed: &InstalledPlugin) -> Result<Vec<String>, Orbi
     {
         return Ok(Vec::new());
     }
+    // The allowlist is read from the tree the row names, and the row is
+    // writable by the very backend this gate confines. The load pass checks
+    // the same thing [ORB-12785], but a backend already running can relocate
+    // its row without a reload, so the path is checked again here rather than
+    // reading an allowlist out of a manifest the backend wrote.
+    verify_install_path(global_root, installed).map_err(OrbitError::PolicyDenied)?;
     let loaded = load_plugin_dir(Path::new(&installed.install_path)).map_err(|error| {
         OrbitError::PolicyDenied(format!(
             "plugin '{}' callback allowlist cannot be read from the recorded install: {error}",

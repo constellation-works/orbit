@@ -6,6 +6,7 @@ use orbit_types::plugin::{InstalledPlugin, PluginProvenance};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
@@ -795,9 +796,32 @@ fn dispatch_records_correlation_fields_from_env() {
 }
 
 fn record_callback_plugin(runtime: &OrbitRuntime, orbit_tools: &[&str]) {
+    let root = plugin_install_path(&runtime.global_root(), "callback", "1.0.0");
+    record_callback_plugin_tree(&root, orbit_tools);
+    runtime
+        .stores()
+        .plugins()
+        .upsert_plugin(&InstalledPlugin {
+            name: "callback".to_string(),
+            version: "1.0.0".to_string(),
+            source: "fixture".to_string(),
+            install_path: root.to_string_lossy().into_owned(),
+            manifest_digest: "0".repeat(64),
+            enabled: true,
+            grants: vec!["orbit_tools".to_string()],
+            first_party: false,
+            certified_orbit_version: None,
+            installed_at: String::new(),
+            updated_at: String::new(),
+        })
+        .expect("record the install");
+}
+
+/// The plugin tree alone, so a test can write a second one somewhere the row
+/// has no business pointing at.
+fn record_callback_plugin_tree(root: &Path, orbit_tools: &[&str]) {
     let name = "callback";
     let version = "1.0.0";
-    let root = plugin_install_path(&runtime.global_root(), name, version);
     std::fs::create_dir_all(root.join("bin")).expect("create plugin bin");
     let backend = root.join("bin/backend.sh");
     std::fs::write(
@@ -819,23 +843,6 @@ fn record_callback_plugin(runtime: &OrbitRuntime, orbit_tools: &[&str]) {
         ),
     )
     .expect("write manifest");
-    runtime
-        .stores()
-        .plugins()
-        .upsert_plugin(&InstalledPlugin {
-            name: name.to_string(),
-            version: version.to_string(),
-            source: "fixture".to_string(),
-            install_path: root.to_string_lossy().into_owned(),
-            manifest_digest: "0".repeat(64),
-            enabled: true,
-            grants: vec!["orbit_tools".to_string()],
-            first_party: false,
-            certified_orbit_version: None,
-            installed_at: String::new(),
-            updated_at: String::new(),
-        })
-        .expect("record the install");
 }
 
 fn set_plugin_callback_env(plugin: &str, allowed_tools: Option<&str>) {
@@ -933,6 +940,50 @@ fn plugin_callback_allowlist_ignores_forged_or_unset_env() {
             .expect_err("rewritten env must not admit an unrecorded tool"),
         "orbit.search",
     );
+}
+
+/// A backend already running cannot widen its own allowlist by relocating its
+/// row: the callback gate reads `permissions.orbit_tools` out of the tree the
+/// row names, so the path is held to the install root on every call, not only
+/// at load [ORB-12785].
+#[test]
+fn plugin_callback_allowlist_refuses_a_row_repointed_outside_the_install_root() {
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    record_callback_plugin(&runtime, &["orbit.task.list"]);
+    let _session = bind_live_callback_session(&runtime);
+    set_plugin_callback_env("callback", None);
+    dispatch_cli(&runtime, "orbit.task.list").expect("the recorded install admits its own tool");
+
+    // The attacker's tree, under a directory `orbit_tools` lets the backend
+    // write, with a manifest that asks for everything.
+    let global_root = runtime.global_root();
+    let evil = global_root.join("state/logs/evil");
+    record_callback_plugin_tree(&evil, &["orbit.task.list", "orbit.search"]);
+    let mut installed = runtime
+        .stores()
+        .plugins()
+        .get_plugin("callback")
+        .expect("read plugin")
+        .expect("recorded");
+    installed.install_path = evil.to_string_lossy().into_owned();
+    runtime
+        .stores()
+        .plugins()
+        .upsert_plugin(&installed)
+        .expect("the attacker's row write succeeds; the gate is what refuses it");
+
+    for tool in ["orbit.search", "orbit.task.list"] {
+        let error = dispatch_cli(&runtime, tool)
+            .expect_err("no allowlist is read out of a tree outside the install root");
+        let message = error.to_string();
+        assert!(
+            matches!(error, OrbitError::PolicyDenied(_))
+                && message.contains(&installed.install_path)
+                && message.contains(&global_root.join("plugins/callback").display().to_string()),
+            "{tool}: {message}"
+        );
+    }
 }
 
 #[test]

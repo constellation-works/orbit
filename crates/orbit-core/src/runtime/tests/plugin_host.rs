@@ -8,7 +8,7 @@ use orbit_tools::ToolRegistry;
 use orbit_types::plugin::{InstalledPlugin, PluginStatus};
 use orbit_types::telemetry::AuditEventStatus;
 
-use super::super::plugin_grants::record_authorized_grants;
+use super::super::plugin_grants::{plugin_grant_witness_path, record_authorized_grants};
 use super::super::plugin_host::{load_host_plugins, plugin_install_path};
 
 fn write_plugin(root: &Path, name: &str, requires: &str) {
@@ -286,6 +286,135 @@ fn grants_injected_into_the_store_row_are_refused_instead_of_registered() {
             .as_deref()
             .is_some_and(|arguments| arguments.contains("unsandboxed")),
         "the row's claimed grant set is on the audit row: {:?}",
+        denial.arguments_json
+    );
+    assert_eq!(denial.error_message.as_deref(), Some(diagnostic.as_str()));
+}
+
+/// The composition gap ORB-12785 closes: the witness binds the grant *names*,
+/// not the tree they apply to. A backend enabled with `fs,orbit_tools` writes a
+/// second plugin tree under one of its own write roots (`state/logs`), then
+/// repoints the row's `install_path` and `manifest_digest` at it. Name,
+/// enabled and grants are untouched, so the witness still matches; the digest
+/// check passes because both sides are now the attacker's; the recorded grant
+/// names cover whatever the new manifest requests. Without the install-path
+/// check the plugin registers Active with the attacker's backend.
+#[test]
+fn a_row_repointed_at_a_tree_outside_the_install_root_is_refused_with_the_witness_intact() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let orbit_dir = temp.path().join("repo/.orbit");
+    std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
+    write_plugin(
+        &plugin_install_path(&global_root, "demo", "1.0.0"),
+        "demo",
+        "",
+    );
+
+    // The authorizing path, exactly as `orbit plugin enable demo --grant
+    // fs,orbit_tools` records it.
+    let grants = ["fs".to_string(), "orbit_tools".to_string()];
+    let store = Store::open(&global_root.join("orbit.db")).expect("open store");
+    let mut installed = record(&global_root, "demo");
+    installed.grants = grants.to_vec();
+    store
+        .with_transaction(|tx| tx.upsert_plugin(&installed))
+        .expect("record the install");
+    record_authorized_grants(&global_root, "demo", true, &grants).expect("authorize the grants");
+
+    // The attacker's tree, under a directory the `orbit_tools` sandbox lets the
+    // backend write. Its manifest asks for more than the granted tree did.
+    let evil = global_root.join("state/logs/evil");
+    write_plugin_verb(&evil, "demo", "escalate", "");
+    let manifest = evil.join("plugin.yaml");
+    let body = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(
+        &manifest,
+        body.replace(
+            "  backend:\n",
+            "  permissions:\n    fs:\n      write: [\"/var/tmp\"]\n    orbit_tools: [orbit.task.update]\n  backend:\n",
+        ),
+    )
+    .expect("widen the attacker's manifest");
+    let evil_digest =
+        orbit_tools::plugin::manifest_digest(&std::fs::read(&manifest).expect("bytes"));
+
+    // The row write: `UPDATE plugins SET install_path=…, manifest_digest=…`
+    // through the store's own upsert, leaving name, enabled and grants alone.
+    let mut repointed = installed.clone();
+    repointed.install_path = evil.to_string_lossy().into_owned();
+    repointed.manifest_digest = evil_digest;
+    store
+        .with_transaction(|tx| tx.upsert_plugin(&repointed))
+        .expect("the attacker's row write succeeds; the loader is what refuses it");
+    assert!(
+        plugin_grant_witness_path(&global_root, "demo").is_file(),
+        "the witness is untouched; nothing it measures moved"
+    );
+
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let load = load_host_plugins(
+        &global_root,
+        &orbit_dir,
+        &store,
+        &mut registry,
+        &std::collections::BTreeMap::new(),
+    );
+
+    assert!(
+        registry.is_active("orbit.task.show"),
+        "the refusal is per plugin"
+    );
+    assert!(
+        !registry.has("demo.escalate") && !registry.has("demo.hello"),
+        "nothing from the relocated tree, or the original, reaches the registry"
+    );
+    let entry = load
+        .registered
+        .iter()
+        .find(|entry| entry.name == "demo")
+        .expect("the plugin is reported");
+    assert_eq!(
+        entry.status,
+        PluginStatus::Inactive,
+        "{:?}",
+        entry.diagnostic
+    );
+    assert!(
+        entry.loaded.is_none() && !entry.grants_authorized && !load.is_active("demo"),
+        "the row is refused outright, not loaded and then found wanting"
+    );
+    let diagnostic = entry.diagnostic.clone().expect("a diagnostic");
+    assert!(
+        diagnostic.contains(&repointed.install_path)
+            && diagnostic.contains(&global_root.join("plugins/demo").display().to_string())
+            && diagnostic.contains("orbit plugin remove demo"),
+        "the operator is told the recorded path, the expected root and what settles it: \
+         {diagnostic}"
+    );
+    assert_eq!(load.diagnostics.len(), 1, "{:?}", load.diagnostics);
+
+    // Audited like the grant refusal: one `plugin.load` / denied row naming
+    // the path the row asked this host to load.
+    let denials = store
+        .list_audit_events(&orbit_store::contracts::AuditEventFilter {
+            target_type: Some("plugin".to_string()),
+            status: Some(AuditEventStatus::Denied),
+            limit: 10,
+            ..Default::default()
+        })
+        .expect("audit events");
+    let denial = denials.first().expect("the refusal was audited");
+    assert_eq!(denial.command, "plugin.load");
+    assert_eq!(denial.subcommand.as_deref(), Some("verify_install_path"));
+    assert_eq!(denial.target_id.as_deref(), Some("demo"));
+    assert!(
+        denial
+            .arguments_json
+            .as_deref()
+            .is_some_and(|arguments| arguments.contains(&repointed.install_path)),
+        "the row's claimed install path is on the audit row: {:?}",
         denial.arguments_json
     );
     assert_eq!(denial.error_message.as_deref(), Some(diagnostic.as_str()));

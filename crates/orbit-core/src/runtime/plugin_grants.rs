@@ -20,10 +20,38 @@
 //! the child cannot read, and a child holding `orbit_tools` reads the whole
 //! global root — it could read any key it could then forge with. What bounds
 //! the attacker here is the write boundary, not a secret.
+//!
+//! # What the witness binds, and what binds the rest of the row
+//!
+//! The digest covers exactly three row fields: `name`, `enabled` and
+//! `grants_json`. Every other field of the `plugins` row is as writable as
+//! those, so each is held by something else, and the reader should not assume
+//! the witness covers it:
+//!
+//! - `install_path` — **not** in the witness. It is bound structurally by
+//!   [`verify_install_path`]: the loader refuses a row whose path does not
+//!   resolve beneath `<global_root>/plugins/<name>/`, the directory the
+//!   confined backend cannot write, before it reads anything from that path
+//!   [ORB-12785]. Without this, a row could keep its authorized grant names
+//!   and point them at a tree the backend wrote under one of its own write
+//!   roots, and the witness would still match.
+//! - `manifest_digest` — **not** in the witness, deliberately: grants survive
+//!   `orbit plugin add` of a newer version, and binding the digest would refuse
+//!   every upgrade. It is only meaningful *because* `install_path` is bound:
+//!   the loader compares it against the bytes at a path the attacker cannot
+//!   populate, so agreeing with it proves the tree is the one `orbit plugin
+//!   add` copied there (§4.1).
+//! - `version` — **not** in the witness, for the same upgrade reason; it names
+//!   the install directory and is reported, never trusted.
+//! - `first_party` — **not** in the witness. `first_party_row_mismatch` in the
+//!   loader refuses a `true` row for a manifest that does not claim
+//!   `origin: orbit`, and the validator names tools from the manifest.
+//! - `source`, `certified_orbit_version`, timestamps — informational.
 
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_tools::plugin::physical_or_lexical;
 use orbit_types::plugin::InstalledPlugin;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -215,6 +243,51 @@ pub fn verify_recorded_grants(
         ));
     }
     Ok(())
+}
+
+/// Check that one enabled row's `install_path` is a tree this host installed.
+///
+/// The witness does not cover the path (module docs), so this is what stops a
+/// row-writing backend from pointing its authorized grant names at a tree of
+/// its own: the path must resolve strictly beneath
+/// `<global_root>/plugins/<name>/`, which is read-only to a confined backend.
+/// Resolution is physical when the path exists — a `..` or a link cannot
+/// place a path beneath a directory it does not live under — and lexical when
+/// it does not, so a vanished install is still reported as vanished by the
+/// loader rather than as relocated.
+///
+/// `Err` is the operator-facing diagnostic naming the recorded and the
+/// expected path. Like [`verify_recorded_grants`], the caller refuses the
+/// plugin and audits the refusal.
+pub fn verify_install_path(global_root: &Path, installed: &InstalledPlugin) -> Result<(), String> {
+    let expected = plugin_install_root(global_root).join(&installed.name);
+    let recorded = Path::new(&installed.install_path);
+    // A relative path would resolve against whatever the current directory
+    // happens to be; `orbit plugin add` never records one.
+    if !recorded.is_absolute() {
+        return Err(relocated_message(installed, &expected));
+    }
+    let resolved = physical_or_lexical(recorded);
+    let root = physical_or_lexical(&expected);
+    if resolved == root || !resolved.starts_with(&root) {
+        return Err(relocated_message(installed, &expected));
+    }
+    Ok(())
+}
+
+/// The install-path counterpart of [`unauthorized_message`]: what the row
+/// records, where this host installs, and the commands that settle it.
+fn relocated_message(installed: &InstalledPlugin, expected: &Path) -> String {
+    format!(
+        "plugin '{}' is refused: its recorded install path {} does not resolve beneath {}, the \
+         only place this host installs it; grants apply only to a tree `orbit plugin add` placed \
+         there, so this Orbit will not load the plugin from the recorded path. Reinstall it with \
+         `orbit plugin add`, or run `orbit plugin remove {}` if you did not install it.",
+        installed.name,
+        installed.install_path,
+        expected.display(),
+        installed.name,
+    )
 }
 
 /// One message, naming what is wrong, what the row currently claims, and the
