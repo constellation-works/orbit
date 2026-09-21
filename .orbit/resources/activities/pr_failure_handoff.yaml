@@ -1,0 +1,75 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: pr_failure_handoff
+spec:
+  type: deterministic
+  description: >
+    Terminal task-PR recovery hook. Before publication it commits any dirty
+    candidate, restores and pushes the pre-rebase branch, and opens or reuses a
+    blocked PR after bounded conflict recovery is exhausted. After publication
+    it preserves the existing PR and review state with truthful merge
+    diagnostics for a safe completion retry.
+  input_schema_json:
+    type: object
+    additionalProperties: false
+    required:
+      - failed_step_id
+      - activity_name
+      - error_code
+      - error_message
+      - job_input
+      - pipeline
+      - run_id
+    properties:
+      failed_step_id:
+        type: string
+      activity_name:
+        type: string
+      error_code:
+        type: string
+      error_message:
+        type: string
+      job_input:
+        type: object
+      pipeline:
+        type: object
+      run_id:
+        type: string
+  output_schema_json:
+    type: object
+    required:
+      - phase
+      - decision
+    properties:
+      phase:
+        type: string
+      decision:
+        type: string
+      branch:
+        type: string
+      head_sha:
+        type: string
+      original_base_sha:
+        type: string
+      target_base_sha:
+        type: string
+      conflicting_paths:
+        type: array
+        items:
+          type: string
+      committed_files:
+        type: array
+        items:
+          type: string
+      pr_number:
+        type: string
+      pr_url:
+        type:
+          - string
+          - "null"
+      candidate_preserved:
+        type: boolean
+      task_status:
+        type: string
+  action: pr_failure_handoff

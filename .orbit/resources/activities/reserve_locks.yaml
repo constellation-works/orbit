@@ -1,0 +1,67 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: reserve_locks
+spec:
+  type: deterministic
+  description: >
+    Atomically reserve file locks for a task bundle by delegating to the
+    `orbit.task.locks.reserve` tool. Thin deterministic wrapper that lets
+    a workflow poll inside a `loop:` with `break_when:` until the
+    reservation is granted. On a successful grant the output carries a
+    `reservation_id` that a later release step (or TTL expiration) can
+    use to free the locks. On a conflict the output records the blocking
+    `task` / `reservation` holders so the caller can decide whether to
+    wait or abort.
+
+    Dependency edges are checked before locks. An unmet-but-reachable
+    dependency yields `reserved: false` with `waiting_on_deps` populated
+    (the caller should keep polling); a dependency that can never reach
+    `done` — archived, rejected, or dangling — fails the activity
+    immediately with a `task.dependencies.unsatisfiable` error rather
+    than making the caller poll out its wait budget.
+  input_schema_json:
+    type: object
+    required: [task_ids]
+    properties:
+      task_ids:
+        type: array
+        items:
+          type: string
+      ttl_seconds:
+        type: number
+        minimum: 1
+        maximum: 14400
+  output_schema_json:
+    type: object
+    required: [reserved]
+    properties:
+      reserved:
+        type: boolean
+      waiting_on_deps:
+        type: array
+        items:
+          type: string
+      reservation_id:
+        type: string
+      expires_at:
+        type: string
+      reserved_files:
+        type: array
+        items:
+          type: string
+      conflicts:
+        type: array
+        items:
+          type: object
+          required: [file, held_by, held_by_id]
+          properties:
+            file:
+              type: string
+            held_by:
+              type: string
+              enum: [task, reservation]
+            held_by_id:
+              type: string
+  action: reserve_locks
+  config: {}

@@ -1,0 +1,16 @@
+# Non-interactive worktree reap target [ORB-10374].
+schemaVersion: 2
+kind: Job
+metadata:
+  name: worktree_gc_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 1
+  default_input:
+    older_than_hours: 1
+  steps:
+    - id: reap
+      target: activity:worktree_gc
+      default_input:
+        older_than_hours: "{{ input.older_than_hours }}"

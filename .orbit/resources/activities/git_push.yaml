@@ -1,0 +1,51 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: git_push
+spec:
+  type: deterministic
+  description: >
+    Push the active worktree branch without overwriting remote-only commits.
+    A rewritten branch requires the exact expected remote SHA from the durable
+    pre-rewrite checkpoint.
+  input_schema_json:
+    type: object
+    properties:
+      job_run_id:
+        type: string
+      workspace_path:
+        type: string
+      branch:
+        type: string
+      base:
+        type: string
+      base_ref:
+        type: string
+      completed_task_ids:
+        type: array
+        items:
+          type: string
+      rewrite_performed:
+        type: boolean
+      rewrite_head_before:
+        type: string
+      expected_remote_sha:
+        type: [string, "null"]
+  output_schema_json:
+    type: object
+    required: [phase, decision, branch, local_sha, force_with_lease]
+    properties:
+      phase:
+        type: string
+      decision:
+        type: string
+      branch:
+        type: string
+      local_sha:
+        type: string
+      remote_sha_before:
+        type: [string, "null"]
+      force_with_lease:
+        type: boolean
+  action: git_push
+  config: {}

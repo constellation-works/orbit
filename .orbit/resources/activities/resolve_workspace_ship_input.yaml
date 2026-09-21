@@ -1,0 +1,26 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: resolve_workspace_ship_input
+spec:
+  type: deterministic
+  description: >
+    Resolve the active workspace's canonical ship input without consulting
+    workflow.auto_ship or dispatching any other registered workspace. Returns
+    only mode and base_branch; omitted task_ids keeps task_auto_pipeline in
+    normal backlog-discovery mode.
+  input_schema_json:
+    type: object
+    additionalProperties: false
+  output_schema_json:
+    type: object
+    required: [mode, base_branch]
+    additionalProperties: false
+    properties:
+      mode:
+        type: string
+        enum: [pr, local]
+      base_branch:
+        type: string
+  action: resolve_workspace_ship_input
+  config: {}

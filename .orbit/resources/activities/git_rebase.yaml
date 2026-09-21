@@ -1,0 +1,67 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: git_rebase
+spec:
+  type: deterministic
+  description: >
+    Rebase a task branch onto the exact prepared base checkpoint, or verify and
+    reuse a rewrite completed by step recovery.
+  input_schema_json:
+    type: object
+    required:
+      [job_run_id, workspace_path, completed_task_ids, head, head_sha,
+       base, base_ref, base_sha, commits_behind, sync_required]
+    properties:
+      job_run_id:
+        type: string
+      completed_task_ids:
+        type: array
+        minItems: 1
+        items:
+          type: string
+      workspace_path:
+        type: string
+      head:
+        type: string
+      head_sha:
+        type: string
+      base:
+        type: string
+      base_ref:
+        type: string
+      base_sha:
+        type: string
+      remote_sha:
+        type: [string, "null"]
+      commits_behind:
+        type: integer
+      sync_required:
+        type: boolean
+  output_schema_json:
+    type: object
+    required:
+      [phase, decision, head, head_sha, base, base_ref, base_sha, rewritten]
+    properties:
+      phase:
+        type: string
+      decision:
+        type: string
+      head:
+        type: string
+      head_sha:
+        type: string
+      head_sha_before:
+        type: string
+      base:
+        type: string
+      base_ref:
+        type: string
+      base_sha:
+        type: string
+      remote_sha_before:
+        type: [string, "null"]
+      rewritten:
+        type: boolean
+  action: git_rebase
+  config: {}

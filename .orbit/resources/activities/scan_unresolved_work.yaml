@@ -1,0 +1,44 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: scan_unresolved_work
+spec:
+  type: deterministic
+  description: >
+    Read-only workspace drain scan. Returns tasks in
+    `proposed` / `backlog` / `blocked`, job-runs in `failed` / `timeout`
+    (excluding `epic_pipeline` itself), and unresolved `check_later`
+    session-log ids. Empty is success. Optional `fail_if_nonempty`
+    fails the step when the set is still non-empty so `epic_pipeline`
+    can fail closed after its iteration cap.
+  input_schema_json:
+    type: object
+    properties:
+      fail_if_nonempty:
+        type: boolean
+  output_schema_json:
+    type: object
+    required: [empty, task_ids, run_ids, check_later_ids]
+    properties:
+      empty:
+        type: boolean
+      task_ids:
+        type: array
+        items:
+          type: string
+      run_ids:
+        type: array
+        items:
+          type: string
+      check_later_ids:
+        type: array
+        items:
+          type: string
+      task_count:
+        type: number
+      run_count:
+        type: number
+      check_later_count:
+        type: number
+  action: scan_unresolved_work
+  config: {}

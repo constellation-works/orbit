@@ -1,0 +1,98 @@
+# Auto-dispatch pipeline.
+#
+# Pulls the workspace backlog and dispatches deterministic singleton bundles
+# from `list_backlog`. `list_backlog` pre-filters backlog groups that already
+# overlap active task locks, so the gate layer sees fewer predictable
+# starvation cases.
+#
+# Empty-backlog behavior
+# - `list_backlog` returns `tasks: []` and `bundles: []`. The fan_out over an
+#   empty list is a no-op, the success guard is skipped, and the Run succeeds
+#   with zero child Runs.
+#
+# Concurrency cap (AC 7)
+# - `fan_out.max_workers` bounds the number of in-flight child gate
+#   Runs via a `Semaphore` in `run_fan_out` (orbit-engine). The value
+#   is a literal `u32` in the v2 `FanOutBlock` schema — it is NOT a
+#   templated expression, so the `input.concurrency` default is a
+#   structural placeholder callers can override by forking this YAML.
+#   A future amendment to `FanOutBlock` to accept templated numerics
+#   would let the top-level `concurrency` input flow through.
+#
+# Child-run status
+# - `invoke_and_wait` returns child status as data so gate workflows can run
+#   cleanup before failing. `require_gate_success` turns any non-succeeded
+#   child gate status into a failed auto-dispatch run.
+
+schemaVersion: 2
+kind: Job
+metadata:
+  name: task_auto_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 15
+  default_input:
+    task_ids: []
+    mode: pr
+    base_branch: main
+    base_sync: remote
+    # ORB-10644: forwarded to each gate run; empty means the base is the
+    # landing branch.
+    landing_branch: ""
+    # ORB-11187: forwarded to each gate run. `review` is the default everywhere;
+    # `done` is explicit per-invocation operator authorization (`--complete`).
+    completion: review
+    # ORB-11242: opt-in, run-scoped crew restriction. Empty means unrestricted,
+    # which is the behavior of every caller that does not pass it. Forwarded
+    # unchanged so the leaf/epic jobs this run admits inherit the same window.
+    allowed_crews: []
+    max_bundles: 10
+    concurrency: 5
+    max_bundle_size: 5
+    max_tasks: 50
+
+  steps:
+    - id: list_backlog
+      target: activity:list_backlog_tasks
+      default_input:
+        max_tasks: "{{ input.max_tasks }}"
+        task_ids: "{{ input.task_ids }}"
+
+    - id: validate_bundles
+      target: activity:validate_bundles
+      default_input:
+        bundles: "{{ steps.list_backlog.output.bundles }}"
+        max_bundle_size: "{{ input.max_bundle_size }}"
+        known_task_ids: "{{ steps.list_backlog.output.task_ids }}"
+
+    - id: dispatch
+      fan_out:
+        items: "{{ steps.validate_bundles.output.bundles }}"
+        max_workers: 5
+        worker:
+          id: gate_invoke
+          target: activity:invoke_and_wait
+          default_input:
+            job_name: task_gate_pipeline
+            # Gate admission (1h) + child delivery (4h) + a bounded 1h tail.
+            timeout_seconds: 21600
+            run_input:
+              task_ids: "{{ item }}"
+              mode: "{{ input.mode }}"
+              base_branch: "{{ input.base_branch }}"
+              base_sync: "{{ input.base_sync }}"
+              landing_branch: "{{ input.landing_branch }}"
+              completion: "{{ input.completion }}"
+              allowed_crews: "{{ input.allowed_crews }}"
+      fan_in:
+        join:
+          mode: all
+        collect: gate_results
+
+    - id: require_gate_success
+      when: "{{ steps.validate_bundles.output.bundle_count }} != 0"
+      target: activity:pipeline_success_guard
+      default_input:
+        context: task_auto_pipeline gate runs
+        results: "{{ steps.gate_results.output }}"

@@ -1,0 +1,21 @@
+schemaVersion: 2
+kind: Executor
+metadata:
+  name: claude
+spec:
+  executor_type: direct_agent
+  command: claude
+  args:
+  - -p
+  - --permission-mode
+  - bypassPermissions
+  - --output-format
+  - json
+  - --tools
+  - default
+  stdout_format: envelope
+  model_flag: --model
+  env: {}
+  sandbox: linux-bwrap
+  created_at: 2026-07-16T03:30:02.283924475Z
+  updated_at: 2026-07-16T03:30:02.283924936Z

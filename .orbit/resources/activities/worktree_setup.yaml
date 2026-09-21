@@ -1,0 +1,50 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: worktree_setup
+spec:
+  type: deterministic
+  description: >
+    Create a worktree and branch for one task or a task bundle, stamp the task
+    records with job-run/workspace metadata, and move them to `in-progress`.
+  input_schema_json:
+    type: object
+    properties:
+      task_id:
+        type: string
+      task_ids:
+        type: array
+        minItems: 1
+        items:
+          type: string
+      run_id:
+        type: string
+      base:
+        type: string
+      base_branch:
+        type: string
+      base_sync:
+        type: string
+        enum: [remote, local]
+      branch_prefix:
+        type: string
+  output_schema_json:
+    type: object
+    properties:
+      job_run_id:
+        type: string
+      batch_id:
+        type: string
+        description: Deprecated compatibility alias for job_run_id.
+      workspace_path:
+        type: string
+      head_ref:
+        type: string
+      base_ref:
+        type: string
+        description: Moving start-point ref name, for steps that reconcile against the live base.
+      base_sha:
+        type: string
+        description: Commit the worktree was created at, resolved once here so later steps never re-resolve the moving ref.
+  action: worktree_setup
+  config: {}

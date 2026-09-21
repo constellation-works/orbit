@@ -1,0 +1,38 @@
+schemaVersion: 2
+kind: Policy
+metadata:
+  name: default
+spec:
+  description: Default filesystem profile policy for Orbit activity runs
+  denyRead:
+  - '**/.env'
+  - '**/.env.*'
+  - '**/*.env'
+  - '**/*.env.*'
+  denyModify:
+  - .orbit/**
+  - '**/.env'
+  - '**/.env.*'
+  - '**/*.env'
+  - '**/*.env.*'
+  fsProfiles:
+    implementer:
+      read:
+      - ./**
+      modify:
+      - ./**
+    reviewer:
+      read:
+      - ./**
+      modify: []
+    pure_compute:
+      read: []
+      modify: []
+    docs_writer:
+      read:
+      - ./**
+      modify:
+      - docs/**
+      - '!docs/drafts/**'
+  created_at: 2026-07-16T03:30:02.284303459Z
+  updated_at: 2026-07-16T03:30:02.284303459Z

@@ -1,0 +1,66 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: pr_promote
+spec:
+  type: deterministic
+  description: >
+    Idempotently stamp completed tasks with PR metadata and promote them to
+    review, or promote an explicitly no-diff bundle without a PR.
+  input_schema_json:
+    type: object
+    required: [job_run_id, completed_task_ids, workspace_path]
+    properties:
+      job_run_id:
+        type: string
+      completed_task_ids:
+        type: array
+        minItems: 1
+        items:
+          type: string
+      workspace_path:
+        type: string
+      head:
+        type: string
+      base:
+        type: string
+      base_ref:
+        type: string
+      base_sha:
+        type: string
+      base_sync:
+        type: string
+        enum: [remote, local]
+      landing_branch:
+        type: string
+        description: >
+          The branch this work must ultimately land on; see pr_open. Promotion
+          re-asks the question because a resume can enter the pipeline here,
+          with a PR opened before its base landed.
+      base_obsolescence:
+        type: string
+        enum: [enforce, ignore]
+      pr_number:
+        type: string
+      pr_url:
+        type: [string, "null"]
+      no_diff_expected:
+        type: boolean
+  output_schema_json:
+    type: object
+    required: [phase, decision, performed_task_ids, reused_task_ids]
+    properties:
+      phase:
+        type: string
+      decision:
+        type: string
+      performed_task_ids:
+        type: array
+        items:
+          type: string
+      reused_task_ids:
+        type: array
+        items:
+          type: string
+  action: pr_promote
+  config: {}
