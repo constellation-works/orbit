@@ -8,11 +8,13 @@
 
 use orbit_common::fs::io::write_text_with_parent;
 use orbit_common::protocol::yaml::parse_routine_yaml;
+use orbit_types::workflow::automation::members::StateTriggerKind;
 use orbit_types::workflow::{OverlapPolicy, RoutineTarget};
 use tempfile::tempdir;
 
 use super::super::routine::{
-    DEFAULT_ROUTINE_FILES, RETIRED_ROUTINE_FILES, ROUTINE_NAME_PLACEHOLDER, RoutineSeedIdentity,
+    BASE_BRANCH_PLACEHOLDER, DEFAULT_ROUTINE_FILES, OWNER_MACHINE_PLACEHOLDER,
+    RETIRED_ROUTINE_FILES, ROUTINE_NAME_PLACEHOLDER, RoutineSeedIdentity,
     SUPERSEDED_ROUTINE_TEMPLATES, ShippedShape, default_routine_name_collisions,
     reconcile_default_routines, seed_default_routines, shipped_shape_of,
 };
@@ -24,12 +26,27 @@ use super::super::{
 };
 
 /// Render a shipped template the way a release of that vintage would have
-/// written it for `workspace`.
+/// written it for `workspace` on the test host (`hm_test`, observing `main`,
+/// the identity `seed_default_routines` uses).
 fn render(template: &str, stem: &str, workspace: &str) -> String {
-    template.replace(
-        "__ORBIT_ROUTINE_NAME__",
-        &format!("{}-{workspace}", stem.replace('_', "-")),
-    )
+    template
+        .replace(
+            "__ORBIT_ROUTINE_NAME__",
+            &format!("{}-{workspace}", stem.replace('_', "-")),
+        )
+        .replace(OWNER_MACHINE_PLACEHOLDER, "hm_test")
+        .replace(BASE_BRANCH_PLACEHOLDER, "main")
+}
+
+/// The cron-form `task_pilot` template the release before [ORB-12745]
+/// shipped: the shape an existing workspace holds before it upgrades.
+fn cron_task_pilot_template() -> &'static str {
+    SUPERSEDED_ROUTINE_TEMPLATES
+        .iter()
+        .filter(|(name, _)| *name == "task_pilot")
+        .map(|(_, template)| *template)
+        .find(|template| template.contains("cron: \"*/40 * * * *\""))
+        .expect("the cron task_pilot form is shipped as a superseded shape")
 }
 
 fn retired_template(stem: &str) -> &'static str {
@@ -67,6 +84,37 @@ fn record_as_orbit_written(routines_dir: &std::path::Path, stem: &str, body: &st
     let digest = sha256_hex(body.as_bytes());
     manifest.assets.insert(stem.to_string(), digest.clone());
     manifest.routine_provenance.remove(stem);
+    std::fs::write(
+        &manifest_path,
+        encode_managed_asset_manifest(&manifest).expect("encode manifest"),
+    )
+    .expect("write manifest");
+}
+
+/// Record `rendered` (from `template`) as the provenance the seeding release
+/// wrote for `stem`, with the name-only binding that release recorded.
+fn record_provenance(routines_dir: &std::path::Path, stem: &str, template: &str, rendered: &str) {
+    let manifest_path = routines_dir.join(MANAGED_ASSET_MANIFEST_FILE);
+    let mut manifest =
+        load_managed_asset_manifest(&manifest_path, "routine", ManagedAssetLayout::YamlStem)
+            .expect("load manifest")
+            .expect("seeding records a manifest");
+    let name = parse_routine_yaml(rendered).expect("rendered parses").name;
+    manifest
+        .assets
+        .insert(stem.to_string(), sha256_hex(rendered.as_bytes()));
+    manifest.routine_provenance.insert(
+        stem.to_string(),
+        super::super::RoutineAssetProvenance {
+            template_digest: sha256_hex(template.as_bytes()),
+            rendered_digest: sha256_hex(rendered.as_bytes()),
+            binding: super::super::RoutineMaterializationBinding {
+                name,
+                owner_machine: None,
+                branch: None,
+            },
+        },
+    );
     std::fs::write(
         &manifest_path,
         encode_managed_asset_manifest(&manifest).expect("encode manifest"),
@@ -354,7 +402,8 @@ fn check_mode_reports_retirement_without_touching_the_workspace() {
     std::fs::write(&path, &seeded).expect("write the previous release's routine");
     record_as_orbit_written(&routines_dir, "auto_task_scheduler", &seeded);
 
-    let identity = RoutineSeedIdentity::new("workspace").expect("build seed identity");
+    let identity =
+        RoutineSeedIdentity::new("workspace", "hm_test", "main").expect("build seed identity");
     let checked = reconcile_default_routines(
         &routines_dir,
         &identity,
@@ -404,8 +453,8 @@ fn stale_shipped_default_refreshes_and_keeps_the_operator_opt_in() {
     ))
     .expect("current template parses");
     assert_eq!(
-        definition.trigger.cron, current.trigger.cron,
-        "the refreshed routine takes the current template's cadence"
+        definition.trigger, current.trigger,
+        "the refreshed routine takes the current template's trigger"
     );
     assert!(definition.legacy_hosts.is_none());
 
@@ -581,7 +630,8 @@ fn untracked_retired_default_is_retired_with_a_preserved_copy() {
     );
 
     // `--check` classifies it without touching the workspace.
-    let identity = RoutineSeedIdentity::new("workspace").expect("build seed identity");
+    let identity =
+        RoutineSeedIdentity::new("workspace", "hm_test", "main").expect("build seed identity");
     let checked = reconcile_default_routines(
         &routines_dir,
         &identity,
@@ -698,20 +748,43 @@ fn seeded_routines_are_valid_disabled_and_workspace_unique() {
     // Terminal failed-run triage is retired: no default seeds its job.
     assert!(!routines_dir.join("task_triage.yaml").exists());
 
-    // Task-pilot may run up to ten five-task partitions in two waves,
-    // each agent bounded to 30 minutes. Its 90-minute timeout covers
-    // that maximum automatic batch plus deterministic preparation/apply.
+    // Task-pilot is state-triggered [ORB-12745]: it names this host as its
+    // owner and observes the registered base branch, and its 90-minute
+    // timeout covers a one-task partition plus deterministic preparation/apply.
     let pilot = std::fs::read_to_string(routines_dir.join("task_pilot.yaml"))
         .expect("read task-pilot routine");
+    assert!(
+        !pilot.contains("__ORBIT_"),
+        "every placeholder must resolve at seed time:\n{pilot}"
+    );
     let pilot = parse_routine_yaml(&pilot).expect("task-pilot routine parses");
-    assert_eq!(pilot.trigger.cron, "*/40 * * * *");
+    assert!(pilot.trigger.cron.is_empty());
+    let trigger = pilot
+        .trigger
+        .state
+        .as_ref()
+        .expect("task-pilot seeds a state trigger");
+    assert_eq!(trigger.kind, StateTriggerKind::PreparationEligible);
+    assert_eq!(trigger.owner_machine, "hm_test");
+    assert_eq!(trigger.branch, "main");
     assert_eq!(
-        pilot.trigger.missed_run,
-        orbit_types::workflow::MissedRunPolicy::Skip
+        (
+            trigger.debounce_minutes,
+            trigger.max_wait_minutes,
+            trigger.max_items,
+            trigger.retries,
+            trigger.deadline_minutes
+        ),
+        (2, 10, 50, 1, 90)
+    );
+    assert!(
+        trigger.eligibility.is_default(),
+        "the seeded eligibility block spells out the default predicate"
     );
     assert_eq!(pilot.policy.timeout_minutes, 90);
     assert_eq!(pilot.policy.overlap, OverlapPolicy::Forbid);
-    parse_cron(&pilot.trigger.cron).expect("task-pilot cron parses");
+    assert_eq!(pilot.policy.retries.max, 1);
+    assert_eq!(pilot.policy.retries.backoff_minutes, 5);
 
     let ship =
         std::fs::read_to_string(routines_dir.join("ship_sweep.yaml")).expect("read ship routine");
@@ -864,17 +937,260 @@ fn fresh_routine_seeding_matches_rendered_canonical_templates() {
     seed_default_routines(&routines_dir, "workspace", false).expect("seed canonical routines");
 
     for (stem, template) in DEFAULT_ROUTINE_FILES {
-        let rendered = template.replace(
-            ROUTINE_NAME_PLACEHOLDER,
-            &format!("{}-workspace", stem.replace('_', "-")),
-        );
+        let rendered = render(template, stem, "workspace");
         let seeded = std::fs::read_to_string(routines_dir.join(format!("{stem}.yaml")))
             .expect("read seeded routine");
         assert_eq!(
             seeded, rendered,
             "freshly seeded {stem} must match its rendered template"
         );
+        assert!(
+            !seeded.contains(ROUTINE_NAME_PLACEHOLDER)
+                && !seeded.contains(OWNER_MACHINE_PLACEHOLDER)
+                && !seeded.contains(BASE_BRANCH_PLACEHOLDER),
+            "{stem} left a placeholder unresolved"
+        );
     }
+}
+
+/// Seed-time resolution of the state trigger's owner and branch [ORB-12745]:
+/// the identity's machine id and base branch land in `task_pilot.yaml` and
+/// nowhere else, so the cron defaults stay host-independent [ORB-12236].
+#[test]
+fn state_routine_seeds_this_hosts_owner_and_the_registered_base_branch() {
+    let root = tempdir().expect("create tempdir");
+    let routines_dir = root.path().join("routines");
+    let identity =
+        RoutineSeedIdentity::new("workspace", "hm_seed_host", "agent-main").expect("seed identity");
+    reconcile_default_routines(
+        &routines_dir,
+        &identity,
+        false,
+        super::super::ManagedAssetReconcileMode::Apply,
+    )
+    .expect("seed default routines");
+
+    let pilot = parse_routine_yaml(
+        &std::fs::read_to_string(routines_dir.join("task_pilot.yaml")).expect("read task-pilot"),
+    )
+    .expect("task-pilot parses");
+    let trigger = pilot.trigger.state.expect("state trigger");
+    assert_eq!(trigger.owner_machine, "hm_seed_host");
+    assert_eq!(trigger.branch, "agent-main");
+
+    for (stem, _) in DEFAULT_ROUTINE_FILES
+        .iter()
+        .filter(|(stem, _)| *stem != "task_pilot")
+    {
+        let seeded = std::fs::read_to_string(routines_dir.join(format!("{stem}.yaml")))
+            .expect("read seeded routine");
+        assert!(
+            !seeded.contains("hm_seed_host") && !seeded.contains("agent-main"),
+            "{stem} must not carry host state"
+        );
+    }
+
+    let manifest = load_managed_asset_manifest(
+        &routines_dir.join(MANAGED_ASSET_MANIFEST_FILE),
+        "routine",
+        ManagedAssetLayout::YamlStem,
+    )
+    .expect("load manifest")
+    .expect("seeding records a manifest");
+    let pilot_binding = &manifest.routine_provenance["task_pilot"].binding;
+    assert_eq!(pilot_binding.owner_machine.as_deref(), Some("hm_seed_host"));
+    assert_eq!(pilot_binding.branch.as_deref(), Some("agent-main"));
+    let gc_binding = &manifest.routine_provenance["worktree_gc"].binding;
+    assert_eq!(gc_binding.owner_machine, None);
+    assert_eq!(gc_binding.branch, None);
+
+    // A blank machine id or an unobservable branch cannot render a valid
+    // state trigger, so the identity refuses them up front.
+    assert!(RoutineSeedIdentity::new("workspace", " ", "main").is_err());
+    assert!(RoutineSeedIdentity::new("workspace", "hm_seed_host", "").is_err());
+    assert!(RoutineSeedIdentity::new("workspace", "hm_seed_host", "no branch").is_err());
+}
+
+/// The upgrade `orbit workspace sync` performs for a workspace seeded with
+/// the cron task-pilot form [ORB-12745]: an unmodified file, and one whose
+/// only edit is the opt-in, refresh onto the state form owned by this host,
+/// keeping `enabled`; a second sync is a no-op.
+#[test]
+fn unmodified_cron_task_pilot_upgrades_to_the_state_form_on_sync() {
+    for opted_in in [false, true] {
+        let root = tempdir().expect("create tempdir");
+        let routines_dir = root.path().join("routines");
+        seed_default_routines(&routines_dir, "workspace", false).expect("seed current defaults");
+
+        let previous = render(cron_task_pilot_template(), "task_pilot", "workspace");
+        let on_disk = if opted_in {
+            previous.replace("enabled: false", "enabled: true")
+        } else {
+            previous.clone()
+        };
+        let path = routines_dir.join("task_pilot.yaml");
+        std::fs::write(&path, &on_disk).expect("write the previous release's routine");
+        record_as_orbit_written(&routines_dir, "task_pilot", &previous);
+
+        let reconciled = seed_default_routines(&routines_dir, "workspace", false).expect("sync");
+        assert!(
+            outcome_of(&reconciled, "task_pilot").contains(&ManagedAssetOutcome::Refreshed),
+            "opted_in={opted_in}: {:?}",
+            reconciled.actions
+        );
+        assert!(reconciled.warnings.is_empty(), "{:?}", reconciled.warnings);
+
+        let refreshed = std::fs::read_to_string(&path).expect("read refreshed routine");
+        assert!(!refreshed.contains("__ORBIT_"), "{refreshed}");
+        let definition = parse_routine_yaml(&refreshed).expect("refreshed routine parses");
+        assert_eq!(
+            definition.enabled, opted_in,
+            "the operator's opt-in must survive"
+        );
+        assert!(definition.trigger.cron.is_empty());
+        let trigger = definition
+            .trigger
+            .state
+            .expect("upgraded to the state form");
+        assert_eq!(trigger.kind, StateTriggerKind::PreparationEligible);
+        assert_eq!(trigger.owner_machine, "hm_test");
+        assert_eq!(trigger.branch, "main");
+
+        let second = seed_default_routines(&routines_dir, "workspace", false).expect("second sync");
+        assert_eq!(second.refreshed, 0);
+        assert_eq!(
+            outcome_of(&second, "task_pilot"),
+            vec![ManagedAssetOutcome::Unchanged]
+        );
+    }
+}
+
+/// The same upgrade for a workspace whose manifest already carries routine
+/// provenance — the name-only binding the cron release recorded is completed
+/// with this host's owner and branch rather than reported as drift.
+#[test]
+fn tracked_cron_task_pilot_upgrades_and_completes_its_recorded_binding() {
+    let root = tempdir().expect("create tempdir");
+    let routines_dir = root.path().join("routines");
+    seed_default_routines(&routines_dir, "workspace", false).expect("seed current defaults");
+
+    let template = cron_task_pilot_template();
+    let previous = render(template, "task_pilot", "workspace");
+    let path = routines_dir.join("task_pilot.yaml");
+    std::fs::write(&path, &previous).expect("write the previous release's routine");
+    record_provenance(&routines_dir, "task_pilot", template, &previous);
+
+    let reconciled = seed_default_routines(&routines_dir, "workspace", false).expect("sync");
+    assert_eq!(
+        outcome_of(&reconciled, "task_pilot"),
+        vec![ManagedAssetOutcome::Refreshed],
+        "{:?}",
+        reconciled.actions
+    );
+    let definition =
+        parse_routine_yaml(&std::fs::read_to_string(&path).expect("read refreshed routine"))
+            .expect("refreshed routine parses");
+    let trigger = definition
+        .trigger
+        .state
+        .expect("upgraded to the state form");
+    assert_eq!(trigger.owner_machine, "hm_test");
+    assert_eq!(trigger.branch, "main");
+
+    let manifest = load_managed_asset_manifest(
+        &routines_dir.join(MANAGED_ASSET_MANIFEST_FILE),
+        "routine",
+        ManagedAssetLayout::YamlStem,
+    )
+    .expect("load manifest")
+    .expect("manifest present");
+    let binding = &manifest.routine_provenance["task_pilot"].binding;
+    assert_eq!(binding.owner_machine.as_deref(), Some("hm_test"));
+    assert_eq!(binding.branch.as_deref(), Some("main"));
+
+    let second = seed_default_routines(&routines_dir, "workspace", false).expect("second sync");
+    assert_eq!(
+        outcome_of(&second, "task_pilot"),
+        vec![ManagedAssetOutcome::Unchanged]
+    );
+}
+
+/// A cron task-pilot whose template-owned fields were edited is the
+/// operator's: sync leaves it alone and says so.
+#[test]
+fn hand_edited_cron_task_pilot_is_preserved_and_reported_on_sync() {
+    let root = tempdir().expect("create tempdir");
+    let routines_dir = root.path().join("routines");
+    seed_default_routines(&routines_dir, "workspace", false).expect("seed current defaults");
+
+    let previous = render(cron_task_pilot_template(), "task_pilot", "workspace");
+    let edited = previous.replace("*/40 * * * *", "*/15 * * * *");
+    assert_ne!(edited, previous, "fixture must change a template field");
+    let path = routines_dir.join("task_pilot.yaml");
+    std::fs::write(&path, &edited).expect("write the operator's cron routine");
+    record_as_orbit_written(&routines_dir, "task_pilot", &previous);
+
+    let reconciled = seed_default_routines(&routines_dir, "workspace", false).expect("sync");
+    assert_eq!(
+        outcome_of(&reconciled, "task_pilot"),
+        vec![ManagedAssetOutcome::Preserved]
+    );
+    let report = reconciled
+        .actions
+        .iter()
+        .find(|action| action.name == "task_pilot")
+        .and_then(|action| action.detail.clone())
+        .expect("a preserved routine is reported");
+    assert!(report.contains("preserved"), "{report}");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("reread routine"),
+        edited,
+        "a hand-edited definition is never rewritten"
+    );
+}
+
+/// A state-form definition an operator authored by hand — the ws_orbit
+/// migration of 2026-09-21 — that differs from the template only in
+/// comments, description or `enabled` is adopted; one with a different
+/// predicate or budget is a local edit.
+#[test]
+fn hand_authored_state_task_pilot_is_adopted_or_preserved_by_shape() {
+    let current = render(current_template("task_pilot"), "task_pilot", "workspace");
+    assert_eq!(
+        shipped_shape_of(
+            "task_pilot",
+            &current.replace("enabled: false", "enabled: true")
+        ),
+        Some(ShippedShape::Current)
+    );
+    // Another host's owner is still the shipped shape: the document's own
+    // binding is what the template is rendered against.
+    assert_eq!(
+        shipped_shape_of("task_pilot", &current.replace("hm_test", "hm_elsewhere")),
+        Some(ShippedShape::Current)
+    );
+    assert_eq!(
+        shipped_shape_of(
+            "task_pilot",
+            &current.replace("debounce_minutes: 2", "debounce_minutes: 5")
+        ),
+        None
+    );
+    assert_eq!(
+        shipped_shape_of(
+            "task_pilot",
+            &current.replace("require_tags: []", "require_tags: [pilot-me]")
+        ),
+        None
+    );
+    // The cron form is a superseded shape, never the current one.
+    assert_eq!(
+        shipped_shape_of(
+            "task_pilot",
+            &render(cron_task_pilot_template(), "task_pilot", "workspace")
+        ),
+        Some(ShippedShape::Superseded)
+    );
 }
 
 #[test]
@@ -886,10 +1202,17 @@ fn task_pilot_reseeding_preserves_workspace_overrides() {
     let edited = std::fs::read_to_string(&path)
         .expect("read task-pilot routine")
         .replace("enabled: false", "enabled: true")
-        .replace("*/40 * * * *", "*/15 * * * *");
+        .replace("debounce_minutes: 2", "debounce_minutes: 5");
     let definition = parse_routine_yaml(&edited).expect("customized routine parses");
     assert!(definition.enabled);
-    assert_eq!(definition.trigger.cron, "*/15 * * * *");
+    assert_eq!(
+        definition
+            .trigger
+            .state
+            .expect("state trigger")
+            .debounce_minutes,
+        5
+    );
     std::fs::write(&path, &edited).expect("write operator overrides");
 
     seed_default_routines(&routines_dir, "workspace", false)
@@ -1064,9 +1387,10 @@ fn seeding_requires_a_workspace_name_with_usable_characters() {
 /// name mismatch never leaks the directory into the routine [ORB-12107].
 #[test]
 fn seeded_names_follow_the_workspace_name_not_the_checkout_directory() {
-    let alpha =
-        RoutineSeedIdentity::new("Alpha QA").expect("workspace name renders a routine suffix");
-    let beta = RoutineSeedIdentity::new("beta").expect("second workspace identity");
+    let alpha = RoutineSeedIdentity::new("Alpha QA", "hm_test", "main")
+        .expect("workspace name renders a routine suffix");
+    let beta =
+        RoutineSeedIdentity::new("beta", "hm_test", "main").expect("second workspace identity");
 
     assert_eq!(alpha.routine_name("task_pilot"), "task-pilot-alpha-qa");
     assert_eq!(beta.routine_name("task_pilot"), "task-pilot-beta");
@@ -1089,7 +1413,7 @@ fn collisions_report_names_another_workspace_already_declares() {
     seed_default_routines(&other_orbit.join("routines"), "server", false)
         .expect("seed the other workspace");
 
-    let identity = RoutineSeedIdentity::new("server").expect("seed identity");
+    let identity = RoutineSeedIdentity::new("server", "hm_test", "main").expect("seed identity");
     let collisions = default_routine_name_collisions(&identity, std::slice::from_ref(&other_orbit));
     assert_eq!(
         collisions.len(),
@@ -1101,7 +1425,8 @@ fn collisions_report_names_another_workspace_already_declares() {
             && collision.declared_in == other_orbit.join("routines/task_pilot.yaml")
     }));
 
-    let distinct = RoutineSeedIdentity::new("other-server").expect("seed identity");
+    let distinct =
+        RoutineSeedIdentity::new("other-server", "hm_test", "main").expect("seed identity");
     assert!(
         default_routine_name_collisions(&distinct, &[other_orbit]).is_empty(),
         "a distinct workspace name must not collide"
@@ -1122,7 +1447,7 @@ fn collisions_cover_local_routine_definitions() {
         .replace("task-pilot-alpha", "task-pilot-beta");
     write_text_with_parent(&local_dir.join("pilot.yaml"), &local).expect("write local routine");
 
-    let identity = RoutineSeedIdentity::new("beta").expect("seed identity");
+    let identity = RoutineSeedIdentity::new("beta", "hm_test", "main").expect("seed identity");
     let collisions = default_routine_name_collisions(&identity, &[other_orbit]);
     assert_eq!(
         collisions

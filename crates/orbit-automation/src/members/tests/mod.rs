@@ -202,6 +202,7 @@ fn trigger() -> StateTrigger {
         max_items: 50,
         retries: 1,
         deadline_minutes: 30,
+        eligibility: PreparationEligibility::default(),
     }
 }
 
@@ -516,7 +517,14 @@ fn material_fingerprint_covers_contract_inputs_but_ignores_audit_writes() {
     }))
     .unwrap();
     let hash = |task: &Task, source: &str, dependencies: &serde_json::Value, instructions: &str| {
-        preparation::fingerprint(task, source, dependencies, instructions).unwrap()
+        preparation::fingerprint(
+            task,
+            source,
+            dependencies,
+            instructions,
+            &PreparationEligibility::default(),
+        )
+        .unwrap()
     };
     let baseline = hash(&task, "source", &json!({}), "instructions");
     task.priority = TaskPriority::High;
@@ -561,6 +569,82 @@ fn material_fingerprint_covers_contract_inputs_but_ignores_audit_writes() {
         baseline,
         hash(&task, "source", &json!({}), "new instructions")
     );
+}
+
+/// [ORB-12745] The resolved eligibility is material input: the default keeps
+/// the `material_v1` bytes a workspace accepted before the predicate became
+/// configurable, an equivalent explicit block hashes the same, and a changed
+/// predicate — even one the task still satisfies — invalidates the fingerprint.
+#[test]
+fn material_fingerprint_folds_in_a_non_default_eligibility() {
+    use orbit_types::task::{Task, TaskStatus, TaskType};
+    use serde_json::json;
+    let task: Task = serde_json::from_value(json!({
+        "id":"ORB-00001", "title":"task", "description":"scope",
+        "context_files":["file:src/lib.rs"], "status":"backlog",
+        "priority":"medium", "task_type":"bug", "tags":["pilot"],
+        "created_at":"2026-09-01T00:00:00Z", "updated_at":"2026-09-01T00:00:00Z"
+    }))
+    .unwrap();
+    let hash = |eligibility: &PreparationEligibility| {
+        preparation::fingerprint(&task, "source", &json!({}), "instructions", eligibility).unwrap()
+    };
+    let baseline = hash(&PreparationEligibility::default());
+    // The default adds no key: these are the exact `material_v1` bytes the
+    // contract hashed before the predicate became configurable.
+    let mut expected_tags = task.tags.clone();
+    expected_tags.sort();
+    let pre_existing_material = json!({
+        "contract": preparation::CONTRACT, "id": task.id, "title": task.title.trim(),
+        "description": task.description.trim(), "criteria": task.acceptance_criteria,
+        "plan": task.plan.trim(), "selectors": task.context_files, "tags": expected_tags,
+        "tools": task.required_tools, "type": task.task_type, "complexity": task.complexity,
+        "crew": task.crew, "eligible": true, "relations": task.relations,
+        "dependencies": json!({}), "instructions": "instructions",
+        "source_revision": "source",
+    });
+    assert_eq!(
+        baseline,
+        crate::delivery::definition_epoch(&pre_existing_material).unwrap()
+    );
+    let spelled_out = PreparationEligibility {
+        statuses: vec![TaskStatus::Backlog, TaskStatus::Proposed],
+        exclude_tags: vec!["no-diff-needed".into(), "no-diff-expected".into()],
+        require_tags: vec![],
+        task_types: vec![],
+    };
+    assert_eq!(
+        baseline,
+        hash(&spelled_out),
+        "an explicit block equal to the default is the same material"
+    );
+
+    let narrowed = PreparationEligibility {
+        require_tags: vec!["pilot".into()],
+        ..Default::default()
+    };
+    assert!(preparation::eligible(&task, &narrowed));
+    assert_ne!(
+        baseline,
+        hash(&narrowed),
+        "a changed predicate is new material"
+    );
+    let reordered = PreparationEligibility {
+        statuses: vec![TaskStatus::Backlog, TaskStatus::Proposed],
+        ..narrowed.clone()
+    };
+    assert_eq!(
+        hash(&narrowed),
+        hash(&reordered),
+        "authoring order is not material"
+    );
+
+    let excluding = PreparationEligibility {
+        task_types: vec![TaskType::Feature],
+        ..Default::default()
+    };
+    assert!(!preparation::eligible(&task, &excluding));
+    assert_ne!(hash(&narrowed), hash(&excluding));
 }
 
 /// [ORB-11332] A grant's resolved due interval accelerates only the members it

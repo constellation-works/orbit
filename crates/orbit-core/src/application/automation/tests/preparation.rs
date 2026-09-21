@@ -14,6 +14,7 @@ use orbit_store::TaskCreateParams;
 use orbit_types::task::{
     Task, TaskPriority, TaskRelationType, TaskStatus, TaskType, task_dependencies_ready,
 };
+use orbit_types::workflow::automation::members::PreparationEligibility;
 use tempfile::TempDir;
 
 use super::super::preparation;
@@ -141,8 +142,13 @@ fn same_host_cross_workspace_dependency_prepares_and_invalidates_on_status_chang
         "the cross-workspace dependency is accepted at creation"
     );
 
-    let before = preparation::fingerprint(&fixture.dependent, &dependent, &fixture.revision)
-        .expect("prepare a task whose prerequisite lives in another local workspace");
+    let before = preparation::fingerprint(
+        &fixture.dependent,
+        &dependent,
+        &fixture.revision,
+        &PreparationEligibility::default(),
+    )
+    .expect("prepare a task whose prerequisite lives in another local workspace");
 
     // Admission reads the same prerequisite through the registry-wide status
     // projection, so preparation and readiness must agree at each step.
@@ -167,8 +173,13 @@ fn same_host_cross_workspace_dependency_prepares_and_invalidates_on_status_chang
         )
         .expect("complete the prerequisite in its own workspace");
 
-    let after = preparation::fingerprint(&fixture.dependent, &dependent, &fixture.revision)
-        .expect("re-prepare after the prerequisite changed");
+    let after = preparation::fingerprint(
+        &fixture.dependent,
+        &dependent,
+        &fixture.revision,
+        &PreparationEligibility::default(),
+    )
+    .expect("re-prepare after the prerequisite changed");
     assert_ne!(
         before, after,
         "the prerequisite's status is material, so preparation computed before it \
@@ -218,15 +229,23 @@ fn another_host_dependency_is_recorded_as_unverifiable_not_satisfied() {
         vec!["ZZZ-00001".to_string()],
     );
 
-    let with_reference =
-        preparation::fingerprint(&fixture.dependent, &dependent, &fixture.revision)
-            .expect("prepare a task referencing another host's task");
+    let with_reference = preparation::fingerprint(
+        &fixture.dependent,
+        &dependent,
+        &fixture.revision,
+        &PreparationEligibility::default(),
+    )
+    .expect("prepare a task referencing another host's task");
 
     let mut without_reference = dependent.clone();
     without_reference.relations.clear();
-    let without_reference =
-        preparation::fingerprint(&fixture.dependent, &without_reference, &fixture.revision)
-            .expect("prepare the same task without the reference");
+    let without_reference = preparation::fingerprint(
+        &fixture.dependent,
+        &without_reference,
+        &fixture.revision,
+        &PreparationEligibility::default(),
+    )
+    .expect("prepare the same task without the reference");
     assert_ne!(
         with_reference, without_reference,
         "an unverifiable prerequisite is still part of the task's material"
@@ -244,8 +263,13 @@ fn another_host_dependency_is_recorded_as_unverifiable_not_satisfied() {
         "no status is ever invented for another host's task"
     );
     assert_eq!(
-        preparation::fingerprint(&fixture.dependent, &satisfied, &fixture.revision)
-            .expect("fingerprint"),
+        preparation::fingerprint(
+            &fixture.dependent,
+            &satisfied,
+            &fixture.revision,
+            &PreparationEligibility::default(),
+        )
+        .expect("fingerprint"),
         without_reference
     );
 }
@@ -261,16 +285,26 @@ fn a_deleted_prerequisite_fails_preparation_closed_with_an_actionable_reason() {
         "dependent",
         vec![prerequisite.id.clone()],
     );
-    preparation::fingerprint(&fixture.dependent, &dependent, &fixture.revision)
-        .expect("prepare while the prerequisite exists");
+    preparation::fingerprint(
+        &fixture.dependent,
+        &dependent,
+        &fixture.revision,
+        &PreparationEligibility::default(),
+    )
+    .expect("prepare while the prerequisite exists");
 
     fixture
         .owner
         .delete_task(&prerequisite.id)
         .expect("delete the prerequisite in its own workspace");
 
-    let error = preparation::fingerprint(&fixture.dependent, &dependent, &fixture.revision)
-        .expect_err("a vanished prerequisite must not prepare");
+    let error = preparation::fingerprint(
+        &fixture.dependent,
+        &dependent,
+        &fixture.revision,
+        &PreparationEligibility::default(),
+    )
+    .expect_err("a vanished prerequisite must not prepare");
     let message = error.to_string();
     assert!(
         message.contains(&prerequisite.id) && message.contains(&dependent.id),
@@ -304,8 +338,13 @@ fn preparation_keeps_its_dependency_budget() {
         })
         .collect();
 
-    let error = preparation::fingerprint(&fixture.dependent, &dependent, &fixture.revision)
-        .expect_err("51 dependencies exceed the scan budget");
+    let error = preparation::fingerprint(
+        &fixture.dependent,
+        &dependent,
+        &fixture.revision,
+        &PreparationEligibility::default(),
+    )
+    .expect_err("51 dependencies exceed the scan budget");
     assert!(
         error.to_string().contains("dependency_scan_budget"),
         "unexpected error: {error}"

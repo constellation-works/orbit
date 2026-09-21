@@ -470,7 +470,8 @@ mod artifacts {
                 refresh_defaults: true,
                 global_root_override: Some(global_root.clone()),
                 routine_seed_identity: Some(
-                    RoutineSeedIdentity::new("repo").expect("routine seed identity"),
+                    RoutineSeedIdentity::new("repo", "hm_test", "main")
+                        .expect("routine seed identity"),
                 ),
                 config_seed: Some(ConfigSeed::default()),
                 ..Default::default()
@@ -930,7 +931,10 @@ policy:\n  timeout_minutes: 30\n  overlap: forbid\n";
         reconcile_workspace_managed_artifacts(
             &global_root,
             &workspace_root,
-            Some(&RoutineSeedIdentity::new("repo").expect("routine seed identity")),
+            Some(
+                &RoutineSeedIdentity::new("repo", "hm_test", "main")
+                    .expect("routine seed identity"),
+            ),
             "main",
             false,
         )

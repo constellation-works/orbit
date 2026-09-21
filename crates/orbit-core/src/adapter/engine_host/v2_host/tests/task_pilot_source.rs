@@ -857,6 +857,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         &fixture.runtime,
         &fixture.task,
         &source.commit,
+        &PreparationEligibility::default(),
     )
     .unwrap();
     let now = chrono::Utc::now();
@@ -880,6 +881,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         max_items: 50,
         retries: 1,
         deadline_minutes: 30,
+        eligibility: PreparationEligibility::default(),
     };
     let definition: orbit_types::workflow::RoutineDefinition = serde_json::from_value(json!({
         "schemaVersion":1,"name":"pilot","enabled":true,"hosts":["fixture"],"target":"job:task_pilot_pipeline",
@@ -1001,7 +1003,8 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         crate::application::automation::preparation::fingerprint(
             &fixture.runtime,
             &task,
-            &fixture.stale_sha
+            &fixture.stale_sha,
+            &PreparationEligibility::default(),
         )
         .unwrap()
     );

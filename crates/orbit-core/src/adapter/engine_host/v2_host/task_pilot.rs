@@ -219,6 +219,9 @@ pub(super) fn prepare(
     // deliberately works from envelopes, which carry no acceptance criteria,
     // and the selection is already bounded by `max_tasks` at this point.
     let lane = ImplementationLane::resolve(runtime);
+    let eligibility =
+        crate::application::automation::preparation::claim_eligibility(runtime, claim.as_ref())
+            .map_err(|error| action_failed(action, error.to_string()))?;
     for (task_id, snapshot) in task_ids.iter().zip(task_snapshots.iter_mut()) {
         let task = runtime
             .get_task(task_id)
@@ -232,6 +235,7 @@ pub(super) fn prepare(
             runtime,
             &task,
             &source.source_revision,
+            &eligibility,
         )
         .map_err(|error| action_failed(action, error.to_string()))?;
         if claim

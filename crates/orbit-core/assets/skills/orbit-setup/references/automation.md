@@ -54,14 +54,17 @@ be deleted.
 ## The five seeded routines
 
 `orbit workspace init` seeds all five, **all disabled**, with a workspace-unique
-name (`<base>-<workspace>`) resolved at seed time. Nothing else is resolved per
-machine, so two hosts seed identical bytes. Run `orbit routine list` to see their
-names on this host.
+name (`<base>-<workspace>`) resolved at seed time. The four cron routines resolve
+nothing else per machine, so two hosts seed identical bytes. `task-pilot` is
+state-triggered and additionally resolves this host's machine id as its
+`owner_machine` and the registered base branch as the `branch` it observes;
+a second host registering the same workspace seeds itself as owner of its own
+copy. Run `orbit routine list` to see their names on this host.
 
 | Base name | Cadence | Target | What it does |
 |---|---|---|---|
 | `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived. |
-| `task-pilot` | every 4h | `task_pilot_pipeline` | Preflights proposed/backlog tasks with empty `context_files` and fills in validated selectors. |
+| `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights one whose material has no fresh assessment; quiet while the backlog is unchanged. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `ship-sweep` | every 20m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. |
@@ -79,7 +82,10 @@ without the ones after it; **the reverse is not true.**
    [maintenance.md](maintenance.md)
 2. **`task-pilot`.** Its agent inspection is read-only; its apply step writes validated task selectors, and it makes everything downstream safer:
    populated `context_files` are what conflict detection and file reservation
-   use to keep parallel runs off each other's files.
+   use to keep parallel runs off each other's files. It fires on task creation
+   or a material edit (debounced two minutes, at most ten) rather than on a
+   clock, so an unchanged backlog costs nothing. See
+   [Tuning which tasks task-pilot prepares](#tuning-which-tasks-task-pilot-prepares).
 3. **`ship-sweep` last, and only deliberately.** This is the one that commits,
    pushes, and opens PRs without a human present. It also needs
    `workflow.auto_ship = true`. Do not enable it in the same change as anything
@@ -111,6 +117,46 @@ load error. It never fires with defaults.
 Use `orbit routine show <name>` for a complete installed example and effective
 state; `orbit routine --help` lists the management commands. Keep the schema
 version and field names from the installed definition when authoring one.
+
+## Tuning which tasks task-pilot prepares
+
+The seeded `task_pilot.yaml` carries an optional `eligibility` block under
+`trigger.state`. Every key is optional; the seeded values are the defaults,
+and a definition without the block behaves identically:
+
+```yaml
+trigger:
+  state:
+    kind: preparation_eligible
+    owner_machine: hm_...            # resolved at seed time: this host
+    branch: main                     # resolved at seed time: the registered base branch
+    debounce_minutes: 2
+    max_wait_minutes: 10
+    max_items: 50
+    retries: 1
+    deadline_minutes: 90
+    eligibility:
+      statuses: [proposed, backlog]  # non-empty subset of these two
+      exclude_tags: [no-diff-expected, no-diff-needed]
+      require_tags: []               # every listed tag must be present
+      task_types: []                 # empty admits every type
+```
+
+Narrow it to, say, `statuses: [backlog]` or `require_tags: [pilot]` to keep the
+scheduled pilot off proposals a human has not looked at yet. Unknown keys and
+an empty `statuses` fail the definition closed. The resolved predicate is part
+of each task's material fingerprint, so changing it re-prepares tasks assessed
+under the old one; the default predicate keeps the fingerprints a workspace
+accepted before the block existed. Explicit runs (`orbit run task-pilot <id>`)
+ignore the block.
+
+**Upgrading from the cron form.** A workspace seeded before the state form
+holds a cron `task_pilot.yaml` (`*/40 * * * *`). `orbit workspace sync` refreshes
+an unmodified one — or one whose only edit is `enabled: true` — onto the state
+form owned by this host, keeping the opt-in (`orbit workspace sync --check`
+previews it). A cron file whose cadence or policy was hand-edited is left in
+place and reported as `preserved`; either restore the shipped bytes and rerun
+the sync, or edit it to the state form above by hand.
 
 ## Verify without firing
 

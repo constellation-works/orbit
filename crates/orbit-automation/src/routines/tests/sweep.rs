@@ -800,6 +800,8 @@ fn state_and_temporal_owners_of_same_pipeline_are_withheld_in_preview() {
             max_items: 50,
             retries: 1,
             deadline_minutes: 90,
+            eligibility:
+                orbit_types::workflow::automation::members::PreparationEligibility::default(),
         });
     let reports = run_sweep_core(
         &store(),

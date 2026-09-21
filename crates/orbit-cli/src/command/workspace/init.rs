@@ -132,15 +132,12 @@ impl WorkspaceInitArgs {
         if let Some(mode) = self.ship_mode.as_deref() {
             orbit_core::ShipMode::parse(mode)?;
         }
-        let (local_machine_id, local_machine_name, task_prefix) =
-            match inspect_machine_identity(global_root)? {
-                MachineIdentityState::Present(identity) => (
-                    Some(identity.id),
-                    Some(identity.name),
-                    Some(identity.task_prefix),
-                ),
-                MachineIdentityState::Absent => (None, None, None),
-            };
+        let (local_machine_id, task_prefix) = match inspect_machine_identity(global_root)? {
+            MachineIdentityState::Present(identity) => {
+                (Some(identity.id), Some(identity.task_prefix))
+            }
+            MachineIdentityState::Absent => (None, None),
+        };
         let explicit_role = self.role.map(WorkspaceCheckoutRole::from);
         match (explicit_role, self.owner.as_deref()) {
             (None, Some(_)) => {
@@ -171,16 +168,6 @@ impl WorkspaceInitArgs {
 
         let name = self.name.unwrap_or_else(|| dir_name_or_fallback(cwd));
         let id = canonical_workspace_id(&name);
-        // Seeded routine names are suffixed with the registered workspace name,
-        // not the checkout directory, so two checkouts sharing a basename stay
-        // distinct on one host [ORB-12107]. Validate the name before any write.
-        // The definitions themselves are machine-independent [ORB-12236]; an
-        // uninitialized host still seeds none, because `orbit init` owns the
-        // host state the clock evaluates them against.
-        let routine_identity = local_machine_name
-            .is_some()
-            .then(|| RoutineSeedIdentity::new(&name))
-            .transpose()?;
         let git_remote = detect_git_remote(cwd);
         let default_base_branch = checked_out_branch(cwd);
         // Every read of the registry below feeds the write at the end; the lock
@@ -206,6 +193,20 @@ impl WorkspaceInitArgs {
                     .clone()
                     .or_else(|| existing_workspace.map(|workspace| workspace.base_branch.clone()))
                     .unwrap_or_else(|| default_base_branch.clone());
+                // Seeded routine names are suffixed with the registered workspace
+                // name, not the checkout directory, so two checkouts sharing a
+                // basename stay distinct on one host [ORB-12107]. Validate the
+                // name before any write. Cron definitions are machine-independent
+                // [ORB-12236]; the state-triggered task-pilot default names this
+                // host as its owner and the branch above as what it observes
+                // [ORB-12745]. An uninitialized host seeds none, because
+                // `orbit init` owns the host state the clock evaluates them against.
+                let routine_identity = local_machine_id
+                    .as_deref()
+                    .map(|machine_id| {
+                        RoutineSeedIdentity::new(&name, machine_id, &seeded_base_branch)
+                    })
+                    .transpose()?;
                 let registered_shared_root = global_root == orbit_dir
                     && registry
                         .checkouts

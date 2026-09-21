@@ -1169,9 +1169,12 @@ fn same_basename_checkouts_with_distinct_names_seed_distinct_routine_names() {
     );
 }
 
-/// Seeded definitions carry no host id [ORB-12236], so the same workspace name
-/// initialized on two machines produces the same bytes — a repository can be
-/// registered on a second host with no definition edits.
+/// Seeded cron definitions carry no host id [ORB-12236], so the same workspace
+/// name initialized on two machines produces the same bytes — a repository can
+/// be registered on a second host with no definition edits. The one exception
+/// is the state-triggered task-pilot default, whose trigger must name the
+/// machine that evaluates it: each host seeds itself as that owner and
+/// nothing else differs [ORB-12745].
 #[test]
 fn seeded_routines_are_byte_identical_across_machine_nameentities() {
     let base = tempdir().expect("base tempdir");
@@ -1214,7 +1217,24 @@ fn seeded_routines_are_byte_identical_across_machine_nameentities() {
 
     let first_routines = read_routines(&first);
     assert!(!first_routines.is_empty(), "init must seed routines");
-    assert_eq!(first_routines, read_routines(&second));
+    let second_routines = read_routines(&second);
+    assert_eq!(first_routines.len(), second_routines.len());
+    for ((name, first_body), (_, second_body)) in first_routines.iter().zip(&second_routines) {
+        if name == "task_pilot.yaml" {
+            assert!(
+                first_body.contains("owner_machine: hm_first")
+                    && second_body.contains("owner_machine: hm_second"),
+                "each host seeds itself as the state trigger's owner"
+            );
+            assert_eq!(
+                first_body.replace("hm_first", "hm_second"),
+                *second_body,
+                "the owner is the only host-dependent byte in task_pilot.yaml"
+            );
+        } else {
+            assert_eq!(first_body, second_body, "{name} must be host-independent");
+        }
+    }
 }
 
 /// Routine discovery drops *every* definition sharing a name, so a duplicate
