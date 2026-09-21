@@ -4,10 +4,13 @@ use crate::state::{DashboardState, Ws};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_common::governance::authorization::DASHBOARD_AUTO_DRAIN_COMPLETE;
+use orbit_common::governance::authorization::{
+    DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_STOP,
+};
 use orbit_common::security::redaction::redact_all;
 use orbit_core::application::job::{
-    ActivityInvocationEvidence, job_run_to_json_with_activity_provenance,
+    ActivityInvocationEvidence, DrainAdmissionsStopRequest, DrainAdmissionsStopResult,
+    job_run_to_json_with_activity_provenance,
 };
 use orbit_core::runtime::run_audit::{RunAuditStep, RunCliInvocationRecord, RunProviderProcess};
 use orbit_core::{InvocationQuery, JobRun, OrbitRuntime, V2AuditEventFilter};
@@ -241,6 +244,81 @@ pub(super) async fn auto_drain_workflow_action(
 }
 
 #[derive(serde::Deserialize, Default)]
+pub(super) struct AutoDrainStopBody {
+    /// Free-text reason recorded on the coordinator's stop marker and audit.
+    #[serde(default)]
+    reason: Option<String>,
+    /// [ORB-10709] Token for this workspace's exclusive claim, when another
+    /// operator holds one.
+    #[serde(default)]
+    claim_token: Option<String>,
+}
+
+/// Stop new admissions for the workspace's live `auto` window
+/// (`POST /workflows/auto/stop?workspace=<id>`) [ORB-12728].
+///
+/// Dashboard counterpart to `orbit run auto --stop`, reusing
+/// `stop_workspace_auto_admissions`: every live coordinator in this concrete
+/// workspace stops admitting, already admitted workers keep running under
+/// their captured completion authority, and a workspace with no coordinator
+/// reports `idle`. This is not cancellation. Ending an unattended delivery
+/// window early is an operator decision, so it is gated like the other
+/// governed dashboard controls (`--operator` session) and refused before any
+/// runtime call.
+pub(super) async fn auto_drain_stop_action(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    body: Option<Json<AutoDrainStopBody>>,
+) -> Response {
+    let Json(body) = body.unwrap_or_default();
+    if let Err(denial) = authorized_caller(&DASHBOARD_AUTO_DRAIN_STOP, state.operator_session()) {
+        return authorization_denied(denial);
+    }
+    match blocking("auto-drain stop", move || {
+        runtime.stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
+            actor: "dashboard",
+            source: "dashboard",
+            reason: body.reason.as_deref(),
+            claim_token: body.claim_token.as_deref(),
+        })
+    })
+    .await
+    {
+        Ok(result) => Json(auto_drain_stop_to_json(&result)).into_response(),
+        Err(response) => *response,
+    }
+}
+
+/// The stop outcome the CLI prints, projected for the pane: the workspace
+/// outcome plus one entry per coordinator naming what changed and which
+/// children are still in flight under it.
+fn auto_drain_stop_to_json(result: &DrainAdmissionsStopResult) -> Value {
+    json!({
+        "workflow": "auto",
+        "outcome": result.outcome,
+        "coordinators": result
+            .coordinators
+            .iter()
+            .map(|change| json!({
+                "run_id": change.run_id,
+                "job_id": change.job_id,
+                "outcome": change.outcome,
+                "remaining_children": change
+                    .remaining_children
+                    .iter()
+                    .map(|child| json!({
+                        "run_id": child.run_id,
+                        "job_name": child.job_name,
+                        "phase": child.phase,
+                        "child_status": child.child_status,
+                    }))
+                    .collect::<Vec<_>>(),
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+#[derive(serde::Deserialize, Default)]
 pub(super) struct AutoDrainReadinessQuery {
     #[serde(default)]
     concurrency: Option<u32>,
@@ -262,14 +340,18 @@ pub(super) async fn auto_drain_readiness(
     .await
     {
         Ok(mut payload) => {
-            // So the form can hide/disable the `complete` opt-in before the
-            // operator ever hits the separately-governed 403 at submission.
+            // So the form can hide/disable the `complete` opt-in and the
+            // stop control before the operator ever hits the
+            // separately-governed 403 at submission. Both operations admit
+            // the same operator capability, so one flag describes both.
             if let Some(object) = payload.as_object_mut() {
+                let operator_session = state.operator_session();
                 object.insert(
                     "controls_authorized".to_string(),
                     Value::Bool(
-                        authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, state.operator_session())
-                            .is_ok(),
+                        authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, operator_session).is_ok()
+                            && authorized_caller(&DASHBOARD_AUTO_DRAIN_STOP, operator_session)
+                                .is_ok(),
                     ),
                 );
             }

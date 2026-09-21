@@ -596,6 +596,7 @@ pub(super) fn router() -> Router<crate::state::DashboardState> {
         .route("/job-runs/:id/resume", post(jobs::resume_job_run_action))
         .route("/workflows/ship", post(runs::ship_workflow_action))
         .route("/workflows/auto", post(runs::auto_drain_workflow_action))
+        .route("/workflows/auto/stop", post(runs::auto_drain_stop_action))
         .route("/workflows/auto/readiness", get(runs::auto_drain_readiness))
         // Distributed-drain claim provenance and the owner's handoff actions
         // [ORB-12516]. There is no dedicated distributed tab: these feed the
