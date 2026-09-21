@@ -542,12 +542,15 @@ most 50 task envelopes and retains a continuation.
 Due members are admitted in batches [ORB-12746]. One pass claims up to
 `batch_size` due members (default 5; an explicit value must lie in
 `1..=min(50, max_items)`; the default is capped by `max_items`) that Core admits
-and that share one pinned source, oldest first, into a single attempt, and
+and that share one pinned source and one stored `task.crew` identity, oldest first,
+into a single attempt, and
 dispatches one `task_pilot_pipeline` run carrying every member's task id as an
-explicit `task_ids` entry. Prepare partitions those ids into groups of at most
-five, so a burst of *N* eligible tasks yields one run with ⌈N/5⌉ pilot
+explicit `task_ids` entry. A mixed-crew eligible set therefore yields one
+run per crew rather than a single rejected bundle [ORB-12761]. Prepare partitions those ids into groups of at most
+five, so a burst of *N* same-crew eligible tasks yields one run with ⌈N/5⌉ pilot
 partitions and up to five concurrent workers instead of *N* serial runs;
-members beyond the batch stay pending for the next admission. The attempt's
+members beyond the batch, or whose crew disagrees with the claimed attempt,
+stay pending for the next admission. The attempt's
 retry budget, backoff and absolute deadline are per attempt: a run that stops
 before any apply output retries the whole batch, while a member whose input
 goes stale before acknowledgement leaves the batch without failing its

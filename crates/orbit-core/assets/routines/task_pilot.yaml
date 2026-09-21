@@ -8,6 +8,7 @@
 # the eligible tasks against the pinned branch head and admits the tasks whose
 # material has no fresh assessment once each has settled for debounce_minutes,
 # or waited max_wait_minutes, up to batch_size of them into one run whose
+# members share one stored crew [ORB-12761] and whose
 # pilots take at most five tasks each [ORB-12746]. A fresh assessment,
 # including an unready verdict, never re-dispatches; a material edit creates
 # new work. Nothing fires while the backlog is unchanged. Preparation never

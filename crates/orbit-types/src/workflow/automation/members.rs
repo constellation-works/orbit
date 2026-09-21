@@ -220,6 +220,20 @@ pub struct StateMember {
     pub evidence: serde_json::Value,
     pub first_seen: DateTime<Utc>,
     pub changed_at: DateTime<Utc>,
+    /// Stored `task.crew` identity used to keep a preparation batch
+    /// crew-homogeneous [ORB-12761]. `None` means no explicit crew, which the
+    /// one-bundle-one-crew dispatch rule treats as distinct from any named crew.
+    /// Records persisted before this field existed deserialize as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew: Option<String>,
+}
+
+/// Trimmed non-empty `task.crew`, or `None` when unset. Matches the identity
+/// `resolve_crew_for_run_input` requires to be unanimous across a bundle.
+pub fn bundle_crew(crew: Option<&str>) -> Option<String> {
+    crew.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 /// One claim over a batch of due members [ORB-12746]. `member` is the first
