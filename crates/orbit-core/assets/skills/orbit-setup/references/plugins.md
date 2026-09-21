@@ -29,7 +29,9 @@ plugins:
 
 Cloning a repository therefore does not make its plugins available. Plugin
 trees are never vendored into a checkout, and `orbit plugin add` refuses a
-source inside the current repository for exactly that reason.
+source inside the current repository for exactly that reason. A source that
+contains a symbolic link is refused, naming the entry, because the install
+copy would follow it and place the target's bytes inside the plugin root.
 
 ## Install
 

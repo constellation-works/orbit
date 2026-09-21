@@ -4,12 +4,14 @@
 //! `.tar.gz`/`.tgz`/`.tar` archive. Fetching runs here rather than in Core
 //! because this is the crate that owns spawning a process.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 
+use super::loader::{plugin_symlink_refusal, refuse_plugin_tree_symlinks};
 use crate::TIMEOUT_LONG_MS;
 
 /// Where a resolved source's tree lives, and what the source was.
@@ -25,6 +27,12 @@ pub struct ResolvedSource {
 /// Fetch or locate `source`. Network and filesystem work only; the manifest
 /// is read by the caller.
 pub fn resolve_plugin_source(source: &str) -> Result<ResolvedSource, OrbitError> {
+    let resolved = resolve_plugin_source_unverified(source)?;
+    refuse_plugin_tree_symlinks(&resolved.root)?;
+    Ok(resolved)
+}
+
+fn resolve_plugin_source_unverified(source: &str) -> Result<ResolvedSource, OrbitError> {
     if let Some(spec) = source.strip_prefix("git+") {
         return clone_git_source(spec);
     }
@@ -118,20 +126,53 @@ fn unpack_archive(path: &Path) -> Result<ResolvedSource, OrbitError> {
     let file = std::fs::File::open(path)
         .map_err(|error| OrbitError::Io(format!("open {name}: {error}")))?;
     let unpacked = scratch.path().join("archive");
+    std::fs::create_dir_all(&unpacked)
+        .map_err(|error| OrbitError::Io(format!("create {}: {error}", unpacked.display())))?;
     if gzipped {
-        tar::Archive::new(flate2::read::GzDecoder::new(file))
-            .unpack(&unpacked)
-            .map_err(|error| OrbitError::Io(format!("unpack {name}: {error}")))?;
+        unpack_tar(
+            tar::Archive::new(flate2::read::GzDecoder::new(file)),
+            &unpacked,
+            &name,
+        )?;
     } else {
-        tar::Archive::new(file)
-            .unpack(&unpacked)
-            .map_err(|error| OrbitError::Io(format!("unpack {name}: {error}")))?;
+        unpack_tar(tar::Archive::new(file), &unpacked, &name)?;
     }
     let root = plugin_root_within(&unpacked)?;
     Ok(ResolvedSource {
         root,
         scratch: Some(scratch),
     })
+}
+
+/// Unpack one archive, refusing symlink members before they hit the disk.
+/// `Archive::unpack` would recreate those links; `copy_tree` would then
+/// follow them and materialise the target's bytes in the install root.
+fn unpack_tar<R: Read>(
+    mut archive: tar::Archive<R>,
+    dest: &Path,
+    source_name: &str,
+) -> Result<(), OrbitError> {
+    let entries = archive
+        .entries()
+        .map_err(|error| OrbitError::Io(format!("unpack {source_name}: {error}")))?;
+    for entry in entries {
+        let mut entry =
+            entry.map_err(|error| OrbitError::Io(format!("unpack {source_name}: {error}")))?;
+        if entry.header().entry_type().is_symlink() {
+            let name = entry
+                .path()
+                .map_err(|error| OrbitError::Io(format!("unpack {source_name}: {error}")))?;
+            let target = entry.link_name().ok().flatten();
+            return Err(OrbitError::InvalidInput(plugin_symlink_refusal(
+                name.as_ref(),
+                target.as_deref(),
+            )));
+        }
+        entry
+            .unpack_in(dest)
+            .map_err(|error| OrbitError::Io(format!("unpack {source_name}: {error}")))?;
+    }
+    Ok(())
 }
 
 /// An archive may hold the manifest at its top level or inside one wrapper
