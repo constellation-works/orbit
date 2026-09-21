@@ -232,9 +232,11 @@ stdout: `{"ok":true,"output":{…}}` or `{"ok":false,"error":{"code":"…","mess
 Non-zero exit, non-JSON stdout, or output failing `output_schema` is a tool error; there is no
 partial success. Timeout is `backend.timeout_ms`, capped by a host ceiling.
 
-`mcp` backend — Orbit spawns the plugin's stdio MCP server once per runtime, keeps it alive,
-proxies each `<ns>.<verb>` call as `tools/call`, and refuses to start if the server's
-`tools/list` disagrees with the manifest's `tools:` (names and schemas). Orbit is the only
+`mcp` backend — Orbit spawns the plugin's stdio MCP server once per allowed-tools
+intersection per runtime, keeps it alive, proxies each `<ns>.<verb>` call as `tools/call`,
+and refuses to start if the server's `tools/list` disagrees with the manifest's `tools:`
+(names and schemas). A caller whose intersection differs from a live session's gets its
+own child rather than inheriting another caller's `ORBIT_ALLOWED_TOOLS`. Orbit is the only
 client; the plugin never listens on a socket. This is how orbit-research plugs in without a
 rewrite.
 
@@ -391,8 +393,9 @@ tool, one panel, one disabled auto-task, one skill stub, a passing conformance t
   `--input` cover the long tail. Do not attempt full clap parity.
 - **Catalog shadowing surprises.** Workspace-over-plugin precedence is right, but `orbit run
   show` must print which layer resolved each `activity:` ref.
-- **`mcp` backend lifetime.** One long-lived child per runtime process means `orbit mcp
-  serve`, `clock tick` and the CLI each spawn their own; acceptable in v1, pool later.
+- **`mcp` backend lifetime.** One long-lived child per allowed-tools intersection per
+  runtime process means `orbit mcp serve`, `clock tick` and the CLI each spawn their own;
+  acceptable in v1, pool later.
 - **Compat table drift.** orbit-research keeps its own Orbit allowlist today; after Phase 2 the
   single source is `requires.orbit` plus the conformance run, and its table should be retired.
 
