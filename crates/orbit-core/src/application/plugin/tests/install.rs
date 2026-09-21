@@ -395,6 +395,64 @@ fn relative_inventory(root: &Path) -> BTreeSet<String> {
     out
 }
 
+/// A local git checkout, so `git+<url>` install exercises the real clone
+/// path without a network fetch.
+fn run_git(repo: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .current_dir(repo)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "orbit-test")
+        .env("GIT_AUTHOR_EMAIL", "orbit-test@example.test")
+        .env("GIT_COMMITTER_NAME", "orbit-test")
+        .env("GIT_COMMITTER_EMAIL", "orbit-test@example.test")
+        .output()
+        .unwrap_or_else(|error| panic!("git {args:?}: {error}"));
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// [ORB-12794] `git clone` writes the source URL (credentials included, when
+/// present) into `.git/config`, and that root is the first entry in the
+/// plugin backend's unconditional read set. The install must not carry the
+/// clone's VCS metadata into the tree the backend can always read.
+#[test]
+fn add_from_a_git_source_excludes_the_clone_metadata() {
+    let fixture = PluginFixture::new();
+    let repo = fixture.sources.join("git-origin");
+    write_plugin_at(&repo, PluginSpecFixture::new("demo", "demo"));
+    run_git(&repo, &["init", "-q"]);
+    run_git(&repo, &["add", "-A"]);
+    run_git(&repo, &["commit", "-q", "-m", "fixture plugin"]);
+    assert!(
+        repo.join(".git").is_dir(),
+        "fixture source must itself be a git checkout"
+    );
+
+    let summary = install_plugin(
+        &fixture.runtime,
+        &format!("git+{}", repo.display()),
+        &PluginAddOptions::default(),
+    )
+    .expect("install from a local git source");
+
+    let installed = Path::new(&summary.install_path);
+    assert!(
+        installed.join("plugin.yaml").is_file(),
+        "installed tree must contain the plugin files"
+    );
+    assert!(
+        installed.join("bin/backend.sh").is_file(),
+        "installed tree must contain the plugin files"
+    );
+    assert!(
+        !installed.join(".git").exists(),
+        "installed tree must not contain the clone's .git directory"
+    );
+}
+
 #[test]
 fn install_inventory_matches_the_source_tree() {
     let fixture = PluginFixture::new();

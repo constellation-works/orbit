@@ -81,6 +81,16 @@ fn clone_git_source(spec: &str) -> Result<ResolvedSource, OrbitError> {
     args.push(checkout_arg);
     run_git(args, None)?;
 
+    // `git clone` writes the source URL (credentials included, when the URL
+    // carried them) into `.git/config`, and `copy_tree` walks this root
+    // verbatim into the install path. Drop the clone's VCS metadata here so
+    // it never reaches the tree the plugin backend can always read.
+    let git_dir = checkout.join(".git");
+    if git_dir.exists() {
+        std::fs::remove_dir_all(&git_dir)
+            .map_err(|error| OrbitError::Io(format!("remove clone metadata: {error}")))?;
+    }
+
     Ok(ResolvedSource {
         root: std::fs::canonicalize(&checkout)
             .map_err(|error| OrbitError::Io(format!("clone target: {error}")))?,
@@ -147,6 +157,11 @@ fn unpack_archive(path: &Path) -> Result<ResolvedSource, OrbitError> {
 /// Unpack one archive, refusing symlink members before they hit the disk.
 /// `Archive::unpack` would recreate those links; `copy_tree` would then
 /// follow them and materialise the target's bytes in the install root.
+///
+/// A hardlink entry is not refused the same way: `tar::Entry::unpack_in`
+/// (called below) resolves a hardlink's target against `dest` and validates
+/// it stays inside that directory before calling `fs::hard_link`, so unlike
+/// a symlink there is no separate escape for this code to guard against.
 fn unpack_tar<R: Read>(
     mut archive: tar::Archive<R>,
     dest: &Path,
