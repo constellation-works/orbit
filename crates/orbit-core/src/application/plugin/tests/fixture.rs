@@ -1,8 +1,10 @@
 //! Shared plugin fixtures: a real Orbit root, and plugin directories written
 //! outside it so `add` exercises the ordinary global-install path.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 use tempfile::TempDir;
 
 use crate::OrbitRuntime;
@@ -53,11 +55,36 @@ impl PluginFixture {
         runtime: &OrbitRuntime,
         tool: &str,
     ) -> Result<serde_json::Value, orbit_common::OrbitError> {
+        self.call_with_input(runtime, tool, serde_json::json!({}))
+    }
+
+    /// Same audited dispatch as [`Self::call`], with a caller-supplied input.
+    pub(super) fn call_with_input(
+        &self,
+        runtime: &OrbitRuntime,
+        tool: &str,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, orbit_common::OrbitError> {
         let _activity_tools =
             crate::adapter::command::dispatch_test_support::override_activity_tools_for_test([
                 tool,
             ]);
-        runtime.execute_tool_command(tool, serde_json::json!({}), None, None)
+        // `execute_tool_command` builds an empty session and reads the process
+        // envelope. CI has no TTY and no agent identity, so that caller
+        // resolves as `unknown` and the identification floor refuses even a
+        // read-only plugin tool. Name the caller here — `agent` is the floor
+        // `plugin.tool.read_only` already admits — rather than depending on
+        // the runner's environment.
+        runtime.execute_tool_command_with_session_context(
+            tool,
+            input,
+            None,
+            None,
+            ToolSessionContext {
+                effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                ..ToolSessionContext::default()
+            },
+        )
     }
 
     pub(super) fn write_pin_file(&self, contents: &str) {
