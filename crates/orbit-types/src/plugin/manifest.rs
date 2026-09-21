@@ -355,10 +355,25 @@ impl PluginManifest {
             validate_template(path, &format!("spec.permissions.fs.write[{index}]"))?;
         }
         for (index, name) in self.spec.permissions.env_pass.iter().enumerate() {
+            let field = format!("spec.permissions.env_pass[{index}]");
             if name.trim().is_empty() || name.contains('=') {
                 return Err(PluginManifestError::new(
-                    format!("spec.permissions.env_pass[{index}]"),
+                    field,
                     format!("'{name}' is not an environment variable name"),
+                ));
+            }
+            // `ORBIT_*` is Orbit's own execution envelope, not something a
+            // manifest can request more of: the host stamps the plugin's
+            // envelope unconditionally, and privilege-bearing names in this
+            // namespace (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`) must
+            // never reach a plugin child even by explicit request.
+            if name.starts_with("ORBIT_") {
+                return Err(PluginManifestError::new(
+                    field,
+                    format!(
+                        "'{name}' is an Orbit-reserved variable and cannot be requested via \
+                         env_pass; the plugin envelope provides Orbit context automatically"
+                    ),
                 ));
             }
         }

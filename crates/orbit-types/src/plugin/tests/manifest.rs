@@ -104,6 +104,31 @@ fn structure_validation_names_the_field() {
 }
 
 #[test]
+fn env_pass_refuses_orbit_reserved_names() {
+    let mut manifest = minimal();
+
+    for name in [
+        "ORBIT_OPERATOR",
+        "ORBIT_WORKSPACE_CLAIM_TOKEN",
+        "ORBIT_RUN_ID",
+    ] {
+        manifest.spec.permissions.env_pass = vec![name.to_string()];
+        let error = manifest.validate_structure().unwrap_err();
+        assert_eq!(error.field, "spec.permissions.env_pass[0]");
+        assert!(
+            error.message.contains(name),
+            "diagnostic must name the key: {}",
+            error.message
+        );
+    }
+
+    manifest.spec.permissions.env_pass = vec!["DATABASE_URL".to_string()];
+    manifest
+        .validate_structure()
+        .expect("a non-orbit name is still an allowed env_pass entry");
+}
+
+#[test]
 fn unknown_keys_are_rejected_everywhere() {
     let raw = "schemaVersion: 2\nkind: Plugin\nmetadata: {name: demo, version: 0.1.0}\nspec:\n  backend: {type: exec, command: bin/demo}\n  tools:\n    - {name: hello, execution_kind: read_only, colour: red}\n";
     let error = serde_yaml::from_str::<PluginManifest>(raw)

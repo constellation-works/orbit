@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Child;
 
 use orbit_common::OrbitError;
-use orbit_common::security::child_env::allowlisted_child_env;
+use orbit_common::security::child_env::{allowlisted_child_env, allowlisted_child_env_from};
 use orbit_exec::{ExecRequest, NoSandbox, Sandbox};
 use orbit_types::plugin::{
     PLUGIN_HOST_API, PluginGrant, PluginManifestError, PluginNetworkPermission, PluginPermissions,
@@ -129,6 +129,15 @@ impl PluginBackendSpec {
     /// granted `env_pass` names copied from this process, and the Orbit
     /// plugin variables (design §4.2). `tool_name` is absent for a
     /// long-lived `mcp` child, which serves every tool.
+    ///
+    /// `env_pass` is composed through the same admission path as the
+    /// baseline (`allowlisted_child_env_from`), not a raw name lookup: a
+    /// manifest names a variable to request it, but the excluded
+    /// privilege-bearing `ORBIT_*` names (`ORBIT_OPERATOR`,
+    /// `ORBIT_WORKSPACE_CLAIM_TOKEN`) can never ride that request through
+    /// even if present in the parent environment (`validate_structure`
+    /// refuses them at the manifest too; this is the defense-in-depth
+    /// boundary for a manifest loaded before that check existed).
     pub fn child_environment(
         &self,
         ctx: &ToolContext,
@@ -140,9 +149,17 @@ impl PluginBackendSpec {
             .clone()
             .unwrap_or_else(|| allowlisted_child_env(&[], &[]));
         if self.granted(PluginGrant::EnvPass) {
+            let parent = ctx
+                .proc_spawn_environment
+                .clone()
+                .unwrap_or_else(|| std::env::vars().collect());
+            let admitted = allowlisted_child_env_from(&parent, &self.permissions.env_pass, &[]);
             for name in &self.permissions.env_pass {
-                if let Ok(value) = std::env::var(name) {
-                    upsert_env(&mut env_pairs, name, value);
+                if let Some((_, value)) = admitted
+                    .iter()
+                    .find(|(admitted_name, _)| admitted_name == name)
+                {
+                    upsert_env(&mut env_pairs, name, value.clone());
                 }
             }
         }
