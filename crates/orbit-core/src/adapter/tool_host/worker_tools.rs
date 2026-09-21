@@ -106,6 +106,7 @@ pub(crate) fn execute(
         .map_err(|error| OrbitError::Store(error.to_string()))?;
         return Ok(Some(value));
     }
+    let mut friction_tag_substitutions = Vec::new();
     let mutation = match action {
         OrbitBuiltinAction::TaskUpdate => {
             binding
@@ -127,7 +128,8 @@ pub(crate) fn execute(
                         "use the task artifact adapter for artifact payloads".into(),
                     ));
                 }
-                return apply(runtime, session, ClaimMutation::Update(update)).map(Some);
+                return apply(runtime, session, ClaimMutation::Update(update), Vec::new())
+                    .map(Some);
             }
             orbit_common::protocol::tool_input::reject_unknown_tool_fields(
                 input,
@@ -177,7 +179,9 @@ pub(crate) fn execute(
             binding
                 .validate_arguments(input)
                 .map_err(OrbitError::InvalidInput)?;
-            let mut params = super::friction_tools::add_params(input, model.map(str::to_owned))?;
+            let (mut params, substitutions) =
+                super::friction_tools::add_params(input, model.map(str::to_owned))?;
+            friction_tag_substitutions = substitutions;
             params.during_task = Some(binding.task_id.clone());
             let taxonomy = crate::runtime::friction::store_for(runtime)?
                 .tags()?
@@ -206,7 +210,7 @@ pub(crate) fn execute(
         }
         _ => return Ok(None),
     };
-    apply(runtime, session, mutation).map(Some)
+    apply(runtime, session, mutation, friction_tag_substitutions).map(Some)
 }
 
 fn optional_field<T: serde::de::DeserializeOwned>(
@@ -227,6 +231,7 @@ fn apply(
     runtime: &OrbitRuntime,
     session: &ToolSessionContext,
     mutation: ClaimMutation,
+    friction_tag_substitutions: Vec<(String, String)>,
 ) -> Result<Value, OrbitError> {
     let binding = session
         .worker_invocation
@@ -250,8 +255,9 @@ fn apply(
     let mutation_id = blake3::hash(&bytes).to_hex().to_string();
     let result = runtime.mutate_execution_claim(Some(&auth), &mutation_id, &mutation)?;
     if let Some(record) = result.friction {
-        return super::friction_tools::record_to_json(
+        return super::friction_tools::record_to_json_with_tag_normalizations(
             orbit_store::contracts::StoredFrictionRecord { record, path: None },
+            friction_tag_substitutions,
         );
     }
     let task = runtime.get_task(&binding.task_id)?;

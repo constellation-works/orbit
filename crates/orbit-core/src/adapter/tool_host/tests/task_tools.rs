@@ -173,6 +173,28 @@ fn task_add_tool_creates_proposed_tasks_for_agents() {
 }
 
 #[test]
+fn task_add_tool_stores_easy_and_small_complexity_as_low() {
+    let (_root, runtime, _repo_root) = test_runtime();
+
+    for alias in ["easy", "small"] {
+        let output = runtime
+            .execute_tool_command(
+                "orbit.task.add",
+                json!({
+                    "title": format!("Alias {alias}"),
+                    "description": "Complexity aliases are canonicalized at the tool boundary.",
+                    "complexity": alias,
+                    "workspace": ".",
+                }),
+                Some("codex".to_string()),
+                Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+            )
+            .expect("complexity alias succeeds");
+        assert_eq!(output["complexity"], json!("low"), "alias {alias}");
+    }
+}
+
+#[test]
 fn task_add_tool_rejects_unknown_required_tools_with_suggestions() {
     let (_root, runtime, _repo_root) = test_runtime();
 
@@ -929,6 +951,69 @@ fn task_update_routes_approval_start_and_blocked_restart_through_transition_bodi
         )
         .expect_err("rejected is not a pickup state");
     assert!(error.to_string().contains("start requires"), "{error}");
+}
+
+#[test]
+fn task_update_attaches_note_to_an_ordinary_status_transition() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let task = create_task(
+        &runtime,
+        &repo_root,
+        "Transition annotation",
+        "Record why an ordinary lifecycle edge was taken.",
+        TaskStatus::InProgress,
+        &[],
+    );
+
+    let updated = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({
+                "id": task.id,
+                "status": "blocked",
+                "note": "waiting for an external prerequisite",
+                "fields": ["status", "history"],
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("ordinary transition accepts a note");
+
+    assert_eq!(updated["status"], json!("blocked"));
+    assert!(updated["history"].as_array().is_some_and(|history| {
+        history.iter().any(|entry| {
+            entry["from_status"] == "in_progress"
+                && entry["to_status"] == "blocked"
+                && entry["note"] == "waiting for an external prerequisite"
+        })
+    }));
+}
+
+#[test]
+fn task_update_rejects_note_without_an_actual_status_change_and_points_to_comment() {
+    let (_root, runtime, repo_root) = test_runtime();
+    let task = create_task(
+        &runtime,
+        &repo_root,
+        "Discussion belongs in comments",
+        "A note annotates only a transition.",
+        TaskStatus::Backlog,
+        &[],
+    );
+
+    for input in [
+        json!({"id": task.id, "note": "discussion"}),
+        json!({"id": task.id, "status": "backlog", "note": "discussion"}),
+    ] {
+        let message = invalid_input_message(runtime.execute_tool_command(
+            "orbit.task.update",
+            input,
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        ));
+        assert!(message.contains("status change"), "{message}");
+        assert!(message.contains("`comment`"), "{message}");
+    }
 }
 
 /// ORB-12338: a non-approval `status: backlog` write is an ordinary governed

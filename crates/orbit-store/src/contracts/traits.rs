@@ -319,6 +319,7 @@ pub trait FrictionStoreBackend: Send + Sync {
         resolved_at: DateTime<Utc>,
     ) -> Result<Option<StoredFrictionRecord>, OrbitError>;
     fn tags(&self) -> Result<Vec<String>, OrbitError>;
+    fn tag_taxonomy(&self) -> Result<Vec<(String, String)>, OrbitError>;
     fn reported_by_model(
         &self,
         since: Option<DateTime<Utc>>,

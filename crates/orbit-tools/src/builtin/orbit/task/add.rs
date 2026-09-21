@@ -79,7 +79,8 @@ impl Tool for OrbitTaskAddTool {
             },
             ToolParam {
                 name: "complexity".to_string(),
-                description: "Task complexity level (low, medium, hard, or xhard)".to_string(),
+                description: "Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard"
+                    .to_string(),
                 param_type: "string".to_string(),
                 required: true,
             },

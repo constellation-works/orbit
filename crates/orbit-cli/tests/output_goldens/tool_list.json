@@ -346,7 +346,7 @@
         "required": false
       },
       {
-        "description": "Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other",
+        "description": "Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; aliases: ci → build, test → build, tests → build, testing → build, cli → tooling, mcp → tooling, tool → tooling, auto-task → automation, auto-tasks → automation, scheduler → automation, routine → automation, skill → skill-guidance, prompt → skill-guidance; defaults to other",
         "name": "tags",
         "param_type": "string_list",
         "required": false
@@ -456,7 +456,7 @@
         "required": false
       },
       {
-        "description": "Optional replacement taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling",
+        "description": "Optional replacement taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; aliases: ci → build, test → build, tests → build, testing → build, cli → tooling, mcp → tooling, tool → tooling, auto-task → automation, auto-tasks → automation, scheduler → automation, routine → automation, skill → skill-guidance, prompt → skill-guidance",
         "name": "tags",
         "param_type": "string_list",
         "required": false
@@ -700,7 +700,7 @@
         "required": false
       },
       {
-        "description": "Task complexity level (low, medium, hard, or xhard)",
+        "description": "Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
         "name": "complexity",
         "param_type": "string",
         "required": true
@@ -1014,7 +1014,7 @@
         "required": false
       },
       {
-        "description": "Optional lifecycle note for the guarded approval (proposed → backlog) or start (pickup → in-progress) transition; rejected on any other update",
+        "description": "Annotation stored on this status transition's history entry; use `comment` for free-form discussion",
         "name": "note",
         "param_type": "string",
         "required": false
@@ -1026,7 +1026,7 @@
         "required": false
       },
       {
-        "description": "Optional task complexity level (low, medium, hard, or xhard)",
+        "description": "Optional task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
         "name": "complexity",
         "param_type": "string",
         "required": false

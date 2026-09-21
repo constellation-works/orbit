@@ -1,8 +1,10 @@
 use serde_json::json;
 
 use super::super::input::{
-    parse_artifacts, parse_optional_string_array_field, parse_string_array_field,
+    parse_artifacts, parse_assessed_task_complexity, parse_optional_string_array_field,
+    parse_string_array_field,
 };
+use orbit_types::task::TaskComplexity;
 
 #[test]
 fn parse_string_array_field_accepts_scalar_string() {
@@ -70,4 +72,22 @@ fn parse_artifacts_rejects_invalid_byte_content() {
     .to_string();
 
     assert!(error.contains("between 0 and 255"));
+}
+
+#[test]
+fn assessed_task_complexity_accepts_every_authored_alias() {
+    for alias in ["easy", "small", "trivial"] {
+        assert_eq!(
+            parse_assessed_task_complexity("complexity", alias).unwrap(),
+            TaskComplexity::Low,
+            "{alias}"
+        );
+    }
+    for alias in ["large", "big"] {
+        assert_eq!(
+            parse_assessed_task_complexity("complexity", alias).unwrap(),
+            TaskComplexity::Hard,
+            "{alias}"
+        );
+    }
 }

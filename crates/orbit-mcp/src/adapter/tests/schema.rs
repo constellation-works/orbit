@@ -6,7 +6,9 @@ use orbit_types::tool::{
 use rmcp::model::{ClientCapabilities, Implementation, InitializeRequestParams, Meta};
 
 use super::super::dispatch::session_context_from_initialize;
-use super::super::schema::{build_input_schema, property_for, schema_to_tool};
+use super::super::schema::{
+    build_input_schema, build_input_schema_with_friction_taxonomy, property_for, schema_to_tool,
+};
 use serde_json::{Value, json};
 
 use super::super::OrbitToolServer;
@@ -34,6 +36,122 @@ fn task_update_schema_uses_common_status_enum() {
         .and_then(Value::as_object)
         .expect("properties");
     assert!(properties["status"]["enum"].as_array().is_some());
+}
+
+#[test]
+fn friction_add_schema_advertises_live_taxonomy_title_limit_and_required_body() {
+    let params = vec![
+        ToolParam {
+            name: "body".to_string(),
+            description: "Markdown body".to_string(),
+            param_type: "string".to_string(),
+            required: true,
+        },
+        param_with_type("title", "string"),
+        param_with_type("tags", "string_list"),
+    ];
+    let taxonomy = vec![
+        ("build".to_string(), "Build and CI failures".to_string()),
+        (
+            "workspace-special".to_string(),
+            "Local operator category".to_string(),
+        ),
+    ];
+    let schema =
+        build_input_schema_with_friction_taxonomy("orbit.friction.add", &params, Some(&taxonomy));
+    let properties = schema["properties"].as_object().expect("properties");
+
+    assert_eq!(properties["title"]["maxLength"], json!(120));
+    assert!(
+        schema["required"]
+            .as_array()
+            .is_some_and(|required| { required.iter().any(|field| field == "body") })
+    );
+    let description = properties["tags"]["description"]
+        .as_str()
+        .expect("tag description");
+    assert!(description.contains("`build` — Build and CI failures"));
+    assert!(description.contains("`workspace-special` — Local operator category"));
+    assert!(!description.contains("may extend this default vocabulary"));
+    let item_enum = properties["tags"]["anyOf"]
+        .as_array()
+        .and_then(|alternatives| {
+            alternatives.iter().find_map(|alternative| {
+                alternative
+                    .get("items")
+                    .and_then(|items| items.get("enum"))
+                    .and_then(Value::as_array)
+            })
+        })
+        .expect("array items enum");
+    assert_eq!(item_enum, &vec![json!("build"), json!("workspace-special")]);
+}
+
+#[test]
+fn unbound_friction_schema_uses_described_defaults_and_says_workspace_may_extend_them() {
+    let schema = build_input_schema(
+        "orbit.friction.update",
+        &[param_with_type("tags", "string_list")],
+    );
+    let description = schema["properties"]["tags"]["description"]
+        .as_str()
+        .expect("tag description");
+
+    assert!(description.contains("`build` — make/fmt/lint friction"));
+    assert!(description.contains("may extend this default vocabulary"));
+    assert!(description.contains("ci → build"));
+}
+
+struct LiveTaxonomyHost;
+
+impl crate::McpHost for LiveTaxonomyHost {
+    fn list_mcp_tool_definitions(
+        &self,
+    ) -> Result<Vec<McpToolDefinition>, orbit_common::OrbitError> {
+        Ok(Vec::new())
+    }
+
+    fn friction_tag_taxonomy(
+        &self,
+        session_context: &ToolSessionContext,
+    ) -> Result<Option<Vec<(String, String)>>, orbit_common::OrbitError> {
+        assert_eq!(session_context.workspace.as_deref(), Some("ws_schema"));
+        Ok(Some(vec![(
+            "workspace-special".to_string(),
+            "Workspace description".to_string(),
+        )]))
+    }
+
+    fn call_tool(
+        &self,
+        _name: &str,
+        _input: Value,
+        _session_context: ToolSessionContext,
+    ) -> Result<Value, orbit_common::OrbitError> {
+        Ok(Value::Null)
+    }
+}
+
+#[test]
+fn bound_server_schema_reads_taxonomy_from_its_workspace_host() {
+    let definition = definition_with_scope(
+        "orbit.friction.add",
+        vec![param_with_type("tags", "string_list")],
+        McpToolScope::WorkspaceRequired,
+    );
+    let server = OrbitToolServer::new_with_context(
+        Arc::new(LiveTaxonomyHost),
+        ToolSessionContext::with_workspace("ws_schema"),
+    );
+    let schema = server
+        .input_schema_for(&definition)
+        .expect("bound schema resolves");
+    let description = schema["properties"]["tags"]["description"]
+        .as_str()
+        .expect("tag description");
+
+    assert!(description.contains("`workspace-special` — Workspace description"));
+    assert!(!description.contains("may extend this default vocabulary"));
 }
 
 #[test]

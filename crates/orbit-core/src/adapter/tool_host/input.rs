@@ -304,7 +304,12 @@ pub(super) fn parse_task_priority(field: &str, raw: &str) -> Result<TaskPriority
 }
 
 fn parse_task_complexity(field: &str, raw: &str) -> Result<TaskComplexity, OrbitError> {
-    TaskComplexity::from_str(raw)
+    let normalized = match raw.trim().to_ascii_lowercase().as_str() {
+        "easy" | "small" | "trivial" => "low",
+        "large" | "big" => "hard",
+        _ => raw,
+    };
+    TaskComplexity::from_str(normalized)
         .map_err(|error| OrbitError::InvalidInput(format!("`{field}` {error}")))
 }
 

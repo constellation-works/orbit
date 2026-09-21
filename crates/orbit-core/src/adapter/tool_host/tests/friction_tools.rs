@@ -51,6 +51,43 @@ fn add_without_a_title_falls_back_to_the_bodys_subject() {
 }
 
 #[test]
+fn add_normalizes_tag_aliases_and_reports_what_was_stored() {
+    let record = add(json!({
+        "body": SECTIONED_BODY,
+        "tags": ["ci", "testing", "cli"],
+        "model": TEST_CODEX_MODEL,
+    }))
+    .expect("add with tag aliases");
+
+    assert_eq!(record["tags"], json!(["build", "tooling"]));
+    assert_eq!(
+        record["tag_normalizations"],
+        json!([
+            {"input": "ci", "stored": "build"},
+            {"input": "testing", "stored": "build"},
+            {"input": "cli", "stored": "tooling"},
+        ])
+    );
+}
+
+#[test]
+fn add_still_rejects_unknown_tags_with_the_canonical_vocabulary() {
+    let message = invalid_input_message(add(json!({
+        "body": SECTIONED_BODY,
+        "tags": ["generation-guard"],
+        "model": TEST_CODEX_MODEL,
+    })));
+
+    assert!(
+        message.contains("unknown friction tag(s): generation-guard"),
+        "{message}"
+    );
+    for canonical in ["automation", "build", "skill-guidance", "tooling"] {
+        assert!(message.contains(canonical), "{message}");
+    }
+}
+
+#[test]
 fn add_refuses_a_non_string_task_id() {
     let message = invalid_input_message(add(json!({
         "body": SECTIONED_BODY,

@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+use orbit_common::governance::friction::{
+    DEFAULT_FRICTION_TAGS, FRICTION_TITLE_MAX_CHARS, friction_tag_aliases_literal,
+};
 use orbit_common::protocol::tool_schema::tool_input_schema_for;
 #[cfg(test)]
 use orbit_common::protocol::tool_schema::tool_parameter_schema;
@@ -125,8 +128,82 @@ fn ensure_federated_selector(schema: &mut JsonObject) {
     );
 }
 
+#[cfg(test)]
 pub(crate) fn build_input_schema(tool_name: &str, params: &[ToolParam]) -> JsonObject {
-    tool_input_schema_for(tool_name, params)
+    build_input_schema_with_friction_taxonomy(tool_name, params, None)
+}
+
+pub(crate) fn build_input_schema_with_friction_taxonomy(
+    tool_name: &str,
+    params: &[ToolParam],
+    taxonomy: Option<&[(String, String)]>,
+) -> JsonObject {
+    let mut schema = tool_input_schema_for(tool_name, params);
+    decorate_friction_schema(&mut schema, tool_name, taxonomy);
+    schema
+}
+
+fn decorate_friction_schema(
+    schema: &mut JsonObject,
+    tool_name: &str,
+    taxonomy: Option<&[(String, String)]>,
+) {
+    if !matches!(tool_name, "orbit.friction.add" | "orbit.friction.update") {
+        return;
+    }
+    let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
+        return;
+    };
+
+    if let Some(title) = properties.get_mut("title").and_then(Value::as_object_mut) {
+        title.insert("maxLength".to_string(), json!(FRICTION_TITLE_MAX_CHARS));
+    }
+
+    let Some(tags) = properties.get_mut("tags").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let using_workspace_taxonomy = taxonomy.is_some_and(|entries| !entries.is_empty());
+    let fallback;
+    let entries = match taxonomy.filter(|entries| !entries.is_empty()) {
+        Some(entries) => entries,
+        None => {
+            fallback = DEFAULT_FRICTION_TAGS
+                .iter()
+                .map(|(tag, description)| ((*tag).to_string(), (*description).to_string()))
+                .collect::<Vec<_>>();
+            &fallback
+        }
+    };
+    let values = entries
+        .iter()
+        .map(|(tag, _description)| tag.clone())
+        .collect::<Vec<_>>();
+    if let Some(alternatives) = tags.get_mut("anyOf").and_then(Value::as_array_mut) {
+        for alternative in alternatives {
+            if alternative.get("type").and_then(Value::as_str) == Some("array")
+                && let Some(items) = alternative.get_mut("items").and_then(Value::as_object_mut)
+            {
+                items.insert("enum".to_string(), json!(values));
+            }
+        }
+    }
+    let vocabulary = entries
+        .iter()
+        .map(|(tag, description)| format!("`{tag}` — {description}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let fallback_note = if using_workspace_taxonomy {
+        ""
+    } else {
+        " The bound workspace's `.orbit/frictions/tags.yaml` may extend this default vocabulary."
+    };
+    tags.insert(
+        "description".to_string(),
+        Value::String(format!(
+            "Friction taxonomy tags as a string or array. Vocabulary: {vocabulary}. Accepted aliases: {}.{fallback_note}",
+            friction_tag_aliases_literal()
+        )),
+    );
 }
 
 #[cfg(test)]

@@ -49,6 +49,16 @@ pub use remote::{
 pub trait McpHost: Send + Sync + 'static {
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError>;
 
+    /// Return the bound workspace's friction taxonomy for tools/list schema
+    /// decoration. An unbound or routing-only host returns `None`, which makes
+    /// the schema advertise the shipped defaults.
+    fn friction_tag_taxonomy(
+        &self,
+        _session_context: &ToolSessionContext,
+    ) -> Result<Option<Vec<(String, String)>>, OrbitError> {
+        Ok(None)
+    }
+
     fn call_tool(
         &self,
         name: &str,

@@ -357,14 +357,22 @@ fn insert_tag_descriptions(map: &mut serde_yaml::Mapping, missing: &[(&str, &str
 }
 
 pub(crate) fn load_tag_taxonomy(frictions_root: &Path) -> Result<BTreeSet<String>, OrbitError> {
+    Ok(load_tag_taxonomy_with_descriptions(frictions_root)?
+        .into_keys()
+        .collect())
+}
+
+pub(crate) fn load_tag_taxonomy_with_descriptions(
+    frictions_root: &Path,
+) -> Result<BTreeMap<String, String>, OrbitError> {
     let path = ensure_default_tag_taxonomy(frictions_root)?;
     let raw = fs::read_to_string(&path)
         .map_err(|error| OrbitError::Io(format!("read {}: {error}", path.display())))?;
     let value: serde_yaml::Value = parse_yaml_with(&raw, &path, |_, error| {
         OrbitError::InvalidInput(format!("parse {}: {error}", path.display()))
     })?;
-    let mut tags = BTreeSet::new();
-    collect_tags_from_yaml(&value, &mut tags);
+    let mut tags = BTreeMap::new();
+    collect_tag_descriptions_from_yaml(&value, &mut tags);
     if tags.is_empty() {
         return Err(OrbitError::InvalidInput(format!(
             "{} must define at least one friction tag",
@@ -391,6 +399,40 @@ fn collect_tags_from_yaml(value: &serde_yaml::Value, out: &mut BTreeSet<String>)
             for item in items {
                 if let Some(tag) = item.as_str().and_then(normalize_tag) {
                     out.insert(tag);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_tag_descriptions_from_yaml(
+    value: &serde_yaml::Value,
+    out: &mut BTreeMap<String, String>,
+) {
+    const WORKSPACE_DEFINED_TAG: &str = "Workspace-defined friction category";
+    match value {
+        serde_yaml::Value::Mapping(map) => {
+            if let Some(tags_value) = map.get(serde_yaml::Value::String("tags".to_string())) {
+                collect_tag_descriptions_from_yaml(tags_value, out);
+                return;
+            }
+            for (key, value) in map {
+                if let Some(tag) = key.as_str().and_then(normalize_tag) {
+                    let description = value
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|description| !description.is_empty())
+                        .unwrap_or(WORKSPACE_DEFINED_TAG)
+                        .to_string();
+                    out.insert(tag, description);
+                }
+            }
+        }
+        serde_yaml::Value::Sequence(items) => {
+            for item in items {
+                if let Some(tag) = item.as_str().and_then(normalize_tag) {
+                    out.insert(tag, WORKSPACE_DEFINED_TAG.to_string());
                 }
             }
         }

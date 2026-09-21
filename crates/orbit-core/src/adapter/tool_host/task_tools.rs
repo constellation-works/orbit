@@ -338,9 +338,10 @@ pub(super) fn update(
             );
         }
     }
-    if input.get("note").is_some() {
+    let note = optional_string(&input, "note")?;
+    if note.is_some() && requested_status.is_none() {
         return Err(OrbitError::InvalidInput(
-            "`note` is only accepted on the guarded approval (proposed → backlog) or start (pickup → in-progress) transition".to_string(),
+            "`note` requires a status change; use `comment` for free-form discussion".to_string(),
         ));
     }
     let mut params = task_update_params_from_input(&input, requested_status)?;
@@ -352,6 +353,7 @@ pub(super) fn update(
         params,
         agent,
         model,
+        note,
         owner.map(|owner| owner.owner_run_id),
     )?;
     write_response_with_unverified_context(runtime, &task, response_fields.as_deref(), unverified)

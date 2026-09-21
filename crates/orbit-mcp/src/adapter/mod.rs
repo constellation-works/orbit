@@ -22,6 +22,7 @@ use self::schema::SelectorAdvertisement;
 use crate::McpHost;
 
 type CachedNameMap = Result<Arc<HashMap<String, String>>, rmcp::ErrorData>;
+type ListToolsCache = HashMap<(SelectorAdvertisement, Option<String>), Arc<ListToolsResult>>;
 
 /// An rmcp server that delegates the complete tool surface to an [`McpHost`].
 ///
@@ -45,7 +46,7 @@ pub struct OrbitToolServer {
     session_context: RwLock<ToolSessionContext>,
     definitions: OnceLock<Arc<Vec<McpToolDefinition>>>,
     name_map: OnceLock<Arc<CachedNameMap>>,
-    list_tools_cache: Mutex<HashMap<SelectorAdvertisement, Arc<ListToolsResult>>>,
+    list_tools_cache: Mutex<ListToolsCache>,
 }
 
 impl OrbitToolServer {

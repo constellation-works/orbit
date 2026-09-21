@@ -638,6 +638,19 @@ impl McpHost for ServerMcpHost {
             .map_err(|error| OrbitError::InvalidInput(error.to_string()))
     }
 
+    fn friction_tag_taxonomy(
+        &self,
+        context: &ToolSessionContext,
+    ) -> Result<Option<Vec<(String, String)>>, OrbitError> {
+        if context.workspace.is_none() {
+            return Ok(None);
+        }
+        let input = Value::Object(Default::default());
+        let (runtime, _selected) =
+            self.resolve_workspace_runtime("orbit.friction.add", &input, context)?;
+        runtime.friction_tag_taxonomy().map(Some)
+    }
+
     fn call_tool(
         &self,
         name: &str,

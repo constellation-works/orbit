@@ -20,3 +20,10 @@ pub(crate) fn store_for(
         runtime.data_root().join("frictions"),
     )
 }
+
+impl OrbitRuntime {
+    /// Workspace tag names and descriptions used to advertise friction inputs.
+    pub fn friction_tag_taxonomy(&self) -> Result<Vec<(String, String)>, OrbitError> {
+        store_for(self)?.tag_taxonomy()
+    }
+}
