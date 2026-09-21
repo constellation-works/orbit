@@ -60,7 +60,10 @@ base64 = "0.22"
 axum = { version = "0.7", default-features = false, features = ["http1", "json", "query", "tokio"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
-clap = { version = "4.5", features = ["derive"] }
+# `string` lets a command or argument be built from an owned `String`, which
+# the plugin-derived `orbit <ns> <verb>` groups need: their names come from
+# installed manifests at startup, not from literals in this source tree.
+clap = { version = "4.5", features = ["derive", "string"] }
 croner = "3"
 flate2 = "1"
 fs2 = "0.4"

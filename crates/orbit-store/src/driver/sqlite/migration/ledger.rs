@@ -254,12 +254,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Breaking,
         apply: super::apply_remove_operation_mode,
     },
+    // Plugin standard phase 4: the Orbit version a plugin's conformance
+    // goldens last passed on (`orbit plugin test`).
+    Migration {
+        version: 27,
+        name: "plugin_certified_orbit_version",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_plugin_certified_orbit_version,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 26;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 27;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

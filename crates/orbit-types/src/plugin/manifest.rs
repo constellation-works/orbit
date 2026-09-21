@@ -1,9 +1,10 @@
 //! `plugin.yaml` v2: one manifest declaring a namespace and its tools.
 //!
 //! Every struct is `deny_unknown_fields` (the `RoutineDefinition` posture).
-//! Sections that later phases consume — `definitions`, `skills`, `config`,
-//! `web`, `tests` — are parsed here so a manifest written against the full
-//! design still validates, and are otherwise unused.
+//! Every section is consumed: `tools` become the registry, CLI and MCP
+//! surfaces, `definitions`/`skills`/`config` are installed on enable, `web`
+//! feeds the dashboard's `plugins` group and `tests` drives `orbit plugin
+//! test`.
 
 use std::fmt::{Display, Formatter};
 
@@ -203,7 +204,7 @@ pub struct PluginToolSpec {
     pub input_schema: Option<Value>,
     #[serde(default)]
     pub output_schema: Option<Value>,
-    /// Optional override of the derived clap shape (a later phase).
+    /// Optional override of the derived `orbit <ns> <verb>` clap shape (§4.6).
     #[serde(default)]
     pub cli: Option<PluginCliShape>,
 }
@@ -237,8 +238,11 @@ pub enum PluginMcpScope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginCliShape {
+    /// The subcommand name under `orbit <ns>`; defaults to the tool verb.
     #[serde(default)]
     pub verb: Option<String>,
+    /// Top-level `input_schema` properties promoted to positional arguments,
+    /// in order. Each still takes its type from the schema.
     #[serde(default)]
     pub positional: Vec<String>,
 }
@@ -278,19 +282,86 @@ pub struct PluginWebSection {
     pub links: Vec<PluginWebLink>,
 }
 
+/// One dashboard panel (§4.7): the output of a `read_only` tool, drawn by
+/// the generic renderer named in `render`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginWebPanel {
     pub id: String,
     #[serde(default)]
     pub title: String,
+    /// `tool:<verb>`, naming one of this plugin's `read_only` tools.
     pub source: String,
     #[serde(default)]
-    pub render: Option<String>,
+    pub render: PluginPanelRender,
     #[serde(default)]
-    pub group: Option<String>,
+    pub group: PluginPanelGroup,
 }
 
+impl PluginWebPanel {
+    /// The verb after `tool:`, when the source has that form.
+    pub fn source_verb(&self) -> Option<&str> {
+        self.source
+            .strip_prefix(PANEL_SOURCE_TOOL_PREFIX)
+            .map(str::trim)
+            .filter(|verb| !verb.is_empty())
+    }
+}
+
+/// The only source form v1 accepts.
+pub const PANEL_SOURCE_TOOL_PREFIX: &str = "tool:";
+
+/// The schemes a `spec.web.links[].url` may use (§4.7).
+pub const LINK_URL_SCHEMES: &[&str] = &["http://", "https://"];
+
+/// How the dashboard draws a panel's JSON (§4.7).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginPanelRender {
+    /// An object as label/value pairs.
+    Kv,
+    /// An array of objects as one table; columns are the union of keys.
+    Table,
+    /// A string (or an object's `markdown`/`text` field) as sanitised Markdown.
+    Markdown,
+    /// Pretty-printed JSON.
+    #[default]
+    Json,
+}
+
+impl PluginPanelRender {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Kv => "kv",
+            Self::Table => "table",
+            Self::Markdown => "markdown",
+            Self::Json => "json",
+        }
+    }
+}
+
+/// Which section of a plugin's dashboard card a panel lands in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginPanelGroup {
+    #[default]
+    Diagnostics,
+    Operations,
+    Config,
+}
+
+impl PluginPanelGroup {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Diagnostics => "diagnostics",
+            Self::Operations => "operations",
+            Self::Config => "config",
+        }
+    }
+}
+
+/// A plain tile pointing at a plugin-hosted UI (§4.7). `url` may use the
+/// manifest template variables, typically `{{config.<key>}}` for a port.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginWebLink {
@@ -416,6 +487,100 @@ impl PluginManifest {
             }
         }
         self.validate_definition_paths()?;
+        self.validate_web()?;
+        Ok(())
+    }
+
+    /// `spec.web` (§4.7): a panel reads exactly one declared `read_only`
+    /// tool; a link is a title and a template-valid URL.
+    ///
+    /// A panel over a mutating tool is refused here, at the manifest, so the
+    /// dashboard never has to decide at request time whether a source may
+    /// be served to an unauthenticated session.
+    fn validate_web(&self) -> Result<(), PluginManifestError> {
+        let Some(web) = &self.spec.web else {
+            return Ok(());
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        for (index, panel) in web.panels.iter().enumerate() {
+            let field = format!("spec.web.panels[{index}]");
+            if !is_valid_verb(&panel.id) {
+                return Err(PluginManifestError::new(
+                    format!("{field}.id"),
+                    format!(
+                        "'{}' is not a valid panel id: use lowercase letters, digits, '_' or '-'",
+                        panel.id
+                    ),
+                ));
+            }
+            if !seen.insert(panel.id.as_str()) {
+                return Err(PluginManifestError::new(
+                    format!("{field}.id"),
+                    format!("panel '{}' is declared more than once", panel.id),
+                ));
+            }
+            let Some(verb) = panel.source_verb() else {
+                return Err(PluginManifestError::new(
+                    format!("{field}.source"),
+                    format!(
+                        "panel '{}' has source '{}'; a panel source is `tool:<verb>` naming one \
+                         of this plugin's tools",
+                        panel.id, panel.source
+                    ),
+                ));
+            };
+            let Some(tool) = self.spec.tools.iter().find(|tool| tool.name == verb) else {
+                return Err(PluginManifestError::new(
+                    format!("{field}.source"),
+                    format!(
+                        "panel '{}' sources tool '{verb}', which this manifest does not declare",
+                        panel.id
+                    ),
+                ));
+            };
+            if tool.execution_kind != PluginExecutionKind::ReadOnly {
+                return Err(PluginManifestError::new(
+                    format!("{field}.source"),
+                    format!(
+                        "panel '{}' sources tool '{verb}', which is `execution_kind: mutating`; \
+                         a dashboard panel may only read a `read_only` tool",
+                        panel.id
+                    ),
+                ));
+            }
+        }
+        for (index, link) in web.links.iter().enumerate() {
+            let field = format!("spec.web.links[{index}]");
+            if link.title.trim().is_empty() {
+                return Err(PluginManifestError::new(
+                    format!("{field}.title"),
+                    "must not be empty",
+                ));
+            }
+            if link.url.trim().is_empty() {
+                return Err(PluginManifestError::new(
+                    format!("{field}.url"),
+                    "must not be empty",
+                ));
+            }
+            // The dashboard sets a link's URL straight onto an anchor, so
+            // the scheme is fixed here: a `javascript:` or `data:` tile would
+            // be plugin-authored script running in the operator's session.
+            if !LINK_URL_SCHEMES
+                .iter()
+                .any(|scheme| link.url.to_ascii_lowercase().starts_with(scheme))
+            {
+                return Err(PluginManifestError::new(
+                    format!("{field}.url"),
+                    format!(
+                        "'{}' must be an http:// or https:// URL; a link tile is a plain \
+                         hyperlink to a plugin-hosted UI",
+                        link.url
+                    ),
+                ));
+            }
+            validate_template(&link.url, &format!("{field}.url"))?;
+        }
         Ok(())
     }
 
@@ -439,6 +604,9 @@ impl PluginManifest {
         }
         for (index, skill) in self.spec.skills.iter().enumerate() {
             validate_plugin_relative_path(skill, &format!("spec.skills[{index}]"))?;
+        }
+        for (index, pattern) in self.spec.tests.iter().enumerate() {
+            validate_plugin_relative_path(pattern, &format!("spec.tests[{index}]"))?;
         }
         if let Some(config) = &self.spec.config {
             if let Some(schema) = &config.schema {

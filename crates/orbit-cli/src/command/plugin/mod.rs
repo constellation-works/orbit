@@ -6,9 +6,11 @@ mod enable;
 mod list;
 mod migrate;
 mod remove;
+mod scaffold;
 mod show;
 mod support;
 mod sync;
+mod test;
 mod validate;
 
 pub use command::{PluginCommand, PluginSubcommand};

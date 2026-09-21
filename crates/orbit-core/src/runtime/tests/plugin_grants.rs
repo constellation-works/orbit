@@ -19,6 +19,7 @@ fn record(name: &str, enabled: bool, grants: &[&str]) -> InstalledPlugin {
         enabled,
         grants: grants.iter().map(|grant| (*grant).to_string()).collect(),
         first_party: false,
+        certified_orbit_version: None,
         installed_at: String::new(),
         updated_at: String::new(),
     }

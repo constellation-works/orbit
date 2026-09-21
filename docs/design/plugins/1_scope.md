@@ -351,22 +351,68 @@ carry the provenance header. Removing a plugin never rewrites task history.
 
 ### 4.6 CLI
 
-`orbit <ns> <verb> [--flag …]` is generated from each tool's `input_schema` (top-level object
-properties become `--kebab-case` flags; `cli.positional` promotes named properties; nested
-objects take `--<name>-json`). `--input '<json>'` and `--input-file` are always accepted, so
+`orbit <ns> <verb> [--flag …]` is generated from each tool's `input_schema`. The mapping is
+applied to the **top level** of the schema and nowhere deeper:
+
+| Property shape | Surface |
+|---|---|
+| `string` | `--kebab-case <VALUE>`; an `enum` becomes clap's possible values, so an unknown one is refused with the list |
+| `integer` / `number` | `--kebab-case <N>`, sent as a JSON number |
+| `boolean` | `--kebab-case` for true, or `--kebab-case <true\|false>` for a property whose schema default is true |
+| `array` of scalars | `--kebab-case <VALUE>`, repeated once per element |
+| `object`, `array` of objects, or an untyped property | `--kebab-case-json '<JSON>'` |
+| named in `cli.positional` | the same value as a positional argument, in manifest order |
+
+`cli.verb` renames the subcommand. Nothing is marked required at the clap level: the tool's
+own `input_schema` is the authority on what a call must contain, and a required flag would
+make `--input` alone unusable. A property whose flag would collide with one the CLI owns
+(`--input`, `--input-file`, `--dry-run`, `--format`, `--root`, `--workspace`) gets no flag
+and stays reachable through `--input`.
+
+`--input '<json>'` and `--input-file` are always accepted and always win, so
 `orbit graph recommend --query …` and `orbit tool run graph.recommend --input …` are the
-same audited operation. There is no `git-foo` style passthrough: an unknown `orbit <word>`
-still errors, and plugin CLI never bypasses dispatch, dry-run or audit.
+same audited operation: the group declares the same `CommandOperation`, dispatches through
+the same `ToolRunArgs`, and writes the same audit row. `--dry-run` is accepted too.
+
+Only an **active** plugin contributes a group. There is no `git-foo` style passthrough: an
+unknown `orbit <word>` — including a disabled plugin's namespace — is clap's ordinary
+unknown-subcommand error, and plugin CLI never bypasses dispatch, dry-run or audit.
+`orbit --help` lists the groups under a `Plugins:` heading, and `orbit <ns> --help` lists its
+verbs with the manifest's descriptions. The tree is built at startup from the host's
+installed manifests; a host with no `~/.orbit/plugins/` directory pays one `stat` for it.
 
 ### 4.7 Dashboard
 
-Panels are rendered by one generic renderer from a `read_only` tool's JSON: `kv`, `table`
-(array of objects), `markdown` (a string field), `json`. `/api/plugins/<ns>/panels/<id>` is
-served to any session for `read_only` sources and never for mutating tools. `links` are
-plain tiles to plugin-hosted UIs (loopback by default). Plugins cannot introduce tabs or
-switch built-in dashboard features on; that idea is deferred past v1. The tab arrays in
-`router.js` gain one `plugins` group fed from `/api/plugins`, so new plugins need zero
-frontend edits.
+The `plugins` tab lists every installed or pinned plugin from `GET /api/plugins` — enable
+state, diagnostics, tools, panels and links — and draws each declared panel with one generic
+renderer. The renderer contract is the whole frontend surface a plugin author needs:
+
+| `render` | Input the panel's tool returns | Rendering |
+|---|---|---|
+| `kv` | an object | one label/value row per key; a nested value is shown as compact JSON |
+| `table` | an array of objects (or `{rows: [...]}`) | one table whose columns are the union of the rows' keys, in first-seen order |
+| `markdown` | a string, or an object with a `markdown` or `text` string | parsed and **sanitised** through the dashboard's existing `renderMarkdown` wrapper (raw HTML in the source is escaped, then DOMPurify runs) |
+| `json` | anything | pretty-printed JSON |
+
+Output that does not fit its declared mode falls back to `json` rather than rendering
+nothing. `group` (`diagnostics` \| `operations` \| `config`) is a presentation hint on the
+plugin's card.
+
+`GET /api/plugins/<ns>/panels/<id>` executes the panel's source through the ordinary audited
+tool dispatch with no caller-supplied input, and is served to any dashboard session. What
+makes that safe is that a panel source is always a `read_only` tool: `validate_structure`
+refuses a manifest whose panel names a mutating tool — naming the panel — so
+`orbit plugin validate` reports it and no such plugin can be installed, and the read
+re-checks the loaded manifest before executing. Writes (install, enable, grants) stay on the
+CLI, where the operator answers the grant request.
+
+`links` are plain tiles to plugin-hosted UIs (loopback by default), with `{{config.<key>}}`
+rendered against the plugin's effective `[plugins.<ns>]` section; an unresolved reference is
+left visible rather than half-rendered. A tile's URL must be `http://` or `https://` —
+`validate_structure` refuses any other scheme, and the renderer draws no tile for one, so a
+`javascript:` URL can never become an anchor in the operator's session. Plugins cannot introduce tabs or switch built-in
+dashboard features on; that idea is deferred past v1. `router.js` gains one `plugins` entry
+fed from `/api/plugins`, so new plugins need zero frontend edits and ship no JavaScript.
 
 ### 4.8 Compatibility
 
@@ -387,12 +433,26 @@ leaves every other plugin and all built-ins untouched.
 ## 5. Conformance
 
 `orbit plugin validate <dir>` — manifest schema, path containment, namespace collisions,
-schema self-consistency, definition cross-references.
-`orbit plugin test <dir>` — runs `spec.tests` goldens through the real protocol in a temp
-workspace with the requested grants; a plugin is "certified for 0.x" when this passes on the
-target Orbit and is recorded in `orbit plugin show`.
+schema self-consistency, definition cross-references, and the `spec.web` rules of §4.7.
+
+`orbit plugin test <dir>` — runs `spec.tests` goldens through the real protocol. Each file is
+`schemaVersion: 1`, `kind: PluginTest`, and a list of `{name, tool, input, expect.output}`
+cases; `tool` is the manifest verb, so a golden travels with the plugin. A case whose tool
+the manifest does not declare refuses the directory rather than being skipped. The run is
+hermetic: a temp directory stands in for the global root and the workspace, and the backend
+runs under the profile the manifest *requests*, so the answer is "would this plugin work
+once granted" rather than "what may it do here right now". Output is compared as JSON
+(exact, key order irrelevant); a failure names the test and prints expected beside actual,
+and the command exits non-zero so a plugin's own CI can gate on it. A passing run records the
+host's version on the installed plugin — `orbit plugin show` then prints "Certified for:
+0.x" — but only when a plugin of that namespace is installed at the **same manifest digest**:
+a directory that differs from the installed tree says nothing about the tree the host runs.
+Installing a different manifest drops the claim.
+
 `orbit plugin scaffold <ns>` — replaces `orbit tool scaffold`: a Python `exec` backend, one
-tool, one panel, one disabled auto-task, one skill stub, a passing conformance test.
+`read_only` tool with input and output schemas, one `kv` panel over it, one disabled
+auto-task, one skill stub, and two passing conformance goldens. `orbit tool scaffold` still
+writes the v1 sidecar pair for one release and prints a deprecation naming its replacement.
 
 ## 6. What opens up in the codebase
 
@@ -401,13 +461,13 @@ tool, one panel, one disabled auto-task, one skill stub, a passing conformance t
 | `register_builtins()` literal list; external tools loaded via plain `register()` | `PluginLoader` registers each manifest tool with `register_mcp(scope)` / `register_inactive` |
 | `canonical_mcp_tool_definitions()` memoised in a `OnceLock`, external tools never in `tools/list` | MCP surface reads the registry; plugin tools advertised with their scope |
 | `ExternalTool` unsandboxed, 15 s, no output validation | `PluginBackend::{Exec,Mcp}` with sandbox profile, schema validation, versioned envelope *(done)* |
-| `Commands` enum only | one `Plugin(PluginGroupArgs)` variant that builds clap subcommands from loaded manifests |
+| `Commands` enum only | one skipped `PluginGroup` variant; the clap subcommands are built from the loaded manifests before parsing *(done)* |
 | `define_config_settings!` closed | dynamic `plugins.<ns>.<key>` admission validated by the plugin's JSON Schema, provenance-aware *(done)* |
 | `GOVERNED_OPERATIONS` per-op rows | two generic plugin rows keyed on `execution_kind` |
 | `DeterministicAction` closed | `plugin.tool_call` *(done)* |
 | `RETIRED_ROUTINE_JOBS` only skip path | provenance-aware skip for disabled plugins *(done)* |
 | `DEFAULT_*_FILES` + `skill_link_roots` | managed-asset reconciliation accepts a plugin layer with `plugin:<ns>@<version>` provenance *(done: plugin-seeded definitions are tracked in their own `.orbit-managed-plugin-assets.json` so a plugin's entries never retire a shipped default)* |
-| `TABS` arrays + per-asset `include_str!` | one `plugins` group + one generic panel renderer |
+| `TABS` arrays + per-asset `include_str!` | one `plugins` group + one generic panel renderer *(done)* |
 
 ## 7. Phases (each its own PR into agent-main)
 
@@ -429,8 +489,14 @@ tool, one panel, one disabled auto-task, one skill stub, a passing conformance t
    field, because `RoutineDefinition` and `AutoTaskDefinition` are
    `deny_unknown_fields`. A `[plugins.<ns>]` value the plugin's schema rejects refuses
    that plugin at load, naming the key, and leaves the runtime standing (§4.9).
-4. **Derived CLI + dashboard panels.** `orbit <ns> <verb>`, `/api/plugins`, generic renderer,
-   `plugins` tab group, `orbit plugin test` and `scaffold`.
+4. **Derived CLI + dashboard panels.** *Landed.* `orbit <ns> <verb>` built at startup from
+   the installed manifests (§4.6), `GET /api/plugins` and
+   `GET /api/plugins/<ns>/panels/<id>`, one generic renderer and the `plugins` tab (§4.7),
+   `orbit plugin test` with the certification it records, and `orbit plugin scaffold` (§5).
+   As implemented, a panel over a mutating tool is refused at `validate_structure` rather
+   than at request time, so an installed plugin can never carry one; and the derived group
+   declares the *same* `CommandOperation` as `orbit tool run`, which is what makes the two
+   spellings one audited operation rather than two paths that agree today.
 5. **Provider plugins** (deferred): open `ProviderRegistry` and collapse the four provider
    vocabularies, only when a second external provider exists.
 

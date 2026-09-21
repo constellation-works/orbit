@@ -57,6 +57,10 @@ pub struct RegisteredPlugin {
     /// catalog layer, the seeded definitions and the config contract all read
     /// the same document the tool surface was built from.
     pub loaded: Option<Arc<LoadedPlugin>>,
+    /// `[plugins.<ns>]` over the manifest's defaults, as the backend and the
+    /// manifest's `{{config.<key>}}` templates see it. Retained so a dashboard
+    /// link tile renders the same value the plugin itself runs with (§4.7).
+    pub config_values: BTreeMap<String, String>,
 }
 
 /// Outcome of a host plugin load pass.
@@ -146,6 +150,111 @@ pub fn host_plugin_mcp_definitions(
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))
 }
 
+/// One `orbit <ns>` command group, derived from an active plugin's manifest
+/// (design §4.6).
+///
+/// Only an **active** plugin contributes a group: a disabled or refused
+/// plugin has no `orbit <ns>` at all, so `orbit <ns>` is the ordinary
+/// unknown-command error rather than a group whose every call fails.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginCliGroup {
+    pub namespace: String,
+    pub version: String,
+    pub description: String,
+    pub verbs: Vec<PluginCliVerb>,
+}
+
+/// One `orbit <ns> <verb>`: the tool it dispatches to and the schema its
+/// flags are derived from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginCliVerb {
+    /// The subcommand name: `cli.verb` when the manifest overrides it.
+    pub verb: String,
+    /// Canonical registry name this subcommand dispatches to.
+    pub tool_name: String,
+    pub description: String,
+    /// The tool's resolved `input_schema`.
+    pub input_schema: Value,
+    /// `cli.positional`, in manifest order.
+    pub positional: Vec<String>,
+    pub mutating: bool,
+}
+
+/// Every `orbit <ns>` group this host serves.
+///
+/// Read host-globally and without a workspace runtime, because the CLI
+/// builds its clap tree before it bootstraps one. A host with no enabled
+/// plugin answers without touching a manifest.
+pub fn host_plugin_cli_groups(
+    global_root: &Path,
+    audit_db: &Path,
+) -> Result<Vec<PluginCliGroup>, OrbitError> {
+    let store = Store::open_read_only(audit_db)?;
+    if !store
+        .list_plugins()?
+        .iter()
+        .any(|installed| installed.enabled)
+    {
+        return Ok(Vec::new());
+    }
+    let mut registry = ToolRegistry::new();
+    let load = load_host_plugins(
+        global_root,
+        global_root,
+        &store,
+        &mut registry,
+        &BTreeMap::new(),
+    );
+    Ok(plugin_cli_groups(&load))
+}
+
+/// Project one load pass into its CLI groups.
+pub fn plugin_cli_groups(load: &PluginHostLoad) -> Vec<PluginCliGroup> {
+    let mut groups: Vec<PluginCliGroup> = load
+        .registered
+        .iter()
+        .filter(|entry| entry.status == PluginStatus::Active)
+        .filter_map(|entry| {
+            let plugin = entry.loaded.as_ref()?;
+            let first_party = plugin.manifest.claims_first_party_namespace();
+            let verbs = plugin
+                .tools
+                .iter()
+                .map(|tool| {
+                    let shape = plugin
+                        .manifest
+                        .spec
+                        .tools
+                        .iter()
+                        .find(|declared| declared.name == tool.verb)
+                        .and_then(|declared| declared.cli.as_ref());
+                    PluginCliVerb {
+                        verb: shape
+                            .and_then(|shape| shape.verb.clone())
+                            .unwrap_or_else(|| tool.verb.clone()),
+                        tool_name: plugin_tool_name(plugin.namespace(), &tool.verb, first_party),
+                        description: tool.description.clone(),
+                        input_schema: tool.input_schema.clone(),
+                        positional: shape
+                            .map(|shape| shape.positional.clone())
+                            .unwrap_or_default(),
+                        mutating: tool.execution_kind
+                            == orbit_types::plugin::PluginExecutionKind::Mutating,
+                    }
+                })
+                .collect();
+            Some(PluginCliGroup {
+                namespace: plugin.namespace().to_string(),
+                version: plugin.manifest.metadata.version.clone(),
+                description: plugin.manifest.metadata.description.clone(),
+                verbs,
+            })
+        })
+        .collect();
+    groups.sort_by(|left, right| left.namespace.cmp(&right.namespace));
+    groups
+}
+
 /// A registry holding this host's plugin tools and nothing else.
 ///
 /// Namespace validation still runs against the real built-in names, so a
@@ -218,6 +327,7 @@ pub fn load_host_plugins(
                 diagnostic: Some(message),
                 grants_authorized: false,
                 loaded: None,
+                config_values: BTreeMap::new(),
             });
             continue;
         }
@@ -366,6 +476,7 @@ fn register_installed_plugin(
         diagnostic: Some(message),
         grants_authorized: true,
         loaded: None,
+        config_values: BTreeMap::new(),
     };
 
     if !installed.enabled {
@@ -377,6 +488,7 @@ fn register_installed_plugin(
             diagnostic: None,
             grants_authorized: true,
             loaded: None,
+            config_values: BTreeMap::new(),
         };
     }
 
@@ -470,6 +582,7 @@ fn register_installed_plugin(
         tools,
         diagnostic: None,
         grants_authorized: true,
+        config_values: backend.spec().config_defaults.clone(),
         loaded: Some(Arc::new(plugin)),
     }
 }
@@ -508,6 +621,7 @@ fn register_inactive_tools(
         diagnostic: Some(message),
         grants_authorized: true,
         loaded: None,
+        config_values: BTreeMap::new(),
     }
 }
 

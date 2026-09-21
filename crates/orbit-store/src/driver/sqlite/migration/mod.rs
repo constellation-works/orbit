@@ -1626,6 +1626,21 @@ fn apply_remove_operation_mode(conn: &Connection) -> Result<(), OrbitError> {
     .map_err(|error| OrbitError::Store(error.to_string()))
 }
 
+/// v27 `plugin_certified_orbit_version` migration: the Orbit version a
+/// plugin's `spec.tests` goldens last passed on, written by `orbit plugin
+/// test` and printed by `orbit plugin show` (design
+/// `docs/design/plugins/1_scope.md` §5). Additive: an older binary ignores
+/// the column, and a host that has never run a conformance suite reads NULL.
+fn apply_plugin_certified_orbit_version(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "plugins")? {
+        return Ok(());
+    }
+    add_column_if_missing(
+        conn,
+        "ALTER TABLE plugins ADD COLUMN certified_orbit_version TEXT",
+    )
+}
+
 /// v23 `audit_machine_name_columns` migration (ORB-12725): *host* is reserved
 /// for the MCP-host/process sense, so the two audit columns that carry a
 /// machine's display name are renamed to say so. A rename rather than an

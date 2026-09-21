@@ -13,9 +13,11 @@ use crate::runtime::plugin_host;
 
 pub use crate::application::plugin::{
     PluginAddOptions, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
-    PluginMigrateRequest, PluginPermissionSummary, PluginSeedAction, PluginSeedOutcome,
-    PluginSummary, PluginSyncOutcome, PluginToolSummary, PluginValidationReport,
+    PluginLinkSummary, PluginMigrateRequest, PluginPanelSummary, PluginPermissionSummary,
+    PluginSeedAction, PluginSeedOutcome, PluginSummary, PluginSyncOutcome, PluginTestOutcome,
+    PluginTestReport, PluginToolSummary, PluginValidationReport,
 };
+pub use crate::runtime::plugin_host::{PluginCliGroup, PluginCliVerb};
 
 impl OrbitRuntime {
     pub fn add_plugin(
@@ -69,6 +71,32 @@ impl OrbitRuntime {
     pub fn sync_plugins(&self, dry_run: bool) -> Result<Vec<PluginSyncOutcome>, OrbitError> {
         plugin::sync_plugins(self, dry_run)
     }
+
+    /// Run a plugin directory's `spec.tests` goldens through the real
+    /// protocol in a temp workspace, and record the passing Orbit version on
+    /// this host's record when the directory is the installed one (§5).
+    pub fn test_plugin_dir(&self, dir: &Path) -> Result<PluginTestReport, OrbitError> {
+        plugin::test_plugin_dir(self, dir)
+    }
+
+    /// Execute one declared dashboard panel's `read_only` source (§4.7).
+    pub fn read_plugin_panel(&self, namespace: &str, panel: &str) -> Result<Value, OrbitError> {
+        plugin::read_plugin_panel(self, namespace, panel)
+    }
+
+    /// The `orbit <ns>` command groups this runtime's active plugins
+    /// contribute. The CLI builds its clap tree before a runtime exists and
+    /// uses [`host_plugin_cli_groups`]; this is the same projection for a
+    /// caller that already holds one.
+    pub fn plugin_cli_groups(&self) -> Vec<PluginCliGroup> {
+        plugin_host::plugin_cli_groups(self.plugin_load())
+    }
+}
+
+/// The `orbit <ns>` groups this host serves, read without a workspace
+/// runtime (design §4.6).
+pub fn host_plugin_cli_groups(global_root: &Path) -> Result<Vec<PluginCliGroup>, OrbitError> {
+    plugin_host::host_plugin_cli_groups(global_root, &audit_db_path(global_root)?)
 }
 
 /// Write a v2 manifest from a set of v1 `*.orbit-tool.yaml` sidecars. No

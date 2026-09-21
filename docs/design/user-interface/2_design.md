@@ -57,7 +57,7 @@ Knowledge detail panels stay pinned while the artifact list scrolls after [ORB-1
 
 ## 6. Top-Level Navigation
 
-The top-level nav carries five operator workflow surfaces — Tasks, Audit, Diagnostics, Operations, and Knowledge — plus the hash-only `run-detail` route [ORB-10444] [ORB-10875]. Operations owns routine and host-clock state; it is top-level because disabling unattended execution is an operational action rather than diagnostic telemetry. A deprecated review-threads tab was removed outright rather than hidden: nav entry, route, pane, refresh branch, and styles all went, so no dead asset ships and no route resolves to a missing pane. Scoreboard is diagnostics-shaped telemetry rather than a workflow surface, so it remains under Diagnostics as the `#diagnostics/scoreboard` sub-tab.
+The top-level nav carries the operator workflow surfaces — Tasks, Auto-drain, Audit, Diagnostics, Operations, Knowledge, Plugins and Config — plus the hash-only `run-detail` route [ORB-10444] [ORB-10875] [ORB-12738]. Operations owns routine and host-clock state; it is top-level because disabling unattended execution is an operational action rather than diagnostic telemetry. A deprecated review-threads tab was removed outright rather than hidden: nav entry, route, pane, refresh branch, and styles all went, so no dead asset ships and no route resolves to a missing pane. Scoreboard is diagnostics-shaped telemetry rather than a workflow surface, so it remains under Diagnostics as the `#diagnostics/scoreboard` sub-tab.
 
 ## 7. Task Write Actions
 
@@ -111,6 +111,12 @@ The two-column desktop layout stacks below 900px, and routine/clock metadata col
 
 The Auto-drain view (`#auto-drain`) projects `GET /api/workflows/auto/readiness` into the Auto-drain panel, which shares the padded body of its Operations neighbours. Its controls are the dashboard counterparts to `orbit run auto`: **Start** submits a bounded window through `POST /api/workflows/auto`, and **Stop admissions** posts `POST /api/workflows/auto/stop` (`orbit run auto --stop`) with an optional `reason` and `claim_token` [ORB-12728]. Stop is enabled only while readiness reports a live `drain_run_id` whose admissions are not already stopped and the session is authorized (`--operator`, governed as `auto_drain.stop`); otherwise the disabled title names which of those is missing. The live coordinator is shown as a run link next to the button, the click confirms first, and the response — `{ "workflow": "auto", "outcome": "idle" | "stopped" | "unchanged" | "cancelled_queued", "coordinators": [...] }` with each coordinator's outcome and still-running children — feeds the panel feedback before readiness is re-fetched. Stopping admissions is not cancellation: already admitted workers keep running under their captured completion authority, and cancelling one is the per-run cancel on its run detail page.
 
+## 9a. Plugins
+
+The Plugins tab (`#plugins`) is the dashboard's whole plugin surface, and it is read-only: installing, enabling and granting stay on the CLI, where the operator answers a manifest's permission request. It lists what `GET /api/plugins` reports for the selected workspace — each installed or pinned plugin's version, state, diagnostic, tools, and the Orbit version its conformance goldens last passed on — so a plugin that is disabled, missing or refused at load is visible *with the step that would fix it* rather than simply absent.
+
+Panels are the one place plugin-authored data is drawn, and one generic renderer draws all of them: `kv` for an object, `table` for an array of objects (columns are the union of the rows' keys), `markdown` for a string, `json` for anything else, with an ill-fitting payload falling back to `json` rather than an empty card. Markdown goes through the same sanitizing wrapper task comments use, so plugin text cannot introduce script or event handlers. Each panel is read from `GET /api/plugins/<ns>/panels/<id>`, which executes only a tool the manifest declared a panel over, with no caller-supplied input; a panel over a mutating tool cannot exist, because `orbit plugin validate` refuses that manifest by name. `links[]` render as plain tiles that open in a new tab without handing over the opener. No plugin ships markup or JavaScript, so a newly installed plugin appears here with no dashboard edit [ORB-12738].
+
 ## 10. Concerns & Honest Limitations
 
 Accessibility still needs a real WCAG pass; responsive behavior remains optimized for wide desktop viewports; raw HTML, CSS variables, and dashboard JavaScript keep the runtime simple but leave duplication across project surfaces.
@@ -137,5 +143,7 @@ Accessibility still needs a real WCAG pass; responsive behavior remains optimize
 - [ORB-12235] made task complexity, description, tags, acceptance criteria, and context files editable in the expanded task detail.
 - [ORB-12645] rendered task comments as a full-width Markdown thread with per-comment collapse, an outline, and a previewing composer.
 - [ORB-12728] added the governed **Stop admissions** control (`POST /api/workflows/auto/stop`) to the Auto-drain view. Its sibling change to the Operation Mode panel went with that panel when operation mode was removed on 2026-09-21 ([orbit-core decisions](../orbit-core/4_decisions.md)).
+
+- [ORB-12738] added the read-only Plugins tab: installed-plugin state, the generic `kv`/`table`/`markdown`/`json` panel renderer, and link tiles.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

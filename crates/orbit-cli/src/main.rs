@@ -36,6 +36,7 @@ mod audit_middleware;
 mod command;
 mod output;
 mod parse;
+mod plugin_cli;
 
 use clap::{Arg, ArgMatches, Command, CommandFactory, FromArgMatches};
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
@@ -208,14 +209,86 @@ fn command_rotates_jsonl_on_start(command: &command::Commands) -> bool {
     }
 }
 
+/// The Orbit root this invocation will use, read from argv before clap runs.
+///
+/// The derived CLI cannot answer this yet: the tree it would parse against
+/// is the one the plugin groups still have to be added to. `--root` is the
+/// only argument that changes *which* plugins those are, so it is the only
+/// one read here, with the same precedence `resolve_generation_root` applies
+/// afterwards (`--root`, then `ORBIT_ROOT`, then the host-global root).
+fn plugin_root_override() -> Option<std::path::PathBuf> {
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        let arg = arg.to_string_lossy().into_owned();
+        if let Some(value) = arg.strip_prefix("--root=") {
+            return Some(std::path::PathBuf::from(value));
+        }
+        if arg == "--root" {
+            return args.next().map(std::path::PathBuf::from);
+        }
+    }
+    None
+}
+
+/// The `orbit <ns>` groups this host's enabled plugins contribute (§4.6).
+///
+/// A host with no plugin install directory answers with one `stat` and no
+/// store or config read, so the common case pays nothing for a surface it
+/// does not use. Any failure below that is this host's plugin problem, not
+/// this command's: the built-in CLI must stay usable, so it is logged and
+/// the groups are simply absent (§4.9).
+fn plugin_cli_groups() -> Vec<orbit_core::adapter::command::PluginCliGroup> {
+    let Ok(root) = orbit_core::runtime::resolve_generation_root(plugin_root_override().as_deref())
+    else {
+        return Vec::new();
+    };
+    if !root.join("plugins").is_dir() {
+        return Vec::new();
+    }
+    match orbit_core::adapter::command::host_plugin_cli_groups(&root) {
+        Ok(groups) => groups,
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.cli.plugin",
+                error = %error,
+                "omitting plugin command groups from the CLI surface"
+            );
+            Vec::new()
+        }
+    }
+}
+
 /// Parse argv into the derived CLI plus the two inputs to mode resolution.
 fn parse_cli() -> (command::Cli, Option<FormatArg>, bool) {
-    let matches = install_format_arg(command::Cli::command())
+    let groups = plugin_cli_groups();
+    let root = plugin_cli::augment(command::Cli::command(), &groups);
+    let root = if groups.is_empty() {
+        root
+    } else {
+        // The hand-rolled top-level template lists commands by section, so a
+        // plugin group is listed in its own section rather than left out of
+        // `orbit --help` entirely.
+        root.help_template(command::ROOT_HELP_TEMPLATE.replace(
+            "\nOptions:",
+            &format!("{}\nOptions:", plugin_cli::help_section(&groups)),
+        ))
+    };
+    let matches = install_format_arg(root)
         .try_get_matches_from(std::env::args_os())
         .unwrap_or_else(|err| repair_crew_flag_suggestion(err).exit());
     let requested = requested_format(&matches);
     let legacy = legacy_json(&matches);
-    let cli = command::Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
+    let cli = match plugin_cli::invocation_from_matches(&groups, &matches) {
+        // A plugin group is not a `Commands` variant clap can build, so the
+        // two global arguments are read here and the rest of the invocation
+        // is the tool call the group reduced to.
+        Some(invocation) => command::Cli {
+            root: matches.get_one::<std::path::PathBuf>("root").cloned(),
+            workspace: matches.get_one::<String>("workspace").cloned(),
+            command: command::Commands::PluginGroup(Box::new(invocation)),
+        },
+        None => command::Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit()),
+    };
     (cli, requested, legacy)
 }
 

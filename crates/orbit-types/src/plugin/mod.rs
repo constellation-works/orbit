@@ -6,6 +6,7 @@
 //! validation only; reading a plugin directory, resolving `$ref` targets, and
 //! computing digests belong to `orbit-tools`.
 
+mod conformance;
 mod grant;
 mod manifest;
 mod namespace;
@@ -17,13 +18,18 @@ mod version;
 #[cfg(test)]
 mod tests;
 
+pub use conformance::{
+    PluginTestCase, PluginTestExpectation, PluginTestFile, TEST_FILE_KIND, TEST_FILE_SCHEMA_VERSION,
+};
 pub use grant::{PluginGrant, PluginGrantRequest, parse_grants};
 pub use manifest::{
-    MANIFEST_FILE_NAME, MANIFEST_KIND, MANIFEST_SCHEMA_VERSION, PluginBackend, PluginBackendType,
-    PluginCliShape, PluginConfigSection, PluginDefinitions, PluginExecutionKind,
-    PluginFsPermissions, PluginManifest, PluginManifestError, PluginMcpScope, PluginMetadata,
-    PluginNetworkPermission, PluginOrigin, PluginPermissions, PluginRequires, PluginSandbox,
-    PluginSpec, PluginToolSpec, plugin_provenance_label, validate_plugin_relative_path,
+    LINK_URL_SCHEMES, MANIFEST_FILE_NAME, MANIFEST_KIND, MANIFEST_SCHEMA_VERSION,
+    PANEL_SOURCE_TOOL_PREFIX, PluginBackend, PluginBackendType, PluginCliShape,
+    PluginConfigSection, PluginDefinitions, PluginExecutionKind, PluginFsPermissions,
+    PluginManifest, PluginManifestError, PluginMcpScope, PluginMetadata, PluginNetworkPermission,
+    PluginOrigin, PluginPanelGroup, PluginPanelRender, PluginPermissions, PluginRequires,
+    PluginSandbox, PluginSpec, PluginToolSpec, PluginWebLink, PluginWebPanel, PluginWebSection,
+    plugin_provenance_label, validate_plugin_relative_path,
 };
 pub use namespace::{
     FIRST_PARTY_PUBLISHER, ORBIT_NAMESPACE_PREFIX, RESERVED_CLI_COMMANDS, is_valid_namespace,

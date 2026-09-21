@@ -64,6 +64,7 @@ fn record(global_root: &Path, name: &str) -> InstalledPlugin {
         enabled: true,
         grants: Vec::new(),
         first_party: false,
+        certified_orbit_version: None,
         installed_at: String::new(),
         updated_at: String::new(),
     }

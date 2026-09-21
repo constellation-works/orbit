@@ -74,6 +74,7 @@ const RUNS_JS: &str = include_str!("../assets/dashboard/runs.js");
 const RUN_DETAIL_JS: &str = include_str!("../assets/dashboard/run-detail.js");
 const DISTRIBUTED_JS: &str = include_str!("../assets/dashboard/distributed.js");
 const AUTOMATION_JS: &str = include_str!("../assets/dashboard/automation.js");
+const PLUGINS_JS: &str = include_str!("../assets/dashboard/plugins.js");
 const OPERATIONS_JS: &str = include_str!("../assets/dashboard/operations.js");
 const DASHBOARD_CSP: &str = concat!(
     "default-src 'self'; ",
@@ -141,6 +142,7 @@ struct DashboardAssets {
     distributed_js: DashboardAsset,
     operations_js: DashboardAsset,
     automation_js: DashboardAsset,
+    plugins_js: DashboardAsset,
 }
 
 impl DashboardAssets {
@@ -228,6 +230,10 @@ impl DashboardAssets {
             automation_js: DashboardAsset::new(
                 "application/javascript; charset=utf-8",
                 AUTOMATION_JS.as_bytes(),
+            )?,
+            plugins_js: DashboardAsset::new(
+                "application/javascript; charset=utf-8",
+                PLUGINS_JS.as_bytes(),
             )?,
         })
     }
@@ -484,6 +490,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         .route("/static/distributed.js", get(serve_distributed_js_route))
         .route("/static/operations.js", get(serve_operations_js_route))
         .route("/static/automation.js", get(serve_automation_js_route))
+        .route("/static/plugins.js", get(serve_plugins_js_route))
         .merge(health_router())
         .nest("/api", api::router())
         .layer(Extension(dashboard_assets))
@@ -640,6 +647,7 @@ dashboard_route_handler!(serve_run_detail_js_route, run_detail_js);
 dashboard_route_handler!(serve_distributed_js_route, distributed_js);
 dashboard_route_handler!(serve_operations_js_route, operations_js);
 dashboard_route_handler!(serve_automation_js_route, automation_js);
+dashboard_route_handler!(serve_plugins_js_route, plugins_js);
 
 fn dashboard_asset_response(asset: &DashboardAsset, request_headers: &HeaderMap) -> Response {
     let mut response_headers = HeaderMap::new();
@@ -843,6 +851,11 @@ async fn serve_operations_js() -> Response {
 #[cfg(test)]
 async fn serve_automation_js() -> Response {
     dashboard_asset_response(&TEST_DASHBOARD_ASSETS.automation_js, &HeaderMap::new())
+}
+
+#[cfg(test)]
+async fn serve_plugins_js() -> Response {
+    dashboard_asset_response(&TEST_DASHBOARD_ASSETS.plugins_js, &HeaderMap::new())
 }
 
 async fn shutdown_signal() {

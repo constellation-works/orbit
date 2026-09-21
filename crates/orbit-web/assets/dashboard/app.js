@@ -13,6 +13,7 @@ import { initRouter, initTabs as iT, navigateToRun as nTR, setActiveTab as sAT, 
 import { initRuns, getRunFilter, setRunFilter, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, initOperations } from './operations.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './config.js';
+import { fetchAndRenderPlugins } from './plugins.js';
 import {
   renderRunDetailEmpty,
   renderRunDetailMeta,
@@ -1303,6 +1304,11 @@ function activeRefreshJobs() {
 
   if (activeTab === "auto-drain") {
     jobs.push(fetchAndRenderAutoDrainPane());
+    return jobs;
+  }
+
+  if (activeTab === "plugins") {
+    jobs.push(fetchAndRenderPlugins());
     return jobs;
   }
 

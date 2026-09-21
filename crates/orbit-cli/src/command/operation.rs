@@ -858,6 +858,39 @@ impl Commands {
                     runtime_dispatch!(Tool),
                 )
             }
+            // `orbit <ns> <verb>` is `orbit tool run <ns>.<verb>` in another
+            // spelling (§4.6), so it declares the same operation: the same
+            // runtime need, the same audit row, and the same dispatch into
+            // `ToolRunArgs`. A second, group-specific policy here is exactly
+            // the drift the two spellings must not have.
+            Commands::PluginGroup(invocation) => {
+                let args = &invocation.tool_run;
+                let runtime_need = match args.id_resolved_task_id() {
+                    Some(task_id) => RuntimeNeed::TaskOwner { task_id },
+                    None => RuntimeNeed::Required,
+                };
+                CommandOperation::new(
+                    runtime_need,
+                    Some(CommandMeta {
+                        command: "tool".to_string(),
+                        subcommand: Some("run".to_string()),
+                        tool_name: Some(args.name.clone()),
+                        target_type: Some("tool".to_string()),
+                        target_id: Some(args.name.clone()),
+                        role: tool_run_actor_role(args),
+                        arguments_json: None,
+                        job_run_id: None,
+                    }),
+                    Some(args.pretty),
+                    false,
+                    |command, context| match command {
+                        Commands::PluginGroup(invocation) => {
+                            (*invocation).execute(context.runtime()?)
+                        }
+                        _ => dispatch_mismatch("PluginGroup"),
+                    },
+                )
+            }
             Commands::Plugin(command) => {
                 use super::plugin::PluginSubcommand;
                 let (subcommand, target_id) = match &command.command {
@@ -871,15 +904,22 @@ impl Commands {
                     PluginSubcommand::Validate(args) => {
                         ("validate", Some(args.dir.to_string_lossy().into_owned()))
                     }
+                    PluginSubcommand::Test(args) => {
+                        ("test", Some(args.dir.to_string_lossy().into_owned()))
+                    }
+                    PluginSubcommand::Scaffold(args) => ("scaffold", Some(args.namespace.clone())),
                     PluginSubcommand::Sync(_) => ("sync", None),
                     PluginSubcommand::Migrate(args) => ("migrate", Some(args.binary.clone())),
                 };
-                // `list`, `show`, `doctor` and `validate` only read; the rest
-                // write the host's plugin records or its install root.
+                // `list`, `show`, `doctor`, `validate` and `scaffold` only
+                // read Orbit state — `scaffold` writes a new directory, never
+                // a record — while `test` records the certification it earned
+                // and the rest write the host's plugin records or install root.
                 let runtime_need = match &command.command {
                     PluginSubcommand::List(_)
                     | PluginSubcommand::Show(_)
                     | PluginSubcommand::Doctor
+                    | PluginSubcommand::Scaffold(_)
                     | PluginSubcommand::Validate(_) => RuntimeNeed::ReadOnly,
                     PluginSubcommand::Sync(args) if args.dry_run => RuntimeNeed::ReadOnly,
                     _ => RuntimeNeed::Required,
