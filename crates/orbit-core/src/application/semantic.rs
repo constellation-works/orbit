@@ -36,21 +36,9 @@ impl OrbitRuntime {
         params: SemanticIndexParams,
     ) -> Result<SemanticIndexResult, OrbitError> {
         match params.resolved_kind() {
-            IndexKind::Tasks => self
+            IndexKind::Tasks | IndexKind::All => self
                 .semantic_index_tasks(params)
                 .map(SemanticIndexResult::from),
-            IndexKind::Docs => self
-                .semantic_index_docs(params)
-                .map(SemanticIndexResult::from),
-            IndexKind::All => {
-                let tasks = self.semantic_index_tasks(params.clone());
-                let docs = self.semantic_index_docs(params);
-                match (tasks, docs) {
-                    (Ok(tasks), Ok(docs)) => Ok(SemanticIndexResult::All { tasks, docs }),
-                    (Err(error), _) => Err(error),
-                    (_, Err(error)) => Err(error),
-                }
-            }
         }
     }
 
@@ -65,16 +53,6 @@ impl OrbitRuntime {
             self.stores().semantic_embedders(),
             params,
         )
-    }
-
-    fn semantic_index_docs(
-        &self,
-        params: SemanticIndexParams,
-    ) -> Result<orbit_search::DocIndexResult, OrbitError> {
-        self.index_docs(orbit_search::DocIndexParams {
-            model: params.model,
-            force: params.force,
-        })
     }
 
     pub fn semantic_stats(&self) -> Result<SemanticStatsResult, OrbitError> {

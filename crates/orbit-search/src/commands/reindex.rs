@@ -3,7 +3,6 @@ use orbit_types::task::Task;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
-use crate::commands::doc_index::DocIndexResult;
 use crate::commands::parse_model;
 use crate::vector::{UpsertReport, VectorStore};
 use crate::{Embedder, EmbedderPool};
@@ -13,7 +12,6 @@ use crate::{Embedder, EmbedderPool};
 pub enum IndexKind {
     #[default]
     Tasks,
-    Docs,
     All,
 }
 
@@ -23,10 +21,9 @@ impl FromStr for IndexKind {
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         match raw {
             "tasks" => Ok(Self::Tasks),
-            "docs" => Ok(Self::Docs),
             "all" => Ok(Self::All),
             value => Err(OrbitError::InvalidInput(format!(
-                "unsupported semantic index kind `{value}`; supported values: tasks, docs, all"
+                "unsupported semantic index kind `{value}`; supported values: tasks, all"
             ))),
         }
     }
@@ -62,16 +59,6 @@ pub enum SemanticIndexResult {
         report: UpsertReport,
         stale_sources: Vec<String>,
     },
-    Docs {
-        model_id: String,
-        report: UpsertReport,
-        indexed_sources: usize,
-        stale_sources: Vec<String>,
-    },
-    All {
-        tasks: TaskIndexResult,
-        docs: DocIndexResult,
-    },
 }
 
 impl From<TaskIndexResult> for SemanticIndexResult {
@@ -79,17 +66,6 @@ impl From<TaskIndexResult> for SemanticIndexResult {
         Self::Tasks {
             model_id: result.model_id,
             report: result.report,
-            stale_sources: result.stale_sources,
-        }
-    }
-}
-
-impl From<DocIndexResult> for SemanticIndexResult {
-    fn from(result: DocIndexResult) -> Self {
-        Self::Docs {
-            model_id: result.model_id,
-            report: result.report,
-            indexed_sources: result.indexed_sources,
             stale_sources: result.stale_sources,
         }
     }

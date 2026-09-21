@@ -310,7 +310,7 @@ fn migrated_external_content_rejects_pre_migration_inline_reader() {
         "diagnostic must say which processes to restart: {message}"
     );
     assert!(
-        message.contains("Lexical (non-hybrid) task and doc"),
+        message.contains("Lexical (non-hybrid) task lookup"),
         "diagnostic must keep lexical lookup in scope: {message}"
     );
     assert!(

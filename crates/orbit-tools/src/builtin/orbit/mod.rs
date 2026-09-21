@@ -1,7 +1,6 @@
 pub mod agent;
 pub mod auto_task;
 pub mod command;
-pub mod docs;
 pub mod drain;
 pub mod friction;
 pub mod operation;
@@ -65,11 +64,6 @@ pub fn register(registry: &mut ToolRegistry) {
         McpToolScope::WorkspaceRequired,
     );
     registry.register(drain::claims::OrbitDrainClaimsTool);
-    registry.register_inactive(docs::OrbitDocsListTool);
-    registry.register_inactive(docs::OrbitDocsShowTool);
-    registry.register_inactive(docs::OrbitDocsAddTool);
-    registry.register_inactive(docs::OrbitDocsIndexTool);
-    registry.register_inactive(docs::OrbitDocsMigrateTool);
     // Friction schemas and MCP exposure are declared once in the shared
     // operation registry and registered from there.
     friction::register(registry);

@@ -7,9 +7,9 @@ use crate::command::{CommandOut, Execute, Payload};
 
 #[derive(Args)]
 #[command(
-    about = "Search tasks, docs, and frictions",
+    about = "Search tasks and frictions",
     subcommand_precedence_over_arg = true,
-    after_help = "Forms:\n  orbit search <query>\n  orbit search similar <id>\n  orbit search path <path>"
+    after_help = "Forms:\n  orbit search <query>\n  orbit search similar <id>"
 )]
 pub struct SearchCommand {
     /// Free-text query. Defaults to lexical matching unless --hybrid is set.
@@ -20,7 +20,7 @@ pub struct SearchCommand {
     pub command: Option<SearchSubcommand>,
 
     // ADR-0179: free-text search keeps the hybrid ranker; neighbor/path modes are separate forms.
-    /// Use hybrid lexical + cosine ranking for indexed task or doc fields.
+    /// Use hybrid lexical + cosine ranking for indexed task fields.
     #[arg(long)]
     pub hybrid: bool,
     /// Restrict results to one corpus kind.
@@ -30,14 +30,14 @@ pub struct SearchCommand {
     /// round-robin per kind to ensure fair representation).
     #[arg(long, default_value_t = 10, global = true)]
     pub limit: usize,
-    /// Filter by tag (AND semantics). Applies to task, doc, and friction results.
+    /// Filter by tag (AND semantics). Applies to task and friction results.
     #[arg(long = "tag", action = ArgAction::Append, value_delimiter = ',', global = true)]
     pub tags: Vec<String>,
     /// Include normally-hidden statuses for the queried kind. Task adds
-    /// done/rejected/archived; friction adds triaged/resolved; doc is a no-op.
+    /// done/rejected/archived; friction adds triaged/resolved.
     #[arg(long, global = true)]
     pub all: bool,
-    /// Explicit per-kind status override, e.g. task:open,doc:active,friction:open.
+    /// Explicit per-kind status override, e.g. task:open,friction:open.
     #[arg(long, value_delimiter = ',', global = true)]
     pub status: Vec<String>,
     /// Search this registered workspace as well. Repeat or comma-separate to
@@ -60,8 +60,6 @@ pub struct SearchCommand {
 pub enum SearchSubcommand {
     /// Find cosine-neighbor tasks for a known task ID. Requires task vectors.
     Similar(SearchSimilarArgs),
-    /// Filter to artifacts applicable to this filesystem path.
-    Path(SearchPathArgs),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
@@ -70,16 +68,9 @@ pub struct SearchSimilarArgs {
     pub id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Args)]
-pub struct SearchPathArgs {
-    #[arg(value_name = "path")]
-    pub path: String,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SearchKindArg {
     Task,
-    Doc,
     Friction,
     All,
 }
@@ -88,7 +79,6 @@ impl std::fmt::Display for SearchKindArg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Task => "task",
-            Self::Doc => "doc",
             Self::Friction => "friction",
             Self::All => "all",
         })
@@ -99,7 +89,6 @@ impl From<SearchKindArg> for GlobalSearchKind {
     fn from(value: SearchKindArg) -> Self {
         match value {
             SearchKindArg::Task => Self::Task,
-            SearchKindArg::Doc => Self::Doc,
             SearchKindArg::Friction => Self::Friction,
             SearchKindArg::All => Self::All,
         }
@@ -118,7 +107,7 @@ impl Execute for SearchCommand {
             tags: self.tags,
             all: self.all,
             status: self.status,
-            path: input.path,
+            path: None,
             workspaces: WorkspaceScope::from_inputs(self.workspaces, self.all_workspaces),
         })?;
 
@@ -136,7 +125,6 @@ impl SearchCommand {
     pub fn audit_subcommand(&self) -> String {
         let mode = match &self.command {
             Some(SearchSubcommand::Similar(_)) => "similar",
-            Some(SearchSubcommand::Path(_)) => "path",
             None => "query",
         };
         format!("{mode}:{}", self.kind)
@@ -160,33 +148,13 @@ impl SearchCommand {
                     query: None,
                     hybrid: false,
                     semantic: Some(args.id.clone()),
-                    path: None,
-                })
-            }
-            Some(SearchSubcommand::Path(args)) => {
-                if self.query.as_deref().is_some_and(|query| !query.is_empty()) {
-                    return Err(OrbitError::InvalidInput(
-                        "`orbit search <query>` and `orbit search path <path>` are mutually exclusive"
-                            .to_string(),
-                    ));
-                }
-                if self.hybrid {
-                    return Err(OrbitError::InvalidInput(
-                        "`--hybrid` only applies to `orbit search <query>`".to_string(),
-                    ));
-                }
-                Ok(SearchInput {
-                    query: None,
-                    hybrid: false,
-                    semantic: None,
-                    path: Some(args.path.clone()),
                 })
             }
             None => {
                 let query = self.query.clone().filter(|query| !query.trim().is_empty());
                 let Some(query) = query else {
                     return Err(OrbitError::InvalidInput(
-                        "search requires an input. Usage: `orbit search <query>`, `orbit search similar <id>`, or `orbit search path <path>`"
+                        "search requires an input. Usage: `orbit search <query>` or `orbit search similar <id>`"
                             .to_string(),
                     ));
                 };
@@ -194,7 +162,6 @@ impl SearchCommand {
                     query: Some(query),
                     hybrid: self.hybrid,
                     semantic: None,
-                    path: None,
                 })
             }
         }
@@ -205,7 +172,6 @@ struct SearchInput {
     query: Option<String>,
     hybrid: bool,
     semantic: Option<String>,
-    path: Option<String>,
 }
 
 fn search_table(results: &[GlobalSearchHit]) -> crate::output::table::Table {
@@ -213,8 +179,7 @@ fn search_table(results: &[GlobalSearchHit]) -> crate::output::table::Table {
     // A federated query labels every hit; a single-workspace one labels none,
     // so the column appears exactly when it carries information [ORB-11027].
     let federated = results.iter().any(|hit| hit.workspace.is_some());
-    // Each hit's kind names its own detail command (`orbit task show`
-    // or `orbit docs show`).
+    // Each task hit names its detail command (`orbit task show`).
     let mut columns = vec![Column::new("KIND").fixed(), Column::new("SOURCE").fixed()];
     if federated {
         columns.push(Column::new("WORKSPACE").fixed());

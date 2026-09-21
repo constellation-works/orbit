@@ -188,20 +188,18 @@ Lexical search works without it. → [search.md](../../orbit/references/search.m
 Offer only additions relevant to the user's goal; none is required merely because
 initial setup succeeded:
 
-1. **A docs corpus** — register the markdown the repo already has, so agents
-   retrieve by concept instead of filename. → [docs-corpus.md](../../orbit/references/docs-corpus.md)
-2. **Crews and base branch** — register the workspace with `--base-branch`
+1. **Crews and base branch** — register the workspace with `--base-branch`
    at the branch task PRs should target (`workflow.base_branch` is only the
    config fallback), and set a default crew. → [configuration.md](configuration.md)
-3. **The scheduler** — host clock, then routines, in the documented order.
+2. **The scheduler** — host clock, then routines, in the documented order.
    → [automation.md](automation.md)
-4. **Recurring chores** — QA sweeps, friction curation, anything periodic.
+3. **Recurring chores** — QA sweeps, friction curation, anything periodic.
    → [auto-tasks.md](auto-tasks.md)
-5. **Task publication** — bind a dedicated snapshot repository and verify one
+4. **Task publication** — bind a dedicated snapshot repository and verify one
    publish/inspect cycle before relying on recovery. → [publication.md](publication.md)
-6. **Upgrade convergence** — use `orbit workspace sync --check`, then
+5. **Upgrade convergence** — use `orbit workspace sync --check`, then
    `orbit workspace sync` to refresh managed defaults. → [maintenance.md](maintenance.md)
-7. **A replica execution host** — collapse to one owner, match binaries and
+6. **A replica execution host** — collapse to one owner, match binaries and
    `review_policy = none`, then probe. Installation is not pull enablement.
    → [distributed-drain.md](../../orbit/references/setup/distributed-drain.md)
 

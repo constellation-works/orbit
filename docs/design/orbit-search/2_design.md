@@ -33,7 +33,7 @@ orbit-common → orbit-search → orbit-core → orbit-cli
 
 `orbit-search::vector` owns the `embeddings` table schema, write/upsert/delete API, and the brute-force cosine helper implementation. It opens the workspace-local SQLite database directly and treats the embedder as injected — tests pass a `NoopEmbedder` that returns deterministic vectors so unit tests never need the companion to be installed.
 
-The vector SQLite store is workspace-local at `.orbit/state/semantic.db`, not in the global `~/.orbit/orbit.db` audit/tool database. This preserves the workspace scoping rule: task and doc embeddings and FTS rows do not leak across workspaces. ADRs participate through the docs corpus.
+The vector SQLite store is workspace-local at `.orbit/state/semantic.db`, not in the global `~/.orbit/orbit.db` audit/tool database. This preserves the workspace scoping rule: task embeddings and FTS rows do not leak across workspaces.
 
 `orbit-tools` exposes `orbit.search` as the MCP query tool, and `orbit-cli` exposes `orbit search` for queries plus `orbit semantic` for companion lifecycle (`install`, `uninstall`, `stats`, `index`). These surfaces are thin shells over the shared search runtime.
 
@@ -287,12 +287,10 @@ Either retriever alone has a failure mode the other doesn't. RRF resolves both a
 ```
 orbit semantic install   [--model bge-small | minilm-l6 | nomic-v1.5] [--force]
 orbit semantic uninstall [--model MODEL] [--all]
-orbit search <query> [--hybrid] [--kind task|doc|friction|all] [--limit N]
+orbit search <query> [--hybrid] [--kind task|friction|all] [--limit N]
                      [--workspaces SELECTOR]... [--all-workspaces]
 orbit search similar <task-id> [--limit N]
-orbit search path <path> [--kind task|doc|friction|all] [--limit N]
-orbit semantic index     [--force] [--model MODEL] [--kind tasks|docs|all]
-orbit docs index         [--force] [--model MODEL]
+orbit semantic index     [--force] [--model MODEL] [--kind tasks|all]
 orbit semantic stats
 ```
 
@@ -300,21 +298,19 @@ orbit semantic stats
 
 `uninstall` removes the companion binary and (by default) the currently active model. `--model M` removes only model M. `--all` removes the companion plus every installed model.
 
-`orbit search` defaults to lexical matching across tasks and docs; ADR content participates through indexed design docs. `--hybrid` blends lexical scoring with cosine over the selected corpus; `orbit search similar <task-id>` embeds the target task and runs cosine-neighbor lookup against other tasks; `orbit search path <path>` performs applicability lookup over path-scoped artifacts. `orbit semantic index` rebuilds the selected corpus (`tasks` by default, or `docs` and `all` via `--kind`) and sweeps the sources that corpus no longer contains; `orbit docs index` is the docs-specific alias. Both report sources changed during embedding as `skipped_sources` and swept sources as `stale_sources` in `--json` output (`tasks_skipped_sources` / `docs_skipped_sources` and `tasks_stale_sources` / `docs_stale_sources` under `--kind all`), while the text output names the skipped sources too. A skipped source keeps the newer complete write and does not abort later write batches. `--force` ignores `content_hash` and re-embeds everything. `stats` reports row counts, model distribution, stale-row count, and companion-install status. The retired `learning` kind is rejected.
+`orbit search` defaults to lexical matching across tasks and frictions. `--hybrid` blends lexical scoring with cosine for tasks; `orbit search similar <task-id>` embeds the target task and runs cosine-neighbor lookup against other tasks. `orbit semantic index` rebuilds the task corpus (`all` is a compatibility spelling for the same corpus) and sweeps sources that corpus no longer contains. It reports sources changed during embedding as `skipped_sources` and swept sources as `stale_sources`. A skipped source keeps the newer complete write and does not abort later write batches. `--force` ignores `content_hash` and re-embeds everything. `stats` reports row counts, model distribution, stale-row count, and companion-install status. Retired `doc`, `adr`, and `learning` kinds are rejected.
 
-If the companion is not installed, `orbit search similar <task-id>`, `orbit semantic index`, and `orbit docs index` exit non-zero with: `"Semantic search not enabled. Run \`orbit semantic install\` to download the inference companion."` Hybrid task and doc search are softer: they emit a warning/note and fall back to lexical results.
+If the companion is not installed, `orbit search similar <task-id>` and `orbit semantic index` exit non-zero with: `"Semantic search not enabled. Run \`orbit semantic install\` to download the inference companion."` Hybrid task search is softer: it emits a warning/note and falls back to lexical results.
 
-`--workspaces` and `--all-workspaces` select the federated scope described in [§6.4](#64-cross-workspace-federated-search). They apply to the free-text form only; `similar` and `path` are single-workspace by construction. `--workspaces` is deliberately distinct from the global `orbit --workspace` routing selector.
+`--workspaces` and `--all-workspaces` select the federated scope described in [§6.4](#64-cross-workspace-federated-search). They apply to the free-text form only; `similar` is single-workspace by construction. `--workspaces` is deliberately distinct from the global `orbit --workspace` routing selector.
 
 ### 6.2 MCP tools
 
-- `orbit.search` — `(query?, hybrid?, semantic?, kind?, limit?, tag?, all?, status?, path?, workspaces?, all_workspaces?)` → ranked results with snippets.
+- `orbit.search` — `(query?, hybrid?, semantic?, kind?, limit?, tag?, all?, status?, workspaces?, all_workspaces?)` → ranked results with snippets.
 - `orbit.semantic.install`, `orbit.semantic.uninstall`, `orbit.semantic.stats`, `orbit.semantic.index` — companion lifecycle.
-- `orbit.docs.index` — docs-corpus embedding build and stale-source sweep.
+The indexing tool returns `stale_sources`: task IDs dropped because the live corpus no longer contains them.
 
-Both indexing tools return `stale_sources`: the source IDs dropped because the live corpus no longer contains them.
-
-`orbit.search` is read-only. Task indexing is implicit (on task mutation) or explicit (`orbit semantic index` / `orbit.semantic.index`); docs indexing is explicit (`orbit docs index` / `orbit.docs.index`).
+`orbit.search` is read-only. Task indexing is implicit (on task mutation) or explicit (`orbit semantic index` / `orbit.semantic.index`).
 
 ### 6.3 Result shape
 
@@ -339,7 +335,7 @@ Both indexing tools return `stale_sources`: the source IDs dropped because the l
 
 `mode` names the retrieval that ran, not the retrieval that survived filtering: a `--hybrid` query whose vector branch returned hits reports `hybrid` even when the status filter then hid every one of them, and the task branch adds a note counting the hits it hid and naming `all:true`. A hybrid query that fell back to lexical — no embeddings, or an unavailable companion — reports `lexical` with the fallback note.
 
-`skipped_kinds` lists the corpora a `--path` query could not apply to (docs and frictions are not path-filtered), mirroring the existing prose notes as structured data so an agent does not read an empty `results` as "nothing relevant exists". Like the federated fields it is omitted from JSON when empty.
+`skipped_kinds` remains an internal response field for path-filtered callers and names frictions when that branch cannot apply. It is omitted from JSON when empty.
 
 The global search response exposes the score breakdown when semantic task search contributes a hit: agents can use it to distinguish a lexical-only hit from a semantic neighborhood and adapt downstream behavior. The internal `orbit-search` result also carries the active `model_id`, but the unified CLI/MCP response uses the global shape shown here.
 
@@ -532,7 +528,7 @@ This section deliberately does not commit to:
 
 ### 9.7 Sequencing
 
-Phase 2 no longer depends on the removed ADR artifact v2 proposal. Implementing the doc-section indexer should still exclude every `4_decisions.md` so local narrative ADR logs do not churn the doc corpus; ADRs can join as `source_kind = "adr"` through `orbit-embed::vector` when a fresh ADR-vector indexing design exists.
+Phase 2 no longer depends on the removed ADR artifact v2 proposal. Any future corpus beyond tasks requires a fresh design; the retired docs corpus and historical ADR-vector proposals are not extension points.
 
 ---
 

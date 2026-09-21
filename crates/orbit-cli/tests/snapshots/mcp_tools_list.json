@@ -393,12 +393,12 @@
     "name": "orbit_friction_update"
   },
   {
-    "description": "Search tasks, docs, and frictions. Decision records are indexed as ordinary docs; hybrid vector ranking applies to indexed tasks and docs.",
+    "description": "Search tasks and frictions; hybrid vector ranking applies to indexed tasks.",
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
         "all": {
-          "description": "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved; doc is a no-op.",
+          "description": "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved.",
           "type": "boolean"
         },
         "all_workspaces": {
@@ -406,11 +406,11 @@
           "type": "boolean"
         },
         "hybrid": {
-          "description": "Opt into hybrid lexical + cosine ranking for indexed task and doc vectors; frictions remain lexical.",
+          "description": "Opt into hybrid lexical + cosine ranking for indexed task vectors; frictions remain lexical.",
           "type": "boolean"
         },
         "kind": {
-          "description": "Corpus kind: task, doc, friction, or all. Default: all.",
+          "description": "Corpus kind: task, friction, or all. Default: all.",
           "type": "string"
         },
         "limit": {
@@ -425,10 +425,6 @@
             "gemini",
             "grok"
           ],
-          "type": "string"
-        },
-        "path": {
-          "description": "Filter to artifacts applicable to this filesystem path. Task uses selector containment; docs and frictions are skipped.",
           "type": "string"
         },
         "query": {
@@ -451,7 +447,7 @@
               "type": "string"
             }
           ],
-          "description": "Explicit per-kind status override using kind:value tokens, such as task:open,doc:active,friction:open. Overrides `all` for the named kind."
+          "description": "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. Overrides `all` for the named kind."
         },
         "tag": {
           "anyOf": [
@@ -465,7 +461,7 @@
               "type": "string"
             }
           ],
-          "description": "AND-filter by tag. Repeat or pass an array. Applies to task, doc, and friction."
+          "description": "AND-filter by tag. Repeat or pass an array. Applies to task and friction."
         },
         "workspace": {
           "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
@@ -802,7 +798,7 @@
     "name": "orbit_task_list"
   },
   {
-    "description": "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. `with_context` composes with a projection by adding `related_docs` to the result. The `crew` field selects execution, while `orchestrator` records orchestration attribution.",
+    "description": "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. The `crew` field selects execution, while `orchestrator` records orchestration attribution.",
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
@@ -826,15 +822,11 @@
               "type": "string"
             }
           ],
-          "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. May be combined with `with_context`; then the projection is an object with `related_docs` added. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution."
+          "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution."
         },
         "id": {
           "description": "Globally unique task ID. Resolved through the host task registry by default; a workspace argument is not required.",
           "type": "string"
-        },
-        "max_docs": {
-          "description": "Optional cap for `related_docs` when `with_context` is true. Defaults to 5.",
-          "type": "integer"
         },
         "model": {
           "description": "Preferred provenance field. Pass the canonical agent family (`codex`, `claude`, `gemini`, or `grok`); full model strings are accepted and auto-normalized.",
@@ -845,10 +837,6 @@
             "grok"
           ],
           "type": "string"
-        },
-        "with_context": {
-          "description": "Optional boolean. When true, include a `related_docs` array matched from task context selectors and feature tags. May be combined with `fields`; the requested projection and `related_docs` are returned in one object.",
-          "type": "boolean"
         },
         "workspace": {
           "description": "Optional explicit workspace filter. `id` is resolved globally by default; do not pass cwd, MCP session/initialize metadata, or a linked-worktree runtime identity (for example `orbit-5c61b3`). When supplied, a registered workspace name, logical workspace ID (`ws_*`), or absolute local checkout path is fail-closed: a valid workspace that does not own the task returns not-found, and an unknown selector is rejected by name.",

@@ -290,13 +290,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::AutoTaskShow
         | OrbitBuiltinAction::AutoTaskToggle
         | OrbitBuiltinAction::CommandExec
-        | OrbitBuiltinAction::DocsList
-        | OrbitBuiltinAction::DocsShow
-        // DocsAdd registers a checked, repo-relative path; it does not write
-        // document content, and HOME normalization would make the path invalid.
-        | OrbitBuiltinAction::DocsAdd
-        | OrbitBuiltinAction::DocsIndex
-        | OrbitBuiltinAction::DocsMigrate
         | OrbitBuiltinAction::Friction(FrictionVerb::List)
         | OrbitBuiltinAction::Friction(FrictionVerb::Show)
         | OrbitBuiltinAction::Friction(FrictionVerb::Stats)

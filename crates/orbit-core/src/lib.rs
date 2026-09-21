@@ -67,7 +67,6 @@ pub use orbit_tools::prepare_remote_task_artifact_put;
 
 // Command-layer types the CLI names in its clap surfaces.
 pub use application::distributed::{DrainEntryAdmission, DrainEntryPoint, DrainEntryRefusal};
-pub use application::docs::{DocType, TaskRelatedDoc};
 pub use application::job::{
     AgentInvokeRequest, AgentInvokeSubmission, DrainAdmissionsStopChange,
     DrainAdmissionsStopRequest, DrainAdmissionsStopResult, DrainWorkerLimitChange,

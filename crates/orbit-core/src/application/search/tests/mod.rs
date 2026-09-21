@@ -1,12 +1,9 @@
-use std::fs;
-
-use orbit_search::{DocEmbeddingSource, DocSemanticHit, NoopEmbedder, ScoreBreakdown, SemanticHit};
+use orbit_search::{ScoreBreakdown, SemanticHit};
 use orbit_store::contracts::TaskCreateParams;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 
 use super::*;
 use crate::OrbitRuntime;
-use crate::application::docs::{git_check_ignore_invocations, reset_git_check_ignore_invocations};
 
 mod federated;
 mod global;
@@ -53,88 +50,13 @@ fn add_task(runtime: &OrbitRuntime, title: &str, description: &str, status: Task
         .id
 }
 
-fn add_doc(runtime: &OrbitRuntime, path: &str, summary: &str) {
-    add_doc_with_tags(runtime, path, summary, &[]);
-}
-
-fn add_doc_with_tags(runtime: &OrbitRuntime, path: &str, summary: &str, tags: &[&str]) {
-    add_doc_with_tags_and_body(runtime, path, summary, tags, "needle doc body");
-}
-
-fn add_doc_with_body(runtime: &OrbitRuntime, path: &str, summary: &str, body: &str) {
-    add_doc_with_tags_and_body(runtime, path, summary, &[], body);
-}
-
-fn add_doc_with_tags_and_body(
-    runtime: &OrbitRuntime,
-    path: &str,
-    summary: &str,
-    tags: &[&str],
-    body: &str,
-) {
-    let doc_path = runtime.paths().repo_root.join(path);
-    fs::create_dir_all(doc_path.parent().expect("doc parent")).expect("create doc parent");
-    let tags_line = if tags.is_empty() {
-        String::new()
-    } else {
-        format!("tags: [{}]\n", tags.join(", "))
-    };
-    fs::write(
-        doc_path,
-        format!("---\ntype: context\nsummary: {summary}\n{tags_line}---\n\n{body}\n"),
-    )
-    .expect("write doc");
-}
-
-/// Put a doc in the semantic index without writing it to disk, the way
-/// `orbit docs index` stores one: `title` is the frontmatter summary.
-fn index_doc(runtime: &OrbitRuntime, path: &str, summary: &str, tags: &[&str], body: &str) {
-    runtime
-        .stores()
-        .semantic_index()
-        .store()
-        .expect("open vector store")
-        .index_doc(
-            &DocEmbeddingSource {
-                path: path.to_string(),
-                title: summary.to_string(),
-                tags: tags.iter().map(|tag| tag.to_string()).collect(),
-                body: body.to_string(),
-            },
-            &NoopEmbedder::small(),
-            false,
-        )
-        .expect("index doc");
-}
-
-// L-0026: keep each caller's query unique; in-memory doc files share the temp parent.
-fn seed_search_fixture(runtime: &OrbitRuntime, query: &str, task_count: usize, doc_count: usize) {
+fn seed_search_fixture(runtime: &OrbitRuntime, query: &str, task_count: usize) {
     for index in 0..task_count {
         add_task_with_status(
             runtime,
             &format!("{query} task {index:02}"),
             TaskStatus::Backlog,
         );
-    }
-    for index in 0..doc_count {
-        add_doc(
-            runtime,
-            &format!("docs/{query}-doc-{index:02}.md"),
-            &format!("{query} doc {index:02}"),
-        );
-    }
-}
-
-fn count_kind(results: &[GlobalSearchHit], kind: &str) -> usize {
-    results.iter().filter(|hit| hit.kind == kind).count()
-}
-
-fn doc_semantic_hit(path: &str, score: f32) -> DocSemanticHit {
-    DocSemanticHit {
-        source_id: path.to_string(),
-        best_field: "body".to_string(),
-        snippet: "semantic snippet".to_string(),
-        score,
     }
 }
 
@@ -151,20 +73,6 @@ fn task_semantic_hit(id: &str, score: f32) -> SemanticHit {
             cosine_rank: Some(1),
         },
     }
-}
-
-fn with_doc_semantic_override<T>(
-    result: Result<Vec<DocSemanticHit>, orbit_common::OrbitError>,
-    f: impl FnOnce() -> T,
-) -> T {
-    DOC_SEMANTIC_SEARCH_OVERRIDE.with(|cell| {
-        *cell.borrow_mut() = Some(result);
-    });
-    let out = f();
-    DOC_SEMANTIC_SEARCH_OVERRIDE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
-    out
 }
 
 fn with_task_semantic_override<T>(

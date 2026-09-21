@@ -266,9 +266,9 @@ impl ConfigStore {
     /// outside the runtime-key registry.
     ///
     /// The registry intentionally admits only runtime-owned keys, while the
-    /// same `config.toml` also contains independently owned sections such as
-    /// `[docs]`. Those owners still use this method so their edits preserve
-    /// comments and share [`Self::save`]'s atomic persistence.
+    /// same `config.toml` can also contain independently owned sections. Those
+    /// owners use this method so their edits preserve comments and share
+    /// [`Self::save`]'s atomic persistence.
     pub fn set_document_value(&mut self, key: &str, raw_value: &str) -> Result<(), OrbitError> {
         if key.split('.').any(str::is_empty) {
             return Err(OrbitError::InvalidInput(

@@ -273,6 +273,7 @@ impl ResolvedConfig {
                 .is_some(),
             retired_duel: parsed.duel.is_some(),
             retired_routines: parsed.routines.is_some(),
+            retired_docs: parsed.docs.is_some(),
             removed_keys: removed_keys_present(&document),
         };
         if emit_compatibility_warnings {
@@ -674,6 +675,7 @@ struct CompatibilityKeys {
     deprecated_task_id_pattern: bool,
     retired_duel: bool,
     retired_routines: bool,
+    retired_docs: bool,
     /// Fixed keys from [`registry::REMOVED_CONFIG_KEYS`] the document still
     /// sets, with their migration notes.
     removed_keys: Vec<(&'static str, &'static str)>,
@@ -690,6 +692,9 @@ impl CompatibilityKeys {
         if self.retired_routines {
             warn_retired_routines_config(config_path);
         }
+        if self.retired_docs {
+            warn_retired_docs_config(config_path);
+        }
         for (key, note) in &self.removed_keys {
             warn_removed_key(config_path, key, note);
         }
@@ -701,6 +706,7 @@ pub(crate) fn warn_compatibility_keys(document: &toml::Value, config_path: &Path
         deprecated_task_id_pattern: value_at_path(document, "knowledge.task_id_pattern").is_some(),
         retired_duel: value_at_path(document, "duel").is_some(),
         retired_routines: value_at_path(document, "routines").is_some(),
+        retired_docs: value_at_path(document, "docs").is_some(),
         removed_keys: removed_keys_present(document),
     }
     .warn(config_path);
@@ -728,6 +734,17 @@ fn warn_removed_key(config_path: &Path, key: &str, note: &str) {
         key,
         note,
         REMOVED_CONFIG_KEY_WARNING,
+    );
+}
+
+pub(crate) const RETIRED_DOCS_CONFIG_WARNING: &str =
+    "[docs] is removed and ignored; delete the table from config.toml";
+
+fn warn_retired_docs_config(config_path: &Path) {
+    let path = redact_home_dir(&config_path.display().to_string());
+    tracing::warn!(
+        config = %path,
+        RETIRED_DOCS_CONFIG_WARNING,
     );
 }
 

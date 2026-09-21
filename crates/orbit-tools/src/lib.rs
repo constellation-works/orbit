@@ -118,11 +118,6 @@ pub enum OrbitBuiltinAction {
     DrainClaims,
     DrainProbe,
     DrainReceiptLookup,
-    DocsList,
-    DocsShow,
-    DocsAdd,
-    DocsIndex,
-    DocsMigrate,
     /// ADR-0209 bearing 1 [ORB-10358]: friction verbs are registry data, so one
     /// action variant carries the verb instead of one variant per verb.
     Friction(FrictionVerb),

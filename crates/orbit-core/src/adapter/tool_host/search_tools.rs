@@ -18,6 +18,11 @@ pub(super) fn search(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
             "unknown parameter `related`; use `semantic` for task-neighbor lookup".to_string(),
         ));
     }
+    if input.get("path").is_some() {
+        return Err(OrbitError::InvalidInput(
+            "unknown parameter `path`; document path search has been removed".to_string(),
+        ));
+    }
     for retired in [
         "field",
         "embedding_model",
@@ -61,7 +66,7 @@ pub(super) fn search(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
         all: optional_bool_alias(&input, &["all"])?.unwrap_or(false),
         status: optional_csv_or_string_list_alias(&input, &["status", "statuses"])?
             .unwrap_or_default(),
-        path: optional_string_alias(&input, &["path"])?,
+        path: None,
         workspaces,
     })?;
     serde_json::to_value(result)

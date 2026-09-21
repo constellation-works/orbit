@@ -201,12 +201,11 @@ For diagnosing a host-level incident rather than tuning retention, see
 
 ```bash
 orbit semantic stats                       # companion and index status
-orbit semantic index --kind tasks|docs|all
-orbit docs index                           # doc corpus embeddings
+orbit semantic index --kind tasks|all
 ```
 
-Both are idempotent and safe to re-run. Reindex after bulk imports, large doc
-moves, or a restore. → [search.md](../../orbit/references/search.md)
+Indexing is idempotent and safe to re-run. Reindex after bulk task imports or
+a restore. → [search.md](../../orbit/references/search.md)
 
 ## What is evidence and must not be edited
 

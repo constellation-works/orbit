@@ -231,8 +231,6 @@ fn task_show_and_artifacts_command_are_metadata_only_and_lazy() {
         id: task.id.clone(),
         json: true,
         fields: vec!["artifacts".to_string()],
-        with_context: false,
-        max_docs: None,
     })
     .execute(&runtime)
     .expect("task show --fields artifacts") else {
@@ -275,8 +273,6 @@ fn task_show_and_artifacts_command_are_metadata_only_and_lazy() {
         id: task.id.clone(),
         json: true,
         fields: vec![],
-        with_context: false,
-        max_docs: None,
     })
     .execute(&runtime)
     .expect("full task show") else {

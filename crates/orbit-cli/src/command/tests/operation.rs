@@ -201,10 +201,6 @@ fn json_error_preferences_are_derived_from_operations() {
         Some(true)
     );
     assert_eq!(
-        operation_for(&["orbit", "docs", "list", "--json"]).json_error_preference,
-        Some(true)
-    );
-    assert_eq!(
         operation_for(&["orbit", "friction", "list", "--json"]).json_error_preference,
         Some(true)
     );
@@ -213,7 +209,7 @@ fn json_error_preferences_are_derived_from_operations() {
         Some(true)
     );
     assert_eq!(
-        operation_for(&["orbit", "docs", "list"]).json_error_preference,
+        operation_for(&["orbit", "doctor"]).json_error_preference,
         None
     );
 }

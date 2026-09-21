@@ -315,8 +315,8 @@ pub(crate) fn incompatible_semantic_index_layout_error(layout: CorpusFtsLayout) 
         }
     };
     OrbitError::Store(format!(
-        "{SEMANTIC_INDEX_LAYOUT_INCOMPATIBLE}: {detail} Lexical (non-hybrid) task and doc \
-         lookup does not use this index and remains valid. Do not delete or downgrade \
+        "{SEMANTIC_INDEX_LAYOUT_INCOMPATIBLE}: {detail} Lexical (non-hybrid) task lookup \
+         does not use this index and remains valid. Do not delete or downgrade \
          semantic.db to make an older binary work."
     ))
 }

@@ -46,13 +46,7 @@ fn tool_list() -> Table {
         "orbit.task.show",
         "active",
         "yes",
-        "Show one task with its comments, history, artifacts, and optionally its related docs.",
-    ]);
-    table.add_row(vec![
-        "orbit.docs.index",
-        "inactive",
-        "yes",
-        "Reindex the human-authored docs corpus so semantic search sees the current files.",
+        "Show one task with its comments, history, and artifacts.",
     ]);
     table
 }
@@ -70,8 +64,8 @@ fn renders_one_line_per_record_with_a_header_and_no_box_glyphs() {
         let lines = lines(&rendered.body);
         assert_eq!(
             lines.len(),
-            4,
-            "3 records plus one header at width {width:?}: {}",
+            3,
+            "2 records plus one header at width {width:?}: {}",
             rendered.body
         );
         assert!(
@@ -156,7 +150,7 @@ fn flexible_columns_drop_from_the_right_and_say_so_on_stderr() {
         vec!["columns hidden to fit the terminal: DESCRIPTION".to_string()],
         "a dropped column is reported, on stderr, never in the body"
     );
-    assert_eq!(lines(&rendered.body).len(), 4, "records are not dropped");
+    assert_eq!(lines(&rendered.body).len(), 3, "records are not dropped");
 }
 
 #[test]
@@ -363,7 +357,7 @@ fn skill_list() -> Table {
         "orbit-search",
         "e3f03c1208",
         "3",
-        "Search tasks, docs, ADRs, and frictions through the unified orbit search query surface",
+        "Search tasks and frictions through the unified orbit search query surface",
     ]);
     table.add_row(vec![
         "orbit-task",

@@ -99,4 +99,11 @@ mod query_tests {
         let params = parse_search_query(Some("q=a&limit=100000000")).expect("parse query");
         assert_eq!(params.limit, super::super::HISTORY_MAX_LIMIT);
     }
+
+    #[test]
+    fn query_parser_rejects_removed_doc_kind() {
+        let error = parse_search_query(Some("q=needle&kind=doc"))
+            .expect_err("the retired docs corpus must not be selectable");
+        assert!(error.contains("invalid search kind `doc`"), "{error}");
+    }
 }

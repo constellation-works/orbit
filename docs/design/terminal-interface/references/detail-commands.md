@@ -18,7 +18,6 @@ Only *flexible* columns are ever truncated — fixed columns render whole or are
 | `orbit audit list` | `TOOL` | `orbit audit show <id>` |
 | `orbit auto-task list` | `TITLE` | `orbit auto-task show <name>` |
 | `orbit task list` | `TITLE` | `orbit task show <id>` |
-| `orbit task show` (related docs) | `SUMMARY`, `EXCERPT`, `PATH` | `orbit docs show <path>` |
 | `orbit job list` | `TARGET_ID` | `orbit job show <job_id>` |
 | `orbit run history` | `ERROR_MESSAGE` | `orbit run show <run_id> -s <step>` |
 | `orbit run events` | `SUMMARY` | `orbit run trace <run_id>`, `orbit run logs <run_id>` |
@@ -27,10 +26,9 @@ Only *flexible* columns are ever truncated — fixed columns render whole or are
 | `orbit executor list` | `COMMAND` | `orbit executor show <name>` |
 | `orbit policy list` | `DESCRIPTION`, `FSPROFILES` | `orbit policy show <name>` |
 | `orbit operation list` | `RIGHTS`, `TASKS` | `orbit operation show <id>` |
-| `orbit docs list` | `PATH`, `SUMMARY`, `TAGS`, `RELATED` | `orbit docs show <path>` |
 | `orbit skill list` | `SUMMARY` | `orbit skill show <id>` |
 | `orbit friction list` | `TAGS`, `TITLE` | `orbit friction show <id>` |
-| `orbit search` | `ID/PATH`, `TITLE/SUMMARY` | per hit kind: `orbit task show`, `orbit docs show` |
+| `orbit search` | `ID`, `TITLE/SUMMARY` | per hit kind: `orbit task show`, `orbit friction show` |
 
 ## Gaps
 

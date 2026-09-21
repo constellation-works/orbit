@@ -18,11 +18,11 @@ The audience is the individual engineer driving multiple coding agents against r
 
 **Orbit is a free, self-hosted, permissively licensed OSS project. There is no paid tier, no hosted offering, no commercial roadmap. Whatever ships, ships in the OSS repo.**
 
-Orbit's own repository uses feature-scoped design docs for load-bearing decisions. That is an Orbit repository convention, not a consumer requirement: [Orbit Docs](design/orbit-docs/1_overview.md) indexes the human-authored Markdown corpus each workspace owns and does not impose a four-file or source-specific layout. Consumers can keep their own conventions for design notes, decision records, and runbooks; Orbit's concern is that important context remains durable and retrievable.
+Orbit's own repository uses feature-scoped design docs for load-bearing decisions. That is an Orbit repository convention, not a consumer requirement. Consumers can keep their own conventions for design notes, decision records, and runbooks; agents read those files with their normal repository tools.
 
 ## Who Orbit is for
 
-The AI-native engineer running multiple provider CLIs — such as Claude Code, Codex, Antigravity, Grok, Copilot, Cursor, OpenCode, or Pi — heavily, who has outgrown the in-session model and wants engineering discipline around their AI-assisted work — tasks, decision records, a searchable docs corpus, audit, sandboxing, parallel dispatch. Gemini CLI remains available as a legacy executor. See the [current provider and executor list](../website/src/content/docs/concepts/agents.md).
+The AI-native engineer running multiple provider CLIs — such as Claude Code, Codex, Antigravity, Grok, Copilot, Cursor, OpenCode, or Pi — heavily, who has outgrown the in-session model and wants engineering discipline around their AI-assisted work — tasks, decision records, audit, sandboxing, and parallel dispatch. Gemini CLI remains available as a legacy executor. See the [current provider and executor list](../website/src/content/docs/concepts/agents.md).
 
 Staff and principal engineers, tech leads, and founding engineers fit the same profile. If they bring Orbit into their team's workflow, that's a natural extension — but the project is not positioned for team conversion. Orbit optimizes for the individual engineer who refuses to vibe-code their way through agent-driven development.
 

@@ -54,10 +54,6 @@ fn semantic_index_params_serde_defaults_to_tasks_at_runtime() {
     assert_eq!(model_only.kind, None);
     assert_eq!(model_only.resolved_kind(), IndexKind::Tasks);
 
-    let docs: SemanticIndexParams = serde_json::from_str(r#"{"kind":"docs"}"#).unwrap();
-    assert_eq!(docs.kind, Some(IndexKind::Docs));
-    assert_eq!(docs.resolved_kind(), IndexKind::Docs);
-
     let all: SemanticIndexParams = serde_json::from_str(r#"{"kind":"all"}"#).unwrap();
     assert_eq!(all.kind, Some(IndexKind::All));
     assert_eq!(all.resolved_kind(), IndexKind::All);
@@ -68,7 +64,7 @@ fn semantic_index_kind_rejects_singular_learning() {
     let error = IndexKind::from_str("learning").expect_err("singular kind should fail");
 
     assert!(error.to_string().contains("`learning`"));
-    assert!(error.to_string().contains("tasks, docs, all"));
+    assert!(error.to_string().contains("tasks, all"));
 }
 
 #[test]

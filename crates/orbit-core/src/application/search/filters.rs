@@ -14,20 +14,9 @@ pub(super) fn task_has_all_tags(task: &orbit_types::task::Task, tag_filter: &[St
     })
 }
 
-/// Whether a doc's tags satisfy every requested tag, case-insensitively.
-/// Takes the tags alone because a hybrid candidate's tags may come from the
-/// index rather than a walked record [DANI-10369].
-pub(super) fn doc_has_all_tags(tags: &[String], tag_filter: &[String]) -> bool {
-    tag_filter.iter().all(|needle| {
-        tags.iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(needle))
-    })
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct SearchStatusFilters {
     pub(super) task: Option<Vec<TaskStatus>>,
-    pub(super) doc_active: Option<bool>,
     pub(super) friction: Option<FrictionStatus>,
 }
 
@@ -55,11 +44,10 @@ impl SearchStatusFilters {
                 }
                 match kind.as_str() {
                     "task" => filters.push_task_status(&value)?,
-                    "doc" => filters.set_doc_status(&value)?,
                     "friction" => filters.set_friction_status(&value)?,
                     other => {
                         return Err(OrbitError::InvalidInput(format!(
-                            "invalid status kind `{other}` in token `{token}`; expected task, doc, or friction"
+                            "invalid status kind `{other}` in token `{token}`; expected task or friction"
                         )));
                     }
                 }
@@ -80,16 +68,6 @@ impl SearchStatusFilters {
             ))
         })?;
         push_unique(statuses, status);
-        Ok(())
-    }
-
-    fn set_doc_status(&mut self, value: &str) -> Result<(), OrbitError> {
-        if value != "active" {
-            return Err(OrbitError::InvalidInput(format!(
-                "invalid status `{value}` for kind `doc`; expected active"
-            )));
-        }
-        self.doc_active = Some(true);
         Ok(())
     }
 

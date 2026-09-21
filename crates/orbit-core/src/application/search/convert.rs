@@ -49,27 +49,3 @@ pub(super) fn semantic_hit_to_global(hit: orbit_search::SemanticHit) -> GlobalSe
         workspace: None,
     }
 }
-
-pub(super) fn doc_result_to_global(
-    result: orbit_search::DocSearchResult,
-    source: &str,
-    score: Option<f32>,
-) -> GlobalSearchHit {
-    GlobalSearchHit {
-        kind: "doc".to_string(),
-        source: source.to_string(),
-        id: None,
-        path: Some(result.record.path),
-        title: None,
-        summary: Some(result.record.summary),
-        // A result served from the doc index has no type to report: the
-        // index does not store one [DANI-10369].
-        status: Some(result.record.doc_type).filter(|doc_type| !doc_type.is_empty()),
-        best_field: None,
-        snippet: result.snippet,
-        score,
-        score_breakdown: None,
-        matched_by: Some(result.matched_by),
-        workspace: None,
-    }
-}

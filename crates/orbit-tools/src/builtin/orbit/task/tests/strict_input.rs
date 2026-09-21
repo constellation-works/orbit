@@ -97,17 +97,21 @@ fn update_rejects_terminal_as_a_writable_field() {
 }
 
 #[test]
-fn show_schema_documents_terminal_and_context_composition() {
+fn show_schema_documents_terminal_projection() {
     let schema = OrbitTaskShowTool.schema();
     assert!(schema.description.contains("read-only `terminal`"));
-    assert!(schema.description.contains("`with_context` composes"));
     let fields = schema
         .parameters
         .iter()
         .find(|parameter| parameter.name == "fields")
         .expect("fields parameter");
     assert!(fields.description.contains("terminal"));
-    assert!(fields.description.contains("`related_docs` added"));
+    assert!(
+        !schema
+            .parameters
+            .iter()
+            .any(|parameter| { matches!(parameter.name.as_str(), "with_context" | "max_docs") })
+    );
 }
 
 #[test]

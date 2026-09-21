@@ -73,7 +73,7 @@ fn task_show_help_advertises_the_authoritative_field_vocabulary() {
         );
     }
     assert!(
-        help.contains("With --with-context"),
-        "task show help must document projection/context composition:\n{help}"
+        !help.contains("with-context"),
+        "task show help must not advertise removed docs context:\n{help}"
     );
 }

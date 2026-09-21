@@ -58,7 +58,7 @@ fn config_path_rejects_a_symlink_without_reading_its_external_target() {
         .join("outside-config.toml");
     std::fs::write(
         global_root.join("config.toml"),
-        "[docs]\nroots = [\"global/\"]\n",
+        "[scoring]\nenabled = false\n",
     )
     .expect("write global config");
     std::fs::write(&outside_target, "leaked = true\n").expect("write file outside workspace root");
@@ -66,13 +66,12 @@ fn config_path_rejects_a_symlink_without_reading_its_external_target() {
         .expect("symlink workspace config.toml");
 
     let error = runtime
-        .docs_roots()
+        .config_path()
         .expect_err("symlinked workspace config must fail closed");
 
     let diagnostic = error.to_string();
     assert!(diagnostic.contains("regular config.toml"), "{diagnostic}");
     assert!(diagnostic.contains(&workspace_root.display().to_string()));
-    assert!(!diagnostic.contains("invalid docs config"), "{diagnostic}");
     assert!(global_root.join("config.toml").is_file());
 }
 

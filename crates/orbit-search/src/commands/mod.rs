@@ -5,8 +5,6 @@
 //! top-level `OrbitRuntime` exposes thin delegates that build the runtime's
 //! shared state into these calls.
 
-mod doc_index;
-mod doc_search;
 mod install;
 mod reindex;
 mod related;
@@ -14,11 +12,6 @@ mod search;
 mod stats;
 mod uninstall;
 
-pub use doc_index::{DocIndexParams, DocIndexResult};
-pub use doc_search::{
-    DocLexicalHit, DocSemanticHit, DocSemanticSearchParams, DocSemanticSearchResult,
-    doc_lexical_search,
-};
 pub use install::{SemanticInstallParams, SemanticInstallResult};
 pub use reindex::{
     IndexKind, SemanticIndexParams, SemanticIndexResult, SemanticReindexParams,
@@ -34,7 +27,7 @@ use std::fs;
 use orbit_common::OrbitError;
 use orbit_types::task::Task;
 
-use crate::vector::{DocEmbeddingSource, VectorStore};
+use crate::vector::VectorStore;
 use crate::{CompanionPaths, EmbedderPool, ModelSpec, default_model};
 
 pub(crate) const DEFAULT_RELEASE_BASE_URL: &str =
@@ -112,15 +105,6 @@ pub fn semantic_reindex(
     semantic_index(vector_store, tasks, embedders, params)
 }
 
-pub fn doc_index(
-    vector_store: &VectorStore,
-    docs: &[DocEmbeddingSource],
-    embedders: &EmbedderPool,
-    params: DocIndexParams,
-) -> Result<DocIndexResult, OrbitError> {
-    doc_index::run(vector_store, docs, embedders, params)
-}
-
 pub fn semantic_stats(
     vector_store: &VectorStore,
     task_ids: &[String],
@@ -147,23 +131,6 @@ pub fn semantic_search_with(
     params: SemanticSearchParams,
 ) -> Result<SemanticSearchResult, OrbitError> {
     search::run_with_embedder(vector_store, embedder, params)
-}
-
-pub fn doc_semantic_search(
-    vector_store: &VectorStore,
-    embedders: &EmbedderPool,
-    params: DocSemanticSearchParams,
-) -> Result<DocSemanticSearchResult, OrbitError> {
-    doc_search::run(vector_store, embedders, params)
-}
-
-/// [`doc_semantic_search`] against an embedder the caller already built.
-pub fn doc_semantic_search_with(
-    vector_store: &VectorStore,
-    embedder: &dyn crate::Embedder,
-    params: DocSemanticSearchParams,
-) -> Result<DocSemanticSearchResult, OrbitError> {
-    doc_search::run_with_embedder(vector_store, embedder, params)
 }
 
 pub fn semantic_related(

@@ -13,7 +13,7 @@ tags: ["orbit-search"]
 
 # Semantic Search — Overview
 
-Semantic search is a local, offline-first retrieval layer over Orbit's task artifacts and explicitly indexed docs. Agents query it to find prior tasks by topic before adding duplicates; humans query it to recover work they remember by meaning rather than by literal substring. **The shipped feature is opt-in**; the former knowledge-graph integration proposal was retired with the graph subsystem.
+Semantic search is a local, offline-first retrieval layer over Orbit tasks. Agents query it to find prior tasks by topic before adding duplicates; humans query it to recover work they remember by meaning rather than by literal substring. **The shipped feature is opt-in**; the former knowledge-graph integration proposal was retired with the graph subsystem.
 
 This document is the entry point. [2_design.md](./2_design.md) specifies the inference backend, vector storage, embedding strategy, and hybrid-retrieval pipeline; [3_vision.md](./3_vision.md) names open questions and prior work; [4_decisions.md](./4_decisions.md) is the decision log.
 
@@ -27,7 +27,7 @@ The task store is already growing past the point where lexical recall is suffici
 2. **Lost prior work.** A human asks "didn't we have a task about token-counting heuristics?" and gets nothing because the original task used the phrase "context window estimation." The information is on disk, just not findable.
 3. **Review-thread context loss.** Long-lived review threads accumulate decisions in comment bodies. Those decisions are unsearchable except by full text scan.
 
-Lexical search via SQLite FTS5 (BM25) is part of the answer — it handles literal identifiers, error codes, and task IDs better than embeddings. But it misses the cases where the user's vocabulary doesn't match the document's. Semantic search via local embeddings handles that. They are complementary: task semantic search fuses lexical and cosine candidates with RRF, while doc hybrid search uses the docs-specific weighted blend ([Hybrid retrieval (FTS5 BM25 + cosine, fused via RRF) from day one](./4_decisions.md#hybrid-retrieval-fts5-bm25-cosine-fused-via-rrf-from-day-one)).
+Lexical search via SQLite FTS5 (BM25) is part of the answer — it handles literal identifiers, error codes, and task IDs better than embeddings. But it misses the cases where the user's vocabulary doesn't match the document's. Semantic search via local embeddings handles that. They are complementary: task semantic search fuses lexical and cosine candidates with RRF ([Hybrid retrieval (FTS5 BM25 + cosine, fused via RRF) from day one](./4_decisions.md#hybrid-retrieval-fts5-bm25-cosine-fused-via-rrf-from-day-one)).
 
 The constraint that shapes every other decision: **the default `orbit` install is single-binary, no-daemon, and no cloud dependency**. That rules out hosted embedding APIs and rules out an always-on inference daemon. The `orbit-search` library keeps the main `orbit` binary slim by making fastembed-rs an optional companion-only dependency; users opt into inference via `orbit semantic install` ([fastembed-rs ONNX backend over Candle, llama.cpp, or external ollama](./4_decisions.md#fastembed-rs-onnx-backend-over-candle-llamacpp-or-external-ollama), [Companion binary installed on demand, rather than bundled in `orbit`](./4_decisions.md#companion-binary-installed-on-demand-rather-than-bundled-in-orbit-1)).
 
@@ -43,7 +43,7 @@ Users opt into semantic search by running `orbit semantic install [--model bge-s
 
 ### 2.2 Vector store
 
-A new SQLite table `embeddings` is stored in the workspace-local semantic database alongside the `chunks` table and the `corpus_fts` virtual table indexing it. Each row holds `(source_kind, source_id, field, chunk_idx, content_hash, model_id, dim, embedding BLOB, normalized)`. `normalized` is set when the blob was L2-normalised at write time so the scan can use a dot product. `source_kind` currently distinguishes task and doc rows; ADRs are indexed through the docs corpus. The forward migration in [ORB-10736] removes rows from the retired native learning corpus.
+A new SQLite table `embeddings` is stored in the workspace-local semantic database alongside the `chunks` table and the `corpus_fts` virtual table indexing it. Each row holds `(source_kind, source_id, field, chunk_idx, content_hash, model_id, dim, embedding BLOB, normalized)`. `normalized` is set when the blob was L2-normalised at write time so the scan can use a dot product. Active indexing writes task rows; older source kinds may remain in an existing regenerable database until its next rebuild.
 
 The implementation uses **brute-force cosine similarity** in Rust over the BLOBs (no per-row decode allocation; top-k is a bounded heap). At the current corpus scale (low thousands of artifacts × a small number of fields per source = tens of thousands of vectors at 384d), brute force is sub-millisecond per query and adds zero new dependencies. The on-disk format remains forward-compatible with `sqlite-vec` should future local corpus growth push past brute-force scaling limits ([Brute-force cosine over SQLite BLOBs; `sqlite-vec` reserved as phase-2 upgrade](./4_decisions.md#brute-force-cosine-over-sqlite-blobs-sqlite-vec-reserved-as-phase-2-upgrade)).
 
@@ -59,7 +59,7 @@ A task is indexed as multiple rows, one per non-empty field: `title`, `descripti
 
 ### 2.5 Phase boundary
 
-The shipped index covers tasks plus explicitly indexed docs, including ADR design records. The old graph-corpus proposal was retired by [Retire and delete Orbit's code-graph subsystem](../_archive/orbit-graph/4_decisions.md#retire-and-delete-orbits-code-graph-subsystem) / ORB-10491; no current implementation or roadmap depends on `source_kind = symbol` rows.
+The shipped index covers tasks. The old graph-corpus proposal was retired by [Retire and delete Orbit's code-graph subsystem](../_archive/orbit-graph/4_decisions.md#retire-and-delete-orbits-code-graph-subsystem) / ORB-10491; no current implementation or roadmap depends on `source_kind = symbol` rows.
 
 ---
 
