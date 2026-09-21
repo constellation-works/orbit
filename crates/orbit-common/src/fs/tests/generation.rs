@@ -422,6 +422,21 @@ fn read_only_join_refuses_when_store_schema_differs() {
 }
 
 #[test]
+fn read_only_join_pins_first_generation_when_store_is_unavailable() {
+    let root = tempfile::tempdir().expect("root");
+    let joined = GenerationGuard::acquire_read_only(root.path(), NEW, 22, || {
+        Err(crate::OrbitError::Execution("store is unavailable".into()))
+    })
+    .expect("a fresh root without a readable store uses the ordinary first pin");
+
+    assert!(!joined.joined_foreign_generation());
+    assert_eq!(
+        std::fs::read_to_string(root.path().join(".generation.lock")).expect("record"),
+        format!("1:{NEW}\n")
+    );
+}
+
+#[test]
 fn matching_digest_read_only_join_does_not_consult_store_schema() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let root = tempfile::tempdir().expect("root");

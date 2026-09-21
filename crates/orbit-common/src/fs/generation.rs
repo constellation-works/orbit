@@ -382,7 +382,8 @@ impl GenerationGuard {
     ///
     /// Matching digest behaves like [`Self::acquire`]. A differing digest
     /// keeps the shared lock and leaves the record unchanged when the
-    /// compiled store schema equals the live store schema.
+    /// compiled store schema equals the live store schema. If no store schema
+    /// can be read yet, fall back to the ordinary first-generation pin.
     pub fn acquire_read_only<F>(
         root: &Path,
         digest: &str,
@@ -392,18 +393,25 @@ impl GenerationGuard {
     where
         F: FnOnce() -> Result<u32, OrbitError>,
     {
-        let _admission = admission(root)?;
+        let admission = admission(root)?;
         let mut generation = open(root, GENERATION_LOCK)?;
         FileExt::try_lock_shared(&generation.file).map_err(refusal)?;
         if read_generation(&mut generation.file)? == digest {
             return Ok(Self::holding(generation.file, false));
         }
-        let store_schema = store_schema().map_err(|error| {
-            refusal(format!(
-                "another executable generation is still running \
-                 (cannot read store schema for a read-only join: {error})"
-            ))
-        })?;
+        let store_schema = match store_schema() {
+            Ok(store_schema) => store_schema,
+            Err(_) => {
+                FileExt::unlock(&generation.file).map_err(refusal)?;
+                FileExt::try_lock_exclusive(&generation.file)
+                    .map_err(|_| refusal(WRITES_WHILE_FOREIGN))?;
+                return GenerationUpdate {
+                    admission,
+                    generation,
+                }
+                .pin(digest);
+            }
+        };
         if compiled_schema != store_schema {
             return Err(refusal(format!(
                 "another executable generation is still running \
