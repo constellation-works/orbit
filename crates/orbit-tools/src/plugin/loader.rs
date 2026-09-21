@@ -709,13 +709,16 @@ pub fn validate_loaded_plugin(
 }
 
 /// Refuse `spec.permissions.fs.write` roots that contain the plugin install
-/// tree or Orbit's global root.
+/// tree or Orbit's global root, or that select a protected path inside the
+/// global root.
 ///
 /// A write tree on `{{plugin_root}}` (or any parent) lets the backend rewrite
 /// `plugin.yaml` under an already-recorded `fs` grant; a write tree on the
-/// global root does the same to the host install. `{{plugin_state}}` is a
-/// child of the global root and is allowed. Paths that need `{{workspace}}`
-/// are skipped here and checked again when a call renders them.
+/// global root does the same to the host install. A narrower write inside the
+/// global root can still replace host executables, grant witnesses, or another
+/// plugin's files, so only the current plugin's `{{plugin_state}}` tree is
+/// allowed there. Paths that need `{{workspace}}` are skipped here and checked
+/// again when a call renders them.
 pub fn refuse_covering_fs_write_roots(
     plugin: &LoadedPlugin,
     global_root: &Path,
@@ -746,12 +749,15 @@ pub fn refuse_covering_fs_write_roots(
         } else {
             plugin.root.join(path)
         };
-        if let Some(protected) = fs_write_root_covers(&absolute, &plugin.root, global_root) {
+        if let Some(protected) =
+            fs_write_root_covers(&absolute, &plugin.root, global_root, plugin_state)
+        {
             return Err(PluginManifestError::new(
                 field,
                 format!(
-                    "'{declared}' contains the {protected}; a plugin cannot request a write \
-                     tree that includes its own install root or Orbit's global root"
+                    "'{declared}' grants write access to the {protected}; a plugin cannot request \
+                     writes to its own install tree or anywhere beneath Orbit's global root \
+                     except its own plugin state tree"
                 ),
             ));
         }
@@ -759,20 +765,26 @@ pub fn refuse_covering_fs_write_roots(
     Ok(())
 }
 
-/// Whether `write` contains `plugin_root` or `global_root`. Equality counts:
-/// a grant on the plugin root itself is how a backend rewrites `plugin.yaml`.
+/// Whether `write` reaches a host path a plugin must not modify. Equality
+/// counts: a grant on the plugin root itself is how a backend rewrites
+/// `plugin.yaml`. Within the global root, only the current plugin's state tree
+/// is writable.
 pub fn fs_write_root_covers(
     write: &Path,
     plugin_root: &Path,
     global_root: &Path,
+    plugin_state: &Path,
 ) -> Option<&'static str> {
     let write = physical_or_lexical(write);
     let plugin_root = physical_or_lexical(plugin_root);
     let global_root = physical_or_lexical(global_root);
+    let plugin_state = physical_or_lexical(plugin_state);
     if is_path_prefix(&write, &plugin_root) {
         Some("plugin install root")
     } else if is_path_prefix(&write, &global_root) {
         Some("Orbit global root")
+    } else if is_path_prefix(&global_root, &write) && !is_path_prefix(&plugin_state, &write) {
+        Some("protected path beneath Orbit global root")
     } else {
         None
     }

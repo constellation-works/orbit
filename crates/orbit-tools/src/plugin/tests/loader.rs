@@ -85,37 +85,48 @@ fn load_plugin_dir_refuses_an_installed_tree_that_contains_a_symlink() {
 }
 
 #[test]
-fn fs_write_root_covers_the_plugin_and_global_roots_and_not_their_children() {
+fn fs_write_root_refuses_protected_global_paths_but_allows_plugin_state() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let plugin_root = temp.path().join("plugins/demo/1.0.0");
     let global_root = temp.path().join("global");
+    let plugin_root = global_root.join("plugins/demo/1.0.0");
+    let plugin_state = global_root.join("state/plugins/demo");
     std::fs::create_dir_all(&plugin_root).expect("plugin root");
-    std::fs::create_dir_all(&global_root).expect("global root");
+    std::fs::create_dir_all(&plugin_state).expect("plugin state");
 
     assert_eq!(
-        fs_write_root_covers(&plugin_root, &plugin_root, &global_root),
+        fs_write_root_covers(&plugin_root, &plugin_root, &global_root, &plugin_state),
         Some("plugin install root")
     );
     assert_eq!(
-        fs_write_root_covers(Path::new("/"), &plugin_root, &global_root),
+        fs_write_root_covers(Path::new("/"), &plugin_root, &global_root, &plugin_state),
         Some("plugin install root")
     );
     assert_eq!(
-        fs_write_root_covers(&global_root, &plugin_root, &global_root),
-        Some("Orbit global root")
+        fs_write_root_covers(&global_root, &plugin_root, &global_root, &plugin_state),
+        Some("plugin install root")
     );
-    assert_eq!(
-        fs_write_root_covers(&plugin_root.join("cache"), &plugin_root, &global_root),
-        None
-    );
-    assert_eq!(
-        fs_write_root_covers(
-            &global_root.join("state/plugins/demo"),
-            &plugin_root,
-            &global_root
-        ),
-        None
-    );
+    for protected in [
+        global_root.join("bin"),
+        global_root.join("plugins/.grants"),
+        global_root.join("plugins/other/1.0.0"),
+        plugin_state.join("../../../plugins/.grants"),
+        plugin_root.join("cache"),
+    ] {
+        assert_eq!(
+            fs_write_root_covers(&protected, &plugin_root, &global_root, &plugin_state),
+            Some("protected path beneath Orbit global root"),
+            "{} must stay read-only",
+            protected.display()
+        );
+    }
+    for allowed in [&plugin_state, &plugin_state.join("cache")] {
+        assert_eq!(
+            fs_write_root_covers(allowed, &plugin_root, &global_root, &plugin_state),
+            None,
+            "{} is inside this plugin's writable state tree",
+            allowed.display()
+        );
+    }
 }
 
 #[test]
