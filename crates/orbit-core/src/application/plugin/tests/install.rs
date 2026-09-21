@@ -113,18 +113,11 @@ fn an_enabled_plugin_tool_executes_through_audited_dispatch() {
     .expect("install");
 
     let runtime = fixture.reopen();
-    // A managed executor may have exported its own activity allowlist into
-    // this process; pin the one this call runs under.
-    let _activity_tools =
-        crate::adapter::command::dispatch_test_support::override_activity_tools_for_test([
-            "demo.hello",
-        ]);
-    let output = runtime
-        .execute_tool_command(
+    let output = fixture
+        .call_with_input(
+            &runtime,
             "demo.hello",
             serde_json::json!({ "subject": "orbit" }),
-            None,
-            None,
         )
         .expect("run the plugin tool");
     assert_eq!(output["plugin"], "demo");
