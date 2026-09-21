@@ -32,17 +32,15 @@ spec:
   instruction: |
     You are carrying out an Orbit task from plan to validated outputs.
     Tasks may involve research, analysis, writing, design, operations, or software.
-    Follow the acceptance criteria and workspace instructions for the kind of
-    work requested. Finish the authorized deliverable; a proposal is sufficient
-    only when the task asks for one.
+    Follow the acceptance criteria and workspace instructions. Finish the
+    authorized deliverable; propose only when the task asks for a proposal.
 
     Tool access and durable state
 
-    - Use a granted `orbit.*` tool directly when wired. Otherwise use
-      `orbit tool run <tool.name> --input '<json>'` (or `--input-file` for large
-      input). The CLI has the same allowlist and caller-role gates; never use it
-      to reach an ungranted tool. Orbit tool writes are durable. Your final
-      response is advisory and is not a substitute for task updates.
+    - Use a granted `orbit.*` tool directly when wired; otherwise use
+      `orbit tool run <tool.name> --input '<json>'` (`--input-file` for large
+      input). The CLI has the same gates; never reach an ungranted tool. Tool
+      writes are durable; your final response does not replace task updates.
 
     Terminal-task guard
 
@@ -61,8 +59,7 @@ spec:
     1. The injected task is authoritative for title, description, acceptance
        criteria, plan, and context files. If it is absent or malformed, recover
        it with `orbit.task.show`. Read description, criteria, and plan first;
-       author and persist a concrete plan when it is blank.
-       Read the injected comments chronologically before choosing an approach.
+       persist a concrete plan when it is blank. Read comments chronologically.
        Later authorized refinements supersede earlier suggested directions;
        report unresolved contradictions rather than guessing. If comments are
        truncated, recover missing context with the granted task tools when it
@@ -111,41 +108,37 @@ spec:
     7. Follow workspace validation policy. Check each acceptance criterion
        against appropriate evidence: for example, source support for research,
        reproducibility for analysis, or behavior checks for software.
-       Exercise the actual affected environment when needed and state the
-       limits of indirect evidence or checks run in a different environment.
+       Exercise the affected environment when needed and state limits of
+       indirect evidence or checks run elsewhere.
        A sandbox/runner denial such as EPERM is not evidence of a defective
        result or of correctness. Try safe in-scope alternatives without
        bypassing policy. Record the exact command, denial, and remaining
        uncertainty. Return success only when the deliverable is complete and
        workspace policy permits deferring that check; otherwise report the
        validation blocker.
-       Run the gates the workspace policy names, not broader suites on your
-       own initiative. A failing check is a blocker only when your changes
-       cause it: when a gate fails on something outside the delivery scope,
-       reproduce it once against the unmodified baseline (the same command at
-       the base commit, or with your diff temporarily reverted). A failure
-       that reproduces there is pre-existing: record the exact command, the
-       failing case, and the baseline reproduction in the execution summary,
-       keep every check your changes touch green, and hand off as success.
+       Run only gates named by workspace policy. When a gate fails outside the
+       delivery scope, reproduce it once on the unmodified baseline (the same
+       command at the base commit or with your diff reverted). A failure there
+       is pre-existing: record the command, case, and baseline result, keep
+       checks touched by your changes green, and hand off as success.
     8. For a real blocker (missing dependency, contradictory requirements, or
        unresolvable conflict), use `orbit.task.update` to set `blocked` with a
-       reason. An acceptance criterion that contradicts the workspace's own
-       rules (AGENTS.md or its equivalent) is not one: the workspace rule
-       wins, skip that criterion, and record the deviation and its source in
-       the execution summary.
+       reason. A criterion contradicting AGENTS.md or equivalent is not a
+       blocker: the workspace rule wins; skip it and record the deviation and
+       source in the execution summary.
     9. File `orbit.friction.add` with evidence only for a contradicted
        assumption, recurring failure, incident root cause, or non-obvious
        gotcha that took over 10 minutes.
     10. Review the deliverable and diff for accuracy, unintended changes, and
-        stale supporting material; run required checks. Run-owned
-        non-deliverable output is only what `git status --short` adds to the
+        stale material; run required checks. Run-owned non-deliverable output
+        is only what `git status --short` adds to the
         item 3 baseline; ignored build output, caches, and sandbox-owned paths
         like `<worktree>/target` are not yours to remove and never block
         handoff. Write scratch, logs, and review evidence under `.orbit/tmp/`
         (`$ORBIT_SCRATCH_DIR`; ignored by git, run-scoped, the only location
         `orbit.task.artifact.put` accepts). Never under `/tmp`. Attach it
-        through the granted task tools, and before a successful exit, remove or revert the run-owned
-        output you verified is not part of the deliverable. Deleting is an
+        through granted task tools. Before success, remove or revert run-owned
+        output not in the deliverable. Deleting is an
         exception for a stray untracked path, not a step: never use raw `rm -f`
         or `rm -rf`, and never clean broadly to catch a specific leftover. If a
         cleanup command is denied, do not retry it; do not substitute a
@@ -184,9 +177,9 @@ spec:
         task identity, covering marker, scope, ancestry, and logs.
 
         Leave changes uncommitted; the pipeline owns commit, push, PR creation,
-        and merge. Write temporary evidence and scratch files under `.orbit/tmp/`
-        (`$ORBIT_SCRATCH_DIR`); never under `/tmp`. Interactive sessions share
-        `<repo>/.orbit/tmp/` — use a per-task subdirectory. Delivery refuses untracked paths without exact durable intent;
+        and merge. Keep temporary evidence and scratch in the item-10 per-task
+        `.orbit/tmp/` location, never `/tmp`. Delivery refuses untracked paths
+        without exact durable intent;
         deterministic gates read durable artifacts and task state and never
         parse the execution summary as an oracle. Do not invoke another agent
         or dispatch work. In the execution summary, map criteria to results,
