@@ -69,12 +69,36 @@ One row per plugin, naming the step that would make it active. The four states:
 A plugin fails closed on its own: one broken plugin never takes down the
 built-in tools, the runtime, or another plugin.
 
-## Permissions
+## Permissions and grants
 
 The manifest's `spec.permissions` block is a **request**, never a grant. The
 `--grant` flags at `orbit plugin enable` are the only source of authority, and
 `orbit plugin show` prints requested and granted side by side. Record only the
 grants the user authorizes.
+
+| Grant | What the manifest asks for | What granting it does |
+|---|---|---|
+| `fs` | `permissions.fs.read` / `.write` | Opens exactly those paths to the sandboxed backend. |
+| `network` | `permissions.network: loopback\|any` | Lets the backend reach the network; without it, TCP is refused. |
+| `env_pass` | `permissions.env_pass` | Copies those variables from Orbit's environment into the child. |
+| `orbit_tools` | `permissions.orbit_tools` | Lets the backend call those Orbit tools back through `orbit tool run`, and nothing else. |
+| `unsandboxed` | `backend.sandbox: none` | Runs the backend with no confinement at all. |
+
+A plugin that requests a grant the host has not given registers its tools
+**inactive**: a call is refused with a diagnostic naming the grant and the
+`orbit plugin enable --grant …` that would fix it. Granting is per host and
+never synced.
+
+Backends run confined: on Linux under a Landlock ruleset built from the
+granted paths, on macOS under `sandbox-exec`. A write outside the granted
+profile fails; so does a TCP connection without the `network` grant. A
+`sandbox: none` plugin needs `unsandboxed` and is reported by
+`orbit plugin doctor` for as long as it stays enabled.
+
+Callbacks are the only way back into Orbit: the child carries
+`ORBIT_ALLOWED_TOOLS` with the granted intersection, and `orbit tool run`
+refuses anything outside it — the plugin's own good behaviour is not the
+boundary.
 
 Who may *call* a plugin tool is decided by its `execution_kind`, not by the
 manifest: a `read_only` tool is callable by any caller Orbit can identify, and
@@ -83,9 +107,16 @@ only when the task's `required_tools` or the activity's allowlist names it. A
 scripted call with no identity at all is refused; `ORBIT_OPERATOR=1` is the
 documented escape hatch, and its use is audited.
 
-In this release, grants are recorded but not enforced and plugin backends are
-not sandboxed. Treat an installed plugin as code the user has chosen to run on
-their machine, and say so when proposing one.
+Treat an installed plugin as code the user has chosen to run on their machine,
+and say so when proposing one: the sandbox bounds what a backend can reach, it
+does not vouch for what the backend does inside those bounds.
+
+## Backends
+
+| `backend.type` | How Orbit runs it |
+|---|---|
+| `exec` | One process per call. Orbit writes `{"schema_version":1,"tool":…,"input":…,"context":{…}}` on stdin and reads `{"ok":true,"output":…}` or `{"ok":false,"error":{…}}` on stdout. A non-zero exit, non-JSON stdout, or output failing the tool's `output_schema` is a tool error — never a partial result. |
+| `mcp` | The plugin ships a stdio MCP server. Orbit spawns it once per runtime process, checks its `tools/list` against the manifest (a disagreement refuses startup, naming the tool), and proxies each `<ns>.<verb>` call as `tools/call`. A crashed or unresponsive server is a tool error within `backend.timeout_ms`, and the next call respawns it. |
 
 ## Migrating an existing external tool
 

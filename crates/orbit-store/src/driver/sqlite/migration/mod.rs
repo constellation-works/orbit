@@ -1601,6 +1601,17 @@ fn apply_plugins_and_audit_plugin_provenance(conn: &Connection) -> Result<(), Or
     .map_err(|error| OrbitError::Store(error.to_string()))
 }
 
+/// v25 `audit_plugin_grants` migration: the grant set (JSON array of grant
+/// names) a plugin-backed tool call ran under, beside the three provenance
+/// columns (design `docs/design/plugins/1_scope.md` §4.4). Additive.
+fn apply_audit_plugin_grants(conn: &Connection) -> Result<(), OrbitError> {
+    ensure_audit_events_schema(conn)?;
+    add_column_if_missing(
+        conn,
+        "ALTER TABLE audit_events ADD COLUMN plugin_grants TEXT",
+    )
+}
+
 /// v23 `audit_machine_name_columns` migration (ORB-12725): *host* is reserved
 /// for the MCP-host/process sense, so the two audit columns that carry a
 /// machine's display name are renamed to say so. A rename rather than an

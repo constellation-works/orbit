@@ -41,6 +41,7 @@ impl OrbitRuntime {
         populate_filesystem_policy_context(self, &mut tool_context)?;
 
         self.check_tool_enabled(name)?;
+        check_tool_active(self.tool_registry(), name)?;
 
         // ORB-10453: the capability chokepoint. Every tool caller in the
         // workspace reaches the registry through this function, so this is the
@@ -160,6 +161,13 @@ impl OrbitRuntime {
         })
     }
 
+    /// A registered-but-inactive entry is refused before it runs.
+    ///
+    /// The plugin host keeps a refused plugin's tool *names* on the registry
+    /// so a caller that names one is told why rather than told the tool does
+    /// not exist (design `docs/design/plugins/1_scope.md` §4.1, §4.8). That
+    /// only holds if inactive also means uncallable, which is here: the
+    /// registry is the one place every workspace caller passes through.
     fn check_tool_enabled(&self, name: &str) -> Result<(), OrbitError> {
         if let Some(stored) = self.stores().tools().get_tool(name)?
             && !stored.enabled
@@ -169,6 +177,32 @@ impl OrbitRuntime {
             )));
         }
         Ok(())
+    }
+}
+
+/// Refuse a *plugin* entry the host registered inactive, reporting the
+/// diagnostic the loader recorded (a missing grant, an unmet `requires`).
+///
+/// Scoped to plugin-backed entries on purpose. `Inactive` means two different
+/// things in this registry: for a built-in it means "not on the agent tool
+/// surface", which an operator may still call and which
+/// `ensure_tool_agent_facing` decides; for a plugin tool it means the plugin
+/// was refused at load, and nothing may call it until the operator fixes what
+/// the diagnostic names (design `docs/design/plugins/1_scope.md` §4.1).
+pub(crate) fn check_tool_active(
+    registry: &orbit_tools::ToolRegistry,
+    name: &str,
+) -> Result<(), OrbitError> {
+    if registry.is_active(name) {
+        return Ok(());
+    }
+    match registry.plugin_binding(name) {
+        Some(binding) => Err(OrbitError::PolicyDenied(
+            binding.diagnostic.clone().unwrap_or_else(|| {
+                format!("plugin tool '{name}' is registered but inactive on this host")
+            }),
+        )),
+        None => Ok(()),
     }
 }
 

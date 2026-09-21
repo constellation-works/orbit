@@ -4,7 +4,7 @@ type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
 last_updated: 2026-09-10
-last_validated: 2026-09-10
+last_validated: 2026-09-21
 status: Draft
 feature: policy-sandbox
 doc_role: design
@@ -167,7 +167,16 @@ The shipped default policy's `denyRead` (`**/.env`, `**/.env.*`, `**/*.env`, `**
 
 **Other known limits.** SSH-authenticated `git` does not work through a scoped spawn, because `~/.ssh` is not granted (use HTTPS or `gh`). A toolchain whose runtime files live outside the `bin` directory on `PATH` — an `nvm`-style install — needs its tree named by the tool's own environment variable.
 
-**Evidence.** `crates/orbit-exec/tests/linux_landlock.rs` exercises the real kernel: a concurrent writer creates a secret in a directory that did not exist at spawn and an indirect descendant cannot return it, while a file the run generates stays readable. It runs only where the host offers Landlock ABI 2 or later and reports a skip otherwise; `crates/orbit-exec/src/linux_landlock/tests/` covers grant compilation deterministically on any platform.
+#### The plugin backend boundary
+
+A plugin backend has no activity profile and no Bubblewrap wrapper: the operator granted concrete paths at `orbit plugin enable`, so the same module compiles those directly (`LandlockBoundary`, `spawn_under_linux_landlock_boundary`). Two differences from the activity path above, both deliberate:
+
+- **Writes are handled here.** The ruleset additionally takes over `WRITE_FILE | REMOVE_* | MAKE_* | TRUNCATE`, so a path without a write grant is read-only to the backend and its descendants. There is no second write answer to reconcile — a plugin backend never runs inside the mount namespace of §7.1, which exists for CLI-backed agents. `TRUNCATE` is masked off below Landlock ABI 3, where the kernel does not know it.
+- **`network: none` is held at the kernel.** `ACCESS_NET_BIND_TCP | ACCESS_NET_CONNECT_TCP` are handled with no rule, refusing every TCP endpoint. That needs ABI 4; an older kernel fails closed rather than running the backend with the network open. Landlock has no address filter, so `loopback` and `any` both leave TCP open and the filesystem grants remain the boundary the design claims.
+
+Granted write roots are created before the child spawns, because a rule binds to an inode: a grant naming a directory that does not exist yet would otherwise silently grant nothing. `/dev/null` and the other write-side character devices are always granted, so an ordinary `>/dev/null` in a backend script is not a denial. The full manifest-to-profile mapping, including the macOS half, is in [plugins §4.3](../plugins/1_scope.md#43-sandboxing). [ORB-12736]
+
+**Evidence.** `crates/orbit-exec/tests/linux_landlock.rs` exercises the real kernel: a concurrent writer creates a secret in a directory that did not exist at spawn and an indirect descendant cannot return it, while a file the run generates stays readable. The plugin boundary is exercised in the same file — a write outside the granted roots does not reach the disk, a granted one does, and a `deny_tcp` child cannot connect to a live loopback listener. Both run only where the host offers the required ABI and report a skip otherwise; `crates/orbit-exec/src/linux_landlock/tests/` covers grant compilation deterministically on any platform.
 
 `ExecutionResult { success, stdout, stderr, exit_code, duration_ms, output }` is defined in `orbit-common`. Captured bytes use `String::from_utf8_lossy`, so non-UTF-8 output becomes replacement characters instead of failing the call.
 

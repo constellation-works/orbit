@@ -2,12 +2,13 @@
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_validated: 2026-09-20
+last_validated: 2026-09-21
 ---
 
 # Scope: Orbit plugin standard
 
-Status: draft — proposal, 2026-09-20; namespace, dashboard-feature, install and mirror questions resolved the same day.
+Status: phases 1 and 2 landed (2026-09-21); phases 3-5 remain proposal.
+Namespace, dashboard-feature, install and mirror questions resolved 2026-09-20.
 Bearing: [Operations as data, not inherent methods](../orbit-core/4_decisions.md) (orbit-core ADR).
 Precedents: `*.orbit-tool.yaml` sidecar manifests (orbit-graph ships three); the shelved
 [docs + search pluginization](../orbit-docs-plugin/1_scope.md); orbit-research's
@@ -239,7 +240,14 @@ rewrite.
 
 Callbacks: the backend reaches Orbit only through `orbit tool run`, and only for tools listed
 in `permissions.orbit_tools` *and* granted; the same allowlist is stamped into
-`ORBIT_ALLOWED_TOOLS`. No socket, no shared store handle.
+`ORBIT_ALLOWED_TOOLS`. No socket, no shared store handle. `ORBIT_ALLOWED_TOOLS` is written
+even when it is empty, so a child process that carries `ORBIT_PLUGIN` is recognised as a
+callback context and an unlisted tool is refused by the CLI before it runs — the backend's
+restraint is not the boundary.
+
+As implemented, the child also carries `ORBIT_PLUGIN_VERSION`, `ORBIT_TOOL_CWD` and
+`ORBIT_PROC_ALLOWED_PROGRAMS` (`requires.programs`). `ORBIT_TOOL_NAME` is absent for an `mcp`
+child, which serves every tool of its plugin.
 
 ### 4.3 Sandboxing
 
@@ -247,6 +255,28 @@ External tools run unsandboxed today. Plugin backends run under the existing Lan
 `sandbox-exec` machinery with the granted `fs` profile, `network` mode and `programs` list.
 `backend.sandbox: none` requires the `unsandboxed` grant and is reported as a finding by
 `orbit plugin doctor` and the dashboard reliability view.
+
+**The mapping, as implemented.** A grant is a *request* until `orbit plugin enable --grant`
+records it; the profile compiled here is the granted one, never the requested one, and a
+plugin missing a required grant never reaches this point (§4.1).
+
+| Manifest | Grant | Linux (`spawn_under_linux_landlock_boundary`) | macOS (`compile_macos_sandbox_profile` + `append_macos_network_access`) |
+|---|---|---|---|
+| (always) | — | The plugin root is readable and executable; the host runtime grants (`/usr`, the loader, resolver files, `PATH` directories, tool state) come from the same table activity-scoped `proc.spawn` uses | The compiler's own read allow plus its credential denies |
+| `permissions.fs.read` | `fs` | Each rendered path as a read tree (directory) or read file | `(allow file-read* (subpath …))` via the profile's `read` rules |
+| `permissions.fs.write` | `fs` | Each rendered path as a write tree; the ruleset handles every write-side right, so a path without a write grant is read-only to the child | `(allow file-write* (subpath …))` via the profile's `modify` rules |
+| `permissions.network: none` (default) | — | `ACCESS_NET_BIND_TCP \| ACCESS_NET_CONNECT_TCP` handled with no rule, which refuses every TCP endpoint (needs Landlock ABI 4; an older kernel fails closed) | `(deny network*)` appended after the compiler's broad allow |
+| `permissions.network: loopback` | `network` | TCP left open — Landlock has no address filter, and the design's confinement claim is the filesystem | `(deny network*)` then loopback re-allows |
+| `permissions.network: any` | `network` | TCP left open | the compiler's `(allow network*)` stands |
+| `permissions.orbit_tools` | `orbit_tools` | Orbit's own global root and the workspace's `.orbit/` become writable, because a callback *is* `orbit tool run`; what that call may do is decided by `ORBIT_ALLOWED_TOOLS` and the ordinary governed-operation rows, not by the sandbox | same, through the profile's `modify` rules |
+| `permissions.env_pass` | `env_pass` | Those names are copied from Orbit's environment into the otherwise allowlisted child environment | same |
+| `requires.programs` | — | Not a sandbox rule: the declared programs are checked against a restricted caller's own `proc.spawn` allowlist and stamped into `ORBIT_PROC_ALLOWED_PROGRAMS` | same |
+| `backend.sandbox: none` | `unsandboxed` | No ruleset at all | No `sandbox-exec` wrapper at all |
+
+Granted write roots are created before the child starts: a Landlock rule binds to an inode,
+so a grant naming a directory that does not exist yet would otherwise grant nothing. A host
+that can enforce neither backend refuses to run the plugin rather than running it unconfined;
+`unsandboxed` is the only opt-out and it is a `doctor` finding.
 
 ### 4.4 Audit and provenance
 
@@ -319,7 +349,7 @@ tool, one panel, one disabled auto-task, one skill stub, a passing conformance t
 |---|---|
 | `register_builtins()` literal list; external tools loaded via plain `register()` | `PluginLoader` registers each manifest tool with `register_mcp(scope)` / `register_inactive` |
 | `canonical_mcp_tool_definitions()` memoised in a `OnceLock`, external tools never in `tools/list` | MCP surface reads the registry; plugin tools advertised with their scope |
-| `ExternalTool` unsandboxed, 15 s, no output validation | `PluginBackend::{Exec,Mcp}` with sandbox profile, schema validation, versioned envelope |
+| `ExternalTool` unsandboxed, 15 s, no output validation | `PluginBackend::{Exec,Mcp}` with sandbox profile, schema validation, versioned envelope *(done)* |
 | `Commands` enum only | one `Plugin(PluginGroupArgs)` variant that builds clap subcommands from loaded manifests |
 | `define_config_settings!` closed | dynamic `plugins.<ns>.<key>` admission validated by the plugin's JSON Schema, provenance-aware |
 | `GOVERNED_OPERATIONS` per-op rows | two generic plugin rows keyed on `execution_kind` |
@@ -330,12 +360,14 @@ tool, one panel, one disabled auto-task, one skill stub, a passing conformance t
 
 ## 7. Phases (each its own PR into agent-main)
 
-1. **Manifest + lifecycle over the existing tool path.** `plugin.yaml` v2, `orbit plugin
-   add|enable|disable|remove|list|show|validate|migrate`, `plugin_store`, tools registered
-   with MCP scope and reaching `tools/list`. orbit-graph migrates from three sidecars to one
-   manifest. Goldens for `orbit tool run` unchanged.
-2. **Grants + sandboxed execution + `mcp` backend.** `permissions`/`--grant`, envelope v1,
-   output-schema validation, Landlock/sandbox-exec profile, MCP proxy. orbit-research plugs in.
+1. **Manifest + lifecycle over the existing tool path.** *Landed [ORB-12735].* `plugin.yaml`
+   v2, `orbit plugin add|enable|disable|remove|list|show|validate|migrate`, `plugin_store`,
+   tools registered with MCP scope and reaching `tools/list`. orbit-graph migrates from three
+   sidecars to one manifest. Goldens for `orbit tool run` unchanged.
+2. **Grants + sandboxed execution + `mcp` backend.** *Landed [ORB-12736].* `permissions`/
+   `--grant` enforced at load and at the call, envelope v1, output-schema validation,
+   Landlock/sandbox-exec profile (§4.3), callback allowlist, MCP proxy. orbit-research can
+   plug in without a rewrite.
 3. **Definitions + skills + config.** Catalog layer, seeding with provenance, `plugin.tool_call`,
    `[plugins.<ns>]` with schema validation and Config-tab provenance.
 4. **Derived CLI + dashboard panels.** `orbit <ns> <verb>`, `/api/plugins`, generic renderer,

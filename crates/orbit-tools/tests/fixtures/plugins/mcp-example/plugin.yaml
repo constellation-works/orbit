@@ -1,0 +1,35 @@
+# A plugin that already ships an MCP server: Orbit spawns it once per runtime
+# and proxies `mcpdemo.<verb>` to `tools/call` (docs/design/plugins/1_scope.md §4.2).
+schemaVersion: 2
+kind: Plugin
+metadata:
+  name: mcpdemo
+  version: 0.1.0
+  description: Fixture stdio MCP server.
+spec:
+  requires:
+    programs: [python3]
+  backend:
+    type: mcp
+    command: bin/server.py
+    timeout_ms: 5000
+  tools:
+    - name: echo
+      description: Echo the arguments.
+      execution_kind: read_only
+      mcp_scope: workspace
+      input_schema:
+        type: object
+        properties:
+          message: { type: string }
+      output_schema:
+        type: object
+        required: [echo, pid]
+    - name: slow
+      description: Answer after a delay.
+      execution_kind: read_only
+      mcp_scope: workspace
+    - name: crash
+      description: Exit mid-call.
+      execution_kind: read_only
+      mcp_scope: none

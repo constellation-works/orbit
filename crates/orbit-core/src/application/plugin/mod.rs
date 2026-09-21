@@ -13,8 +13,8 @@ mod lifecycle;
 mod tests;
 
 pub use inspect::{
-    PluginDoctorResult, PluginSummary, PluginToolSummary, PluginValidationReport, list_plugins,
-    plugin_doctor, show_plugin, validate_plugin_dir,
+    PluginDoctorResult, PluginPermissionSummary, PluginSummary, PluginToolSummary,
+    PluginValidationReport, list_plugins, plugin_doctor, show_plugin, validate_plugin_dir,
 };
 pub use install::{PluginAddOptions, install_plugin};
 pub use lifecycle::{

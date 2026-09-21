@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_tools::plugin::{load_sidecar_manifest, migrate_sidecars};
-use orbit_types::plugin::{MANIFEST_FILE_NAME, PluginStatus};
+use orbit_types::plugin::{MANIFEST_FILE_NAME, PluginStatus, parse_grants};
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
@@ -13,13 +13,20 @@ use crate::runtime::plugin_host::{plugin_current_link, read_pin_file};
 use super::inspect::{PluginSummary, show_plugin};
 
 /// Record the operator's grants and put the plugin's tools on the surface at
-/// the next runtime build. The grants are recorded, not enforced (§4.1).
+/// the next runtime build. The recorded grants are the only authority the
+/// loader consults (§4.1): a tool whose plugin still lacks a required grant
+/// registers inactive with a diagnostic naming it.
 pub fn enable_plugin(
     runtime: &OrbitRuntime,
     name: &str,
     grants: &[String],
 ) -> Result<PluginSummary, OrbitError> {
-    set_enabled(runtime, name, true, grants)
+    let grants: Vec<String> = parse_grants(grants)
+        .map_err(OrbitError::InvalidInput)?
+        .into_iter()
+        .map(|grant| grant.as_str().to_string())
+        .collect();
+    set_enabled(runtime, name, true, &grants)
 }
 
 pub fn disable_plugin(runtime: &OrbitRuntime, name: &str) -> Result<PluginSummary, OrbitError> {
@@ -72,6 +79,9 @@ fn set_enabled(
     } else {
         PluginStatus::Disabled
     };
+    for permission in &mut summary.permissions {
+        permission.granted = grants.iter().any(|name| name == permission.grant.as_str());
+    }
     summary.granted = grants;
     summary.diagnostic = None;
     Ok(summary)

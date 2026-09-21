@@ -207,3 +207,209 @@ fn plugin_add_refuses_a_source_inside_the_repository() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("global-install-only"), "{stderr}");
 }
+
+/// A backend that calls back into Orbit: `orbit tool run <tool>` with the
+/// `ORBIT_ALLOWED_TOOLS` its plugin was granted. The plugin's tool reports
+/// the callback's exit status and stderr, so a refusal is observable.
+fn write_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathBuf {
+    let root = home.join(format!("plugin-sources/{namespace}"));
+    std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
+    let backend = root.join("bin/backend.sh");
+    std::fs::write(
+        &backend,
+        // `$ORBIT_BIN` is the orbit under test; the child env carries only
+        // what the plugin protocol stamps plus the allowlisted baseline.
+        "#!/bin/sh\n\
+         input=$(cat)\n\
+         tool=$(printf '%s' \"$input\" | sed -n 's/.*\"callback\":\"\\([^\"]*\\)\".*/\\1/p')\n\
+         stderr=$(\"$ORBIT_BIN\" tool run \"$tool\" --input '{}' 2>&1 >/dev/null)\n\
+         status=$?\n\
+         printf '{\"ok\":true,\"output\":{\"status\":%s,\"allowed\":\"%s\",\"stderr\":\"%s\"}}\\n' \\\n\
+           \"$status\" \"$ORBIT_ALLOWED_TOOLS\" \"$(printf '%s' \"$stderr\" | tr -d '\\\"\\n' | cut -c1-300)\"\n",
+    )
+    .expect("write plugin backend");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod plugin backend");
+    }
+    std::fs::write(
+        root.join("plugin.yaml"),
+        format!(
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Callback fixture plugin.\nspec:\n  permissions:\n    env_pass: [ORBIT_BIN]\n    orbit_tools: [{requested}]\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: callback\n      description: Call an Orbit tool back through the CLI.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n        properties:\n          callback: {{ type: string, description: The tool to call back. }}\n"
+        ),
+    )
+    .expect("write plugin manifest");
+    root
+}
+
+/// The plugin backend reaches Orbit only through `orbit tool run`, and only
+/// for tools its manifest requested *and* the host granted. The allowlist is
+/// enforced by the CLI in the child, not by the backend's good behaviour
+/// (design docs/design/plugins/1_scope.md §4.2).
+#[cfg(unix)]
+#[test]
+fn a_plugin_callback_reaches_only_its_granted_orbit_tools() {
+    let workspace = McpWorkspace::init();
+    let source = write_callback_plugin(&workspace.home, "callback", "orbit.task.list");
+    let source = source.to_str().expect("utf8 plugin source");
+    let orbit_bin = env!("CARGO_BIN_EXE_orbit");
+
+    run_orbit(&workspace, &["plugin", "add", source]);
+    // Enabled without the `orbit_tools` grant: the tool is inactive and the
+    // refusal names the grant.
+    run_orbit(&workspace, &["plugin", "enable", "callback"]);
+    let ungranted = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .env("ORBIT_OPERATOR", "1")
+        .env("ORBIT_BIN", orbit_bin)
+        .args([
+            "tool",
+            "run",
+            "callback.callback",
+            "--input",
+            "{\"callback\":\"orbit.task.list\"}",
+        ])
+        .output()
+        .expect("run orbit tool run");
+    assert!(!ungranted.status.success());
+    let stderr = String::from_utf8_lossy(&ungranted.stderr);
+    assert!(
+        stderr.contains("orbit_tools") && stderr.contains("--grant"),
+        "{stderr}"
+    );
+
+    run_orbit(
+        &workspace,
+        &[
+            "plugin",
+            "enable",
+            "callback",
+            "--grant",
+            "orbit_tools,env_pass",
+        ],
+    );
+    let shown = run_orbit(
+        &workspace,
+        &["plugin", "show", "callback", "--format", "json"],
+    );
+    let shown: Value = serde_json::from_slice(&shown.stdout).expect("plugin show returns JSON");
+    let granted: Vec<&str> = shown["permissions"]
+        .as_array()
+        .expect("permission rows")
+        .iter()
+        .filter(|row| row["granted"] == json!(true))
+        .map(|row| row["grant"].as_str().expect("grant name"))
+        .collect();
+    assert_eq!(granted, ["env_pass", "orbit_tools"]);
+
+    let call = |tool: &str| -> Value {
+        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .env("ORBIT_OPERATOR", "1")
+            .env("ORBIT_BIN", orbit_bin)
+            .args([
+                "tool",
+                "run",
+                "callback.callback",
+                "--full",
+                "--input",
+                &format!("{{\"callback\":\"{tool}\"}}"),
+            ])
+            .output()
+            .expect("run orbit tool run");
+        assert!(
+            output.status.success(),
+            "the plugin tool itself succeeds\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
+    };
+
+    // The child env carries exactly the granted allowlist.
+    let granted_call = call("orbit.task.list");
+    assert_eq!(granted_call["allowed"], "orbit.task.list");
+    assert_eq!(
+        granted_call["status"], 0,
+        "a granted callback succeeds: {granted_call}"
+    );
+
+    // An ungranted tool is refused by the CLI in the child, not by the
+    // backend choosing not to ask.
+    let refused = call("orbit.task.add");
+    assert_eq!(refused["allowed"], "orbit.task.list");
+    assert_ne!(refused["status"], 0, "the ungranted callback is refused");
+    let message = refused["stderr"].as_str().expect("callback stderr");
+    assert!(
+        message.contains("orbit.task.add") && message.contains("granted orbit_tools allowlist"),
+        "{message}"
+    );
+}
+
+/// An `mcp`-backend plugin: Orbit spawns the plugin's own stdio MCP server
+/// and proxies `<ns>.<verb>` to it, so a plugin that already ships an MCP
+/// server needs no rewrite (design §4.2).
+#[cfg(unix)]
+#[test]
+#[allow(clippy::print_stderr)]
+fn an_mcp_backend_plugin_is_advertised_and_proxied() {
+    if !python3_available() {
+        eprintln!("skipping: python3 is not available");
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let source = workspace.home.join("plugin-sources/mcpdemo");
+    copy_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../orbit-tools/tests/fixtures/plugins/mcp-example"),
+        &source,
+    );
+    let source = source.to_str().expect("utf8 plugin source");
+
+    run_orbit(&workspace, &["plugin", "add", source, "--enable"]);
+    let mut client = workspace.serve();
+    let names = advertised_tool_names(&mut client);
+    assert!(
+        names.iter().any(|name| name == "mcpdemo_echo"),
+        "an mcp-backend plugin tool reaches tools/list: {names:?}"
+    );
+    assert!(
+        !names.iter().any(|name| name == "mcpdemo_crash"),
+        "`mcp_scope: none` stays off tools/list: {names:?}"
+    );
+
+    let first = client.call_tool_ok("mcpdemo_echo", json!({ "message": "hello" }));
+    assert_eq!(first["echo"]["message"], "hello");
+    assert_eq!(first["plugin"], "mcpdemo");
+    let second = client.call_tool_ok("mcpdemo_echo", json!({ "message": "again" }));
+    assert_eq!(
+        second["pid"], first["pid"],
+        "one server per runtime process serves every call"
+    );
+    drop(client);
+}
+
+fn python3_available() -> bool {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .any(|dir| dir.join("python3").is_file())
+}
+
+fn copy_tree(source: &Path, target: &Path) {
+    std::fs::create_dir_all(target).expect("create target dir");
+    for entry in std::fs::read_dir(source).expect("read fixture dir") {
+        let entry = entry.expect("entry");
+        let destination = target.join(entry.file_name());
+        if entry.file_type().expect("file type").is_dir() {
+            copy_tree(&entry.path(), &destination);
+        } else {
+            std::fs::copy(entry.path(), &destination).expect("copy");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = entry.metadata().expect("metadata").permissions().mode();
+                std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(mode))
+                    .expect("preserve mode");
+            }
+        }
+    }
+}

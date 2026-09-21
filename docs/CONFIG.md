@@ -1329,10 +1329,15 @@ task's `required_tools` or the activity's allowlist names it. A non-interactive
 caller with no identity at all is refused; set `ORBIT_OPERATOR=1` for a
 deliberate scripted operator call, exactly as for other governed operations.
 
-Grants are recorded but not yet enforced, and plugin backends are not yet
-sandboxed; `spec.definitions`, `spec.skills`, `spec.config` and `spec.web`
-parse and are accepted but contribute nothing in this release.
-`*.orbit-tool.yaml` sidecars and `orbit tool add` keep working unchanged.
+Grants are enforced: a plugin that requests `fs`, `network`, `env_pass`,
+`orbit_tools` or `backend.sandbox: none` and has not been granted it registers
+its tools inactive, and a call is refused with a diagnostic naming the grant.
+Backends run confined to the granted profile (Linux Landlock, macOS
+`sandbox-exec`); `backend.sandbox: none` needs the `unsandboxed` grant and is
+an `orbit plugin doctor` finding. `spec.definitions`, `spec.skills`,
+`spec.config` and `spec.web` parse and are accepted but contribute nothing in
+this release. `*.orbit-tool.yaml` sidecars and `orbit tool add` keep working
+unchanged.
 
 ## Other sections (brief)
 

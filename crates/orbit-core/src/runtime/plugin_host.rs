@@ -1,10 +1,12 @@
 //! Register installed plugins into the runtime tool registry.
 //!
 //! Fail closed per plugin (design `docs/design/plugins/1_scope.md` §4.9): a
-//! plugin whose manifest no longer loads, whose `requires` no longer hold, or
-//! whose namespace collides is reported as one diagnostic and registered
-//! inactive; every built-in and every other plugin is untouched.
+//! plugin whose manifest no longer loads, whose `requires` no longer hold,
+//! whose namespace collides, or whose required grants the operator has not
+//! recorded is reported as one diagnostic and registered inactive; every
+//! built-in and every other plugin is untouched.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -12,12 +14,12 @@ use orbit_common::OrbitError;
 use orbit_store::Store;
 use orbit_tools::ToolRegistry;
 use orbit_tools::plugin::{
-    LoadedPlugin, PluginTool, PluginToolBinding, PluginValidationPolicy, load_plugin_dir,
-    validate_loaded_plugin,
+    LoadedPlugin, McpBackend, McpExpectedTool, PluginBackend, PluginBackendSpec, PluginTool,
+    PluginToolBinding, PluginValidationPolicy, load_plugin_dir, validate_loaded_plugin,
 };
 use orbit_types::plugin::{
-    InstalledPlugin, PLUGIN_HOST_API, PluginMcpScope, PluginPinFile, PluginProvenance,
-    PluginStatus, SemverRange, Version, plugin_tool_name,
+    InstalledPlugin, PLUGIN_HOST_API, PluginBackendType, PluginGrant, PluginMcpScope,
+    PluginPinFile, PluginProvenance, PluginStatus, SemverRange, Version, plugin_tool_name,
 };
 use orbit_types::tool::{McpToolDefinition, McpToolScope};
 
@@ -232,12 +234,12 @@ fn register_installed_plugin(
     if let Some(message) = unmet_requirement(&plugin) {
         return register_inactive_tools(global_root, installed, &plugin, registry, message);
     }
+    if let Some(message) = missing_grant_diagnostic(installed, &plugin) {
+        return register_inactive_tools(global_root, installed, &plugin, registry, message);
+    }
 
-    let provenance = PluginProvenance {
-        name: installed.name.clone(),
-        version: installed.version.clone(),
-        manifest_digest: installed.manifest_digest.clone(),
-    };
+    let backend = plugin_backend(global_root, installed, &plugin);
+    let provenance = backend.spec().provenance.clone();
     let mut tools = Vec::with_capacity(plugin.tools.len());
     for tool in &plugin.tools {
         let name = plugin_tool_name(plugin.namespace(), &tool.verb, installed.first_party);
@@ -252,14 +254,7 @@ fn register_installed_plugin(
             PluginMcpScope::None => None,
         };
         registry.register_plugin_tool(
-            plugin_tool(
-                global_root,
-                installed,
-                &plugin,
-                tool,
-                &name,
-                binding.clone(),
-            ),
+            plugin_tool(&plugin, tool, &name, binding.clone(), backend.clone()),
             scope,
             binding,
         );
@@ -284,11 +279,8 @@ fn register_inactive_tools(
     registry: &mut ToolRegistry,
     message: String,
 ) -> RegisteredPlugin {
-    let provenance = PluginProvenance {
-        name: installed.name.clone(),
-        version: installed.version.clone(),
-        manifest_digest: installed.manifest_digest.clone(),
-    };
+    let backend = plugin_backend(global_root, installed, plugin);
+    let provenance = backend.spec().provenance.clone();
     let mut tools = Vec::with_capacity(plugin.tools.len());
     for tool in &plugin.tools {
         let name = plugin_tool_name(plugin.namespace(), &tool.verb, installed.first_party);
@@ -298,7 +290,7 @@ fn register_inactive_tools(
             diagnostic: Some(message.clone()),
         });
         registry.register_inactive_plugin_tool(
-            plugin_tool(global_root, installed, plugin, tool, &name, binding.clone()),
+            plugin_tool(plugin, tool, &name, binding.clone(), backend.clone()),
             binding,
         );
         tools.push(name);
@@ -312,26 +304,126 @@ fn register_inactive_tools(
     }
 }
 
-fn plugin_tool(
+/// A required grant the operator has not recorded refuses the whole plugin,
+/// naming the grant, the manifest key that asks for it, and the command that
+/// records it (design §4.1). `backend.sandbox: none` is the `unsandboxed`
+/// grant, so it is refused here too.
+pub fn missing_grant_diagnostic(
+    installed: &InstalledPlugin,
+    plugin: &LoadedPlugin,
+) -> Option<String> {
+    let missing = plugin.manifest.missing_grants(&installed.grants);
+    if missing.is_empty() {
+        return None;
+    }
+    let asks = missing
+        .iter()
+        .map(|grant| format!("`{grant}` ({})", grant.requested_by()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let flags = missing
+        .iter()
+        .map(|grant| grant.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    Some(format!(
+        "plugin '{}' requests {asks} but this host has not granted {}; run `orbit plugin enable {} \
+         --grant {flags}` to grant {}",
+        installed.name,
+        if missing.len() == 1 { "it" } else { "them" },
+        installed.name,
+        if missing.len() == 1 { "it" } else { "them" },
+    ))
+}
+
+/// The backend every tool of this plugin shares: the spec for `exec`, or one
+/// long-lived server proxy for `mcp` (design §4.2).
+fn plugin_backend(
     global_root: &Path,
     installed: &InstalledPlugin,
+    plugin: &LoadedPlugin,
+) -> PluginBackend {
+    let grants: Vec<PluginGrant> = installed
+        .grants
+        .iter()
+        .filter_map(|name| PluginGrant::parse(name))
+        .collect();
+    let config_defaults: BTreeMap<String, String> = plugin
+        .manifest
+        .spec
+        .config
+        .as_ref()
+        .and_then(|config| config.defaults.as_ref())
+        .and_then(|defaults| defaults.as_object())
+        .map(|defaults| {
+            defaults
+                .iter()
+                .map(|(key, value)| {
+                    let rendered = match value {
+                        serde_json::Value::String(text) => text.clone(),
+                        other => other.to_string(),
+                    };
+                    (key.clone(), rendered)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let spec = Arc::new(PluginBackendSpec {
+        provenance: PluginProvenance {
+            name: installed.name.clone(),
+            version: installed.version.clone(),
+            manifest_digest: installed.manifest_digest.clone(),
+            grants: grants
+                .iter()
+                .map(|grant| grant.as_str().to_string())
+                .collect(),
+        },
+        plugin_root: plugin.root.clone(),
+        state_dir: plugin_state_dir(global_root, &installed.name),
+        global_root: global_root.to_path_buf(),
+        command: plugin.backend_command.clone(),
+        args: plugin.manifest.spec.backend.args.clone(),
+        timeout_ms: plugin.manifest.spec.backend.timeout_ms,
+        sandbox: plugin.manifest.spec.backend.sandbox,
+        permissions: plugin.manifest.spec.permissions.clone(),
+        programs: plugin.manifest.spec.requires.programs.clone(),
+        config_defaults,
+        grants,
+    });
+    match plugin.manifest.spec.backend.backend_type {
+        PluginBackendType::Exec => PluginBackend::Exec(spec),
+        PluginBackendType::Mcp => {
+            let expected = plugin
+                .tools
+                .iter()
+                .map(|tool| McpExpectedTool {
+                    verb: tool.verb.clone(),
+                    input_schema: tool
+                        .input_schema_declared
+                        .then(|| tool.input_schema.clone()),
+                })
+                .collect();
+            PluginBackend::Mcp(Arc::new(McpBackend::new(spec, expected)))
+        }
+    }
+}
+
+fn plugin_tool(
     plugin: &LoadedPlugin,
     tool: &orbit_tools::plugin::ResolvedPluginTool,
     name: &str,
     binding: Arc<PluginToolBinding>,
+    backend: PluginBackend,
 ) -> PluginTool {
     PluginTool {
         name: name.to_string(),
+        verb: tool.verb.clone(),
         description: plugin_tool_description(plugin, tool),
         parameters: tool.parameters.clone(),
         execution_kind: tool.execution_kind,
+        output_schema: tool.output_schema.clone(),
         binding,
-        plugin_root: plugin.root.clone(),
-        state_dir: plugin_state_dir(global_root, &installed.name),
-        command: plugin.backend_command.clone(),
-        args: plugin.manifest.spec.backend.args.clone(),
-        timeout_ms: plugin.manifest.spec.backend.timeout_ms,
-        requested_orbit_tools: plugin.manifest.spec.permissions.orbit_tools.clone(),
+        backend,
     }
 }
 

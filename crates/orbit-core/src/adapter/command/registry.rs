@@ -250,6 +250,13 @@ impl OrbitRuntime {
             return Ok(());
         }
         if self.tool_registry().has(name) {
+            // A plugin-backed entry is inactive for a reason the loader
+            // recorded — a grant the host has not given, a `requires` this
+            // host does not satisfy. Report that instead of the built-in
+            // surface's answer, which would be wrong for it.
+            if let Some(diagnostic) = self.tool_registry().inactive_diagnostic(name) {
+                return Err(OrbitError::PolicyDenied(diagnostic));
+            }
             return Err(OrbitError::Execution(format!(
                 "tool '{name}' is inactive on the agent tool surface; it is an admin/human-only operation not reachable by agents"
             )));

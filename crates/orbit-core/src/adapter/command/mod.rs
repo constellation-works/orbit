@@ -28,8 +28,8 @@ pub use dispatch::{
     mark_tool_audit_recorded, take_tool_audit_recorded, trusted_mcp_audit_context,
 };
 pub use plugin::{
-    PluginAddOptions, PluginDoctorResult, PluginMigrateRequest, PluginSummary, PluginSyncOutcome,
-    PluginToolSummary, PluginValidationReport, execute_global_plugin_tool,
-    host_plugin_mcp_definitions, migrate_plugin_sidecars,
+    PluginAddOptions, PluginDoctorResult, PluginMigrateRequest, PluginPermissionSummary,
+    PluginSummary, PluginSyncOutcome, PluginToolSummary, PluginValidationReport,
+    execute_global_plugin_tool, host_plugin_mcp_definitions, migrate_plugin_sidecars,
 };
 pub use registry::{DoctorResult, DoctorStatus, ToolInfo};

@@ -21,8 +21,8 @@
 //!
 //! # Role
 //! Sits directly above `orbit-types` and is consumed by `orbit-tools`, which
-//! builds the builtin `proc.spawn` tool and other shell-invoking tools on top
-//! of these primitives.
+//! builds the builtin `proc.spawn` tool, the plugin backend sandbox, and other
+//! shell-invoking tools on top of these primitives.
 //!
 //! # Key exports
 //! - [`run_process`] — primary entry point for spawning a subprocess
@@ -33,6 +33,8 @@
 //!   adds no additional Orbit sandbox
 //! - [`spawn_under_linux_landlock`] — Linux read confinement applied to the
 //!   child itself, used by activity-scoped `proc.spawn`
+//! - [`spawn_under_linux_landlock_boundary`] — Linux read + write + TCP
+//!   confinement to explicit granted roots, used by plugin backends
 //! - [`EnvironmentMode`], [`StdinMode`] — environment and stdin control
 //!
 //! # Dependency direction
@@ -48,9 +50,10 @@ pub mod sandbox;
 mod supervision;
 
 pub use linux_landlock::{
-    HOST_READ_ENV_VARS, LandlockGrant, LandlockPathGrant, LandlockProbeOutcome,
-    LandlockReadBoundary, MINIMUM_LANDLOCK_ABI, grants_read, landlock_unavailable_message,
-    linux_landlock_read_boundary, probe_landlock, spawn_under_linux_landlock,
+    HOST_READ_ENV_VARS, LandlockBoundary, LandlockGrant, LandlockPathGrant, LandlockProbeOutcome,
+    LandlockReadBoundary, MINIMUM_LANDLOCK_ABI, NETWORK_LANDLOCK_ABI, grants_read,
+    landlock_unavailable_message, linux_landlock_boundary_grants, linux_landlock_read_boundary,
+    probe_landlock, spawn_under_linux_landlock, spawn_under_linux_landlock_boundary,
 };
 pub use linux_sandbox::{
     BwrapProbeOutcome, LINUX_STABLE_BUILD_MOUNT, LINUX_STABLE_WORKSPACE_MOUNT,
@@ -62,10 +65,11 @@ pub use linux_sandbox::{
     probe_bwrap, spawn_under_linux_bwrap,
 };
 pub use macos_sandbox::{
-    MacosLoginKeychainAccess, MacosSandboxSpawnRequest, claude_state_dir_from_env,
-    compile_macos_sandbox_profile, grok_state_dir_from_env, macos_login_keychain_access,
-    sandbox_exec_available, sandbox_exec_path, sandbox_exec_program_for_audit,
-    sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
+    MacosLoginKeychainAccess, MacosNetworkAccess, MacosSandboxSpawnRequest,
+    append_macos_network_access, claude_state_dir_from_env, compile_macos_sandbox_profile,
+    grok_state_dir_from_env, macos_login_keychain_access, sandbox_exec_available,
+    sandbox_exec_path, sandbox_exec_program_for_audit, sandbox_exec_unavailable_message,
+    spawn_under_macos_sandbox,
 };
 pub use result::ExecutionResult;
 pub use runner::{

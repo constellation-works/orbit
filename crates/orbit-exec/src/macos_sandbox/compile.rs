@@ -539,3 +539,36 @@ fn emit_read_deny_literal(path: &str, out: &mut String) {
         super::sbpl_filter::sbpl_escape(path)
     ));
 }
+
+/// What a plugin backend may reach over the network on macOS (design
+/// `docs/design/plugins/1_scope.md` §4.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MacosNetworkAccess {
+    /// Every socket operation is refused.
+    None,
+    /// Only endpoints on the loopback interface.
+    Loopback,
+    /// Whatever the compiled profile already allows.
+    Any,
+}
+
+/// Append the plugin network clause to a compiled profile.
+///
+/// [`compile_macos_sandbox_profile`] allows the network unconditionally, which
+/// is right for an agent CLI that must reach its provider. A plugin backend
+/// gets what its manifest declared and the operator granted, so the narrower
+/// modes are appended *after* the broad allow: SBPL is last-match-wins, so
+/// the deny takes effect and the loopback re-allows sit on top of it.
+pub fn append_macos_network_access(profile: &mut String, access: MacosNetworkAccess) {
+    match access {
+        MacosNetworkAccess::Any => {}
+        MacosNetworkAccess::None => profile.push_str("(deny network*)\n"),
+        MacosNetworkAccess::Loopback => {
+            profile.push_str("(deny network*)\n");
+            profile.push_str("(allow network* (local ip \"localhost:*\"))\n");
+            profile.push_str("(allow network* (remote ip \"localhost:*\"))\n");
+            profile.push_str("(allow network* (local unix-socket))\n");
+            profile.push_str("(allow network* (remote unix-socket))\n");
+        }
+    }
+}

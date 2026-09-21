@@ -74,10 +74,20 @@ fn structure_validation_names_the_field() {
     manifest.metadata.name = "demo".into();
 
     manifest.spec.backend.backend_type = PluginBackendType::Mcp;
-    let error = manifest.validate_structure().unwrap_err();
-    assert_eq!(error.field, "spec.backend.type");
-    assert!(error.message.contains("not supported"));
+    manifest
+        .validate_structure()
+        .expect("the mcp backend is a valid backend type");
     manifest.spec.backend.backend_type = PluginBackendType::Exec;
+
+    manifest.spec.permissions.fs.write = vec!["{{home}}/cache".into()];
+    let error = manifest.validate_structure().unwrap_err();
+    assert_eq!(error.field, "spec.permissions.fs.write[0]");
+    assert!(error.message.contains("{{home}}"), "{}", error.message);
+    manifest.spec.permissions.fs.write = vec!["{{plugin_state}}".into()];
+    manifest
+        .validate_structure()
+        .expect("{{plugin_state}} is an allowed template");
+    manifest.spec.permissions.fs.write.clear();
 
     manifest.spec.tools.push(manifest.spec.tools[0].clone());
     assert_eq!(

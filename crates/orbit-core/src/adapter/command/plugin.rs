@@ -12,8 +12,8 @@ use crate::application::plugin;
 use crate::runtime::plugin_host;
 
 pub use crate::application::plugin::{
-    PluginAddOptions, PluginDoctorResult, PluginMigrateRequest, PluginSummary, PluginSyncOutcome,
-    PluginToolSummary, PluginValidationReport,
+    PluginAddOptions, PluginDoctorResult, PluginMigrateRequest, PluginPermissionSummary,
+    PluginSummary, PluginSyncOutcome, PluginToolSummary, PluginValidationReport,
 };
 
 impl OrbitRuntime {

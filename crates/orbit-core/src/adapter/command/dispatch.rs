@@ -26,7 +26,9 @@ use crate::redact_sensitive_env_text;
 use crate::runtime::run_input::{
     managed_run_context_from_env, managed_run_context_run_id_from_env,
 };
-use crate::runtime::tool_exec::{CapabilityEnforcement, populate_filesystem_policy_context};
+use crate::runtime::tool_exec::{
+    CapabilityEnforcement, check_tool_active, populate_filesystem_policy_context,
+};
 
 #[cfg(test)]
 pub(super) use crate::runtime::run_input::ORBIT_MANAGED_RUN_CONTEXT_ENV;
@@ -184,6 +186,7 @@ pub(super) fn execute_global_plugin_dispatch(
                 entry_point,
                 &tool_context.session_context,
             )?;
+            check_tool_active(&registry, name)?;
             registry.execute(name, &tool_context, input)
         },
     )
@@ -327,6 +330,9 @@ impl OrbitRuntime {
             },
             |input| {
                 self.ensure_tool_agent_facing(name)?;
+                if entry_point == ToolEntryPoint::Cli {
+                    enforce_plugin_callback_allowlist(name)?;
+                }
                 let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context();
                 let allowed_tools = if trusted_env {
                     read_activity_tools_from_env()
@@ -777,6 +783,45 @@ fn resolve_agent_identity_for_entry_point(
         return Ok((None, None));
     }
     resolve_agent_identity(agent_override, model_override)
+}
+
+/// The environment variable a plugin backend's child carries: the plugin
+/// namespace, which marks the process as a plugin callback context.
+pub const ORBIT_PLUGIN_ENV: &str = "ORBIT_PLUGIN";
+/// The callbacks that plugin may make, as `permissions.orbit_tools` ∩ the
+/// `orbit_tools` grant (design `docs/design/plugins/1_scope.md` §4.2).
+pub const ORBIT_ALLOWED_TOOLS_ENV: &str = "ORBIT_ALLOWED_TOOLS";
+
+/// A process launched as a plugin backend reaches Orbit only through
+/// `orbit tool run`, and only for the tools stamped into its environment.
+/// Anything else is refused before the tool runs; an absent or empty list
+/// refuses everything.
+fn enforce_plugin_callback_allowlist(name: &str) -> Result<(), OrbitError> {
+    let Some(plugin) = std::env::var(ORBIT_PLUGIN_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(());
+    };
+    let allowed: Vec<String> = std::env::var(ORBIT_ALLOWED_TOOLS_ENV)
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    if allowed.iter().any(|tool| tool == name) {
+        return Ok(());
+    }
+    Err(OrbitError::PolicyDenied(format!(
+        "tool '{name}' is not in plugin '{plugin}''s granted orbit_tools allowlist [{}]; the \
+         manifest must request it under `permissions.orbit_tools` and the host must grant \
+         `orbit_tools`",
+        allowed.join(", ")
+    )))
 }
 
 fn read_proc_allowed_programs_from_env() -> Vec<String> {

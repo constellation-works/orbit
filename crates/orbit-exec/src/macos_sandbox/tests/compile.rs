@@ -1355,3 +1355,27 @@ fn compiled_profile_makes_the_cargo_download_caches_writable_but_not_bin_or_the_
         "the crates.io publish token must stay unreadable"
     );
 }
+
+#[test]
+fn plugin_network_access_is_appended_after_the_broad_allow() {
+    use super::super::compile::{MacosNetworkAccess, append_macos_network_access};
+
+    let mut any = String::from("(allow network*)\n");
+    append_macos_network_access(&mut any, MacosNetworkAccess::Any);
+    assert_eq!(any, "(allow network*)\n");
+
+    let mut none = String::from("(allow network*)\n");
+    append_macos_network_access(&mut none, MacosNetworkAccess::None);
+    assert!(none.ends_with("(deny network*)\n"), "{none}");
+
+    let mut loopback = String::from("(allow network*)\n");
+    append_macos_network_access(&mut loopback, MacosNetworkAccess::Loopback);
+    let deny = loopback.find("(deny network*)").expect("deny clause");
+    let reallow = loopback
+        .find("(allow network* (remote ip \"localhost:*\"))")
+        .expect("loopback re-allow");
+    assert!(
+        deny < reallow,
+        "the loopback re-allow must follow the deny:\n{loopback}"
+    );
+}
