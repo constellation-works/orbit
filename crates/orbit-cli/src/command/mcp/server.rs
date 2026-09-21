@@ -646,8 +646,15 @@ impl McpHost for ServerMcpHost {
             return Ok(None);
         }
         let input = Value::Object(Default::default());
-        let (runtime, _selected) =
-            self.resolve_workspace_runtime("orbit.friction.add", &input, context)?;
+        // Schema decoration is advisory: a session hint that does not resolve
+        // (an unregistered runtime identity, a foreign path) advertises the
+        // shipped defaults here and fails closed at call time, so tools/list
+        // stays available for globally resolved tools such as task.show.
+        let Ok((runtime, _selected)) =
+            self.resolve_workspace_runtime("orbit.friction.add", &input, context)
+        else {
+            return Ok(None);
+        };
         runtime.friction_tag_taxonomy().map(Some)
     }
 

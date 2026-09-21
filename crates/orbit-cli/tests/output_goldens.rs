@@ -102,18 +102,28 @@ impl Fixture {
     /// A fresh workspace with the deterministic task seed applied. Policies
     /// and skills need no seeding: `orbit workspace init` seeds the default
     /// policy and the default skill catalog on every fresh workspace.
+    ///
+    /// Init runs with an empty `PATH`: crew seeding probes which agent CLIs
+    /// the host has installed, so a developer box with `claude` on `PATH`
+    /// would render a default crew that a CI runner never sees.
     fn new() -> Self {
         let temp = tempdir().expect("tempdir");
         let home = temp.path().join("home");
         let work = home.join("work");
+        let empty_path = temp.path().join("empty-path");
         std::fs::create_dir_all(&home).expect("create home");
         std::fs::create_dir_all(work.join(".git")).expect("create work repo");
+        std::fs::create_dir_all(&empty_path).expect("create empty PATH");
         let fixture = Self {
             _temp: temp,
             home,
             work,
         };
-        fixture.run(&["workspace", "init", "--name", "output-goldens"], &[]);
+        let empty_path = empty_path.to_string_lossy().into_owned();
+        fixture.run(
+            &["workspace", "init", "--name", "output-goldens"],
+            &[("PATH", empty_path.as_str())],
+        );
         for (title, description, priority, task_type) in SEED_TASKS {
             fixture.run(
                 &[

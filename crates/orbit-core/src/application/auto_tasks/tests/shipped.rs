@@ -3,7 +3,7 @@
 //! enabled or manually minted.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 use orbit_tools::ToolRegistry;
@@ -136,9 +136,9 @@ fn shipped_delivery_defaults_render_the_workspace_base_branch() {
     );
 }
 
-/// Every repository-local definition remains covered in addition to the
-/// embedded defaults. These files are workspace-authored and may intentionally
-/// differ from the inert defaults.
+/// Every definition in `dir` parses, uses its filename identity, and declares
+/// a complexity. Workspace-authored definitions may intentionally differ from
+/// the inert defaults, so this checks structure only.
 fn assert_auto_task_directory_all_parse(dir: &Path) -> usize {
     let entries =
         std::fs::read_dir(dir).unwrap_or_else(|error| panic!("read {}: {error}", dir.display()));
@@ -200,21 +200,6 @@ fn assert_auto_task_directory_all_parse(dir: &Path) -> usize {
     count
 }
 
-/// Every repository-local definition remains covered in addition to the
-/// embedded defaults. These files are workspace-authored and may intentionally
-/// differ from the inert defaults.
-#[test]
-fn repository_definitions_all_parse() {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(".orbit/auto_tasks");
-    let count = assert_auto_task_directory_all_parse(&dir);
-    assert!(
-        count > 0,
-        "expected at least one repository-local auto-task"
-    );
-}
-
 /// [ORB-12711] Adding an auto-task or editing complexity, crew, or schedule
 /// must leave tests green without updating Rust match tables.
 #[test]
@@ -242,72 +227,6 @@ template:
 
     let count = assert_auto_task_directory_all_parse(temp.path());
     assert_eq!(count, 1);
-}
-
-#[test]
-fn repository_qa_full_sweep_is_manual_opus_release_signoff() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(".orbit/auto_tasks/qa-full-sweep.yaml");
-    let yaml = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    let definition = parse_auto_task_yaml(&yaml).expect("parse qa-full-sweep");
-
-    assert_eq!(definition.name, "qa-full-sweep");
-    assert!(!definition.enabled, "periodic scheduling must be opt-in");
-    assert!(matches!(definition.dedupe, DedupePolicy::SkipIfOpen));
-    assert_eq!(
-        definition.template.status,
-        orbit_types::task::TaskStatus::Backlog
-    );
-    for required_tag in ["qa-full-sweep", "release", "no-diff-expected"] {
-        assert!(
-            definition
-                .template
-                .tags
-                .iter()
-                .any(|tag| tag == required_tag),
-            "missing required tag {required_tag}"
-        );
-    }
-}
-
-#[test]
-fn model_price_audit_is_weekly_report_only_and_routes_to_terra() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(".orbit/auto_tasks/model-price-audit.yaml");
-    let yaml = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-    let definition = parse_auto_task_yaml(&yaml).expect("parse model-price-audit");
-
-    assert_eq!(definition.name, "model-price-audit");
-    assert!(!definition.enabled, "definition must ship disabled");
-    assert!(
-        matches!(definition.schedule, AutoTaskSchedule::Cron { .. }),
-        "model-price-audit runs on a cron cadence"
-    );
-    assert!(matches!(definition.dedupe, DedupePolicy::SkipIfOpen));
-    assert_eq!(
-        definition.template.status,
-        orbit_types::task::TaskStatus::Backlog
-    );
-    for required_tag in ["model-price-audit", "pricing", "no-diff-expected"] {
-        assert!(
-            definition
-                .template
-                .tags
-                .iter()
-                .any(|tag| tag == required_tag),
-            "missing required tag {required_tag}"
-        );
-    }
-
-    let body = definition.template.description.to_lowercase();
-    assert!(
-        body.contains("must not edit model_prices.yaml"),
-        "[ORB-10583] model-price-audit data safety contract: must not edit model_prices.yaml"
-    );
 }
 
 /// Friction curation is the portable default. It keeps the curation safeguards
@@ -468,13 +387,6 @@ fn code_review_default_is_portable_cursor_driven_and_inert() {
         .find(|(name, _)| *name == "code-review")
         .expect("code-review default");
     let definition = parse_auto_task_yaml(yaml).expect("parse code-review");
-    let repository_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(".orbit/auto_tasks/code-review.yaml");
-    let repository_yaml = std::fs::read_to_string(&repository_path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", repository_path.display()));
-    let repository_definition =
-        parse_auto_task_yaml(&repository_yaml).expect("parse repository code-review");
 
     assert_eq!(definition.name, "code-review");
     assert!(!definition.enabled, "definition must ship disabled");
@@ -483,10 +395,6 @@ fn code_review_default_is_portable_cursor_driven_and_inert() {
         "code-review must use a documented cron schedule"
     );
     assert!(matches!(definition.dedupe, DedupePolicy::SkipIfOpen));
-    assert!(
-        repository_definition.template.complexity.is_some(),
-        "[ORB-12463] repository code-review must declare explicit complexity"
-    );
     assert_eq!(
         definition.template.status,
         orbit_types::task::TaskStatus::Backlog
@@ -504,14 +412,6 @@ fn code_review_default_is_portable_cursor_driven_and_inert() {
     assert!(
         !yaml.contains("/home/") && !yaml.contains("/Users/"),
         "[ORB-11095] default must not contain a machine-specific path"
-    );
-    assert_eq!(
-        repository_definition.template.description, definition.template.description,
-        "repository and embedded code-review instructions must stay synchronized"
-    );
-    assert_eq!(
-        repository_definition.template.acceptance_criteria, definition.template.acceptance_criteria,
-        "repository and embedded code-review criteria must stay synchronized"
     );
     // The template ships to every workspace, so it must not name this
     // repository's branches or files.

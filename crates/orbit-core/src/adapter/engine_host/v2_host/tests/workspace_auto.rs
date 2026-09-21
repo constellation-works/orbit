@@ -8,7 +8,7 @@ use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, Jo
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::adapter::engine_host::v2_host::task_pilot::{apply, prepare};
+use crate::adapter::engine_host::v2_host::task_pilot::prepare;
 use crate::adapter::engine_host::v2_host::test_support::{
     runtime_with_workspace_config, runtime_with_workspace_layout, seed_list_backlog_task,
     write_workspace_file,
@@ -31,31 +31,8 @@ fn classify_with(runtime: &OrbitRuntime, input: Value) -> Value {
         .expect("classify workspace auto tasks")
 }
 
-fn verified_no_diff_assessment(task: &Task) -> Value {
-    json!({
-        "task_id": task.id,
-        "context_files_before": task.context_files,
-        "context_files_after": [],
-        "disposition": "verified_no_diff",
-        "evidence": "The recurring review is an operational check and changes no repository files.",
-        "recommended_crew": "luna",
-        "recommended_complexity": "low",
-        "assessment_rationale": "The review has bounded read-only scope.",
-        "confidence": "high",
-        "evidence_gaps": [],
-        "validation_approach": "Run the configured review commands.",
-        "reassessment_triggers": ["the review scope changes"],
-        "blocked_by": [],
-        "duplicate_of": null,
-        "already_landed": null,
-        "adr_conflicts": [],
-        "utility_warnings": [],
-        "surface_warnings": [],
-    })
-}
-
 #[test]
-fn minted_no_diff_auto_task_is_admitted_unassessed_and_still_assessable() {
+fn minted_no_diff_auto_task_is_admitted_unassessed_and_never_piloted() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     runtime
         .auto_task_add(AutoTaskAddParams {
@@ -94,40 +71,33 @@ fn minted_no_diff_auto_task_is_admitted_unassessed_and_still_assessable() {
             .contains(&json!(minted.id))
     );
 
+    // Automatic discovery never assesses no-diff work: its result lives
+    // outside the repository, so there are no modification selectors to pick,
+    // and admitting it re-piloted the same task on every routine tick.
     let prepared = prepare(
         &runtime,
         "prepare_task_pilot",
         &json!({ "workspace_path": repo_root }),
     )
-    .expect("automatic preparation includes minted no-diff auto-task");
+    .expect("automatic preparation runs without the minted no-diff auto-task");
     assert!(
-        prepared["task_ids"]
+        !prepared["task_ids"]
             .as_array()
             .expect("task ids")
             .contains(&json!(minted.id))
     );
+    assert!(
+        prepared["excluded"]
+            .as_array()
+            .expect("excluded")
+            .iter()
+            .any(|entry| entry["task_id"] == minted.id && entry["reason"] == "no_diff_task")
+    );
 
-    let applied = apply(
-        &runtime,
-        "apply_task_pilot_results",
-        &json!({
-            "prepared": prepared,
-            "results": [{
-                "partition_index": 0,
-                "task_ids": [minted.id],
-                "tasks": [verified_no_diff_assessment(&minted)],
-                "summary": "assess no-diff auto-task",
-            }],
-            "workspace_path": repo_root,
-        }),
-    )
-    .expect("apply no-diff assessment");
-    assert_eq!(applied["status"], "succeeded");
-
-    let prepared_task = runtime.get_task(&minted.id).expect("prepared task");
-    assert_eq!(prepared_task.complexity, Some(TaskComplexity::Low));
-    assert!(prepared_task.context_files.is_empty());
-    assert_eq!(prepared_task.crew.as_deref(), Some("opus"));
+    let untouched = runtime.get_task(&minted.id).expect("minted task");
+    assert_eq!(untouched.complexity, Some(TaskComplexity::Unassessed));
+    assert!(untouched.context_files.is_empty());
+    assert_eq!(untouched.crew.as_deref(), Some("opus"));
 
     let after = classify(&runtime);
     assert!(

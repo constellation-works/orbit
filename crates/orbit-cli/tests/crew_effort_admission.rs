@@ -50,8 +50,17 @@ fn inject_invalid_astra_effort(config_path: &Path) {
         body.replacen("[crews.astra]", "[crews.astra]\neffort = \"hard\"", 1)
     } else {
         let mut body = body;
-        if !body.contains("[workflow]") {
-            body.push_str("\n[workflow]\ndefault_crew = \"astra\"\n");
+        // A host with no agent CLI on `PATH` seeds `[workflow]` without a
+        // `default_crew`, which `[crews.*]` requires.
+        let has_default_crew = body
+            .lines()
+            .any(|line| line.trim_start().starts_with("default_crew"));
+        if !has_default_crew {
+            if body.contains("[workflow]") {
+                body = body.replacen("[workflow]", "[workflow]\ndefault_crew = \"astra\"", 1);
+            } else {
+                body.push_str("\n[workflow]\ndefault_crew = \"astra\"\n");
+            }
         }
         body.push_str(
             "\n[crews.astra]\nmodel = \"gpt-6-astra\"\nprovider = \"codex\"\neffort = \"hard\"\n",
