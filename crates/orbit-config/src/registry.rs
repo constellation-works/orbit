@@ -74,7 +74,7 @@ pub enum ConfigSection {
     /// `workflow.*` — how tasks are shipped.
     Delivery,
     /// `crews.*` — named provider/model assignments. No fixed registry rows:
-    /// crew tables are dynamically named (see [`CREW_CONFIG_FIELDS`]).
+    /// crew tables are dynamically named (see `CREW_CONFIG_FIELDS`).
     Crews,
     /// `execution.*` — how agent subprocesses run.
     Execution,
@@ -281,7 +281,7 @@ define_config_settings! {
     },
     machine_name: Option<String> => String {
         key: "machine.name", value_type: "string",
-        description: "Operator-chosen display name for this machine. The one [machine] value that may change: `orbit config set --global machine.name <value>`.",
+        description: "Operator-chosen display name for this machine. The one `[machine]` value that may change: `orbit config set --global machine.name <value>`.",
         section: ConfigSection::Machine, order: 20,
         resolve: |raw: Option<String>| resolve_machine_name(raw),
     },
@@ -555,7 +555,7 @@ impl MachineSettings {
     }
 
     /// The complete identity, or `None` when no `[machine]` table exists.
-    /// A partial table never reaches here — [`Self::check_complete`] refuses it.
+    /// A partial table never reaches here — `check_complete` refuses it.
     pub fn complete(self) -> Option<(String, String, String)> {
         Some((self.id?, self.name?, self.task_prefix?))
     }

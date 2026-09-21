@@ -96,7 +96,7 @@ impl ConfigValueSource {
 pub enum ShadowReason {
     /// A higher layer set the same key.
     Overridden,
-    /// A security key ([`WORKSPACE_REPLACE_ONLY_KEYS`]) that the workspace
+    /// A security key (`WORKSPACE_REPLACE_ONLY_KEYS`) that the workspace
     /// file must restate to keep: it never inherits from global once a
     /// distinct workspace file exists.
     NotInherited,
