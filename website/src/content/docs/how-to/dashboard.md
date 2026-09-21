@@ -110,7 +110,7 @@ The left rail is the section map:
 | Rail | What it shows |
 |---|---|
 | **Tasks** | Backlog and other statuses for the selected workspace (or the aggregate list). |
-| **Auto-drain** | Under Work beside Tasks: the bounded auto-delivery window, with the Operation Mode grant that bounds it. The rail count is the number of tasks eligible now. |
+| **Auto-drain** | Under Work beside Tasks: the bounded auto-delivery window. The rail count is the number of tasks eligible now. |
 | **Audit** | Recent events and a 24-hour summary. |
 | **Diagnostics** | Recent runs, metrics, errors, incidents, reliability, and the scoreboard. |
 | **Operations** | Three rail subtabs: **Routines** (with the sweep clock), **Auto-tasks**, and **Jobs**. |
@@ -214,9 +214,8 @@ orbit audit list
 Operations has three subtabs in the rail: **Routines**, which also holds the
 sweep clock bar; **Auto-tasks**; and **Jobs**. **Auto-drain** is its own
 destination under Work (`#auto-drain`; the older `#operations/auto-drain`
-link still resolves) and also holds the Operation Mode panel. All of them
-require a **single active workspace**. In **All workspaces** the panels stay
-read-only and explain why.
+link still resolves). All of them require a **single active workspace**. In
+**All workspaces** the panels stay read-only and explain why.
 
 Routines, auto-tasks and jobs share one row layout: the thing, what triggers
 it, when it fires next, what happened last time, and one control at the
@@ -325,7 +324,7 @@ orbit run job worktree_gc_pipeline --workspace orbit
 
 The button will submit the same run once a job endpoint lands.
 
-### Auto-drain and operation mode
+### Auto-drain
 
 The pane reads top to bottom in the order you act: the window controls, the
 slot picture, a summary strip, then task readiness.
@@ -360,15 +359,6 @@ the window ships as `done` (`review` → `done`), not only the ones visible at
 submit time. If the session is not authorized for that option, the window
 can still start with default review completion; the completion control stays
 disabled and says why.
-
-**Operation Mode** projects `orbit operation explain` for the workspace:
-preset, caps, and the active grant. **Stop grant** and **Revoke grant** are
-supported when a grant is active and the session is authorized.
-
-**Enablement is not a dashboard action.** Creating a grant names a finite
-task set and explicit rights; that decision stays on the CLI
-(`orbit operation enable`). Do not treat a missing Enable control as a broken
-button.
 
 ## Config: read and edit config.toml
 
@@ -464,7 +454,7 @@ Two independent gates still apply:
 1. **Workspace scope.** Aggregate view and inactive workspaces are
    read-only, even for an operator.
 2. **Operator capability** for Operations controls (routine/auto-task
-   toggle, mint, clock, auto-drain completion, grant stop/revoke) and for
+   toggle, mint, clock, auto-drain completion) and for
    Config writes. The
    server resolves the same capability vocabulary as the CLI. A local
    interactive terminal counts as an operator session. `orbit web serve

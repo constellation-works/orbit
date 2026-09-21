@@ -19,7 +19,6 @@ let lastAutoDrainRun = null;
 // Whether the dependency-waiting rows are expanded; held outside the render so
 // a background refresh or a duration click does not collapse them.
 let autoDrainDependencyRowsOpen = false;
-let lastOperationMode = null;
 let context = null;
 let unsubscribeWorkspace = null;
 // The operator's unapplied cadence choice, held outside the rebuilt <select>
@@ -30,8 +29,8 @@ export function initOperations(nextContext) {
   context = nextContext;
   unsubscribeWorkspace?.();
   unsubscribeWorkspace = onWorkspaceChange(() => {
-    lastOperations = lastAutoTasks = lastAutoDrain = lastOperationMode = null;
-    for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "operation-mode-operation-feedback"]) feedback(id, "", "");
+    lastOperations = lastAutoTasks = lastAutoDrain = null;
+    for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback"]) feedback(id, "", "");
   });
 }
 
@@ -2072,166 +2071,6 @@ function fetchAndRenderAutoDrain() {
   return loadOperationPanel("auto-drain-body", `/api/workflows/auto/readiness${query}`, renderAutoDrain);
 }
 
-// ORB-11332: operation mode. The panel projects `orbit operation explain`
-// (current preferences, the captured grant policy when one is active, caps,
-// and limiting reasons) and offers the two governed grant controls.
-// Enablement is deliberately not a dashboard action: a grant names a finite
-// task set and explicit rights, which is an operator decision made from the
-// CLI or MCP.
-const OPERATION_MODE_CONTROLS = {
-  stop: {
-    label: "Stop grant",
-    confirm: "Stop new admissions and promotion under this grant? Admitted work keeps its captured bounds, including completion. This is not cancellation.",
-    enabled: (authority) => authority.admission === "open",
-  },
-  revoke: {
-    label: "Revoke grant",
-    confirm: "WARNING: revocation withdraws privileged actions, including completion, from work already admitted under this grant. Bound drains stop admitting. Continue?",
-    enabled: (authority) => authority.status !== "revoked",
-  },
-};
-
-function policyField(policy, name, label) {
-  const entry = policy?.[name] || {};
-  const value = entry.value ?? "—";
-  const source = entry.source ? ` [${entry.source}]` : "";
-  return field(label, `${value}${source}`);
-}
-
-function policyGrid(policy) {
-  return el("div", { class: "operation-grid" }, [
-    policyField(policy, "preset", "Preset"),
-    policyField(policy, "preparation", "Preparation"),
-    policyField(policy, "promotion", "Promotion"),
-    policyField(policy, "completion", "Completion"),
-    policyField(policy, "recovery", "Recovery"),
-    policyField(policy, "leaf_ceiling", "Leaf ceiling"),
-    policyField(policy, "review_policy", "Review policy"),
-    policyField(policy, "review_crew", "Review crew (before-PR)"),
-    policyField(policy, "review_reviewer_starts", "Reviewer starts / lineage"),
-    policyField(policy, "review_repair_cycles", "Repair cycles / lineage"),
-    policyField(policy, "review_minutes", "Review minutes / lineage"),
-    policyField(policy, "delivery_cap", "Delivery cap"),
-  ]);
-}
-
-function operationControlButton(payload, kind) {
-  const control = OPERATION_MODE_CONTROLS[kind];
-  const authority = payload.authority || {};
-  const key = `operation:${kind}`;
-  const pending = pendingOperations.has(key);
-  const unauthorized = payload.controls_authorized === false;
-  const button = el("button", {
-    class: `operation-button ${kind === "revoke" ? "disable" : "secondary"}`,
-    text: pending ? `${control.label}…` : control.label,
-    title: unauthorized
-      ? "Grant controls require an authorized operator session."
-      : control.confirm,
-  });
-  button.type = "button";
-  button.disabled = unauthorized || pending || !control.enabled(authority);
-  button.addEventListener("click", async () => {
-    if (pendingOperations.has(key)) return;
-    if (!window.confirm(`${control.confirm}\n\nGrant: ${authority.grant_id} (revision ${authority.revision})`)) return;
-    pendingOperations.add(key);
-    feedback("operation-mode-operation-feedback", "pending", `${control.label} in progress…`);
-    renderOperationMode(payload);
-    try {
-      const result = await postJson(`/api/operation/${kind}`, {
-        grant_id: authority.grant_id,
-        expected_revision: authority.revision,
-      });
-      feedback("operation-mode-operation-feedback", "success", `Grant ${result?.grant_id ?? authority.grant_id}: ${result?.outcome ?? kind} (revision ${result?.revision ?? "?"}).`);
-      await fetchAndRenderOperationMode();
-    } catch (error) {
-      feedback("operation-mode-operation-feedback", "error", `${control.label} failed: ${error.message}`);
-    } finally {
-      pendingOperations.delete(key);
-      if (lastOperationMode) renderOperationMode(lastOperationMode);
-    }
-  });
-  return button;
-}
-
-function renderOperationMode(payload) {
-  lastOperationMode = payload;
-  const body = $("operation-mode-body");
-  if (!body) return;
-  body.textContent = "";
-  const workspaceReason = workspaceReadOnlyReason();
-  const workspace = selectedWorkspace();
-  if (workspaceReason) {
-    body.appendChild(el("div", { class: "operations-readonly-note", text: workspaceReason }));
-    $("operation-mode-count").textContent = "read-only";
-    return;
-  }
-  const policy = payload.policy || {};
-  const authority = payload.authority || {};
-  const delivery = payload.delivery || {};
-  const grantPolicy = authority.policy;
-  body.append(
-    el("div", { class: "operation-row-head" }, [
-      operationIdentity(authority.grant_id || "No grant", authority.admission || "none"),
-      el("div", { class: "operation-row-facts" }, [
-        operationFact("Completion", `${delivery.effective_completion ?? "—"}${delivery.cap ? ` (cap: ${delivery.cap})` : ""}`),
-        operationFact("Expires", authority.expires_at ? time(authority.expires_at) : "—"),
-      ]),
-    ]),
-    operationDetails("operation-mode", [
-      grantPolicy
-        ? el("p", {
-          class: "operation-control-note",
-          text: "Active grant policy (captured at enablement; retuning preferences does not change it).",
-        })
-        : null,
-      grantPolicy ? policyGrid(grantPolicy) : null,
-      el("p", {
-        class: "operation-control-note",
-        text: grantPolicy
-          ? "Current preferences (apply to a future grant only)."
-          : "Current preferences.",
-      }),
-      policyGrid(policy),
-      el("div", { class: "operation-grid" }, [
-        field("Effective completion", `${delivery.effective_completion ?? "—"}${delivery.cap ? ` (cap: ${delivery.cap})` : ""}`),
-        field("Grant", authority.grant_id ?? "none"),
-        field("Admission", authority.admission ?? "none"),
-        field("Rights", Array.isArray(authority.rights) && authority.rights.length ? authority.rights.join(", ") : "—"),
-        field("Scope", Array.isArray(authority.task_ids) ? `${authority.task_ids.length} task(s)` : "—"),
-        field("Expires", authority.expires_at ? time(authority.expires_at) : "—"),
-      ]),
-      el("p", {
-        class: "operation-control-note",
-        text: Array.isArray(payload.limiting_reasons) && payload.limiting_reasons.length
-          ? `Limiting reasons: ${payload.limiting_reasons.join(", ")}`
-          : "No limiting reasons.",
-      }),
-      el("p", {
-        class: "operation-control-note",
-        text: "Changing a preference activates nothing. Only an explicit grant (orbit operation enable) authorizes scoped automation, and no grant authorizes merge.",
-      }),
-      el("p", {
-        class: "operation-control-note",
-        text: "Review crew selects the reviewer for before-PR review only. After-landing review runs from its own delivery auto-task, which mints tasks with that definition's template crew.",
-      }),
-    ]),
-  );
-  if (authority.grant_id) {
-    body.appendChild(el("div", { class: "operation-clock-actions" }, [
-      operationControlButton(payload, "stop"),
-      operationControlButton(payload, "revoke"),
-    ]));
-  }
-  $("operation-mode-count").textContent = `${authority.grant_id ? authority.admission : "no grant"} · ${workspace?.name || workspace?.id}`;
-}
-
-export function fetchAndRenderOperationMode() {
-  if (!selectedWorkspace()) {
-    return requestPanel("operation-mode-body", "unselected", () => Promise.resolve({}), renderOperationMode, "operation-mode-count");
-  }
-  return loadOperationPanel("operation-mode-body", "/api/operation/explain", renderOperationMode);
-}
-
 function throwFirstPanelError(results) {
   const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
   // Preserve transport classification even if a different panel also fails.
@@ -2248,11 +2087,7 @@ export async function fetchAndRenderOperations() {
   ]));
 }
 
-// The Auto-drain destination (Work → Auto-drain) carries the readiness panel
-// and the Operation Mode grant that bounds it; both refresh together.
+// The Auto-drain destination (Work → Auto-drain) carries the readiness panel.
 export async function fetchAndRenderAutoDrainPane() {
-  throwFirstPanelError(await Promise.allSettled([
-    fetchAndRenderAutoDrain(),
-    fetchAndRenderOperationMode(),
-  ]));
+  await fetchAndRenderAutoDrain();
 }

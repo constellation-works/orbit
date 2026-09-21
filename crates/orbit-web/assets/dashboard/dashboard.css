@@ -5019,7 +5019,7 @@
       .operation-feedback.pending { color: var(--priority-medium); }
       .operation-feedback.success { color: var(--state-success); }
       .operation-feedback.error { color: var(--state-failed); }
-      #routines-body, #clock-body, #auto-tasks-body, #auto-drain-body, #operation-mode-body { padding: 12px; background: var(--bg); }
+      #routines-body, #clock-body, #auto-tasks-body, #auto-drain-body { padding: 12px; background: var(--bg); }
       .operation-card {
         padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--border);
         border-radius: 4px; background: var(--bg-elev);
