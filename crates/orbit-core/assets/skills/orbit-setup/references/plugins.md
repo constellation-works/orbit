@@ -65,7 +65,7 @@ declares:
 |---|---|
 | `spec.definitions.activities`, `.jobs` | A `plugin:<ns>` catalog layer. A workspace file of the same name shadows the plugin's, and a shipped default is never displaced. `orbit run show` names the layer that resolved each `job:` / `activity:` reference and what it shadowed. |
 | `spec.definitions.routines`, `.auto_tasks` | Seeded as `.orbit/routines/<ns>-<name>.yaml` and `.orbit/auto_tasks/<ns>-<name>.yaml` with `enabled: false` and a `# provenance: plugin:<ns>@<version>` header. |
-| `spec.skills` | Linked from the install directory into `~/.agents/skills` and `~/.claude/skills`; unlinked on disable. |
+| `spec.skills` | Linked from the install directory into `~/.agents/skills` and `~/.claude/skills` as `<plugin-namespace>-<skill-directory>`; `plugin validate` reports the ID before install, and disable removes only that plugin's links. |
 | `spec.config` | The `[plugins.<ns>]` config section, validated by the plugin's own JSON Schema. |
 
 Seeded schedules are inert until a human reviews one and sets `enabled: true`

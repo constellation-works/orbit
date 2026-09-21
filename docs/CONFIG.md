@@ -1362,8 +1362,11 @@ contributes nothing in this release. `*.orbit-tool.yaml` sidecars and
   and `orbit auto-task list` show. A task minted by a plugin auto-task carries
   `plugin:<ns>` beside `auto-task:<name>`.
 - **Skills** (`spec.skills`) are linked from the install directory into
-  `~/.agents/skills` and `~/.claude/skills` on enable and unlinked on disable;
-  `orbit plugin doctor` reports a link whose target is gone.
+  `~/.agents/skills` and `~/.claude/skills` on enable under the discovery ID
+  `<plugin-namespace>-<skill-directory>` and unlinked on disable. The
+  `orbit plugin validate` command reports those IDs before installation, and
+  linking never replaces a shipped, user-owned or other plugin's link. The
+  `orbit plugin doctor` command reports a link whose target is gone.
 - **Config** (`spec.config`) claims the `[plugins.<ns>]` section below.
 
 ## Other sections (brief)
