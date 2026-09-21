@@ -10,6 +10,7 @@ use orbit_types::plugin::{MANIFEST_FILE_NAME, PluginStatus, parse_grants};
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
+use crate::runtime::plugin_grants::{forget_authorized_grants, record_authorized_grants};
 use crate::runtime::plugin_host::{plugin_current_link, read_pin_file};
 
 use super::inspect::{PluginSummary, show_plugin};
@@ -172,6 +173,11 @@ fn set_enabled(
         };
         Ok(((), event))
     })?;
+    // This command is the authorization, so it is what records the integrity
+    // value the loader checks the row back against. Written after the row, so
+    // a failure here leaves a plugin that refuses to load and says why, rather
+    // than a witness authorizing a grant set the store never took [ORB-12778].
+    record_authorized_grants(&runtime.global_root(), name, enabled, &grants)?;
     // The live runtime built its registry before this write, so report the
     // stored state rather than the surface this process happens to hold.
     let mut summary = show_plugin(runtime, name)?;
@@ -222,6 +228,10 @@ pub fn remove_plugin(runtime: &OrbitRuntime, name: &str) -> Result<(), OrbitErro
             },
         ))
     })?;
+
+    // The authority goes with the install: a later reinstall of this namespace
+    // starts from no authorized grants rather than inheriting these.
+    forget_authorized_grants(&runtime.global_root(), name);
 
     let install_path = PathBuf::from(&installed.install_path);
     if install_path.is_dir() {

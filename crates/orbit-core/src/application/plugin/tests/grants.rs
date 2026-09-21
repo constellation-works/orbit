@@ -3,6 +3,7 @@
 //! `orbit plugin enable --grant` is what activates it (design §4.1, §4.3).
 
 use orbit_types::plugin::{PluginGrant, PluginStatus};
+use orbit_types::telemetry::AuditEventStatus;
 
 use super::super::{
     PluginAddOptions, PluginEnableOptions, disable_plugin, enable_plugin, install_plugin,
@@ -170,4 +171,162 @@ fn grant_options(grants: &[&str]) -> PluginEnableOptions {
         grants: grants.iter().map(|grant| (*grant).to_string()).collect(),
         force: false,
     }
+}
+
+/// A plugin that can write `orbit.db` can write its own `plugins` row. The
+/// grants it puts there are not authority: the loader refuses the row, the
+/// operator sees a `doctor` finding, and the refusal is in the audit trail
+/// [ORB-12778].
+///
+/// The row write below is the store's own, not `orbit plugin enable` — the same
+/// effect as the `UPDATE plugins SET grants_json='["unsandboxed"]'` in the
+/// finding, expressed through the seam a backend reaches with a writable store.
+#[test]
+fn grants_injected_into_the_store_row_never_become_an_unconfined_plugin() {
+    let fixture = PluginFixture::new();
+    install(
+        &fixture,
+        PluginSpecFixture::new("loose", "loose").unsandboxed(),
+    );
+
+    // Enabled, nothing granted: refused for the missing grant, as today.
+    let runtime = fixture.reopen();
+    assert_eq!(
+        show_plugin(&runtime, "loose").expect("show").status,
+        PluginStatus::Inactive
+    );
+
+    runtime
+        .stores()
+        .plugins()
+        .set_plugin_enabled("loose", true, &["unsandboxed".to_string()])
+        .expect("the row write itself succeeds");
+
+    let runtime = fixture.reopen();
+    let summary = show_plugin(&runtime, "loose").expect("show");
+    assert_eq!(summary.status, PluginStatus::Inactive);
+    assert!(
+        !summary.unsandboxed && summary.granted.is_empty(),
+        "the injected grant is not reported as authority: {summary:?}"
+    );
+    assert!(
+        summary.permissions.iter().all(|row| !row.granted),
+        "{:?}",
+        summary.permissions
+    );
+    let diagnostic = summary.diagnostic.clone().expect("a diagnostic");
+    assert!(
+        diagnostic.contains("`unsandboxed`") && diagnostic.contains("orbit plugin enable loose"),
+        "{diagnostic}"
+    );
+    fixture
+        .call(&runtime, "loose.hello")
+        .expect_err("a refused row puts no tool on the surface");
+
+    // Visible to an operator, not a silent skip.
+    let finding = plugin_doctor(&runtime)
+        .expect("doctor")
+        .into_iter()
+        .find(|result| result.plugin == "loose")
+        .expect("a doctor row");
+    assert_eq!(finding.status, PluginStatus::Inactive);
+    assert_eq!(finding.message, diagnostic);
+
+    // And recorded durably.
+    let denials = runtime
+        .list_audit_events_with_kind(
+            None,
+            None,
+            Some("plugin".to_string()),
+            Some(AuditEventStatus::Denied),
+            None,
+            10,
+        )
+        .expect("audit events");
+    let denial = denials
+        .iter()
+        .find(|event| event.target_id.as_deref() == Some("loose"))
+        .expect("the refusal was audited");
+    assert_eq!(denial.command, "plugin.load");
+    assert!(
+        denial
+            .arguments_json
+            .as_deref()
+            .is_some_and(|arguments| arguments.contains("unsandboxed")),
+        "the row records the set that was claimed: {:?}",
+        denial.arguments_json
+    );
+    let provenance = denial.plugin.as_ref().expect("the row names the plugin");
+    assert_eq!(provenance.name, "loose");
+    assert!(
+        provenance.grants.is_empty(),
+        "the refused plugin ran under nothing: {:?}",
+        provenance.grants
+    );
+
+    // Re-authorizing the same set through the one command that may is what
+    // makes it effective again.
+    enable_plugin(&runtime, "loose", &grant_options(&["unsandboxed"])).expect("authorize");
+    let runtime = fixture.reopen();
+    let summary = show_plugin(&runtime, "loose").expect("show");
+    assert_eq!(summary.status, PluginStatus::Active);
+    assert!(summary.unsandboxed);
+    fixture
+        .call(&runtime, "loose.hello")
+        .expect("an authorized grant activates the tool");
+}
+
+/// Enable, disable, re-enable and a reinstall all keep the row and its
+/// authorization record in step, so the check never refuses a plugin an
+/// operator maintained through the ordinary commands.
+#[test]
+fn the_ordinary_lifecycle_keeps_the_row_authorized() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo").requesting_fs_write());
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            grants: vec!["fs".to_string()],
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("install");
+
+    let runtime = fixture.reopen();
+    assert_eq!(
+        show_plugin(&runtime, "demo").expect("show").status,
+        PluginStatus::Active,
+        "`add --enable --grant` authorizes what it records"
+    );
+
+    disable_plugin(&runtime, "demo").expect("disable");
+    let runtime = fixture.reopen();
+    assert_eq!(
+        show_plugin(&runtime, "demo").expect("show").status,
+        PluginStatus::Disabled
+    );
+
+    enable_plugin(&runtime, "demo", &grant_options(&["fs"])).expect("re-enable");
+    let runtime = fixture.reopen();
+    let summary = show_plugin(&runtime, "demo").expect("show");
+    assert_eq!(summary.status, PluginStatus::Active);
+    assert_eq!(summary.granted, ["fs"]);
+
+    // A reinstall over the top carries the row's grants forward; it is not an
+    // authorization, and it must not invalidate the one already recorded.
+    install_plugin(
+        &runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            force: true,
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("reinstall");
+    let runtime = fixture.reopen();
+    let summary = show_plugin(&runtime, "demo").expect("show");
+    assert_eq!(summary.status, PluginStatus::Active, "{summary:?}");
+    assert_eq!(summary.granted, ["fs"]);
 }

@@ -26,6 +26,7 @@ pub(crate) mod git_sandbox;
 pub mod mutation;
 pub(crate) mod plugin_config;
 pub(crate) mod plugin_definitions;
+pub mod plugin_grants;
 pub mod plugin_host;
 pub(crate) mod recovery_authority;
 mod resolve;
