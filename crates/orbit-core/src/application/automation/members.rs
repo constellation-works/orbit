@@ -211,6 +211,7 @@ impl MemberHost for Host<'_> {
                         evidence: json!({"task_id":task.id}),
                         first_seen: now,
                         changed_at: now,
+                        crew: bundle_crew(task.crew.as_deref()),
                     });
                 }
                 StateTriggerKind::ExecutionFailed => {
@@ -255,6 +256,7 @@ impl MemberHost for Host<'_> {
                                 evidence,
                                 first_seen: now,
                                 changed_at: now,
+                                crew: None,
                             });
                         }
                         Err(error) => {
@@ -358,9 +360,10 @@ impl MemberHost for Host<'_> {
             "preparation"
         };
 
-        // Every batch member travels as an explicit task id; prepare partitions
-        // them by `max_partition_size`, so one run fans out over the batch
-        // [ORB-12746].
+        // Every batch member travels as an explicit task id; evaluate already
+        // grouped the attempt by stored crew, and prepare partitions those
+        // ids by `max_partition_size`, so one run fans out over a
+        // crew-homogeneous batch [ORB-12746, ORB-12761].
         let task_ids = attempt.task_ids();
         self.runtime
             .submit_automation_pipeline_run(

@@ -4,7 +4,7 @@
 
 use crate::task::{Task, TaskStatus, TaskType};
 use crate::workflow::automation::members::{
-    PreparationEligibility, StateTrigger, StateTriggerKind,
+    PreparationEligibility, StateMember, StateTrigger, StateTriggerKind, bundle_crew,
 };
 use serde_json::json;
 
@@ -222,4 +222,35 @@ fn eligibility_normalizes_order_and_duplicates() {
         .is_default(),
         "the default predicate is recognised in any authored order"
     );
+}
+
+/// [ORB-12761] Persisted members without `crew` stay loadable; the bundle
+/// identity trims empty values the same way dispatch does.
+#[test]
+fn member_crew_defaults_absent_and_normalizes_like_dispatch() {
+    let without: StateMember = serde_json::from_value(json!({
+        "key": "t",
+        "task_ids": ["t"],
+        "fingerprint": "fp",
+        "source": {"commit": "c", "tree": "tree"},
+        "evidence": {},
+        "first_seen": "2026-09-01T00:00:00Z",
+        "changed_at": "2026-09-01T00:00:00Z"
+    }))
+    .expect("legacy member without crew still deserializes");
+    assert_eq!(without.crew, None);
+    let encoded = serde_json::to_value(&without).expect("serialize");
+    assert!(encoded.get("crew").is_none(), "{encoded}");
+
+    let mut with_crew = without;
+    with_crew.crew = Some("opus".into());
+    let encoded = serde_json::to_value(&with_crew).expect("serialize named crew");
+    assert_eq!(encoded["crew"], "opus");
+    let back: StateMember = serde_json::from_value(encoded).expect("round-trip named crew");
+    assert_eq!(back.crew.as_deref(), Some("opus"));
+
+    assert_eq!(bundle_crew(Some("  opus  ")), Some("opus".into()));
+    assert_eq!(bundle_crew(Some("")), None);
+    assert_eq!(bundle_crew(Some("   ")), None);
+    assert_eq!(bundle_crew(None), None);
 }

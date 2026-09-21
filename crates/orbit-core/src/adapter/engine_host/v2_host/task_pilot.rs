@@ -251,6 +251,9 @@ pub(super) fn prepare(
         snapshot["material_fingerprint"] = json!(fingerprint);
     }
 
+    // Size partitions only. Crew homogeneity is the state-consumer batching
+    // step [ORB-12761]: a mixed-crew attempt is rejected at dispatch before
+    // this action runs.
     let partitions = task_ids
         .chunks(max_partition_size)
         .enumerate()

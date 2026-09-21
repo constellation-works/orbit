@@ -144,7 +144,10 @@ trigger:
 ```
 
 `batch_size` is how many due tasks one tick admits into a single
-`task_pilot_pipeline` run, which pilots them five per partition; a burst of
+`task_pilot_pipeline` run. The batch is crew-homogeneous: members that
+disagree on stored `task.crew` (including set vs unset) stay pending for
+the next admission, so dispatch is never asked to reject a mixed-crew
+bundle. The run pilots them five per partition; a burst of same-crew
 filed tasks is prepared as one run rather than one run per task, and
 `orbit clock tick --dry-run` lists the batch it would admit. Narrow the
 predicate to, say, `statuses: [backlog]` or `require_tags: [pilot]` to keep the

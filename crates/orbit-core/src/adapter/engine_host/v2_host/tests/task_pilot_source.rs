@@ -869,6 +869,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         evidence: json!({}),
         first_seen: now,
         changed_at: now,
+        crew: None,
     };
     let consumer =
         crate::application::automation::consumer_key(&fixture.runtime, "routine", "pilot").unwrap();
@@ -1097,6 +1098,7 @@ fn batched_claim_partitions_one_run_and_settles_members_independently() {
             evidence: json!({}),
             first_seen: now,
             changed_at: now,
+            crew: None,
         })
         .collect::<Vec<_>>();
     let consumer =

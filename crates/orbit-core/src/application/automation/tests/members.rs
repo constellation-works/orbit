@@ -269,6 +269,47 @@ fn preparation_page_lists_instructions_once_for_all_eligible_tasks() {
     );
 }
 
+/// [ORB-12761] Preparation members carry stored `task.crew` so the batching
+/// step can keep a dispatch bundle crew-homogeneous.
+#[test]
+fn preparation_observe_stamps_stored_task_crew() {
+    let (_root, runtime, repo) = test_runtime();
+    let opus = create_proposed_task(&runtime, &repo, "opus");
+    let sol = create_proposed_task(&runtime, &repo, "sol");
+    let unset = create_proposed_task(&runtime, &repo, "unset");
+    runtime
+        .update_task(
+            &opus,
+            crate::application::task::TaskUpdateParams {
+                crew: Some(Some("opus".into())),
+                ..Default::default()
+            },
+        )
+        .expect("assign opus");
+    runtime
+        .update_task(
+            &sol,
+            crate::application::task::TaskUpdateParams {
+                crew: Some(Some("sol".into())),
+                ..Default::default()
+            },
+        )
+        .expect("assign sol");
+
+    let page = Host::new(&runtime, &preparation_trigger())
+        .observe(None, Utc::now())
+        .unwrap();
+    let crew_of = |id: &str| {
+        page.candidates
+            .iter()
+            .find(|member| member.key == id)
+            .map(|member| member.crew.clone())
+    };
+    assert_eq!(crew_of(&opus), Some(Some("opus".into())));
+    assert_eq!(crew_of(&sol), Some(Some("sol".into())));
+    assert_eq!(crew_of(&unset), Some(None));
+}
+
 #[test]
 fn preparation_admission_resolves_branch_head_once_per_call() {
     let (_root, runtime, repo) = test_runtime();

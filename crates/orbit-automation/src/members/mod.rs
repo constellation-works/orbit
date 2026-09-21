@@ -343,8 +343,10 @@ pub fn evaluate(
     // Batch the due members Core will admit, oldest first, up to the batch
     // size and `max_items` admission checks [ORB-12746]. Temporary refusals
     // remain visible, while obsolete source identities are retired from
-    // durable state. One attempt pins one source, so a member observed at
-    // another head waits for the next admission.
+    // durable state. One attempt pins one source and one crew identity, so a
+    // member observed at another head — or carrying a different stored
+    // `task.crew` — waits for the next admission rather than mixing the
+    // bundle the one-bundle-one-crew dispatch rule would reject [ORB-12761].
     let batch_size = trigger.effective_batch_size();
     let mut admitted = Vec::new();
     let mut batch = Vec::new();
@@ -354,10 +356,9 @@ pub fn evaluate(
         if admitted.len() >= batch_size {
             break;
         }
-        if admitted
-            .first()
-            .is_some_and(|first: &StateMember| first.source != member.source)
-        {
+        if admitted.first().is_some_and(|first: &StateMember| {
+            first.source != member.source || first.crew != member.crew
+        }) {
             continue;
         }
         match host.admission(&member)? {

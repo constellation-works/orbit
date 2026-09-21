@@ -45,6 +45,7 @@ impl MemberHost for Host {
                 evidence: serde_json::json!({}),
                 first_seen: now,
                 changed_at: now,
+                crew: None,
             }],
             withheld: BTreeMap::new(),
             next: None,
@@ -165,6 +166,15 @@ fn source() -> SourceRevision {
 }
 
 fn state_member(key: &str, task_ids: &[&str], first_seen_minute: i64) -> StateMember {
+    state_member_with_crew(key, task_ids, first_seen_minute, None)
+}
+
+fn state_member_with_crew(
+    key: &str,
+    task_ids: &[&str],
+    first_seen_minute: i64,
+    crew: Option<&str>,
+) -> StateMember {
     StateMember {
         key: key.into(),
         task_ids: task_ids.iter().map(|id| (*id).into()).collect(),
@@ -175,6 +185,7 @@ fn state_member(key: &str, task_ids: &[&str], first_seen_minute: i64) -> StateMe
             + Duration::minutes(first_seen_minute),
         changed_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap()
             + Duration::minutes(first_seen_minute),
+        crew: crew.map(str::to_string),
     }
 }
 
@@ -796,6 +807,104 @@ fn burst_of_due_members_admits_one_batch_and_keeps_the_rest_pending() {
             .all(|member| member.reason == "admitted")
     );
     assert_eq!(host.admitted.borrow().len(), 1, "one run per batch");
+}
+
+/// [ORB-12761] A mixed-crew due set is admitted as one crew-homogeneous
+/// attempt; the other crew stays pending and is dispatched on the next
+/// admission after the first attempt settles, so dispatch never sees a
+/// mixed `task_ids` bundle.
+#[test]
+fn mixed_crew_due_members_dispatch_one_homogeneous_bundle_per_crew() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = SchedulerHost::new(vec![
+        state_member_with_crew("task-0", &["task-0"], 0, Some("opus")),
+        state_member_with_crew("task-1", &["task-1"], 0, Some("sol")),
+        state_member_with_crew("task-2", &["task-2"], 0, Some("opus")),
+        state_member("task-3", &["task-3"], 0),
+    ]);
+
+    assert_eq!(
+        preparation_tick(store.as_ref(), &host, 0, false).reason,
+        "debouncing"
+    );
+
+    let preview = preparation_tick(store.as_ref(), &host, 3, true);
+    assert_eq!(preview.reason, "would_fire");
+    assert_eq!(
+        preview
+            .batch
+            .iter()
+            .map(|member| member.key.as_str())
+            .collect::<Vec<_>>(),
+        ["task-0", "task-2"]
+    );
+
+    let fired = preparation_tick(store.as_ref(), &host, 3, false);
+    assert_eq!(fired.reason, "fired");
+    assert_eq!(
+        host.admitted.borrow().as_slice(),
+        [vec!["task-0".to_string(), "task-2".to_string()]]
+    );
+    let attempt = fired.state.unwrap().members.unwrap().active.unwrap();
+    assert_eq!(attempt.members().len(), 2);
+    assert!(
+        attempt
+            .members()
+            .iter()
+            .all(|member| member.crew.as_deref() == Some("opus"))
+    );
+
+    *host.settled.borrow_mut() = Some(MemberBatchEvidence {
+        action_id: attempt.action_id.clone().unwrap(),
+        attempt_id: attempt.id.clone(),
+        applied: vec![
+            evidence_for(&attempt, "task-0", "task-0-assessed"),
+            evidence_for(&attempt, "task-2", "task-2-assessed"),
+        ],
+        failed: BTreeMap::new(),
+    });
+    let assessed = |key: &str, crew: Option<&str>| StateMember {
+        fingerprint: format!("{key}-assessed"),
+        ..state_member_with_crew(key, &[key], 0, crew)
+    };
+    *host.candidates.borrow_mut() = vec![
+        assessed("task-0", Some("opus")),
+        state_member_with_crew("task-1", &["task-1"], 0, Some("sol")),
+        assessed("task-2", Some("opus")),
+        state_member("task-3", &["task-3"], 0),
+    ];
+
+    let next = preparation_tick(store.as_ref(), &host, 4, false);
+    assert_eq!(next.reason, "fired");
+    assert_eq!(
+        host.admitted.borrow().as_slice(),
+        [
+            vec!["task-0".to_string(), "task-2".to_string()],
+            vec!["task-1".to_string()]
+        ]
+    );
+    let sol_attempt = next.state.unwrap().members.unwrap().active.unwrap();
+    assert_eq!(sol_attempt.task_ids(), ["task-1"]);
+    assert_eq!(sol_attempt.member.crew.as_deref(), Some("sol"));
+}
+
+/// [ORB-12761] Unset `task.crew` is a distinct bundle identity: it does not
+/// share an attempt with a named crew, matching the dispatch rule that
+/// treats set vs unset as mixed.
+#[test]
+fn unset_and_named_crew_do_not_share_a_bundle() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = SchedulerHost::new(vec![
+        state_member_with_crew("named", &["named"], 0, Some("opus")),
+        state_member("unset", &["unset"], 0),
+    ]);
+    preparation_tick(store.as_ref(), &host, 0, false);
+    let fired = preparation_tick(store.as_ref(), &host, 3, false);
+    assert_eq!(fired.reason, "fired");
+    assert_eq!(
+        host.admitted.borrow().as_slice(),
+        [vec!["named".to_string()]]
+    );
 }
 
 /// [ORB-12746] One run settles each member on its own: applied members are
