@@ -295,20 +295,28 @@ pub(super) fn update(
     {
         let current = runtime.get_task(&id)?;
         if let Some(kind) = guarded_lifecycle_write(current.status, target, &input)? {
-            let task = match kind {
-                GuardedLifecycleWrite::Approve => runtime
-                    .transition_task_to_backlog_with_identity(
+            let (task, unverified) = match kind {
+                GuardedLifecycleWrite::Approve => (
+                    runtime.transition_task_to_backlog_with_identity(
                         &id,
                         optional_string(&input, "note")?,
                         optional_string(&input, "comment")?,
                         agent,
                         model,
                     )?,
+                    Vec::new(),
+                ),
                 GuardedLifecycleWrite::Start => {
                     let mut params = task_update_params_from_input(&input, requested_status)?;
                     params.trusted_artifact_origin = origin.clone();
-                    ensure_context_selectors_if_required(runtime, &input, &params)?;
-                    runtime.start_task_with_identity_and_crew(
+                    let unverified = ensure_context_selectors_if_required(
+                        runtime,
+                        &id,
+                        &input,
+                        &params,
+                        owner.as_ref(),
+                    )?;
+                    let task = runtime.start_task_with_identity_and_crew(
                         &id,
                         optional_string(&input, "note")?,
                         params.comment.clone(),
@@ -318,10 +326,16 @@ pub(super) fn update(
                         params.plan.clone(),
                         params,
                         owner.map(|owner| owner.owner_run_id),
-                    )?
+                    )?;
+                    (task, unverified)
                 }
             };
-            return serialize_task_write_response(runtime, &task, response_fields.as_deref());
+            return write_response_with_unverified_context(
+                runtime,
+                &task,
+                response_fields.as_deref(),
+                unverified,
+            );
         }
     }
     if input.get("note").is_some() {
@@ -331,7 +345,8 @@ pub(super) fn update(
     }
     let mut params = task_update_params_from_input(&input, requested_status)?;
     params.trusted_artifact_origin = origin.clone();
-    ensure_context_selectors_if_required(runtime, &input, &params)?;
+    let unverified =
+        ensure_context_selectors_if_required(runtime, &id, &input, &params, owner.as_ref())?;
     let task = runtime.update_task_with_owner(
         &id,
         params,
@@ -339,7 +354,28 @@ pub(super) fn update(
         model,
         owner.map(|owner| owner.owner_run_id),
     )?;
-    serialize_task_write_response(runtime, &task, response_fields.as_deref())
+    write_response_with_unverified_context(runtime, &task, response_fields.as_deref(), unverified)
+}
+
+/// Response key listing the canonical selectors this write stored without a
+/// verified anchor because the owning worker declared them from its worktree.
+/// Present only when the relaxation actually applied, so the response stays
+/// unchanged for every strict write.
+const CONTEXT_FILES_UNVERIFIED_KEY: &str = "context_files_unverified";
+
+fn write_response_with_unverified_context(
+    runtime: &OrbitRuntime,
+    task: &orbit_types::task::Task,
+    fields: Option<&[String]>,
+    unverified: Vec<String>,
+) -> Result<Value, OrbitError> {
+    let mut response = serialize_task_write_response(runtime, task, fields)?;
+    if !unverified.is_empty()
+        && let Some(obj) = response.as_object_mut()
+    {
+        obj.insert(CONTEXT_FILES_UNVERIFIED_KEY.to_string(), json!(unverified));
+    }
+    Ok(response)
 }
 
 enum GuardedLifecycleWrite {
@@ -486,17 +522,28 @@ fn task_update_params_from_input(
     })
 }
 
+/// Run the operator-surface selector guard for an update unless the caller
+/// opted out, and return the selectors the owning worker's relaxation let
+/// through unverified (see
+/// [`OrbitRuntime::ensure_context_selectors_exist_for_task_write`]).
 fn ensure_context_selectors_if_required(
     runtime: &OrbitRuntime,
+    task_id: &str,
     input: &Value,
     params: &TaskUpdateParams,
-) -> Result<(), OrbitError> {
-    if !allows_missing_context(input)?
-        && let Some(candidates) = params.context_files.as_deref()
-    {
-        runtime.ensure_context_selectors_exist(candidates)?;
+    owner: Option<&orbit_tools::ReservationOwnerContext>,
+) -> Result<Vec<String>, OrbitError> {
+    if allows_missing_context(input)? {
+        return Ok(Vec::new());
     }
-    Ok(())
+    let Some(candidates) = params.context_files.as_deref() else {
+        return Ok(Vec::new());
+    };
+    runtime.ensure_context_selectors_exist_for_task_write(
+        task_id,
+        owner.map(|owner| owner.owner_run_id.as_str()),
+        candidates,
+    )
 }
 
 /// Whether the caller explicitly opted out of the operator-surface check that

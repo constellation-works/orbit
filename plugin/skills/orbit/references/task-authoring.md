@@ -91,9 +91,12 @@ precise verified files/symbols; a directory is appropriate for a genuinely owned
 area, not a shortcut for all possibly relevant code.
 
 For a known new target, use the supported `allow_missing_context` option and
-explain creation intent. Missing-file selectors remain valid declarations; do
-not prune them because a checkout cannot yet resolve them. Do not invent paths
-to satisfy admission. Unknown targets can be prepared by task-pilot before
+explain creation intent; a rejected selector's message names that option. A
+worker updating its own task through `orbit.task.update` from its run's linked
+worktree gets that relaxation automatically for that task, and the response
+lists the stored-but-unresolved selectors as `context_files_unverified`.
+Missing-file selectors remain valid declarations; do not prune them because a
+checkout cannot yet resolve them. Do not invent paths to satisfy admission. Unknown targets can be prepared by task-pilot before
 execution; empty context does not guarantee eligibility for every admission path.
 
 Put read-only designs, conventions and examples in prose links. A design document

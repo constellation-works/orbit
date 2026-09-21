@@ -119,6 +119,13 @@ fn ensure_context_selectors_exist_rejects_missing_selectors() {
         message.contains("not a `symbol:` name or kind"),
         "error must name the unverified `symbol:` half: {message}"
     );
+    // ORB-12731: workers retried this rejection blind because nothing told
+    // them the escape exists; the message names it for every surface.
+    assert!(
+        message.contains("pass `allow_missing_context: true`")
+            && message.contains("`--allow-missing-context` on the CLI"),
+        "a missing target must name the escape hatch: {message}"
+    );
 
     let message = expect_selector_rejection(&runtime, "symbol:does/not/exist.rs#run:function");
     assert!(
@@ -129,6 +136,56 @@ fn ensure_context_selectors_exist_rejects_missing_selectors() {
         message.contains("only the filesystem anchor is verified"),
         "error must document that a `symbol:` name is not verified: {message}"
     );
+}
+
+/// The escape hint belongs to the missing-target rejection only: a selector
+/// that is malformed, outside the workspace, or of the wrong kind is never
+/// something `allow_missing_context` should be suggested for.
+#[test]
+fn ensure_context_selectors_exist_hint_is_limited_to_missing_targets() {
+    let (root, runtime) = test_runtime();
+    let repo_root = root.path().join("repo");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create src");
+    std::fs::write(repo_root.join("src/lib.rs"), b"pub fn run() {}\n").expect("write anchor");
+
+    for selector in ["../outside.rs", "module:src", "dir:src/lib.rs", "file:src"] {
+        let message = expect_selector_rejection(&runtime, selector);
+        assert!(
+            !message.contains("allow_missing_context"),
+            "`{selector}` is not a missing target and must not suggest the escape: {message}"
+        );
+    }
+}
+
+/// Without a run binding, the update-path guard is the strict guard: nothing
+/// is relaxed and nothing is reported unverified.
+#[test]
+fn ensure_context_selectors_exist_for_task_write_is_strict_without_an_owner_run() {
+    let (root, runtime) = test_runtime();
+    let repo_root = root.path().join("repo");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create src");
+    std::fs::write(repo_root.join("src/lib.rs"), b"pub fn run() {}\n").expect("write anchor");
+
+    let unverified = runtime
+        .ensure_context_selectors_exist_for_task_write(
+            "ORB-00001",
+            None,
+            &["file:src/lib.rs".to_string()],
+        )
+        .expect("existing selector is accepted");
+    assert!(unverified.is_empty(), "nothing was relaxed: {unverified:?}");
+
+    match runtime.ensure_context_selectors_exist_for_task_write(
+        "ORB-00001",
+        Some("jrun-unbound"),
+        &["file:src/new.rs".to_string()],
+    ) {
+        Err(OrbitError::InvalidInput(message)) => assert!(
+            message.contains("file:src/new.rs") && message.contains("allow_missing_context"),
+            "a caller outside a linked worktree gets the strict rejection: {message}"
+        ),
+        other => panic!("expected InvalidInput outside a worktree, got {other:?}"),
+    }
 }
 
 #[test]

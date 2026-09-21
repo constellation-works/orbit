@@ -92,10 +92,14 @@ spec:
        selector through `orbit.task.update` only when needed for an acceptance
        criterion or to keep directly affected materials and consumers
        consistent; record why in the execution summary and make the smallest
-       compatible change. Declaring a path never converts an accidental or
-       unintended edit into scoped work: revert that edit instead of widening
-       the boundary. Stop after a task comment if target behavior is out of
-       scope, broad, or ambiguous. Never delete unrelated materials as cleanup.
+       compatible change. A file this task creates does not exist yet: pass
+       `allow_missing_context: true` on that update (a call from your own
+       run's worktree relaxes the existence check for this task automatically
+       and reports those selectors as `context_files_unverified`). Declaring a
+       path never converts an accidental or unintended edit into scoped work:
+       revert that edit instead of widening the boundary. Stop after a task
+       comment if target behavior is out of scope, broad, or ambiguous. Never
+       delete unrelated materials as cleanup.
     5. Keep shared instructions domain-neutral. Apply the owning workspace's
        AGENTS.md for code-, language-, and repository-specific practices.
        Use current evidence and explicit requirements to justify decisions.
