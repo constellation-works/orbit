@@ -1,0 +1,39 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: invoke_detached
+spec:
+  type: deterministic
+  description: >
+    Submit a named v2 Job and return as soon as its Run is durable. The
+    non-blocking counterpart to `invoke_and_wait`, for a parent that must keep
+    working while the child runs. Output carries `run_id`, `job_name`, and
+    whether the child was `queued` behind the job's `max_active_runs`. There is
+    deliberately no `status`: this activity never waits for one, so
+    `pipeline_success_guard` does not apply to its output. A caller that needs
+    the child's outcome re-observes the run itself.
+  input_schema_json:
+    type: object
+    required: [job_name, run_input]
+    properties:
+      job_name:
+        type: string
+      run_input:
+        type: object
+      priority:
+        type: string
+        enum: [low, medium, high, critical]
+  output_schema_json:
+    type: object
+    required: [run_id, job_name, queued]
+    properties:
+      run_id:
+        type: string
+      job_name:
+        type: string
+      queued:
+        type: boolean
+      submitted_at:
+        type: string
+  action: invoke_detached
+  config: {}

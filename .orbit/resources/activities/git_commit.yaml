@@ -1,0 +1,67 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: git_commit
+spec:
+  type: deterministic
+  description: >
+    Commit the active task candidate: every tracked change plus new paths with
+    exact durable file intent. Refuse unknown untracked paths before changing
+    the index.
+  input_schema_json:
+    type: object
+    properties:
+      job_run_id:
+        type: string
+      completed_task_ids:
+        type: array
+        items:
+          type: string
+      scope:
+        type: string
+        enum: [all, per_task, per_task_finalize]
+      workspace_path:
+        type: string
+      base_ref:
+        type: string
+        description: Worktree setup start-point ref name. Diagnostic context only; this step never resolves it.
+      base_sha:
+        type: string
+        description: Full commit id pinned by worktree_setup; HEAD must still equal it when this step begins.
+      verify_already_landed:
+        type: boolean
+        description: >
+          Allow a clean pinned HEAD to return verified_already_landed only
+          after checking the task's structured landing and validation artifacts.
+          Callers must recheck that evidence at promotion and completion.
+  output_schema_json:
+    type: object
+    properties:
+      phase:
+        type: string
+      decision:
+        type: string
+      committed:
+        type: boolean
+      base_sha:
+        type: string
+      commit_sha:
+        type: string
+      job_run_id:
+        type: string
+      skipped_no_diff_expected:
+        type: boolean
+      committed_task_ids:
+        type: array
+        items:
+          type: string
+      skipped_task_ids:
+        type: array
+        items:
+          type: string
+      committed_files:
+        type: array
+        items:
+          type: string
+  action: git_commit
+  config: {}

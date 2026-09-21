@@ -1,0 +1,34 @@
+# Auto-task scheduler pipeline [ORB-10149].
+#
+# The one generic scheduler routine's target: a single deterministic step that
+# fires every due, enabled auto-task definition and mints a task from its
+# template. There are no per-need bespoke routines — periodic work is data
+# (`.orbit/auto_tasks/*.yaml`), and this pipeline is the only thing that reads
+# it.
+#
+# Empty / all-skipped behavior
+# - `run_auto_task_scheduler` returns `created: 0` and the run succeeds — a
+#   clean no-op, the same contract as `task_auto_pipeline` on an empty backlog.
+#
+# Overlap safety
+# - `max_active_runs: 1` makes the scheduler single-flight, and the seeded
+#   routine fires it with `policy.overlap: forbid`. The scheduler advances a
+#   per-definition cursor before returning, so even a racing pass cannot
+#   double-mint a slot.
+
+schemaVersion: 2
+kind: Job
+metadata:
+  name: auto_task_scheduler_pipeline
+spec:
+  state: enabled
+  kind: workflow
+  max_active_runs: 1
+  default_input:
+    dry_run: false
+
+  steps:
+    - id: schedule
+      target: activity:run_auto_task_scheduler
+      default_input:
+        dry_run: "{{ input.dry_run }}"

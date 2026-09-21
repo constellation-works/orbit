@@ -1,0 +1,122 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: collect_ci_evidence
+spec:
+  type: deterministic
+  description: >
+    Run the GitHub capability preflight and every CI discovery query on the
+    host, outside any agent sandbox, and emit one bounded, redacted evidence
+    snapshot. Derives the workspace's integration head, the repository's
+    release head as GitHub itself reports it, and every open pull-request head
+    rather than assuming branch names; separates the event-reported SHA, the
+    ref's current head, and the commit the runner actually checked out; and
+    reports every bound it hit in `truncation` rather than silently returning
+    less. Checkout identity is extracted while the full runner-log stream is
+    drained, before the human excerpt is truncated; extraction scans at most
+    8 MiB per log and records incomplete evidence rather than guessing.
+    Workflow runs are listed repository-wide in one query. `latest_runs`
+    records the newest run of each workflow for audit, ordered by creation
+    time then run ID. Current failures are selected by relevant identity
+    (workflow, ref, and observed failed jobs): a queued or in-progress
+    successor is not evidence that an observed failure is resolved, an
+    unrelated pull-request run cannot erase a landing-branch failure, and a
+    genuinely newer completed non-unsuccessful check of the same identity
+    (or a landing-branch success, for non-landing noise) does suppress it.
+    Already-failed jobs inside an in-flight workflow become current once
+    their evidence is complete; a pending check alone is never a repair
+    task. Incomplete mixed-state logs stay in `retryable_errors` until a
+    later sweep can finish them. A red run on a branch that is neither a
+    scanned head nor present on origin is reported as
+    `ref_no_longer_exists` rather than current: its pull request merged or
+    its branch was deleted, so the landing branch's own runs are the live
+    evidence. That probe is authoritative and bounded — one origin query per
+    distinct branch carrying a red run — and a probe that fails leaves the
+    failure current. When candidates outnumber `max_investigated_runs` the
+    ranked prefix keeps all but one slot and the last slot rotates through
+    the overflow by `investigation_cursor`, so a candidate below the cap is
+    investigated within one rotation instead of never. Discovery or investigation failures are
+    bounded, redacted, and emitted in `retryable_errors`; the filing step
+    rejects such a snapshot so it cannot be mistaken for a clean result.
+    When no GitHub client is available or authenticated the snapshot carries
+    `collected: false` and gathers nothing further, so a caller can never
+    mistake it for a clean CI result.
+  input_schema_json:
+    type: object
+    properties:
+      workspace_path:
+        type: string
+      integration_branch:
+        type: string
+        description: >
+          The branch this workspace ships onto. Defaults to `base_branch`, then
+          to the repository's GitHub default branch.
+      base_branch:
+        type: string
+      max_runs:
+        type: number
+        description: >
+          Cap on the single repository-wide workflow-run listing. This is a
+          whole-repository budget, not a per-head one; it must stay deep enough
+          that the integration head's newest run survives the pull-request runs
+          that outnumber it. Defaults to 100, maximum 300.
+      max_pull_requests:
+        type: number
+      max_investigated_runs:
+        type: number
+      max_retired_ref_probes:
+        type: number
+        description: >
+          Cap on origin probes for branches no scanned head covers. Defaults to
+          20, maximum 100. Branches past the cap keep their failures listed as
+          current rather than being assumed merged.
+      investigation_cursor:
+        type: number
+        description: >
+          Which overflow candidate the rotating investigation slot lands on.
+          Defaults to the collection hour, which advances once per hourly
+          sweep; pin it to make a sweep's selection reproducible.
+      log_max_bytes:
+        type: number
+      max_checkout_log_reads:
+        type: number
+  output_schema_json:
+    type: object
+    required: [phase, ci_evidence]
+    properties:
+      phase:
+        type: string
+      ci_evidence:
+        type: object
+        required: [schema_version, collected, capability]
+        properties:
+          schema_version:
+            type: number
+          collected:
+            type: boolean
+          outcome_hint:
+            type: string
+          capability:
+            type: object
+          repository:
+            type: object
+          heads:
+            type: array
+          latest_runs:
+            type: array
+          current_failures:
+            type: array
+          stale_or_superseded:
+            type: array
+          in_flight:
+            type: array
+          retryable_errors:
+            type: array
+          summary:
+            type: object
+          truncation:
+            type: object
+          collected_at:
+            type: string
+  action: collect_ci_evidence
+  config: {}

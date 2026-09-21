@@ -1,0 +1,105 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: classify_workspace_auto_tasks
+spec:
+  type: deterministic
+  description: >
+    Materialize the admissible work for one workspace drain iteration. Returns
+    the loose backlog leaves that may start right now, in `list_backlog`
+    priority/age order and one task per dispatch, plus at most one backlog epic
+    root. The two are independent answers, not a choice: an `in-progress` epic
+    root already reserves the union of its descendants' `context_files`, so
+    `list_backlog_tasks` excludes exactly the leaves that overlap it and
+    conflict-free chores keep shipping alongside it. Leaves are capped at the
+    number of free leaf-run slots (`max_active_leaf_runs` minus the live
+    `task_auto_pipeline` runs), and tasks a live child is already carrying are
+    excluded — a detached leaf stays `backlog` until its child moves it to
+    `in-progress`, so the child's run input is the only claim record until then.
+    An epic root is offered only when no `epic_pipeline` run is pending or
+    running, because that job admits one active run and a second dispatch would
+    queue rather than execute; `active_epic_run_id` names the live run when one
+    exists. Epic children are never selected. `idle` means the iteration
+    started nothing, which includes a saturated drain with a full backlog
+    behind it; `sleep_seconds` is the wait that fits — the short poll when work
+    is queued, the long one when nothing is. The ceiling in force is
+    `max_active_leaf_runs`: the value an operator set live on this run
+    (`worker_limit_source: run_control`, with the change itself in
+    `worker_limit`) when one exists, otherwise the `max_active_leaf_runs` this
+    run was submitted with.
+  input_schema_json:
+    type: object
+    properties:
+      max_tasks:
+        type: number
+        minimum: 1
+        maximum: 500
+      max_active_leaf_runs:
+        type: number
+        minimum: 1
+      poll_sleep_seconds:
+        type: number
+        minimum: 0
+      idle_sleep_seconds:
+        type: number
+        minimum: 0
+  output_schema_json:
+    type: object
+    required:
+      [
+        loose_task_ids,
+        loose_task_dispatches,
+        has_leaves,
+        epic_task_id,
+        has_epic,
+        idle,
+        sleep_seconds,
+      ]
+    properties:
+      loose_task_ids:
+        type: array
+        items:
+          type: string
+      loose_task_dispatches:
+        type: array
+        items:
+          type: object
+      has_leaves:
+        type: boolean
+      epic_task_id:
+        oneOf:
+          - type: string
+          - type: "null"
+      has_epic:
+        type: boolean
+      idle:
+        type: boolean
+      sleep_seconds:
+        type: number
+      pending_backlog:
+        type: number
+      active_leaf_runs:
+        type: number
+      free_slots:
+        type: number
+      max_active_leaf_runs:
+        type: number
+      submitted_max_active_leaf_runs:
+        type: number
+      worker_limit_source:
+        type: string
+        enum: [run_input, run_control]
+      worker_limit:
+        oneOf:
+          - type: object
+          - type: "null"
+      active_epic_run_id:
+        oneOf:
+          - type: string
+          - type: "null"
+      active_epic_task_id:
+        oneOf:
+          - type: string
+          - type: "null"
+  action: classify_workspace_auto_tasks
+  config: {}

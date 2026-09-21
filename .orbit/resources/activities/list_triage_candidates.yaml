@@ -1,0 +1,90 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: list_triage_candidates
+spec:
+  type: deterministic
+  description: >
+    Materialize the blocked tasks eligible for triage: `status: blocked`,
+    coupled to a job run via `job_run_id`, and that run terminalized as a
+    workflow failure (`failed` / `timeout` / `cancelled`). Tasks a human
+    blocked by hand (no coupled run, or a non-failed run) are never listed —
+    human intent wins. Reconciles stale job runs first (reusing
+    `reconcile_stale_job_runs`) so dead-owner runs settle to `interrupted`
+    and stay out of triage. Tasks whose durable re-backlog budget
+    (`triage_rebacklogged` history events >= `max_rebacklogs`) is exhausted
+    take the gave-up path here — a `triage_gave_up` history note plus a
+    filed friction, recorded at most once — and are reported under
+    `exhausted` instead of `candidates`. Explicit `task_ids` narrow the scan
+    but never bypass the guards. An empty result is a clean no-op for the
+    pipeline.
+  input_schema_json:
+    type: object
+    properties:
+      state_automation: {}
+      max_tasks:
+        type: number
+        minimum: 1
+        maximum: 100
+      max_rebacklogs:
+        type: number
+        minimum: 0
+        maximum: 10
+      task_ids:
+        type: array
+        items:
+          type: string
+  output_schema_json:
+    type: object
+    required: [candidates, candidate_count, task_ids]
+    properties:
+      candidate_count:
+        type: number
+      task_ids:
+        type: array
+        items:
+          type: string
+      candidates:
+        type: array
+        items:
+          type: object
+          required: [task_id, title, run_id, job_id, run_state, rebacklog_count, max_rebacklogs]
+          properties:
+            task_id:
+              type: string
+            title:
+              type: string
+            run_id:
+              type: string
+            job_id:
+              type: string
+            run_state:
+              type: string
+            error_code:
+              oneOf:
+                - type: string
+                - type: "null"
+            error_message:
+              oneOf:
+                - type: string
+                - type: "null"
+            rebacklog_count:
+              type: number
+            max_rebacklogs:
+              type: number
+      exhausted:
+        type: array
+        items:
+          type: object
+          required: [task_id, run_id, rebacklog_count]
+          properties:
+            task_id:
+              type: string
+            run_id:
+              type: string
+            rebacklog_count:
+              type: number
+      reconciled_stale_runs:
+        type: number
+  action: list_triage_candidates
+  config: {}

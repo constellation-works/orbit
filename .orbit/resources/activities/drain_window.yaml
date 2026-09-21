@@ -1,0 +1,37 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: drain_window
+spec:
+  type: deterministic
+  description: >
+    Open a drain window, or re-read one that is already open. Called with
+    `for_seconds` and no `deadline`, it stamps: the deadline is now plus that
+    many seconds. Called with that `deadline` echoed back, it answers whether
+    the window has since expired. The stamp lives in the stamping step's own
+    output, so re-reading the window is a pure function of a value the run
+    already carries. A zero or absent window is expired on the first answer;
+    since `break_when` is evaluated after a loop body runs, that yields exactly
+    one iteration. The deadline gates starting new work only — it never
+    cancels or shortens a child run that has already begun.
+  input_schema_json:
+    type: object
+    properties:
+      for_seconds:
+        type: number
+        minimum: 0
+        maximum: 86400
+      deadline:
+        type: string
+  output_schema_json:
+    type: object
+    required: [deadline, expired, remaining_seconds]
+    properties:
+      deadline:
+        type: string
+      expired:
+        type: boolean
+      remaining_seconds:
+        type: number
+  action: drain_window
+  config: {}

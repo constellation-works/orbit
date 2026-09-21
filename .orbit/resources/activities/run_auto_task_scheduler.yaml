@@ -1,0 +1,73 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: run_auto_task_scheduler
+spec:
+  type: deterministic
+  description: >
+    Fire every due, enabled auto-task definition in this workspace and mint a
+    task from its template. Reads git-versioned definitions from
+    `.orbit/auto_tasks/*.yaml`; last-fired cursors are host-local runtime state
+    under `.orbit/state/auto-tasks.json`. Catch-up collapses (a downtime gap
+    yields one make-up task, never one per missed slot) and `skip_if_open`
+    dedupe (never files while a prior instance created by the same definition
+    is still open) are enforced in the scheduler core. Every minted task
+    carries an `auto-task:<name>` provenance tag. Provider-neutral -
+    definitions carry no turn-based knobs. An empty or all-skipped
+    pass is a clean no-op. `dry_run` reports what would fire without recording
+    or creating anything.
+  input_schema_json:
+    type: object
+    properties:
+      dry_run:
+        type: boolean
+  output_schema_json:
+    type: object
+    required: [dry_run, definitions, created, created_task_ids, reports, load_errors]
+    properties:
+      dry_run:
+        type: boolean
+      definitions:
+        type: number
+      created:
+        type: number
+      created_task_ids:
+        type: array
+        items:
+          type: string
+      reports:
+        type: array
+        items:
+          type: object
+          required: [name, action]
+          properties:
+            name:
+              type: string
+            action:
+              type: string
+            reason:
+              oneOf:
+                - type: string
+                - type: "null"
+            slot:
+              oneOf:
+                - type: string
+                - type: "null"
+            task_id:
+              oneOf:
+                - type: string
+                - type: "null"
+      load_errors:
+        type: array
+        items:
+          type: object
+          required: [message]
+          properties:
+            path:
+              oneOf:
+                - type: string
+                - type: "null"
+            message:
+              type: string
+  action: run_auto_task_scheduler
+  config: {}

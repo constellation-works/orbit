@@ -1,0 +1,34 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: worktree_gc
+spec:
+  type: deterministic
+  description: >
+    Reap worktrees whose associated task has settled to rejected, archived,
+    or done. A run that is not yet terminal, has no resolvable associated
+    task, or still has a dirty tree is always retained and reported.
+  input_schema_json:
+    type: object
+    properties:
+      older_than_hours:
+        type: integer
+        minimum: 0
+      run_id:
+        type: string
+  output_schema_json:
+    type: object
+    required: [dry_run, bytes_reclaimed, reports]
+    properties:
+      dry_run:
+        type: boolean
+      bytes_reclaimed:
+        type: integer
+      reports:
+        type: array
+        items:
+          type: object
+          required:
+            [path, run_id, run_state, task_id, task_status, action, bytes_reclaimed]
+  action: worktree_gc
+  config: {}

@@ -1,0 +1,67 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: pipeline_success_guard
+spec:
+  type: deterministic
+  description: >
+    Fail the current workflow when one or more child pipeline wait entries did
+    not reach `status: succeeded`. Use this after any required cleanup steps
+    that still need access to the raw child status. Workspace-level sequencers
+    may opt into `allow_non_success` to validate, retain, and count exact
+    terminal child outcomes without failing solely for a non-success status.
+  input_schema_json:
+    type: object
+    properties:
+      context:
+        type: string
+      allow_non_success:
+        type: boolean
+      result:
+        type: object
+        properties:
+          status:
+            type: string
+          run_id:
+            type: string
+          error:
+            type: string
+          pipeline:
+            type: object
+      results:
+        type: array
+        items:
+          type: object
+          properties:
+            status:
+              type: string
+            run_id:
+              type: string
+            error:
+              type: string
+            pipeline:
+              type: object
+    anyOf:
+      - required: [result]
+      - required: [results]
+  output_schema_json:
+    type: object
+    required: [succeeded, checked_count]
+    properties:
+      succeeded:
+        type: boolean
+      checked_count:
+        type: integer
+        minimum: 1
+      succeeded_count:
+        type: integer
+        minimum: 0
+      non_success_count:
+        type: integer
+        minimum: 0
+      results:
+        type: array
+        items:
+          type: object
+  action: pipeline_success_guard
+  config: {}

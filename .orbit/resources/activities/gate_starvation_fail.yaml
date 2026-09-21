@@ -1,0 +1,47 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: gate_starvation_fail
+spec:
+  type: deterministic
+  description: >
+    Emit a `gate.starvation` audit event and fail the Run. Used by the
+    admission-gate workflow (`task_gate_pipeline`) as the post-loop
+    guard when the reserve-wait window never opened within
+    `max_wait_seconds`. The audit payload carries `task_ids`,
+    `conflicting_files`, and `waiting_on_deps` so an epic-level
+    orchestrator can decide to replan the bundle rather than retry
+    indefinitely — the gate can starve on either axis, so both are
+    reported.
+
+    Note this activity only fires for *legitimate* waits that ran out of
+    budget. A dependency that can never be satisfied (archived, rejected,
+    or dangling) fails earlier, inside `reserve_locks`, with a
+    `task.dependencies.unsatisfiable` error and never reaches the loop.
+  input_schema_json:
+    type: object
+    required: [task_ids]
+    properties:
+      task_ids:
+        type: array
+        items:
+          type: string
+      conflicts:
+        type: array
+        items:
+          type: object
+      waiting_on_deps:
+        type: array
+        items:
+          type: string
+      max_wait_seconds:
+        type: number
+  output_schema_json:
+    type: object
+    description: >
+      This activity always fails — it exists only to emit the audit
+      event and terminate the Run. The output schema is declared for
+      parity with other deterministic activities.
+    properties: {}
+  action: gate_starvation_fail
+  config: {}

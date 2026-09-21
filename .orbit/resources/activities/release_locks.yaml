@@ -1,0 +1,25 @@
+schemaVersion: 2
+kind: Activity
+metadata:
+  name: release_locks
+spec:
+  type: deterministic
+  description: >
+    Release a previously granted task-lock reservation by delegating to
+    `orbit.task.locks.release`. Used by admission-gate workflows after a
+    child shipment run has reached terminal state; TTL expiration remains the
+    crash-cleanup fallback.
+  input_schema_json:
+    type: object
+    required: [reservation_id]
+    properties:
+      reservation_id:
+        type: string
+  output_schema_json:
+    type: object
+    required: [released]
+    properties:
+      released:
+        type: boolean
+  action: release_locks
+  config: {}
