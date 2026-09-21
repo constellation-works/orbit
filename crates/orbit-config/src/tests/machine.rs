@@ -191,6 +191,41 @@ fn set_machine_identity_writes_the_table_without_disturbing_the_rest_of_the_file
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn load_machine_settings_refuses_a_symlinked_config_file() {
+    let global = tempdir().expect("global");
+    let real = global.path().join("real.toml");
+    std::fs::write(&real, IDENTITY).expect("write real config");
+    std::os::unix::fs::symlink(&real, global.path().join("config.toml")).expect("symlink leaf");
+
+    let error = load_machine_settings(global.path())
+        .expect_err("a symlinked identity file must be refused")
+        .to_string();
+    assert!(error.contains("must not be a symlink"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn load_machine_settings_follows_a_symlinked_parent_directory() {
+    let dir = tempdir().expect("parent");
+    let real_dir = dir.path().join("real");
+    std::fs::create_dir(&real_dir).expect("create real parent");
+    write_config(&real_dir, IDENTITY);
+    let link_dir = dir.path().join("link");
+    std::os::unix::fs::symlink(&real_dir, &link_dir).expect("symlink parent");
+
+    let settings = load_machine_settings(&link_dir).expect("symlinked parent is allowed");
+    assert_eq!(
+        settings.complete(),
+        Some((
+            "hm_0123456789abcdef".to_string(),
+            "dk-server-1".to_string(),
+            "DE".to_string()
+        ))
+    );
+}
+
 #[test]
 fn a_workspace_store_never_writes_a_machine_identity() {
     let workspace = tempdir().expect("workspace");

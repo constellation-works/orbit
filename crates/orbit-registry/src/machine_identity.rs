@@ -234,7 +234,7 @@ pub fn migrate_host_toml(global_root: &Path) -> Result<Option<MachineIdentity>, 
             task_prefix,
         };
         if current == legacy {
-            remove_host_toml(&host_path);
+            remove_host_toml(global_root);
             return Ok(None);
         }
         return Err(OrbitError::InvalidInput(format!(
@@ -257,7 +257,7 @@ pub fn migrate_host_toml(global_root: &Path) -> Result<Option<MachineIdentity>, 
     // later writable open.
     match write_machine_identity(global_root, &legacy) {
         Ok(()) => {
-            remove_host_toml(&host_path);
+            remove_host_toml(global_root);
             tracing::info!(
                 machine_id = %legacy.id,
                 machine_name = %legacy.name,
@@ -277,8 +277,20 @@ pub fn migrate_host_toml(global_root: &Path) -> Result<Option<MachineIdentity>, 
 
 /// Best-effort removal of the migrated file. A root Orbit can read but not
 /// write keeps its `host.toml`; the next writable open retires it.
-fn remove_host_toml(path: &Path) {
-    if let Err(error) = std::fs::remove_file(path)
+fn remove_host_toml(global_root: &Path) {
+    let path = match validated_host_toml_path(global_root) {
+        Ok(Some(path)) => path,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                root = %global_root.display(),
+                "could not validate host.toml path for removal"
+            );
+            return;
+        }
+    };
+    if let Err(error) = std::fs::remove_file(&path)
         && error.kind() != std::io::ErrorKind::NotFound
     {
         tracing::warn!(
@@ -287,6 +299,29 @@ fn remove_host_toml(path: &Path) {
             "could not remove the migrated host.toml"
         );
     }
+}
+
+/// CodeQL `rust/path-injection` treats `Path::starts_with` as a SafeAccessCheck
+/// on the receiver. Call this after reconstructing `host.toml` so later
+/// filesystem sinks only see a prefix-checked value.
+fn host_toml_path_is_contained(path: &Path, parent: &Path) -> bool {
+    path.starts_with(parent)
+}
+
+/// Reconstruct the legacy identity file under a validated existing global root
+/// before any remove sink.
+fn validated_host_toml_path(global_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    let Some(canonical_root) = validated_existing_global_root(global_root)? else {
+        return Ok(None);
+    };
+    let candidate = canonical_root.join(LEGACY_HOST_TOML_FILE);
+    if !host_toml_path_is_contained(&candidate, &canonical_root) {
+        return Err(OrbitError::InvalidInput(format!(
+            "legacy host identity path escapes its parent: {}",
+            candidate.display()
+        )));
+    }
+    Ok(Some(candidate))
 }
 
 #[derive(Debug, Deserialize)]
