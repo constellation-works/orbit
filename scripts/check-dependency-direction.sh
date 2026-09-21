@@ -29,9 +29,6 @@ allowed_internal_deps() {
       echo "orbit-common orbit-types"
       ;;
     orbit-search)
-      # ORB-10357 folded the former orbit-search-companion crate in as an
-      # additional [[bin]] target; fastembed is a workspace dependency, not
-      # an internal crate edge.
       echo "orbit-common orbit-types"
       ;;
     orbit-tools)

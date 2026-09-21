@@ -36,7 +36,7 @@ records in a second store merely to get past a connection error.
 | Workspace discovery | `orbit_workspace_list` | `orbit workspace list/show` |
 | Task create/read/update | `orbit_task_add/list/show/update` | Registered `orbit.task.*` tools preserve agent attribution; lifecycle writes use `orbit.task.update` with `status` |
 | Task attachments | `orbit_task_artifact_put` | Task artifact commands; source path is on the executing host and must resolve inside the workspace checkout |
-| Retrieval | `orbit_search` | `orbit search`; semantic install/index is separate |
+| Retrieval | `orbit_search` | `orbit search`; `orbit search reindex` rebuilds the index |
 | Friction | `orbit_friction_add/list/update` | Additional show/stats/tags/resolve commands |
 | Submit explicit tasks | `orbit_workflow_ship` (review-only; no completion input) | `orbit run ship`, `run auto` |
 | Observe/resume workflows | `orbit_workflow_run_show/list/resume` | `orbit run show/history/events/trace/logs/cancel`; job replay/resume |
@@ -45,7 +45,7 @@ records in a second store merely to get past a connection error.
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string |
 | Host agent invocation | `orbit_agent_invoke` when advertised and authorized | `orbit run agent <prompt>`; asynchronous, returns a run ID |
 | Distributed drain preflight | `orbit_drain_probe`, `orbit_drain_receipt_lookup` (owner-served, read only) | The same two tools answer `orbit tool run`; both require an identified caller (`agent` or `operator`), so a non-interactive caller runs under an agent envelope or sets `ORBIT_OPERATOR=1`. `orbit tool run orbit.drain.claims` lists execution claims; it is off the MCP surface and governed to operator authority, so a non-interactive caller claims that authority with `ORBIT_OPERATOR=1`. The pull surface itself does not exist yet: these report what an admission *would* do and reconcile a past request; they create no claim and grant no execution authority. Setup, migration and manual recovery: [distributed-drain.md](setup/distributed-drain.md) |
-| Setup and maintenance | Discover any server extensions; do not guess | config, doctor, semantic, docs, audit, GC, policy, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
+| Setup and maintenance | Discover any server extensions; do not guess | config, doctor, search reindex, audit, GC, policy, skill, routine, sweep, job/activity catalogs, workspace role/sync/publication |
 
 Provider/gateway prefixes are transport wrappers around these names. A connected
 server may expose additional discovery such as crews; use its advertised schema
@@ -121,7 +121,7 @@ relaunch a server with more privileges to work around a denied call.
 These are JSON arguments to the named tool, not shell commands:
 
 ```json
-{"workspace":"<selector>","query":"<problem terms>","kind":"task","hybrid":true,"limit":5,"model":"<agent-family>"}
+{"workspace":"<selector>","query":"<problem terms>","kind":"task","limit":5,"model":"<agent-family>"}
 ```
 
 Use with `orbit_search` before filing a task. Search closed history as well with

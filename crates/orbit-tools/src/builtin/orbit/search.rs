@@ -15,26 +15,8 @@ impl Tool for OrbitSearchTool {
         let mut parameters = vec![
             ToolParam {
                 name: "query".to_string(),
-                description: "Free-text query. Defaults to lexical matching unless hybrid is true."
+                description: "Free-text lexical query. Multiple words need not be adjacent."
                     .to_string(),
-                param_type: "string".to_string(),
-                required: false,
-            },
-            ToolParam {
-                // ADR-0179: expose the free-text vector ranker as hybrid, not semantic.
-                name: "hybrid".to_string(),
-                description:
-                    "Opt into hybrid lexical + cosine ranking for indexed task vectors; frictions remain lexical."
-                        .to_string(),
-                param_type: "boolean".to_string(),
-                required: false,
-            },
-            ToolParam {
-                // ADR-0179: semantic carries the task ID for cosine-neighbor lookup on MCP.
-                name: "semantic".to_string(),
-                description:
-                    "Task ID for cosine-neighbor lookup. Mutually exclusive with query."
-                        .to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },
@@ -98,9 +80,7 @@ impl Tool for OrbitSearchTool {
         parameters.extend(super::model_identity_params());
         ToolSchema {
             name: "orbit.search".to_string(),
-            description:
-                "Search tasks and frictions; hybrid vector ranking applies to indexed tasks."
-                    .to_string(),
+            description: "Search tasks and frictions using lexical matching.".to_string(),
             parameters,
             builtin: true,
         }

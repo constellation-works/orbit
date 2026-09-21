@@ -30,7 +30,6 @@ before the subcommand.
 | `orbit workspace publication bind` \| `show` \| `rebind` \| `remove` | Manage the owner-local binding to a dedicated task-publication repository. See [Publish and Restore Tasks](../../how-to/task-publication/). |
 | `orbit workspace remove` \| `teardown` | Deregister a workspace, or remove Orbit artifacts from it. |
 | `orbit config show` \| `get` \| `set` \| `keys` \| `path` | Read and write configuration, including this machine's identity under `machine.*`. Rename the machine with `orbit config set --global machine.name <value>`. See [Configuration](../config/). |
-| `orbit semantic install` \| `uninstall` \| `stats` \| `index` | Manage the local embedding companion. CLI task mutations do not auto-index; run `orbit semantic index` to refresh. |
 | `orbit migrate` | Inspect pending `.orbit` layout and store migrations; `--confirm` applies them. |
 | `orbit update` | Install a published release and converge to it. `--check`, `--version`, `--allow-downgrade`. |
 
@@ -100,7 +99,8 @@ Start a drain under a grant with `orbit run auto --grant <ID>`.
 
 | Command | Purpose |
 |---|---|
-| `orbit search <query>` | Search tasks, docs, and frictions. `--hybrid` adds vector ranking; `--workspaces <SELECTOR>` (repeatable) federates across registered checkouts and is distinct from the global `--workspace` routing selector; `--all-workspaces` searches every active workspace on this machine; `orbit search similar <id>` finds task neighbors; `orbit search path <path>` does applicability lookup. |
+| `orbit search reindex` | Rebuild the lexical task index after imports or restores; reports task and chunk counts. |
+| `orbit search <query>` | Search tasks and frictions using lexical matching; `--workspaces <SELECTOR>` (repeatable) federates across registered checkouts and is distinct from the global `--workspace` routing selector; `--all-workspaces` searches every active workspace on this machine; task fields use FTS5 BM25 with non-adjacent term matching. |
 | `orbit audit list` \| `show` \| `prune` \| `export` \| `stats` | Query the audit event log. |
 | `orbit run history` | Recent job runs. `-j <job_id>` filters to one job. |
 | `orbit run show [run_id]` | State and step summary for a run; defaults to the most recent. `-s <step_id>`. |

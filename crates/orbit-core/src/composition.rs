@@ -178,7 +178,7 @@ impl OrbitRuntime {
         )
     }
 
-    /// Open a runtime whose embed worker matches the constructing host's lifetime.
+    /// Open a runtime for the constructing host's lifetime.
     pub fn from_resolved_roots_with_binding_for(
         global_root: &Path,
         shared_root: &Path,

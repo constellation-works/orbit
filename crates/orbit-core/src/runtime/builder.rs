@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orbit_policy::PolicyEngine;
-use orbit_search::{EmbedWorker, EmbedderPool, SemanticIndex};
+use orbit_search::LexicalIndex;
 use orbit_store::Store;
 use orbit_store::compose::{
     CoordinatedWorkspaceBackends, audit_event_store_sqlite, automation_store,
@@ -51,7 +51,7 @@ pub(crate) fn build_context_from_roots(
     local_root: &Path,
     binding: Option<&WorkspaceRuntimeBinding>,
     runtime_config: &ResolvedConfig,
-    host_lifetime: HostLifetime,
+    _host_lifetime: HostLifetime,
     write_free: bool,
 ) -> Result<OrbitContext, OrbitError> {
     let persistence = &runtime_config.persistence;
@@ -123,29 +123,10 @@ pub(crate) fn build_context_from_roots(
             "skipped malformed legacy state records during SQLite import",
         );
     }
-    let semantic_index = if write_free {
-        SemanticIndex::open_read_only(&persistence.semantic_db)?
+    let lexical_index = if write_free {
+        LexicalIndex::open_read_only(&persistence.semantic_db)?
     } else {
-        SemanticIndex::open(&persistence.semantic_db)?
-    };
-    // One companion per model for this process, shared by queries, indexing,
-    // and the background worker. A long-lived host takes the process-wide pool
-    // — it opens a runtime per call, so a per-runtime pool would reload the
-    // model every time; a command process takes a private one and drops it,
-    // with its companions, at exit.
-    let semantic_embedders = match host_lifetime {
-        HostLifetime::LongLived => EmbedderPool::process_shared(),
-        HostLifetime::ShortLived => Arc::new(EmbedderPool::command_process()),
-    };
-    // The worker writes embeddings. Without an index to write into there is
-    // nothing for it to drain, so it stays disabled alongside the short-lived
-    // hosts that refresh through `orbit semantic index` instead.
-    let semantic_worker = match (host_lifetime, semantic_index.store()) {
-        (HostLifetime::LongLived, Ok(vector)) => Arc::new(EmbedWorker::start(
-            vector.clone(),
-            Arc::clone(&semantic_embedders),
-        )),
-        _ => Arc::new(EmbedWorker::disabled()),
+        LexicalIndex::open(&persistence.semantic_db)?
     };
     let job_run_store = workspace_job_run_store(store.clone(), workspace_id);
 
@@ -232,9 +213,7 @@ pub(crate) fn build_context_from_roots(
             task_backends.document,
             task_backends.history,
             task_backends.artifact,
-            semantic_index,
-            semantic_worker,
-            semantic_embedders,
+            lexical_index,
             task_reservation_store,
             job_run_store,
             tool_store,

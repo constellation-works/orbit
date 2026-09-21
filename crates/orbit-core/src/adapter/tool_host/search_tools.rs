@@ -12,18 +12,14 @@ use crate::{GlobalSearchKind, GlobalSearchParams, OrbitRuntime, WorkspaceScope};
 use super::input::optional_bool_alias;
 
 pub(super) fn search(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    // ADR-0179: hard-break retired search parameters; no compatibility shim.
-    if input.get("related").is_some() {
-        return Err(OrbitError::InvalidInput(
-            "unknown parameter `related`; use `semantic` for task-neighbor lookup".to_string(),
-        ));
-    }
-    if input.get("path").is_some() {
-        return Err(OrbitError::InvalidInput(
-            "unknown parameter `path`; document path search has been removed".to_string(),
-        ));
-    }
     for retired in [
+        "related",
+        "path",
+        "hybrid",
+        "semantic",
+        "id",
+        "task_id",
+        "taskId",
         "field",
         "embedding_model",
         "embeddingModel",
@@ -33,13 +29,10 @@ pub(super) fn search(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
     ] {
         if input.get(retired).is_some() {
             return Err(OrbitError::InvalidInput(format!(
-                "unknown parameter `{retired}`; search no longer exposes field or embedding-model selection"
+                "unknown parameter `{retired}`; search supports lexical queries only"
             )));
         }
     }
-
-    let semantic = optional_string_alias(&input, &["semantic", "id", "task_id", "taskId"])?;
-    let hybrid = optional_bool_alias(&input, &["hybrid"])?.unwrap_or(false);
     let kind = optional_string_alias(&input, &["kind"])?
         .map(|kind| GlobalSearchKind::from_str(&kind).map_err(OrbitError::InvalidInput))
         .transpose()?
@@ -56,8 +49,6 @@ pub(super) fn search(runtime: &OrbitRuntime, input: Value) -> Result<Value, Orbi
 
     let result = runtime.global_search(GlobalSearchParams {
         query: optional_string_alias(&input, &["query"])?,
-        hybrid,
-        semantic,
         kind,
         limit: optional_u32_alias(&input, &["limit"])?
             .map(|limit| limit as usize)

@@ -20,7 +20,6 @@ pub mod policy;
 pub mod routine;
 pub mod run;
 pub mod search;
-pub mod semantic;
 pub mod skill;
 pub mod sweep;
 pub mod task;
@@ -88,7 +87,6 @@ Knowledge:
   task        Create, update, and manage tasks
   friction    Report, list, and triage friction records
   search      Search tasks and frictions
-  semantic    Manage local orbit-search indexing
 
 Operate:
   run         Run a workflow (ship, job)
@@ -149,7 +147,6 @@ pub enum Commands {
     Task(Box<task::TaskCommand>),
     Friction(friction::FrictionCommand),
     Search(search::SearchCommand),
-    Semantic(semantic::SemanticCommand),
 
     // ── Operate ──
     Run(run::RunCommand),

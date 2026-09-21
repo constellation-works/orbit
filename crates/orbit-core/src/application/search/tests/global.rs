@@ -21,7 +21,7 @@ fn global_search_single_kind_limit_keeps_task_behavior() {
     assert!(response.results.iter().all(|hit| hit.kind == "task"));
 }
 #[test]
-fn lexical_task_search_uses_fts_when_task_corpus_is_indexed() {
+fn task_create_synchronously_indexes_non_adjacent_title_terms() {
     let runtime = OrbitRuntime::in_memory().expect("runtime");
     let id = add_task(
         &runtime,
@@ -29,15 +29,6 @@ fn lexical_task_search_uses_fts_when_task_corpus_is_indexed() {
         "ordinary body",
         TaskStatus::Backlog,
     );
-    let task = runtime.get_task(&id).expect("indexed task");
-    runtime
-        .stores()
-        .semantic_index()
-        .store()
-        .expect("semantic index")
-        .index_task(&task, &orbit_search::NoopEmbedder::small(), false)
-        .expect("index task");
-
     // The bundle fallback treats this as one contiguous substring and cannot
     // match it. A hit therefore proves the lexical branch consulted FTS5,
     // whose query syntax requires both terms without requiring adjacency.
@@ -122,12 +113,10 @@ fn indexed_lexical_task_search_still_matches_comments_refs_and_artifact_paths() 
     let task = runtime.get_task(&id).expect("task with sidecars");
     let index = runtime
         .stores()
-        .semantic_index()
+        .lexical_index()
         .store()
-        .expect("semantic index");
-    index
-        .index_task(&task, &orbit_search::NoopEmbedder::small(), false)
-        .expect("index task");
+        .expect("lexical index");
+    index.index_task(&task).expect("index task");
     assert!(
         index
             .has_source_kind(orbit_search::SOURCE_KIND_TASK)
@@ -318,4 +307,30 @@ fn global_search_without_path_omits_skipped_kinds_from_json() {
     assert_eq!(response.results[0].id.as_deref(), Some(id.as_str()));
     let json = serde_json::to_value(&response).expect("serialize response");
     assert!(json.get("skipped_kinds").is_none());
+}
+
+#[test]
+fn task_deletion_cascades_to_lexical_chunks() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    let id = add_task(
+        &runtime,
+        "quartz routing telescope",
+        "body",
+        TaskStatus::Backlog,
+    );
+    assert!(runtime.search_index_stats().expect("stats").chunks > 0);
+    assert!(
+        runtime
+            .stores()
+            .task_records()
+            .delete(&id)
+            .expect("delete task")
+    );
+    assert_eq!(runtime.search_index_stats().expect("stats").chunks, 0);
+    let index = runtime.stores().lexical_index().store().expect("index");
+    assert!(
+        bm25_top_k(index, "quartz telescope", Some(SOURCE_KIND_TASK), None, 5)
+            .expect("query")
+            .is_empty()
+    );
 }

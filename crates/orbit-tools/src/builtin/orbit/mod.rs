@@ -7,7 +7,6 @@ pub mod operation;
 pub mod operation_mode;
 pub mod pipeline;
 pub mod search;
-pub mod semantic;
 pub mod task;
 pub mod workflow;
 pub mod workspace_claim;
@@ -136,11 +135,6 @@ pub fn register(registry: &mut ToolRegistry) {
         workflow::OrbitWorkflowRunWorkersTool,
         McpToolScope::WorkspaceRequired,
     );
-    registry.register_inactive(semantic::install::OrbitSemanticInstallTool);
-    // Destructive semantic-index administration remains on the CLI surface.
-    registry.register_inactive(semantic::uninstall::OrbitSemanticUninstallTool);
-    registry.register_inactive(semantic::stats::OrbitSemanticStatsTool);
-    registry.register_inactive(semantic::index::OrbitSemanticIndexTool);
 }
 
 fn trimmed_optional(value: Option<String>) -> Option<String> {

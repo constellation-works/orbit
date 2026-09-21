@@ -34,7 +34,7 @@ shared workspace. Preserve the user's installation method and existing config.
 Task tracking alone does not require a provider, PR credentials, a scheduler or
 remote hosts. Add those only for the requested workflow. Agent execution needs
 an authenticated supported provider and working sandbox; PR delivery also needs
-its Git/PR credentials. Lexical search works without downloading a semantic model.
+its Git/PR credentials. Task search uses local SQLite FTS5 and requires no download.
 
 ## Apply and verify
 

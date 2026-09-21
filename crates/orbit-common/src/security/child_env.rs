@@ -62,9 +62,8 @@ const ORBIT_ENVELOPE_VARS: &[&str] = &[
 ];
 
 /// Envelope families admitted by prefix because the engine treats them as
-/// groups (`ORBIT_ACTIVITY_ID` / `_TOOLS` / `_FS_PROFILE`, and the search
-/// companion override cluster).
-const ORBIT_ENVELOPE_PREFIXES: &[&str] = &["ORBIT_ACTIVITY_", "ORBIT_SEARCH_COMPANION"];
+/// groups (`ORBIT_ACTIVITY_ID` / `_TOOLS` / `_FS_PROFILE`).
+const ORBIT_ENVELOPE_PREFIXES: &[&str] = &["ORBIT_ACTIVITY_"];
 
 fn is_orbit_envelope_name(name: &str) -> bool {
     ORBIT_ENVELOPE_VARS.contains(&name)

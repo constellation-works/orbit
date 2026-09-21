@@ -17,13 +17,7 @@ use std::path::Path;
 
 use clap::{Command, CommandFactory, Parser, error::ErrorKind};
 
-use super::{
-    Cli, Commands,
-    mcp::McpSubcommand,
-    search::SearchSubcommand,
-    semantic::{SemanticIndexKindArg, SemanticSubcommand},
-    web::WebSubcommand,
-};
+use super::{Cli, Commands, mcp::McpSubcommand, search::SearchSubcommand, web::WebSubcommand};
 
 const UPDATE_HELP_GOLDENS_ENV: &str = "ORBIT_UPDATE_HELP_GOLDENS";
 
@@ -420,86 +414,6 @@ fn cli_parses_web_connect_no_operator() {
 }
 
 #[test]
-fn cli_parses_semantic_install_force() {
-    let cli = Cli::parse_from(["orbit", "semantic", "install", "--force"]);
-    match cli.command {
-        Commands::Semantic(command) => match command.command {
-            SemanticSubcommand::Install(args) => assert!(args.force),
-            _ => panic!("expected semantic install"),
-        },
-        _ => panic!("expected top-level semantic command"),
-    }
-}
-
-#[test]
-fn cli_parses_semantic_stats() {
-    let cli = Cli::parse_from(["orbit", "semantic", "stats"]);
-    match cli.command {
-        Commands::Semantic(command) => match command.command {
-            SemanticSubcommand::Stats(_) => {}
-            _ => panic!("expected semantic stats"),
-        },
-        _ => panic!("expected top-level semantic command"),
-    }
-}
-
-#[test]
-fn cli_parses_semantic_index() {
-    let cli = Cli::parse_from(["orbit", "semantic", "index", "--force", "--kind", "all"]);
-    match cli.command {
-        Commands::Semantic(command) => match command.command {
-            SemanticSubcommand::Index(args) => {
-                assert!(args.force);
-                assert_eq!(args.kind, SemanticIndexKindArg::All);
-            }
-            _ => panic!("expected semantic index"),
-        },
-        _ => panic!("expected top-level semantic command"),
-    }
-}
-
-#[test]
-fn cli_semantic_index_defaults_kind_to_tasks() {
-    let cli = Cli::parse_from(["orbit", "semantic", "index"]);
-    match cli.command {
-        Commands::Semantic(command) => match command.command {
-            SemanticSubcommand::Index(args) => {
-                assert_eq!(args.kind, SemanticIndexKindArg::Tasks);
-            }
-            _ => panic!("expected semantic index"),
-        },
-        _ => panic!("expected top-level semantic command"),
-    }
-}
-
-#[test]
-fn cli_semantic_index_rejects_singular_kinds_at_clap_layer() {
-    for kind in ["adr", "adrs", "learning"] {
-        let error = match Cli::try_parse_from(["orbit", "semantic", "index", "--kind", kind]) {
-            Ok(_) => panic!("singular kinds should be rejected"),
-            Err(error) => error,
-        };
-        let message = error.to_string();
-        assert!(message.contains("possible values"), "{message}");
-        assert!(message.contains("tasks"), "{message}");
-        assert!(message.contains("all"), "{message}");
-    }
-}
-
-#[test]
-fn cli_semantic_index_help_explains_kind_principle() {
-    let error = match Cli::try_parse_from(["orbit", "semantic", "index", "--help"]) {
-        Ok(_) => panic!("help exits before parsing"),
-        Err(error) => error,
-    };
-    let help = error.to_string();
-    assert!(
-        help.contains("--kind selects corpus: tasks (default) or all (an alias for tasks)."),
-        "{help}"
-    );
-}
-
-#[test]
 fn cli_rejects_removed_docs_command() {
     assert_cli_rejects(
         &["orbit", "docs", "list"],
@@ -523,14 +437,12 @@ fn cli_parses_top_level_search() {
         "orbit",
         "search",
         "semantic search design",
-        "--hybrid",
         "--kind",
         "task",
     ]);
     match cli.command {
         Commands::Search(args) => {
             assert_eq!(args.query.as_deref(), Some("semantic search design"));
-            assert!(args.hybrid);
             assert!(args.command.is_none());
         }
         _ => panic!("expected top-level search command"),
@@ -538,20 +450,14 @@ fn cli_parses_top_level_search() {
 }
 
 #[test]
-fn cli_parses_top_level_search_similar_neighbor() {
-    let cli = Cli::parse_from(["orbit", "search", "similar", "ORB-1"]);
-    match cli.command {
-        Commands::Search(args) => {
-            assert_eq!(args.query, None);
-            match args.command {
-                Some(SearchSubcommand::Similar(similar)) => {
-                    assert_eq!(similar.id, "ORB-1");
-                }
-                _ => panic!("expected search similar"),
-            }
-        }
-        _ => panic!("expected top-level search command"),
-    }
+fn cli_rejects_removed_search_surfaces_and_accepts_reindex() {
+    assert!(Cli::try_parse_from(["orbit", "semantic", "stats"]).is_err());
+    assert!(Cli::try_parse_from(["orbit", "search", "query", "--hybrid"]).is_err());
+    assert!(Cli::try_parse_from(["orbit", "search", "similar", "task-id"]).is_err());
+    let cli = Cli::parse_from(["orbit", "search", "reindex"]);
+    assert!(
+        matches!(cli.command, Commands::Search(args) if args.command == Some(SearchSubcommand::Reindex))
+    );
 }
 
 #[test]
@@ -619,10 +525,6 @@ fn cli_rejects_retired_search_field_and_model_flags() {
         (
             &["orbit", "search", "query", "--model", "bge-small"][..],
             "--model",
-        ),
-        (
-            &["orbit", "search", "similar", "ORB-1", "--field", "title"][..],
-            "--field",
         ),
     ] {
         assert_cli_rejects(

@@ -35,13 +35,9 @@ const INACTIVE_TOOL_NAMES: &[&str] = &[
     "orbit.workspace.claim.acquire",
     "orbit.workspace.claim.release",
     "orbit.workspace.claim.show",
-    "orbit.semantic.index",
-    "orbit.semantic.install",
-    "orbit.semantic.stats",
     "orbit.friction.stats",
     // Admin/destructive ops — CLI path retains them, agent MCP surface does
     // not expose them.
-    "orbit.semantic.uninstall",
     "orbit.task.delete",
     "orbit.task.lint",
 ];
@@ -96,7 +92,14 @@ fn unused_tools_are_not_registered_in_public_surface() {
     );
 
     let removed_prefix = "orbit.semantic.";
-    for removed in ["related", "search"] {
+    for removed in [
+        "related",
+        "search",
+        "install",
+        "uninstall",
+        "stats",
+        "index",
+    ] {
         let name = format!("{removed_prefix}{removed}");
         assert!(
             !names.contains(name.as_str()),
@@ -221,7 +224,7 @@ fn workflow_critical_tools_remain_registered() {
         "orbit.workflow.run.list",
         "orbit.workflow.run.resume",
         "orbit.workflow.run.workers",
-        // ORB-00289: `orbit.semantic.uninstall` is inactive on the agent
+        // Destructive administrative operations are inactive on the agent
         // surface; its inactive-classification is covered by
         // `inactive_ops_tools_*` and `INACTIVE_TOOL_NAMES` above.
         "orbit.task.artifact.get",

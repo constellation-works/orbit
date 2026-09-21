@@ -195,8 +195,6 @@ pub enum OrbitError {
         .0.friction_id, .0.workspace_id, .0.found_in.join(", ")
     )]
     FrictionNotLocal(Box<FrictionNotLocal>),
-    #[error("companion not installed: {0}")]
-    CompanionNotInstalled(String),
     #[error("invalid input: {0}")]
     InvalidInput(String),
     #[error("sensitive input rejected for `{field}`: {reason}")]

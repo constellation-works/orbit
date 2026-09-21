@@ -28,8 +28,8 @@ Search open and closed tasks before filing findings from sweeps, CI, review or
 curation. For direct user requests, follow the task-authoring guidance rather
 than adding an unnecessary discovery step. Use `orbit_search` with
 `kind: "task"`, `all: true`, the explicit workspace, and concrete problem
-terms; inspect likely matches and their merge evidence. Search descriptions,
-not a new task ID that has no embedding yet.
+terms; inspect likely matches and their merge evidence. Use distinctive terms
+from the title and description.
 
 A useful task states the observed problem or feature opportunity, its value,
 bounded scope, and acceptance criteria describing observable behavior.

@@ -9,20 +9,16 @@ use crate::command::{CommandOut, Execute, Payload};
 #[command(
     about = "Search tasks and frictions",
     subcommand_precedence_over_arg = true,
-    after_help = "Forms:\n  orbit search <query>\n  orbit search similar <id>"
+    after_help = "Forms:\n  orbit search <query>\n  orbit search reindex"
 )]
 pub struct SearchCommand {
-    /// Free-text query. Defaults to lexical matching unless --hybrid is set.
+    /// Free-text lexical query; multiple words need not be adjacent.
     #[arg(value_name = "query")]
     pub query: Option<String>,
 
     #[command(subcommand)]
     pub command: Option<SearchSubcommand>,
 
-    // ADR-0179: free-text search keeps the hybrid ranker; neighbor/path modes are separate forms.
-    /// Use hybrid lexical + cosine ranking for indexed task fields.
-    #[arg(long)]
-    pub hybrid: bool,
     /// Restrict results to one corpus kind.
     #[arg(long, value_enum, default_value_t = SearchKindArg::All, global = true)]
     pub kind: SearchKindArg,
@@ -58,14 +54,8 @@ pub struct SearchCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum SearchSubcommand {
-    /// Find cosine-neighbor tasks for a known task ID. Requires task vectors.
-    Similar(SearchSimilarArgs),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Args)]
-pub struct SearchSimilarArgs {
-    #[arg(value_name = "id")]
-    pub id: String,
+    /// Rebuild the task search index from the task store.
+    Reindex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -97,11 +87,23 @@ impl From<SearchKindArg> for GlobalSearchKind {
 
 impl Execute for SearchCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let input = self.search_input()?;
+        if matches!(self.command, Some(SearchSubcommand::Reindex)) {
+            if self.query.is_some() || !self.workspaces.is_empty() || self.all_workspaces {
+                return Err(OrbitError::InvalidInput(
+                    "search reindex only applies to the current workspace and takes no query"
+                        .into(),
+                ));
+            }
+            let stats = runtime.search_reindex()?;
+            return Ok(Payload::detail(
+                serde_json::json!(stats),
+                format!("Indexed {} chunks from {} tasks", stats.chunks, stats.tasks),
+            )
+            .into());
+        }
+        let query = self.search_input()?;
         let response = runtime.global_search(GlobalSearchParams {
-            query: input.query,
-            hybrid: input.hybrid,
-            semantic: input.semantic,
+            query: Some(query),
             kind: self.kind.into(),
             limit: self.limit,
             tags: self.tags,
@@ -124,54 +126,22 @@ impl Execute for SearchCommand {
 impl SearchCommand {
     pub fn audit_subcommand(&self) -> String {
         let mode = match &self.command {
-            Some(SearchSubcommand::Similar(_)) => "similar",
+            Some(SearchSubcommand::Reindex) => "reindex",
             None => "query",
         };
         format!("{mode}:{}", self.kind)
     }
 
-    fn search_input(&self) -> Result<SearchInput, OrbitError> {
-        match &self.command {
-            Some(SearchSubcommand::Similar(args)) => {
-                if self.query.as_deref().is_some_and(|query| !query.is_empty()) {
-                    return Err(OrbitError::InvalidInput(
-                        "`orbit search <query>` and `orbit search similar <id>` are mutually exclusive"
-                            .to_string(),
-                    ));
-                }
-                if self.hybrid {
-                    return Err(OrbitError::InvalidInput(
-                        "`--hybrid` only applies to `orbit search <query>`".to_string(),
-                    ));
-                }
-                Ok(SearchInput {
-                    query: None,
-                    hybrid: false,
-                    semantic: Some(args.id.clone()),
-                })
-            }
-            None => {
-                let query = self.query.clone().filter(|query| !query.trim().is_empty());
-                let Some(query) = query else {
-                    return Err(OrbitError::InvalidInput(
-                        "search requires an input. Usage: `orbit search <query>` or `orbit search similar <id>`"
-                            .to_string(),
-                    ));
-                };
-                Ok(SearchInput {
-                    query: Some(query),
-                    hybrid: self.hybrid,
-                    semantic: None,
-                })
-            }
-        }
+    fn search_input(&self) -> Result<String, OrbitError> {
+        self.query
+            .clone()
+            .filter(|query| !query.trim().is_empty())
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(
+                    "search requires a query. Usage: orbit search <query>".into(),
+                )
+            })
     }
-}
-
-struct SearchInput {
-    query: Option<String>,
-    hybrid: bool,
-    semantic: Option<String>,
 }
 
 fn search_table(results: &[GlobalSearchHit]) -> crate::output::table::Table {

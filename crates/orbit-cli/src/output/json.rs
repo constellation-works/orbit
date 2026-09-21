@@ -73,7 +73,6 @@ fn error_code(error: &OrbitError) -> &str {
         // Catalog-role refusal, not an operator capability grant: the CLI
         // surfaces the same stable code MCP does [ORB-11012].
         OrbitError::CapabilityRefused(_) => "capability_refused",
-        OrbitError::CompanionNotInstalled(_) => "companion_not_installed",
         OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => "invalid_input",
         OrbitError::SensitiveInput { .. } => "sensitive_input",
         OrbitError::SkillValidation(_) => "skill_validation_failed",

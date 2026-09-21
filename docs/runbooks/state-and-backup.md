@@ -39,7 +39,7 @@ presence. Path fields live on `WorkspacePaths` in
 | `graph/`, `knowledge/graph/` | retired graph state left by older Orbit versions | non-authoritative; remove explicitly with `orbit doctor --remove-graph` |
 | `state/layout.version` | plain-text workspace layout version marker | regenerable marker (see [upgrades](./upgrades.md)) |
 | `state/layout.lock` | advisory lock taken during layout upgrades | transient |
-| `state/semantic.db` | semantic/vector index (docs and tasks) | regenerable (`orbit semantic index`) |
+| `state/semantic.db` | lexical task index (FTS5 chunks) | regenerable (`orbit search reindex`) |
 | `state/scoreboard/` | rolling counters (`pr.json`, `task_review.json`, `tokens.json`, …) | mostly regenerable |
 | `state/job-runs/` | run-definition snapshots (`jrun-*.job.yaml`); new run history lives in SQLite | retain if old run evidence matters |
 | `state/audit/blobs/` | redacted content-addressed blobs referenced by global `v2_audit_events` | preserve with audit history when detailed output matters |
@@ -60,7 +60,7 @@ presence. Path fields live on `WorkspacePaths` in
 | other `resources/`, `skills/` | default executor/policy defs and skills; `resources/.orbit-global-defaults.json` records which embedded default set was last reconciled here | regenerable (`orbit init` reseeds) |
 | `state/logs/orbit.jsonl` (+ rotated archives) | unified JSONL log sink for all Orbit processes | disposable |
 | `state/task-publication/` | private Git object/work-tree caches plus pending-push reconciliation records | regenerable after a cleanly recorded success; retain during push-success/local-record recovery |
-| `embed/` | semantic-search companion binary + models | regenerable (`orbit semantic install`) |
+| `embed/` | retired search downloads | removable after stopping older binaries; see upgrades |
 | `bin/` | installed Orbit binary (when installed via `install.sh`) | reinstallable |
 
 Task bundles are not projected into workspace `.orbit/` directories. During
@@ -284,7 +284,7 @@ rm -f ~/.orbit/orbit.db-wal ~/.orbit/orbit.db-shm
 
 # Rebuild derived indexes as needed.
 orbit task reindex
-orbit semantic index      # if semantic search is installed
+orbit search reindex      # rebuild lexical task chunks
 orbit doctor --remove-graph # remove retired local/shared graph state, if present
 
 orbit doctor              # verify; see health-checks.md

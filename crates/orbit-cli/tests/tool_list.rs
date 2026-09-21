@@ -21,9 +21,6 @@ const INACTIVE_TOOL_NAMES: &[&str] = &[
     "orbit.task.locks",
     "orbit.task.locks.release",
     "orbit.task.locks.reserve",
-    "orbit.semantic.index",
-    "orbit.semantic.install",
-    "orbit.semantic.stats",
     "orbit.friction.stats",
 ];
 
@@ -284,7 +281,7 @@ fn tool_run_rejects_inactive_tools() {
         .args([
             "tool",
             "run",
-            "orbit.semantic.uninstall",
+            "orbit.auto_task.show",
             "--input",
             "{\"model\":\"codex\"}",
         ])

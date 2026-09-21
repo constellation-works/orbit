@@ -123,10 +123,6 @@ pub struct OrbitRuntimeRoots {
 
 /// Whether the constructing process retains this runtime past a single command.
 ///
-/// Short-lived CLI mutations must not spawn a detached embed worker: process
-/// exit can interrupt queued indexing, and a missing companion must not add
-/// startup or retry work. Long-lived hosts (MCP serve, the dashboard) keep
-/// incremental indexing on [`orbit_search::EmbedWorker`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostLifetime {
     ShortLived,
@@ -768,16 +764,6 @@ impl OrbitRuntime {
 
     pub(crate) fn stores(&self) -> &OrbitStores {
         self.context.stores()
-    }
-
-    /// Hand this runtime's companions to a sub-runtime opened for one
-    /// federated target, so the fan-out loads each model once instead of once
-    /// per workspace.
-    pub(crate) fn share_semantic_embedders(
-        &mut self,
-        embedders: std::sync::Arc<orbit_search::EmbedderPool>,
-    ) {
-        self.context.share_semantic_embedders(embedders);
     }
 
     pub(crate) fn skill_catalog(&self) -> &crate::skill_catalog::SkillCatalog {

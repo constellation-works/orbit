@@ -8,7 +8,7 @@ status: Accepted
 
 # Design Doc Conventions
 
-Recommended conventions that feature leads follow when writing and maintaining design docs under `docs/design/<feature>/`. The goal is a set of feature folders that read as one coherent documentation system regardless of which agent authored them. These are recommendations (not hard rules enforced by tooling; `orbit-design` has been retired in favor of the more tolerant docs surface — see the `orbit-search` skill).
+Recommended conventions that feature leads follow when writing and maintaining design docs under `docs/design/<feature>/`. The goal is a set of feature folders that read as one coherent documentation system regardless of which agent authored them. These are recommendations (not hard rules enforced by tooling; `orbit-design` has been retired in favor of ordinary repository documentation).
 
 This doc is itself the source of truth for the conventions. When a convention changes, update this doc and then update existing feature folders to match — do not silently diverge.
 
@@ -185,7 +185,7 @@ There is no `Deprecated` status at the doc level. If the feature is retired, arc
 
 ## 11. Enforcement
 
-These are recommendations, not mechanically enforced by `orbit-design` (retired) or the docs indexer. The tolerant indexer (see the `orbit-search` skill) accepts both strict numbered design folders and free-form docs.
+These are recommendations, not mechanically enforced by `orbit-design` (retired) or the docs indexer. Both numbered design folders and free-form docs are acceptable.
 
 Five mechanical checks worth adding later (as optional lints, never blocking):
 

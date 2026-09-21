@@ -205,10 +205,8 @@ impl Drop for ScopedEnv {
 /// the conventional `umask 022`, so the root lands `0o755` and every
 /// permission-sensitive check downstream happens to pass. A developer box with
 /// a permissive umask (`002`, common with user-private groups, or `000`) gets
-/// a group- or world-writable root instead — and Orbit's search-companion
-/// override validator legitimately refuses to execute a binary whose parent
-/// directory is group/world writable. The fixture, not the validator, is what
-/// needs to be deterministic (ORB-10350).
+/// a group- or world-writable root instead. Permission-sensitive fixtures
+/// need a deterministic private directory regardless of that ambient setting.
 ///
 /// No-op on non-Unix targets.
 #[cfg(unix)]

@@ -368,25 +368,20 @@
       }
     },
     {
-      "name": "orbit_search",
-      "description": "Search tasks, docs, and frictions. Decision records are indexed as ordinary docs; hybrid vector ranking applies to indexed tasks and docs.",
+      "description": "Search tasks and frictions using lexical matching.",
       "inputSchema": {
         "additionalProperties": true,
         "properties": {
           "all": {
-            "description": "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved; doc is a no-op.",
+            "description": "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved.",
             "type": "boolean"
           },
           "all_workspaces": {
             "description": "Search every active workspace registered on the answering machine. Overrides `workspaces`. Not available inside an Orbit-managed run.",
             "type": "boolean"
           },
-          "hybrid": {
-            "description": "Opt into hybrid lexical + cosine ranking for indexed task and doc vectors; frictions remain lexical.",
-            "type": "boolean"
-          },
           "kind": {
-            "description": "Corpus kind: task, doc, friction, or all. Default: all.",
+            "description": "Corpus kind: task, friction, or all. Default: all.",
             "type": "string"
           },
           "limit": {
@@ -403,16 +398,8 @@
             ],
             "type": "string"
           },
-          "path": {
-            "description": "Filter to artifacts applicable to this filesystem path. Task uses selector containment; docs and frictions are skipped.",
-            "type": "string"
-          },
           "query": {
-            "description": "Free-text query. Defaults to lexical matching unless hybrid is true.",
-            "type": "string"
-          },
-          "semantic": {
-            "description": "Task ID for cosine-neighbor lookup. Mutually exclusive with query.",
+            "description": "Free-text lexical query. Multiple words need not be adjacent.",
             "type": "string"
           },
           "status": {
@@ -427,7 +414,7 @@
                 "type": "string"
               }
             ],
-            "description": "Explicit per-kind status override using kind:value tokens, such as task:open,doc:active,friction:open. Overrides `all` for the named kind."
+            "description": "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. Overrides `all` for the named kind."
           },
           "tag": {
             "anyOf": [
@@ -441,10 +428,10 @@
                 "type": "string"
               }
             ],
-            "description": "AND-filter by tag. Repeat or pass an array. Applies to task, doc, and friction."
+            "description": "AND-filter by tag. Repeat or pass an array. Applies to task and friction."
           },
           "workspace": {
-            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Required in this session, which is bound to no workspace, so a call that omits it is refused. Sessions bound by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize may omit it; first call `orbit_workspace_list` and reuse a returned `ws_*` ID. If none is listed, run `orbit init` and then `orbit workspace init` from the project directory. Never inferred from the server process cwd.",
+            "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace \u2014 by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd.",
             "type": "string"
           },
           "workspaces": {
@@ -463,7 +450,8 @@
           }
         },
         "type": "object"
-      }
+      },
+      "name": "orbit_search"
     },
     {
       "name": "orbit_task_add",

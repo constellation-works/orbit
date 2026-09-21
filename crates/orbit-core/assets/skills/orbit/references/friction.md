@@ -135,11 +135,10 @@ edge as coverage.
 orbit friction list --status open
 orbit friction show <ID>
 orbit friction stats                          # friction rates over time
-orbit search "<terms>" --kind friction        # lexical; frictions are never embedded
+orbit search "<terms>" --kind friction        # lexical friction search
 ```
 
-Frictions are searchable but not vectorized, so they stay lexical even under
-`--hybrid`. Search by the words someone would actually have used.
+Frictions use lexical matching. Search by the words someone would actually have used.
 → [search.md](search.md)
 
 Left alone, the corpus rots into duplicates. The seeded `friction-curation`

@@ -4,7 +4,7 @@ Review someone else's work and surface issues in your review summary. Read-only:
 
 ## Load context
 
-`orbit.task.show` for `description`, `acceptance_criteria`, `plan`, and `execution_summary`. Inspect the diff and the changed files. Run the target repo's build and its relevant test commands, taken from that repo's own instructions and configuration. Optionally `orbit.search` with `semantic: "<task-id>"` for prior similar decisions.
+`orbit.task.show` for `description`, `acceptance_criteria`, `plan`, and `execution_summary`. Inspect the diff and the changed files. Run the target repo's build and its relevant test commands, taken from that repo's own instructions and configuration. Search relevant title or description terms with `orbit.search` when prior task context is needed.
 
 ## Two stages, in order
 

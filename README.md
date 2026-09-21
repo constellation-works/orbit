@@ -54,12 +54,12 @@ Three things to notice:
 - **Conflict-aware parallel execution.** Each run gets its own git worktree and reserves the task's `context_files` as locks before fanning out, rejecting overlapping reservations up front instead of producing merge conflicts later. → [docs/design/activity-job/](docs/design/activity-job/)
 - **Continuous review after delivery.** Shipped `code-review`, `qa-sweep`, and `security-review` auto-tasks read the window since their last cursor, verify findings against live code, and file confirmed ones as tasks with `file:line` evidence. A clean window is a successful no-op. → [docs/design/auto-tasks/](docs/design/auto-tasks/)
 - **Sandboxed-by-default execution.** Dispatched agent CLIs run under `sandbox-exec` on macOS and Bubblewrap on Linux; the Linux boundary enforces writes only, leaving host reads and network open. Unsupported platforms keep the in-process filesystem guards. → [docs/design/policy-sandbox/](docs/design/policy-sandbox/)
-- **A searchable docs corpus — your conventions, not Orbit's.** Register the markdown you already write with `orbit docs add`; agents retrieve it by concept via `orbit search --kind doc`, with `--hybrid` adding embedding recall. → [docs/design/orbit-docs/](docs/design/orbit-docs/)
+- **Searchable task history.** Local SQLite FTS5 BM25 finds task text with non-adjacent query terms; task mutations keep the index current. → [docs/design/orbit-search/](docs/design/orbit-search/)
 - **A friction ledger for what made the work harder than it should have been.** A confusing error, a missing flag, an undocumented convention — Orbit's own tooling being one case among many — the agent files it (`orbit friction add`) instead of silently working around it. A task carrying a `resolves` relation closes its friction on reaching `done`.
 - **Dependency-ordered execution.** Tasks carry `dependencies` and typed `relations`; the pipeline gates admission on them, so declare the order once and let the queue enforce it.
 - **Recurring work as data.** `orbit auto-task` defines `.orbit/auto_tasks/*.yaml` templates with a cron or interval schedule and a dedupe policy; a seeded scheduler mints tasks from the due ones, and `orbit auto-task mint <name>` mints one on demand.
 
-Everything is incremental: the task layer and audit log work on day one; the docs corpus, friction ledger, auto-tasks, and parallel dispatch switch on as you adopt them.
+Everything is incremental: the task layer and audit log work on day one; the friction ledger, auto-tasks, and parallel dispatch switch on as you adopt them.
 
 ---
 
@@ -129,16 +129,16 @@ Cloning gives you a framework to mold to your team's conventions; everything und
 <details>
 <summary><strong>Agent setup prompt</strong> (click to expand)</summary>
 
-> You are helping me set up Orbit, a local governance and audit layer for coding agents, inside this repository so I keep my existing agents while gaining durable tasks, structured audit, a searchable docs corpus, and safe parallel execution.
+> You are helping me set up Orbit, a local governance and audit layer for coding agents, inside this repository so I keep my existing agents while gaining durable tasks, structured audit, searchable task history, and safe parallel execution.
 >
 > 1. Ask me where to clone the Orbit repository (suggest `~/code/orbit`).
 > 2. Verify the Rust toolchain: Orbit's MSRV is `rust-version = "1.89"`. If cargo is missing or older, **stop and ask me before installing anything** (`rustup` modifies the shell profile).
 > 3. Clone `https://github.com/constellation-works/orbit` into that location and run `make install` (copies `orbit` to `$INSTALL_BIN_DIR`, default `~/.orbit/bin`, the same location `./install.sh` uses). Confirm the install path with me first. Verify with `orbit --version`.
 > 4. Run `orbit init` for global state at `~/.orbit`. On Linux, follow `docs/runbooks/linux-sandbox.md` and require its probe to pass before dispatching agents.
 > 5. From *this* repository, run `orbit workspace init --mcp`. It creates `.orbit/` and registers an **operator-authorized** MCP server with installed agent CLIs. Tell me first if you'd rather it stay agent-only (`orbit mcp init`).
-> 6. Ask me whether to enable semantic search (optional): `orbit semantic install` downloads an embedder companion plus the default model under `~/.orbit/embed/` (macOS arm64 or Linux x86_64/aarch64 with glibc >= 2.38). If I accept and tasks already exist, run `orbit semantic index`.
+> 6. If tasks were imported or restored, run `orbit search reindex` to rebuild their lexical index. No search model download is needed.
 > 7. Read `README.md`, `docs/POSITIONING.md`, `CLAUDE.md`, `ARCHITECTURE.md`, `docs/design/CONVENTIONS.md`, and `docs/CONFIG.md`.
-> 8. Run `orbit task list` and `orbit semantic stats` and show me the output.
+> 8. Run `orbit task list` and `orbit doctor` and show me the output.
 > 9. Ask me what my first real task should be and create it with the `orbit` skill.
 >
 > Rules: never run destructive commands, install rustup, install outside `~/.orbit/bin`, or modify a shell profile without confirmation. If anything is unclear or fails, stop and ask. Do not simplify or hide Orbit's conventions; I am choosing this because I want the discipline.
@@ -149,16 +149,20 @@ Cloning gives you a framework to mold to your team's conventions; everything und
 
 ## Search
 
-`orbit search` queries tasks, docs, and frictions (`--kind task|doc|friction|all`), lexical by default. `--hybrid` adds embedding ranking over tasks and indexed docs, and `orbit search similar <task-id>` finds cosine-neighbor tasks. The embedder is a separate companion subprocess, so semantic search costs nothing when unused.
+`orbit search` queries tasks and frictions (`--kind task|friction|all`) using
+lexical matching. Task fields use SQLite FTS5 BM25: query terms need not be
+adjacent. Task create/update/delete keep the index current synchronously. Bundle
+substring matching supplements task fields and searches unindexed records.
 
 ```bash
-orbit semantic install    # one-time: companion + default model (bge-small)
-orbit semantic index      # backfill tasks; CLI mutations do not auto-index — re-run after edits
-orbit docs index          # backfill docs for --kind doc --hybrid
-orbit search "race in the scheduler when locks overlap" --hybrid --kind task
+orbit search "scheduler locks" --kind task
+orbit search "retry" --kind friction --all
+orbit search reindex      # rebuild task chunks after imports or restores
 ```
 
-The companion is released for macOS arm64 and Linux x86_64/aarch64 (glibc >= 2.38); Intel macOS runs the CLI without semantic search. Frictions are never embedded.
+Search runs locally with no model download or separate binary. See the
+[upgrade guide](docs/runbooks/upgrades.md#lexical-search-migration) for cleanup of
+retired search installations.
 
 ---
 

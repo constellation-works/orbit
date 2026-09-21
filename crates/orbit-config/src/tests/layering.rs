@@ -592,3 +592,31 @@ provider = "codex"
         );
     }
 }
+
+#[test]
+fn retired_search_configuration_warns_and_stays_out_of_effective_settings() {
+    let global = tempdir().expect("global");
+    let workspace = tempdir().expect("workspace");
+    write_config(
+        workspace.path(),
+        "[semantic]\nmodel = \"old\"\n[search]\nmodel = \"old\"\n",
+    );
+    let (result, warnings) =
+        capture_warnings(|| ResolvedConfig::load(&roots(global.path(), workspace.path())));
+    let config = result.expect("legacy configuration still loads");
+    for key in ["semantic", "search.model"] {
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning["fields"]["key"] == key),
+            "{warnings:?}"
+        );
+    }
+    assert!(
+        config
+            .snapshot
+            .all_values()
+            .iter()
+            .all(|(key, _)| !key.starts_with("semantic") && *key != "search.model")
+    );
+}

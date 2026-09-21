@@ -22,7 +22,7 @@ Orbit does not process your data on your behalf. All Orbit state lives under
 per-user checkout state (gitignored in full); it is not a repository artifact.
 The only network
 traffic Orbit initiates itself is to fetch its own releases from GitHub when you
-run `orbit update` or `orbit semantic install`. Everything else that leaves
+run `orbit update`. Everything else that leaves
 the machine — model traffic from agent CLIs, `git push`, pull requests, SSH —
 goes through tools and accounts you already control, under those providers'
 terms, not Orbit's. Because Orbit is neither a data processor (GDPR), a
@@ -42,7 +42,7 @@ data-handling review:
 | Audit events, job runs, step checkpoints, routine state | `~/.orbit/orbit.db` (SQLite) | Authoritative history of what each agent invocation did. |
 | Redacted agent output blobs | `<repo>/.orbit/state/audit/blobs/` | Content-addressed; secrets are redacted at write time (see below). |
 | Process logs | `~/.orbit/state/logs/orbit.jsonl` | JSONL, rotated locally; secret-looking values are redacted before reaching the sink. See [logging](./runbooks/logging.md). |
-| Semantic task index | `<repo>/.orbit/state/semantic.db` | Local vector index; regenerable. Embeddings are computed on the host by the search companion. |
+| Lexical task index | `<repo>/.orbit/state/semantic.db` | Local SQLite FTS5 index; regenerable with `orbit search reindex`. No model or network request. |
 | Worktrees | `<repo>/.orbit/state/worktrees/` | Scratch; regenerable. |
 | Machine identity (`machine.id`, `machine.name`, `machine.task_prefix`) | `~/.orbit/config.toml` `[machine]` | A locally generated stable identifier. It is never transmitted to the Orbit project. |
 | Workspace registry, runtime config, resource overrides | `~/.orbit/config.toml`, `workspaces.json`, `resources/` | Host-global configuration only. |
@@ -60,7 +60,6 @@ choose, or through federated MCP over SSH to hosts you configure.
 | Traffic | When | Destination | What is sent |
 | --- | --- | --- | --- |
 | Release check and binary download | Only when you run `orbit update` | `api.github.com` / `github.com/constellation-works/orbit/releases` | A GitHub API request for the latest release; no identifiers, no payload. |
-| Search companion and embedding model download | Only when you run `orbit semantic install` | `github.com/constellation-works/orbit/releases` | Download only. |
 | Direct HTTP model transports (Anthropic Messages, OpenAI-compatible, Gemini) | Never from the `orbit` CLI | `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com` by default | These transports live in the `orbit-agent` library crate for embedders and examples. Every `orbit` crew dispatches through a provider CLI; selecting an HTTP-only provider such as `openai_compat` fails structurally rather than making a request. |
 
 Orbit has no update check on startup, no crash reporter, no usage analytics,
@@ -156,8 +155,8 @@ data flow; point the reviewer at this page and at
 - **Retention is yours.** Logs rotate locally ([logging](./runbooks/logging.md));
   audit history in `orbit.db` is kept until you delete it. Nothing ages out to
   a remote.
-- **Air-gapped use works** apart from the two explicit download commands and
-  whatever your agent CLIs need. Install the binary and the search companion
+- **Air-gapped use works** apart from explicit update downloads and
+  whatever your agent CLIs need. Install the binary
   by hand and Orbit initiates no further connections.
 
 ## Related

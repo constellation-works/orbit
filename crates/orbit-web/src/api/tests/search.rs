@@ -63,30 +63,6 @@ async fn search_route_matches_unified_lexical_pipeline() {
 }
 
 #[tokio::test]
-async fn search_route_matches_hybrid_fallback_and_reports_lexical_mode() {
-    let runtime = OrbitRuntime::in_memory().expect("runtime");
-    let params = GlobalSearchParams {
-        query: Some("no indexed vectors".to_string()),
-        hybrid: true,
-        kind: GlobalSearchKind::Task,
-        limit: 5,
-        ..Default::default()
-    };
-    let expected = serde_json::to_value(runtime.global_search(params).expect("direct search"))
-        .expect("serialize direct search");
-
-    let (status, actual) = request_search(
-        runtime,
-        "query=no+indexed+vectors&kind=task&limit=5&hybrid=true",
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(actual, expected);
-    assert_eq!(actual["mode"], "lexical");
-}
-
-#[tokio::test]
 async fn search_route_rejects_invalid_filters_as_bad_requests() {
     let runtime = OrbitRuntime::in_memory().expect("runtime");
 
@@ -101,7 +77,7 @@ async fn search_route_rejects_invalid_filters_as_bad_requests() {
 }
 
 #[tokio::test]
-async fn search_route_forwards_semantic_neighbor_mode() {
+async fn search_route_rejects_removed_semantic_mode() {
     let runtime = OrbitRuntime::in_memory().expect("runtime");
 
     let (status, body) = request_search(
@@ -114,6 +90,6 @@ async fn search_route_forwards_semantic_neighbor_mode() {
     assert!(
         body["error"]
             .as_str()
-            .is_some_and(|error| error.contains("`query` and `semantic` are mutually exclusive"))
+            .is_some_and(|error| error.contains("unknown search parameter `semantic`"))
     );
 }

@@ -23,7 +23,7 @@ pub struct PersistenceConfig {
     pub executor_dir: PathBuf,
     /// Single global audit database.
     pub audit_db: PathBuf,
-    /// Workspace semantic index database.
+    /// Workspace lexical index database; filename retained for compatibility.
     pub semantic_db: PathBuf,
     /// Global policy definitions.
     pub policy_dir: PathBuf,

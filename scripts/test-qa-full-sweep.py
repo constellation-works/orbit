@@ -657,8 +657,8 @@ spec:
              "--input", json.dumps({"id":task_id,"model":"codex"}), "--format", "json"],
             work, [], lambda evidence: parse_json(evidence, "tool task.show"))
     checked("search-observability-boundary",
-            [orbit_bin, "--root", str(root), "--workspace", str(work), "semantic", "stats", "--json"],
-            work, ["semantic-stats-reports-capability"], lambda evidence: parse_json(evidence, "semantic stats"))
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "search", "reindex", "--json"],
+            work, ["search-reindex-reports-chunks"], lambda evidence: parse_json(evidence, "search reindex"))
     checked("search-observability-boundary",
             [orbit_bin, "--root", str(root), "--workspace", str(work), "doctor", "--json"],
             work, ["doctor-reports-isolated-workspace-health"], lambda evidence: parse_json(evidence, "doctor"))

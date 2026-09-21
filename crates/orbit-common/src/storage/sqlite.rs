@@ -1,7 +1,7 @@
 //! Shared SQLite connection defaults for every Orbit SQLite store.
 //!
 //! Historically each store (orbit-store `Store`, its ID allocator and task
-//! registry, and orbit-search's `VectorStore`) hand-rolled its own pragma
+//! registry, and orbit-search's `LexicalStore`) hand-rolled its own pragma
 //! setup, and the copies drifted (missing `foreign_keys` here, missing
 //! `busy_timeout` there). [`apply_default_pragmas`] is the single source of
 //! truth: call it on every freshly opened connection, then layer any

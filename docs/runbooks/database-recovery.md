@@ -61,7 +61,7 @@ Do not install the recovered database unless `PRAGMA integrity_check` returns `o
 
 | DB | Derivable? | Rebuild |
 |---|---|---|
-| `<ws>/.orbit/state/semantic.db` | yes | delete the file, then `orbit semantic index` |
+| `<ws>/.orbit/state/semantic.db` | yes | delete the file, then `orbit search reindex` |
 | `~/.orbit/tasks/index.sqlite` | yes, from task bundles | `orbit task reindex` |
 | `~/.orbit/orbit.db` | **no**—audit + run history | restore or salvage; deleting it is a last resort that loses history, although task content survives in file bundles and decision reasoning survives in `docs/` |
 
