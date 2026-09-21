@@ -8,7 +8,7 @@ use axum::http::{Method, Request, StatusCode};
 use orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV;
 use orbit_core::application::routines::{ClockStatus, ScheduleDisplayState};
 use orbit_core::{OrbitError, OrbitRuntime, RoutineFireRecord, RoutineFireState};
-use orbit_registry::{NewHostIdentity, ensure_host_identity};
+use orbit_registry::{NewMachineIdentity, ensure_machine_identity};
 use tower::ServiceExt;
 
 use super::super::router;
@@ -191,9 +191,9 @@ fn next_evaluation_json_marks_disabled_times_hypothetical() {
 #[tokio::test]
 async fn routines_endpoint_returns_envelope_for_empty_host() {
     let temp = tempfile::tempdir().expect("temp global root");
-    ensure_host_identity(temp.path(), || {
-        Ok(NewHostIdentity {
-            host_id: "dashboard-test".to_string(),
+    ensure_machine_identity(temp.path(), || {
+        Ok(NewMachineIdentity {
+            name: "dashboard-test".to_string(),
             task_prefix: "DA".to_string(),
         })
     })
@@ -222,7 +222,7 @@ async fn routines_endpoint_returns_envelope_for_empty_host() {
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
     assert!(json["generated_at"].is_string());
-    assert!(json["host_id"].is_string());
+    assert!(json["machine_name"].is_string());
     assert!(json["clock"]["provider"].is_string());
     assert!(json["clock"]["configured_cadence_seconds"].is_number());
     assert!(json["clock"]["enabled"].is_boolean());
@@ -235,9 +235,9 @@ async fn routines_endpoint_returns_envelope_for_empty_host() {
 #[tokio::test]
 async fn routines_endpoint_preserves_disabled_clock_observation() {
     let temp = tempfile::tempdir().expect("temp global root");
-    ensure_host_identity(temp.path(), || {
-        Ok(NewHostIdentity {
-            host_id: "dashboard-test".to_string(),
+    ensure_machine_identity(temp.path(), || {
+        Ok(NewMachineIdentity {
+            name: "dashboard-test".to_string(),
             task_prefix: "DA".to_string(),
         })
     })
@@ -262,9 +262,9 @@ async fn routines_endpoint_preserves_disabled_clock_observation() {
 #[tokio::test]
 async fn routines_endpoint_preserves_unavailable_clock_manager_error() {
     let temp = tempfile::tempdir().expect("temp global root");
-    ensure_host_identity(temp.path(), || {
-        Ok(NewHostIdentity {
-            host_id: "dashboard-test".to_string(),
+    ensure_machine_identity(temp.path(), || {
+        Ok(NewMachineIdentity {
+            name: "dashboard-test".to_string(),
             task_prefix: "DA".to_string(),
         })
     })
@@ -282,7 +282,7 @@ async fn routines_endpoint_preserves_unavailable_clock_manager_error() {
     let json = body_json(response).await;
     assert!(json["error"].is_null() || json.get("error").is_none());
     assert!(json["generated_at"].is_string());
-    assert!(json["host_id"].is_string());
+    assert!(json["machine_name"].is_string());
     assert_eq!(json["routines"], serde_json::json!([]));
     assert_eq!(json["load_errors"], serde_json::json!([]));
     assert_eq!(json["clock"]["health"], "unknown");
@@ -345,7 +345,7 @@ async fn routine_mutation_denies_an_unidentified_dashboard_caller() {
                         .header("host", "localhost:7878")
                         .header("content-type", "application/json")
                         .body(Body::from(
-                            r#"{"name":"nightly","source":"default","target":"job:nightly","host_id":"host-a","expected_enabled":true,"enabled":false}"#,
+                            r#"{"name":"nightly","source":"default","target":"job:nightly","machine_name":"host-a","expected_enabled":true,"enabled":false}"#,
                         ))
                         .expect("request"),
                 )
@@ -375,7 +375,7 @@ async fn operations_mutations_require_an_explicit_workspace() {
                 .header("host", "localhost:7878")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    r#"{"action":"disable","host_id":"host-a","expected_enabled":true,"expected_cadence_seconds":60}"#,
+                    r#"{"action":"disable","machine_name":"host-a","expected_enabled":true,"expected_cadence_seconds":60}"#,
                 ))
                 .expect("request"),
         )
@@ -446,9 +446,9 @@ fn operator_session_grants_without_tty_or_override() {
 
 fn empty_host_state() -> (tempfile::TempDir, DashboardState) {
     let temp = tempfile::tempdir().expect("temp global root");
-    ensure_host_identity(temp.path(), || {
-        Ok(NewHostIdentity {
-            host_id: "dashboard-test".to_string(),
+    ensure_machine_identity(temp.path(), || {
+        Ok(NewMachineIdentity {
+            name: "dashboard-test".to_string(),
             task_prefix: "DA".to_string(),
         })
     })
@@ -530,9 +530,9 @@ async fn authorized_routine_toggle_reads_back_and_rejects_stale_or_wrong_selecti
     let temp = tempfile::tempdir().expect("fixture");
     let global = temp.path().join("global");
     std::fs::create_dir_all(&global).expect("global");
-    ensure_host_identity(&global, || {
-        Ok(NewHostIdentity {
-            host_id: "dashboard-test".to_string(),
+    ensure_machine_identity(&global, || {
+        Ok(NewMachineIdentity {
+            name: "dashboard-test".to_string(),
             task_prefix: "DA".to_string(),
         })
     })
@@ -560,9 +560,9 @@ async fn authorized_routine_toggle_reads_back_and_rejects_stale_or_wrong_selecti
             id: "ws_alpha".to_string(),
             name: "alpha".to_string(),
             owner_machine_id: Some(
-                orbit_registry::host_identity::load_host_identity(&global)
+                orbit_registry::machine_identity::load_machine_identity(&global)
                     .expect("identity")
-                    .machine_id,
+                    .id,
             ),
             git_remote: None,
             ship_mode: None,
@@ -594,7 +594,7 @@ async fn authorized_routine_toggle_reads_back_and_rejects_stale_or_wrong_selecti
 
     with_caller_env([(OPERATOR_OVERRIDE_ENV, Some("1"))], async {
         for enabled in [false, true] {
-            let body = serde_json::json!({"name":"fixture", "source":"alpha", "target":"job:noop", "host_id":"dashboard-test", "expected_enabled": !enabled, "enabled":enabled});
+            let body = serde_json::json!({"name":"fixture", "source":"alpha", "target":"job:noop", "machine_name":"dashboard-test", "expected_enabled": !enabled, "enabled":enabled});
             let response = routine_request(state.clone(), "/routines/toggle?workspace=alpha", Some(body.clone())).await;
             assert_eq!(response.status(), StatusCode::OK, "{}", body_json(response).await);
             let persisted: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&path).expect("read file")).expect("yaml");
@@ -614,7 +614,7 @@ async fn authorized_routine_toggle_reads_back_and_rejects_stale_or_wrong_selecti
             assert_eq!(stale.status(), StatusCode::CONFLICT);
         }
         let wrong = routine_request(state.clone(), "/routines/toggle?workspace=alpha", Some(serde_json::json!({
-            "name":"fixture", "source":"other", "target":"job:noop", "host_id":"dashboard-test", "expected_enabled":true, "enabled":false
+            "name":"fixture", "source":"other", "target":"job:noop", "machine_name":"dashboard-test", "expected_enabled":true, "enabled":false
         }))).await;
         assert_eq!(wrong.status(), StatusCode::CONFLICT);
         assert_eq!(body_json(wrong).await["code"], "workspace_mismatch");
@@ -623,7 +623,7 @@ async fn authorized_routine_toggle_reads_back_and_rejects_stale_or_wrong_selecti
         // native service writes. Actual service mutation belongs to Core's fake-runner tests.
         let listed = body_json(routine_request(state.clone(), "/routines", None).await).await;
         let invalid_clock = routine_request(state.clone(), "/routines/clock?workspace=alpha", Some(serde_json::json!({
-            "action":"set_cadence", "host_id":"dashboard-test",
+            "action":"set_cadence", "machine_name":"dashboard-test",
             "expected_enabled": listed["clock"]["enabled"],
             "expected_cadence_seconds": listed["clock"]["configured_cadence_seconds"], "cadence_seconds":61
         }))).await;

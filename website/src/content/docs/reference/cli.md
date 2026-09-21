@@ -24,13 +24,12 @@ before the subcommand.
 
 | Command | Purpose |
 |---|---|
-| `orbit init` | Initialize the global Orbit root, host identity, task-id prefix, and default skills. |
+| `orbit init` | Initialize the global Orbit root, this machine's `[machine]` identity, task-id prefix, and default skills. |
 | `orbit workspace init` | Register the current repository as a workspace. `--name`, `--base-branch`, `--ship-mode pr\|local`, `--role owner\|replica` (`replica` requires `--owner <machine_id>`), `--task-id-start <N>`, `--mcp`, `--inject-agent-rules`; `--force` reconciles an already registered workspace. |
 | `orbit workspace list` \| `show` \| `sync` \| `role` | Inspect registered workspaces, converge managed artifacts, and validate this checkout's role. |
 | `orbit workspace publication bind` \| `show` \| `rebind` \| `remove` | Manage the owner-local binding to a dedicated task-publication repository. See [Publish and Restore Tasks](../../how-to/task-publication/). |
 | `orbit workspace remove` \| `teardown` | Deregister a workspace, or remove Orbit artifacts from it. |
-| `orbit host show` \| `rename` | Inspect or rename this machine's local host identity. |
-| `orbit config show` \| `get` \| `set` \| `keys` \| `path` | Read and write configuration. See [Configuration](../config/). |
+| `orbit config show` \| `get` \| `set` \| `keys` \| `path` | Read and write configuration, including this machine's identity under `machine.*`. Rename the machine with `orbit config set --global machine.name <value>`. See [Configuration](../config/). |
 | `orbit semantic install` \| `uninstall` \| `stats` \| `index` | Manage the local embedding companion. CLI task mutations do not auto-index; run `orbit semantic index` to refresh. |
 | `orbit migrate` | Inspect pending `.orbit` layout and store migrations; `--confirm` applies them. |
 | `orbit update` | Install a published release and converge to it. `--check`, `--version`, `--allow-downgrade`. |
@@ -130,7 +129,7 @@ Start a drain under a grant with `orbit run auto --grant <ID>`.
 | `orbit routine list` \| `show` \| `pause` \| `resume` | Inspect routines and pause them host-locally. |
 | `orbit clock status` \| `pause` \| `enable` \| `set` | Control the host OS scheduler clock. |
 | `orbit clock repair` | Rewrite the installed clock unit when it names a missing, moved, or stale program, then re-register it. Run automatically as the last `orbit update` convergence step. |
-| `orbit routine init [--install-clock]` | Read host identity and optionally install the OS clock unit. |
+| `orbit routine init [--install-clock]` | Read this machine's identity and optionally install the OS clock unit. |
 | `orbit auto-task add` \| `list` \| `show` \| `update` \| `toggle` \| `mint` | Define recurring auto-task templates and mint from them. |
 | `orbit auto-task recover` \| `reset` | Preview or apply audited repair of a delivery consumer: `recover` unsticks one stalled by a settings change and keeps its coverage debt; `reset` forgets the debt and re-baselines at the branch head. |
 

@@ -120,9 +120,9 @@ pub struct AutoTaskSweepReport {
 /// Result of one sweep pass.
 #[derive(Debug, Default)]
 pub struct SweepOutcome {
-    /// Display identity of the host this pass ran on.
-    pub host_id: String,
-    /// Stable machine identity of the host this pass ran on.
+    /// Display name of the machine this pass ran on.
+    pub machine_name: String,
+    /// Stable identity of the machine this pass ran on.
     pub machine_id: String,
     /// True when another sweep held the lock and this pass exited early.
     pub lock_busy: bool,

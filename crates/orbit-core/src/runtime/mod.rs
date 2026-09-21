@@ -154,7 +154,7 @@ pub struct WorkspaceRuntimeBinding {
     /// Registered owner of the logical workspace. Automation resolves the
     /// default owner of a delivery definition from it, so an unambiguously
     /// owned workspace needs no redundant per-definition configuration.
-    /// Absent on standalone registries that predate host identity.
+    /// Absent on standalone registries that predate machine identity.
     pub owner_machine_id: Option<String>,
     pub repo_root: PathBuf,
     pub ship_mode: ShipMode,
@@ -200,7 +200,7 @@ impl OrbitRuntime {
             .or_else(|| self.automation_machine_identity())
             .map(|machine_id| orbit_types::task::ExecutionLocation {
                 machine_id: machine_id.into(),
-                host_id: session.process_host_id.clone(),
+                machine_name: session.process_machine_name.clone(),
             })
     }
 
@@ -382,7 +382,7 @@ impl OrbitRuntime {
             .set_execution_location(machine_id.as_ref().map(|machine_id| {
                 orbit_types::task::ExecutionLocation {
                     machine_id: machine_id.clone(),
-                    host_id: None,
+                    machine_name: None,
                 }
             }));
         self.automation_machine_identity = machine_id.map(Arc::from);

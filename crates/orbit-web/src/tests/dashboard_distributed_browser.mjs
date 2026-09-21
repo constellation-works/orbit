@@ -65,8 +65,8 @@ try {
     phase: 'handed_off',
     phase_summary: 'delivery handed off and awaiting completion authority — this is not a code review',
     authorizes_execution: false, unsettled: true,
-    executed_on: { known: true, machine_id: 'hm_9ca6004473492f06', host_id: 'runner-2' },
-    run_context: { run_id: 'drain-1', job_name: 'auto', host_id: null },
+    executed_on: { known: true, machine_id: 'hm_9ca6004473492f06', machine_name: 'runner-2' },
+    run_context: { run_id: 'drain-1', job_name: 'auto', machine_name: null },
     bound_run: { machine_id: 'hm_9ca6004473492f06', run_id: 'jrun-20260919-2210-a1' },
     bound_run_navigable: false,
     inspect_on: 'inspect this run on machine hm_9ca6004473492f06 (no owner-local run exists)',
@@ -82,7 +82,7 @@ try {
     handoff: {
       handoff_id: 'handoff1', accepted_at: '2026-09-19T00:00:00+00:00',
       task_id: 'ORB-2', claim_id: 'claim-1',
-      executed_on: { known: true, machine_id: 'hm_9ca6004473492f06', host_id: null },
+      executed_on: { known: true, machine_id: 'hm_9ca6004473492f06', machine_name: null },
       run_id: 'jrun-20260919-2210-a1', execution_summary: 'Outcome: success',
       candidate: {
         repository: 'owner/repository', source_branch: 'orbit/ORB-2-6aaf7fd3',
@@ -140,7 +140,7 @@ try {
   await page.waitForSelector('.claim-panel', { timeout: 5000 });
   const rendered = await page.textContent('.claim-panel');
   for (const required of [
-    'machine hm_9ca6004473492f06 · host runner-2',
+    'machine hm_9ca6004473492f06 · name runner-2',
     'inspect this run on machine hm_9ca6004473492f06',
     'expiry is not revocation',
     'not_required (policy none)',

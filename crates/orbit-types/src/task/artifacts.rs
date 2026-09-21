@@ -36,7 +36,7 @@ pub fn is_valid_orb_task_id(id: &str) -> bool {
         && suffix.chars().all(|character| character.is_ascii_digit())
 }
 
-/// Validate a stored task-id prefix. `ORB` remains valid for migrated hosts;
+/// Validate a stored task-id prefix. `ORB` remains valid for migrated machines;
 /// other artifact namespaces cannot be interpreted as tasks.
 pub fn is_valid_task_id_prefix(prefix: &str) -> bool {
     (2..=5).contains(&prefix.len())
@@ -92,8 +92,14 @@ pub struct TaskEnvelopeV2 {
     pub pr_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_run_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub job_run_host: Option<crate::task::ExecutionLocation>,
+    /// [ORB-12725] `job_run_host` is read for one release; see
+    /// [`crate::task::Task::job_run_machine`].
+    #[serde(
+        default,
+        alias = "job_run_host",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub job_run_machine: Option<crate::task::ExecutionLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
     /// Named crew responsible for task orchestration, distinct from execution crew.

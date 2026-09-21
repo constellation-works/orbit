@@ -11,7 +11,7 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::contracts::RoutineFireRecord;
 
-use super::RoutineHostIdentity;
+use super::RoutineMachineIdentity;
 use super::due::{next_occurrence, parse_cron};
 use super::loader::{
     LoadedRoutine, RetiredRoutine, RoutineLoadError, RoutineWorkspaceProvider, collect_routines,
@@ -114,9 +114,9 @@ fn automation_unavailable(automation: Option<&serde_json::Value>) -> bool {
 /// Everything `orbit routine list` renders.
 #[derive(Debug)]
 pub struct RoutineStatusReport {
-    /// This host's identity.
-    pub host_id: String,
-    /// Stable machine identity of this host.
+    /// This machine's display name (`machine.name`).
+    pub machine_name: String,
+    /// This machine's stable identity (`machine.id`).
     pub machine_id: String,
     /// Per-routine status rows, in discovery order.
     pub statuses: Vec<RoutineStatus>,
@@ -130,7 +130,7 @@ pub struct RoutineStatusReport {
 /// ownership remains outside Core.
 pub fn routine_statuses_with_providers(
     global_root: &Path,
-    local_host: RoutineHostIdentity,
+    local_machine: RoutineMachineIdentity,
     workspace_provider: &dyn RoutineWorkspaceProvider,
     now_utc: DateTime<Utc>,
 ) -> Result<RoutineStatusReport, OrbitError> {
@@ -167,8 +167,8 @@ pub fn routine_statuses_with_providers(
     }
 
     Ok(RoutineStatusReport {
-        host_id: local_host.host_id,
-        machine_id: local_host.machine_id,
+        machine_name: local_machine.machine_name,
+        machine_id: local_machine.machine_id,
         statuses,
         retired: collection.retired,
         load_errors,

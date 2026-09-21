@@ -82,16 +82,16 @@ export function claimsForTask(payload, taskId) {
 
 // --- shared renderers -------------------------------------------------------
 
-/// Host-qualified execution provenance, or an explicit unknown.
+/// Machine-qualified execution provenance, or an explicit unknown.
 ///
-/// `machine_id` is the stable identity; `host_id` rides along for display and
-/// may be renamed, so it is never shown alone.
+/// `machine_id` is the stable identity; `machine_name` rides along for display
+/// and may be renamed, so it is never shown alone.
 export function formatExecutionLocation(location) {
   if (!location || location.known !== true || !location.machine_id) {
     return "unknown — recorded before execution provenance was tracked";
   }
-  return location.host_id
-    ? `machine ${location.machine_id} · host ${location.host_id}`
+  return location.machine_name
+    ? `machine ${location.machine_id} · name ${location.machine_name}`
     : `machine ${location.machine_id}`;
 }
 
@@ -150,7 +150,7 @@ export function buildClaimPanel(claim, capabilities, handlers = {}) {
       panel.appendChild(
         line("bound run", `${run.run_id} on machine ${run.machine_id}`, {
           class: "remote",
-          note: claim.inspect_on || "inspect this run on its execution host",
+          note: claim.inspect_on || "inspect this run on its execution machine",
         }),
       );
     }

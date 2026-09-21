@@ -1,4 +1,4 @@
-//! Routine and host clock operations for the dashboard [ORB-10875].
+//! Routine and machine clock operations for the dashboard [ORB-10875].
 
 use std::time::Instant;
 
@@ -35,9 +35,10 @@ pub(super) struct RoutineToggleRequest {
     name: String,
     source: String,
     target: String,
-    /// The host the browser acted from. Recorded in the audit event; routine
-    /// definitions are host-independent [ORB-12236], so it selects nothing.
-    host_id: String,
+    /// The machine the browser acted from. Recorded in the audit event;
+    /// routine definitions are machine-independent [ORB-12236], so it selects
+    /// nothing.
+    machine_name: String,
     expected_enabled: bool,
     enabled: bool,
 }
@@ -53,7 +54,7 @@ pub(super) enum ClockAction {
 #[derive(Debug, Deserialize)]
 pub(super) struct ClockControlRequest {
     action: ClockAction,
-    host_id: String,
+    machine_name: String,
     expected_enabled: bool,
     expected_cadence_seconds: u64,
     cadence_seconds: Option<u64>,
@@ -104,7 +105,7 @@ pub(super) async fn toggle_routine(
                 workspace,
                 "routine.toggle",
                 &body.name,
-                &body.host_id,
+                &body.machine_name,
                 &json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
                 None,
                 Some(&denial),
@@ -165,7 +166,7 @@ pub(super) async fn toggle_routine(
                 workspace,
                 "routine.toggle",
                 &body.name,
-                &body.host_id,
+                &body.machine_name,
                 &json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
                 Some(&caller),
                 None,
@@ -192,7 +193,7 @@ pub(super) async fn toggle_routine(
         workspace,
         "routine.toggle",
         &body.name,
-        &body.host_id,
+        &body.machine_name,
         &json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
         Some(&caller),
         None,
@@ -203,7 +204,7 @@ pub(super) async fn toggle_routine(
         "name": body.name,
         "source": body.source,
         "target": body.target,
-        "host_id": body.host_id,
+        "machine_name": body.machine_name,
         "enabled": body.enabled,
         "changed": outcome == RoutineToggleOutcome::Changed,
         "message": if body.enabled { "Routine enabled" } else { "Routine disabled" },
@@ -235,7 +236,7 @@ pub(super) async fn control_clock(
                 workspace,
                 operation,
                 "clock",
-                &body.host_id,
+                &body.machine_name,
                 &json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
                 None,
                 Some(&denial),
@@ -259,10 +260,13 @@ pub(super) async fn control_clock(
         Ok(pair) => pair,
         Err(response) => return *response,
     };
-    if body.host_id != report.host_id {
+    if body.machine_name != report.machine_name {
         return selection_conflict(
-            "host_mismatch",
-            format!("select host '{}' before changing its clock", report.host_id),
+            "machine_mismatch",
+            format!(
+                "select machine '{}' before changing its clock",
+                report.machine_name
+            ),
         );
     }
     if before.enabled != body.expected_enabled
@@ -312,7 +316,7 @@ pub(super) async fn control_clock(
             workspace,
             operation,
             "clock",
-            &body.host_id,
+            &body.machine_name,
             &json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
             Some(&caller),
             None,
@@ -335,7 +339,7 @@ pub(super) async fn control_clock(
         workspace,
         operation,
         "clock",
-        &body.host_id,
+        &body.machine_name,
         &json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
         Some(&caller),
         None,
@@ -362,7 +366,7 @@ pub(super) fn report_json(
 ) -> Value {
     json!({
         "generated_at": generated_at.to_rfc3339(),
-        "host_id": report.host_id,
+        "machine_name": report.machine_name,
         "machine_id": report.machine_id,
         "controls_authorized": authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, operator_session).is_ok(),
         "capabilities": {
@@ -371,7 +375,7 @@ pub(super) fn report_json(
             "clock_cadence": action_capability(&DASHBOARD_CLOCK_CADENCE, operator_session),
         },
         "session_explanation": if authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, operator_session).is_ok() {
-            "Session access: this dashboard server has operator authority. Actions also check workspace and host selection. Mint creates a task without starting delivery; bounded-window submission has separate permissions."
+            "Session access: this dashboard server has operator authority. Actions also check workspace and machine selection. Mint creates a task without starting delivery; bounded-window submission has separate permissions."
         } else {
             "Session access comes from the dashboard server. For operator access, start it with `orbit web serve --operator` (or `orbit web connect`, which does that by default) and reload this page. Opening a terminal does not authorize a running server. Bounded-window submission has separate permissions."
         },
@@ -551,7 +555,7 @@ pub(super) fn record_operation_audit(
     workspace: &str,
     operation: &str,
     target: &str,
-    host_id: &str,
+    machine_name: &str,
     arguments: &Value,
     caller: Option<&CallerCapabilities>,
     denial: Option<&AuthorizationDenial>,
@@ -597,9 +601,9 @@ pub(super) fn record_operation_audit(
         session_id: None,
         workspace_id: Some(workspace.to_string()),
         caller_machine_id: None,
-        caller_host_id: Some(host_id.to_string()),
+        caller_machine_name: Some(machine_name.to_string()),
         process_machine_id: None,
-        process_host_id: Some(host_id.to_string()),
+        process_machine_name: Some(machine_name.to_string()),
         transport: None,
         effective_capabilities: capabilities,
         origin_session_id: None,

@@ -6,7 +6,7 @@ use orbit_cmd::task_owner::bound_workspace_identity;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
 use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_registry::{HostIdentityState, inspect_host_identity};
+use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::task::is_task_show_projection_field;
 use orbit_types::tool::{McpTransport, ToolSessionContext};
 use serde_json::{Map, Value};
@@ -164,16 +164,16 @@ pub(super) fn local_tool_session_context(
     runtime: &OrbitRuntime,
     owner: Option<&orbit_cmd::task_owner::WorkspaceIdentity>,
 ) -> Result<ToolSessionContext, OrbitError> {
-    let (machine_id, host_id) = local_machine_identity(&runtime.global_root())?;
+    let (machine_id, machine_name) = local_machine_identity(&runtime.global_root())?;
     Ok(ToolSessionContext {
         workspace: Some(runtime.paths().repo_root.to_string_lossy().into_owned()),
         workspace_id: owner
             .map(|owner| owner.id.clone())
             .or_else(|| runtime.workspace_id().ok()),
         caller_machine_id: Some(machine_id.clone()),
-        caller_host_id: host_id.clone(),
+        caller_machine_name: machine_name.clone(),
         process_machine_id: Some(machine_id),
-        process_host_id: host_id,
+        process_machine_name: machine_name,
         transport: Some(McpTransport::Local),
         trace_id: Some(audit_execution_id("trace")),
         ..ToolSessionContext::default()
@@ -183,16 +183,9 @@ pub(super) fn local_tool_session_context(
 pub(super) fn local_machine_identity(
     global_root: &std::path::Path,
 ) -> Result<(String, Option<String>), OrbitError> {
-    match inspect_host_identity(global_root)? {
-        HostIdentityState::Present(identity) => Ok((identity.machine_id, Some(identity.host_id))),
-        HostIdentityState::Legacy {
-            host_id,
-            machine_id,
-        } => Ok((
-            machine_id.unwrap_or_else(|| LOCAL_MACHINE_ID_FALLBACK.to_string()),
-            Some(host_id),
-        )),
-        HostIdentityState::Absent => Ok((LOCAL_MACHINE_ID_FALLBACK.to_string(), None)),
+    match inspect_machine_identity(global_root)? {
+        MachineIdentityState::Present(identity) => Ok((identity.id, Some(identity.name))),
+        MachineIdentityState::Absent => Ok((LOCAL_MACHINE_ID_FALLBACK.to_string(), None)),
     }
 }
 

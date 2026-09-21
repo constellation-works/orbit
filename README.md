@@ -205,7 +205,6 @@ Each entrypoint loads only the relevant references on demand. `orbit skill docto
 ├── skills/                      # SKILL.md files
 ├── embed/                       # semantic companion + models
 ├── config.toml                  # global settings
-└── host.toml                    # machine identity: machine_id, host_id, task_prefix
 ```
 
 `orbit workspace init` seeds a `.gitignore` that ignores all of `.orbit/` as per-user checkout state. Seeded defaults come from the binary via `init` / `workspace sync`. Day-2 operations (backup, stuck runs, DB recovery, health checks, upgrades) are in the [runbooks](docs/INDEX.md#runbooks).

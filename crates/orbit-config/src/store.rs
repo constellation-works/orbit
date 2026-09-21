@@ -16,6 +16,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::security::redaction::redact_home_dir;
 
+use crate::layering::reject_workspace_machine_table;
 use crate::persistence::PersistenceConfig;
 use crate::registry::{self, ConfigSnapshot};
 use crate::resolved::ResolvedConfig;
@@ -189,8 +190,76 @@ impl ConfigStore {
     /// [`Self::validate`] and then [`Self::save`] afterward — `set_value`
     /// never touches disk.
     pub fn set_value(&mut self, key: &str, raw_value: &str) -> Result<(), OrbitError> {
-        registry::admit_config_key(key)?;
+        registry::admit_settable_config_key(key)?;
+        self.reject_global_only_key(key)?;
         self.set_document_value(key, raw_value)
+    }
+
+    /// Refuse a global-only key on a workspace-bound store, naming the flag
+    /// that targets the right file. Checked before any document mutation so a
+    /// refused `set` leaves the workspace file untouched.
+    fn reject_global_only_key(&self, key: &str) -> Result<(), OrbitError> {
+        if self.scope != ConfigScope::Workspace || !registry::is_global_only_key(key) {
+            return Ok(());
+        }
+        Err(OrbitError::InvalidInput(format!(
+            "config key '{key}' belongs to the global config only; rerun with --global to edit \
+             this machine's identity in '{}'",
+            redact_home_dir(&self.path.display().to_string())
+        )))
+    }
+
+    /// Record this machine's identity in the global `config.toml`.
+    ///
+    /// `orbit init` is the only writer of `machine.id` and `machine.task_prefix`
+    /// — [`Self::set_value`] refuses both — so creating an identity goes
+    /// through this seam rather than the operator-facing one. Refuses a
+    /// workspace-bound store outright: the table is global-only.
+    ///
+    /// The staged document is reparsed before the caller can save it, so an
+    /// identity that would not round-trip fails here rather than producing an
+    /// unreadable `[machine]` table. Deliberately narrower than
+    /// [`Self::validate`]: an unrelated admission problem elsewhere in an
+    /// operator's config must not stop `orbit init` from recording who this
+    /// machine is.
+    pub fn set_machine_identity(
+        &mut self,
+        id: &str,
+        name: &str,
+        task_prefix: &str,
+    ) -> Result<(), OrbitError> {
+        if self.scope != ConfigScope::Global {
+            return Err(OrbitError::InvalidInput(
+                "machine identity is written only to the global config.toml".to_string(),
+            ));
+        }
+        let fields = [
+            ("machine.id", id),
+            ("machine.name", name),
+            ("machine.task_prefix", task_prefix),
+        ];
+        for (key, value) in fields {
+            // Render as a TOML basic string rather than letting the literal
+            // parser reinterpret an identity that happens to look like a
+            // number, array, or inline table.
+            self.set_document_value(key, &toml_edit::Value::from(value).to_string())?;
+        }
+        let staged = self.doc.to_string().parse::<toml::Value>().map_err(|err| {
+            OrbitError::InvalidInput(format!("staged machine identity is not valid TOML: {err}"))
+        })?;
+        for (key, value) in fields {
+            let read_back = key
+                .split('.')
+                .try_fold(&staged, |table, segment| table.get(segment))
+                .and_then(toml::Value::as_str);
+            if read_back != Some(value) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "staged machine identity does not round-trip: '{key}' reads back as \
+                     {read_back:?}; refusing to write a corrupt [machine] table"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Set a value in a configuration section that is parsed by a subsystem
@@ -249,8 +318,18 @@ impl ConfigStore {
     /// again. Emptied parent tables are left in place: a `[workflow]` header
     /// with a hand-written comment above it is content an operator wrote, and
     /// an empty table admits exactly like an absent one.
+    /// `machine.*` is the one exception: there is no layer below this machine's
+    /// identity to fall back to, and clearing one of its three keys would leave
+    /// a partial `[machine]` table that fails closed on the next load.
     pub fn unset_value(&mut self, key: &str) -> Result<bool, OrbitError> {
-        registry::admit_config_key(key)?;
+        registry::admit_settable_config_key(key)?;
+        if registry::is_global_only_key(key) {
+            return Err(OrbitError::InvalidInput(format!(
+                "config key '{key}' cannot be unset: this machine's identity has no layer to \
+                 fall back to, and a partial [machine] table does not load. Rename it with \
+                 `orbit config set --global machine.name <value>` instead"
+            )));
+        }
         Ok(self.remove_path(key))
     }
 
@@ -296,7 +375,24 @@ impl ConfigStore {
     /// `RawRuntimeConfig` → [`ResolvedConfig`] validation pipeline as
     /// [`ResolvedConfig::load`], without writing anything.
     pub fn validate(&self) -> Result<(), OrbitError> {
+        self.reject_workspace_machine_table()?;
         self.snapshot().map(|_| ())
+    }
+
+    /// A workspace file may not carry `[machine]` at all, however it got
+    /// there. The scope-free admission pipeline cannot see which file it is
+    /// resolving, so the store — which does — states the rule.
+    fn reject_workspace_machine_table(&self) -> Result<(), OrbitError> {
+        if self.scope != ConfigScope::Workspace {
+            return Ok(());
+        }
+        let document = self.doc.to_string().parse::<toml::Value>().map_err(|err| {
+            OrbitError::InvalidInput(format!(
+                "invalid TOML in '{}': {err}",
+                redact_home_dir(&self.path.display().to_string())
+            ))
+        })?;
+        reject_workspace_machine_table(&document, &self.path)
     }
 
     /// Admission plus a write-time refusal for `orbit config set`.
@@ -305,6 +401,7 @@ impl ConfigStore {
     /// usable. A deliberate `set` of that same key still fails closed: the
     /// operator asked to persist a value that admission would drop.
     pub fn validate_for_set(&self, key: &str) -> Result<(), OrbitError> {
+        self.reject_workspace_machine_table()?;
         let resolved = self.resolved()?;
         if let Some(ignored) = resolved
             .ignored_crew_properties

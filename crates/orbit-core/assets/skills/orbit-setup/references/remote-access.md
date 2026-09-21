@@ -29,7 +29,7 @@ ssh = "<ssh-config-alias>"
 machine_id = "<destination-machine-id>"
 ```
 
-Copy machine IDs from `orbit host show` on the corresponding hosts. Local
+Copy machine IDs from `orbit config get machine.id` on the corresponding machines. Local
 membership is automatic and needs no row. Missing/empty configuration gives a
 local-only mux; malformed or ambiguous configuration fails closed. A configured
 unreachable destination remains visible in discovery rather than disappearing.

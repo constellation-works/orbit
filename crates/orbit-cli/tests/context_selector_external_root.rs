@@ -57,7 +57,7 @@ impl Workspace {
         let rooted_init = workspace.rooted(&[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "external-root-host",
             "--task-prefix",
             "EXR",

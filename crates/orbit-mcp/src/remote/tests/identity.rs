@@ -7,33 +7,30 @@ use super::super::identity::{
 };
 
 #[test]
-fn absent_host_identity_uses_explicit_local_fallbacks() {
+fn absent_machine_identity_uses_explicit_local_fallbacks() {
     let root = tempfile::tempdir().expect("global root");
 
-    let (machine_id, host_id) = local_identity(root.path()).expect("local identity");
+    let (machine_id, machine_name) = local_identity(root.path()).expect("local identity");
 
     assert_eq!(machine_id, "host/local");
-    assert!(!host_id.is_empty());
+    assert!(!machine_name.is_empty());
 }
 
 #[test]
-fn present_host_identity_is_server_derived() {
+fn present_machine_identity_is_server_derived() {
     let root = tempfile::tempdir().expect("global root");
-    let outcome = orbit_registry::ensure_host_identity(root.path(), || {
-        Ok(orbit_registry::NewHostIdentity {
-            host_id: "server-host".to_string(),
+    let outcome = orbit_registry::ensure_machine_identity(root.path(), || {
+        Ok(orbit_registry::NewMachineIdentity {
+            name: "server-host".to_string(),
             task_prefix: "SV".to_string(),
         })
     })
-    .expect("host identity");
+    .expect("machine identity");
     let identity = outcome.identity();
 
     let actual = local_identity(root.path()).expect("local identity");
 
-    assert_eq!(
-        actual,
-        (identity.machine_id.clone(), identity.host_id.clone())
-    );
+    assert_eq!(actual, (identity.id.clone(), identity.name.clone()));
 }
 
 #[test]

@@ -1749,11 +1749,11 @@ function buildTaskDetail(task, context) {
     const display = key.endsWith("_at") ? fmtAbsTimeValue(context, v) : String(v);
     const value = el("span", { class: "value" });
     if (key === "job_run_id") {
-      // ORB-12516: a pulled task's run lives in the executing host's own job
+      // ORB-12516: a pulled task's run lives in the executing machine's own job
       // store, so the id alone is a dangling reference. When the recorded
       // execution machine is this one the link still resolves; otherwise name
-      // the host to inspect rather than linking somewhere it is not.
-      const host = task.job_run_host;
+      // the machine to inspect rather than linking somewhere it is not.
+      const machine = task.job_run_machine;
       if (task.job_run_navigable !== false) {
         const link = el("a", { text: display });
         link.href = `#runs?run_id=${encodeURIComponent(display)}`;
@@ -1763,14 +1763,14 @@ function buildTaskDetail(task, context) {
         value.appendChild(
           el("span", {
             class: "claim-note",
-            text: "no owner-local run for this id — inspect it on the execution host below",
+            text: "no owner-local run for this id — inspect it on the execution machine below",
           }),
         );
       }
       value.appendChild(
         buildExecutionProvenance(
-          host && host.machine_id
-            ? { known: true, machine_id: host.machine_id, host_id: host.host_id || null }
+          machine && machine.machine_id
+            ? { known: true, machine_id: machine.machine_id, machine_name: machine.machine_name || null }
             : { known: false },
         ),
       );

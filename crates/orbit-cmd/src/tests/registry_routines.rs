@@ -17,10 +17,10 @@ fn workspace_discovery_builds_bound_runtimes() {
     std::fs::create_dir_all(global.join("state")).expect("global");
     std::fs::create_dir_all(&orbit_dir).expect("orbit");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_local\"\nhost_id = \"local\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_local\"\nname = \"local\"\ntask_prefix = \"ORB\"\n",
     )
-    .expect("host identity");
+    .expect("machine identity");
     write_workspace_config(
         &orbit_dir,
         &WorkspaceConfig {
@@ -75,10 +75,10 @@ fn workspace_discovery_skips_replica_checkouts() {
     let global = root.path().join("global");
     std::fs::create_dir_all(global.join("state")).expect("global");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_local\"\nhost_id = \"local\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_local\"\nname = \"local\"\ntask_prefix = \"ORB\"\n",
     )
-    .expect("host identity");
+    .expect("machine identity");
 
     let mut workspaces = Vec::new();
     let mut checkouts = Vec::new();

@@ -70,9 +70,9 @@ fn seed_audit_event_with_scope(
             session_id: None,
             workspace_id: Some("ws-orbit".to_string()),
             caller_machine_id: Some("hm-caller".to_string()),
-            caller_host_id: Some("caller.local".to_string()),
+            caller_machine_name: Some("caller.local".to_string()),
             process_machine_id: Some("hm-process".to_string()),
-            process_host_id: Some("process.local".to_string()),
+            process_machine_name: Some("process.local".to_string()),
             transport: Some(McpTransport::Local),
             effective_capabilities: [McpCapability::Agent, McpCapability::Runner]
                 .into_iter()
@@ -149,9 +149,9 @@ fn seed_lifecycle_audit_event(
             session_id: None,
             workspace_id: Some("ws-orbit".to_string()),
             caller_machine_id: None,
-            caller_host_id: None,
+            caller_machine_name: None,
             process_machine_id: None,
-            process_host_id: None,
+            process_machine_name: None,
             transport: None,
             effective_capabilities: Default::default(),
             origin_session_id: None,
@@ -273,9 +273,9 @@ async fn audit_lists_seeded_events_newest_first_with_projected_fields() {
     assert_eq!(newest["error_message"], "boom");
     assert_eq!(newest["workspace_id"], "ws-orbit");
     assert_eq!(newest["caller_machine_id"], "hm-caller");
-    assert_eq!(newest["caller_host_id"], "caller.local");
+    assert_eq!(newest["caller_machine_name"], "caller.local");
     assert_eq!(newest["process_machine_id"], "hm-process");
-    assert_eq!(newest["process_host_id"], "process.local");
+    assert_eq!(newest["process_machine_name"], "process.local");
     assert_eq!(newest["transport"], "local");
     assert_eq!(
         newest["effective_capabilities"],

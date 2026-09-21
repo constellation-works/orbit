@@ -7,7 +7,7 @@ use orbit_types::task::{
 #[derive(Default, Clone)]
 pub(crate) struct TaskRecordUpdateParams {
     pub(crate) artifact_origin: Option<orbit_types::task::ExecutionLocation>,
-    pub(crate) job_run_host: Option<Option<orbit_types::task::ExecutionLocation>>,
+    pub(crate) job_run_machine: Option<Option<orbit_types::task::ExecutionLocation>>,
     pub(crate) artifact_owner_run_id: Option<String>,
     pub(crate) actor: String,
     pub(crate) title: Option<String>,

@@ -73,7 +73,7 @@ pub struct TaskDocumentUpdateParams {
     pub source_task_id: Option<Option<String>>,
     pub job_run_id: Option<Option<String>>,
     /// Trusted link location supplied with the run binding, never tool input.
-    pub job_run_host: Option<Option<orbit_types::task::ExecutionLocation>>,
+    pub job_run_machine: Option<Option<orbit_types::task::ExecutionLocation>>,
     pub crew: Option<Option<String>>,
     pub orchestrator: Option<Option<String>>,
 }

@@ -769,7 +769,7 @@ impl RuntimeHost for PrOpenTestHost {
 pub fn task(id: &str, title: &str, execution_summary: &str) -> Task {
     let now = Utc::now();
     Task {
-        job_run_host: None,
+        job_run_machine: None,
         id: id.to_string(),
         title: title.to_string(),
         description: String::new(),

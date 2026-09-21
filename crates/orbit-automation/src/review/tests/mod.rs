@@ -25,7 +25,7 @@ fn revision(label: &str) -> SourceRevision {
 
 fn task() -> Task {
     Task {
-        job_run_host: None,
+        job_run_machine: None,
         id: "ORB-1".into(),
         title: "Title".into(),
         description: "Description".into(),

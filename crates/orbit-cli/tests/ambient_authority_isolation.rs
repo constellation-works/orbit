@@ -299,7 +299,7 @@ fn explicit_root_allows_a_managed_child_to_round_trip_a_scratch_task_artifact() 
             &root_arg,
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "scratch-host",
             "--task-prefix",
             "SCR",

@@ -540,7 +540,7 @@ command -v orbit
 orbit tool run orbit.task.show --input '{"id":"<real-task-id>","model":"codex"}'
 ```
 
-If `~/.orbit/host.toml` uses a schema newer than an installed binary supports, upgrade and
+If `~/.orbit/config.toml` uses settings newer than an installed binary supports, upgrade and
 restart that binary. Never edit `schema_version` downward to bypass the guard.
 
 See [Check Orbit health](./health-checks.md) for `orbit doctor` and dashboard-readiness

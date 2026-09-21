@@ -41,7 +41,7 @@ fn operator_workflow_is_network_free_labelled_and_fail_closed() {
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "publication-owner",
             "--task-prefix",
             "PUB",
@@ -255,7 +255,7 @@ fn operator_workflow_is_network_free_labelled_and_fail_closed() {
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "replacement-host",
             "--task-prefix",
             "PUB",
@@ -263,8 +263,8 @@ fn operator_workflow_is_network_free_labelled_and_fail_closed() {
     )
     .success();
     fs::copy(
-        owner_home.join(".orbit/host.toml"),
-        recovery_home.join(".orbit/host.toml"),
+        owner_home.join(".orbit/config.toml"),
+        recovery_home.join(".orbit/config.toml"),
     )
     .expect("preserve recovered authority identity");
     orbit(

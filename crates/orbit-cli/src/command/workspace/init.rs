@@ -10,7 +10,7 @@ use orbit_core::{
     OrbitError, RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
 };
 use orbit_registry::workspace_registry;
-use orbit_registry::{HostIdentityState, inspect_host_identity};
+use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::identity::validate_machine_id;
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
@@ -132,14 +132,14 @@ impl WorkspaceInitArgs {
         if let Some(mode) = self.ship_mode.as_deref() {
             orbit_core::ShipMode::parse(mode)?;
         }
-        let (local_machine_id, local_host_id, task_prefix) =
-            match inspect_host_identity(global_root)? {
-                HostIdentityState::Present(identity) => (
-                    Some(identity.machine_id),
-                    Some(identity.host_id),
+        let (local_machine_id, local_machine_name, task_prefix) =
+            match inspect_machine_identity(global_root)? {
+                MachineIdentityState::Present(identity) => (
+                    Some(identity.id),
+                    Some(identity.name),
                     Some(identity.task_prefix),
                 ),
-                HostIdentityState::Legacy { .. } | HostIdentityState::Absent => (None, None, None),
+                MachineIdentityState::Absent => (None, None, None),
             };
         let explicit_role = self.role.map(WorkspaceCheckoutRole::from);
         match (explicit_role, self.owner.as_deref()) {
@@ -177,7 +177,7 @@ impl WorkspaceInitArgs {
         // The definitions themselves are machine-independent [ORB-12236]; an
         // uninitialized host still seeds none, because `orbit init` owns the
         // host state the clock evaluates them against.
-        let routine_identity = local_host_id
+        let routine_identity = local_machine_name
             .is_some()
             .then(|| RoutineSeedIdentity::new(&name))
             .transpose()?;
@@ -338,31 +338,6 @@ impl WorkspaceInitArgs {
                         self.owner.as_deref(),
                         local_machine_id.as_deref(),
                     )?;
-                    match assigned_role {
-                        WorkspaceCheckoutRole::Owner => {
-                            if let (Some(machine_id), Some(host_id)) =
-                                (local_machine_id.as_deref(), local_host_id.as_deref())
-                            {
-                                workspace_registry::rename_local_owner_host_id(
-                                    &mut registry,
-                                    machine_id,
-                                    host_id,
-                                )?;
-                            }
-                        }
-                        WorkspaceCheckoutRole::Replica => {
-                            // v1 has no fleet lookup from stable machine id to display
-                            // name. Until the local record is enriched with a human
-                            // name, the explicit owner id is itself recognizable to
-                            // routine-pin diagnostics as a known-elsewhere owner.
-                            if let Some(owner) = self.owner.as_deref() {
-                                registry
-                                    .owner_host_ids
-                                    .entry(owner.to_string())
-                                    .or_insert_with(|| owner.to_string());
-                            }
-                        }
-                    }
                 }
                 orbit_core::adapter::HubCoordinationExecutor::register_workspace(
                     global_root,

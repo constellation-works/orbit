@@ -3,9 +3,10 @@ use orbit_core::bootstrap::init::{InitOptions, init_global};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry::global_orbit_dir;
 use orbit_registry::{
-    HostIdentityOutcome, HostIdentityState, NewHostIdentity, ensure_host_identity,
-    inspect_host_identity, os_hostname, validate_new_task_prefix,
+    MachineIdentityOutcome, MachineIdentityState, NewMachineIdentity, ensure_machine_identity,
+    inspect_machine_identity, os_hostname,
 };
+use orbit_types::identity::validate_new_task_prefix;
 #[cfg(test)]
 use std::io::BufRead;
 use std::io::{self, ErrorKind, Write};
@@ -31,11 +32,11 @@ pub struct InitCommand {
     #[arg(long)]
     pub non_interactive: bool,
 
-    /// Operator-chosen host name for this machine's identity. Used only when
-    /// no identity exists yet (first init). Required with --non-interactive on
-    /// a fresh host; interactively, the OS hostname is the default.
+    /// Operator-chosen display name for this machine. Used only when no
+    /// identity exists yet (first init). Required with --non-interactive on a
+    /// fresh machine; interactively, the OS hostname is the default.
     #[arg(long)]
-    pub host_name: Option<String>,
+    pub machine_name: Option<String>,
 
     /// Immutable task-id namespace for this machine (2-5 uppercase ASCII
     /// letters). Required on first init; reserved artifact namespaces cannot
@@ -62,15 +63,15 @@ impl InitCommand {
     }
 
     fn run(self, root_override: Option<&Path>) -> Result<(), OrbitError> {
-        // Reject a malformed or (non-interactively) missing --host-name/
+        // Reject a malformed or (non-interactively) missing --machine-name/
         // --task-prefix before anything is written: skills, activities, jobs,
-        // executors, and config.toml all seed ahead of the host identity, so
-        // a late validation error left a half-initialized root behind
+        // executors, and config.toml all seed ahead of the machine identity,
+        // so a late validation error left a half-initialized root behind
         // [ORB-12112].
         reject_invalid_fresh_identity_inputs(
             root_override,
             self.non_interactive,
-            self.host_name.as_deref(),
+            self.machine_name.as_deref(),
             self.task_prefix.as_deref(),
         )?;
         let config_seed =
@@ -84,13 +85,14 @@ impl InitCommand {
                 ..Default::default()
             },
         )?;
-        // Host identity is created/migrated here — `orbit init` is its sole
-        // owner (ADR-0227). This runs after the root exists so the file has a
-        // parent directory.
-        ensure_host_identity_for_init(
+        // Machine identity is seeded into the global config.toml here —
+        // `orbit init` is its sole writer. This runs after `init_global` has
+        // written that file so the `[machine]` table joins an existing
+        // document rather than replacing one.
+        ensure_machine_identity_for_init(
             root_override,
             self.non_interactive,
-            self.host_name,
+            self.machine_name,
             self.task_prefix,
         )?;
         let paths = reported_init_paths(root_override);
@@ -119,28 +121,28 @@ fn resolve_global_root(root_override: Option<&Path>) -> Result<PathBuf, OrbitErr
     }
 }
 
-/// Validate operator-supplied `--host-name`/`--task-prefix` inputs for a fresh
-/// host identity. Called both before `orbit init` writes anything (so a
-/// rejected or, under `--non-interactive`, missing value leaves no partial
+/// Validate operator-supplied `--machine-name`/`--task-prefix` inputs for a
+/// fresh machine identity. Called both before `orbit init` writes anything (so
+/// a rejected or, under `--non-interactive`, missing value leaves no partial
 /// root [ORB-12112]) and again inside the identity-creation closure, which
-/// stays self-sufficient against a racing concurrent create. A present or
-/// legacy identity never reaches this function — both callers only consult it
-/// when the identity is confirmed absent.
+/// stays self-sufficient against a racing concurrent create. A present
+/// identity never reaches this function — both callers only consult it when
+/// the identity is confirmed absent.
 fn validate_fresh_identity_flags(
     non_interactive: bool,
-    host_name: Option<&str>,
+    machine_name: Option<&str>,
     task_prefix: Option<&str>,
 ) -> Result<(), OrbitError> {
-    match host_name {
+    match machine_name {
         Some(name) if name.trim().is_empty() => {
             return Err(OrbitError::InvalidInput(
-                "host name must not be empty".to_string(),
+                "machine name must not be empty".to_string(),
             ));
         }
         None if non_interactive => {
             return Err(OrbitError::InvalidInput(
-                "host identity is absent; pass --host-name and --task-prefix \
-                 to initialize a fresh host non-interactively"
+                "machine identity is absent; pass --machine-name and --task-prefix \
+                 to initialize a fresh machine non-interactively"
                     .to_string(),
             ));
         }
@@ -152,8 +154,8 @@ fn validate_fresh_identity_flags(
         }
         None if non_interactive => {
             return Err(OrbitError::InvalidInput(
-                "host identity is absent; pass --task-prefix <PREFIX> (2-5 uppercase ASCII letters) \
-                 to initialize a fresh host non-interactively"
+                "machine identity is absent; pass --task-prefix <PREFIX> (2-5 uppercase ASCII letters) \
+                 to initialize a fresh machine non-interactively"
                     .to_string(),
             ));
         }
@@ -162,87 +164,87 @@ fn validate_fresh_identity_flags(
     Ok(())
 }
 
-/// Reject a malformed, or under `--non-interactive` missing, `--host-name`/
+/// Reject a malformed, or under `--non-interactive` missing, `--machine-name`/
 /// `--task-prefix` before `orbit init` writes anything. These flags are only
-/// consulted when the host identity is absent (a fresh create) — a present or
-/// legacy identity ignores them entirely, so this check is skipped on the
-/// idempotent re-init path, matching [`ensure_host_identity_for_init`]'s own
-/// condition.
+/// consulted when the machine identity is absent (a fresh create) — a present
+/// identity ignores them entirely, so this check is skipped on the idempotent
+/// re-init path, matching [`ensure_machine_identity_for_init`]'s own condition.
 fn reject_invalid_fresh_identity_inputs(
     root_override: Option<&Path>,
     non_interactive: bool,
-    host_name: Option<&str>,
+    machine_name: Option<&str>,
     task_prefix: Option<&str>,
 ) -> Result<(), OrbitError> {
     let global_root = resolve_global_root(root_override)?;
     if !matches!(
-        inspect_host_identity(&global_root)?,
-        HostIdentityState::Absent
+        inspect_machine_identity(&global_root)?,
+        MachineIdentityState::Absent
     ) {
         return Ok(());
     }
-    validate_fresh_identity_flags(non_interactive, host_name, task_prefix)
+    validate_fresh_identity_flags(non_interactive, machine_name, task_prefix)
 }
 
-/// Create or migrate this machine's host identity. Host name and task prefix are only
-/// consulted when the identity is absent (a fresh create); a present identity
-/// is preserved unchanged and a legacy file is migrated without prompting.
-fn ensure_host_identity_for_init(
+/// Create this machine's identity in the global `config.toml`. Machine name
+/// and task prefix are only consulted when the identity is absent (a fresh
+/// create); a present identity is preserved unchanged and a pre-ORB-12725
+/// `host.toml` is folded in without prompting.
+fn ensure_machine_identity_for_init(
     root_override: Option<&Path>,
     non_interactive: bool,
-    host_name: Option<String>,
+    machine_name: Option<String>,
     task_prefix: Option<String>,
 ) -> Result<(), OrbitError> {
     let global_root = resolve_global_root(root_override)?;
-    let outcome = ensure_host_identity(&global_root, move || {
+    let outcome = ensure_machine_identity(&global_root, move || {
         validate_fresh_identity_flags(
             non_interactive,
-            host_name.as_deref(),
+            machine_name.as_deref(),
             task_prefix.as_deref(),
         )?;
-        let host_id = match host_name {
+        let machine_name = match machine_name {
             Some(name) => name,
-            None => prompt_host_name()?,
+            None => prompt_machine_name()?,
         };
         let task_prefix = match task_prefix {
             Some(prefix) => prefix,
             None => prompt_task_prefix()?,
         };
-        Ok(NewHostIdentity {
-            host_id,
+        Ok(NewMachineIdentity {
+            name: machine_name,
             task_prefix,
         })
     })?;
 
-    report_host_identity(&outcome);
+    report_machine_identity(&outcome);
     Ok(())
 }
 
-fn report_host_identity(outcome: &HostIdentityOutcome) {
+fn report_machine_identity(outcome: &MachineIdentityOutcome) {
     let identity = outcome.identity();
     let verb = match outcome {
-        HostIdentityOutcome::Created(_) => "created",
-        HostIdentityOutcome::Migrated(_) => "migrated",
-        HostIdentityOutcome::Unchanged(_) => "unchanged",
+        MachineIdentityOutcome::Created(_) => "created",
+        MachineIdentityOutcome::Migrated(_) => "migrated",
+        MachineIdentityOutcome::Unchanged(_) => "unchanged",
     };
     println!(
-        "host identity ({verb}): host_id=\"{}\", machine_id={}, task_prefix={}",
-        identity.host_id, identity.machine_id, identity.task_prefix
+        "machine identity ({verb}): name=\"{}\", id={}, task_prefix={}",
+        identity.name, identity.id, identity.task_prefix
     );
 }
 
-fn prompt_host_name() -> Result<String, OrbitError> {
+fn prompt_machine_name() -> Result<String, OrbitError> {
     let default = os_hostname();
     let prompt = match default.as_deref() {
-        Some(name) => format!("Host name [{name}]: "),
-        None => "Host name: ".to_string(),
+        Some(name) => format!("Machine name [{name}]: "),
+        None => "Machine name: ".to_string(),
     };
     let answer = read_line(&prompt)?;
     if answer.is_empty() {
         default.ok_or_else(|| {
             OrbitError::InvalidInput(
-                "no host name entered and the OS hostname is unavailable; \
-                 re-run with --host-name"
+                "no machine name entered and the OS hostname is unavailable; \
+                 re-run with --machine-name"
                     .to_string(),
             )
         })

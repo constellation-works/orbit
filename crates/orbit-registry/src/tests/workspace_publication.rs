@@ -56,14 +56,14 @@ fn owner_registry() -> WorkspaceRegistry {
     }
 }
 
-fn write_host_identity(root: &Path, machine_id: &str) {
+fn write_machine_identity(root: &Path, machine_id: &str) {
     fs::write(
-        root.join("host.toml"),
+        root.join("config.toml"),
         format!(
-            "schema_version = 2\nmachine_id = \"{machine_id}\"\nhost_id = \"test-host\"\ntask_prefix = \"ORB\"\n"
+            "[machine]\nid = \"{machine_id}\"\nname = \"test-machine\"\ntask_prefix = \"ORB\"\n"
         ),
     )
-    .expect("write host identity");
+    .expect("write machine identity");
 }
 
 fn write_json(path: &Path, value: &Value) -> Vec<u8> {
@@ -84,7 +84,7 @@ fn assert_redacted(message: &str) {
 #[test]
 fn bind_round_trips_through_atomic_save_and_rebind_is_the_only_replace_path() {
     let root = tempdir().expect("tempdir");
-    write_host_identity(root.path(), "hm_owner");
+    write_machine_identity(root.path(), "hm_owner");
     let path = root.path().join("workspaces.json");
     let mut registry = owner_registry();
 
@@ -174,7 +174,7 @@ fn bind_round_trips_through_atomic_save_and_rebind_is_the_only_replace_path() {
 #[test]
 fn existing_registry_without_publication_bindings_loads_and_saves_without_data_loss() {
     let root = tempdir().expect("tempdir");
-    write_host_identity(root.path(), "hm_owner");
+    write_machine_identity(root.path(), "hm_owner");
     let path = root.path().join("workspaces.json");
     write_json(
         &path,
@@ -214,7 +214,7 @@ fn existing_registry_without_publication_bindings_loads_and_saves_without_data_l
 #[test]
 fn malformed_publication_bindings_fail_closed_without_rewriting() {
     let root = tempdir().expect("tempdir");
-    write_host_identity(root.path(), "hm_owner");
+    write_machine_identity(root.path(), "hm_owner");
     let path = root.path().join("workspaces.json");
     let original = write_json(
         &path,
@@ -366,7 +366,7 @@ fn bind_rejects_replica_equivalent_remote_credentials_branch_authority_and_reuse
 #[test]
 fn rejected_bind_leaves_persisted_registry_byte_identical() {
     let root = tempdir().expect("tempdir");
-    write_host_identity(root.path(), "hm_owner");
+    write_machine_identity(root.path(), "hm_owner");
     let path = root.path().join("workspaces.json");
     let mut registry = owner_registry();
     bind_publication(

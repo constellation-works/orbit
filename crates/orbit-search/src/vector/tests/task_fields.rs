@@ -7,7 +7,7 @@ use super::super::task_fields::task_embedding_fields;
 
 fn task() -> Task {
     Task {
-        job_run_host: None,
+        job_run_machine: None,
         id: "ORB-00000".to_string(),
         title: "Index this".to_string(),
         description: "Task description".to_string(),

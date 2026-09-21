@@ -7,8 +7,10 @@ use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
 pub use orbit_common::fs::path::global_orbit_dir;
 use orbit_types::workspace::WorkspaceRegistry;
 
-use super::{WorkspaceRegistryHostContext, parse_workspace_registry, validate_workspace_registry};
-use crate::{HostIdentityState, inspect_host_identity};
+use super::{
+    WorkspaceRegistryMachineContext, parse_workspace_registry, validate_workspace_registry,
+};
+use crate::{MachineIdentityState, inspect_machine_identity};
 
 const REGISTRY_FILE_NAME: &str = "workspaces.json";
 
@@ -65,13 +67,13 @@ pub fn load_registry_from(path: &Path) -> Result<WorkspaceRegistry, OrbitError> 
     load_registry_from_with_writer(path, write_registry)
 }
 
-/// [`load_registry_from`] for a caller that already classified the `host.toml`
-/// beside the registry. A runtime open needs that classification for itself,
-/// so threading it here reads `host.toml` once per invocation instead of once
-/// more per registry load [DANI-10371].
-pub fn load_registry_from_with_host(
+/// [`load_registry_from`] for a caller that already classified this machine's
+/// identity. A runtime open needs that classification for itself, so threading
+/// it here resolves the global config once per invocation instead of once more
+/// per registry load [DANI-10371].
+pub fn load_registry_from_with_machine(
     path: &Path,
-    identity: &HostIdentityState,
+    identity: &MachineIdentityState,
 ) -> Result<WorkspaceRegistry, OrbitError> {
     let snapshot = read_registry_snapshot(path, |_| Ok(identity.into()))?;
     persist_migration(snapshot, write_registry)
@@ -83,14 +85,14 @@ pub fn load_registry_from_with_host(
 /// directly. A caller that sees `migration_required` must re-read and migrate
 /// while holding [`with_registry_lock`] before it performs maintenance.
 pub fn load_registry_from_read_only(path: &Path) -> Result<ReadOnlyRegistryLoad, OrbitError> {
-    Ok(read_registry_snapshot(path, registry_host_context)?.load)
+    Ok(read_registry_snapshot(path, registry_machine_context)?.load)
 }
 
-/// [`load_registry_from_read_only`] with an already-classified `host.toml`;
-/// see [`load_registry_from_with_host`].
-pub fn load_registry_from_read_only_with_host(
+/// [`load_registry_from_read_only`] with an already-classified machine
+/// identity; see [`load_registry_from_with_machine`].
+pub fn load_registry_from_read_only_with_machine(
     path: &Path,
-    identity: &HostIdentityState,
+    identity: &MachineIdentityState,
 ) -> Result<ReadOnlyRegistryLoad, OrbitError> {
     Ok(read_registry_snapshot(path, |_| Ok(identity.into()))?.load)
 }
@@ -99,7 +101,7 @@ pub(crate) fn load_registry_from_with_writer(
     path: &Path,
     writer: impl FnOnce(&WorkspaceRegistry, &Path) -> Result<(), OrbitError>,
 ) -> Result<WorkspaceRegistry, OrbitError> {
-    let snapshot = read_registry_snapshot(path, registry_host_context)?;
+    let snapshot = read_registry_snapshot(path, registry_machine_context)?;
     persist_migration(snapshot, writer)
 }
 
@@ -113,11 +115,11 @@ struct RegistrySnapshot {
 }
 
 /// Validate `path` once, then read and parse the registry under it with the
-/// host facts `context_for` supplies. The context is resolved after the file
-/// is read, so a missing or empty registry never inspects `host.toml`.
+/// machine facts `context_for` supplies. The context is resolved after the
+/// file is read, so a missing or empty registry never resolves an identity.
 fn read_registry_snapshot(
     path: &Path,
-    context_for: impl FnOnce(&Path) -> Result<WorkspaceRegistryHostContext, OrbitError>,
+    context_for: impl FnOnce(&Path) -> Result<WorkspaceRegistryMachineContext, OrbitError>,
 ) -> Result<RegistrySnapshot, OrbitError> {
     let empty = |path| RegistrySnapshot {
         load: ReadOnlyRegistryLoad {
@@ -165,7 +167,7 @@ pub fn save_registry(registry: &WorkspaceRegistry) -> Result<(), OrbitError> {
 /// Validate and atomically save a registry to an explicit path.
 pub fn save_registry_to(registry: &WorkspaceRegistry, path: &Path) -> Result<(), OrbitError> {
     let path = validated_registry_path(path)?;
-    let context = registry_host_context(&path)?;
+    let context = registry_machine_context(&path)?;
     let mut canonical = registry.clone();
     validate_workspace_registry(&mut canonical, &context)?;
     write_registry(&canonical, &path)
@@ -256,26 +258,22 @@ fn registry_parent(path: &Path) -> Result<&Path, OrbitError> {
     Ok(parent)
 }
 
-fn registry_host_context(path: &Path) -> Result<WorkspaceRegistryHostContext, OrbitError> {
+fn registry_machine_context(path: &Path) -> Result<WorkspaceRegistryMachineContext, OrbitError> {
     let global_root = path.parent().ok_or_else(|| {
         OrbitError::WorkspaceError(format!(
             "registry path '{}' has no parent directory",
             path.display()
         ))
     })?;
-    Ok((&inspect_host_identity(global_root)?).into())
+    Ok((&inspect_machine_identity(global_root)?).into())
 }
 
-impl From<&HostIdentityState> for WorkspaceRegistryHostContext {
-    /// Only a complete, current-schema identity contributes validation facts;
-    /// a legacy or absent file validates as a standalone installation.
-    fn from(identity: &HostIdentityState) -> Self {
-        match identity {
-            HostIdentityState::Present(identity) => Self {
-                machine_id: Some(identity.machine_id.clone()),
-                host_id: Some(identity.host_id.clone()),
-            },
-            HostIdentityState::Legacy { .. } | HostIdentityState::Absent => Self::default(),
+impl From<&MachineIdentityState> for WorkspaceRegistryMachineContext {
+    /// Only a complete identity contributes validation facts; an uninitialized
+    /// machine validates as a standalone installation.
+    fn from(identity: &MachineIdentityState) -> Self {
+        Self {
+            machine_id: identity.id().map(ToOwned::to_owned),
         }
     }
 }

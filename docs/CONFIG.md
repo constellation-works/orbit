@@ -33,6 +33,8 @@ Tables layer down to individual settings, while scalar and array values replace 
 model = "gpt-5.6-terra"
 ```
 
+The `[machine]` table is **global-only**: a workspace `config.toml` that supplies it is refused at load, naming the file. See [`[machine]` — who this machine is](#machine--who-this-machine-is).
+
 Three security-sensitive settings deliberately do not inherit from global whenever a distinct workspace file exists:
 
 - `execution.codex.sandbox`
@@ -41,7 +43,7 @@ Three security-sensitive settings deliberately do not inherit from global whenev
 
 If the workspace file omits one of these, Orbit uses that setting's built-in default. This keeps repository agent sandboxing, approval, and environment passthrough deterministic instead of depending on a user's global policy. `execution.env.inherit` is not a configurable key: an agent subprocess environment is always composed from an allowlist — see [`[execution.env]` — the agent subprocess environment](#executionenv--the-agent-subprocess-environment).
 
-Run `orbit config show` for the effective merged view. It is grouped into sections — Delivery (`workflow.*`), Crews, Execution (`execution.*`), Operation mode (`operation.*`), Housekeeping, and Paths — and every key prints the same description `orbit config keys` shows. Each value reports exactly one state:
+Run `orbit config show` for the effective merged view. It is grouped into sections — Machine (`machine.*`), Delivery (`workflow.*`), Crews, Execution (`execution.*`), Operation mode (`operation.*`), Housekeeping, and Paths — and every key prints the same description `orbit config keys` shows. Each value reports exactly one state:
 
 | State | Meaning |
 |---|---|
@@ -56,6 +58,33 @@ When a lower layer also defines a key, the row says so rather than hiding it: `(
 Use `--scope global` or `--scope workspace` to resolve either physical file in isolation, without values from the other file. Scoped output uses the same grouping, minus the layering banner and the crew table (a single file resolves registry keys only). Both `config show --scope <scope>` and `config get --scope <scope> <key>` include built-in defaults for keys omitted from the selected file, so they report the same value for a given key. In scoped `config get --json`, the top-level `exists` field instead reports whether that key is explicitly present in the selected file; it can be `false` while `value` contains a default. In scoped `config show --json`, `source.exists` reports whether the selected file itself exists. Settings are still resolved when the file is absent.
 
 The workspace identity file `.orbit/config.yaml` is a separate artifact (it stores `workspace_id` for the canonical task store binding) and is unrelated to runtime config.
+
+---
+
+## `[machine]` — who this machine is
+
+Written once by `orbit init` into the **global** `~/.orbit/config.toml`:
+
+```toml
+[machine]
+id          = "hm_9ca6004473492f06"   # stable, generated once, never reused
+name        = "dk-server-1"           # renameable display label
+task_prefix = "ORB"                   # immutable task-id namespace for ids minted here
+```
+
+| Key | Settable | What it is |
+|---|---|---|
+| `machine.id` | No | Opaque `hm_…` identity generated once at `orbit init`. It names run ownership, workspace ownership, and federated routing; every task, run, and workspace record minted here refers to it. |
+| `machine.name` | Yes | Operator-chosen display label. Rename with `orbit config set --global machine.name <value>`. |
+| `machine.task_prefix` | No | The 2–5 uppercase ASCII-letter namespace task ids minted on this machine use. Fixed for the life of the local task store. |
+
+Three rules follow from "this is one machine's identity, not a repository setting":
+
+- **Global-only.** A `[machine]` table in a workspace `.orbit/config.toml` is refused at load with an error naming that file. A checkout must not be able to rename, renumber, or re-identify the machine it happens to sit on.
+- **`id` and `task_prefix` are read-only.** `orbit config set` refuses both, naming the reason: changing `machine.id` would orphan every record minted under it, and ids already allocated under a `task_prefix` cannot be renumbered.
+- **Hand edits fail closed.** A `[machine]` table missing any of the three keys is an error naming the missing ones. A `machine.task_prefix` that contradicts what the local task allocator already minted is refused at runtime open, and a `machine.id` that contradicts a workspace record declaring this machine as owner is refused by registry validation. Nothing falls back to the OS hostname and nothing is regenerated.
+
+A pre-`[machine]` installation carried these values in `~/.orbit/host.toml`. That file is folded into `[machine]` on first load and removed. If both exist and disagree, Orbit refuses to start and names both paths — they are two different answers to "who is this machine", and either choice orphans the ids minted under the other. Reconcile them by deleting the stale file.
 
 ---
 

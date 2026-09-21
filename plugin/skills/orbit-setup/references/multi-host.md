@@ -7,9 +7,10 @@ through MCP when operating its tasks.
 
 ## Owners and replicas
 
-`orbit init` establishes a stable machine ID, a display host name, and an
-immutable 2–5 uppercase ASCII-letter task prefix. `orbit host show` reports the
-identity. A workspace registration records its logical ID, source repository,
+`orbit init` establishes a stable machine ID, a display machine name, and an
+immutable 2–5 uppercase ASCII-letter task prefix, written as `[machine]` in the
+global `~/.orbit/config.toml`. `orbit config show` reports the identity, and
+`orbit config get machine.id` prints one field. A workspace registration records its logical ID, source repository,
 owner machine, local checkout, and checkout role.
 
 From the repository being registered:
@@ -39,7 +40,7 @@ do not delete registry or identity files to get past them.
 
 | Git-versioned definitions | Host-local state |
 |---|---|
-| Workspace config, routines, auto-task templates, resource overrides | Host identity, workspace registry and owner/replica declarations |
+| Workspace config, routines, auto-task templates, resource overrides | Machine identity (`[machine]` in the global config), workspace registry and owner/replica declarations |
 | Source and documentation | Task coordination store, locks, reservations, run evidence, scheduler cursors and pauses |
 | Dedicated publication repository: explicitly published task snapshots | Publication binding and last-success metadata, audit store, logs, search indexes |
 
@@ -53,7 +54,7 @@ See [publication.md](publication.md).
 Give independently allocating hosts distinct prefixes at first initialization:
 
 ```bash
-orbit init --non-interactive --host-name <name> --task-prefix <PREFIX>
+orbit init --non-interactive --machine-name <name> --task-prefix <PREFIX>
 ```
 
 Reserved prefixes are refused. The prefix cannot be renamed later. For legacy
@@ -72,11 +73,12 @@ routine each evaluate it independently, and `overlap: forbid` is local — pause
 it on the hosts that should not run it.
 
 ```bash
-orbit host rename <current-name> <new-name>
+orbit config set --global machine.name <new-name>
 ```
 
-Renaming updates the host identity and local owner records. Routine definitions
-name no host, so nothing versioned has to be rewritten.
+Renaming changes only the display name; `machine.id` and `machine.task_prefix`
+are read-only and `orbit config set` refuses both. Routine definitions name no
+machine, so nothing versioned has to be rewritten.
 
 Workspace claims coordinate operators acting on **the same authoritative
 store**. `--claim-token` or `ORBIT_WORKSPACE_CLAIM_TOKEN` presents an existing
@@ -87,7 +89,7 @@ through its task selectors and reservations.
 
 ## Verify another host
 
-Check host identity, source remote, workspace role/owner, tool capabilities,
+Check machine identity, source remote, workspace role/owner, tool capabilities,
 routine pins, and the actual executable/version before enabling work there.
 `orbit sweep --dry-run` and `orbit doctor` give local operational evidence.
 From a client, discover through the authoritative MCP connection and use the

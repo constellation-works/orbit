@@ -86,7 +86,7 @@ every task ID this machine allocates. Supply them up front for an unattended
 setup:
 
 ```bash
-orbit init --non-interactive --host-name build-01 --task-prefix ORB
+orbit init --non-interactive --machine-name build-01 --task-prefix ORB
 ```
 
 It also seeds `~/.orbit/config.toml` with crews for the provider CLIs it

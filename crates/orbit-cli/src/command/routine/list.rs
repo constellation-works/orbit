@@ -43,7 +43,7 @@ impl RoutineListArgs {
             })
             .collect();
         let doc = json!({
-            "host_id": report.host_id,
+            "machine_name": report.machine_name,
             "machine_id": report.machine_id,
             "routines": statuses,
             "retired": report.retired.iter().map(|routine| json!({
@@ -74,7 +74,7 @@ impl RoutineListArgs {
         .empty_message(format!(
             "no routines found (host {}); register an owner checkout that defines \
              .orbit/routines/*.yaml",
-            report.host_id
+            report.machine_name
         ));
         for status in &report.statuses {
             let last_fire = status
@@ -114,7 +114,7 @@ impl RoutineListArgs {
             ]);
         }
         // Context about where the list came from, not a record in it (spec §5).
-        eprintln!("host: {}", report.host_id);
+        eprintln!("host: {}", report.machine_name);
         for routine in &report.retired {
             eprintln!(
                 "retired [{}] ({}): {}",

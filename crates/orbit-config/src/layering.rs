@@ -11,6 +11,9 @@
 //!   table key replaces the global table rather than merging into it;
 //! - the replace-only keys below never inherit from global once a distinct
 //!   workspace file exists;
+//! - the `[machine]` table is global-only: a workspace file that supplies it
+//!   is refused before the merge, so a checkout can never rename, renumber, or
+//!   re-identify the machine it happens to be checked out on;
 //! - a crew name containing `:` is refused per layer, before the merge, so the
 //!   error names the file that defines it — the only way back from a persisted
 //!   colon-named crew is editing that file;
@@ -32,7 +35,7 @@ use crate::operation::{
     OperationLayer, OperationLayerSource, OperationPolicy, OperationPreset, PRESET_MANAGED_KEYS,
 };
 use crate::persistence::PersistenceConfig;
-use crate::registry::CONFIG_KEY_REGISTRY;
+use crate::registry::{CONFIG_KEY_REGISTRY, GLOBAL_ONLY_KEY_PREFIX};
 use crate::resolved::{ResolvedConfig, warn_compatibility_keys};
 
 /// Security-sensitive settings that a workspace file must restate to keep.
@@ -260,6 +263,9 @@ pub(crate) fn load_layered_resolved(
     for document in [global.as_ref(), workspace.as_ref()].into_iter().flatten() {
         reject_unpoolable_crew_names_in_document(&document.value, &document.path)?;
     }
+    if let Some(workspace_document) = &workspace {
+        reject_workspace_machine_table(&workspace_document.value, &workspace_document.path)?;
+    }
 
     if global.is_none() && workspace.is_none() {
         return Ok(LoadedResolvedConfig {
@@ -334,6 +340,28 @@ fn resolve_operation_layers(
         (OperationLayerSource::Global, &global_layer),
         (OperationLayerSource::Workspace, &workspace_layer),
     ]))
+}
+
+/// Refuse a `[machine]` table in a workspace `config.toml`.
+///
+/// Machine identity is a per-user, per-machine fact: exactly the kind of value
+/// a checkout must not be able to supply or override. This is the mirror image
+/// of the replace-only security keys — there the workspace layer may set the
+/// value and must restate it to keep it, here it may not set it at all.
+pub(crate) fn reject_workspace_machine_table(
+    document: &toml::Value,
+    path: &Path,
+) -> Result<(), OrbitError> {
+    let table = GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.');
+    if value_at_path(document, table).is_none() {
+        return Ok(());
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "[{table}] is not a workspace setting: remove it from '{}'. This machine's identity \
+         lives only in the global config.toml, where `orbit init` writes it; \
+         `orbit config set --global machine.name <value>` renames it",
+        redact_home_dir(&path.display().to_string())
+    )))
 }
 
 fn read_config_document(path: &Path) -> Result<Option<ConfigDocument>, OrbitError> {

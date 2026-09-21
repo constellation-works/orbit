@@ -480,7 +480,7 @@ fn dependent_task(id: &str, dependency_id: &str) -> Task {
 fn task_fixture(id: &str, status: TaskStatus) -> Task {
     let now = Utc::now();
     Task {
-        job_run_host: None,
+        job_run_machine: None,
         id: id.to_string(),
         title: "fixture task".to_string(),
         description: String::new(),

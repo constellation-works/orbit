@@ -14,8 +14,8 @@ use crate::workspace_registry::{
     assign_checkout_role, find_checkout_by_path, find_workspace, find_workspace_by_id,
     find_workspace_by_path, load_registry_from, load_registry_from_read_only,
     load_registry_from_with_writer, register_checkout, registry_file_fingerprint, remove_workspace,
-    rename_local_owner_host_id, resolve_logical_workspace, save_registry_to, set_path_override,
-    validate_workspaces, with_registry_lock,
+    resolve_logical_workspace, save_registry_to, set_path_override, validate_workspaces,
+    with_registry_lock,
 };
 
 fn timestamp() -> chrono::DateTime<Utc> {
@@ -38,24 +38,18 @@ fn logical_workspace(id: &str, owner_machine_id: Option<&str>) -> Workspace {
     }
 }
 
-fn write_host_identity(root: &Path, _legacy_mode: &str, machine_id: &str) {
-    fs::write(
-        root.join("host.toml"),
-        format!(
-            "schema_version = 2\nmachine_id = \"{machine_id}\"\nhost_id = \"test-host\"\ntask_prefix = \"ORB\"\n"
-        ),
-    )
-    .expect("write host identity");
+fn write_machine_identity(root: &Path, _legacy_mode: &str, machine_id: &str) {
+    write_current_machine_identity(root, machine_id);
 }
 
-fn write_current_host_identity(root: &Path, machine_id: &str) {
+fn write_current_machine_identity(root: &Path, machine_id: &str) {
     fs::write(
-        root.join("host.toml"),
+        root.join("config.toml"),
         format!(
-            "schema_version = 2\nmachine_id = \"{machine_id}\"\nhost_id = \"test-host\"\ntask_prefix = \"ORB\"\n"
+            "[machine]\nid = \"{machine_id}\"\nname = \"test-machine\"\ntask_prefix = \"ORB\"\n"
         ),
     )
-    .expect("write current host identity");
+    .expect("write machine identity");
 }
 
 fn write_json(path: &Path, value: &Value) -> Vec<u8> {
@@ -202,7 +196,7 @@ fn standalone_missing_role_canonicalizes_to_local_owner() {
 fn multi_host_legacy_registry_rejects_missing_role_without_rewriting() {
     for mode in ["hub", "spoke"] {
         let root = tempdir().expect("tempdir");
-        write_host_identity(root.path(), mode, "hm_local");
+        write_machine_identity(root.path(), mode, "hm_local");
         let path = root.path().join("workspaces.json");
         let original = write_json(
             &path,
@@ -236,7 +230,7 @@ fn multi_host_legacy_registry_rejects_missing_role_without_rewriting() {
 #[test]
 fn owner_role_load_stamps_missing_local_owner_without_manual_repair() {
     let root = tempdir().expect("tempdir");
-    write_current_host_identity(root.path(), "hm_local");
+    write_current_machine_identity(root.path(), "hm_local");
     let path = root.path().join("workspaces.json");
     write_json(
         &path,
@@ -257,15 +251,48 @@ fn owner_role_load_stamps_missing_local_owner_without_manual_repair() {
         loaded.workspaces[0].owner_machine_id.as_deref(),
         Some("hm_local")
     );
-    assert_eq!(
-        loaded.owner_host_ids.get("hm_local").map(String::as_str),
-        Some("test-host")
-    );
 
     let persisted: Value = serde_json::from_slice(&fs::read(&path).expect("read healed registry"))
         .expect("parse healed registry");
     assert_eq!(persisted["workspaces"][0]["owner_machine_id"], "hm_local");
-    assert_eq!(persisted["owner_host_ids"]["hm_local"], "test-host");
+    // The catalog records the stable owner only. A machine's display name is
+    // read from `machine.name` when it is needed, not cached here [ORB-12725].
+    assert!(persisted.get("owner_host_ids").is_none(), "{persisted}");
+}
+
+/// [ORB-12725] A `workspaces.json` an older build wrote still carries
+/// `owner_host_ids`. The catalog uses `deny_unknown_fields`, so the retired key
+/// is accepted and dropped for one release rather than failing every command.
+#[test]
+fn a_registry_that_still_carries_owner_host_ids_loads_and_drops_it() {
+    let root = tempfile::tempdir().expect("root");
+    write_machine_identity(root.path(), "current", "hm_local");
+    let path = root.path().join("workspaces.json");
+    write_json(
+        &path,
+        &json!({
+            "schema_version": WORKSPACE_REGISTRY_SCHEMA_VERSION,
+            "owner_host_ids": {"hm_local": "old-display-name"},
+            "workspaces": [logical_workspace("ws_orbit", Some("hm_local"))],
+            "checkouts": [{
+                "workspace_id": "ws_orbit",
+                "repo_root": "/repos/orbit",
+                "orbit_dir": "/repos/orbit/.orbit",
+                "role": "owner"
+            }]
+        }),
+    );
+
+    let loaded = load_registry_from(&path).expect("a retired key must not fail the load");
+    assert_eq!(
+        loaded.workspaces[0].owner_machine_id.as_deref(),
+        Some("hm_local")
+    );
+
+    save_registry_to(&loaded, &path).expect("re-save");
+    let persisted: Value =
+        serde_json::from_slice(&fs::read(&path).expect("read")).expect("parse re-saved registry");
+    assert!(persisted.get("owner_host_ids").is_none(), "{persisted}");
 }
 
 #[test]
@@ -314,7 +341,7 @@ fn multi_host_modes_reject_missing_unknown_and_contradictory_roles_by_workspace_
 
     for (mode, checkout, expected) in cases {
         let root = tempdir().expect("tempdir");
-        write_host_identity(root.path(), mode, "hm_local");
+        write_machine_identity(root.path(), mode, "hm_local");
         let path = root.path().join("workspaces.json");
         let workspace_id = checkout["workspace_id"].as_str().expect("workspace id");
         let owner = match workspace_id {
@@ -341,7 +368,7 @@ fn multi_host_modes_reject_missing_unknown_and_contradictory_roles_by_workspace_
 #[test]
 fn valid_spoke_replica_requires_and_preserves_owner_machine() {
     let root = tempdir().expect("tempdir");
-    write_host_identity(root.path(), "spoke", "hm_local");
+    write_machine_identity(root.path(), "spoke", "hm_local");
     let path = root.path().join("workspaces.json");
     write_json(
         &path,
@@ -817,7 +844,7 @@ fn persisted_replica_owner_ids_must_be_logical_and_remain_byte_stable_on_rejecti
         ("hm_owner", "hm_owner\ntransport"),
     ] {
         let root = tempdir().expect("tempdir");
-        write_host_identity(root.path(), "spoke", "hm_local");
+        write_machine_identity(root.path(), "spoke", "hm_local");
         let path = root.path().join("workspaces.json");
         let original = write_json(
             &path,
@@ -848,7 +875,7 @@ fn persisted_replica_owner_ids_must_be_logical_and_remain_byte_stable_on_rejecti
 #[test]
 fn invalid_local_machine_id_cannot_be_copied_into_owner_role() {
     let root = tempdir().expect("tempdir");
-    write_host_identity(root.path(), "hub", "/tmp/hub");
+    write_machine_identity(root.path(), "hub", "/tmp/hub");
     let path = root.path().join("workspaces.json");
     let original = write_json(
         &path,
@@ -911,7 +938,7 @@ fn injected_migration_write_failure_preserves_readable_legacy_registry() {
 #[test]
 fn assign_checkout_role_is_idempotent_and_rejects_owner_of_another_machine_byte_valid() {
     let root = tempdir().expect("tempdir");
-    write_host_identity(root.path(), "spoke", "hm_local");
+    write_machine_identity(root.path(), "spoke", "hm_local");
     let path = root.path().join("workspaces.json");
     write_json(
         &path,
@@ -984,7 +1011,7 @@ fn assign_checkout_role_is_idempotent_and_rejects_owner_of_another_machine_byte_
 #[test]
 fn explicit_owner_role_stamps_the_validated_local_machine_before_save() {
     let root = tempdir().expect("tempdir");
-    write_current_host_identity(root.path(), "hm_local");
+    write_current_machine_identity(root.path(), "hm_local");
     let path = root.path().join("workspaces.json");
     let mut registry = WorkspaceRegistry {
         workspaces: vec![logical_workspace("ws_orbit", None)],
@@ -1019,54 +1046,12 @@ fn explicit_owner_role_stamps_the_validated_local_machine_before_save() {
         Some("hm_local")
     );
     assert_eq!(loaded.checkouts[0].role, Some(WorkspaceCheckoutRole::Owner));
-    assert_eq!(
-        loaded.owner_host_ids.get("hm_local").map(String::as_str),
-        Some("test-host")
-    );
-}
-
-#[test]
-fn local_owner_rename_changes_only_the_display_name_projection() {
-    let mut registry = WorkspaceRegistry {
-        owner_host_ids: [
-            ("hm_local".to_string(), "old".to_string()),
-            ("hm_remote".to_string(), "remote".to_string()),
-        ]
-        .into_iter()
-        .collect(),
-        workspaces: vec![
-            logical_workspace("ws_one", Some("hm_local")),
-            logical_workspace("ws_two", Some("hm_local")),
-            logical_workspace("ws_remote", Some("hm_remote")),
-        ],
-        ..WorkspaceRegistry::default()
-    };
-    let stable_owners = registry
-        .workspaces
-        .iter()
-        .map(|workspace| workspace.owner_machine_id.clone())
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        rename_local_owner_host_id(&mut registry, "hm_local", "new").expect("rename"),
-        2
-    );
-    assert_eq!(registry.owner_host_ids["hm_local"], "new");
-    assert_eq!(registry.owner_host_ids["hm_remote"], "remote");
-    assert_eq!(
-        registry
-            .workspaces
-            .iter()
-            .map(|workspace| workspace.owner_machine_id.clone())
-            .collect::<Vec<_>>(),
-        stable_owners
-    );
 }
 
 #[test]
 fn replica_role_rejects_transport_shaped_owner_before_any_mutation() {
     let root = tempdir().expect("tempdir");
-    write_host_identity(root.path(), "spoke", "hm_local");
+    write_machine_identity(root.path(), "spoke", "hm_local");
     let path = root.path().join("workspaces.json");
     write_json(
         &path,

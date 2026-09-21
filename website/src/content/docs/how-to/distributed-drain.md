@@ -24,7 +24,7 @@ On the host that will stay authoritative:
 
 ```bash
 orbit --version
-orbit host show
+orbit config get machine.id
 orbit workspace init --role owner --base-branch <integration-branch>
 orbit workspace show
 ```
@@ -33,7 +33,7 @@ On a second machine, pick a **different** task prefix at `orbit init`, then
 register the checkout as a replica of the owner's machine id:
 
 ```bash
-orbit init --non-interactive --host-name <name> --task-prefix <PREFIX>
+orbit init --non-interactive --machine-name <name> --task-prefix <PREFIX>
 orbit workspace init --role replica --owner <owner-machine-id>
 orbit workspace show
 orbit workspace role <workspace-id> replica

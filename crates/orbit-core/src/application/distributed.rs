@@ -83,7 +83,7 @@ pub struct DrainProbeReport {
     pub binary_version: String,
     pub workspace_id: String,
     /// Registered owner machine, absent on a standalone registry that predates
-    /// host identity.
+    /// machine identity.
     pub owner_machine_id: Option<String>,
     /// Session facts, for diagnostics. Capabilities are what the destination
     /// resolved for this caller — the set the chokepoint admitted the call on,
@@ -354,7 +354,7 @@ impl crate::OrbitRuntime {
             run_context: AdmissionRunContext {
                 run_id: "probe".to_string(),
                 job_name: "probe".to_string(),
-                host_id: session.caller_host_id.clone(),
+                machine_name: session.caller_machine_name.clone(),
             },
             ship: ship.clone(),
         };
@@ -429,7 +429,7 @@ fn is_remote(session: &ToolSessionContext) -> bool {
 fn trusted_identity(machine_id: &str, session: &ToolSessionContext) -> AdmissionIdentity {
     let location = ExecutionLocation {
         machine_id: machine_id.to_string(),
-        host_id: session.caller_host_id.clone(),
+        machine_name: session.caller_machine_name.clone(),
     };
     if is_remote(session) {
         AdmissionIdentity::trusted_remote(location)
@@ -666,7 +666,7 @@ impl crate::OrbitRuntime {
                 .automation_machine_identity()
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| "local".to_string()),
-            host_id: None,
+            machine_name: None,
         });
         let request = AdmissionRequest {
             request_id: "entry-point".to_string(),
@@ -676,7 +676,7 @@ impl crate::OrbitRuntime {
             run_context: AdmissionRunContext {
                 run_id: "entry-point".to_string(),
                 job_name: "entry-point".to_string(),
-                host_id: None,
+                machine_name: None,
             },
             ship: ship.clone(),
         };

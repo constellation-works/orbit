@@ -500,7 +500,7 @@ fn federated_workspace_scoped_tool_advertises_copy_from_list() {
 }
 
 #[test]
-fn federated_task_show_requires_the_host_qualified_selector() {
+fn federated_task_show_requires_the_machine_qualified_selector() {
     let declared = ToolParam {
         name: "workspace".to_string(),
         description: "Optional explicit workspace filter. `id` is resolved globally by default"

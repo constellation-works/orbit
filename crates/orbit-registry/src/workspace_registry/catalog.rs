@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::identity::{validate_host_id, validate_machine_id};
+use orbit_types::identity::validate_machine_id;
 use orbit_types::workspace::{
     WORKSPACE_REGISTRY_SCHEMA_VERSION, Workspace, WorkspaceCheckout, WorkspaceCheckoutRole,
     WorkspaceRegistry, WorkspaceStatus, git_remote_identity, redact_git_remote,
@@ -107,7 +107,7 @@ pub fn rebind_workspace_source_remote(
 
     let local_machine_id = local_machine_id.ok_or_else(|| {
         OrbitError::WorkspaceError(
-            "source-remote rebinding requires a local host identity; run `orbit init` first"
+            "source-remote rebinding requires a local machine identity; run `orbit init` first"
                 .to_string(),
         )
     })?;
@@ -205,7 +205,7 @@ pub fn rebind_workspace_source_remote(
 /// requires an explicit non-local `owner_machine_id`, which is mirrored onto
 /// both the checkout binding and the logical workspace record so the stable
 /// owner identity stays consistent. The optional local identity exists only
-/// for pre-host-identity standalone compatibility. This mutates the in-memory
+/// for pre-machine-identity standalone compatibility. This mutates the in-memory
 /// registry only; the caller persists via [`super::save_registry_to`], which validates a clone and
 /// therefore leaves the previous file byte-valid on any contradiction. Owner
 /// and replica declarations are never inferred from paths, workspace names,
@@ -330,14 +330,6 @@ pub fn remove_workspace(
     registry
         .publication_bindings
         .retain(|binding| binding.workspace_id != removed.id);
-    if let Some(owner) = removed.owner_machine_id.as_deref()
-        && !registry
-            .workspaces
-            .iter()
-            .any(|workspace| workspace.owner_machine_id.as_deref() == Some(owner))
-    {
-        registry.owner_host_ids.remove(owner);
-    }
     Ok(removed)
 }
 
@@ -572,9 +564,8 @@ pub fn validate_workspaces(registry: &mut WorkspaceRegistry) -> bool {
 
 /// Machine identity facts used while validating a local registry file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct WorkspaceRegistryHostContext {
+pub struct WorkspaceRegistryMachineContext {
     pub machine_id: Option<String>,
-    pub host_id: Option<String>,
 }
 
 /// Parse, migrate, and validate one workspace registry JSON document.
@@ -587,7 +578,7 @@ pub struct WorkspaceRegistryHostContext {
 /// migration branch.
 pub fn parse_workspace_registry(
     content: &str,
-    context: &WorkspaceRegistryHostContext,
+    context: &WorkspaceRegistryMachineContext,
 ) -> Result<(WorkspaceRegistry, bool), OrbitError> {
     let mut registry: WorkspaceRegistry = match serde_json::from_str(content) {
         Ok(registry) => registry,
@@ -620,7 +611,7 @@ struct CheckoutRoleProbe {
 /// nothing more specific to say.
 fn diagnose_registry_document(
     content: &str,
-    context: &WorkspaceRegistryHostContext,
+    context: &WorkspaceRegistryMachineContext,
     typed_error: serde_json::Error,
 ) -> Result<(WorkspaceRegistry, bool), OrbitError> {
     if !typed_error.is_data() {
@@ -686,7 +677,7 @@ fn validate_role_tokens(checkouts: &[CheckoutRoleProbe]) -> Result<(), OrbitErro
 /// Validate and canonicalize an in-memory workspace registry.
 pub fn validate_workspace_registry(
     registry: &mut WorkspaceRegistry,
-    context: &WorkspaceRegistryHostContext,
+    context: &WorkspaceRegistryMachineContext,
 ) -> Result<bool, OrbitError> {
     if registry.schema_version != WORKSPACE_REGISTRY_SCHEMA_VERSION {
         return Err(invalid_registry(format!(
@@ -719,37 +710,6 @@ pub fn validate_workspace_registry(
                 ))
             })?;
         }
-    }
-
-    let owner_machine_ids = registry
-        .workspaces
-        .iter()
-        .filter_map(|workspace| workspace.owner_machine_id.as_deref())
-        .collect::<HashSet<_>>();
-    for (machine_id, host_id) in &registry.owner_host_ids {
-        validate_machine_id(machine_id).map_err(|error| {
-            invalid_registry(format!("invalid owner host-name machine_id: {error}"))
-        })?;
-        validate_host_id(host_id).map_err(|error| {
-            invalid_registry(format!(
-                "owner machine '{machine_id}' has invalid host_id: {error}"
-            ))
-        })?;
-        if !owner_machine_ids.contains(machine_id.as_str()) {
-            return Err(invalid_registry(format!(
-                "owner host name for machine '{machine_id}' has no local workspace record"
-            )));
-        }
-    }
-    if let (Some(machine_id), Some(host_id)) =
-        (context.machine_id.as_deref(), context.host_id.as_deref())
-        && owner_machine_ids.contains(machine_id)
-        && registry.owner_host_ids.get(machine_id).map(String::as_str) != Some(host_id)
-    {
-        registry
-            .owner_host_ids
-            .insert(machine_id.to_string(), host_id.to_string());
-        changed = true;
     }
 
     let mut checkout_ids = HashSet::new();
@@ -800,15 +760,10 @@ pub fn validate_workspace_registry(
                             )));
                         }
                         // A standalone workspace may have been registered before this
-                        // machine received a host identity. The explicit owner role is
+                        // machine received an identity. The explicit owner role is
                         // the local binding, so canonicalize its logical owner now.
                         None => {
                             workspace.owner_machine_id = Some(machine_id.to_string());
-                            if let Some(host_id) = context.host_id.as_deref() {
-                                registry
-                                    .owner_host_ids
-                                    .insert(machine_id.to_string(), host_id.to_string());
-                            }
                             changed = true;
                         }
                         Some(_) => {}
@@ -922,7 +877,7 @@ struct LegacyWorkspace {
 
 fn migrate_legacy_registry(
     content: &str,
-    context: &WorkspaceRegistryHostContext,
+    context: &WorkspaceRegistryMachineContext,
 ) -> Result<WorkspaceRegistry, OrbitError> {
     let legacy: LegacyWorkspaceRegistry = serde_json::from_str(content)
         .map_err(|error| invalid_registry(format!("invalid legacy registry: {error}")))?;
@@ -959,7 +914,7 @@ fn migrate_legacy_registry(
             workspace_id: workspace_id.clone(),
             repo_root: legacy_workspace.root,
             orbit_dir: legacy_workspace.orbit_dir,
-            // Only installations without a host identity may use the legacy
+            // Only installations without a machine identity may use the legacy
             // owner default. Identity-bearing machines must declare a role.
             role: context
                 .machine_id
@@ -972,29 +927,6 @@ fn migrate_legacy_registry(
         });
     }
     Ok(registry)
-}
-
-/// Update the local display name attached to workspace records owned by
-/// `machine_id`. Returns the number of logical workspace records affected.
-/// Stable owner machine ids and task prefixes are deliberately untouched.
-pub fn rename_local_owner_host_id(
-    registry: &mut WorkspaceRegistry,
-    machine_id: &str,
-    new_host_id: &str,
-) -> Result<usize, OrbitError> {
-    validate_machine_id(machine_id)?;
-    validate_host_id(new_host_id)?;
-    let affected = registry
-        .workspaces
-        .iter()
-        .filter(|workspace| workspace.owner_machine_id.as_deref() == Some(machine_id))
-        .count();
-    if affected > 0 {
-        registry
-            .owner_host_ids
-            .insert(machine_id.to_string(), new_host_id.to_string());
-    }
-    Ok(affected)
 }
 
 fn claim_checkout_path<'a>(

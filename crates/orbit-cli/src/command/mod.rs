@@ -8,7 +8,6 @@ pub mod doctor;
 pub mod executor;
 pub mod friction;
 pub mod gc;
-pub mod host;
 pub mod init;
 pub mod job;
 pub mod locks;
@@ -82,7 +81,6 @@ pub(crate) fn require_confirmation(confirm: bool, action: &str) -> Result<(), Or
 Environment:
   init        Initialize the global Orbit root (~/.orbit)
   workspace   Manage workspaces
-  host        Register and manage hub hosts
   config      Show or update Orbit configuration
   migrate     Apply or inspect pending .orbit layout/schema migrations
   update      Install a published Orbit release and converge to it
@@ -112,9 +110,9 @@ Definitions:
   executor    View executors
 
 Scheduler:
-  clock       Inspect, control, and manually tick the host scheduler
+  clock       Inspect, control, and manually tick the machine scheduler
   sweep       Compatibility alias for `orbit clock tick`
-  routine     Inspect and control scheduled routines on this host
+  routine     Inspect and control scheduled routines on this machine
   auto-task   Define recurring auto-task templates (the scheduler primitive)
 
 Services:
@@ -145,7 +143,6 @@ pub enum Commands {
     // ── Environment ──
     Init(init::InitCommand),
     Workspace(workspace::WorkspaceCommand),
-    Host(host::HostCommand),
     Config(config::ConfigCommand),
     Migrate(migrate::MigrateCommand),
     Update(update::UpdateCommand),

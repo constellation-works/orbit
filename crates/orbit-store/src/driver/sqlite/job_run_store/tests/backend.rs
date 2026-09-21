@@ -229,14 +229,14 @@ fn execution_location_is_trusted_immutable_and_legacy_unknown() {
     use orbit_types::task::ExecutionLocation;
     let store = Store::open_in_memory().expect("store");
     let plain = SqliteJobRunStore::new(store.clone(), "ws_a");
-    let forged = serde_json::json!({"executed_on":{"machine_id":"payload-machine"},"host_id":"payload-host"});
+    let forged = serde_json::json!({"executed_on":{"machine_id":"payload-machine"},"machine_name":"payload-host"});
     let legacy = plain
         .insert_job_run("job", 1, Utc::now(), Some(forged.clone()), None)
         .expect("legacy");
     assert!(legacy.executed_on.is_none());
     let location = ExecutionLocation {
         machine_id: "registry-machine".into(),
-        host_id: Some("display-name".into()),
+        machine_name: Some("display-name".into()),
     };
     let trusted = plain.with_execution_location(Some(location.clone()));
     let mut run = trusted
@@ -245,7 +245,7 @@ fn execution_location_is_trusted_immutable_and_legacy_unknown() {
     assert_eq!(run.executed_on, Some(location.clone()));
     run.executed_on = Some(ExecutionLocation {
         machine_id: "replacement".into(),
-        host_id: None,
+        machine_name: None,
     });
     store
         .upsert_job_run_for_workspace("ws_a", &run, None)
@@ -310,7 +310,7 @@ fn pull_fixture() -> (
         run_context: AdmissionRunContext {
             run_id: parent.run_id,
             job_name: "workspace_auto_pipeline".into(),
-            host_id: None,
+            machine_name: None,
         },
         ship: AdmissionShipContract {
             mode: "local".into(),
@@ -338,7 +338,7 @@ fn pull_receipt(
             request_id: request.request_id.clone(),
             executed_on: ExecutionLocation {
                 machine_id: "owner".into(),
-                host_id: None,
+                machine_name: None,
             },
             run_context: request.run_context.clone(),
             footprint: vec!["file:src.rs".into()],

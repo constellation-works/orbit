@@ -11,7 +11,7 @@ use orbit_types::workspace::{
 };
 
 use super::{
-    WorkspaceRegistryHostContext, find_checkout_by_id, find_workspace, find_workspace_by_id,
+    WorkspaceRegistryMachineContext, find_checkout_by_id, find_workspace, find_workspace_by_id,
 };
 
 /// Locate the publication binding for an exact workspace ID.
@@ -251,7 +251,7 @@ pub fn record_publication_success(
 
 pub(crate) fn validate_publication_bindings(
     registry: &WorkspaceRegistry,
-    context: &WorkspaceRegistryHostContext,
+    context: &WorkspaceRegistryMachineContext,
 ) -> Result<(), OrbitError> {
     let mut seen_workspace_ids = HashSet::new();
     let mut seen_publication_ids = HashSet::new();

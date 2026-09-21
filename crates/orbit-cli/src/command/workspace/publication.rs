@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
 use orbit_core::OrbitRuntime;
-use orbit_registry::{load_host_identity, workspace_registry};
+use orbit_registry::{load_machine_identity, workspace_registry};
 use orbit_types::workspace::{
     DEFAULT_PUBLICATION_BRANCH, WorkspacePublicationBinding, redact_git_remote,
 };
@@ -59,7 +59,7 @@ impl WorkspacePublicationBindArgs {
         let workspace_id = selected_workspace_id(runtime)?;
         let task_workspace_id = selected_task_workspace_id(runtime)?;
         let global_root = runtime.global_root();
-        let machine_id = load_host_identity(&global_root)?.machine_id;
+        let machine_id = load_machine_identity(&global_root)?.id;
         let registry_path = workspace_registry::registry_path_for(&global_root);
         let mut registry = workspace_registry::load_registry_from(&registry_path)?;
         let binding = if rebind {
@@ -150,7 +150,7 @@ impl Execute for WorkspacePublicationRemoveArgs {
         )?;
         let workspace_id = selected_workspace_id(runtime)?;
         let global_root = runtime.global_root();
-        let machine_id = load_host_identity(&global_root)?.machine_id;
+        let machine_id = load_machine_identity(&global_root)?.id;
         let registry_path = workspace_registry::registry_path_for(&global_root);
         let mut registry = workspace_registry::load_registry_from(&registry_path)?;
         let removed = workspace_registry::unbind_publication_by_id(

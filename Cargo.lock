@@ -2343,11 +2343,13 @@ dependencies = [
  "chrono",
  "hostname",
  "orbit-common",
+ "orbit-config",
  "orbit-types",
  "serde",
  "serde_json",
  "tempfile",
  "toml",
+ "tracing",
 ]
 
 [[package]]

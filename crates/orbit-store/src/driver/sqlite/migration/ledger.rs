@@ -218,12 +218,23 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_execution_provenance,
     },
+    // ORB-12725: `caller_host_id`/`process_host_id` carry a machine's display
+    // name, so they are renamed to `caller_machine_name`/`process_machine_name`
+    // with the rest of the host -> machine vocabulary. Breaking: an older
+    // binary selects the retired column names by name and would fail at the
+    // first audit read rather than silently losing attribution.
+    Migration {
+        version: 23,
+        name: "audit_machine_name_columns",
+        compat: MigrationCompatibility::Breaking,
+        apply: super::apply_audit_machine_name_columns,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 22;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 23;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

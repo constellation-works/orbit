@@ -2,7 +2,7 @@ use crate::application::auto_tasks::AutoTaskAddParams;
 use crate::application::job::JobRunListParams;
 use crate::application::job::pipeline::worker_command_override;
 use crate::application::routine::RETIRED_ROUTINE_FILES;
-use crate::application::routines::RoutineHostIdentity;
+use crate::application::routines::RoutineMachineIdentity;
 use crate::application::routines::clock::{ClockSettings, save_clock_settings};
 use crate::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
 use crate::application::routines::sweep::{
@@ -46,9 +46,9 @@ fn busy_lock_returns_before_workspaces_are_discovered() {
     let outcome = run_sweep_at_with_providers(
         &global,
         SweepOptions::default(),
-        RoutineHostIdentity {
+        RoutineMachineIdentity {
             machine_id: "hm_local".to_string(),
-            host_id: "local".to_string(),
+            machine_name: "local".to_string(),
         },
         &MustNotLoad,
     )
@@ -56,7 +56,7 @@ fn busy_lock_returns_before_workspaces_are_discovered() {
 
     assert!(outcome.lock_busy);
     assert_eq!(outcome.machine_id, "hm_local");
-    assert_eq!(outcome.host_id, "local");
+    assert_eq!(outcome.machine_name, "local");
 }
 
 #[test]
@@ -206,10 +206,10 @@ fn assert_swept(outcome: &SweepOutcome, global: &Path, pass: &str) {
     );
 }
 
-fn host() -> RoutineHostIdentity {
-    RoutineHostIdentity {
+fn host() -> RoutineMachineIdentity {
+    RoutineMachineIdentity {
         machine_id: "hm_local".to_string(),
-        host_id: "local".to_string(),
+        machine_name: "local".to_string(),
     }
 }
 

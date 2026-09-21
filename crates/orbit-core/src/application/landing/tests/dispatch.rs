@@ -63,7 +63,7 @@ fn owner(completion: &str, grant: Option<&str>) -> Owner {
         .admit_task(
             &AdmissionIdentity::trusted_remote(ExecutionLocation {
                 machine_id: "follower".into(),
-                host_id: None,
+                machine_name: None,
             }),
             &AdmissionRequest {
                 request_id: "pull".into(),
@@ -73,7 +73,7 @@ fn owner(completion: &str, grant: Option<&str>) -> Owner {
                 run_context: AdmissionRunContext {
                     run_id: "drain".into(),
                     job_name: "auto".into(),
-                    host_id: None,
+                    machine_name: None,
                 },
                 ship: ship.clone(),
             },

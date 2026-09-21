@@ -27,7 +27,7 @@ impl Root {
         let temp = tempfile::tempdir().expect("global root");
         let root = Self { temp };
         std::fs::write(root.registry_path(), "{}").expect("registry file");
-        std::fs::write(root.path().join("host.toml"), "schema_version = 2\n")
+        std::fs::write(root.path().join("config.toml"), "schema_version = 2\n")
             .expect("host identity");
         std::fs::create_dir_all(root.orbit_dir()).expect("orbit dir");
         std::fs::write(root.workspace_binding_path(), "workspace_id: ws_local\n")
@@ -151,7 +151,7 @@ fn a_registry_edit_between_calls_rebuilds_the_runtime() {
 }
 
 #[test]
-fn a_host_identity_or_workspace_config_edit_rebuilds_the_runtime() {
+fn a_machine_identity_or_workspace_config_edit_rebuilds_the_runtime() {
     let root = Root::new();
     let selection = root.selection();
     let cache = WorkspaceRuntimeCache::<usize>::default();
@@ -160,15 +160,16 @@ fn a_host_identity_or_workspace_config_edit_rebuilds_the_runtime() {
     cache
         .resolve(root.path(), &selection, || builds.next())
         .expect("first build");
-    // The task prefix and machine identity a runtime carries come from
-    // host.toml; its task partition comes from the checkout's config.yaml.
+    // The task prefix and machine identity a runtime carries come from the
+    // global config.toml `[machine]` table, which the global-config stamp
+    // already covers; its task partition comes from the checkout's config.yaml.
     overwrite(
-        &root.path().join("host.toml"),
-        "schema_version = 2\ntask_prefix = \"NEW\"\n",
+        &root.path().join("config.toml"),
+        "[machine]\nid = \"hm_0123456789abcdef\"\nname = \"dk\"\ntask_prefix = \"NEW\"\n",
     );
     cache
         .resolve(root.path(), &selection, || builds.next())
-        .expect("rebuild after the host identity changed");
+        .expect("rebuild after the machine identity changed");
     assert_eq!(builds.count(), 2);
 
     overwrite(

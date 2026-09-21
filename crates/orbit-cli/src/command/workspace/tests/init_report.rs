@@ -25,9 +25,9 @@ impl IsolatedWorkspace {
         let global = home.path().join(".orbit");
         std::fs::create_dir_all(&global).expect("create global orbit");
         std::fs::write(
-            global.join("host.toml"),
+            global.join("config.toml"),
             format!(
-                "schema_version = 2\nmachine_id = \"hm_report\"\nhost_id = \"report-host\"\ntask_prefix = \"{task_prefix}\"\n"
+                "[machine]\nid = \"hm_report\"\nname = \"report-host\"\ntask_prefix = \"{task_prefix}\"\n"
             ),
         )
         .expect("write host identity");
@@ -188,7 +188,7 @@ fn task_id_start_adopts_custom_prefix_before_a_runtime_opens() {
     InitCommand {
         force: false,
         non_interactive: true,
-        host_name: Some("prefix-host".to_string()),
+        machine_name: Some("prefix-host".to_string()),
         task_prefix: Some("QASW".to_string()),
     }
     .execute_without_runtime(Some(&global))
@@ -236,7 +236,7 @@ fn custom_prefix_without_task_id_start_still_mints_tasks() {
     InitCommand {
         force: false,
         non_interactive: true,
-        host_name: Some("unseeded-prefix-host".to_string()),
+        machine_name: Some("unseeded-prefix-host".to_string()),
         task_prefix: Some("QASB".to_string()),
     }
     .execute_without_runtime(Some(&global))

@@ -102,9 +102,9 @@ pub(super) fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitE
             "session_id",
             "workspace_id",
             "caller_machine_id",
-            "caller_host_id",
+            "caller_machine_name",
             "process_machine_id",
-            "process_host_id",
+            "process_machine_name",
             "transport",
             "effective_capabilities",
             "origin_session_id",
@@ -144,9 +144,9 @@ pub(super) fn export_csv(path: &str, events: &[AuditEvent]) -> Result<(), OrbitE
                 event.session_id.clone().unwrap_or_default(),
                 event.workspace_id.clone().unwrap_or_default(),
                 event.caller_machine_id.clone().unwrap_or_default(),
-                event.caller_host_id.clone().unwrap_or_default(),
+                event.caller_machine_name.clone().unwrap_or_default(),
                 event.process_machine_id.clone().unwrap_or_default(),
-                event.process_host_id.clone().unwrap_or_default(),
+                event.process_machine_name.clone().unwrap_or_default(),
                 event
                     .transport
                     .map(|value| value.to_string())

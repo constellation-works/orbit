@@ -1562,3 +1562,30 @@ fn apply_execution_provenance(conn: &Connection) -> Result<(), OrbitError> {
         "ALTER TABLE job_runs ADD COLUMN executed_on_json TEXT",
     )
 }
+
+/// v23 `audit_machine_name_columns` migration (ORB-12725): *host* is reserved
+/// for the MCP-host/process sense, so the two audit columns that carry a
+/// machine's display name are renamed to say so. A rename rather than an
+/// additive column plus backfill, because one column is one fact and two
+/// spellings of it would drift.
+fn apply_audit_machine_name_columns(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "audit_events")? {
+        return Ok(());
+    }
+    for (old, new) in [
+        ("caller_host_id", "caller_machine_name"),
+        ("process_host_id", "process_machine_name"),
+    ] {
+        if !table_has_column(conn, "audit_events", old)?
+            || table_has_column(conn, "audit_events", new)?
+        {
+            continue;
+        }
+        conn.execute(
+            &format!("ALTER TABLE audit_events RENAME COLUMN {old} TO {new}"),
+            [],
+        )
+        .map_err(|e| OrbitError::Store(e.to_string()))?;
+    }
+    Ok(())
+}

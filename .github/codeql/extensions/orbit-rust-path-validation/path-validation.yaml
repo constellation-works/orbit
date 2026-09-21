@@ -22,7 +22,7 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_registry::host_identity::validated_existing_global_root",
+          "orbit_registry::machine_identity::validated_existing_global_root",
           "ReturnValue",
           "path-injection",
           "manual",

@@ -155,7 +155,7 @@ fn ssh_session_preserves_worker_binding_outside_tool_arguments() {
         claim_id: "claim".into(),
         execution: orbit_types::task::ExecutionLocation {
             machine_id: "executor".into(),
-            host_id: None,
+            machine_name: None,
         },
         bound_run_id: "immutable-leaf".into(),
     };

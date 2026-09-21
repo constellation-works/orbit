@@ -15,7 +15,7 @@ use crate::vector::{UpsertReport, VectorStore};
 
 fn task(id: &str, title: &str, description: &str) -> Task {
     Task {
-        job_run_host: None,
+        job_run_machine: None,
         id: id.to_string(),
         title: title.to_string(),
         description: description.to_string(),

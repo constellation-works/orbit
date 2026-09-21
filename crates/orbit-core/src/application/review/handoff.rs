@@ -456,7 +456,7 @@ fn location_json(location: &orbit_types::task::ExecutionLocation) -> serde_json:
     serde_json::json!({
         "known": true,
         "machine_id": location.machine_id,
-        "host_id": location.host_id,
+        "machine_name": location.machine_name,
     })
 }
 
@@ -491,7 +491,7 @@ fn claim_json(
         "run_context": {
             "run_id": claim.claim.run_context.run_id,
             "job_name": claim.claim.run_context.job_name,
-            "host_id": claim.claim.run_context.host_id,
+            "machine_name": claim.claim.run_context.machine_name,
         },
         "bound_run": claim.bound_run.as_ref().map(|run| serde_json::json!({
             "machine_id": run.machine_id,
@@ -582,7 +582,7 @@ fn handoff_json(
         "executed_on": {
             "known": true,
             "machine_id": accepted.handoff.machine_id,
-            "host_id": serde_json::Value::Null,
+            "machine_name": serde_json::Value::Null,
         },
         "run_id": accepted.handoff.run_id,
         "execution_summary": accepted.handoff.execution_summary,

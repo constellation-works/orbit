@@ -72,15 +72,15 @@ fn init_git_repo(repo: &Path) {
 
 fn initialize_root(repo: &Path, home: &Path, mirror: &Path, root: &Path, suffix: &str) {
     let root = root.to_string_lossy();
-    let host_name = format!("update-{suffix}");
+    let machine_name = format!("update-{suffix}");
     orbit(repo, home, mirror)
         .args([
             "--root",
             root.as_ref(),
             "init",
             "--non-interactive",
-            "--host-name",
-            &host_name,
+            "--machine-name",
+            &machine_name,
             "--task-prefix",
             "UP",
         ])
@@ -241,7 +241,7 @@ fn update_without_a_root_override_retains_default_workspace_routing() {
         .args([
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "update-default",
             "--task-prefix",
             "UD",

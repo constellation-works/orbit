@@ -27,7 +27,7 @@ pub(super) const AUDIT_EVENT_COLUMNS: &str = "id, execution_id, timestamp, comma
      tool_name, target_type, target_id, role, status, exit_code, duration_ms, \
      working_directory, arguments_json, stdout_truncated, stderr_truncated, \
      error_message, host, pid, session_id, workspace_id, caller_machine_id, \
-     caller_host_id, process_machine_id, process_host_id, transport, \
+     caller_machine_name, process_machine_id, process_machine_name, transport, \
      capabilities_json, origin_session_id, mcp_call_id, lease_id, task_id, \
      job_run_id, activity_id, step_index, trace_id, caller_ip, \
      self_reported_actor";
@@ -88,9 +88,9 @@ fn audit_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEvent>
         session_id: row.get(19)?,
         workspace_id: row.get(20)?,
         caller_machine_id: row.get(21)?,
-        caller_host_id: row.get(22)?,
+        caller_machine_name: row.get(22)?,
         process_machine_id: row.get(23)?,
-        process_host_id: row.get(24)?,
+        process_machine_name: row.get(24)?,
         transport,
         effective_capabilities,
         origin_session_id: row.get(27)?,
@@ -186,7 +186,7 @@ fn insert_audit_event_record_on_connection(
             duration_ms, working_directory, arguments_json,
             stdout_truncated, stderr_truncated, error_message,
             host, pid, session_id, workspace_id, caller_machine_id,
-            caller_host_id, process_machine_id, process_host_id, transport,
+            caller_machine_name, process_machine_id, process_machine_name, transport,
             capabilities_json, origin_session_id, mcp_call_id, lease_id,
             task_id, job_run_id, activity_id, step_index, trace_id, caller_ip,
             actor_kind, actor_id, actor_vendor, actor_family, actor_model,
@@ -214,9 +214,9 @@ fn insert_audit_event_record_on_connection(
             params.session_id,
             params.workspace_id,
             params.caller_machine_id,
-            params.caller_host_id,
+            params.caller_machine_name,
             params.process_machine_id,
-            params.process_host_id,
+            params.process_machine_name,
             params.transport.map(|transport| transport.to_string()),
             capabilities_json,
             params.origin_session_id,

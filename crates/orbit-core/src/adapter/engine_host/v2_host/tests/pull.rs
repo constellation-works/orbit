@@ -41,7 +41,7 @@ impl PullPeer for Peer {
                     request_id: request.request_id.clone(),
                     executed_on: ExecutionLocation {
                         machine_id: destination.execution_machine_id.clone(),
-                        host_id: None,
+                        machine_name: None,
                     },
                     run_context: request.run_context.clone(),
                     footprint: vec!["file:src.rs".into()],
@@ -134,7 +134,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
             run_context: AdmissionRunContext {
                 run_id: parent.run_id,
                 job_name: "workspace_auto_pipeline".into(),
-                host_id: None,
+                machine_name: None,
             },
             ship: AdmissionShipContract {
                 mode: "local".into(),

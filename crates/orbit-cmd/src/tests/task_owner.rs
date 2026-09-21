@@ -31,10 +31,10 @@ fn owner_fixture() -> OwnerFixture {
     let global = root.path().join("global");
     std::fs::create_dir_all(&global).expect("global");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_owner_test\"\nhost_id = \"owner-test\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_owner_test\"\nname = \"owner-test\"\ntask_prefix = \"ORB\"\n",
     )
-    .expect("host identity");
+    .expect("machine identity");
 
     let (ws_alpha, checkout_alpha) =
         registered_workspace(root.path(), "ws_alpha", "alpha", "alpha-a1b2c3");

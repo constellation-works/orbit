@@ -33,7 +33,7 @@ orbit routine init --install-clock
 
 Reads the machine identity written by `orbit init` and installs the per-user OS
 clock unit that runs `orbit clock tick` every minute — launchd on macOS, a systemd
-user timer on Linux. It never creates or rewrites host identity; `orbit init`
+user timer on Linux. It never creates or rewrites machine identity; `orbit init`
 owns that.
 
 ```bash

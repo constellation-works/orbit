@@ -62,7 +62,7 @@ impl TaskV2Store {
             .collect();
         let bundle = TaskBundleV2 {
             envelope: orbit_types::task::TaskEnvelopeV2 {
-                job_run_host: None,
+                job_run_machine: None,
                 schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
                 id: id.clone(),
                 title: params.title,

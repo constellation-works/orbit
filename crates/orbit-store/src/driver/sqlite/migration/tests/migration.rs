@@ -166,6 +166,8 @@ fn coordination_migrations_create_typed_tables_without_touching_existing_records
     }
     for column in [
         "machine_id",
+        // The v5 `hosts` table is shipped history: its column keeps the
+        // spelling that migration created.
         "host_id",
         "labels_json",
         "status",

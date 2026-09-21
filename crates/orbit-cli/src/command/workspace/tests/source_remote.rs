@@ -39,8 +39,8 @@ fn registry(root: &Path) -> WorkspaceRegistry {
 fn injected_persistence_failure_leaves_registry_file_unchanged() {
     let root = tempdir().expect("tempdir");
     std::fs::write(
-        root.path().join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_owner\"\nhost_id = \"owner\"\ntask_prefix = \"ORB\"\n",
+        root.path().join("config.toml"),
+        "[machine]\nid = \"hm_owner\"\nname = \"owner\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("host identity");
     let path = root.path().join("workspaces.json");

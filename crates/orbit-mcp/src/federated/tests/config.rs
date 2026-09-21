@@ -1,12 +1,13 @@
 use orbit_common::OrbitError;
 
 use super::super::config::{
-    Destination, HostQualifiedSelector, destinations_path, federated_membership, load_destinations,
+    Destination, MachineQualifiedSelector, destinations_path, federated_membership,
+    load_destinations,
 };
 
 #[test]
-fn host_qualified_selector_accepts_only_machine_and_workspace_ids() {
-    let selector: HostQualifiedSelector = "hm_alpha-1/ws_orbit"
+fn machine_qualified_selector_accepts_only_machine_and_workspace_ids() {
+    let selector: MachineQualifiedSelector = "hm_alpha-1/ws_orbit"
         .parse()
         .expect("host-qualified selector");
 
@@ -16,23 +17,23 @@ fn host_qualified_selector_accepts_only_machine_and_workspace_ids() {
 }
 
 #[test]
-fn host_qualified_selector_rejects_bare_workspace_id() {
+fn machine_qualified_selector_rejects_bare_workspace_id() {
     assert!(matches!(
-        "ws_orbit".parse::<HostQualifiedSelector>(),
+        "ws_orbit".parse::<MachineQualifiedSelector>(),
         Err(OrbitError::UnknownSelector(_))
     ));
 }
 
 #[test]
-fn host_qualified_selector_rejects_display_host_name() {
+fn machine_qualified_selector_rejects_display_machine_name() {
     assert!(matches!(
-        "orbit-linux/ws_orbit".parse::<HostQualifiedSelector>(),
+        "orbit-linux/ws_orbit".parse::<MachineQualifiedSelector>(),
         Err(OrbitError::UnknownSelector(_))
     ));
 }
 
 #[test]
-fn host_qualified_selector_rejects_paths() {
+fn machine_qualified_selector_rejects_paths() {
     for token in [
         "/srv/orbit/ws_orbit",
         "hm_alpha/../ws_orbit",
@@ -40,7 +41,7 @@ fn host_qualified_selector_rejects_paths() {
     ] {
         assert!(
             matches!(
-                token.parse::<HostQualifiedSelector>(),
+                token.parse::<MachineQualifiedSelector>(),
                 Err(OrbitError::UnknownSelector(_))
             ),
             "unexpectedly accepted {token}"
@@ -219,7 +220,7 @@ fn membership_collapses_an_explicit_row_for_the_local_machine() {
         ["hm_local", "hm_remote"]
     );
     assert!(destinations[0].is_local());
-    assert_eq!(destinations[0].host_display(), "local-host");
+    assert_eq!(destinations[0].machine_name_display(), "local-host");
     assert_eq!(destinations[1].ssh_target(), Some("orbit-remote"));
 }
 

@@ -18,7 +18,7 @@ fn wait_for_fd_times_out_on_a_silent_open_socket() {
     assert_eq!(error.to_string(), STDIN_PROMPT_TIMEOUT);
     assert!(
         error.to_string().contains("--task-prefix")
-            && error.to_string().contains("--host-name")
+            && error.to_string().contains("--machine-name")
             && error.to_string().contains("--non-interactive"),
         "{error}"
     );

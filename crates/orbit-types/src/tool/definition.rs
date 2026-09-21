@@ -22,13 +22,25 @@ pub struct ToolSessionContext {
     /// is self-declared metadata, not an authenticated principal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller_machine_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caller_host_id: Option<String>,
-    /// Stable identity of the process host, derived by the accepting server.
+    /// [ORB-12725] `caller_host_id` is read for one release so a session
+    /// envelope from an older peer still deserializes.
+    #[serde(
+        default,
+        alias = "caller_host_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub caller_machine_name: Option<String>,
+    /// Stable identity of the accepting machine, derived by the server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_machine_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub process_host_id: Option<String>,
+    /// [ORB-12725] `process_host_id` is read for one release; see
+    /// [`Self::caller_machine_name`].
+    #[serde(
+        default,
+        alias = "process_host_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub process_machine_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport: Option<McpTransport>,
     /// Per-invocation correlation ID created by the accepting process. This is
@@ -90,16 +102,16 @@ impl ToolSessionContext {
     pub fn trusted_local(
         workspace_id: Option<String>,
         machine_id: Option<String>,
-        host_id: Option<String>,
+        machine_name: Option<String>,
     ) -> Self {
         Self {
             workspace: None,
             worker_invocation: None,
             workspace_id,
             caller_machine_id: machine_id.clone(),
-            caller_host_id: host_id.clone(),
+            caller_machine_name: machine_name.clone(),
             process_machine_id: machine_id,
-            process_host_id: host_id,
+            process_machine_name: machine_name,
             transport: Some(McpTransport::Local),
             trace_id: None,
             caller_ip: None,

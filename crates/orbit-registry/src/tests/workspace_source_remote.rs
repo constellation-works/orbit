@@ -30,9 +30,6 @@ fn logical_workspace(id: &str, owner_machine_id: Option<&str>) -> Workspace {
 
 fn owned_registry() -> WorkspaceRegistry {
     WorkspaceRegistry {
-        owner_host_ids: [("hm_owner".to_string(), "owner-host".to_string())]
-            .into_iter()
-            .collect(),
         workspaces: vec![logical_workspace("ws_orbit", Some("hm_owner"))],
         checkouts: vec![WorkspaceCheckout::owner(
             "ws_orbit".to_string(),
@@ -80,7 +77,6 @@ fn source_remote_rebind_changes_only_remote_and_updated_at() {
     expected_workspace.updated_at = registry.workspaces[0].updated_at;
     assert_eq!(registry.workspaces[0], expected_workspace);
     assert_eq!(registry.checkouts, before.checkouts);
-    assert_eq!(registry.owner_host_ids, before.owner_host_ids);
 }
 
 #[test]

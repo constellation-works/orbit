@@ -45,7 +45,7 @@ Placeholders:
 
 | Placeholder | Meaning |
 |---|---|
-| `<owner-machine-id>` | Owner `machine_id` from `orbit host show` on the owner |
+| `<owner-machine-id>` | Owner `machine.id` from `orbit config get machine.id` on the owner |
 | `<workspace-id>` | Logical `ws_*` id from `orbit workspace show` |
 | `<selector>` | Host-qualified selector from federated `orbit_workspace_list` |
 | `<ssh-alias>` | An SSH config alias already able to log in as the owner |
@@ -58,7 +58,7 @@ On **every** participating host:
 
 ```bash
 orbit --version
-orbit host show
+orbit config get machine.id
 orbit workspace show
 orbit doctor
 ```
@@ -107,7 +107,7 @@ other host that currently owns a copy of the same logical workspace:
 3. Move tasks that must keep their IDs, or drain them on the demoted host
    first.
 
-Do not delete `~/.orbit/host.toml`, `workspaces.json`, or the store to force
+Do not delete the `[machine]` table in `~/.orbit/config.toml`, `workspaces.json`, or the store to force
 the switch.
 
 ### 2. Re-register the demoted checkout as a replica
@@ -317,7 +317,7 @@ orbit run show <run-id>
 orbit run events <run-id>
 ```
 
-`job_run_host` on the task names where the bound run lives; a host pointer is
+`job_run_machine` on the task names where the bound run lives; a host pointer is
 not remote reachability. Inspect that run on the execution host.
 
 ### Interrupted claimed-run resume refusal
@@ -387,7 +387,7 @@ read-only readiness check uses:
 orbit run history -j epic_pipeline --limit 50
 orbit run history --limit 50
 orbit task list --tag epic
-orbit task show <task-id> --fields status,context_files,job_run_id,job_run_host
+orbit task show <task-id> --fields status,context_files,job_run_id,job_run_machine
 orbit task locks list
 orbit doctor
 ```
@@ -406,7 +406,7 @@ still have a live completion step):
 | Historical epic worktrees | Let GC reap them; keep decoding until `orbit doctor` / worktree GC shows they are gone |
 
 Failed-run triage is also retired. A failed claimed or family run parks the
-task in `blocked` with `job_run_host`. Re-backlog is a deliberate
+task in `blocked` with `job_run_machine`. Re-backlog is a deliberate
 `orbit task update --status backlog`, made by whoever inspected the evidence.
 
 ## Retained ship-sweep (do not enable as part of setup)

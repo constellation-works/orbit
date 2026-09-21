@@ -24,14 +24,14 @@ fn orbit(cwd: &Path, home: &Path) -> assert_cmd::Command {
     command
 }
 
-fn write_host_identity(home: &Path) {
+fn write_machine_identity(home: &Path) {
     let global = home.join(".orbit");
     std::fs::create_dir_all(&global).expect("create global root");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_workspace_sync\"\nhost_id = \"sync-host\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_workspace_sync\"\nname = \"sync-machine\"\ntask_prefix = \"ORB\"\n",
     )
-    .expect("write host identity");
+    .expect("write machine identity");
 }
 
 fn read(path: impl Into<PathBuf>) -> Vec<u8> {
@@ -47,7 +47,7 @@ fn workspace_sync_creates_missing_defaults_preserves_operator_content_and_is_ide
     let home = tempdir().expect("home tempdir");
     let repo = home.path().join("workspace");
     std::fs::create_dir_all(repo.join(".git")).expect("create workspace repo");
-    write_host_identity(home.path());
+    write_machine_identity(home.path());
     orbit(&repo, home.path())
         .args(["workspace", "init"])
         .assert()
@@ -177,7 +177,7 @@ fn workspace_sync_outside_registered_workspace_fails_before_writing() {
     std::fs::create_dir_all(parent.path().join(".git")).expect("create parent repo");
     std::fs::create_dir_all(repo.join(".git")).expect("create outside repo");
     std::fs::create_dir_all(&uninitialized_root).expect("create uninitialized root");
-    write_host_identity(&home);
+    write_machine_identity(&home);
     orbit(parent.path(), &home)
         .args(["workspace", "init", "--name", "initialized-parent"])
         .assert()

@@ -4632,32 +4632,32 @@ fn artifact_provenance_uses_verified_session_identity_only() {
     // Local process identity and process host are recorded; caller labels are ignored.
     let mut session = ToolSessionContext {
         process_machine_id: Some("local-process".into()),
-        process_host_id: Some("local-host".into()),
+        process_machine_name: Some("local-host".into()),
         caller_machine_id: Some("claimed-machine".into()),
-        caller_host_id: Some("claimed-host".into()),
+        caller_machine_name: Some("claimed-host".into()),
         ..Default::default()
     };
     let local_origin = runtime
         .artifact_origin(&session)
         .expect("local process identity");
     assert_eq!(local_origin.machine_id, "local-process");
-    assert_eq!(local_origin.host_id.as_deref(), Some("local-host"));
+    assert_eq!(local_origin.machine_name.as_deref(), Some("local-host"));
 
     // When process identity is absent, local trusted runtime identity is recorded.
     let runtime_with_identity =
         runtime.with_automation_machine_identity(Some("runtime-machine".into()));
     let session_no_process = ToolSessionContext {
         process_machine_id: None,
-        process_host_id: Some("local-host".into()),
+        process_machine_name: Some("local-host".into()),
         caller_machine_id: Some("claimed-machine".into()),
-        caller_host_id: Some("claimed-host".into()),
+        caller_machine_name: Some("claimed-host".into()),
         ..Default::default()
     };
     let runtime_origin = runtime_with_identity
         .artifact_origin(&session_no_process)
         .expect("local runtime identity");
     assert_eq!(runtime_origin.machine_id, "runtime-machine");
-    assert_eq!(runtime_origin.host_id.as_deref(), Some("local-host"));
+    assert_eq!(runtime_origin.machine_name.as_deref(), Some("local-host"));
 
     // For SSH MCP transport, caller's self-asserted machine/host labels do not
     // become artifact origin, and the destination process is not misattributed.
@@ -4698,9 +4698,9 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
     let local_process_session = ToolSessionContext {
         effective_capabilities: BTreeSet::from([McpCapability::Operator]),
         process_machine_id: Some("worker-proc-1".into()),
-        process_host_id: Some("worker-host-1".into()),
+        process_machine_name: Some("worker-host-1".into()),
         caller_machine_id: Some("untrusted-caller-box".into()),
-        caller_host_id: Some("untrusted-caller-host".into()),
+        caller_machine_name: Some("untrusted-caller-host".into()),
         ..Default::default()
     };
     runtime
@@ -4726,7 +4726,7 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
     let local_runtime_session = ToolSessionContext {
         effective_capabilities: BTreeSet::from([McpCapability::Operator]),
         process_machine_id: None,
-        process_host_id: Some("worker-host-1".into()),
+        process_machine_name: Some("worker-host-1".into()),
         caller_machine_id: Some("untrusted-caller-box".into()),
         ..Default::default()
     };
@@ -4753,9 +4753,9 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
         effective_capabilities: BTreeSet::from([McpCapability::Operator]),
         transport: Some(McpTransport::SshMcp),
         process_machine_id: Some("destination-machine".into()),
-        process_host_id: Some("destination-host".into()),
+        process_machine_name: Some("destination-host".into()),
         caller_machine_id: Some("remote-spoke-box".into()),
-        caller_host_id: Some("remote-spoke-host".into()),
+        caller_machine_name: Some("remote-spoke-host".into()),
         ..Default::default()
     };
     runtime
@@ -4790,7 +4790,7 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
         proc_art.origin,
         Some(orbit_types::task::ExecutionLocation {
             machine_id: "worker-proc-1".into(),
-            host_id: Some("worker-host-1".into()),
+            machine_name: Some("worker-host-1".into()),
         })
     );
 
@@ -4802,7 +4802,7 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
         runtime_art.origin,
         Some(orbit_types::task::ExecutionLocation {
             machine_id: "local-runtime-box".into(),
-            host_id: Some("worker-host-1".into()),
+            machine_name: Some("worker-host-1".into()),
         })
     );
 

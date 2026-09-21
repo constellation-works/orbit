@@ -49,8 +49,8 @@ If a valid configured row already names the accepting machine's `machine_id`, th
 
 ## Selector identity
 
-1. The host-qualified selector is **structured, caller-uninterpreted**. Encoding `hm_<id>/ws_*` is normative (example: `hm_<id>/ws_orbit`). The stable key is `machine_id` (`hm_…`), not renameable `host_id`.
-2. Callers must not parse the token and must not construct it from `host_id` or by concatenating remembered identifiers. The only caller-facing way to obtain a selector is to copy the `selector` field from federated `orbit_workspace_list`.
+1. The machine-qualified selector is **structured, caller-uninterpreted**. Encoding `hm_<id>/ws_*` is normative (example: `hm_<id>/ws_orbit`). The stable key is `machine_id` (`hm_…`), not the renameable `machine.name`.
+2. Callers must not parse the token and must not construct it from `machine.name` or by concatenating remembered identifiers. The only caller-facing way to obtain a selector is to copy the `selector` field from federated `orbit_workspace_list`.
 3. Display names such as `orbit-linux/ws_orbit` are not selectors.
 4. The selector is addressing data, not a path, URL, logical-only workspace ID, or authorization credential. Possession of a selector is not authorization.
 5. Every workspace-scoped federated tool accepts the selector. The gateway routes that call to the encoded destination. Federated `tools/list` advertises that callers must copy `selector` from federated `orbit.workspace.list` and must not treat cwd, a registered name, or a bare `ws_*` as valid. Federated `orbit.task.show` requires the host-qualified selector and does not inherit the v1 id-only default.
@@ -131,15 +131,15 @@ Federated list does **not** inherit that envelope or that filter:
    | Field | Meaning |
    |---|---|
    | `selector` | Structured, caller-uninterpreted host-qualified route token (`hm_<id>/ws_*`). Copy this field; do not parse it. |
-   | `host` | Destination display identity (renameable `host_id`; display only) |
+   | `machine_name` | Destination display identity (renameable `machine.name`; display only) |
    | `machine_id` | Destination stable identity (`hm_…`) |
    | `reachability` | Whether the configured destination answers: `reachable` or `unreachable` |
    | `checkout_health` | Repo-root presence at that destination: `active`, `invalid`, or `unknown` if the host cannot be probed |
    | `capabilities` | Classes the destination currently **advertises** for that workspace (a hint; see Capabilities vs checkout roles) |
 
-   `host` is the accepting machine's `host_id` for the implicit local destination. For configured remotes it is the operator's `ssh` target: the v1 discovery envelope carries no `host_id`, so that alias is the only display identity the mux can honestly attribute to a remote.
+   `machine_name` is the accepting machine's `machine.name` for the implicit local destination. For configured remotes it is the operator's `ssh` target: the v1 discovery envelope carries no display name, so that alias is the only display identity the mux can honestly attribute to a remote. [ORB-12725] renamed this key from `host`, retiring *host* for the machine sense across Orbit.
 
-   The federated-only keys are exactly `selector`, `host`, `machine_id`, `reachability`, `checkout_health`, and `capabilities`. `capabilities` is an array whose values are `control_plane` and/or `execute`. These names are protocol keys; implementations must not substitute a combined `health` key or the prose labels used to describe them.
+   The federated-only keys are exactly `selector`, `machine_name`, `machine_id`, `reachability`, `checkout_health`, and `capabilities`. `capabilities` is an array whose values are `control_plane` and/or `execute`. These names are protocol keys; implementations must not substitute a combined `health` key or the prose labels used to describe them.
 
 3. **Do not overload one `health` field** with SSH/MCP reachability and repo-root presence.
 4. **Include unreachable and inactive destinations.** Configured workspaces on unreachable or inactive destinations are included, not omitted. A down destination appears with an explicit unreachable (and, if checkout cannot be probed, unknown/unhealthy) projection. Omission makes every later call a stale-route surprise.

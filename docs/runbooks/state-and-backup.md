@@ -49,9 +49,8 @@ presence. Path fields live on `WorkspacePaths` in
 
 | Path | What it is | Authoritative or regenerable |
 |---|---|---|
-| `config.toml` | global runtime config (created by `orbit init`) | authoritative |
+| `config.toml` | global runtime config **and** this machine's stable identity in its `[machine]` table (`id`, `name`, `task_prefix`), both created by `orbit init` | authoritative |
 | `workspaces.json` | registry of workspaces on this machine (logical workspaces + local checkouts, including declared owner and `owner`/`replica` role) | authoritative |
-| `host.toml` | this machine's stable identity (`machine_id`, `host_id`, `task_prefix`) | authoritative |
 | `registry-cache.json` | legacy file from the removed fleet-registry path | inert; no live reader or refresher, so remove only after backup if cleanup is desired |
 | `orbit.db` (+ `-wal`, `-shm`) | **the** store DB for audit events (`audit_events`, `v2_audit_events`), job runs + checkpoints (`job_runs`, `job_run_steps`), task reservations, indexes, routine state, and the `schema_meta` migration ledger | **authoritative** for live history; old host/profile tables may remain from shipped migrations but are not registry, routing, health, or authorization authority |
 | `tasks/index.sqlite` | global task-ID allocator + registry index | regenerable (`orbit task reindex`) |
@@ -235,7 +234,7 @@ from the captured settings only after the old source identity is restored.
   the matching database when detailed audit output matters, and retain legacy
   `state/job-runs/` if its old run evidence matters. Git already backs up any selected
   artifacts the repository deliberately commits.
-- **Global root:** `~/.orbit/config.toml`, `host.toml`, `workspaces.json`, `tasks/`
+- **Global root:** `~/.orbit/config.toml` (settings and the `[machine]` identity), `workspaces.json`, `tasks/`
   (canonical bundles), `orbit.db`, `frictions/`, and `resources/` whenever it contains operator-authored YAML or
   `.retired-managed/` recovery copies. The database holds non-derivable audit and run history.
 - **Safe to lose or regenerate:** retired `graph/` and `knowledge/graph/`, `state/semantic.db`,
@@ -265,7 +264,7 @@ file-copy a live DB, copy `*.db`, `*.db-wal`, and `*.db-shm` together.
 
 Task publication is an explicit, task-only durability channel. It does not
 replace the global-root/database backup above: audit events, run history,
-claims, reservations, configuration, host identity, and runtime caches are not
+claims, reservations, configuration, machine identity, and runtime caches are not
 published. No task mutation publishes automatically, and v1 seeds no publication
 routine. A future routine trigger must be configured separately.
 

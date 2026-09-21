@@ -188,7 +188,7 @@ fn owner_domain_accepts_typed_handoff_but_only_operator_can_approve() {
         .admit_task(
             &AdmissionIdentity::trusted_remote(ExecutionLocation {
                 machine_id: "follower".into(),
-                host_id: None,
+                machine_name: None,
             }),
             &AdmissionRequest {
                 request_id: "pull".into(),
@@ -198,7 +198,7 @@ fn owner_domain_accepts_typed_handoff_but_only_operator_can_approve() {
                 run_context: AdmissionRunContext {
                     run_id: "drain".into(),
                     job_name: "auto".into(),
-                    host_id: None,
+                    machine_name: None,
                 },
                 ship: ship.clone(),
             },

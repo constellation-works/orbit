@@ -10,7 +10,7 @@ use orbit_types::tool::{
 use orbit_types::workspace::WorkspaceStatus;
 use serde_json::{Map, Value, json};
 
-use super::config::{Destination, HostQualifiedSelector};
+use super::config::{Destination, MachineQualifiedSelector};
 use super::descriptor::WorkspaceDescriptor;
 use super::probe::{DestinationProbe, DestinationSnapshot};
 
@@ -130,7 +130,7 @@ impl FederatedMcpHost {
         // Parse before opening a destination session: a bare `ws_*`, display
         // form, or any other non-host-qualified token is unknown_selector, even
         // when initialize injected the v1 local default.
-        let parsed = HostQualifiedSelector::from_str(token)?;
+        let parsed = MachineQualifiedSelector::from_str(token)?;
         if let Some(binding) = &session_context.worker_invocation {
             binding.validate().map_err(OrbitError::InvalidInput)?;
             if token != binding.owner_destination || parsed.machine_id() != binding.owner_machine_id
@@ -278,7 +278,7 @@ fn confirm_pinned_identity(
     }
     Err(OrbitError::UnreachableDestination(format!(
         "'{}' is configured as machine '{}' but answered as '{}'",
-        destination.host_display(),
+        destination.machine_name_display(),
         destination.machine_id,
         snapshot.machine_id
     )))

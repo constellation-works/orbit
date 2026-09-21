@@ -11,7 +11,7 @@ advertised task MCP tools. Apply the authority rules in
 
 ## Bind an owned workspace
 
-Prerequisites: initialized host identity, a registered owner checkout with a
+Prerequisites: initialized machine identity, a registered owner checkout with a
 portable source Git remote, Git access to a separate publication repository,
 and an explicit choice of repository visibility and access. Orbit does not
 create the hosted repository or enforce its privacy; output labels privacy
@@ -21,7 +21,7 @@ From the selected owner checkout:
 
 ```bash
 orbit workspace show
-orbit host show
+orbit config get machine.id
 orbit workspace publication bind --remote <publication-git-url> --publication-id <lineage-id>
 orbit workspace publication show --json
 ```
@@ -127,6 +127,7 @@ records are refused rather than merged or silently overwritten. Check
 `omitted_attachments`, and the projection result before claiming recovery.
 An omitted-attachment snapshot remains incomplete after restore.
 
-Task publication is only one recovery artifact. Preserve host identity and
-other required configuration through the operator's separate backup process;
+Task publication is only one recovery artifact. Preserve the global
+`config.toml` (including its `[machine]` identity) and other required
+configuration through the operator's separate backup process;
 never rewrite machine IDs or registry files to bypass a restore denial.

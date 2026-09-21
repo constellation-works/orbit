@@ -425,7 +425,7 @@ function routineButton(payload, routine) {
       render: () => { if (lastOperations) renderOperations(lastOperations); },
       request: () => postJson("/api/routines/toggle", {
         name: routine.name, source: routine.source, target: routine.target,
-        host_id: payload.host_id, expected_enabled: routine.enabled, enabled: nextEnabled,
+        machine_name: payload.machine_name, expected_enabled: routine.enabled, enabled: nextEnabled,
       }),
       refresh: fetchAndRenderOperations,
       success: (result) => `${result.message}: ${routine.name} → ${routine.target}.`,
@@ -576,7 +576,7 @@ function renderOperations(payload) {
   const body = $("routines-body");
   body.textContent = "";
   if (!workspace) {
-    body.appendChild(el("div", { class: "operations-readonly-note", text: `All-workspace mode is read-only. Select one workspace; this host is already resolved as ${payload.host_id}.` }));
+    body.appendChild(el("div", { class: "operations-readonly-note", text: `All-workspace mode is read-only. Select one workspace; this machine is already resolved as ${payload.machine_name}.` }));
   }
   if (routines.length === 0) {
     body.appendChild(el("div", { class: "empty-state", text: workspace ? "No routines are defined by this workspace." : "Select a workspace to list its routines." }));
@@ -608,7 +608,7 @@ function renderOperations(payload) {
 
 function clockButton(payload, action, label) {
   const selection = selectionSnapshot();
-  const key = `clock:${payload.host_id}`;
+  const key = `clock:${payload.machine_name}`;
   const unavailable = clockUnavailable(payload.clock);
   const reason = unavailable
     ? clockUnavailableReason(payload.clock)
@@ -619,17 +619,17 @@ function clockButton(payload, action, label) {
   button.addEventListener("click", () => {
     if (reason || unavailable || !selection.current() || pendingOperations.has(key)) return;
     const verb = action === "enable" ? "Start" : "Stop";
-    if (!window.confirm(`${verb} the ${payload.clock.provider} clock on ${payload.host_id}? This does not change any routine definition.`)) return;
+    if (!window.confirm(`${verb} the ${payload.clock.provider} clock on ${payload.machine_name}? This does not change any routine definition.`)) return;
     return runOperation({
       selection, key, feedbackId: "clock-operation-feedback",
       pending: `${verb} host clock…`, failure: "Clock service change failed",
       render: () => { if (lastOperations) renderClock(lastOperations); },
       request: () => postJson("/api/routines/clock", {
-        action, host_id: payload.host_id, expected_enabled: payload.clock.enabled,
+        action, machine_name: payload.machine_name, expected_enabled: payload.clock.enabled,
         expected_cadence_seconds: payload.clock.configured_cadence_seconds,
       }),
       refresh: fetchAndRenderOperations,
-      success: (result) => `${result.message} on ${payload.host_id}.`,
+      success: (result) => `${result.message} on ${payload.machine_name}.`,
     });
   });
   return explainUnavailable(button, reason);
@@ -646,7 +646,7 @@ function renderClock(payload) {
     ? clockUnavailableReason(clock)
     : controlReason(payload, "clock_cadence");
   const selection = selectionSnapshot();
-  const key = `clock:${payload.host_id}`;
+  const key = `clock:${payload.machine_name}`;
   const serviceLabel = unavailable ? "service unknown" : (clock.enabled ? "service enabled" : "service paused");
   const cadenceLabel = unavailable ? "Unknown" : cadenceText(clock.configured_cadence_seconds);
   const effectiveCadenceLabel = unavailable ? "Unknown" : cadenceText(clock.effective_cadence_seconds);
@@ -685,7 +685,7 @@ function renderClock(payload) {
       pending: `Changing cadence to ${cadence.value}s…`, failure: "Cadence change failed",
       render: () => { if (lastOperations) renderClock(lastOperations); },
       request: () => postJson("/api/routines/clock", {
-        action: "set_cadence", host_id: payload.host_id, expected_enabled: clock.enabled,
+        action: "set_cadence", machine_name: payload.machine_name, expected_enabled: clock.enabled,
         expected_cadence_seconds: clock.configured_cadence_seconds, cadence_seconds: Number(cadence.value),
       }),
       refresh: fetchAndRenderOperations,
@@ -720,7 +720,7 @@ function renderClock(payload) {
     ]),
   );
   if (clock.health_issue) body.appendChild(el("p", { class: "operation-control-note error", text: clock.health_issue }));
-  $("clock-host").textContent = payload.host_id || "unknown host";
+  $("clock-host").textContent = payload.machine_name || "unknown machine";
 }
 
 // ---------------------------------------------------------------------------
