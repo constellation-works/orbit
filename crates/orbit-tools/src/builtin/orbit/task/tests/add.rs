@@ -164,6 +164,13 @@ fn schema_exposes_only_trimmed_create_task_fields() {
             .description
             .contains("low, medium, hard, or xhard")
     );
+    for alias in ["easy", "small", "trivial", "large", "big"] {
+        assert!(
+            complexity.description.contains(alias),
+            "complexity schema must advertise alias {alias}: {}",
+            complexity.description
+        );
+    }
     assert!(
         !complexity
             .description

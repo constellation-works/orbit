@@ -145,6 +145,7 @@ impl OrbitRuntime {
         params: TaskUpdateParams,
         agent: Option<String>,
         model: Option<String>,
+        status_note: Option<String>,
         owner: Option<String>,
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
@@ -154,6 +155,7 @@ impl OrbitRuntime {
             TaskUpdateContext {
                 agent,
                 model,
+                status_note,
                 artifact_owner: owner,
                 status_authority: StatusAuthority::Lifecycle,
                 ..Default::default()
@@ -263,6 +265,17 @@ impl OrbitRuntime {
             )));
         }
         let requested_status = params.status.filter(|status| *status != task.status);
+        let status_note = status_note
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if status_note.is_some() && requested_status.is_none() {
+            return Err(OrbitError::InvalidInput(
+                "`note` requires a status change; use `comment` for free-form discussion"
+                    .to_string(),
+            ));
+        }
         if let Some(target) = requested_status
             && status_authority == StatusAuthority::Lifecycle
         {
@@ -294,11 +307,6 @@ impl OrbitRuntime {
             },
         )?;
         let effective_label = attribution.actor.clone();
-        let status_note = status_note
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
         let append_comments = build_task_comments(
             params.comment.clone(),
             attribution.authored_role_label.as_str(),

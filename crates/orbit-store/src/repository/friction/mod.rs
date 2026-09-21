@@ -33,7 +33,7 @@ use rusqlite::TransactionBehavior;
 use serde_json::{Value, json};
 
 use crate::Store;
-use crate::driver::file::friction_store::load_tag_taxonomy;
+use crate::driver::file::friction_store::{load_tag_taxonomy, load_tag_taxonomy_with_descriptions};
 
 pub(crate) mod queries;
 mod stats;
@@ -267,6 +267,12 @@ impl FrictionStore {
         Ok(load_tag_taxonomy(&self.files_root)?.into_iter().collect())
     }
 
+    pub fn tag_taxonomy(&self) -> Result<Vec<(String, String)>, OrbitError> {
+        Ok(load_tag_taxonomy_with_descriptions(&self.files_root)?
+            .into_iter()
+            .collect())
+    }
+
     /// Friction counts by reporting model over an optional window, for the
     /// scoreboard. Bounded by distinct model labels.
     pub fn reported_by_model(
@@ -431,6 +437,10 @@ impl crate::contracts::FrictionStoreBackend for FrictionStore {
 
     fn tags(&self) -> Result<Vec<String>, OrbitError> {
         Self::tags(self)
+    }
+
+    fn tag_taxonomy(&self) -> Result<Vec<(String, String)>, OrbitError> {
+        Self::tag_taxonomy(self)
     }
 
     fn reported_by_model(

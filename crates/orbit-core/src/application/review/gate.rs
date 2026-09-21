@@ -1247,6 +1247,7 @@ fn write_artifact(
         },
         None,
         None,
+        None,
         Some(run_id.to_string()),
     )?;
     Ok(())

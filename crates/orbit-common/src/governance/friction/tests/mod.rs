@@ -9,7 +9,10 @@ mod title;
 use std::collections::BTreeSet;
 
 use super::operations::{FRICTION_OPERATIONS, FrictionVerb, friction_operation};
-use super::{DEFAULT_FRICTION_TAGS, friction_tags_literal};
+use super::{
+    DEFAULT_FRICTION_TAGS, FRICTION_TAG_ALIASES, friction_tag_aliases_literal,
+    friction_tags_literal, normalize_friction_tag_aliases,
+};
 use crate::governance::operation::CliArgKind;
 use orbit_types::tool::McpToolScope;
 
@@ -150,6 +153,23 @@ fn tags_parameter_descriptions_list_the_default_taxonomy() {
         for (tag, _gloss) in DEFAULT_FRICTION_TAGS {
             assert!(description.contains(tag), "{description} should list {tag}");
         }
+        assert!(
+            description.contains(&friction_tag_aliases_literal()),
+            "{description}"
+        );
+    }
+}
+
+#[test]
+fn every_friction_tag_alias_normalizes_to_its_canonical_category() {
+    for (alias, canonical) in FRICTION_TAG_ALIASES {
+        let (tags, substitutions) = normalize_friction_tag_aliases(vec![(*alias).to_string()]);
+        assert_eq!(tags, vec![*canonical], "alias {alias}");
+        assert_eq!(
+            substitutions,
+            vec![(alias.to_string(), canonical.to_string())],
+            "alias {alias} must be reported to the caller"
+        );
     }
 }
 

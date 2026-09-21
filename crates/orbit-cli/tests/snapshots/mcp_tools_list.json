@@ -232,6 +232,18 @@
           "anyOf": [
             {
               "items": {
+                "enum": [
+                  "automation",
+                  "build",
+                  "docs",
+                  "history-diverged",
+                  "lifecycle",
+                  "naming",
+                  "other",
+                  "policy",
+                  "skill-guidance",
+                  "tooling"
+                ],
                 "type": "string"
               },
               "type": "array"
@@ -240,10 +252,11 @@
               "type": "string"
             }
           ],
-          "description": "Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other"
+          "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` — Scheduler, auto-task, or delivery-automation friction; `build` — make/fmt/lint friction; `docs` — Stale or missing CLAUDE.md or design docs; `history-diverged` — A rewritten branch history orphaned recorded automation state; `lifecycle` — Task lifecycle confusion or transition issues; `naming` — Naming drift or duplicated sources of truth; `other` — Fallback; `policy` — fsProfile or sandboxing surprises; `skill-guidance` — Misleading or incorrect skill instructions; `tooling` — Tool, CLI, or MCP failures. Accepted aliases: ci → build, test → build, tests → build, testing → build, cli → tooling, mcp → tooling, tool → tooling, auto-task → automation, auto-tasks → automation, scheduler → automation, routine → automation, skill → skill-guidance, prompt → skill-guidance."
         },
         "title": {
           "description": "One-line handle identifying the problem, at most 120 characters. This is what lists and searches show, so name the surface and the failure. Derived from the body's opening line when omitted",
+          "maxLength": 120,
           "type": "string"
         },
         "workspace": {
@@ -340,6 +353,18 @@
           "anyOf": [
             {
               "items": {
+                "enum": [
+                  "automation",
+                  "build",
+                  "docs",
+                  "history-diverged",
+                  "lifecycle",
+                  "naming",
+                  "other",
+                  "policy",
+                  "skill-guidance",
+                  "tooling"
+                ],
                 "type": "string"
               },
               "type": "array"
@@ -348,10 +373,11 @@
               "type": "string"
             }
           ],
-          "description": "Optional replacement taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling"
+          "description": "Friction taxonomy tags as a string or array. Vocabulary: `automation` — Scheduler, auto-task, or delivery-automation friction; `build` — make/fmt/lint friction; `docs` — Stale or missing CLAUDE.md or design docs; `history-diverged` — A rewritten branch history orphaned recorded automation state; `lifecycle` — Task lifecycle confusion or transition issues; `naming` — Naming drift or duplicated sources of truth; `other` — Fallback; `policy` — fsProfile or sandboxing surprises; `skill-guidance` — Misleading or incorrect skill instructions; `tooling` — Tool, CLI, or MCP failures. Accepted aliases: ci → build, test → build, tests → build, testing → build, cli → tooling, mcp → tooling, tool → tooling, auto-task → automation, auto-tasks → automation, scheduler → automation, routine → automation, skill → skill-guidance, prompt → skill-guidance."
         },
         "title": {
           "description": "Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body",
+          "maxLength": 120,
           "type": "string"
         },
         "workspace": {
@@ -488,7 +514,7 @@
           "type": "boolean"
         },
         "complexity": {
-          "description": "Task complexity level (low, medium, hard, or xhard)",
+          "description": "Task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
           "enum": [
             "low",
             "medium",
@@ -864,7 +890,13 @@
           "type": "string"
         },
         "complexity": {
-          "description": "Optional task complexity level (low, medium, hard, or xhard)",
+          "description": "Optional task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard",
+          "enum": [
+            "low",
+            "medium",
+            "hard",
+            "xhard"
+          ],
           "type": "string"
         },
         "context": {
@@ -952,7 +984,7 @@
           "type": "string"
         },
         "note": {
-          "description": "Optional lifecycle note for the guarded approval (proposed → backlog) or start (pickup → in-progress) transition; rejected on any other update",
+          "description": "Annotation stored on this status transition's history entry; use `comment` for free-form discussion",
           "type": "string"
         },
         "orchestrator": {

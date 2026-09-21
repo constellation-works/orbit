@@ -71,6 +71,8 @@ OrbitToolServer holds one context for its stdio session. Initialize may replace 
 
 tools/list is derived from the authoritative host and its validated result is cached per session/selector. Each definition carries a ToolSchema and one McpToolScope: Global or WorkspaceRequired. Scope controls only workspace-selector injection and server dispatch; it is not authorization metadata.
 
+Workspace-bound schema decoration follows the same session selector. In particular, the `orbit.friction.add` and `orbit.friction.update` tag schemas enumerate the bound workspace's operator-owned taxonomy with descriptions. Before a workspace is bound, the schema falls back to the shipped taxonomy and explicitly notes that `.orbit/frictions/tags.yaml` may extend it. The tools-list cache key includes the normalized session selector so re-initializing a connection for another workspace cannot retain the previous workspace's vocabulary.
+
 Because tools/list is answered per session, the injected selector documents the session the caller is actually in: optional in a bound session, required in an unbound one. Both spellings describe the same server rule; only the obligation on the caller differs.
 
 ## 5. Core dispatch and audit

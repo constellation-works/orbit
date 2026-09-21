@@ -12,7 +12,8 @@ use std::str::FromStr;
 use chrono::{DateTime, TimeZone, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::friction::{
-    FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb, effective_title, normalize_title,
+    FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb, effective_title,
+    normalize_friction_tag_aliases, normalize_title,
 };
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_raw_string, optional_string, required_string,
@@ -55,19 +56,21 @@ pub(super) fn dispatch(
 }
 
 fn add(runtime: &OrbitRuntime, input: Value, model: Option<String>) -> Result<Value, OrbitError> {
-    let stored = crate::runtime::friction::store_for(runtime)?.add(add_params(&input, model)?)?;
-    record_to_json(stored)
+    let (params, substitutions) = add_params(&input, model)?;
+    let stored = crate::runtime::friction::store_for(runtime)?.add(params)?;
+    record_to_json_with_tag_normalizations(stored, substitutions)
 }
 
 pub(super) fn add_params(
     input: &Value,
     model: Option<String>,
-) -> Result<FrictionAddParams, OrbitError> {
+) -> Result<(FrictionAddParams, Vec<(String, String)>), OrbitError> {
     let body = required_string(input, &["body", "description"], "body")?;
     let title = optional_raw_string(input, "title")?
         .map(|raw| normalize_title(&raw))
         .transpose()?;
     let tags = optional_csv_or_string_list_alias(input, &["tags", "tag"])?.unwrap_or_default();
+    let (tags, substitutions) = normalize_friction_tag_aliases(tags);
     let during_task = optional_string(input, "during_task")?.or(optional_string(input, "task_id")?);
     let model = model
         .map(|value| value.trim().to_string())
@@ -75,14 +78,17 @@ pub(super) fn add_params(
         .ok_or_else(|| {
             OrbitError::InvalidInput("orbit.friction.add requires `model`".to_string())
         })?;
-    Ok(FrictionAddParams {
-        model,
-        title,
-        body,
-        tags,
-        during_task,
-        created_at: Utc::now(),
-    })
+    Ok((
+        FrictionAddParams {
+            model,
+            title,
+            body,
+            tags,
+            during_task,
+            created_at: Utc::now(),
+        },
+        substitutions,
+    ))
 }
 
 fn list(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
@@ -185,7 +191,13 @@ fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
     let status = optional_string(&input, "status")?
         .map(|status| parse_status(&status))
         .transpose()?;
-    let tags = optional_csv_or_string_list_alias(&input, &["tags", "tag"])?;
+    let (tags, substitutions) = match optional_csv_or_string_list_alias(&input, &["tags", "tag"])? {
+        Some(tags) => {
+            let (tags, substitutions) = normalize_friction_tag_aliases(tags);
+            (Some(tags), substitutions)
+        }
+        None => (None, Vec::new()),
+    };
     let body = optional_string(&input, "body")?;
     // An explicit empty `title` clears the stored one, which restores
     // derivation from the body — distinct from omitting the field entirely.
@@ -210,7 +222,7 @@ fn update(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
             updated_at: Utc::now(),
         },
     )?;
-    record_to_json(stored)
+    record_to_json_with_tag_normalizations(stored, substitutions)
 }
 
 fn resolve(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
@@ -301,6 +313,27 @@ pub(super) fn record_to_json(stored: StoredFrictionRecord) -> Result<Value, Orbi
         // `title` is always present on the wire: a record written before the
         // field existed derives one here rather than reaching consumers blank.
         object.insert("title".to_string(), json!(record_title(&stored.record)));
+    }
+    Ok(value)
+}
+
+pub(super) fn record_to_json_with_tag_normalizations(
+    stored: StoredFrictionRecord,
+    substitutions: Vec<(String, String)>,
+) -> Result<Value, OrbitError> {
+    let mut value = record_to_json(stored)?;
+    if !substitutions.is_empty()
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert(
+            "tag_normalizations".to_string(),
+            json!(
+                substitutions
+                    .into_iter()
+                    .map(|(input, stored)| json!({ "input": input, "stored": stored }))
+                    .collect::<Vec<_>>()
+            ),
+        );
     }
     Ok(value)
 }

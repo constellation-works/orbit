@@ -64,7 +64,7 @@ impl Tool for OrbitTaskUpdateTool {
             },
             ToolParam {
                 name: "note".to_string(),
-                description: "Optional lifecycle note for the guarded approval (proposed → backlog) or start (pickup → in-progress) transition; rejected on any other update"
+                description: "Annotation stored on this status transition's history entry; use `comment` for free-form discussion"
                     .to_string(),
                 param_type: "string".to_string(),
                 required: false,
@@ -77,7 +77,8 @@ impl Tool for OrbitTaskUpdateTool {
             },
             ToolParam {
                 name: "complexity".to_string(),
-                description: "Optional task complexity level (low, medium, hard, or xhard)".to_string(),
+                description: "Optional task complexity level (low, medium, hard, or xhard). Accepted aliases: easy, small, or trivial → low; large or big → hard"
+                    .to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },

@@ -135,7 +135,7 @@ pub fn tool_parameter_enum_values(
     match (tool_name, param_name) {
         ("orbit.task.add" | "orbit.task.update", "type") => Some(TASK_TYPE_ENUM),
         ("orbit.task.add" | "orbit.task.update", "status") => Some(TASK_STATUS_ENUM),
-        ("orbit.task.add", "complexity") => Some(TASK_COMPLEXITY_ENUM),
+        ("orbit.task.add" | "orbit.task.update", "complexity") => Some(TASK_COMPLEXITY_ENUM),
         (_, "model") => Some(AGENT_FAMILY_ENUM),
         _ => None,
     }

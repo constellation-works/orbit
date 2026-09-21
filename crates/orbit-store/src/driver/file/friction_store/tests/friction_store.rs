@@ -219,6 +219,32 @@ fn existing_taxonomy_gains_missing_defaults_and_keeps_operator_tags() {
 }
 
 #[test]
+fn taxonomy_loader_preserves_operator_descriptions_for_schema_advertisement() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path();
+    fs::write(
+        root.join(TAGS_FILENAME),
+        "build: \"Workspace build description\"\ncustom-ops: \"Operator-owned category\"\n",
+    )
+    .expect("taxonomy");
+
+    let taxonomy = load_tag_taxonomy_with_descriptions(root).expect("described taxonomy");
+    assert_eq!(
+        taxonomy.get("build").map(String::as_str),
+        Some("Workspace build description")
+    );
+    assert_eq!(
+        taxonomy.get("custom-ops").map(String::as_str),
+        Some("Operator-owned category")
+    );
+    assert_eq!(
+        taxonomy.get("tooling").map(String::as_str),
+        Some("Tool, CLI, or MCP failures"),
+        "missing shipped defaults are merged with their descriptions"
+    );
+}
+
+#[test]
 fn a_tags_list_taxonomy_gains_missing_defaults_and_keeps_operator_tags() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path();

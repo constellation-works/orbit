@@ -141,6 +141,26 @@ fn schema_exposes_complexity() {
     assert_eq!(param.param_type, "string");
     assert!(!param.required);
     assert!(param.description.contains("low, medium, hard, or xhard"));
+    for alias in ["easy", "small", "trivial", "large", "big"] {
+        assert!(
+            param.description.contains(alias),
+            "alias {alias}: {param:?}"
+        );
+    }
+}
+
+#[test]
+fn schema_describes_note_as_a_status_transition_annotation() {
+    let schema = OrbitTaskUpdateTool.schema();
+    let note = schema
+        .parameters
+        .iter()
+        .find(|param| param.name == "note")
+        .expect("note param");
+
+    assert!(note.description.contains("status transition"));
+    assert!(note.description.contains("`comment`"));
+    assert!(note.description.contains("free-form discussion"));
 }
 
 #[test]

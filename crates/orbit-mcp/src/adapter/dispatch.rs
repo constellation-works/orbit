@@ -101,9 +101,17 @@ impl OrbitToolServer {
         &self,
         definition: &McpToolDefinition,
     ) -> Result<Map<String, Value>, OrbitError> {
-        let mut schema = super::schema::build_input_schema(
+        let taxonomy = matches!(
+            definition.schema.name.as_str(),
+            "orbit.friction.add" | "orbit.friction.update"
+        )
+        .then(|| self.host.friction_tag_taxonomy(&self.session_context()))
+        .transpose()?
+        .flatten();
+        let mut schema = super::schema::build_input_schema_with_friction_taxonomy(
             &definition.schema.name,
             &definition.schema.parameters,
+            taxonomy.as_deref(),
         );
         ensure_workspace_selector(&mut schema, definition, self.selector_advertisement());
         Ok(schema)
@@ -297,8 +305,9 @@ impl ServerHandler for OrbitToolServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         let advertisement = self.selector_advertisement();
+        let cache_key = (advertisement, self.session_context().workspace);
         if let Ok(cache) = self.list_tools_cache.lock()
-            && let Some(cached) = cache.get(&advertisement)
+            && let Some(cached) = cache.get(&cache_key)
         {
             return Ok((**cached).clone());
         }
@@ -322,7 +331,7 @@ impl ServerHandler for OrbitToolServer {
             .collect::<Result<Vec<_>, McpError>>()?;
         let result = ListToolsResult::with_all_items(tools);
         if let Ok(mut cache) = self.list_tools_cache.lock() {
-            cache.insert(advertisement, Arc::new(result.clone()));
+            cache.insert(cache_key, Arc::new(result.clone()));
         }
         Ok(result)
     }
