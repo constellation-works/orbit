@@ -13,6 +13,7 @@ use orbit_types::plugin::{InstalledPlugin, PluginStatus};
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
+use crate::runtime::plugin_grants::record_authorized_grants;
 use crate::runtime::plugin_host::{plugin_current_link, plugin_install_path, unmet_requirement};
 
 use super::inspect::{PluginSummary, summary_for_installed};
@@ -97,6 +98,14 @@ pub fn install_plugin(
             },
         ))
     })?;
+    // `--enable` is the operator authorizing this grant set, so it records the
+    // integrity value the loader checks the row back against. A plain `add`
+    // deliberately does not: the grants it carries forward came from the
+    // existing row, and writing a witness over them would authorize a set an
+    // `orbit.db` writer could have put there [ORB-12778].
+    if options.enable {
+        record_authorized_grants(&global_root, &name, enabled, &record.grants)?;
+    }
 
     // `--enable` is an enable: the plugin's schedules are seeded and its
     // skills linked here too, so a one-step install leaves the same state as

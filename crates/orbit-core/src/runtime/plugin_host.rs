@@ -13,7 +13,9 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use orbit_common::OrbitError;
+use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_store::Store;
+use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_tools::ToolRegistry;
 use orbit_tools::plugin::{
     LoadedPlugin, McpBackend, McpExpectedTool, PluginBackend, PluginBackendSpec, PluginTool,
@@ -23,7 +25,10 @@ use orbit_types::plugin::{
     InstalledPlugin, PLUGIN_HOST_API, PluginBackendType, PluginGrant, PluginMcpScope,
     PluginPinFile, PluginProvenance, PluginStatus, SemverRange, Version, plugin_tool_name,
 };
+use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpToolDefinition, McpToolScope};
+
+use super::plugin_grants::verify_recorded_grants;
 
 /// Why a plugin is not on the active tool surface, and what would fix it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +47,11 @@ pub struct RegisteredPlugin {
     /// Canonical tool names, active or inactive.
     pub tools: Vec<String>,
     pub diagnostic: Option<String>,
+    /// Whether the loader could verify this row's grants against the set
+    /// `orbit plugin enable` authorized [ORB-12778]. `false` means the row
+    /// granted nothing, whatever it claims, so no surface may present its
+    /// grants as effective.
+    pub grants_authorized: bool,
     /// The manifest this pass loaded, when it loaded at all. Retained so the
     /// catalog layer, the seeded definitions and the config contract all read
     /// the same document the tool surface was built from.
@@ -183,6 +193,33 @@ pub fn load_host_plugins(
     let mut load = PluginHostLoad::default();
     let policy = PluginValidationPolicy::host_default();
     for plugin in &installed {
+        // The grant set a row records is only authority when `orbit plugin
+        // enable` wrote it. A backend that can write `orbit.db` can write its
+        // own row, so an enabled row is checked against the authorization
+        // witness before anything it claims is honoured [ORB-12778].
+        if plugin.enabled
+            && let Err(message) = verify_recorded_grants(global_root, plugin)
+        {
+            audit_unauthorized_grants(store, plugin, &message);
+            load.diagnostics.push(PluginDiagnostic {
+                plugin: plugin.name.clone(),
+                status: PluginStatus::Inactive,
+                message: message.clone(),
+            });
+            // No tools at all, not even inactive ones: an inactive entry is
+            // how the host explains a plugin it trusts but cannot serve, and
+            // this row is one it does not trust.
+            load.registered.push(RegisteredPlugin {
+                name: plugin.name.clone(),
+                version: plugin.version.clone(),
+                status: PluginStatus::Inactive,
+                tools: Vec::new(),
+                diagnostic: Some(message),
+                grants_authorized: false,
+                loaded: None,
+            });
+            continue;
+        }
         let registered =
             register_installed_plugin(global_root, plugin, &policy, registry, plugin_config);
         if let Some(message) = &registered.diagnostic {
@@ -230,6 +267,89 @@ pub fn load_host_plugins(
     load
 }
 
+/// Write the refusal of an unauthorized grant set to the audit trail
+/// [ORB-12778].
+///
+/// The load pass is the only place this is visible, and a refusal that left no
+/// durable record would be indistinguishable from a plugin the operator had
+/// disabled. One row per load pass: the trail then says how often the
+/// tampered row was presented, not just that it exists once.
+///
+/// A failed write is logged and swallowed, like every other audit write on a
+/// path that is already refusing (`record_authorization_event`): the plugin is
+/// not registered either way, and `host_plugin_registry` deliberately opens the
+/// store read-only, so an insert failure here is an expected outcome rather
+/// than a new one to propagate.
+fn audit_unauthorized_grants(store: &Store, installed: &InstalledPlugin, message: &str) {
+    let params = AuditEventInsertParams {
+        execution_id: audit_execution_id("plugin-grants"),
+        command: "plugin.load".to_string(),
+        subcommand: Some("verify_grants".to_string()),
+        tool_name: None,
+        target_type: Some("plugin".to_string()),
+        target_id: Some(installed.name.clone()),
+        role: "admin".to_string(),
+        status: AuditEventStatus::Denied,
+        exit_code: 1,
+        duration_ms: 0,
+        working_directory: std::env::current_dir()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| ".".to_string()),
+        // The claimed set, not the authorized one: what the row asked this
+        // host to honour is the fact an operator investigating needs.
+        arguments_json: Some(
+            serde_json::json!({
+                "plugin": installed.name,
+                "version": installed.version,
+                "claimed_grants": installed.grants,
+                "install_path": installed.install_path,
+            })
+            .to_string(),
+        ),
+        stdout_truncated: None,
+        stderr_truncated: None,
+        error_message: Some(message.to_string()),
+        host: std::env::var("HOSTNAME").ok(),
+        pid: std::process::id(),
+        session_id: None,
+        workspace_id: None,
+        caller_machine_id: None,
+        caller_machine_name: None,
+        process_machine_id: None,
+        process_machine_name: None,
+        transport: None,
+        effective_capabilities: Default::default(),
+        origin_session_id: None,
+        mcp_call_id: None,
+        lease_id: None,
+        task_id: None,
+        job_run_id: None,
+        activity_id: None,
+        step_index: None,
+    };
+    // The dedicated plugin columns carry the identity, so `orbit audit` reads
+    // this row beside the plugin's tool calls. Its grant set is empty on
+    // purpose: those columns record what a plugin *ran under*, and this one
+    // ran nothing — the set it claimed is in `arguments_json` above.
+    let provenance = PluginProvenance {
+        name: installed.name.clone(),
+        version: installed.version.clone(),
+        manifest_digest: installed.manifest_digest.clone(),
+        grants: Vec::new(),
+    };
+    let invocation = AuditInvocationFields {
+        plugin: Some(&provenance),
+        ..Default::default()
+    };
+    if let Err(error) = store.insert_audit_event_record_with_invocation(&params, invocation) {
+        tracing::error!(
+            target: "orbit.core.plugin",
+            plugin = %installed.name,
+            "could not audit the refused plugin grant set: {error}",
+        );
+    }
+}
+
 fn register_installed_plugin(
     global_root: &Path,
     installed: &InstalledPlugin,
@@ -243,6 +363,7 @@ fn register_installed_plugin(
         status,
         tools: Vec::new(),
         diagnostic: Some(message),
+        grants_authorized: true,
         loaded: None,
     };
 
@@ -253,6 +374,7 @@ fn register_installed_plugin(
             status: PluginStatus::Disabled,
             tools: Vec::new(),
             diagnostic: None,
+            grants_authorized: true,
             loaded: None,
         };
     }
@@ -324,6 +446,7 @@ fn register_installed_plugin(
         status: PluginStatus::Active,
         tools,
         diagnostic: None,
+        grants_authorized: true,
         loaded: Some(Arc::new(plugin)),
     }
 }
@@ -360,6 +483,7 @@ fn register_inactive_tools(
         status: PluginStatus::Inactive,
         tools,
         diagnostic: Some(message),
+        grants_authorized: true,
         loaded: None,
     }
 }

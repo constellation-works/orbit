@@ -300,6 +300,17 @@ fn summary_from_runtime(runtime: &OrbitRuntime, installed: &InstalledPlugin) -> 
     );
     let loaded = load_plugin_dir(Path::new(&installed.install_path)).ok();
     let mut summary = summary_for_installed(installed, loaded.as_ref(), status);
+    // A row whose grants this host could not verify granted nothing, so the
+    // report says so rather than repeating the row's claim back as authority —
+    // otherwise `orbit plugin show` would print `unsandboxed` for a plugin the
+    // loader refused to run at all [ORB-12778].
+    if registered.is_some_and(|entry| !entry.grants_authorized) {
+        summary.granted.clear();
+        summary.unsandboxed = false;
+        for permission in &mut summary.permissions {
+            permission.granted = false;
+        }
+    }
     summary.diagnostic = registered.and_then(|entry| entry.diagnostic.clone());
     if summary.diagnostic.is_none() && status == PluginStatus::Inactive && loaded.is_none() {
         summary.diagnostic = Some(format!(

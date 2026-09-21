@@ -201,6 +201,20 @@ installed, or has installed without the requested grants, gets the plugin's tool
 via `register_inactive` and one deduped diagnostic naming the missing step. Nothing else
 degrades.
 
+**The recorded grant set is tamper-evident.** `orbit plugin enable` also writes an integrity
+value over the set it authorized to `~/.orbit/plugins/.grants/<ns>.json`, and the loader
+refuses a `plugins` row whose grants do not match it — no tools, a `doctor` finding, and a
+`denied` audit row per load pass. The two halves sit on opposite sides of a boundary the
+sandbox already enforces: a backend holding `orbit_tools` can write `orbit.db`, because
+`orbit tool run` cannot start without it, but `plugins/` is read-only to it (§4.3). The value
+is `sha256("orbit.plugin.grants.v1\n<ns>\n<enabled|disabled>\n<sorted grants>")` — a plain
+digest, not a MAC: a keyed value would need a secret the child cannot read, and that child
+reads the whole global root. What bounds an attacker is the write boundary, not a secret
+[ORB-12778]. A row whose grants are non-empty with no such record is refused, so a host
+upgrading past this change re-runs `orbit plugin enable <ns> --grant …` once per granted
+plugin; the records are deliberately not back-filled from existing rows, which would
+authorize a row that may already have been written by a plugin.
+
 **Seeding follows the managed-asset rule.** Routines, auto-tasks and skills are written once
 with `provenance: plugin:<ns>@<version>` and a digest in `.orbit-managed-assets.json`. A
 plugin upgrade re-seeds only files whose digest still matches the previously shipped
@@ -218,7 +232,9 @@ generic row per execution kind: `read_only` plugin tools are callable by `Agent 
 Runner`; `mutating` plugin tools by `Operator | Runner` and by `Agent` only when the task's
 `required_tools` or the activity's allowlist names them. The `permissions:` block is a
 *request*; the `--grant` flags at enable time are the only source of authority, and
-`orbit plugin show` prints requested vs granted side by side.
+`orbit plugin show` prints requested vs granted side by side. A stored grant set the host cannot
+verify against its authorization record is not authority either: the plugin is refused and
+every surface reports it as granting nothing (§3).
 
 ### 4.2 Execution protocol
 
@@ -295,10 +311,14 @@ inventory the agent sandbox grants a nested Orbit process (`append_linux_runtime
 in `orbit-core`). Widening it is a security decision, because a plugin that can write
 Orbit's global root can replace the binary the scheduler runs unconfined. Note that this
 confines *filesystem* writes only — a plugin able to write `orbit.db` at all can still reach
-its own `plugins` store row, which is ORB-12778's boundary, not this one.
+its own `plugins` store row. What stops that row from becoming authority is the grant
+authorization record under `plugins/`, which this boundary keeps read-only to the child
+(§3) [ORB-12778].
 
 ### 4.4 Audit and provenance
 
+A plugin refused because its stored grants do not match the set this host authorized is
+audited at load as `plugin.load` / `denied`, with the claimed grant set on the row (§3).
 Every call passes through the existing audited dispatch with `ToolEntryPoint` plus
 `plugin: {name, version, manifest_digest}`. Tasks minted by a plugin auto-task carry
 `plugin:<ns>` alongside the existing `auto-task:<name>` tag. Definitions seeded by a plugin
