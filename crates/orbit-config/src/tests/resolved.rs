@@ -1081,41 +1081,41 @@ fn complexity_crew_pools_layer_by_replacement_and_empty_disables() {
     assert_eq!(defaults.complexity_crews.xhard, Some(vec![]));
 }
 
-/// [ORB-12605] The pilot writes `complexity`, so the reserved top tier is only
-/// reachable by an operator until this key says otherwise.
+/// [ORB-12723] `workflow.pilot_max_complexity` is removed with the pilot
+/// ceiling it drove. An existing config that still sets it keeps loading
+/// (the loader warns), the key is no registry setting, and `orbit config
+/// get`/`set` name the removal rather than offering a did-you-mean.
 #[test]
-fn pilot_max_complexity_defaults_to_hard_and_admits_only_assessed_tiers() {
-    use orbit_types::task::TaskComplexity;
+fn removed_pilot_max_complexity_loads_and_is_refused_by_config_get_and_set() {
+    let config = load_config(
+        r#"
+[workflow]
+base_branch = "agent-main"
+pilot_max_complexity = "xhard"
+"#,
+    )
+    .expect("a config carrying the removed key must load");
 
-    let defaults = load_config("").expect("defaults");
-    assert_eq!(defaults.pilot_max_complexity, TaskComplexity::Hard);
-    assert_eq!(
-        defaults.snapshot.value_for("workflow.pilot_max_complexity"),
-        Some(serde_json::json!("hard"))
+    assert_eq!(config.workflow_base_branch, "agent-main");
+    assert!(
+        config
+            .snapshot
+            .value_for("workflow.pilot_max_complexity")
+            .is_none()
     );
+    assert!(crate::describe_config_key("workflow.pilot_max_complexity").is_none());
 
-    let raised = load_config("[workflow]\npilot_max_complexity = \"xhard\"\n")
-        .expect("xhard is a valid ceiling");
-    assert_eq!(raised.pilot_max_complexity, TaskComplexity::XHard);
-    assert_eq!(
-        raised.snapshot.value_for("workflow.pilot_max_complexity"),
-        Some(serde_json::json!("xhard"))
+    let error = crate::admit_config_key("workflow.pilot_max_complexity")
+        .expect_err("a removed key is not addressable");
+    let message = error.to_string();
+    assert!(
+        message.contains("workflow.pilot_max_complexity") && message.contains("removed"),
+        "{message}"
     );
-    assert_eq!(
-        load_config("[workflow]\npilot_max_complexity = \"low\"\n")
-            .expect("low is a valid ceiling")
-            .pilot_max_complexity,
-        TaskComplexity::Low
+    assert!(
+        !message.contains("unknown config key"),
+        "a removed key is reported as removed, not unknown: {message}"
     );
-
-    for invalid in ["\"unassessed\"", "\"x-hard\"", "\"extreme\"", "\"\"", "3"] {
-        let error = load_config(&format!("[workflow]\npilot_max_complexity = {invalid}\n"))
-            .expect_err("only assessed tiers cap the pilot");
-        assert!(
-            error.to_string().contains("pilot_max_complexity"),
-            "{error}"
-        );
-    }
 }
 
 /// [ORB-12619] `workflow.*_complexity_crews` reads `:` as the weight

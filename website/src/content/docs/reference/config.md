@@ -142,7 +142,6 @@ These are the keys `orbit config set` accepts, as printed by `orbit config keys`
 | `workflow.medium_complexity_crews` | array&lt;string&gt; | Weighted crew pool for unassigned medium-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool. |
 | `workflow.hard_complexity_crews` | array&lt;string&gt; | Weighted crew pool for unassigned hard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool. |
 | `workflow.xhard_complexity_crews` | array&lt;string&gt; | Weighted crew pool for unassigned xhard-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool. |
-| `workflow.pilot_max_complexity` | string | Highest complexity the task pilot may assign: `low`, `medium`, `hard` (default), or `xhard`. A higher recommendation is refused as a `complexity_escalation_blocked` finding instead of being applied. |
 | `workflow.required_validation_commands` | array&lt;string&gt; | Commands a distributed execution claim must pass on its exact candidate before this owner accepts its delivery handoff; empty means no claimed handoff can be accepted. |
 | `tasks.id_start` | integer | Floor for this machine's task-id allocator. Forward-only; lets machines hold disjoint ID ranges. |
 | `automation.stall_window_minutes` | integer | Minutes a deferred delivery-automation reason may persist before the evaluator logs a warning and files one friction (1–1440). |
