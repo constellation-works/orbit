@@ -1,6 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_store::Store;
 use orbit_tools::ToolExecutionKind;
+use orbit_types::plugin::InstalledPlugin;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use std::collections::BTreeSet;
@@ -10,12 +11,14 @@ use std::thread;
 use serde_json::json;
 
 use super::support::{clear_identity_env, env_guard, fresh_runtime, set_identity_env};
+use crate::OrbitRuntime;
 use crate::adapter::command::dispatch::{
-    ORBIT_MANAGED_RUN_CONTEXT_ENV, ToolEntryPoint, audit_role_label,
+    ORBIT_MANAGED_RUN_CONTEXT_ENV, ORBIT_PLUGIN_ENV, ToolEntryPoint, audit_role_label,
     audit_role_label_for_entry_point, finalize_successful_dispatch,
     override_activity_tools_for_test, reservation_owner_from_env, resolve_audit_context,
     take_tool_audit_recorded, trusted_mcp_audit_context,
 };
+use crate::runtime::plugin_host::plugin_install_path;
 
 #[test]
 fn dispatch_records_success_audit_with_mcp_subcommand_and_clamped_duration() {
@@ -788,4 +791,126 @@ fn dispatch_records_correlation_fields_from_env() {
     assert_eq!(row.job_run_id.as_deref(), Some("jrun-corr"));
     assert_eq!(row.activity_id.as_deref(), Some("agent_implement"));
     assert_eq!(row.step_index, Some(5));
+}
+
+fn record_callback_plugin(runtime: &OrbitRuntime, orbit_tools: &[&str]) {
+    let name = "callback";
+    let version = "1.0.0";
+    let root = plugin_install_path(&runtime.global_root(), name, version);
+    std::fs::create_dir_all(root.join("bin")).expect("create plugin bin");
+    let backend = root.join("bin/backend.sh");
+    std::fs::write(
+        &backend,
+        "#!/bin/sh\ncat >/dev/null\necho '{\"ok\":true,\"output\":{}}'\n",
+    )
+    .expect("write backend");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod backend");
+    }
+    let requested = orbit_tools.join(", ");
+    std::fs::write(
+        root.join("plugin.yaml"),
+        format!(
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {name}\n  version: {version}\nspec:\n  permissions:\n    orbit_tools: [{requested}]\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: hello\n      execution_kind: read_only\n      mcp_scope: workspace\n"
+        ),
+    )
+    .expect("write manifest");
+    runtime
+        .stores()
+        .plugins()
+        .upsert_plugin(&InstalledPlugin {
+            name: name.to_string(),
+            version: version.to_string(),
+            source: "fixture".to_string(),
+            install_path: root.to_string_lossy().into_owned(),
+            manifest_digest: "0".repeat(64),
+            enabled: true,
+            grants: vec!["orbit_tools".to_string()],
+            first_party: false,
+            installed_at: String::new(),
+            updated_at: String::new(),
+        })
+        .expect("record the install");
+}
+
+fn set_plugin_callback_env(plugin: &str, allowed_tools: Option<&str>) {
+    // SAFETY: callers hold `env_guard()` while changing process environment.
+    unsafe {
+        std::env::set_var(ORBIT_PLUGIN_ENV, plugin);
+        match allowed_tools {
+            Some(value) => std::env::set_var("ORBIT_ALLOWED_TOOLS", value),
+            None => std::env::remove_var("ORBIT_ALLOWED_TOOLS"),
+        }
+    }
+}
+
+fn dispatch_cli(runtime: &OrbitRuntime, tool: &str) -> Result<serde_json::Value, OrbitError> {
+    let input = match tool {
+        "orbit.search" => json!({
+            "query": "callback",
+            "model": orbit_common::test_fixtures::TEST_CODEX_MODEL
+        }),
+        "orbit.task.list" => json!({ "limit": 10 }),
+        other => panic!("dispatch_cli fixture does not cover {other}"),
+    };
+    runtime
+        .execute_tool_command_dispatch(tool, input, None, None, ToolEntryPoint::Cli)
+        .map(|outcome| outcome.value)
+}
+
+fn assert_plugin_allowlist_denied(error: &OrbitError, tool: &str) {
+    let message = error.to_string();
+    assert!(
+        matches!(error, OrbitError::PolicyDenied(_)),
+        "expected PolicyDenied, got {error}"
+    );
+    assert!(
+        message.contains(tool) && message.contains("granted orbit_tools allowlist"),
+        "{message}"
+    );
+}
+
+/// A plugin callback that unsets or rewrites `ORBIT_ALLOWED_TOOLS` is still
+/// bounded by the recorded install, not by the inherited variable.
+#[test]
+fn plugin_callback_allowlist_ignores_forged_or_unset_env() {
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    record_callback_plugin(&runtime, &["orbit.task.list"]);
+
+    let run = |allowed_tools: Option<&str>, tool: &str| {
+        set_plugin_callback_env("callback", allowed_tools);
+        dispatch_cli(&runtime, tool)
+    };
+
+    run(None, "orbit.task.list").expect("unset env still admits a recorded tool");
+    run(Some("orbit.search,orbit.task.add"), "orbit.task.list")
+        .expect("rewritten env still admits a recorded tool");
+
+    assert_plugin_allowlist_denied(
+        &run(None, "orbit.search").expect_err("unset env must not admit an unrecorded tool"),
+        "orbit.search",
+    );
+    assert_plugin_allowlist_denied(
+        &run(Some("orbit.search"), "orbit.search")
+            .expect_err("rewritten env must not admit an unrecorded tool"),
+        "orbit.search",
+    );
+}
+
+#[test]
+fn plugin_callback_allowlist_is_idle_without_orbit_plugin() {
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    record_callback_plugin(&runtime, &["orbit.task.list"]);
+    // SAFETY: callers hold `env_guard()` while changing process environment.
+    unsafe {
+        std::env::remove_var(ORBIT_PLUGIN_ENV);
+        std::env::set_var("ORBIT_ALLOWED_TOOLS", "orbit.task.list");
+    }
+    dispatch_cli(&runtime, "orbit.search")
+        .expect("ordinary CLI callers are not gated by a plugin allowlist");
 }

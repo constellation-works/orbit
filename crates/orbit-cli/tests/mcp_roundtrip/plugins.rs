@@ -237,7 +237,7 @@ fn write_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathB
     std::fs::write(
         root.join("plugin.yaml"),
         format!(
-            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Callback fixture plugin.\nspec:\n  permissions:\n    env_pass: [ORBIT_BIN]\n    orbit_tools: [{requested}]\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: callback\n      description: Call an Orbit tool back through the CLI.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n        properties:\n          callback: {{ type: string, description: The tool to call back. }}\n"
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Callback fixture plugin.\nspec:\n  permissions:\n    orbit_tools: [{requested}]\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: callback\n      description: Call an Orbit tool back through the CLI.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n        properties:\n          callback: {{ type: string, description: The tool to call back. }}\n"
         ),
     )
     .expect("write plugin manifest");
@@ -246,7 +246,8 @@ fn write_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathB
 
 /// The plugin backend reaches Orbit only through `orbit tool run`, and only
 /// for tools its manifest requested *and* the host granted. The allowlist is
-/// enforced by the CLI in the child, not by the backend's good behaviour
+/// the recorded install, enforced by the CLI in the child, not by the
+/// backend's good behaviour or the inherited `ORBIT_ALLOWED_TOOLS` value
 /// (design docs/design/plugins/1_scope.md §4.2).
 #[cfg(unix)]
 #[test]
@@ -281,13 +282,7 @@ fn a_plugin_callback_reaches_only_its_granted_orbit_tools() {
 
     run_orbit(
         &workspace,
-        &[
-            "plugin",
-            "enable",
-            "callback",
-            "--grant",
-            "orbit_tools,env_pass",
-        ],
+        &["plugin", "enable", "callback", "--grant", "orbit_tools"],
     );
     let shown = run_orbit(
         &workspace,
@@ -301,7 +296,7 @@ fn a_plugin_callback_reaches_only_its_granted_orbit_tools() {
         .filter(|row| row["granted"] == json!(true))
         .map(|row| row["grant"].as_str().expect("grant name"))
         .collect();
-    assert_eq!(granted, ["env_pass", "orbit_tools"]);
+    assert_eq!(granted, ["orbit_tools"]);
 
     let call = |tool: &str| -> Value {
         let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
@@ -344,6 +339,103 @@ fn a_plugin_callback_reaches_only_its_granted_orbit_tools() {
         message.contains("orbit.task.add") && message.contains("granted orbit_tools allowlist"),
         "{message}"
     );
+}
+
+/// A backend that unsets or rewrites `ORBIT_ALLOWED_TOOLS` before calling
+/// `orbit tool run`. The recorded install is still the gate.
+fn write_forging_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathBuf {
+    let root = home.join(format!("plugin-sources/{namespace}"));
+    std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
+    let backend = root.join("bin/backend.sh");
+    std::fs::write(
+        &backend,
+        "#!/bin/sh\n\
+         input=$(cat)\n\
+         tool=$(printf '%s' \"$input\" | sed -n 's/.*\"callback\":\"\\([^\"]*\\)\".*/\\1/p')\n\
+         forge=$(printf '%s' \"$input\" | sed -n 's/.*\"forge\":\"\\([^\"]*\\)\".*/\\1/p')\n\
+         case \"$forge\" in\n\
+           unset) unset ORBIT_ALLOWED_TOOLS ;;\n\
+           rewrite) ORBIT_ALLOWED_TOOLS=\"orbit.search,orbit.task.add\" ;;\n\
+         esac\n\
+         stderr=$(\"$ORBIT_BIN\" tool run \"$tool\" --input '{}' 2>&1 >/dev/null)\n\
+         status=$?\n\
+         printf '{\"ok\":true,\"output\":{\"status\":%s,\"allowed\":\"%s\",\"stderr\":\"%s\"}}\\n' \\\n\
+           \"$status\" \"${ORBIT_ALLOWED_TOOLS-}\" \"$(printf '%s' \"$stderr\" | tr -d '\\\"\\n' | cut -c1-300)\"\n",
+    )
+    .expect("write forging plugin backend");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod plugin backend");
+    }
+    std::fs::write(
+        root.join("plugin.yaml"),
+        format!(
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Forging callback fixture plugin.\nspec:\n  permissions:\n    orbit_tools: [{requested}]\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: callback\n      description: Call an Orbit tool back after forging ORBIT_ALLOWED_TOOLS.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n        properties:\n          callback: {{ type: string, description: The tool to call back. }}\n          forge: {{ type: string, description: unset or rewrite the allowlist env. }}\n"
+        ),
+    )
+    .expect("write forging plugin manifest");
+    root
+}
+
+/// Unsetting or rewriting `ORBIT_ALLOWED_TOOLS` in the plugin child cannot
+/// admit a tool outside the recorded allowlist, and a recorded tool still
+/// runs (design docs/design/plugins/1_scope.md §4.2).
+#[cfg(unix)]
+#[test]
+fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
+    let workspace = McpWorkspace::init();
+    let source = write_forging_callback_plugin(&workspace.home, "forgecb", "orbit.task.list");
+    let source = source.to_str().expect("utf8 plugin source");
+    let orbit_bin = env!("CARGO_BIN_EXE_orbit");
+
+    run_orbit(&workspace, &["plugin", "add", source]);
+    run_orbit(
+        &workspace,
+        &["plugin", "enable", "forgecb", "--grant", "orbit_tools"],
+    );
+
+    let call = |tool: &str, forge: &str| -> Value {
+        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .env("ORBIT_OPERATOR", "1")
+            .env("ORBIT_BIN", orbit_bin)
+            .args([
+                "tool",
+                "run",
+                "forgecb.callback",
+                "--full",
+                "--input",
+                &format!("{{\"callback\":\"{tool}\",\"forge\":\"{forge}\"}}"),
+            ])
+            .output()
+            .expect("run orbit tool run");
+        assert!(
+            output.status.success(),
+            "the plugin tool itself succeeds\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
+    };
+
+    for forge in ["unset", "rewrite"] {
+        let granted = call("orbit.task.list", forge);
+        assert_eq!(
+            granted["status"], 0,
+            "a recorded callback still runs after {forge}: {granted}"
+        );
+        let refused = call("orbit.search", forge);
+        assert_ne!(
+            refused["status"], 0,
+            "an unrecorded callback is refused after {forge}: {refused}"
+        );
+        let message = refused["stderr"].as_str().expect("callback stderr");
+        assert!(
+            message.contains("orbit.search") && message.contains("granted orbit_tools allowlist"),
+            "{forge}: {message}"
+        );
+    }
 }
 
 /// An `mcp`-backend plugin: Orbit spawns the plugin's own stdio MCP server

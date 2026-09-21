@@ -186,8 +186,9 @@ impl PluginBackendSpec {
                 workspace_root.to_string_lossy().into_owned(),
             );
         }
-        // Always present, even when empty: `orbit tool run` in the child reads
-        // it as "this is a plugin callback, refuse anything not listed".
+        // Always present, even when empty: information for the backend.
+        // `orbit tool run` identifies a callback from `ORBIT_PLUGIN` and
+        // enforces the recorded install, not this value.
         set("ORBIT_ALLOWED_TOOLS", self.allowed_tools(ctx).join(","));
         // `requires.programs` is what a callback through `proc.spawn` may run.
         set("ORBIT_PROC_ALLOWED_PROGRAMS", self.programs.join(","));

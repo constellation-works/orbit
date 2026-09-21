@@ -129,10 +129,11 @@ profile fails; so does a TCP connection without the `network` grant. A
 `sandbox: none` plugin needs `unsandboxed` and is reported by
 `orbit plugin doctor` for as long as it stays enabled.
 
-Callbacks are the only way back into Orbit: the child carries
-`ORBIT_ALLOWED_TOOLS` with the granted intersection, and `orbit tool run`
-refuses anything outside it — the plugin's own good behaviour is not the
-boundary.
+Callbacks are the only way back into Orbit: the child carries `ORBIT_PLUGIN`
+and an informational `ORBIT_ALLOWED_TOOLS` copy of the granted intersection.
+`orbit tool run` looks up that plugin's recorded grants and refuses anything
+outside them — unsetting or rewriting the variable cannot expand the set, and
+the plugin's own good behaviour is not the boundary.
 
 Who may *call* a plugin tool is decided by its `execution_kind`, not by the
 manifest: a `read_only` tool is callable by any caller Orbit can identify, and

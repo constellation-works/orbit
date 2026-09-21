@@ -18,6 +18,8 @@ pub(super) fn env_guard() -> ScopedEnv {
         crate::runtime::run_input::ORBIT_MANAGED_RUN_CONTEXT_ENV,
         "ORBIT_ACTIVITY_ID",
         "ORBIT_STEP_INDEX",
+        crate::adapter::command::dispatch::ORBIT_PLUGIN_ENV,
+        "ORBIT_ALLOWED_TOOLS",
     ])
 }
 

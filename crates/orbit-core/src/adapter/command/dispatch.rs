@@ -10,12 +10,13 @@ use std::time::Instant;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::Store;
-use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
+use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields, PluginStoreBackend};
+use orbit_tools::plugin::load_plugin_dir;
 use orbit_tools::{ReservationOwnerContext, ToolContext, ToolExecutionKind};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
 };
-use orbit_types::plugin::PluginProvenance;
+use orbit_types::plugin::{InstalledPlugin, PluginGrant, PluginProvenance};
 use orbit_types::policy::Role;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
@@ -331,7 +332,7 @@ impl OrbitRuntime {
             |input| {
                 self.ensure_tool_agent_facing(name)?;
                 if entry_point == ToolEntryPoint::Cli {
-                    enforce_plugin_callback_allowlist(name)?;
+                    enforce_plugin_callback_allowlist(self.stores().plugins(), name)?;
                 }
                 let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context();
                 let allowed_tools = if trusted_env {
@@ -788,31 +789,27 @@ fn resolve_agent_identity_for_entry_point(
 /// The environment variable a plugin backend's child carries: the plugin
 /// namespace, which marks the process as a plugin callback context.
 pub const ORBIT_PLUGIN_ENV: &str = "ORBIT_PLUGIN";
-/// The callbacks that plugin may make, as `permissions.orbit_tools` ∩ the
-/// `orbit_tools` grant (design `docs/design/plugins/1_scope.md` §4.2).
-pub const ORBIT_ALLOWED_TOOLS_ENV: &str = "ORBIT_ALLOWED_TOOLS";
 
 /// A process launched as a plugin backend reaches Orbit only through
-/// `orbit tool run`, and only for the tools stamped into its environment.
-/// Anything else is refused before the tool runs; an absent or empty list
-/// refuses everything.
-fn enforce_plugin_callback_allowlist(name: &str) -> Result<(), OrbitError> {
+/// `orbit tool run`, and only for tools in that plugin's recorded
+/// `permissions.orbit_tools` once the host has granted `orbit_tools`.
+/// `ORBIT_PLUGIN` identifies the caller; `ORBIT_ALLOWED_TOOLS` is not the
+/// gate. Anything else is refused before the tool runs; a missing install,
+/// missing grant, or unloadable manifest refuses everything.
+fn enforce_plugin_callback_allowlist(
+    plugins: &dyn PluginStoreBackend,
+    name: &str,
+) -> Result<(), OrbitError> {
     let Some(plugin) = std::env::var(ORBIT_PLUGIN_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
     else {
         return Ok(());
     };
-    let allowed: Vec<String> = std::env::var(ORBIT_ALLOWED_TOOLS_ENV)
-        .ok()
-        .map(|raw| {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default();
+    let allowed = match plugins.get_plugin(&plugin)? {
+        Some(installed) => recorded_orbit_tools(&installed)?,
+        None => Vec::new(),
+    };
     if allowed.iter().any(|tool| tool == name) {
         return Ok(());
     }
@@ -822,6 +819,24 @@ fn enforce_plugin_callback_allowlist(name: &str) -> Result<(), OrbitError> {
          `orbit_tools`",
         allowed.join(", ")
     )))
+}
+
+fn recorded_orbit_tools(installed: &InstalledPlugin) -> Result<Vec<String>, OrbitError> {
+    if !installed.enabled
+        || !installed
+            .grants
+            .iter()
+            .any(|grant| PluginGrant::parse(grant) == Some(PluginGrant::OrbitTools))
+    {
+        return Ok(Vec::new());
+    }
+    let loaded = load_plugin_dir(Path::new(&installed.install_path)).map_err(|error| {
+        OrbitError::PolicyDenied(format!(
+            "plugin '{}' callback allowlist cannot be read from the recorded install: {error}",
+            installed.name
+        ))
+    })?;
+    Ok(loaded.manifest.spec.permissions.orbit_tools)
 }
 
 fn read_proc_allowed_programs_from_env() -> Vec<String> {
