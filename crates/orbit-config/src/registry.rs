@@ -43,11 +43,11 @@ const PILOT_MAX_COMPLEXITY_CHOICES: &[TaskComplexity] = &[
     TaskComplexity::XHard,
 ];
 const DEFAULT_WORKFLOW_CREW: &str = "opus";
-/// Name of the crew seeded for the bounded system lane. `orbit init` writes
-/// both this crew table and the `workflow.system_crew` key that points at it,
-/// so the two must stay in step. Shipped job steps also name this crew
-/// directly, so it must resolve on hosts whose config predates it — see the
-/// alias in `resolved::crews_from_raw`.
+/// Built-in name of the bounded system lane and the default value of
+/// `workflow.system_crew`. Shipped job steps name this crew directly, and a
+/// seeded config defines no `[crews.system]` table — `orbit init` points
+/// `workflow.system_crew` at a real cheap-tier crew instead — so the name is
+/// resolved onto that crew at load; see `resolved::alias_system_crew`.
 pub(crate) const DEFAULT_WORKFLOW_SYSTEM_CREW: &str = "system";
 /// The crew that carried the system lane before `system` existed. Still seeded
 /// in its own right; named here because a config written before ORB-10877

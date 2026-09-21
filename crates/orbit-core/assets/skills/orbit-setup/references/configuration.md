@@ -48,7 +48,8 @@ assuming a value.
 |---|---|
 | `workflow.base_branch` | Config fallback for ship/auto/pilot base branch. A registered workspace `base_branch` takes precedence. |
 | `workflow.default_crew` | Crew for any task that doesn't declare one. |
-| `workflow.system_crew` | Crew for Orbit's own bounded activities (failure recovery, task pilot). |
+| `workflow.system_crew` | Crew for Orbit's own bounded activities (failure recovery, task pilot). Shipped `crew: system` steps resolve onto it. |
+| `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `name` or `name:weight`. Empty (`[]`) routes that tier to `default_crew`. |
 | `workflow.auto_ship` | Opt-in for unattended ship dispatch via the scheduler. |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
 | `execution.env.pass` | Environment variable names allow-listed into agent subprocesses. |
@@ -88,9 +89,20 @@ globally defined crew. A `default_crew` or `system_crew` naming an undefined cre
 fails config load — deliberately, since the alternative is silently dispatching
 to the wrong model.
 
-`orbit init` seeds crews for the agent CLIs it detects and uses `system` for
-newly initialized system work. A user-authored legacy `qa` crew remains
-loadable, but init never creates it. Available providers:
+`orbit init` seeds only the built-in crews for the agent CLIs it detects
+(Claude: `opus`, `sonnet`, `fable`; Codex: `astra`, `sol`, `terra`, `luna`;
+one crew each for Antigravity, Gemini, Grok, Copilot, Cursor, Pi, OpenCode)
+and points the two lane keys at real crews from that set:
+`workflow.default_crew` is the preferred family's default (`opus` on a Claude
+host) and `workflow.system_crew` is the cheapest tier of the preferred family
+(`luna` when Codex is present, else `sonnet`, `grok`, …). Interactive init
+offers those seeded crews by name; `--non-interactive` writes the
+recommendations. Init does not write a `custom` or `system` crew table: the
+`system` name shipped job steps use resolves onto `system_crew` at load, and an
+explicit user-authored `[crews.system]` table wins if one exists. The four
+`workflow.*_complexity_crews` pools are scaffolded as `[]`. A user-authored
+legacy `qa` crew remains loadable, but init never creates it. To move system
+work, run `orbit config set workflow.system_crew <crew>`. Available providers:
 
 ```bash
 orbit executor list

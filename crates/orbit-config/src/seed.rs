@@ -5,14 +5,19 @@
 //! is not done here: the CLI init adapter detects installed provider CLIs,
 //! runs any interactive prompts, and hands the answers over as a
 //! [`ConfigSeed`].
+//!
+//! A seeded file names real crews. `workflow.default_crew` and
+//! `workflow.system_crew` each point at one of the built-in crews the seed
+//! writes for the detected families; init never invents a `custom` or
+//! `system` crew table whose only purpose is to be pointed at.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::write_text_with_parent;
+use orbit_types::identity::Crew;
 
-use crate::raw::{CrewSeed, RawCrewEntry};
 use crate::registry::DEFAULT_WORKFLOW_SYSTEM_CREW;
 use crate::resolved::default_crews;
 
@@ -38,22 +43,65 @@ const CREW_FAMILY_PREFERENCE: &[&str] = &[
     "opencode",
 ];
 
+/// The crew each family's default lane runs on, in [`CREW_FAMILY_PREFERENCE`]
+/// order. The first available family's entry is the seeded
+/// `workflow.default_crew`.
+const DEFAULT_CREW_BY_FAMILY: &[(&str, &str)] = &[
+    ("claude", "opus"),
+    ("codex", "astra"),
+    ("antigravity", "antigravity"),
+    ("gemini", "gemini"),
+    ("grok", "grok"),
+    ("copilot", "copilot"),
+    ("cursor", "cursor"),
+    ("pi", "pi"),
+    ("opencode", "opencode"),
+];
+
+/// The cheapest built-in crew each family offers, in the order a seeded
+/// config prefers them for the bounded system lane: step-failure recovery,
+/// PR conflict recovery, and the read-only task pilot. That work is
+/// high-volume and low-judgment, so the first available entry becomes
+/// `workflow.system_crew` rather than the family's default crew — seeding a
+/// mid-tier crew there multiplies the cost of every unattended sweep for no
+/// gain.
+///
+/// The order is a preference list, not a strict price sort. Gemini Flash
+/// undercuts both Sonnet and Grok per token but sits later because observed
+/// runs have failed outright on quota; a crew that does not finish costs more
+/// than a pricier one that does. Adjust the order here rather than teaching
+/// callers to special-case a family.
+const SYSTEM_CREW_BY_FAMILY: &[(&str, &str)] = &[
+    ("codex", "luna"),
+    ("claude", "sonnet"),
+    ("grok", "grok"),
+    ("antigravity", "antigravity"),
+    ("gemini", "gemini"),
+    ("copilot", "copilot"),
+    ("cursor", "cursor"),
+    ("pi", "pi"),
+    ("opencode", "opencode"),
+];
+
 /// Explicit, host-independent inputs for rendering a fresh `config.toml`.
 ///
 /// A seed says which provider families this machine can actually dispatch to
-/// and, optionally, which crew assignments an operator chose. Everything else
-/// — the model tier per lane, the crew table layout, the default-crew key —
-/// is config policy and stays in this crate.
+/// and, optionally, which of the resulting crews an operator chose for the
+/// two workflow lanes. Everything else — the model tier per lane, the crew
+/// table layout, the recommended crew per lane — is config policy and stays
+/// in this crate.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConfigSeed {
     /// Provider families available on this host. An empty set seeds an
     /// explicitly empty `[crews]` registry, which is how a host that can
     /// dispatch nothing avoids inheriting the built-in crews at load time.
     pub families: BTreeSet<String>,
-    /// Crew assignments chosen by the caller, keyed by crew name. A `custom`
-    /// entry becomes `workflow.default_crew`; `system` overrides the
-    /// family-derived default for that lane.
-    pub crews: BTreeMap<String, CrewSeed>,
+    /// Operator-chosen `workflow.default_crew`, by seeded crew name. `None`
+    /// takes [`Self::recommended_default_crew`].
+    pub default_crew: Option<String>,
+    /// Operator-chosen `workflow.system_crew`, by seeded crew name. `None`
+    /// takes [`Self::recommended_system_crew`].
+    pub system_crew: Option<String>,
 }
 
 impl ConfigSeed {
@@ -70,14 +118,63 @@ impl ConfigSeed {
                 .map(|family| family.as_ref().to_string())
                 .filter(|family| CREW_FAMILY_PREFERENCE.contains(&family.as_str()))
                 .collect(),
-            crews: BTreeMap::new(),
+            default_crew: None,
+            system_crew: None,
         }
     }
 
-    /// Attach the crew assignments an operator chose interactively.
-    pub fn with_crews(mut self, crews: BTreeMap<String, CrewSeed>) -> Self {
-        self.crews = crews;
+    /// Record the crew an operator chose as `workflow.default_crew`.
+    pub fn with_default_crew(mut self, name: impl Into<String>) -> Self {
+        self.default_crew = Some(name.into());
         self
+    }
+
+    /// Record the crew an operator chose as `workflow.system_crew`.
+    pub fn with_system_crew(mut self, name: impl Into<String>) -> Self {
+        self.system_crew = Some(name.into());
+        self
+    }
+
+    /// The built-in crews this seed writes: the registry filtered to the
+    /// available families, keyed by crew name. The built-in `system` alias is
+    /// excluded because a seeded file names its system crew through
+    /// `workflow.system_crew` instead.
+    pub fn seeded_crews(&self) -> BTreeMap<String, Crew> {
+        let available_families = self.available_families();
+        default_crews()
+            .into_iter()
+            .filter(|(name, crew)| {
+                name != DEFAULT_WORKFLOW_SYSTEM_CREW
+                    && available_families.contains(&crew.assignment.provider.as_str())
+            })
+            .collect()
+    }
+
+    /// Default crew name frozen into a newly seeded config when the operator
+    /// chose none: the default crew of the preferred available family.
+    pub fn recommended_default_crew(&self) -> Option<&'static str> {
+        self.available_families().first().and_then(|family| {
+            DEFAULT_CREW_BY_FAMILY
+                .iter()
+                .find(|(candidate, _)| candidate == family)
+                .map(|(_, crew)| *crew)
+        })
+    }
+
+    /// Cheap-tier crews an operator may pick as `workflow.system_crew`, in
+    /// preference order; the first entry is the non-interactive choice.
+    pub fn system_crew_options(&self) -> Vec<&'static str> {
+        SYSTEM_CREW_BY_FAMILY
+            .iter()
+            .filter(|(family, _)| self.has_family(family))
+            .map(|(_, crew)| *crew)
+            .collect()
+    }
+
+    /// System crew name frozen into a newly seeded config when the operator
+    /// chose none.
+    pub fn recommended_system_crew(&self) -> Option<&'static str> {
+        self.system_crew_options().first().copied()
     }
 
     /// Available families in Orbit's fixed preference order.
@@ -93,12 +190,16 @@ impl ConfigSeed {
         self.families.contains(family)
     }
 
-    fn chosen_crew(&self, name: &str) -> Option<CrewSeed> {
-        self.crews.get(name).cloned()
+    fn effective_default_crew(&self) -> Option<String> {
+        self.default_crew
+            .clone()
+            .or_else(|| self.recommended_default_crew().map(str::to_string))
     }
 
-    fn has_custom_crew(&self) -> bool {
-        self.crews.contains_key("custom")
+    fn effective_system_crew(&self) -> Option<String> {
+        self.system_crew
+            .clone()
+            .or_else(|| self.recommended_system_crew().map(str::to_string))
     }
 }
 
@@ -107,7 +208,7 @@ impl ConfigSeed {
 /// idempotent.
 ///
 /// `seed` of `None` renders the static template alone: no `[crews]` table and
-/// no `workflow.default_crew`, so config loading falls back to the built-in
+/// no `[workflow]` crew keys, so config loading falls back to the built-in
 /// crew registry. That is the shape used by implicit bootstrap, which has no
 /// operator present to detect a host for.
 pub fn seed_default_config(
@@ -123,10 +224,6 @@ pub fn seed_default_config(
 }
 
 fn render_seeded_config(template: &str, seed: Option<&ConfigSeed>) -> Result<String, OrbitError> {
-    if let Some(custom) = seed.and_then(|seed| seed.crews.get("custom")) {
-        validate_complete_crew_setting(custom)?;
-    }
-
     let mut body = template.to_string();
     if !body.ends_with('\n') {
         body.push('\n');
@@ -137,177 +234,89 @@ fn render_seeded_config(template: &str, seed: Option<&ConfigSeed>) -> Result<Str
 
     // Agent detection is frozen at init; runtime config loading never probes
     // PATH or the environment.
-    let workflow_default = render_workflow_default_crew(seed);
-    if !workflow_default.is_empty() {
-        // L-0100: generated TOML keys must be inserted inside their intended table.
-        let marker = "[workflow]\n";
-        let insertion = body.find(marker).ok_or_else(|| {
-            OrbitError::InvalidInput("default config template is missing [workflow]".to_string())
-        })? + marker.len();
-        body.insert_str(insertion, &workflow_default);
-    }
+    let crews = seed.seeded_crews();
+    let workflow = render_workflow_crew_keys(seed, &crews)?;
+    // L-0100: generated TOML keys must be inserted inside their intended table.
+    let marker = "[workflow]\n";
+    let insertion = body.find(marker).ok_or_else(|| {
+        OrbitError::InvalidInput("default config template is missing [workflow]".to_string())
+    })? + marker.len();
+    body.insert_str(insertion, &workflow);
     body.push('\n');
-    body.push_str(&render_crews(seed)?);
+    body.push_str(&render_crews(&crews));
     Ok(body)
 }
 
-fn render_workflow_default_crew(seed: &ConfigSeed) -> String {
-    let default_crew = if seed.has_custom_crew() {
-        Some("custom")
-    } else {
-        default_crew_name(seed)
-    };
-    default_crew.map_or_else(String::new, |name| format!("default_crew = \"{name}\"\n"))
-}
-
-/// Default crew name frozen into newly seeded config. The result always names
-/// the first emitted crew for the preferred available family.
-fn default_crew_name(seed: &ConfigSeed) -> Option<&'static str> {
-    seed.available_families()
-        .first()
-        .map(|family| match *family {
-            "claude" => "opus",
-            "codex" => "astra",
-            "antigravity" => "antigravity",
-            "gemini" => "gemini",
-            "grok" => "grok",
-            "copilot" => "copilot",
-            "cursor" => "cursor",
-            "pi" => "pi",
-            "opencode" => "opencode",
-            _ => unreachable!("available crew families are fixed"),
-        })
-}
-
-fn render_crews(seed: &ConfigSeed) -> Result<String, OrbitError> {
-    let available_families = seed.available_families();
-    let mut crews: BTreeMap<String, RawCrewEntry> = default_crews()
-        .into_iter()
-        .filter(|(_, crew)| available_families.contains(&crew.assignment.provider.as_str()))
-        .map(|(name, crew)| {
-            (
-                name,
-                RawCrewEntry {
-                    provider: Some(crew.assignment.provider),
-                    model: Some(crew.assignment.model),
-                    effort: crew.assignment.effort.map(|value| value.to_string()),
-                    backend: None,
-                    description: crew.description,
-                    tags: crew.tags,
-                    planner: None,
-                    implementer: None,
-                    reviewer: None,
-                },
-            )
-        })
-        .collect();
-
-    if let Some(assignment) = seed.chosen_crew("custom") {
-        crews.insert(
-            "custom".to_string(),
-            RawCrewEntry {
-                provider: assignment.provider,
-                model: assignment.model,
-                effort: None,
-                backend: None,
-                description: None,
-                tags: Vec::new(),
-                planner: None,
-                implementer: None,
-                reviewer: None,
-            },
-        );
-    }
-
-    let name = DEFAULT_WORKFLOW_SYSTEM_CREW;
-    if let Some(assignment) = seed.chosen_crew(name).or_else(|| default_system_crew(seed)) {
-        crews.insert(
-            name.to_string(),
-            RawCrewEntry {
-                provider: assignment.provider,
-                model: assignment.model,
-                effort: None,
-                backend: None,
-                description: None,
-                tags: Vec::new(),
-                planner: None,
-                implementer: None,
-                reviewer: None,
-            },
-        );
-    }
-
+/// The `[workflow]` keys a seed owns: the two lane crews, each naming a crew
+/// the same file defines, and the four complexity pools scaffolded empty so an
+/// operator finds them without reading the docs.
+fn render_workflow_crew_keys(
+    seed: &ConfigSeed,
+    crews: &BTreeMap<String, Crew>,
+) -> Result<String, OrbitError> {
     let mut rendered = String::new();
-    for (name, entry) in crews {
-        rendered.push_str(&render_crew_table(&name, &entry)?);
+    let lanes = [
+        ("default_crew", seed.effective_default_crew()),
+        ("system_crew", seed.effective_system_crew()),
+    ];
+    if lanes.iter().any(|(_, crew)| crew.is_some()) {
+        rendered.push_str(
+            "# `default_crew` runs every task that declares no crew of its own.\n\
+             # `system_crew` runs bounded system work (step-failure recovery, the task\n\
+             # pilot); shipped job steps that name `crew: system` resolve onto it unless\n\
+             # this file defines a crew table literally named `system`. Both name a\n\
+             # crew from the `[crews.<name>]` tables below.\n",
+        );
+    }
+    for (key, crew) in lanes {
+        let Some(name) = crew else {
+            continue;
+        };
+        if !crews.contains_key(&name) {
+            return Err(OrbitError::InvalidInput(format!(
+                "workflow.{key} names crew `{name}`, which this host does not seed"
+            )));
+        }
+        rendered.push_str(&format!("{key} = {}\n", toml::Value::String(name)));
+    }
+    rendered.push_str(
+        "# Automatic crew pools by task complexity. Entries are crew names, written\n\
+         # `name` or `name:weight` (all bare or all weighted). A task created without\n\
+         # a crew draws from the pool for its complexity; an empty pool routes that\n\
+         # complexity to `default_crew`.\n\
+         low_complexity_crews = []\n\
+         medium_complexity_crews = []\n\
+         hard_complexity_crews = []\n\
+         xhard_complexity_crews = []\n",
+    );
+    Ok(rendered)
+}
+
+fn render_crews(crews: &BTreeMap<String, Crew>) -> String {
+    let mut rendered = String::new();
+    for (name, crew) in crews {
+        rendered.push_str(&render_crew_table(name, crew));
     }
     if rendered.is_empty() {
         // Preserve an explicitly empty registry so runtime loading does not
         // substitute built-in crews for a host where init detected none.
         rendered.push_str("[crews]\n");
     }
-    Ok(rendered)
+    rendered
 }
 
-/// Seed the bounded system lane: step-failure recovery, PR conflict recovery,
-/// and the read-only task pilot. That work is high-volume and low-judgment, so this
-/// picks the cheapest tier each family offers rather than the family's default
-/// model — seeding a mid-tier crew here multiplies the cost of every unattended
-/// sweep for no gain.
-///
-/// The order below is a preference list, not a strict price sort. Gemini Flash
-/// undercuts both Sonnet and Grok per token but sits last because observed runs
-/// have failed outright on quota; a crew that does not finish costs more than a
-/// pricier one that does. Adjust the order here rather than teaching callers to
-/// special-case a family.
-fn default_system_crew(seed: &ConfigSeed) -> Option<CrewSeed> {
-    use orbit_common::model_defaults::{
-        ANTIGRAVITY_CREW_MODEL, CLAUDE_DEFAULT_WEAK, CODEX_LUNA_MODEL, COPILOT_CREW_MODEL,
-        CURSOR_CREW_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL, OPENCODE_CREW_MODEL,
-        PI_CREW_MODEL,
-    };
-    let (provider, model) = if seed.has_family("codex") {
-        ("codex", CODEX_LUNA_MODEL)
-    } else if seed.has_family("claude") {
-        ("claude", CLAUDE_DEFAULT_WEAK)
-    } else if seed.has_family("grok") {
-        ("grok", GROK_DEFAULT_MODEL)
-    } else if seed.has_family("antigravity") {
-        ("antigravity", ANTIGRAVITY_CREW_MODEL)
-    } else if seed.has_family("gemini") {
-        ("gemini", GEMINI_CREW_MODEL)
-    } else if seed.has_family("copilot") {
-        ("copilot", COPILOT_CREW_MODEL)
-    } else if seed.has_family("cursor") {
-        ("cursor", CURSOR_CREW_MODEL)
-    } else if seed.has_family("pi") {
-        ("pi", PI_CREW_MODEL)
-    } else if seed.has_family("opencode") {
-        ("opencode", OPENCODE_CREW_MODEL)
-    } else {
-        return None;
-    };
-    Some(CrewSeed {
-        provider: Some(provider.to_string()),
-        model: Some(model.to_string()),
-    })
-}
-
-fn render_crew_table(name: &str, entry: &RawCrewEntry) -> Result<String, OrbitError> {
+fn render_crew_table(name: &str, crew: &Crew) -> String {
     let mut rendered = format!("[crews.{name}]\n");
     for (field, value) in [
-        ("model", entry.model.as_deref()),
-        ("provider", entry.provider.as_deref()),
+        ("model", &crew.assignment.model),
+        ("provider", &crew.assignment.provider),
     ] {
-        let value = value.ok_or_else(|| {
-            OrbitError::InvalidInput(format!("crew `{name}` is missing `{field}`"))
-        })?;
         rendered.push_str(&format!(
             "{field} = {}\n",
-            toml::Value::String(value.to_string())
+            toml::Value::String(value.clone())
         ));
     }
-    if let Some(description) = entry
+    if let Some(description) = crew
         .description
         .as_deref()
         .map(str::trim)
@@ -318,8 +327,8 @@ fn render_crew_table(name: &str, entry: &RawCrewEntry) -> Result<String, OrbitEr
             toml::Value::String(description.to_string())
         ));
     }
-    if !entry.tags.is_empty() {
-        let tags = entry
+    if !crew.tags.is_empty() {
+        let tags = crew
             .tags
             .iter()
             .map(|tag| toml::Value::String(tag.clone()))
@@ -327,19 +336,5 @@ fn render_crew_table(name: &str, entry: &RawCrewEntry) -> Result<String, OrbitEr
         rendered.push_str(&format!("tags = {}\n", toml::Value::Array(tags)));
     }
     rendered.push('\n');
-    Ok(rendered)
-}
-
-fn validate_complete_crew_setting(config: &CrewSeed) -> Result<(), OrbitError> {
-    for (field, value) in [
-        ("provider", config.provider.as_deref()),
-        ("model", config.model.as_deref()),
-    ] {
-        if value.map(str::trim).is_none_or(str::is_empty) {
-            return Err(OrbitError::InvalidInput(format!(
-                "custom crew is missing required `{field}`"
-            )));
-        }
-    }
-    Ok(())
+    rendered
 }

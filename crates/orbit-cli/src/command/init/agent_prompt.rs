@@ -1,11 +1,18 @@
-//! Interactive prompts that collect the default crew and, when more than one
-//! cheap-tier family is detected, the system crew during `orbit init`.
+//! Interactive prompts that choose, by name, which seeded crew is the default
+//! crew and which is the system crew during `orbit init`.
+//!
+//! Every option comes from the [`ConfigSeed`] the detection step built, so a
+//! prompt can only name a crew the seeded file defines. Recommendations are
+//! the seed's own — the same ones `--non-interactive` writes — so answering
+//! every prompt with Enter produces exactly the non-interactive file.
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 
-use orbit_config::CrewSeed;
+use orbit_config::ConfigSeed;
+use orbit_types::identity::Crew;
 
-use super::agent_detect::{DetectedAgents, default_model_for, default_provider};
+use super::agent_detect::DetectedAgents;
 use super::prompt_stdin;
 
 pub trait Prompter {
@@ -30,71 +37,79 @@ impl Prompter for StdinPrompter {
     }
 }
 
-/// Choose the single assignment written as `[crews.custom]` and selected by
-/// `workflow.default_crew` for a fresh interactive installation.
-pub fn collect_crew_setting(
+/// Choose the seeded crew written as `workflow.default_crew`. Returns `None`
+/// when the seed writes no crews, in which case there is nothing to choose
+/// and no prompt runs.
+pub fn collect_default_crew(
     detected: &DetectedAgents,
+    seed: &ConfigSeed,
     prompter: &mut dyn Prompter,
-) -> io::Result<CrewSeed> {
-    let recommended = recommended_crew_setting(detected);
-    prompter.message(&intro_text(detected, &recommended))?;
+) -> io::Result<Option<String>> {
+    let crews = seed.seeded_crews();
+    let Some(recommended) = seed.recommended_default_crew() else {
+        prompter.message(&no_crew_text(detected))?;
+        return Ok(None);
+    };
+    let recommended_crew = crews.get(recommended).ok_or_else(|| {
+        io::Error::other(format!("recommended crew `{recommended}` is not seeded"))
+    })?;
+    prompter.message(&intro_text(detected, recommended_crew))?;
     if yes_by_default(&prompter.prompt("Use this default crew? [Y/n]: ")?) {
-        return Ok(recommended);
+        return Ok(Some(recommended.to_string()));
     }
 
-    let options = agent_options(detected);
-    prompter.message(&format_agent_options(&options))?;
-    loop {
-        let choice = prompter.prompt("Choice [1]: ")?;
-        let choice = choice.trim();
-        if choice.eq_ignore_ascii_case("custom") || choice.eq_ignore_ascii_case("c") {
-            return collect_custom_crew(detected, prompter);
-        }
-        if choice
-            .parse::<usize>()
-            .is_ok_and(|number| number == options.len() + 1)
-        {
-            return collect_custom_crew(detected, prompter);
-        }
-
-        let selected = if choice.is_empty() {
-            Some(0)
-        } else {
-            choice.parse::<usize>().ok().and_then(|n| n.checked_sub(1))
-        };
-        if let Some(option) = selected.and_then(|index| options.get(index)) {
-            return Ok(CrewSeed {
-                provider: Some(option.provider.to_string()),
-                model: collect_model_override(option.model, prompter)?,
-            });
-        }
-
-        let custom_index = options.len() + 1;
-        prompter.message(&format!(
-            "Please enter 1-{custom_index}, or `custom` for a manual provider."
-        ))?;
-    }
+    // The recommendation leads the list so an empty answer keeps it.
+    let options = std::iter::once(recommended)
+        .chain(
+            crews
+                .keys()
+                .map(String::as_str)
+                .filter(|name| *name != recommended),
+        )
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+    prompter.message(&format_crew_options(
+        "Choose the default crew:",
+        &options,
+        &crews,
+    ))?;
+    choose_crew(options, "Choice [1]: ", prompter).map(Some)
 }
 
-/// Choose the assignment written as `[crews.system]`. Only cheap-tier options
-/// are offered: Codex Luna, Claude Sonnet, Grok, Gemini Flash. No Sol, Opus,
-/// Terra, or free-form custom provider.
-pub(crate) fn collect_system_crew_setting(
-    detected: &DetectedAgents,
+/// Choose the seeded crew written as `workflow.system_crew`. Only the cheap
+/// tier of each detected family is offered, in the seed's preference order;
+/// a host with exactly one candidate takes it without a prompt.
+pub(crate) fn collect_system_crew(
+    seed: &ConfigSeed,
     prompter: &mut dyn Prompter,
-) -> io::Result<Option<CrewSeed>> {
-    let mut options = system_crew_options(detected);
-    if options.is_empty() {
-        return Ok(None);
-    }
-    if options.len() == 1 {
-        return Ok(Some(options.remove(0)));
+) -> io::Result<Option<String>> {
+    let options = seed
+        .system_crew_options()
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if options.len() <= 1 {
+        return Ok(options.into_iter().next());
     }
 
-    prompter.message(&format_system_crew_options(&options))?;
+    prompter.message(&format_crew_options(
+        "Choose the crew for bounded system work (recovery, task pilot, qa-sweep):",
+        &options,
+        &seed.seeded_crews(),
+    ))?;
+    choose_crew(options, "System crew [1]: ", prompter).map(Some)
+}
+
+/// Read a 1-based choice from `options` until one is valid; an empty answer
+/// takes the first entry.
+fn choose_crew(
+    mut options: Vec<String>,
+    prompt: &str,
+    prompter: &mut dyn Prompter,
+) -> io::Result<String> {
     let last = options.len();
     loop {
-        let choice = prompter.prompt("System crew [1]: ")?;
+        let choice = prompter.prompt(prompt)?;
         let choice = choice.trim();
         let selected = if choice.is_empty() {
             Some(0)
@@ -102,129 +117,34 @@ pub(crate) fn collect_system_crew_setting(
             choice.parse::<usize>().ok().and_then(|n| n.checked_sub(1))
         };
         if let Some(index) = selected.filter(|index| *index < options.len()) {
-            return Ok(Some(options.remove(index)));
+            return Ok(options.swap_remove(index));
         }
         prompter.message(&format!("Please enter 1-{last}."))?;
     }
 }
 
-/// Cheap-tier system options in the same preference order as
-/// `orbit-config::default_system_crew`: Codex Luna, Claude Sonnet, Grok,
-/// Antigravity Flash, Gemini Flash, Copilot Haiku, Cursor, Pi, OpenCode.
-fn system_crew_options(detected: &DetectedAgents) -> Vec<CrewSeed> {
-    use orbit_common::model_defaults::{
-        ANTIGRAVITY_CREW_MODEL, CLAUDE_DEFAULT_WEAK, CODEX_LUNA_MODEL, COPILOT_CREW_MODEL,
-        CURSOR_CREW_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL, OPENCODE_CREW_MODEL,
-        PI_CREW_MODEL,
-    };
-    let mut options = Vec::new();
-    for (enabled, provider, model) in [
-        (detected.codex_cli, "codex", CODEX_LUNA_MODEL),
-        (detected.claude_cli, "claude", CLAUDE_DEFAULT_WEAK),
-        (detected.grok_cli, "grok", GROK_DEFAULT_MODEL),
-        (
-            detected.antigravity_cli,
-            "antigravity",
-            ANTIGRAVITY_CREW_MODEL,
-        ),
-        (detected.gemini_cli, "gemini", GEMINI_CREW_MODEL),
-        (detected.copilot_cli, "copilot", COPILOT_CREW_MODEL),
-        (detected.cursor_cli, "cursor", CURSOR_CREW_MODEL),
-        (detected.pi_cli, "pi", PI_CREW_MODEL),
-        (detected.opencode_cli, "opencode", OPENCODE_CREW_MODEL),
-    ] {
-        if enabled {
-            options.push(CrewSeed {
-                provider: Some(provider.to_string()),
-                model: Some(model.to_string()),
-            });
-        }
-    }
-    options
-}
-
-fn format_system_crew_options(options: &[CrewSeed]) -> String {
-    let mut lines = vec![
-        "Choose the cheap-tier agent for the system crew (recovery, task pilot, qa-sweep):"
-            .to_string(),
-        String::new(),
-    ];
-    for (index, option) in options.iter().enumerate() {
-        lines.push(format!(
-            "  {}. {:<8} {}",
-            index + 1,
-            system_crew_label(option),
-            option.model.as_deref().unwrap_or("(not set)")
-        ));
+fn format_crew_options(
+    heading: &str,
+    options: &[String],
+    crews: &BTreeMap<String, Crew>,
+) -> String {
+    let mut lines = vec![heading.to_string(), String::new()];
+    for (index, name) in options.iter().enumerate() {
+        let line = crews
+            .get(name)
+            .map(crew_line)
+            .unwrap_or_else(|| name.to_string());
+        lines.push(format!("  {:>2}. {line}", index + 1));
     }
     lines.join("\n")
 }
 
-fn system_crew_label(option: &CrewSeed) -> &'static str {
-    match option.provider.as_deref() {
-        Some("codex") => "Codex",
-        Some("claude") => "Claude",
-        Some("grok") => "Grok",
-        Some("antigravity") => "Antigravity",
-        Some("gemini") => "Gemini",
-        Some("copilot") => "Copilot",
-        Some("cursor") => "Cursor",
-        Some("pi") => "Pi",
-        Some("opencode") => "OpenCode",
-        _ => "Agent",
-    }
-}
-
-fn recommended_crew_setting(detected: &DetectedAgents) -> CrewSeed {
-    let provider = default_provider(detected);
-    CrewSeed {
-        provider: Some(provider.to_string()),
-        model: default_model_for(provider).map(str::to_string),
-    }
-}
-
-fn collect_custom_crew(
-    detected: &DetectedAgents,
-    prompter: &mut dyn Prompter,
-) -> io::Result<CrewSeed> {
-    let provider_default = default_provider(detected);
-    let provider = take_or_default(
-        prompter.prompt(&format!("Provider [{provider_default}]: "))?,
-        provider_default,
-    );
-    let model_default = default_model_for(&provider).unwrap_or("");
-    let model = collect_model_override(model_default, prompter)?;
-    Ok(CrewSeed {
-        provider: Some(provider),
-        model,
-    })
-}
-
-fn collect_model_override(
-    model_default: &str,
-    prompter: &mut dyn Prompter,
-) -> io::Result<Option<String>> {
-    let prompt = if model_default.is_empty() {
-        "Model: ".to_string()
-    } else {
-        format!("Model [{model_default}]: ")
-    };
-    loop {
-        let model = take_or_default(prompter.prompt(&prompt)?, model_default);
-        if !model.is_empty() {
-            return Ok(Some(model));
-        }
-        prompter.message("Model is required for a crew assignment.")?;
-    }
-}
-
-fn take_or_default(input: String, default: &str) -> String {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        default.to_string()
-    } else {
-        trimmed.to_string()
-    }
+/// `name  provider  model`, padded so the columns line up in a list.
+fn crew_line(crew: &Crew) -> String {
+    format!(
+        "{:<12} {:<12} {}",
+        crew.name, crew.assignment.provider, crew.assignment.model
+    )
 }
 
 fn yes_by_default(input: &str) -> bool {
@@ -232,64 +152,21 @@ fn yes_by_default(input: &str) -> bool {
     trimmed.is_empty() || trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes")
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AgentOption {
-    label: &'static str,
-    provider: &'static str,
-    model: &'static str,
-}
-
-#[derive(Clone, Copy)]
-struct AgentFamily {
-    label: &'static str,
-    provider: &'static str,
-}
-
-const AGENT_FAMILIES: [AgentFamily; 10] = [
-    AgentFamily {
-        label: "Claude CLI",
-        provider: "claude",
-    },
-    AgentFamily {
-        label: "Codex CLI",
-        provider: "codex",
-    },
-    AgentFamily {
-        label: "Antigravity CLI",
-        provider: "antigravity",
-    },
-    AgentFamily {
-        label: "Gemini CLI",
-        provider: "gemini",
-    },
-    AgentFamily {
-        label: "Grok CLI",
-        provider: "grok",
-    },
-    AgentFamily {
-        label: "Copilot CLI",
-        provider: "copilot",
-    },
-    AgentFamily {
-        label: "Cursor Agent CLI",
-        provider: "cursor",
-    },
-    AgentFamily {
-        label: "Pi CLI",
-        provider: "pi",
-    },
-    AgentFamily {
-        label: "OpenCode CLI",
-        provider: "opencode",
-    },
-    AgentFamily {
-        label: "Ollama CLI",
-        provider: "ollama",
-    },
+const AGENT_FAMILY_LABELS: [&str; 10] = [
+    "Claude CLI",
+    "Codex CLI",
+    "Antigravity CLI",
+    "Gemini CLI",
+    "Grok CLI",
+    "Copilot CLI",
+    "Cursor Agent CLI",
+    "Pi CLI",
+    "OpenCode CLI",
+    "Ollama CLI",
 ];
 
-fn agent_families(detected: &DetectedAgents) -> impl Iterator<Item = (AgentFamily, bool)> {
-    AGENT_FAMILIES.into_iter().zip([
+fn agent_families(detected: &DetectedAgents) -> impl Iterator<Item = (&'static str, bool)> {
+    AGENT_FAMILY_LABELS.into_iter().zip([
         detected.claude_cli,
         detected.codex_cli,
         detected.antigravity_cli,
@@ -303,80 +180,29 @@ fn agent_families(detected: &DetectedAgents) -> impl Iterator<Item = (AgentFamil
     ])
 }
 
-fn agent_options(detected: &DetectedAgents) -> Vec<AgentOption> {
-    let mut options = Vec::new();
-    for (family, enabled) in agent_families(detected) {
-        if enabled {
-            options.push(agent_option(family.label, family.provider));
-        }
-    }
-
-    let provider = default_provider(detected);
-    if let Some(index) = options
-        .iter()
-        .position(|option| option.provider == provider)
-    {
-        let option = options.remove(index);
-        options.insert(0, option);
-    } else {
-        options.insert(0, agent_option("Recommended agent", provider));
-    }
-    options
-}
-
-fn agent_option(label: &'static str, provider: &'static str) -> AgentOption {
-    AgentOption {
-        label,
-        provider,
-        model: default_model_for(provider).unwrap_or(""),
-    }
-}
-
-fn intro_text(detected: &DetectedAgents, recommended: &CrewSeed) -> String {
+fn intro_text(detected: &DetectedAgents, recommended: &Crew) -> String {
     format!(
-        "Orbit routes every activity through one crew assignment. An activity input may select a different named crew; otherwise it uses the run's resolved crew.\n\nDetected agents:\n{}\n\nRecommended default crew:\n  {:<18} {}",
+        "Orbit routes every activity through one crew assignment. An activity input may select a different named crew; otherwise it uses the run's resolved crew.\n\nDetected agents:\n{}\n\nRecommended default crew:\n  {}",
         detection_lines(detected),
-        agent_display_name(recommended),
-        recommended.model.as_deref().unwrap_or("(not set)")
+        crew_line(recommended)
+    )
+}
+
+fn no_crew_text(detected: &DetectedAgents) -> String {
+    format!(
+        "Detected agents:\n{}\n\nNo agent CLI Orbit ships a crew for was found, so config.toml is written with an empty [crews] registry and no default crew. Define crews under [crews.<name>] and set workflow.default_crew once an agent CLI is installed.",
+        detection_lines(detected)
     )
 }
 
 fn detection_lines(detected: &DetectedAgents) -> String {
     agent_families(detected)
-        .map(|(family, found)| {
+        .map(|(label, found)| {
             let status = if found { "found" } else { "not found" };
-            format!("  {:<18} {status}", family.label)
+            format!("  {label:<18} {status}")
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn format_agent_options(options: &[AgentOption]) -> String {
-    let mut lines = vec![
-        "Choose an agent for the default crew:".to_string(),
-        String::new(),
-    ];
-    for (index, option) in options.iter().enumerate() {
-        let model = if option.model.is_empty() {
-            "(model not set)"
-        } else {
-            option.model
-        };
-        lines.push(format!("  {}. {:<16} {model}", index + 1, option.label));
-    }
-    lines.push(format!("  {}. Custom", options.len() + 1));
-    lines.join("\n")
-}
-
-fn agent_display_name(config: &CrewSeed) -> String {
-    let provider = config.provider.as_deref().unwrap_or("custom");
-    match AGENT_FAMILIES
-        .iter()
-        .find(|family| family.provider == provider)
-    {
-        Some(family) => family.label.to_string(),
-        None => format!("{provider} (CLI)"),
-    }
 }
 
 #[cfg(test)]

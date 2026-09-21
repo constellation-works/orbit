@@ -33,14 +33,11 @@ enabled = true
 # Config fallback for ship/auto/pilot when no registered workspace
 # base_branch is bound. Override per-invocation with `--base <branch>`.
 base_branch = "main"
-# Crew used by bounded system activities, such as step-failure recovery.
-# `orbit init` seeds a `system` crew whenever it detects a supported CLI,
-# choosing the cheapest tier that family offers. Shipped job steps name that
-# crew directly, so edit the seeded `system` crew below to change what runs
-# them. This key covers recovery paths that have no job step to name a crew on,
-# and re-points the `system` name itself on a config that never seeded it. Old
-# single-family configs without `system` or `qa` reuse their validated default.
-system_crew = "system"
+# `orbit init` writes `default_crew`, `system_crew`, and the four
+# `*_complexity_crews` pools at the top of this table when it detects a
+# supported agent CLI, each naming a real crew from the crew tables it seeds.
+# Without those keys Orbit uses the built-in crew registry: `opus` for tasks
+# and its built-in `system` crew for system work.
 
 [runtime]
 # Rotation + retention for the global JSONL log (~/.orbit/state/logs/orbit.jsonl).

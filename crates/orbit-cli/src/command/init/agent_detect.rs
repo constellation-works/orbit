@@ -1,7 +1,6 @@
 //! Agent environment detection used to seed `orbit init` prompt defaults.
 //!
-//! Probes which agent CLIs are on `PATH`, then derives the provider and model
-//! defaults the init prompts offer. The detection layer is gated by
+//! Probes which agent CLIs are on `PATH`. The detection layer is gated by
 //! [`AgentEnvProbe`] so unit tests can simulate a host without touching the
 //! real `PATH`.
 //!
@@ -119,10 +118,9 @@ pub fn detect(probe: &dyn AgentEnvProbe) -> DetectedAgents {
 }
 
 /// CLI agent families available for crew-backed config seeding. This is the
-/// whole host-derived input `orbit-config` receives.
-///
-/// The order intentionally mirrors [`default_provider`] for the overlapping
-/// families, excluding `ollama` because Orbit does not ship an `ollama` crew.
+/// whole host-derived input `orbit-config` receives; that crate owns the
+/// preference order among them. `ollama` is excluded because Orbit does not
+/// ship an `ollama` crew.
 pub fn available_crew_families(detected: &DetectedAgents) -> Vec<&'static str> {
     let mut families = Vec::new();
     if detected.claude_cli {
@@ -153,59 +151,6 @@ pub fn available_crew_families(detected: &DetectedAgents) -> Vec<&'static str> {
         families.push("opencode");
     }
     families
-}
-
-/// "Latest known good" model per provider. Returned to seed prompt defaults;
-/// users can override at the prompt.
-///
-/// Thin delegate to [`orbit_common::model_defaults::default_model_for_provider`],
-/// the single source of truth for production default model names. Update that
-/// module when new flagship models ship.
-pub fn default_model_for(provider: &str) -> Option<&'static str> {
-    orbit_common::model_defaults::default_model_for_provider(provider)
-}
-
-/// Pick a default provider for the role given a detection snapshot.
-///
-/// Preference order: first detected CLI in [claude, codex, antigravity,
-/// gemini, grok, copilot, cursor, pi, opencode, ollama], else `claude` as a
-/// last resort. Antigravity (`agy`) occupies Gemini CLI's previous slot so a
-/// host with both prefers the current Google terminal CLI. OpenCode is
-/// appended after the existing lanes so adding it cannot change what an
-/// already-provisioned host would pick. [ORB-10946] [ORB-10945] [ORB-11296]
-/// [ORB-11299] [ORB-11295]
-pub fn default_provider(detected: &DetectedAgents) -> &'static str {
-    if detected.claude_cli {
-        return "claude";
-    }
-    if detected.codex_cli {
-        return "codex";
-    }
-    if detected.antigravity_cli {
-        return "antigravity";
-    }
-    if detected.gemini_cli {
-        return "gemini";
-    }
-    if detected.grok_cli {
-        return "grok";
-    }
-    if detected.copilot_cli {
-        return "copilot";
-    }
-    if detected.cursor_cli {
-        return "cursor";
-    }
-    if detected.pi_cli {
-        return "pi";
-    }
-    if detected.opencode_cli {
-        return "opencode";
-    }
-    if detected.ollama_cli {
-        return "ollama";
-    }
-    "claude"
 }
 
 #[cfg(test)]

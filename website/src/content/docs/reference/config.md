@@ -121,9 +121,12 @@ reasoning budget inside it.
 
 `[workflow] system_crew` (default: `system`) names the crew for system
 activities that are synthesized at runtime and so have no job step to name a
-crew on — principally step-failure recovery. Interactive `orbit init` asks which
-detected bounded family should back `[crews.system]`. System work never inherits
-a failed task's crew or the workspace default.
+crew on — principally step-failure recovery. `orbit init` points it at the
+cheapest seeded crew of the preferred detected family (`luna` when Codex is
+present, else `sonnet`, `grok`, …); interactive init offers those crews by
+name. Shipped job steps that name `crew: system` resolve onto this crew unless
+a user-authored `[crews.system]` table exists. System work never inherits a
+failed task's crew or the workspace default.
 
 ## Settable keys
 

@@ -174,6 +174,38 @@ fn complexity_pools_set_get_show_agree_and_invalid_edits_do_not_write() {
     }
 }
 
+/// [ORB-12719] The file `orbit init` seeds scaffolds every complexity pool
+/// empty; `config get` reads each back as `[]`, and the two lane keys read
+/// back the real crews the seed named.
+#[test]
+fn a_fresh_seeded_config_reads_empty_pools_and_named_lane_crews() {
+    let (_root, runtime, global_root, _workspace_root) = test_runtime();
+    orbit_config::seed_default_config(
+        &global_root.join("config.toml"),
+        Some(&orbit_config::ConfigSeed::from_families([
+            "claude", "codex",
+        ])),
+    )
+    .expect("seed the init shape");
+
+    for complexity in ["low", "medium", "hard", "xhard"] {
+        let key = format!("workflow.{complexity}_complexity_crews");
+        let document = json_value(get_args(&key, true).execute(&runtime).expect("get pool"));
+        assert_eq!(document["value"], serde_json::json!([]), "{key}");
+    }
+    for (key, crew) in [
+        ("workflow.default_crew", "opus"),
+        ("workflow.system_crew", "luna"),
+    ] {
+        let document = json_value(
+            get_args(key, true)
+                .execute(&runtime)
+                .expect("get lane crew"),
+        );
+        assert_eq!(document["value"], crew, "{key}");
+    }
+}
+
 #[test]
 fn get_without_json_flag_still_returns_a_payload() {
     let (_root, runtime, _global_root, _workspace_root) = test_runtime();

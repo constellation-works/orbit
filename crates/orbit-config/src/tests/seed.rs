@@ -1,28 +1,24 @@
-use std::collections::BTreeMap;
-
 use tempfile::tempdir;
 
 use crate::raw::RawRuntimeConfig;
 use crate::seed::DEFAULT_CONFIG_TEMPLATE;
-use crate::{ConfigRoots, ConfigSeed, CrewSeed, ResolvedConfig, seed_default_config};
+use crate::{ConfigRoots, ConfigSeed, ResolvedConfig, seed_default_config};
 
 fn seed_for(families: &[&str]) -> ConfigSeed {
     ConfigSeed::from_families(families.iter().copied())
 }
 
-fn sample_crew_settings() -> BTreeMap<String, CrewSeed> {
-    BTreeMap::from([(
-        "custom".to_string(),
-        CrewSeed {
-            provider: Some("codex".into()),
-            model: Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.into()),
-        },
-    )])
-}
+const POOL_KEYS: [&str; 4] = [
+    "low_complexity_crews",
+    "medium_complexity_crews",
+    "hard_complexity_crews",
+    "xhard_complexity_crews",
+];
 
 #[test]
 fn default_template_keeps_agent_dependent_sections_out() {
-    assert!(!DEFAULT_CONFIG_TEMPLATE.contains("default_crew"));
+    assert!(!DEFAULT_CONFIG_TEMPLATE.contains("default_crew ="));
+    assert!(!DEFAULT_CONFIG_TEMPLATE.contains("system_crew ="));
     assert!(!DEFAULT_CONFIG_TEMPLATE.contains("[crews."));
     assert!(!DEFAULT_CONFIG_TEMPLATE.contains("[duel"));
     assert!(DEFAULT_CONFIG_TEMPLATE.contains("[execution.env]"));
@@ -44,150 +40,132 @@ fn no_seed_writes_the_static_template_and_keeps_built_in_crews() {
     let contents = std::fs::read_to_string(&path).expect("read");
 
     assert!(!contents.contains("[crews"));
-    assert!(!contents.contains("default_crew"));
+    assert!(!contents.contains("default_crew ="));
+    assert!(!contents.contains("complexity_crews ="));
     let resolved = load_seeded_config(&contents);
     assert_eq!(resolved.crews, crate::resolved::default_crews());
     assert_eq!(resolved.default_crew.as_deref(), Some("opus"));
+    assert_eq!(resolved.system_crew, "system");
 }
 
+/// [ORB-12719] The shape a claude + codex host seeds non-interactively:
+/// `default_crew` and `system_crew` name real built-in crews, the four pools
+/// are scaffolded empty, and no `custom` or `system` crew table exists.
 #[test]
-fn claude_only_seeds_the_claude_family_and_system() {
-    let contents = seed_contents(&seed_for(&["claude"]));
+fn claude_and_codex_seed_names_real_crews_and_empty_pools() {
+    let contents = seed_contents(&seed_for(&["claude", "codex"]));
     let parsed = parsed_config(&contents);
 
     assert_eq!(
         crew_names(&parsed),
-        vec!["fable", "opus", "sonnet", "system"]
+        vec!["astra", "fable", "luna", "opus", "sol", "sonnet", "terra"]
     );
+    assert_workflow_str(&parsed, "default_crew", Some("opus"));
+    assert_workflow_str(&parsed, "system_crew", Some("luna"));
+    assert_empty_pools(&parsed);
+    assert!(!contents.contains("[crews.custom]"));
+    assert!(!contents.contains("[crews.system]"));
+    assert!(
+        contents.contains("an empty pool routes that\n# complexity to `default_crew`"),
+        "the pool comment must explain the empty-pool fallback:\n{contents}"
+    );
+    assert!(
+        contents.contains("`name` or `name:weight`"),
+        "the pool comment must explain the entry grammar:\n{contents}"
+    );
+
+    let resolved = load_seeded_config(&contents);
+    assert_eq!(resolved.default_crew.as_deref(), Some("opus"));
+    assert_eq!(resolved.system_crew, "luna");
+    for key in POOL_KEYS {
+        assert_eq!(
+            resolved.snapshot.value_for(&format!("workflow.{key}")),
+            Some(serde_json::json!([])),
+            "workflow.{key} must admit as an empty pool"
+        );
+    }
+    let pools = &resolved.complexity_crews;
+    for pool in [&pools.low, &pools.medium, &pools.hard, &pools.xhard] {
+        assert_eq!(pool.as_deref(), Some(&[][..]));
+    }
+}
+
+#[test]
+fn claude_only_seeds_the_claude_family() {
+    let contents = seed_contents(&seed_for(&["claude"]));
+    let parsed = parsed_config(&contents);
+
+    assert_eq!(crew_names(&parsed), vec!["fable", "opus", "sonnet"]);
     assert_crew(&parsed, "opus", "claude", "opus");
     assert_crew(&parsed, "sonnet", "claude", "sonnet");
     assert_crew(&parsed, "fable", "claude", "fable");
-    assert_crew(&parsed, "system", "claude", "sonnet");
-    assert_default_crew(&parsed, Some("opus"));
+    assert_workflow_str(&parsed, "default_crew", Some("opus"));
+    assert_workflow_str(&parsed, "system_crew", Some("sonnet"));
     assert!(!contents.contains("[duel"));
 }
 
 #[test]
-fn codex_only_seeds_the_codex_family_and_system() {
+fn codex_only_seeds_the_codex_family() {
     let contents = seed_contents(&seed_for(&["codex"]));
     let parsed = parsed_config(&contents);
 
-    assert_eq!(
-        crew_names(&parsed),
-        vec!["astra", "luna", "sol", "system", "terra"]
-    );
+    assert_eq!(crew_names(&parsed), vec!["astra", "luna", "sol", "terra"]);
     assert_crew(&parsed, "astra", "codex", "gpt-6-astra");
     assert_crew(&parsed, "sol", "codex", "gpt-5.6-sol");
     assert_crew(&parsed, "terra", "codex", "gpt-5.6-terra");
     assert_crew(&parsed, "luna", "codex", "gpt-5.6-luna");
-    assert_crew(&parsed, "system", "codex", "gpt-5.6-luna");
-    assert_default_crew(&parsed, Some("astra"));
+    assert_workflow_str(&parsed, "default_crew", Some("astra"));
+    assert_workflow_str(&parsed, "system_crew", Some("luna"));
 }
 
+/// Single-crew families name that one crew for both lanes.
 #[test]
-fn gemini_only_seeds_gemini_and_a_system_crew() {
-    let contents = seed_contents(&seed_for(&["gemini"]));
-    let parsed = parsed_config(&contents);
+fn single_crew_families_name_their_crew_for_both_lanes() {
+    for (family, model) in [
+        ("gemini", "gemini-3.8-flash"),
+        ("antigravity", "gemini-3.8-flash-high"),
+        ("grok", "grok-4.6"),
+        ("cursor", "gpt-5"),
+        ("pi", "sonnet"),
+        ("opencode", "anthropic/claude-sonnet-4-5"),
+    ] {
+        let contents = seed_contents(&seed_for(&[family]));
+        let parsed = parsed_config(&contents);
 
-    assert_eq!(crew_names(&parsed), vec!["gemini", "system"]);
-    assert_crew(&parsed, "gemini", "gemini", "gemini-3.8-flash");
-    assert_crew(&parsed, "system", "gemini", "gemini-3.8-flash");
-    assert_default_crew(&parsed, Some("gemini"));
-}
-
-#[test]
-fn antigravity_only_seeds_antigravity_and_a_system_crew() {
-    let contents = seed_contents(&seed_for(&["antigravity"]));
-    let parsed = parsed_config(&contents);
-
-    assert_eq!(crew_names(&parsed), vec!["antigravity", "system"]);
-    assert_crew(
-        &parsed,
-        "antigravity",
-        "antigravity",
-        "gemini-3.8-flash-high",
-    );
-    assert_crew(&parsed, "system", "antigravity", "gemini-3.8-flash-low");
-    assert_default_crew(&parsed, Some("antigravity"));
+        assert_eq!(crew_names(&parsed), vec![family], "{family}");
+        assert_crew(&parsed, family, family, model);
+        assert_workflow_str(&parsed, "default_crew", Some(family));
+        assert_workflow_str(&parsed, "system_crew", Some(family));
+        let resolved = load_seeded_config(&contents);
+        assert_eq!(
+            resolved
+                .crews
+                .get("system")
+                .map(|crew| crew.assignment.model.as_str()),
+            Some(model),
+            "{family}: `system` must alias the named system crew"
+        );
+    }
 }
 
 #[test]
 fn antigravity_outranks_legacy_gemini_when_both_are_available() {
-    let contents = seed_contents(&seed_for(&["antigravity", "gemini"]));
-    let parsed = parsed_config(&contents);
-    assert_eq!(crew_names(&parsed), vec!["antigravity", "gemini", "system"]);
-    assert_default_crew(&parsed, Some("antigravity"));
-    assert_crew(&parsed, "system", "antigravity", "gemini-3.8-flash-low");
+    let parsed = parsed_config(&seed_contents(&seed_for(&["antigravity", "gemini"])));
+    assert_eq!(crew_names(&parsed), vec!["antigravity", "gemini"]);
+    assert_workflow_str(&parsed, "default_crew", Some("antigravity"));
+    assert_workflow_str(&parsed, "system_crew", Some("antigravity"));
 }
 
+/// [ORB-11296] [ORB-11295] Pi and OpenCode are appended last in the preference
+/// order, so installing them beside an earlier family never moves that host's
+/// default or system crew.
 #[test]
-fn grok_only_seeds_grok_and_a_system_crew() {
-    let contents = seed_contents(&seed_for(&["grok"]));
-    let parsed = parsed_config(&contents);
-
-    assert_eq!(crew_names(&parsed), vec!["grok", "system"]);
-    assert_crew(&parsed, "grok", "grok", "grok-4.6");
-    assert_crew(&parsed, "system", "grok", "grok-4.6");
-    assert_default_crew(&parsed, Some("grok"));
-}
-
-#[test]
-fn cursor_only_seeds_cursor_and_a_system_crew() {
-    let contents = seed_contents(&seed_for(&["cursor"]));
-    let parsed = parsed_config(&contents);
-
-    assert_eq!(crew_names(&parsed), vec!["cursor", "system"]);
-    assert_crew(&parsed, "cursor", "cursor", "gpt-5");
-    assert_crew(&parsed, "system", "cursor", "gpt-5");
-    assert_default_crew(&parsed, Some("cursor"));
-}
-
-#[test]
-fn pi_only_seeds_pi_and_a_system_crew() {
-    let contents = seed_contents(&seed_for(&["pi"]));
-    let parsed = parsed_config(&contents);
-
-    assert_eq!(crew_names(&parsed), vec!["pi", "system"]);
-    assert_crew(&parsed, "pi", "pi", "sonnet");
-    assert_crew(&parsed, "system", "pi", "sonnet");
-    assert_default_crew(&parsed, Some("pi"));
-}
-
-/// [ORB-11296] Pi is appended last in the preference order, so installing it
-/// beside an earlier family never moves that host's default or system crew.
-#[test]
-fn adding_pi_never_displaces_an_earlier_family() {
-    let parsed = parsed_config(&seed_contents(&seed_for(&["claude", "pi"])));
-
-    assert_default_crew(&parsed, Some("opus"));
-    assert_crew(&parsed, "system", "claude", "sonnet");
-    assert_crew(&parsed, "pi", "pi", "sonnet");
-}
-
-#[test]
-fn opencode_only_seeds_opencode_and_a_system_crew() {
-    let contents = seed_contents(&seed_for(&["opencode"]));
-    let parsed = parsed_config(&contents);
-
-    assert_eq!(crew_names(&parsed), vec!["opencode", "system"]);
-    assert_crew(
-        &parsed,
-        "opencode",
-        "opencode",
-        "anthropic/claude-sonnet-4-5",
-    );
-    assert_crew(&parsed, "system", "opencode", "anthropic/claude-haiku-4-5");
-    assert_default_crew(&parsed, Some("opencode"));
-}
-
-/// [ORB-11295] OpenCode is appended last in the preference order, so installing
-/// it beside an earlier family never moves that host's default or system crew.
-#[test]
-fn adding_opencode_never_displaces_an_earlier_family() {
+fn appended_families_never_displace_an_earlier_family() {
     let parsed = parsed_config(&seed_contents(&seed_for(&["claude", "pi", "opencode"])));
 
-    assert_default_crew(&parsed, Some("opus"));
-    assert_crew(&parsed, "system", "claude", "sonnet");
+    assert_workflow_str(&parsed, "default_crew", Some("opus"));
+    assert_workflow_str(&parsed, "system_crew", Some("sonnet"));
+    assert_crew(&parsed, "pi", "pi", "sonnet");
     assert_crew(
         &parsed,
         "opencode",
@@ -204,7 +182,9 @@ fn no_supported_family_seeds_no_crews_or_dangling_default() {
     let parsed = parsed_config(&contents);
 
     assert!(crew_names(&parsed).is_empty());
-    assert_default_crew(&parsed, None);
+    assert_workflow_str(&parsed, "default_crew", None);
+    assert_workflow_str(&parsed, "system_crew", None);
+    assert_empty_pools(&parsed);
     assert!(!contents.contains("[duel"));
     toml::from_str::<RawRuntimeConfig>(&contents).expect("no-provider config parses");
     let resolved = load_seeded_config(&contents);
@@ -219,20 +199,12 @@ fn multi_provider_seed_includes_each_available_family_and_excludes_unavailable()
     assert_eq!(
         crew_names(&parsed),
         vec![
-            "astra", "fable", "grok", "luna", "opus", "sol", "sonnet", "system", "terra"
+            "astra", "fable", "grok", "luna", "opus", "sol", "sonnet", "terra"
         ]
     );
-    assert_default_crew(&parsed, Some("opus"));
-    assert_crew(&parsed, "opus", "claude", "opus");
-    assert_crew(&parsed, "sonnet", "claude", "sonnet");
-    assert_crew(&parsed, "fable", "claude", "fable");
-    assert_crew(&parsed, "sol", "codex", "gpt-5.6-sol");
-    assert_crew(&parsed, "terra", "codex", "gpt-5.6-terra");
-    assert_crew(&parsed, "luna", "codex", "gpt-5.6-luna");
-    assert_crew(&parsed, "astra", "codex", "gpt-6-astra");
-    assert_crew(&parsed, "grok", "grok", "grok-4.6");
+    assert_workflow_str(&parsed, "default_crew", Some("opus"));
     // codex outranks claude and grok in the system-lane preference order.
-    assert_crew(&parsed, "system", "codex", "gpt-5.6-luna");
+    assert_workflow_str(&parsed, "system_crew", Some("luna"));
     for crew in crews(&parsed).values() {
         // [ORB-10801] Seeded crews no longer carry the retired backend key.
         assert!(crew.get("backend").is_none());
@@ -257,10 +229,12 @@ fn seeded_configs_round_trip_for_family_permutations() {
 
     for (name, families) in cases {
         let contents = seed_contents(&seed_for(families));
-        assert!(
-            !contents.contains("[crews.qa]"),
-            "{name} seed must not create the legacy QA crew"
-        );
+        for retired in ["[crews.qa]", "[crews.custom]", "[crews.system]"] {
+            assert!(
+                !contents.contains(retired),
+                "{name} seed must not create {retired}"
+            );
+        }
         toml::from_str::<RawRuntimeConfig>(&contents)
             .unwrap_or_else(|err| panic!("{name} raw parse failed: {err}"));
         load_seeded_config(&contents);
@@ -268,12 +242,86 @@ fn seeded_configs_round_trip_for_family_permutations() {
 }
 
 #[test]
-fn seed_with_no_crew_settings_keeps_static_template_content() {
+fn seed_with_no_families_keeps_static_template_content() {
     let contents = seed_contents(&ConfigSeed::default());
     assert!(no_active_role_section(&contents));
-    assert!(crew_names(&parsed_config(&contents)).is_empty());
-    assert!(!contents.contains("default_crew"));
+    let parsed = parsed_config(&contents);
+    assert!(crew_names(&parsed).is_empty());
+    assert!(!contents.contains("default_crew ="));
+    assert_empty_pools(&parsed);
     assert!(contents.contains("sandbox = \"danger-full-access\""));
+}
+
+/// Operator choices are written by name, exactly as chosen, and the seed
+/// offers only crews it writes.
+#[test]
+fn chosen_crews_are_written_by_name() {
+    let seed = seed_for(&["claude", "codex"])
+        .with_default_crew("astra")
+        .with_system_crew("sonnet");
+    assert_eq!(seed.recommended_default_crew(), Some("opus"));
+    assert_eq!(seed.recommended_system_crew(), Some("luna"));
+    assert_eq!(seed.system_crew_options(), vec!["luna", "sonnet"]);
+    assert_eq!(
+        seed.seeded_crews()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["astra", "fable", "luna", "opus", "sol", "sonnet", "terra"]
+    );
+
+    let contents = seed_contents(&seed);
+    let parsed = parsed_config(&contents);
+    assert_workflow_str(&parsed, "default_crew", Some("astra"));
+    assert_workflow_str(&parsed, "system_crew", Some("sonnet"));
+    assert!(!contents.contains("[crews.custom]"));
+    let resolved = load_seeded_config(&contents);
+    assert_eq!(resolved.default_crew.as_deref(), Some("astra"));
+    assert_eq!(
+        resolved
+            .crews
+            .get("system")
+            .map(|crew| crew.assignment.model.as_str()),
+        Some("sonnet")
+    );
+}
+
+#[test]
+fn a_chosen_crew_the_host_does_not_seed_is_refused_before_writing() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+
+    let seed = seed_for(&["claude"]).with_default_crew("luna");
+    let error = seed_default_config(&path, Some(&seed)).expect_err("unseeded default crew fails");
+    assert!(
+        error
+            .to_string()
+            .contains("workflow.default_crew names crew `luna`, which this host does not seed"),
+        "{error}"
+    );
+    assert!(!path.exists());
+
+    let seed = seed_for(&["claude"]).with_system_crew("custom");
+    let error = seed_default_config(&path, Some(&seed)).expect_err("unseeded system crew fails");
+    assert!(
+        error.to_string().contains("workflow.system_crew"),
+        "{error}"
+    );
+    assert!(!path.exists());
+}
+
+#[test]
+fn seed_with_existing_file_is_noop() {
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "# pre-existing user content\n").expect("preseed");
+
+    let seed = seed_for(&["claude"]);
+    let created = seed_default_config(&path, Some(&seed)).expect("seed");
+    assert!(!created);
+
+    let contents = std::fs::read_to_string(&path).expect("read");
+    assert_eq!(contents, "# pre-existing user content\n");
 }
 
 fn seed_contents(seed: &ConfigSeed) -> String {
@@ -321,93 +369,32 @@ fn assert_crew(parsed: &toml::Value, name: &str, provider: &str, model: &str) {
     assert!(crew.get("backend").is_none());
 }
 
-fn assert_default_crew(parsed: &toml::Value, expected: Option<&str>) {
+fn workflow_value<'a>(parsed: &'a toml::Value, key: &str) -> Option<&'a toml::Value> {
+    parsed
+        .get("workflow")
+        .and_then(|workflow| workflow.get(key))
+}
+
+fn assert_workflow_str(parsed: &toml::Value, key: &str, expected: Option<&str>) {
     assert_eq!(
-        parsed
-            .get("workflow")
-            .and_then(|workflow| workflow.get("default_crew"))
-            .and_then(toml::Value::as_str),
+        workflow_value(parsed, key).and_then(toml::Value::as_str),
         expected,
+        "workflow.{key}"
     );
+}
+
+fn assert_empty_pools(parsed: &toml::Value) {
+    for key in POOL_KEYS {
+        assert_eq!(
+            workflow_value(parsed, key).and_then(toml::Value::as_array),
+            Some(&Vec::new()),
+            "workflow.{key} must be scaffolded as an empty array"
+        );
+    }
 }
 
 fn no_active_role_section(contents: &str) -> bool {
     contents
         .lines()
         .all(|line| !line.trim_start().starts_with("[agent."))
-}
-
-#[test]
-fn seed_with_crew_settings_writes_custom_crew() {
-    let contents = seed_contents(&ConfigSeed::default().with_crews(sample_crew_settings()));
-
-    assert!(no_active_role_section(&contents));
-    assert!(contents.contains("default_crew = \"custom\""));
-    assert!(contents.contains("[crews.custom]"));
-    assert!(contents.contains("provider = \"codex\""));
-    assert!(contents.contains(&format!(
-        "model = \"{}\"",
-        orbit_common::test_fixtures::TEST_CODEX_MODEL
-    )));
-
-    // Round-trips through toml::from_str (consumer side will need this).
-    let parsed: toml::Value = toml::from_str(&contents).expect("parse");
-    let crews = parsed
-        .get("crews")
-        .expect("crews table")
-        .as_table()
-        .expect("crews is a table");
-    assert_eq!(crews.len(), 1, "custom init must not invent provider crews");
-    let custom = crews
-        .get("custom")
-        .and_then(|v| v.as_table())
-        .expect("custom crew");
-    assert_eq!(
-        custom.get("provider").and_then(|v| v.as_str()),
-        Some("codex")
-    );
-    assert!(custom.get("backend").is_none());
-    assert_eq!(
-        custom.get("model").and_then(|v| v.as_str()),
-        Some(orbit_common::test_fixtures::TEST_CODEX_MODEL)
-    );
-}
-
-#[test]
-fn seed_with_existing_file_is_noop() {
-    let dir = tempdir().expect("tempdir");
-    let path = dir.path().join("config.toml");
-    std::fs::write(&path, "# pre-existing user content\n").expect("preseed");
-
-    let seed = ConfigSeed::default().with_crews(sample_crew_settings());
-    let created = seed_default_config(&path, Some(&seed)).expect("seed");
-    assert!(!created);
-
-    let contents = std::fs::read_to_string(&path).expect("read");
-    assert_eq!(contents, "# pre-existing user content\n");
-}
-
-#[test]
-fn seed_with_empty_crew_map_uses_no_provider_behavior() {
-    let contents = seed_contents(&ConfigSeed::default().with_crews(BTreeMap::new()));
-    let parsed = parsed_config(&contents);
-    assert!(crew_names(&parsed).is_empty());
-    assert_default_crew(&parsed, None);
-}
-
-#[test]
-fn seed_with_incomplete_crew_settings_fails() {
-    let dir = tempdir().expect("tempdir");
-    let path = dir.path().join("config.toml");
-    let mut settings = sample_crew_settings();
-    settings.get_mut("custom").expect("custom").model.take();
-    let seed = ConfigSeed::default().with_crews(settings);
-
-    let error = seed_default_config(&path, Some(&seed)).expect_err("missing model fails");
-    assert!(
-        error
-            .to_string()
-            .contains("custom crew is missing required `model`")
-    );
-    assert!(!path.exists());
 }

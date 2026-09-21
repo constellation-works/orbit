@@ -64,8 +64,9 @@ Task crew and system-activity crew are different. Inspect the effective job
 and resolved provider/model, not just its crew label. The shipped
 `task_pilot_pipeline` names `crew: system` on its pilot step and has no
 per-run crew input: passing `--input crew=...` does not override that step.
-Inspect `[crews.system]` and any compatibility fallback in the active config;
-change persistent configuration only within the user's authorization.
+Inspect `workflow.system_crew` (or a user-authored `[crews.system]` table,
+which wins) and any compatibility fallback in the active config; change
+persistent configuration only within the user's authorization.
 
 ## Record who orchestrated the work
 
