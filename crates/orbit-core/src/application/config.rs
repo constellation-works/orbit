@@ -203,6 +203,7 @@ pub fn set_key(
     let mut store = open_store_for_write(runtime, scope, init)?;
     store.set_value(key, &toml_literal(value)?)?;
     store.validate()?;
+    store.validate_for_set(key)?;
     store.save()?;
     write_outcome(runtime, scope, &store, old_value, &[key.to_string()])
 }
@@ -260,6 +261,9 @@ pub fn set_crew(
         }
     }
     store.validate()?;
+    for key in &keys {
+        store.validate_for_set(key)?;
+    }
     store.save()?;
     write_outcome(runtime, scope, &store, old_value, &keys)
 }

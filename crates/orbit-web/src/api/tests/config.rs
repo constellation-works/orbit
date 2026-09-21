@@ -657,3 +657,86 @@ async fn deleting_an_unreferenced_crew_removes_its_table() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(!read_workspace_config(&runtime).contains("[crews.reviewer]"));
 }
+
+#[tokio::test]
+async fn writing_an_ignored_optional_crew_property_is_refused_and_leaves_config_byte_identical() {
+    let runtime = runtime();
+    write_workspace_config(&runtime, WORKSPACE_CONFIG_WITH_CREWS);
+    let (state, runtime) = state(runtime);
+
+    // PUT /config/keys/crews.<name>.effort (set_key path)
+    let response = as_operator(send(
+        state.clone(),
+        Method::PUT,
+        "/config/keys/crews.opus.effort?workspace=default",
+        Some(r#"{"value":"medium-low"}"#),
+    ))
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(response).await;
+    let message = body["error"].as_str().expect("error message");
+    assert!(
+        message.contains("expected one of low, medium, high, xhigh, max"),
+        "{message}"
+    );
+    assert_eq!(read_workspace_config(&runtime), WORKSPACE_CONFIG_WITH_CREWS);
+
+    // PUT /config/crews/<name> (set_crew path)
+    let response = as_operator(send(
+        state,
+        Method::PUT,
+        "/config/crews/opus?workspace=default",
+        Some(r#"{"fields":{"effort":"medium-low"}}"#),
+    ))
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(response).await;
+    let message = body["error"].as_str().expect("error message");
+    assert!(
+        message.contains("expected one of low, medium, high, xhigh, max"),
+        "{message}"
+    );
+    assert_eq!(read_workspace_config(&runtime), WORKSPACE_CONFIG_WITH_CREWS);
+}
+
+#[tokio::test]
+async fn writing_unsupported_provider_crew_effort_is_refused_and_leaves_config_byte_identical() {
+    let runtime = runtime();
+    let original = "[workflow]\ndefault_crew = \"gemini\"\n\n[crews.gemini]\nmodel = \"gemini\"\nprovider = \"gemini\"\n";
+    write_workspace_config(&runtime, original);
+    let (state, runtime) = state(runtime);
+
+    // PUT /config/keys/crews.<name>.effort
+    let response = as_operator(send(
+        state.clone(),
+        Method::PUT,
+        "/config/keys/crews.gemini.effort?workspace=default",
+        Some(r#"{"value":"high"}"#),
+    ))
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(response).await;
+    let message = body["error"].as_str().expect("error message");
+    assert!(
+        message.contains("does not support configured reasoning effort"),
+        "{message}"
+    );
+    assert_eq!(read_workspace_config(&runtime), original);
+
+    // PUT /config/crews/<name>
+    let response = as_operator(send(
+        state,
+        Method::PUT,
+        "/config/crews/gemini?workspace=default",
+        Some(r#"{"fields":{"effort":"high"}}"#),
+    ))
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(response).await;
+    let message = body["error"].as_str().expect("error message");
+    assert!(
+        message.contains("does not support configured reasoning effort"),
+        "{message}"
+    );
+    assert_eq!(read_workspace_config(&runtime), original);
+}
