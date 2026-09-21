@@ -688,6 +688,7 @@ fn a_bounded_child_writes_only_inside_its_granted_roots() {
     let boundary = LandlockBoundary {
         read: vec![fixture.root()],
         write: vec![state.clone()],
+        write_files: vec![],
         deny_tcp: false,
     };
     assert!(
@@ -752,6 +753,7 @@ fn a_bounded_child_with_deny_tcp_cannot_connect() {
     let boundary = LandlockBoundary {
         read: vec![fixture.root()],
         write: vec![],
+        write_files: vec![],
         deny_tcp: true,
     };
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a local listener");

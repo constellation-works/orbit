@@ -18,12 +18,59 @@ use orbit_types::plugin::{
     PLUGIN_HOST_API, PluginGrant, PluginManifestError, PluginNetworkPermission, PluginPermissions,
     PluginProvenance, PluginSandbox, PluginTemplateVars, render_template,
 };
+use orbit_types::policy::ResolvedFsProfile;
 
 use crate::builtin::proc::spawn::enforce_program_allowlist;
 use crate::{TIMEOUT_SLOW_MS, ToolContext};
 
 /// Host ceiling on `spec.backend.timeout_ms`.
 pub const PLUGIN_TIMEOUT_CEILING_MS: u64 = 300_000;
+
+/// Store directories under Orbit's global root that a confined `orbit tool
+/// run` appends to. This is the same inventory the agent sandbox grants a
+/// nested Orbit process (`orbit-core`'s `append_linux_runtime_write_roots`),
+/// and it is deliberately *not* the root itself: `bin/orbit` is executed
+/// unconfined by the scheduler and every worker, `plugins/` records what each
+/// plugin is allowed to do, and `config.toml`, `mcp-callers.toml` and
+/// `clock.toml` are host configuration. Those stay readable and unwritable
+/// [ORB-12777].
+const ORBIT_TOOLS_GLOBAL_WRITE_DIRS: &[&str] = &["state/logs", "state/audit", "tasks"];
+
+/// Individual files under the global root the child opens for writing: the
+/// audit/task store's WAL file set, and the executable-generation locks every
+/// `orbit` process pins before it bootstraps.
+///
+/// Each is granted only when it already exists as a regular file. A Landlock
+/// rule binds an inode, so a name that is not there yet cannot be granted —
+/// and materialising one here would be a write no grant made. The host
+/// process that spawns the backend has already opened the store and pinned
+/// its own generation, so the file set is present for the call.
+const ORBIT_TOOLS_GLOBAL_WRITE_FILES: &[&str] = &[
+    "orbit.db",
+    "orbit.db-wal",
+    "orbit.db-shm",
+    ".generation.lock",
+    ".generation-admission.lock",
+];
+
+/// The same narrowing for the workspace's `.orbit/`: the stores a callback
+/// writes, never `plugins.yaml` (the install pin), `routines/`, `auto_tasks/`
+/// or `config.toml`.
+const ORBIT_TOOLS_WORKSPACE_WRITE_DIRS: &[&str] = &[
+    "tasks",
+    "frictions",
+    "state/audit",
+    "state/logs",
+    "state/job-runs",
+];
+
+/// The workspace lexical index's WAL file set, granted on the same terms as
+/// [`ORBIT_TOOLS_GLOBAL_WRITE_FILES`].
+const ORBIT_TOOLS_WORKSPACE_WRITE_FILES: &[&str] = &[
+    "state/semantic.db",
+    "state/semantic.db-wal",
+    "state/semantic.db-shm",
+];
 
 /// The per-plugin facts a backend needs to run one of its tools.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,9 +80,10 @@ pub struct PluginBackendSpec {
     /// `ORBIT_PLUGIN_STATE`: the host's per-plugin state directory.
     pub state_dir: PathBuf,
     /// Orbit's own global root. A backend granted `orbit_tools` calls
-    /// `orbit tool run`, which reads and writes the stores under this root
-    /// and the workspace's `.orbit/`, so the sandbox opens them for that
-    /// grant and for no other.
+    /// `orbit tool run`, which reads this root and the workspace's `.orbit/`
+    /// and appends to some of the stores beneath them, so the sandbox opens
+    /// them for that grant and for no other — the roots read-only, the stores
+    /// by name (see [`ORBIT_TOOLS_GLOBAL_WRITE_DIRS`]).
     pub global_root: PathBuf,
     /// The resolved backend program and its fixed arguments.
     pub command: PathBuf,
@@ -102,13 +150,32 @@ impl PluginBackendSpec {
         } else {
             Vec::new()
         };
+        let mut write_files = Vec::new();
         if self.granted(PluginGrant::OrbitTools) {
             // The callback runs `orbit tool run` in the child: its own
             // governance, allowlist and audit decide what that call may do,
-            // but it cannot run at all without Orbit's roots.
-            write.push(self.global_root.clone());
+            // but it cannot run at all without reading Orbit's roots and
+            // appending to Orbit's stores. Those are two different sets. The
+            // roots are granted read-only and the stores are named one by
+            // one, so holding `orbit_tools` no longer carries the right to
+            // rewrite the binary the scheduler runs unconfined, the recorded
+            // plugin installs, or the MCP authorization ceiling [ORB-12777].
+            read.push(self.global_root.clone());
+            for relative in ORBIT_TOOLS_GLOBAL_WRITE_DIRS {
+                write.push(self.global_root.join(relative));
+            }
+            for relative in ORBIT_TOOLS_GLOBAL_WRITE_FILES {
+                write_files.push(self.global_root.join(relative));
+            }
             if let Some(workspace_root) = workspace_root {
-                write.push(workspace_root.join(".orbit"));
+                let workspace_orbit = workspace_root.join(".orbit");
+                for relative in ORBIT_TOOLS_WORKSPACE_WRITE_DIRS {
+                    write.push(workspace_orbit.join(relative));
+                }
+                for relative in ORBIT_TOOLS_WORKSPACE_WRITE_FILES {
+                    write_files.push(workspace_orbit.join(relative));
+                }
+                read.push(workspace_orbit);
             }
         }
         let network = if self.granted(PluginGrant::Network) {
@@ -119,6 +186,7 @@ impl PluginBackendSpec {
         Ok(PluginSandboxProfile {
             read,
             write,
+            write_files,
             network,
             unsandboxed: self.sandbox == PluginSandbox::None
                 && self.granted(PluginGrant::Unsandboxed),
@@ -240,13 +308,51 @@ fn plugin_refusal(error: PluginManifestError) -> OrbitError {
 /// The granted boundary one plugin backend runs under.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginSandboxProfile {
-    /// Readable (and executable) roots: the plugin root plus granted reads.
+    /// Readable (and executable) roots: the plugin root plus granted reads,
+    /// and — for `orbit_tools` — Orbit's global root and the workspace's
+    /// `.orbit/`, which `orbit tool run` reads but must not rewrite.
     pub read: Vec<PathBuf>,
-    /// Writable roots: granted writes only.
+    /// Writable directories: granted writes only. Materialised before the
+    /// child starts, because a rule cannot bind an inode that is not there.
     pub write: Vec<PathBuf>,
+    /// Writable single files, granted only where one already exists as a
+    /// regular file. Kept apart from [`Self::write`] so a named store file
+    /// is never created as a directory, and so neither platform widens a
+    /// leaf grant into its parent tree.
+    pub write_files: Vec<PathBuf>,
     pub network: PluginNetworkPermission,
     /// `backend.sandbox: none` with the `unsandboxed` grant: no confinement.
     pub unsandboxed: bool,
+}
+
+impl PluginSandboxProfile {
+    /// The seatbelt view of this boundary.
+    ///
+    /// Not gated on the host OS: the macOS spawn path compiles it, and a
+    /// Linux test compiles it to check the two platforms express the same
+    /// write set. Directories become `subpath` roots (`<dir>/**`); a named
+    /// file is emitted literally, so `orbit.db` never widens into the global
+    /// root that holds it.
+    pub fn macos_fs_rules(&self) -> ResolvedFsProfile {
+        ResolvedFsProfile {
+            name: "plugin".to_string(),
+            read: self
+                .read
+                .iter()
+                .map(|path| format!("{}/**", path.display()))
+                .collect(),
+            modify: self
+                .write
+                .iter()
+                .map(|path| format!("{}/**", path.display()))
+                .chain(
+                    self.write_files
+                        .iter()
+                        .map(|path| path.display().to_string()),
+                )
+                .collect(),
+        }
+    }
 }
 
 impl Sandbox for PluginSandboxProfile {
@@ -258,9 +364,12 @@ impl Sandbox for PluginSandboxProfile {
     /// `sandbox-exec` on macOS. Anywhere else the only way to run is the
     /// `unsandboxed` grant; there is no unconfined fallback (§4.9).
     fn spawn(&self, req: &ExecRequest) -> Result<Child, OrbitError> {
-        // A granted write root is materialised before the child exists: the
-        // grant names it, and neither a kernel rule nor an unconfined
+        // A granted write directory is materialised before the child exists:
+        // the grant names it, and neither a kernel rule nor an unconfined
         // backend can create a directory the grant's parent never allowed.
+        // `write_files` is deliberately absent here — those name store files
+        // SQLite and the generation protocol own, and creating one as an
+        // empty directory would break the store rather than confine it.
         for root in &self.write {
             if !root.exists() {
                 std::fs::create_dir_all(root).map_err(|error| {
@@ -283,6 +392,7 @@ fn spawn_confined(profile: &PluginSandboxProfile, req: &ExecRequest) -> Result<C
     let boundary = orbit_exec::LandlockBoundary {
         read: profile.read.clone(),
         write: profile.write.clone(),
+        write_files: profile.write_files.clone(),
         // Landlock has no address filter: `loopback` and `any` both leave
         // TCP open, and only `none` is held at the kernel.
         deny_tcp: profile.network == PluginNetworkPermission::None,
@@ -296,22 +406,9 @@ fn spawn_confined(profile: &PluginSandboxProfile, req: &ExecRequest) -> Result<C
         EnvironmentMode, MacosNetworkAccess, MacosSandboxSpawnRequest, StdinMode,
         append_macos_network_access, compile_macos_sandbox_profile, spawn_under_macos_sandbox,
     };
-    use orbit_types::policy::ResolvedFsProfile;
     use std::process::Stdio;
 
-    let rules = ResolvedFsProfile {
-        name: "plugin".to_string(),
-        read: profile
-            .read
-            .iter()
-            .map(|path| format!("{}/**", path.display()))
-            .collect(),
-        modify: profile
-            .write
-            .iter()
-            .map(|path| format!("{}/**", path.display()))
-            .collect(),
-    };
+    let rules = profile.macos_fs_rules();
     // "plugin" is not a provider name, so the compiler keeps every default
     // credential deny (it fails closed on an unknown provider).
     let mut profile_text = compile_macos_sandbox_profile(&rules, "plugin")?;
