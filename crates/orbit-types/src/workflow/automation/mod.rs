@@ -358,6 +358,11 @@ pub struct AutomationDiagnostic {
     /// routines, whose trigger always names its owner outright.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ownership: Option<DeliveryOwnership>,
+    /// Members in the batch a state consumer would admit, is admitting, or
+    /// has in flight, each with why it is there [ORB-12746]. Empty for
+    /// delivery consumers and when nothing is due.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub batch: Vec<members::BatchMember>,
 }
 
 /// Core-verified writer authority for exact artifact bytes; this is not coverage.

@@ -62,7 +62,7 @@ pub(super) fn prepare(
     let source = resolve_source_snapshot(runtime, action, input, &workspace_root)?;
     if let Some(claim) = &claim
         && (source.as_ref().map(|s| &s.source_revision) != Some(&claim.member.source.commit)
-            || input.get("task_ids") != Some(&json!(claim.member.task_ids)))
+            || input.get("task_ids") != Some(&json!(claim.task_ids())))
     {
         return Err(action_failed(
             action,
@@ -238,10 +238,14 @@ pub(super) fn prepare(
             &eligibility,
         )
         .map_err(|error| action_failed(action, error.to_string()))?;
-        if claim
-            .as_ref()
-            .is_some_and(|claim| claim.member.fingerprint != fingerprint)
-        {
+        // Each task is checked against the batch member that claimed it.
+        if claim.as_ref().is_some_and(|claim| {
+            claim
+                .members()
+                .iter()
+                .find(|member| member.task_ids.contains(task_id))
+                .is_none_or(|member| member.fingerprint != fingerprint)
+        }) {
             return Err(action_failed(action, "state-trigger task meaning changed"));
         }
         snapshot["material_fingerprint"] = json!(fingerprint);

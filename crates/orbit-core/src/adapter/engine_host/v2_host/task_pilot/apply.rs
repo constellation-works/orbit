@@ -761,12 +761,10 @@ pub(in super::super) fn apply(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let repair_claim = (repair_task_ids.len() == prepared_before.len())
-        .then(|| prepared.get("state_automation").cloned())
-        .flatten()
-        .unwrap_or(Value::Null);
+    // The repair apply keeps the claim so a repaired member still certifies
+    // its own evidence under the consumer's predicate [ORB-12746].
     let repair_prepared = json!({
-        "state_automation": repair_claim,
+        "state_automation": prepared.get("state_automation").cloned().unwrap_or(Value::Null),
         "mode": mode,
         "workspace_path": workspace_root,
         "source": prepared.get("source").cloned().unwrap_or(Value::Null),
@@ -789,21 +787,30 @@ pub(in super::super) fn apply(
         .cloned()
         .collect::<Vec<_>>();
 
-    let member_evidence = claim.filter(|_| succeeded).and_then(|claim| {
-        let id = claim.member.task_ids.first()?;
-        let resulting = resulting_fingerprints.get(id)?;
-        let assessment = task_results
+    // One evidence record per claim member this apply settled, independent
+    // of its siblings: a failed partition never withholds an applied member's
+    // receipt [ORB-12746].
+    let member_evidence = claim.as_ref().map(|claim| {
+        claim
+            .members()
             .iter()
-            .find(|v| v["task_id"].as_str() == Some(id))?;
-        Some(orbit_types::workflow::automation::members::MemberEvidence {
-            action_id: claim.action_id.unwrap_or_default(),
-            attempt_id: claim.id,
-            member_key: claim.member.key,
-            input_fingerprint: claim.member.fingerprint,
-            resulting_fingerprint: resulting.clone(),
-            ready: member_ready(assessment),
-            result: assessment.clone(),
-        })
+            .filter_map(|member| {
+                let id = member.task_ids.first()?;
+                let resulting = resulting_fingerprints.get(id)?;
+                let assessment = task_results
+                    .iter()
+                    .find(|v| v["task_id"].as_str() == Some(id))?;
+                Some(orbit_types::workflow::automation::members::MemberEvidence {
+                    action_id: claim.action_id.clone().unwrap_or_default(),
+                    attempt_id: claim.id.clone(),
+                    member_key: member.key.clone(),
+                    input_fingerprint: member.fingerprint.clone(),
+                    resulting_fingerprint: resulting.clone(),
+                    ready: member_ready(assessment),
+                    result: assessment.clone(),
+                })
+            })
+            .collect::<Vec<_>>()
     });
     Ok(json!({
         "member_evidence": member_evidence,

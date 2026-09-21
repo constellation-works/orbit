@@ -227,6 +227,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
         reason: Some(routine.reason.clone()),
         slot: None,
         run_id: None,
+        batch: Vec::new(),
     }));
     // Auto-tasks run second so their task-store writes cannot delay routine
     // dispatch. The phase is bounded by this pass's discovered workspaces and

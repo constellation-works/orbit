@@ -881,6 +881,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         max_items: 50,
         retries: 1,
         deadline_minutes: 30,
+        batch_size: None,
         eligibility: PreparationEligibility::default(),
     };
     let definition: orbit_types::workflow::RoutineDefinition = serde_json::from_value(json!({
@@ -921,6 +922,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         kind: StateTriggerKind::PreparationEligible,
         id: "fixture-attempt".into(),
         member: member.clone(),
+        members: vec![member.clone()],
         attempt: 1,
         max_attempts: 2,
         deadline: now + chrono::Duration::minutes(30),
@@ -993,7 +995,7 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
     );
     assert_eq!(result["status"], "succeeded");
     let evidence: MemberEvidence =
-        serde_json::from_value(result["member_evidence"].clone()).unwrap();
+        serde_json::from_value(result["member_evidence"][0].clone()).unwrap();
     assert_eq!(evidence.input_fingerprint, claim.member.fingerprint);
     assert_ne!(evidence.input_fingerprint, evidence.resulting_fingerprint);
     let task = fixture.runtime.get_task(&fixture.task.id).unwrap();
@@ -1054,8 +1056,302 @@ fn state_member_apply_preserves_resulting_provenance_without_promotion() {
         .unwrap()
         .pop()
         .unwrap();
-    let accepted: MemberEvidence = serde_json::from_slice(&receipt.evidence).unwrap();
-    assert_eq!(accepted, evidence);
+    let accepted: MemberBatchEvidence = serde_json::from_slice(&receipt.evidence).unwrap();
+    assert_eq!(accepted.applied, vec![evidence]);
+    assert!(accepted.failed.is_empty());
+}
+
+/// [ORB-12746] A batched claim over twelve eligible tasks reaches prepare as
+/// twelve explicit ids and partitions into three pilots inside one run. Apply
+/// certifies every member whose partition returned a valid assessment and
+/// the consumer records the rest failed at their fingerprint, so one failed
+/// partition neither blocks its siblings nor triggers a second run.
+#[test]
+fn batched_claim_partitions_one_run_and_settles_members_independently() {
+    use orbit_engine::RuntimeHost;
+    use orbit_types::workflow::automation::{members::*, *};
+    let mut fixture = remote_landing_fixture();
+    fixture.runtime = fixture
+        .runtime
+        .with_automation_machine_identity(Some("fixture".into()));
+    let mut tasks = vec![fixture.task.clone()];
+    tasks.extend((1..12).map(|index| seed_task(&fixture.runtime, &format!("burst task {index}"))));
+    let source = SourceRevision {
+        commit: fixture.stale_sha.clone(),
+        tree: git(&fixture.repo, &["rev-parse", "HEAD^{tree}"]),
+    };
+    let now = chrono::Utc::now();
+    let members = tasks
+        .iter()
+        .map(|task| StateMember {
+            key: task.id.clone(),
+            task_ids: vec![task.id.clone()],
+            fingerprint: crate::application::automation::preparation::fingerprint(
+                &fixture.runtime,
+                task,
+                &source.commit,
+                &PreparationEligibility::default(),
+            )
+            .unwrap(),
+            source: source.clone(),
+            evidence: json!({}),
+            first_seen: now,
+            changed_at: now,
+        })
+        .collect::<Vec<_>>();
+    let consumer =
+        crate::application::automation::consumer_key(&fixture.runtime, "routine", "pilot").unwrap();
+    let trigger = StateTrigger {
+        kind: StateTriggerKind::PreparationEligible,
+        owner_machine: "fixture".into(),
+        branch: LANDING.into(),
+        debounce_minutes: 2,
+        max_wait_minutes: 10,
+        max_items: 50,
+        retries: 1,
+        deadline_minutes: 30,
+        batch_size: Some(12),
+        eligibility: PreparationEligibility::default(),
+    };
+    let definition: orbit_types::workflow::RoutineDefinition = serde_json::from_value(json!({
+        "schemaVersion":1,"name":"pilot","enabled":true,"hosts":["fixture"],"target":"job:task_pilot_pipeline",
+        "trigger":{"state":trigger},"policy":{"overlap":"forbid","retries":{"max":1,"backoff_minutes":5},"timeout_minutes":30}
+    })).unwrap();
+    let epoch = orbit_automation::delivery::definition_epoch(&(
+        &trigger.kind,
+        &trigger.owner_machine,
+        &trigger.branch,
+        &definition.target,
+    ))
+    .unwrap();
+    let store = fixture.runtime.automation_store().unwrap();
+    let state = AutomationState {
+        members: Some(MemberState::default()),
+        consumer: consumer.clone(),
+        epoch,
+        trigger: None,
+        repository: "fixture".into(),
+        branch: LANDING.into(),
+        generation: 0,
+        baseline: source.clone(),
+        observed: source.clone(),
+        covered: source,
+        pending_commits: vec![],
+        pending: vec![],
+        waived: vec![],
+        excluded: vec![],
+        unresolved: Default::default(),
+        associations: Default::default(),
+        active: None,
+        stall: None,
+    };
+    assert!(store.automation_initialize(&state).unwrap());
+    let claim = MemberAttempt {
+        consumer: consumer.clone(),
+        kind: StateTriggerKind::PreparationEligible,
+        id: "fixture-batch".into(),
+        member: members[0].clone(),
+        members: members.clone(),
+        attempt: 1,
+        max_attempts: 2,
+        deadline: now + chrono::Duration::minutes(30),
+        retry_after: now,
+        action_key: "fixture-batch-key".into(),
+        action_id: None,
+        exhausted: false,
+    };
+    let mut claimed = state.clone();
+    claimed.generation += 1;
+    for member in &members {
+        claimed
+            .members
+            .as_mut()
+            .unwrap()
+            .pending
+            .insert(member.key.clone(), member.clone());
+    }
+    claimed.members.as_mut().unwrap().active = Some(claim.clone());
+    assert!(store.automation_commit(&state, &claimed, None).unwrap());
+    let run = fixture
+        .runtime
+        .stores()
+        .jobs()
+        .insert_automation_job_run(
+            "task_pilot_pipeline",
+            json!({"state_automation":claim}),
+            "fixture-batch-key",
+        )
+        .unwrap();
+    let mut admitted = claimed.clone();
+    admitted.generation += 1;
+    admitted
+        .members
+        .as_mut()
+        .unwrap()
+        .active
+        .as_mut()
+        .unwrap()
+        .action_id = Some(run.run_id.clone());
+    assert!(store.automation_commit(&claimed, &admitted, None).unwrap());
+
+    // The batch travels as explicit ids: a subset is a membership change.
+    let task_ids = claim.task_ids();
+    assert_eq!(task_ids.len(), 12);
+    let context = fixture
+        .runtime
+        .tool_context_for_activity(Some(&run.run_id), None, None, None);
+    let subset = json!({"state_automation":claim,"task_ids":task_ids[..5],"workspace_path":fixture.repo,"base_branch":LANDING,"source_revision":fixture.stale_sha});
+    assert!(
+        fixture
+            .runtime
+            .run_deterministic("prepare_task_pilot", &json!({}), &subset, context.clone())
+            .is_err()
+    );
+    let input = json!({"state_automation":claim,"task_ids":task_ids,"workspace_path":fixture.repo,"base_branch":LANDING,"source_revision":fixture.stale_sha});
+    let prepared = fixture
+        .runtime
+        .run_deterministic("prepare_task_pilot", &json!({}), &input, context)
+        .unwrap();
+    assert_eq!(prepared["mode"], "explicit");
+    assert_eq!(prepared["task_count"], 12);
+    assert_eq!(prepared["partition_count"], 3);
+    let partitions = prepared["partitions"].as_array().unwrap();
+    assert_eq!(
+        partitions
+            .iter()
+            .map(|partition| partition["task_ids"].as_array().unwrap().len())
+            .collect::<Vec<_>>(),
+        [5, 5, 2]
+    );
+
+    // Partition 2 never returns; the first ten members still apply.
+    let results = partitions[..2]
+        .iter()
+        .enumerate()
+        .map(|(index, partition)| {
+            let ids = partition["task_ids"].as_array().unwrap();
+            json!({
+                "partition_index": index,
+                "task_ids": ids,
+                "tasks": ids.iter().map(|id| {
+                    let task = tasks.iter().find(|task| json!(task.id) == *id).unwrap();
+                    selector_assessment(task, vec!["file:src/existing.rs"])
+                }).collect::<Vec<_>>(),
+                "summary": "fixture partition",
+            })
+        })
+        .collect::<Vec<_>>();
+    let result = apply(
+        &fixture.runtime,
+        "apply_task_pilot_results",
+        &json!({
+            "prepared": prepared,
+            "results": results,
+            "workspace_path": prepared["workspace_path"],
+        }),
+    )
+    .unwrap();
+    assert_eq!(result["status"], "failed");
+    assert_eq!(result["applied_count"], 10);
+    let evidence = result["member_evidence"].as_array().unwrap();
+    assert_eq!(evidence.len(), 10, "every applied member certifies itself");
+    assert!(task_ids[..10].iter().all(|id| {
+        evidence
+            .iter()
+            .any(|entry| entry["member_key"] == json!(id))
+    }));
+
+    let mut pipeline = orbit_types::workflow::PipelineState::new(
+        run.run_id.clone(),
+        run.job_id.clone(),
+        json!({"state_automation":claim}),
+    );
+    pipeline.record_step(
+        2,
+        orbit_types::workflow::JobRunState::Success,
+        Some(result),
+        None,
+    );
+    fixture
+        .runtime
+        .write_run_state(&run.run_id, &pipeline)
+        .unwrap();
+    // The run needed repair pilots for the missing partition but its owner
+    // stopped before the repair apply: the batch settles on what applied.
+    fixture
+        .runtime
+        .stores()
+        .jobs()
+        .mark_job_run_running(&run.run_id, now, i32::MAX as u32)
+        .unwrap();
+    fixture
+        .runtime
+        .finalize_job_run_with_reservation_cleanup(
+            &run.run_id,
+            orbit_types::workflow::JobRunState::Failed,
+            chrono::Utc::now(),
+            Some(1),
+            orbit_store::TaskReservationReleaseReason::RunTerminal,
+        )
+        .unwrap();
+    let diagnostic = crate::application::automation::evaluate_routine(
+        &fixture.runtime,
+        &definition,
+        false,
+        now + chrono::Duration::minutes(1),
+    )
+    .unwrap();
+    assert_eq!(diagnostic.receipts.len(), 1, "{}", diagnostic.reason);
+    let members = diagnostic.state.unwrap().members.unwrap();
+    assert!(members.active.is_none());
+    assert_eq!(members.assessed.len(), 10);
+    assert!(
+        members
+            .assessed
+            .values()
+            .all(|assessment| assessment.receipt_id == "fixture-batch")
+    );
+    assert_eq!(
+        members.failed.keys().cloned().collect::<Vec<_>>(),
+        task_ids[10..].to_vec()
+    );
+    assert!(
+        members
+            .failed
+            .values()
+            .all(|failed| failed.exhausted && failed.id == "fixture-batch")
+    );
+    let accepted: MemberBatchEvidence = serde_json::from_slice(
+        &store
+            .automation_receipt(&consumer, "fixture-batch")
+            .unwrap()
+            .unwrap()
+            .evidence,
+    )
+    .unwrap();
+    assert_eq!(accepted.applied.len(), 10);
+    assert_eq!(
+        accepted.failed.keys().cloned().collect::<Vec<_>>(),
+        task_ids[10..].to_vec()
+    );
+    assert!(
+        accepted
+            .failed
+            .values()
+            .all(|reason| reason.contains("missing")),
+        "{:?}",
+        accepted.failed
+    );
+    // No second run was needed for the batch.
+    assert_eq!(
+        fixture
+            .runtime
+            .stores()
+            .jobs()
+            .automation_job_for_key("fixture-batch-key")
+            .unwrap(),
+        Some(run.run_id)
+    );
 }
 
 /// `prepare_task_pilot` reported an accepted dependency on a task owned by

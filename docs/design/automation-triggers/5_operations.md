@@ -501,6 +501,7 @@ trigger:
     debounce_minutes: 2
     max_wait_minutes: 10
     max_items: 50
+    batch_size: 5                               # optional; default 5, never above max_items
     retries: 1
     deadline_minutes: 90
     eligibility:                                # optional; these are the defaults
@@ -534,10 +535,30 @@ the block existed. Explicit task-ID runs do not consult it.
 longer ships; the shape is recorded here for definitions written before the
 retirement. Cron, deliveries and state triggers are mutually exclusive; state kinds have
 fixed pipeline targets, require one owner and forbid overlap. Retry limits are
-the minimum of the trigger and routine policy. Each consumer admits one member
-at a time, so a preparation action is a one-task pilot partition. `max_items`
-bounds the candidate admission checks in a pass, not worker concurrency. The
-source page contains at most 50 task envelopes and retains a continuation.
+the minimum of the trigger and routine policy. `max_items` bounds the candidate
+admission checks in a pass, not worker concurrency. The source page contains at
+most 50 task envelopes and retains a continuation.
+
+Due members are admitted in batches [ORB-12746]. One pass claims up to
+`batch_size` due members (default 5; an explicit value must lie in
+`1..=min(50, max_items)`; the default is capped by `max_items`) that Core admits
+and that share one pinned source, oldest first, into a single attempt, and
+dispatches one `task_pilot_pipeline` run carrying every member's task id as an
+explicit `task_ids` entry. Prepare partitions those ids into groups of at most
+five, so a burst of *N* eligible tasks yields one run with ⌈N/5⌉ pilot
+partitions and up to five concurrent workers instead of *N* serial runs;
+members beyond the batch stay pending for the next admission. The attempt's
+retry budget, backoff and absolute deadline are per attempt: a run that stops
+before any apply output retries the whole batch, while a member whose input
+goes stale before acknowledgement leaves the batch without failing its
+siblings. Apply outcomes are per member: every member whose partition returned
+a valid assessment is certified by the attempt's single receipt (the receipt
+evidence lists the applied members and, keyed by member, why each remaining
+member did not apply), and each remaining member is recorded failed at its
+fingerprint so it does not refire until its material changes. A member whose
+partition needed repair settles with the repair apply. Member state persisted
+before batching, whose active attempt names a single `member`, still
+deserializes as a batch of one and completes through the same path.
 
 Preparation includes populated selectors when their assessment is missing or
 stale. The material fingerprint covers task meaning, criteria, plan, selectors,
@@ -575,7 +596,11 @@ reports missing or invalid partitions.
 `orbit routine show --json`, routine status and the dashboard expose the shared
 state projection: pending fingerprints, fresh/unready assessments, withheld
 reasons, consumed attempts, absolute deadlines, continuation and immutable
-receipt links. Usage stays unknown when no measurement exists. Readiness is
+receipt links. `orbit clock tick --dry-run` and `orbit routine show` also list
+the batch: each member the pass would admit with why it is due (`settled`,
+`max_wait` or `grant`), or, while an attempt is in flight, each admitted
+member, beside the existing `debouncing` / `fresh` / `needs_attention`
+reasons (`batch` in the JSON report). Usage stays unknown when no measurement exists. Readiness is
 positive evidence only; this trigger grants no promotion, commit, merge or
 implementation authority. Operation-mode grants [ORB-11332] are separate
 records: a valid grant supplies this evaluator a scope and due interval and
@@ -592,5 +617,6 @@ members and withholds the ones it no longer admits. Changes to trigger kind,
 owner, target or branch return `definition_changed`; restore the original
 definition to settle it rather than deleting state. Rollback disables
 new admissions and preserves receipts; a binary without state-trigger support
-rejects the unknown configuration key. General multi-member batching, automatic
-host/epoch transfer and automatic promotion are not part of this implementation.
+rejects the unknown configuration key, and one that predates `batch_size`
+rejects that key. Automatic host/epoch transfer and automatic promotion are not
+part of this implementation.

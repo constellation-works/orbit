@@ -358,15 +358,19 @@ impl MemberHost for Host<'_> {
             "preparation"
         };
 
+        // Every batch member travels as an explicit task id; prepare partitions
+        // them by `max_partition_size`, so one run fans out over the batch
+        // [ORB-12746].
+        let task_ids = attempt.task_ids();
         self.runtime
             .submit_automation_pipeline_run(
                 self.trigger.job_name(),
                 json!({
                     "state_automation": attempt,
-                    "task_ids": attempt.member.task_ids,
+                    "task_ids": task_ids,
                     "source_revision": attempt.member.source.commit,
                     "base_branch": self.trigger.branch,
-                    "max_tasks": attempt.member.task_ids.len(),
+                    "max_tasks": task_ids.len(),
                     "promotion_authorized": false,
                     "automation_origin": origin,
                 }),
@@ -395,33 +399,115 @@ impl MemberHost for Host<'_> {
             return Err(AutomationError::Evidence("job_input_mismatch".into()));
         }
 
-        if let Some(state) = self.runtime.read_run_state(id)? {
-            // Only the exact canonical deterministic apply step can provide this
-            // record. Agent prose and unrelated output keys are never searched.
-            let index = 2;
-            if state.step_states.get(&index) == Some(&JobRunState::Success)
-                && let Some(result) = state
-                    .step_outputs
-                    .get(&index)
-                    .and_then(|v| v.get("member_evidence"))
-            {
-                let mut evidence: MemberEvidence = serde_json::from_value(result.clone())
-                    .map_err(|e| AutomationError::Evidence(e.to_string()))?;
-                evidence.action_id = id.into();
-                return Ok(MemberOutcome::Applied(evidence));
-            }
-        }
-
-        if run.state.is_terminal()
+        let stopped = run.state.is_terminal()
             && crate::application::job::run_owner_liveness(&run)
-                == crate::application::job::RunOwnerLiveness::Stopped
-        {
-            return Ok(MemberOutcome::Failed(
-                "stopped_without_member_evidence".into(),
-            ));
+                == crate::application::job::RunOwnerLiveness::Stopped;
+
+        // Only the exact canonical deterministic apply steps can provide this
+        // record. Agent prose and unrelated output keys are never searched.
+        let state = self.runtime.read_run_state(id)?;
+        let apply_output = |index: u32| {
+            state
+                .as_ref()
+                .filter(|state| state.step_states.get(&index) == Some(&JobRunState::Success))
+                .and_then(|state| state.step_outputs.get(&index))
+        };
+        let Some(initial) = apply_output(APPLY_STEP) else {
+            return Ok(if stopped {
+                MemberOutcome::Failed("stopped_without_member_evidence".into())
+            } else {
+                MemberOutcome::Pending
+            });
+        };
+
+        // A member whose partition needed repair settles with the repair apply,
+        // or as failed once the run stopped without reaching it [ORB-12746].
+        let repairs_requested = initial
+            .get("repair_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            != 0;
+        let repair = apply_output(REPAIR_APPLY_STEP);
+        if repairs_requested && repair.is_none() && !stopped {
+            return Ok(MemberOutcome::Pending);
         }
 
-        Ok(MemberOutcome::Pending)
+        let mut applied = Vec::new();
+        for output in [Some(initial), repair].into_iter().flatten() {
+            let mut evidence = member_evidence(output)?;
+            for entry in &mut evidence {
+                entry.action_id = id.into();
+            }
+            applied.extend(evidence);
+        }
+
+        let latest_outcomes = repair.unwrap_or(initial);
+        let mut failed = BTreeMap::new();
+        for member in attempt.members() {
+            if applied.iter().any(|entry| entry.member_key == member.key) {
+                continue;
+            }
+            let reason = latest_outcomes
+                .get("task_outcomes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find(|outcome| {
+                    outcome
+                        .get("task_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|task_id| member.task_ids.iter().any(|id| id == task_id))
+                })
+                .and_then(|outcome| {
+                    let classification = outcome
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .or_else(|| outcome.get("outcome").and_then(Value::as_str))?;
+                    let detail = outcome
+                        .get("error")
+                        .or_else(|| outcome.get("detail"))
+                        .and_then(Value::as_str)
+                        .map(|detail| format!(": {detail}"))
+                        .unwrap_or_default();
+                    Some(format!("{classification}{detail}"))
+                })
+                .unwrap_or_else(|| {
+                    if repairs_requested && repair.is_none() {
+                        "stopped_before_repair_apply".into()
+                    } else {
+                        "no_member_evidence".into()
+                    }
+                });
+            failed.insert(member.key.clone(), reason);
+        }
+
+        Ok(MemberOutcome::Settled(MemberBatchEvidence {
+            action_id: id.into(),
+            attempt_id: attempt.id.clone(),
+            applied,
+            failed,
+        }))
+    }
+}
+
+/// Step indices of the two deterministic apply steps in
+/// `task_pilot_pipeline`: the partition apply and the targeted repair apply.
+const APPLY_STEP: u32 = 2;
+const REPAIR_APPLY_STEP: u32 = 4;
+
+/// The `member_evidence` an apply step recorded: one entry per claim member it
+/// applied. A run checkpointed before batching carried a single object.
+fn member_evidence(output: &Value) -> Result<Vec<MemberEvidence>, AutomationError> {
+    match output.get("member_evidence") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(entries)) => entries
+            .iter()
+            .map(|entry| serde_json::from_value(entry.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AutomationError::Evidence(e.to_string())),
+        Some(entry) => serde_json::from_value(entry.clone())
+            .map(|evidence| vec![evidence])
+            .map_err(|e| AutomationError::Evidence(e.to_string())),
     }
 }
 
@@ -467,6 +553,7 @@ pub(crate) fn claim(
     if active.kind != submitted.kind
         || active.id != submitted.id
         || active.member != submitted.member
+        || active.members() != submitted.members()
         || active.action_key != submitted.action_key
         || active.attempt != submitted.attempt
         || active.exhausted

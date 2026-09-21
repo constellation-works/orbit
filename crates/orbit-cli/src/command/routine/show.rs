@@ -5,6 +5,7 @@ use clap::Args;
 use orbit_cmd::registry_routines::routine_statuses;
 use orbit_core::OrbitError;
 use orbit_core::application::routines::recent_fires;
+use orbit_types::workflow::automation::members::BatchMember;
 use serde_json::json;
 
 const RECENT_FIRE_LIMIT: usize = 10;
@@ -92,6 +93,23 @@ impl RoutineShowArgs {
                 serde_json::to_string(trigger)
                     .map_err(|e| OrbitError::InvalidInput(e.to_string()))?
             );
+            let batch = status
+                .automation
+                .as_ref()
+                .and_then(|diagnostic| diagnostic.get("batch"))
+                .map(|batch| serde_json::from_value::<Vec<BatchMember>>(batch.clone()))
+                .transpose()
+                .map_err(|e| OrbitError::InvalidInput(e.to_string()))?
+                .unwrap_or_default();
+            if !batch.is_empty() {
+                let _ = writeln!(
+                    out,
+                    "Batch ({} of up to {}): {}",
+                    batch.len(),
+                    trigger.effective_batch_size(),
+                    crate::command::clock::tick::format_batch(&batch)
+                );
+            }
         } else {
             let _ = writeln!(
                 out,

@@ -70,6 +70,7 @@ fn trigger() -> StateTrigger {
         max_items: 50,
         retries: 0,
         deadline_minutes: 30,
+        batch_size: None,
         eligibility: PreparationEligibility::default(),
     }
 }

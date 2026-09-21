@@ -133,6 +133,7 @@ trigger:
     debounce_minutes: 2
     max_wait_minutes: 10
     max_items: 50
+    batch_size: 5                    # due tasks admitted per run (1..=min(50, max_items))
     retries: 1
     deadline_minutes: 90
     eligibility:
@@ -142,7 +143,11 @@ trigger:
       task_types: []                 # empty admits every type
 ```
 
-Narrow it to, say, `statuses: [backlog]` or `require_tags: [pilot]` to keep the
+`batch_size` is how many due tasks one tick admits into a single
+`task_pilot_pipeline` run, which pilots them five per partition; a burst of
+filed tasks is prepared as one run rather than one run per task, and
+`orbit clock tick --dry-run` lists the batch it would admit. Narrow the
+predicate to, say, `statuses: [backlog]` or `require_tags: [pilot]` to keep the
 scheduled pilot off proposals a human has not looked at yet. Unknown keys and
 an empty `statuses` fail the definition closed. The resolved predicate is part
 of each task's material fingerprint, so changing it re-prepares tasks assessed

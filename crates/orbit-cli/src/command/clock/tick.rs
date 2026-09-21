@@ -11,6 +11,7 @@ use orbit_core::{
         clock_unit_drift_warning,
     },
 };
+use orbit_types::workflow::automation::members::BatchMember;
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Payload};
@@ -49,7 +50,19 @@ pub(crate) fn format_routine_report_line(report: &RoutineSweepReport) -> String 
     if let Some(run_id) = &report.run_id {
         line.push_str(&format!(" — run {run_id}"));
     }
+    if !report.batch.is_empty() {
+        line.push_str(&format!(" — batch [{}]", format_batch(&report.batch)));
+    }
     line
+}
+
+/// `key (reason)` per batch member, in admission order.
+pub(crate) fn format_batch(batch: &[BatchMember]) -> String {
+    batch
+        .iter()
+        .map(|member| format!("{} ({})", member.key, member.reason))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub(crate) fn format_auto_task_report_line(report: &AutoTaskSweepReport) -> String {
@@ -198,6 +211,7 @@ pub(crate) fn outcome_json(outcome: &SweepOutcome, dry_run: bool) -> serde_json:
                 "slot": report.slot,
                 "run_id": report.run_id,
                 "task_id": null,
+                "batch": report.batch,
             })
         })
         .collect::<Vec<_>>();

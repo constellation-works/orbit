@@ -17,6 +17,7 @@ fn report(action: &'static str) -> RoutineSweepReport {
         reason: None,
         slot: None,
         run_id: None,
+        batch: Vec::new(),
     }
 }
 
@@ -62,6 +63,7 @@ fn json_shape_is_stable() {
             reason: None,
             slot: Some("2026-01-01T00:01:00+00:00".to_string()),
             run_id: Some("run-1".to_string()),
+            batch: Vec::new(),
         }],
         auto_task_reports: vec![AutoTaskSweepReport {
             name: "chore".to_string(),
