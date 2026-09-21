@@ -1,15 +1,6 @@
 use super::*;
-use orbit_types::workflow::OPERATION_ADMISSION_KEY;
 
 use crate::application::job::crew_pools;
-
-/// Whether caller-shaped run input names the reserved operation-mode
-/// admission key [ORB-11332].
-fn run_input_declares_operation_admission(input: &Value) -> bool {
-    input
-        .get(OPERATION_ADMISSION_KEY)
-        .is_some_and(|value| !value.is_null())
-}
 
 impl OrbitRuntime {
     /// Record the `pipeline.invoke` audit for a direct-path submission, which
@@ -69,7 +60,6 @@ impl OrbitRuntime {
             actor,
             action_key,
             trusted_host,
-            operation_bound,
             trigger,
         } = submission;
         // [ORB-11354] The reserved admission key is writable by exactly one
@@ -80,41 +70,10 @@ impl OrbitRuntime {
         if !trusted_host && run_input_declares_trusted_host(&input) {
             return Err(reserved_trusted_host_key_error(job_name));
         }
-        // [ORB-11332] The operation-mode snapshot follows the same rule: the
-        // grant-bound coordinator writes it, a resume carries its persisted
-        // run input forward unchanged, and a parent-authorized child inherits
-        // exactly its parent's snapshot. Any other input that names it is
-        // refused rather than trusted.
-        let (input, authority) = match admission {
-            Some(admission) => {
-                match child_admission_authority(self, &admission.parent_run_id, job_name, &input)? {
-                    Some((snapshot, authority)) => {
-                        let mut input = input;
-                        inherit_child_admission(&mut input, &snapshot)?;
-                        (input, Some(authority))
-                    }
-                    None => {
-                        if run_input_declares_operation_admission(&input) {
-                            return Err(reserved_operation_key_error(job_name));
-                        }
-                        (input, None)
-                    }
-                }
-            }
-            None => {
-                if !operation_bound
-                    && resume.is_none()
-                    && run_input_declares_operation_admission(&input)
-                {
-                    return Err(reserved_operation_key_error(job_name));
-                }
-                (input, None)
-            }
-        };
         // [ORB-11333] The review admission follows the same discipline: a
-        // child inherits its parent's snapshot, a grant-bound or ordinary
-        // delivery submission captures the effective policy once, and
-        // ordinary input naming the key is refused.
+        // child inherits its parent's snapshot, an ordinary delivery
+        // submission captures the effective policy once, and ordinary input
+        // naming the key is refused.
         let mut input = input;
         crate::application::review::install_review_admission(
             self,
@@ -161,7 +120,7 @@ impl OrbitRuntime {
                         attempt: 1,
                         scheduled_at: submitted_at,
                         input: Some(input.clone()),
-                        authority: authority.clone(),
+                        authority: None,
                     })? {
                     ChildJobRunAdmissionOutcome::Admitted(run) => *run,
                     ChildJobRunAdmissionOutcome::AdmissionsStopped => {

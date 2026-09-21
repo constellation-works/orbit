@@ -8,6 +8,7 @@
 //! - `conflict` — recording a terminal outcome that contradicts the one already persisted.
 //! - `worker_limit` — adjusting a live auto drain's worker ceiling.
 //! - `admissions_stop` — stopping new admissions on a live auto drain.
+//! - `step_recovery` — authenticating executor-owned recovery before it mutates Git.
 //! - `tests/*` — helpers and regression tests split by concern (actions, reconcile, owner, conflict).
 
 mod actions;
@@ -17,6 +18,7 @@ mod owner;
 mod projection;
 mod query;
 mod reconcile;
+mod step_recovery;
 mod types;
 mod worker_limit;
 

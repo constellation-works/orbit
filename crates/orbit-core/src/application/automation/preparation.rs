@@ -3,15 +3,23 @@
 use super::source::Source;
 use crate::OrbitRuntime;
 use orbit_automation::routines::loader::declared_routine_names;
-use orbit_automation::{AutomationError, automation_error_to_orbit, members::preparation};
+use orbit_automation::{AutomationError, members::preparation};
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::RegisteredTaskResolution;
 use orbit_types::task::Task;
-use orbit_types::workflow::automation::members::{
-    MemberAssessment, MemberAttempt, PreparationEligibility,
-};
+use orbit_types::workflow::automation::members::{MemberAttempt, PreparationEligibility};
 use serde_json::{Value, json};
+
+/// The landing-branch head commit the material fingerprint is bound to.
+/// Tests bind an expected fingerprint to the same revision the evaluator saw.
+#[cfg(test)]
+pub(crate) fn head_revision(runtime: &OrbitRuntime, branch: &str) -> Result<String, OrbitError> {
+    Source::new(&runtime.paths().repo_root)
+        .head(branch)
+        .map(|(_, revision)| revision.commit)
+        .map_err(orbit_automation::automation_error_to_orbit)
+}
 
 /// Repository instructions captured from one immutable source revision.
 ///
@@ -19,42 +27,6 @@ use serde_json::{Value, json};
 /// this cache existed, so sharing it changes work performed, not evidence.
 #[derive(Clone)]
 pub(crate) struct InstructionSnapshot(String);
-
-/// Bound on the consumer states one lookup reads.
-const MAX_CONSUMER_STATES: usize = 50;
-
-/// The landing-branch head commit the material fingerprint is bound to.
-pub(crate) fn head_revision(runtime: &OrbitRuntime, branch: &str) -> Result<String, OrbitError> {
-    Source::new(&runtime.paths().repo_root)
-        .head(branch)
-        .map(|(_, revision)| revision.commit)
-        .map_err(automation_error_to_orbit)
-}
-
-/// The accepted preparation assessment for `task_id`, from this machine's
-/// state consumers for this workspace, with the consumer key that accepted
-/// it. Read-only: Core consumes the record the shared evaluator accepted and
-/// never derives readiness itself [ORB-11332]. `None` without a registered
-/// machine identity, because no consumer can have been evaluated here.
-pub(crate) fn accepted_assessment(
-    runtime: &OrbitRuntime,
-    task_id: &str,
-) -> Result<Option<(String, MemberAssessment)>, OrbitError> {
-    let Some(machine) = runtime.automation_machine_identity() else {
-        return Ok(None);
-    };
-    let prefix = format!("{machine}/{}/routine/", runtime.workspace_id()?);
-    let states = runtime
-        .automation_store()?
-        .automation_states(&prefix, MAX_CONSUMER_STATES)?;
-    Ok(states
-        .into_iter()
-        .filter_map(|state| {
-            let assessment = state.members?.assessed.get(task_id).cloned()?;
-            Some((state.consumer, assessment))
-        })
-        .max_by_key(|(_, assessment)| assessment.receipt_id.clone()))
-}
 
 /// The eligibility the state consumer `consumer` evaluates: the
 /// `trigger.state.eligibility` of the routine its key names, read from this
