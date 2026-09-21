@@ -24,7 +24,7 @@ use orbit_config::{
 };
 use serde_json::{Map, Value as JsonValue, json};
 
-use crate::runtime::OrbitRuntime;
+use crate::runtime::{CONFIG_TOML_FILE, OrbitRuntime, existing_config_file_path};
 
 /// Which physical `config.toml` a view or a write targets. Re-exported so a
 /// transport can name the scope without depending on `orbit-config` directly.
@@ -102,17 +102,17 @@ pub fn parse_config_scope(raw: &str) -> Option<ConfigScope> {
 pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
     let effective = load_effective_config(&config_roots(runtime))?;
     let values = effective.values();
-    let global_path = global_config_path(runtime);
-    let workspace_path = workspace_config_path(runtime);
-    let workspace_file_exists = workspace_path.exists();
+    let global_file = config_layer_file(&runtime.global_root())?;
+    let workspace_file = config_layer_file(&runtime.shared_root())?;
+    let workspace_file_exists = workspace_file.exists;
 
     let sections = effective_sections(values);
     Ok(json!({
         "scope": "effective",
         "layers": {
             "built_in": {"label": ConfigValueSourceKind::BuiltIn.label()},
-            "global": file_layer_json(&global_path),
-            "workspace": file_layer_json(&workspace_path),
+            "global": global_file.json(),
+            "workspace": workspace_file.json(),
             // The security exception is only in force once a workspace file
             // exists; before that, global values still apply and warning about
             // them would be wrong.
@@ -133,20 +133,25 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
 /// --scope global|workspace`: the same grouping without layering, shadowed
 /// values, or crews (a scoped snapshot admits registry keys only).
 pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue, OrbitError> {
-    let path = config_path_for_scope(runtime, scope);
-    let store = ConfigStore::open(scope, path.clone())?;
+    let global_file = config_layer_file(&runtime.global_root())?;
+    let workspace_file = config_layer_file(&runtime.shared_root())?;
+    let file = match scope {
+        ConfigScope::Global => &global_file,
+        ConfigScope::Workspace => &workspace_file,
+    };
+    let store = ConfigStore::open(scope, file.path.clone())?;
     let snapshot = store.snapshot()?;
     let settings = snapshot.all_values();
     let sections = file_sections(&store, &settings);
 
     Ok(json!({
         "scope": scope.label(),
-        "file": file_layer_json(&path),
+        "file": file.json(),
         "layers": {
             "built_in": {"label": ConfigValueSourceKind::BuiltIn.label()},
-            "global": file_layer_json(&global_config_path(runtime)),
-            "workspace": file_layer_json(&workspace_config_path(runtime)),
-            "execution_not_inherited": workspace_config_path(runtime).exists(),
+            "global": global_file.json(),
+            "workspace": workspace_file.json(),
+            "execution_not_inherited": workspace_file.exists,
             "not_inherited_keys": JsonValue::Array(Vec::new()),
         },
         "workspace_binding": JsonValue::Null,
@@ -157,7 +162,7 @@ pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue
         "paths": path_rows_json(runtime, Some(store.path())),
         "crew_fields": CREW_FIELDS,
         "write_scope_default": scope.label(),
-        "workspace_file_exists": workspace_config_path(runtime).exists(),
+        "workspace_file_exists": workspace_file.exists,
     }))
 }
 
@@ -408,18 +413,42 @@ fn config_roots(runtime: &OrbitRuntime) -> ConfigRoots {
 }
 
 fn global_config_path(runtime: &OrbitRuntime) -> PathBuf {
-    runtime.global_root().join("config.toml")
+    runtime.global_root().join(CONFIG_TOML_FILE)
 }
 
 fn workspace_config_path(runtime: &OrbitRuntime) -> PathBuf {
-    runtime.shared_root().join("config.toml")
+    runtime.shared_root().join(CONFIG_TOML_FILE)
 }
 
-fn config_path_for_scope(runtime: &OrbitRuntime, scope: ConfigScope) -> PathBuf {
-    match scope {
-        ConfigScope::Global => global_config_path(runtime),
-        ConfigScope::Workspace => workspace_config_path(runtime),
+/// One physical `config.toml` layer: the path a caller sees and whether a
+/// regular file is there.
+///
+/// Existence is probed through the runtime's validated config-root boundary
+/// rather than a bare `Path::exists` on the joined path, so a root selected by
+/// `?workspace=` never reaches a filesystem probe unvalidated (CodeQL
+/// `rust/path-injection`). The displayed path stays the caller's spelling of
+/// the root, not the canonical one, so it matches what `orbit config path`
+/// prints.
+struct ConfigLayerFile {
+    path: PathBuf,
+    exists: bool,
+}
+
+impl ConfigLayerFile {
+    fn json(&self) -> JsonValue {
+        json!({
+            "path": path_cell(&self.path),
+            "exists": self.exists,
+        })
     }
+}
+
+fn config_layer_file(root: &Path) -> Result<ConfigLayerFile, OrbitError> {
+    let exists = existing_config_file_path(root)?.is_some();
+    Ok(ConfigLayerFile {
+        path: root.join(CONFIG_TOML_FILE),
+        exists,
+    })
 }
 
 fn open_store_for_write(
@@ -500,13 +529,6 @@ fn toml_literal(value: &JsonValue) -> Result<String, OrbitError> {
         ))
     })?;
     Ok(literal.to_string())
-}
-
-fn file_layer_json(path: &Path) -> JsonValue {
-    json!({
-        "path": path_cell(path),
-        "exists": path.exists(),
-    })
 }
 
 /// Keys whose global value the workspace file did not inherit, so the caller

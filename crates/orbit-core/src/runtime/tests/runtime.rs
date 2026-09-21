@@ -9,7 +9,7 @@ use orbit_common::test_env;
 use tempfile::tempdir;
 
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
-use crate::runtime::existing_workspace_config_path;
+use crate::runtime::existing_config_file_path;
 
 fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf, PathBuf) {
     let root = tempdir().expect("create tempdir");
@@ -94,7 +94,7 @@ fn workspace_config_selection_reports_a_non_directory_root() {
     let root_file = root.path().join("not-a-directory");
     std::fs::write(&root_file, "not a directory").expect("write root file");
 
-    let error = existing_workspace_config_path(&root_file)
+    let error = existing_config_file_path(&root_file)
         .expect_err("a config child cannot be selected beneath a file");
 
     assert!(error.to_string().contains("failed to inspect config path"));
@@ -107,7 +107,7 @@ fn config_root_validation_treats_a_missing_root_as_absent() {
     let missing = root.path().join("missing");
 
     assert_eq!(
-        existing_workspace_config_path(&missing).expect("select beneath missing root"),
+        existing_config_file_path(&missing).expect("select beneath missing root"),
         None
     );
 }
@@ -124,7 +124,7 @@ fn workspace_config_selection_accepts_a_trusted_root_alias() {
     std::fs::write(real_root.join("config.toml"), "").expect("write config");
     symlink(&real_root, &alias_root).expect("create trusted root alias");
 
-    let selected_config = existing_workspace_config_path(&alias_root)
+    let selected_config = existing_config_file_path(&alias_root)
         .expect("select through trusted alias")
         .expect("config exists");
 

@@ -854,7 +854,7 @@ fn validated_runtime_config_path(runtime: &OrbitRuntime) -> Result<PathBuf, Orbi
     let shared_root = runtime.shared_root();
     let global_root = runtime.global_root();
     if shared_root != global_root
-        && let Some(workspace_config) = existing_workspace_config_path(&shared_root)?
+        && let Some(workspace_config) = existing_config_file_path(&shared_root)?
     {
         return Ok(workspace_config);
     }
@@ -862,7 +862,7 @@ fn validated_runtime_config_path(runtime: &OrbitRuntime) -> Result<PathBuf, Orbi
     Ok(global_root.join(CONFIG_TOML_FILE))
 }
 
-const CONFIG_TOML_FILE: &str = "config.toml";
+pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
 
 /// Resolve an existing config root to the directory selected by the caller.
 ///
@@ -887,12 +887,16 @@ fn validated_existing_config_root(root: &Path) -> Result<Option<PathBuf>, OrbitE
     Ok(Some(canonical_root))
 }
 
-/// Select the fixed workspace config leaf after the root validation boundary.
+/// Select the fixed config leaf of one layer root after the root validation
+/// boundary. `None` means the root or the file is absent.
 ///
 /// This no-follow metadata probe decides precedence and rejects an already
 /// visible invalid leaf. It does not authorize a later pathname read; config
 /// consumers reopen the selected path through their descriptor-based boundary.
-fn existing_workspace_config_path(root: &Path) -> Result<Option<PathBuf>, OrbitError> {
+/// Other modules that need to know whether a layer file exists probe through
+/// this function rather than `Path::exists` so the probe only ever sees a
+/// validated root [ORB-12724].
+pub(crate) fn existing_config_file_path(root: &Path) -> Result<Option<PathBuf>, OrbitError> {
     let Some(validated_root) = validated_existing_config_root(root)? else {
         return Ok(None);
     };
