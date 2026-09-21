@@ -54,14 +54,6 @@ const STORAGE_APPLY_ATTEMPTS: usize = 3;
 /// and the host's in the same assessment.
 const CONTEXT_ATTACHMENT_WARNINGS: &str = "context_attachment_warnings";
 
-/// Field carrying the escalation findings this boundary records when a pilot
-/// recommends above the complexity this lane may assign [ORB-12605]. The
-/// reserved top tier routes work to the most capable — and most expensive —
-/// crews, so raising a task into it stays an operator decision: the assessment
-/// is refused rather than applied, and the finding names what was asked for
-/// and the ceiling that refused it.
-const COMPLEXITY_ESCALATION_BLOCKED: &str = "complexity_escalation_blocked";
-
 /// Selector budget for a proposal at each recommended complexity.
 ///
 /// Context selectors are both the executor's reading list and the task's lock
@@ -81,54 +73,21 @@ fn context_selector_cap(complexity: TaskComplexity) -> usize {
     }
 }
 
-/// The complexity this boundary writes for an assessment, or the escalation
-/// finding that refuses it. The finding and the task's error text share one
-/// detail so the apply result and the repair prompt describe the refusal
-/// identically.
+/// The complexity this boundary writes for an assessment.
 ///
-/// The ceiling is `max(workflow.pilot_max_complexity, the complexity the task
-/// already carries)`. A task an operator placed above the cap is a routine
-/// automatic-lane candidate — attaching selectors is what the pilot is for —
-/// and an assessment that merely re-states the tier it already carries
-/// escalates nothing, so refusing it would strand the task without selectors
-/// for as long as it keeps that tier [ORB-12622]. The cap reserves the top
-/// tier for operator decisions in both directions: while the task sits above
-/// the cap it keeps the complexity it carries, so a lower recommendation
-/// applies its `context_files` without demoting the task out of the reserved
-/// pool.
+/// The recommendation applies as-is, with one exception: a task already
+/// carrying the top tier keeps it. `xhard` routes work to the most capable —
+/// and most expensive — crews, so a task there receives its selectors from a
+/// lower recommendation without being demoted out of that pool; lowering it
+/// is an operator decision [ORB-12622].
 fn resolve_applied_complexity(
-    task_id: &str,
     recommended: TaskComplexity,
-    cap: TaskComplexity,
     current: Option<TaskComplexity>,
-) -> Result<TaskComplexity, (Value, String)> {
-    let reserved = current.filter(|value| value.assessment_rank() > cap.assessment_rank());
-    let ceiling = reserved.unwrap_or(cap);
-    if recommended.assessment_rank() > ceiling.assessment_rank() {
-        let carried = current.map_or("unassessed", TaskComplexity::as_str);
-        let detail = format!(
-            "recommended complexity {recommended} is above the {ceiling} ceiling this lane may \
-             assign — workflow.pilot_max_complexity is {cap} and the task carries {carried} — so \
-             this assessment was not applied; an operator raises the cap or sets the complexity \
-             directly"
-        );
-        return Err((
-            json!({
-                "task_id": task_id,
-                "finding": COMPLEXITY_ESCALATION_BLOCKED,
-                "recommended_complexity": recommended.as_str(),
-                "pilot_max_complexity": cap.as_str(),
-                "current_complexity": carried,
-                "assignable_ceiling": ceiling.as_str(),
-                "detail": detail,
-            }),
-            detail,
-        ));
-    }
-    Ok(match reserved {
-        Some(reserved) if recommended.assessment_rank() < reserved.assessment_rank() => reserved,
+) -> TaskComplexity {
+    match current {
+        Some(TaskComplexity::XHard) => TaskComplexity::XHard,
         _ => recommended,
-    })
+    }
 }
 
 /// Report an over-budget proposal without refusing it. Genuinely large-surface
@@ -291,8 +250,6 @@ pub(in super::super) fn apply(
     let mut task_results = Vec::with_capacity(prepared_before.len());
     let mut ci_sweep_admission = Vec::new();
     let mut resulting_fingerprints = BTreeMap::new();
-    let mut escalation_findings = Vec::new();
-    let pilot_max_complexity = runtime.context.settings().pilot_max_complexity();
 
     for (position, expected) in expected_partitions.iter().enumerate() {
         let expected_index = expected
@@ -505,26 +462,7 @@ pub(in super::super) fn apply(
                     continue;
                 }
             };
-            let complexity = match resolve_applied_complexity(
-                task_id,
-                complexity,
-                pilot_max_complexity,
-                snapshot.complexity,
-            ) {
-                Ok(complexity) => complexity,
-                Err((finding, detail)) => {
-                    escalation_findings.push(finding);
-                    // `invalid` routes the task to a repair partition, where
-                    // the pilot sees this error and can reassess inside the
-                    // ceiling.
-                    outcomes.push(task_outcome(
-                        task_id,
-                        "invalid",
-                        Some(format!("{COMPLEXITY_ESCALATION_BLOCKED}: {detail}")),
-                    ));
-                    continue;
-                }
-            };
+            let complexity = resolve_applied_complexity(complexity, snapshot.complexity);
             let current = match runtime.get_task(task_id) {
                 Ok(task) => task,
                 Err(OrbitError::NotFound { .. }) => {
@@ -886,7 +824,6 @@ pub(in super::super) fn apply(
         "non_repairable_outcomes": non_repairable_outcomes,
         "tasks": task_results,
         "ci_sweep_admission": ci_sweep_admission,
-        "complexity_escalation_blocked": escalation_findings,
     }))
 }
 

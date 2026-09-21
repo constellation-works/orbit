@@ -10,7 +10,7 @@ use tracing_subscriber::fmt::MakeWriter;
 
 use super::{roots, write_config};
 use crate::load_effective_config;
-use crate::resolved::RETIRED_ROUTINES_CONFIG_WARNING;
+use crate::resolved::{REMOVED_CONFIG_KEY_WARNING, RETIRED_ROUTINES_CONFIG_WARNING};
 use crate::{ConfigRoots, ConfigSnapshot, ConfigValueSourceKind, ResolvedConfig};
 
 #[derive(Clone)]
@@ -72,6 +72,46 @@ fn routines_warning_paths(warnings: &[serde_json::Value]) -> Vec<&str> {
             fields.get("config")?.as_str()
         })
         .collect()
+}
+
+/// [ORB-12723] A removed fixed key is ignored with a warning naming the key
+/// and the layer that still sets it, so an existing config never fails to
+/// load over a setting that no longer exists.
+#[test]
+fn removed_pilot_max_complexity_warns_once_for_the_layer_that_sets_it() {
+    let global = tempdir().expect("global tempdir");
+    let workspace = tempdir().expect("workspace tempdir");
+    write_config(global.path(), "[scoring]\nenabled = false\n");
+    write_config(
+        workspace.path(),
+        "[workflow]\npilot_max_complexity = \"xhard\"\n",
+    );
+
+    let (result, warnings) =
+        capture_warnings(|| ResolvedConfig::load(&roots(global.path(), workspace.path())));
+
+    result.expect("layered config loads");
+    let removed: Vec<(&str, &str)> = warnings
+        .iter()
+        .filter_map(|warning| {
+            let fields = warning.get("fields")?;
+            if fields.get("REMOVED_CONFIG_KEY_WARNING")?.as_str()? != REMOVED_CONFIG_KEY_WARNING {
+                return None;
+            }
+            Some((
+                fields.get("key")?.as_str()?,
+                fields.get("config")?.as_str()?,
+            ))
+        })
+        .collect();
+    let workspace_path = workspace.path().join("config.toml");
+    assert_eq!(
+        removed,
+        vec![(
+            "workflow.pilot_max_complexity",
+            workspace_path.to_str().expect("UTF-8 path")
+        )]
+    );
 }
 
 #[test]

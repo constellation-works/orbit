@@ -7,7 +7,6 @@ Delivery (workflow.*)        how tasks are shipped
   default_crew                     sol                   global   Named crew used when a task does not declare `crew` and no CLI override is given.
   system_crew                      system                default  Named crew used by system activities such as step-failure recovery and the task pilot.
   auto_ship                        false                 default  Opt-in for unattended ship dispatch via the routine/sweep scheduler.
-  pilot_max_complexity             hard                  default  Highest complexity the task pilot may assign: low, medium, hard (default), or xhard. A higher recommendation is refused as a complexity_escalation_blocked finding instead of being applied, so the reserved tier stays an operator decision.
   required_validation_commands     []                    default  Commands a distributed execution claim must pass on its exact candidate before this owner accepts its delivery handoff; empty means no claimed handoff can be accepted.
   low_complexity_crews             []                    default  Weighted crew pool for unassigned low-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.
   medium_complexity_crews          []                    default  Weighted crew pool for unassigned medium-complexity tasks in drains and ships; entries are `name` or `name:weight` (all bare or all weighted); empty disables the pool.

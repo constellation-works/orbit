@@ -236,14 +236,11 @@ spec:
        dependency bump with direct validation can be low; a caller migration
        is often medium; a trust-boundary or cross-subsystem redesign can be
        hard. These are policy examples, not proof of live-model classification
-       accuracy. `xhard` is the reserved top tier, routing work to the most
-       capable and most expensive crews; a workspace caps what this lane may
-       assign (`workflow.pilot_max_complexity`, `hard` by default) and refuses
-       an assessment above that cap outright, so recommend `xhard` only for a
-       repair `hard` genuinely understates. A task that already carries a
-       complexity above that cap is the exception: an operator assigned it, so
-       the ceiling for that task is the tier it carries, its selectors apply
-       normally, and it keeps that tier whatever this assessment recommends.
+       accuracy. `xhard` is the top tier, routing work to the most capable and
+       most expensive crews, so recommend it only for a repair `hard` genuinely
+       understates. A task that already carries `xhard` keeps that tier
+       whatever this assessment recommends — lowering it out of the top pool
+       is an operator decision — and its selectors apply normally.
        Whenever the pilot has produced selectors and a rationale, return an
        assessed complexity (`low`, `medium`, `hard`, or `xhard`) with an appropriate
        `confidence` level (`high`, `medium`, or `low`) expressing uncertainty.

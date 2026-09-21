@@ -16,7 +16,6 @@ use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{Crew, CrewAssignment, resolve_crew};
-use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::automation::recovery::DEFAULT_STALL_WINDOW_MINUTES;
 use orbit_types::workflow::{CODEX_PROVIDER_SANDBOX_MODES, Provider};
 
@@ -30,18 +29,6 @@ use serde_json::{Value as JsonValue, json};
 const DEFAULT_WORKFLOW_BASE_BRANCH: &str = "main";
 /// Approval policies `execution.codex.approval_policy` admits.
 const CODEX_APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
-/// The pilot may assess up to `hard` on its own; `xhard` reserves the most
-/// capable crews for work an operator escalated deliberately.
-const DEFAULT_PILOT_MAX_COMPLEXITY: TaskComplexity = TaskComplexity::Hard;
-/// The tiers `workflow.pilot_max_complexity` admits, in ascending order. The
-/// admission error and the choice list an editor offers both read this, so a
-/// retired tier cannot survive in one of them.
-const PILOT_MAX_COMPLEXITY_CHOICES: &[TaskComplexity] = &[
-    TaskComplexity::Low,
-    TaskComplexity::Medium,
-    TaskComplexity::Hard,
-    TaskComplexity::XHard,
-];
 const DEFAULT_WORKFLOW_CREW: &str = "opus";
 /// Built-in name of the bounded system lane and the default value of
 /// `workflow.system_crew`. Shipped job steps name this crew directly, and a
@@ -437,12 +424,6 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 80,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
-    workflow_pilot_max_complexity: TaskComplexity => String {
-        key: "workflow.pilot_max_complexity", value_type: "string",
-        description: "Highest complexity the task pilot may assign: low, medium, hard (default), or xhard. A higher recommendation is refused as a complexity_escalation_blocked finding instead of being applied, so the reserved tier stays an operator decision.",
-        section: ConfigSection::Delivery, order: 50,
-        resolve: |raw: Option<String>| resolve_pilot_max_complexity(raw),
-    },
     workflow_required_validation_commands: Vec<String> => Vec<String> {
         key: "workflow.required_validation_commands", value_type: "array<string>",
         description: "Commands a distributed execution claim must pass on its exact candidate before this owner accepts its delivery handoff; empty means no claimed handoff can be accepted.",
@@ -529,32 +510,6 @@ fn default_admission_crews() -> BTreeMap<String, Crew> {
     )])
 }
 
-/// Admit `workflow.pilot_max_complexity`, the ceiling on what the task pilot
-/// may assign. Only assessed tiers are a ceiling: `unassessed` is the absence
-/// of an assessment, so it would cap the pilot at nothing.
-fn resolve_pilot_max_complexity(raw: Option<String>) -> Result<TaskComplexity, OrbitError> {
-    let Some(raw) = raw else {
-        return Ok(DEFAULT_PILOT_MAX_COMPLEXITY);
-    };
-    raw.trim()
-        .parse::<TaskComplexity>()
-        .ok()
-        .filter(|complexity| PILOT_MAX_COMPLEXITY_CHOICES.contains(complexity))
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "workflow.pilot_max_complexity must be one of {} (got '{raw}')",
-                complexity_choice_labels().join(", ")
-            ))
-        })
-}
-
-fn complexity_choice_labels() -> Vec<&'static str> {
-    PILOT_MAX_COMPLEXITY_CHOICES
-        .iter()
-        .map(|complexity| complexity.as_str())
-        .collect()
-}
-
 /// Every literal a key's resolver accepts, or an empty list when the key is
 /// free-form.
 ///
@@ -565,7 +520,6 @@ pub fn config_key_options(key: &str) -> Vec<&'static str> {
     match key {
         "execution.codex.sandbox" => CODEX_PROVIDER_SANDBOX_MODES.to_vec(),
         "execution.codex.approval_policy" => CODEX_APPROVAL_POLICIES.to_vec(),
-        "workflow.pilot_max_complexity" => complexity_choice_labels(),
         "operation.completion" => CompletionPreference::CHOICES.to_vec(),
         "operation.delivery_cap" => DeliveryCap::CHOICES.to_vec(),
         "operation.preparation" => PreparationPreference::CHOICES.to_vec(),
@@ -593,14 +547,40 @@ pub fn describe(key: &str) -> Option<&'static ConfigKeyDescriptor> {
     CONFIG_KEY_REGISTRY.iter().find(|entry| entry.key == key)
 }
 
+/// Fixed keys retired from the registry that an existing `config.toml` may
+/// still carry. Loading warns and ignores each one for one release (see
+/// `resolved::warn_compatibility_keys`); `orbit config get`/`set` refuse it
+/// with the migration note instead of a did-you-mean, so the operator learns
+/// the key is gone rather than misspelled. Delete an entry together with its
+/// load warning once the release window has passed.
+pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[(
+    "workflow.pilot_max_complexity",
+    "the task pilot applies its assessed complexity as-is; route a tier with \
+     workflow.<tier>_complexity_crews or pin `crew` on the task instead",
+)];
+
+/// The migration note for a removed key, or `None` for any other key.
+pub(crate) fn removed_key_note(key: &str) -> Option<&'static str> {
+    REMOVED_CONFIG_KEYS
+        .iter()
+        .find(|(removed, _)| *removed == key)
+        .map(|(_, note)| *note)
+}
+
 /// Admit a dotted key for `orbit config get`/`set`.
 ///
-/// Fixed registry keys and live `crews.<name>.<field>` keys succeed. Unknown
-/// registry keys and misspelled crew fields fail with suggestions before any
-/// document mutation.
+/// Fixed registry keys and live `crews.<name>.<field>` keys succeed. A
+/// removed key fails with its migration note; unknown registry keys and
+/// misspelled crew fields fail with suggestions. All before any document
+/// mutation.
 pub fn admit_config_key(key: &str) -> Result<(), OrbitError> {
     if describe(key).is_some() {
         return Ok(());
+    }
+    if let Some(note) = removed_key_note(key) {
+        return Err(OrbitError::InvalidInput(format!(
+            "config key '{key}' was removed and is ignored: {note}"
+        )));
     }
     match parse_crew_field_key(key)? {
         Some(_) => Ok(()),

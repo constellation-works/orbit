@@ -960,10 +960,13 @@ hard_complexity_crews = ["astra"]
 xhard_complexity_crews = ["fable", "astra"]
 ```
 
-The tiers are `low`, `medium`, `hard` and `xhard`. `xhard` is the reserved top
-tier: it exists to route the work an operator judges worth the most capable —
-and most expensive — crews, and the task pilot may not assign it on its own
-(see [`workflow.pilot_max_complexity`](#capping-what-the-task-pilot-may-assign)).
+The tiers are `low`, `medium`, `hard` and `xhard`. `xhard` is the top tier: it
+exists to route the work judged worth the most capable — and most expensive —
+crews. The task pilot applies the complexity it assesses as-is, with one
+exception: a task that already carries `xhard` keeps that tier whatever the
+pilot recommends, so a scoping pass never demotes work out of the top pool —
+lowering it is an operator decision. To pin a crew outright, set `crew` on the
+task.
 
 A fresh `orbit init` scaffolds all four keys as `[]`. An empty pool is "no
 pool": a crew-less task of that complexity is routed to `workflow.default_crew`
@@ -1090,33 +1093,6 @@ created before this behaviour existed, but writes nothing back to the record;
 a run-window `--allow-crew` allowlist is checked against `task.crew`.
 `task.crew` is authoritative for every read surface (task list, task show,
 MCP, dashboard).
-
-#### Capping what the task pilot may assign
-
-The task pilot writes `complexity`, so without a ceiling it could raise its own
-work into the reserved pool. `workflow.pilot_max_complexity` is that ceiling:
-
-```toml
-[workflow]
-pilot_max_complexity = "hard"   # default; "low", "medium" and "xhard" also valid
-```
-
-The ceiling a pilot assessment may assign is the higher of the cap and the
-complexity the task already carries. An assessment above that ceiling is **not
-applied** — neither its complexity nor its `context_files` — and the apply
-result carries a `complexity_escalation_blocked` finding naming the
-recommendation, the cap, the task's current complexity, and the ceiling. The
-task is routed to the pilot's repair partition, where the same detail is the
-error it reassesses against. Raising the key to `xhard` lets the pilot assign
-the top tier itself. `unassessed` is not a ceiling and is rejected for this
-key.
-
-A task an operator already placed above the cap — the usual case for an
-operator-authored `xhard` task, which has no `context_files` yet and so is a
-routine automatic-lane candidate — is scoped rather than refused: the pilot
-applies its `context_files`, and the task keeps the complexity it carries.
-Neither a re-statement of that tier nor a lower recommendation rewrites it, so
-the cap reserves the tier for operator decisions in both directions.
 
 ### Setting `task.crew`
 

@@ -32,7 +32,9 @@ use crate::layering::{load_layered_resolved, value_at_path};
 use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
 use crate::raw::{RawCrewEntry, RawRuntimeConfig, RawTaskSection};
-use crate::registry::{ConfigSnapshot, DEFAULT_WORKFLOW_SYSTEM_CREW, LEGACY_WORKFLOW_SYSTEM_CREW};
+use crate::registry::{
+    self, ConfigSnapshot, DEFAULT_WORKFLOW_SYSTEM_CREW, LEGACY_WORKFLOW_SYSTEM_CREW,
+};
 
 /// PR-rendering settings owned by configuration.
 ///
@@ -120,10 +122,6 @@ pub struct ResolvedConfig {
     pub default_crew: Option<String>,
     /// Automatic admission pools; explicit task assignments take precedence.
     pub complexity_crews: crate::ComplexityCrewPools,
-    /// Highest complexity the task pilot may assign on its own
-    /// (`[workflow] pilot_max_complexity`; defaults to `hard`). A higher
-    /// recommendation is reported instead of applied.
-    pub pilot_max_complexity: orbit_types::task::TaskComplexity,
     /// Crew used by system activities such as step-failure recovery and the
     /// task pilot. Resolution of the named crew is deliberately
     /// deferred to dispatch so a bad system crew does not stop unrelated
@@ -166,7 +164,6 @@ impl ResolvedConfig {
                 hard: Some(snapshot.workflow_hard_complexity_crews.clone()),
                 xhard: Some(snapshot.workflow_xhard_complexity_crews.clone()),
             },
-            pilot_max_complexity: snapshot.workflow_pilot_max_complexity,
             system_crew: snapshot.workflow_system_crew.clone(),
             operation: OperationPolicy::built_in(),
             tasks_id_start: snapshot.tasks_id_start,
@@ -276,6 +273,7 @@ impl ResolvedConfig {
                 .is_some(),
             retired_duel: parsed.duel.is_some(),
             retired_routines: parsed.routines.is_some(),
+            removed_keys: removed_keys_present(&document),
         };
         if emit_compatibility_warnings {
             compatibility_keys.warn(config_path);
@@ -300,7 +298,6 @@ impl ResolvedConfig {
                 hard: Some(snapshot.workflow_hard_complexity_crews.clone()),
                 xhard: Some(snapshot.workflow_xhard_complexity_crews.clone()),
             },
-            pilot_max_complexity: snapshot.workflow_pilot_max_complexity,
             system_crew: snapshot.workflow_system_crew.clone(),
             operation,
             tasks_id_start: snapshot.tasks_id_start,
@@ -677,6 +674,9 @@ struct CompatibilityKeys {
     deprecated_task_id_pattern: bool,
     retired_duel: bool,
     retired_routines: bool,
+    /// Fixed keys from [`registry::REMOVED_CONFIG_KEYS`] the document still
+    /// sets, with their migration notes.
+    removed_keys: Vec<(&'static str, &'static str)>,
 }
 
 impl CompatibilityKeys {
@@ -690,6 +690,9 @@ impl CompatibilityKeys {
         if self.retired_routines {
             warn_retired_routines_config(config_path);
         }
+        for (key, note) in &self.removed_keys {
+            warn_removed_key(config_path, key, note);
+        }
     }
 }
 
@@ -698,8 +701,34 @@ pub(crate) fn warn_compatibility_keys(document: &toml::Value, config_path: &Path
         deprecated_task_id_pattern: value_at_path(document, "knowledge.task_id_pattern").is_some(),
         retired_duel: value_at_path(document, "duel").is_some(),
         retired_routines: value_at_path(document, "routines").is_some(),
+        removed_keys: removed_keys_present(document),
     }
     .warn(config_path);
+}
+
+fn removed_keys_present(document: &toml::Value) -> Vec<(&'static str, &'static str)> {
+    registry::REMOVED_CONFIG_KEYS
+        .iter()
+        .copied()
+        .filter(|(key, _)| value_at_path(document, key).is_some())
+        .collect()
+}
+
+/// [ORB-12723] A key retired from the registry is accepted and ignored for
+/// one release so an existing `config.toml` keeps loading; delete the
+/// [`registry::REMOVED_CONFIG_KEYS`] entry after that, when the key becomes
+/// an ordinary unknown setting.
+pub(crate) const REMOVED_CONFIG_KEY_WARNING: &str =
+    "config key is removed and ignored; delete it from config.toml";
+
+fn warn_removed_key(config_path: &Path, key: &str, note: &str) {
+    let path = redact_home_dir(&config_path.display().to_string());
+    tracing::warn!(
+        config = %path,
+        key,
+        note,
+        REMOVED_CONFIG_KEY_WARNING,
+    );
 }
 
 pub(crate) const RETIRED_DUEL_CONFIG_WARNING: &str =
