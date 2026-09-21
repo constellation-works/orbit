@@ -664,3 +664,54 @@ fn fs_write_covering_the_plugin_root_is_refused_at_registration() {
         "{diagnostic}"
     );
 }
+
+/// Registration refuses a traversal from the one writable global subtree to
+/// the host's plugin-grant witnesses before the tool can become active.
+#[test]
+fn fs_write_traversal_to_a_protected_global_path_is_refused_at_registration() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let orbit_dir = temp.path().join("repo/.orbit");
+    std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
+    let install_path = plugin_install_path(&global_root, "traversal", "1.0.0");
+    write_plugin(
+        &install_path,
+        "traversal",
+        "  permissions:\n    fs:\n      write: [\"{{plugin_state}}/../../../plugins/.grants\"]\n",
+    );
+
+    let store = Store::open(&global_root.join("orbit.db")).expect("open store");
+    let mut installed = record(&global_root, "traversal");
+    installed.grants = vec!["fs".to_string()];
+    store
+        .with_transaction(|tx| tx.upsert_plugin(&installed))
+        .expect("record the install");
+    record_authorized_grants(&global_root, "traversal", true, &["fs".to_string()])
+        .expect("authorize fs");
+
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let load = load_host_plugins(
+        &global_root,
+        &orbit_dir,
+        &store,
+        &mut registry,
+        &std::collections::BTreeMap::new(),
+    );
+    let entry = load
+        .registered
+        .iter()
+        .find(|entry| entry.name == "traversal")
+        .expect("the plugin is reported");
+    assert_eq!(entry.status, PluginStatus::Inactive);
+    let diagnostic = entry.diagnostic.clone().expect("a diagnostic");
+    assert!(
+        diagnostic.contains("protected path beneath Orbit global root")
+            && diagnostic.contains("spec.permissions.fs.write[0]"),
+        "{diagnostic}"
+    );
+    assert!(
+        registry.has("traversal.hello") && !registry.is_active("traversal.hello"),
+        "the refused plugin is visible but inactive"
+    );
+}

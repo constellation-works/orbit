@@ -153,37 +153,85 @@ fn the_profile_follows_the_grants_not_the_requests() {
 }
 
 #[test]
-fn fs_write_of_the_plugin_root_or_global_root_is_refused() {
+fn call_time_fs_write_refuses_protected_global_paths_but_allows_plugin_state() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let root = temp.path().join("plugin");
+    let global_root = temp.path().join("global");
+    let root = global_root.join("plugins/demo/1.0.0");
+    let state_dir = global_root.join("state/plugins/demo");
     std::fs::create_dir_all(&root).expect("plugin root");
+    std::fs::create_dir_all(&state_dir).expect("plugin state");
+
     let mut covering = PluginPermissions::default();
     covering.fs.write = vec!["{{plugin_root}}".into()];
-    let covering_spec = spec(root.join("bin"), &root, covering, &[PluginGrant::Fs]);
+    let mut covering_spec = (*spec(root.join("bin"), &root, covering, &[PluginGrant::Fs])).clone();
+    covering_spec.global_root.clone_from(&global_root);
+    covering_spec.state_dir.clone_from(&state_dir);
     let error = covering_spec.sandbox_profile(None).unwrap_err().to_string();
     assert!(
         error.contains("spec.permissions.fs.write[0]") && error.contains("plugin install root"),
         "{error}"
     );
 
-    let mut host = PluginPermissions::default();
-    host.fs.write = vec![root.join("global").to_string_lossy().into_owned()];
-    let host_spec = spec(root.join("bin"), &root, host, &[PluginGrant::Fs]);
-    let error = host_spec.sandbox_profile(None).unwrap_err().to_string();
+    for declared in [
+        global_root.join("bin").to_string_lossy().into_owned(),
+        global_root
+            .join("plugins/.grants")
+            .to_string_lossy()
+            .into_owned(),
+        global_root
+            .join("plugins/other/1.0.0")
+            .to_string_lossy()
+            .into_owned(),
+        "{{plugin_state}}/../../../plugins/.grants".to_string(),
+    ] {
+        let mut permissions = PluginPermissions::default();
+        permissions.fs.write = vec![declared.clone()];
+        let mut protected =
+            (*spec(root.join("bin"), &root, permissions, &[PluginGrant::Fs])).clone();
+        protected.global_root.clone_from(&global_root);
+        protected.state_dir.clone_from(&state_dir);
+        let error = protected.sandbox_profile(None).unwrap_err().to_string();
+        assert!(
+            error.contains("spec.permissions.fs.write[0]")
+                && error.contains("protected path beneath Orbit global root"),
+            "{declared}: {error}"
+        );
+    }
+
+    let mut deferred_permissions = PluginPermissions::default();
+    deferred_permissions.fs.write = vec!["{{workspace}}/plugins/.grants".into()];
+    let mut deferred = (*spec(
+        root.join("bin"),
+        &root,
+        deferred_permissions,
+        &[PluginGrant::Fs],
+    ))
+    .clone();
+    deferred.global_root.clone_from(&global_root);
+    deferred.state_dir.clone_from(&state_dir);
+    let error = deferred
+        .sandbox_profile(Some(&global_root))
+        .expect_err("a deferred workspace path into the global root must be refused")
+        .to_string();
     assert!(
-        error.contains("spec.permissions.fs.write[0]") && error.contains("Orbit global root"),
+        error.contains("spec.permissions.fs.write[0]")
+            && error.contains("protected path beneath Orbit global root"),
         "{error}"
     );
 
-    let profile = spec(
+    let mut allowed = (*spec(
         root.join("bin"),
         &root,
         fs_state_permissions(),
         &[PluginGrant::Fs],
-    )
-    .sandbox_profile(None)
-    .expect("plugin_state is a child of the plugin root fixture, not a covering write");
-    assert_eq!(profile.write, vec![root.join("state")]);
+    ))
+    .clone();
+    allowed.global_root = global_root;
+    allowed.state_dir.clone_from(&state_dir);
+    let profile = allowed
+        .sandbox_profile(None)
+        .expect("the current plugin_state tree remains writable");
+    assert_eq!(profile.write, vec![state_dir]);
 }
 
 #[test]

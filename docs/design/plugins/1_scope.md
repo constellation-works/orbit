@@ -214,9 +214,11 @@ degrades.
 **The recorded grant set is tamper-evident.** `orbit plugin enable` also writes an integrity
 value over the set it authorized to `~/.orbit/plugins/.grants/<ns>.json`, and the loader
 refuses a `plugins` row whose grants do not match it — no tools, a `doctor` finding, and a
-`denied` audit row per load pass. The two halves sit on opposite sides of a boundary the
-sandbox already enforces: a backend holding `orbit_tools` can write `orbit.db`, because
-`orbit tool run` cannot start without it, but `plugins/` is read-only to it (§4.3). The value
+`denied` audit row per load pass. The two halves sit on opposite sides of boundaries the
+sandbox enforces: a backend holding `orbit_tools` can write `orbit.db`, because `orbit tool
+run` cannot start without it, but that grant never opens `plugins/` for writing, and an `fs`
+grant may write beneath the global root only inside that plugin's `{{plugin_state}}` tree
+(§4.3). The value
 is `sha256("orbit.plugin.grants.v1\n<ns>\n<enabled|disabled>\n<sorted grants>")` — a plain
 digest, not a MAC: a keyed value would need a secret the child cannot read, and that child
 reads the whole global root. What bounds an attacker is the write boundary, not a secret
@@ -273,10 +275,13 @@ call is the one the operator granted, never a later rewrite of the requested pat
 tools, or backend. That comparison means something only because the row's `install_path` is
 checked against `~/.orbit/plugins/<ns>/` first (§3): both sides of the digest comparison come
 off a row a backend can write, so what makes the stored digest evidence is that the bytes it
-is compared against sit at a path the backend cannot populate [ORB-12785]. Independently of that digest check, `permissions.fs.write` roots that
-contain the plugin install root (`{{plugin_root}}` or any parent) or Orbit's global root are
-refused at `orbit plugin validate` and at registration — a plugin may write `{{plugin_state}}`,
-not its own manifest and not `~/.orbit`.
+is compared against sit at a path the backend cannot populate [ORB-12785]. Independently of
+that digest check, every rendered `permissions.fs.write` root is normalized before admission.
+A root that contains the plugin install tree or Orbit's global root is refused, and any root
+*beneath* the global root is also refused unless it is inside that plugin's own
+`{{plugin_state}}` tree. The same rule runs at `orbit plugin validate`, registration and call
+time (the last pass resolves deferred `{{workspace}}` paths), so an `fs` grant cannot reopen
+`bin/`, `plugins/.grants`, another plugin's install tree or another protected global path.
 
 ### 4.2 Execution protocol
 
@@ -336,7 +341,7 @@ plugin missing a required grant never reaches this point (§4.1).
 |---|---|---|---|
 | (always) | — | The plugin root is readable and executable; the host runtime grants (`/usr`, the loader, resolver files, `PATH` directories, tool state) come from the same table activity-scoped `proc.spawn` uses | The compiler's own read allow plus its credential denies |
 | `permissions.fs.read` | `fs` | Each rendered path as a read tree (directory) or read file | `(allow file-read* (subpath …))` via the profile's `read` rules |
-| `permissions.fs.write` | `fs` | Each rendered path as a write tree; the ruleset handles every write-side right, so a path without a write grant is read-only to the child | `(allow file-write* (subpath …))` via the profile's `modify` rules |
+| `permissions.fs.write` | `fs` | Each rendered path as a write tree; before a rule is compiled, normalized paths at or beneath Orbit's global root are refused except paths inside this plugin's `{{plugin_state}}` tree. The ruleset handles every write-side right, so a path without a write grant is read-only to the child | `(allow file-write* (subpath …))` via the profile's `modify` rules, after the same global-root refusal |
 | `permissions.network: none` (default) | — | `ACCESS_NET_BIND_TCP \| ACCESS_NET_CONNECT_TCP` handled with no rule, which refuses every TCP endpoint (needs Landlock ABI 4; an older kernel fails closed) | `(deny network*)` appended after the compiler's broad allow |
 | `permissions.network: loopback` | `network` | TCP left open — Landlock has no address filter, and the design's confinement claim is the filesystem | `(deny network*)` then loopback re-allows |
 | `permissions.network: any` | `network` | TCP left open | the compiler's `(allow network*)` stands |
@@ -360,8 +365,10 @@ in `orbit-core`). Widening it is a security decision, because a plugin that can 
 Orbit's global root can replace the binary the scheduler runs unconfined. Note that this
 confines *filesystem* writes only — a plugin able to write `orbit.db` at all can still reach
 its own `plugins` store row. What stops that row from becoming authority is the grant
-authorization record under `plugins/`, which this boundary keeps read-only to the child
-(§3) [ORB-12778].
+authorization record under `plugins/`. It stays read-only only because the two grant paths
+compose: the `orbit_tools` inventory does not add `plugins/`, and the independent `fs.write`
+admission rule refuses every global-root descendant outside the plugin's own state tree. The
+inventory alone is not that protection (§3) [ORB-12778].
 
 ### 4.4 Audit and provenance
 

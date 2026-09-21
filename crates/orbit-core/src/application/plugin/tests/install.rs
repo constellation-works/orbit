@@ -199,7 +199,8 @@ fn a_rewritten_manifest_after_install_is_refused_until_reconsent() {
 }
 
 /// `orbit plugin validate` refuses a write tree that contains the plugin
-/// directory or the host global root, the same refusal registration applies.
+/// directory or reaches protected host-global paths. Registration and calls
+/// apply the same shared rule.
 #[test]
 fn validate_refuses_fs_write_roots_that_cover_the_plugin_or_global_root() {
     let fixture = PluginFixture::new();
@@ -245,9 +246,53 @@ fn validate_refuses_fs_write_roots_that_cover_the_plugin_or_global_root() {
         "{error}"
     );
 
+    for (name, write) in [
+        (
+            "hostbin",
+            fixture
+                .global_root
+                .join("bin")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        (
+            "grants",
+            fixture
+                .global_root
+                .join("plugins/.grants")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        (
+            "other",
+            fixture
+                .global_root
+                .join("plugins/victim/1.0.0")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        (
+            "traversal",
+            "{{plugin_state}}/../../../plugins/.grants".to_string(),
+        ),
+    ] {
+        let permissions = format!("  permissions:\n    fs:\n      write: [\"{write}\"]\n");
+        let mut protected = PluginSpecFixture::new(name, name);
+        protected.permissions = Some(&permissions);
+        let protected_dir = fixture.write_plugin(protected);
+        let error = validate_plugin_dir(&fixture.runtime, &protected_dir, false)
+            .expect_err("a protected global-root descendant must be refused")
+            .to_string();
+        assert!(
+            error.contains("spec.permissions.fs.write[0]")
+                && error.contains("protected path beneath Orbit global root"),
+            "{name}: {error}"
+        );
+    }
+
     let allowed = fixture.write_plugin(PluginSpecFixture::new("ok", "ok").requesting_fs_write());
     validate_plugin_dir(&fixture.runtime, &allowed, false)
-        .expect("{{plugin_state}} is a child of the global root, not a covering write");
+        .expect("the current {{plugin_state}} tree remains writable");
 }
 
 /// Every way a backend can fail short of a valid response is a tool error
