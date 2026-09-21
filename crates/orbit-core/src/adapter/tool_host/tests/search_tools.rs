@@ -29,9 +29,9 @@ fn search_tool_rejects_boolean_semantic_param() {
     input.insert("query".to_string(), json!("anything"));
     input.insert("semantic".to_string(), json!(true));
     let error = search(&runtime, Value::Object(input))
-        .expect_err("semantic parameter should require a task ID string");
+        .expect_err("removed semantic parameter must be rejected");
 
-    assert!(error.to_string().contains("`semantic` must be a string"));
+    assert!(error.to_string().contains("unknown parameter `semantic`"));
 }
 
 #[test]
@@ -68,4 +68,19 @@ fn search_tool_splits_comma_delimited_status_tokens() {
 
     assert!(error.to_string().contains("`not-a-status`"));
     assert!(error.to_string().contains("`task`"));
+}
+
+#[test]
+fn search_tool_rejects_removed_modes_even_with_valid_query() {
+    let runtime = OrbitRuntime::in_memory().expect("runtime");
+    for (key, value) in [("semantic", json!("task-id")), ("hybrid", json!(true))] {
+        let mut input = json!({"query": "needle"});
+        input[key] = value;
+        let error = search(&runtime, input).expect_err("removed mode");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("unknown parameter `{key}`"))
+        );
+    }
 }

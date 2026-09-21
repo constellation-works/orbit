@@ -12,7 +12,6 @@ mod json;
 mod operation_mode_tools;
 mod pipeline_tools;
 mod search_tools;
-mod semantic_tools;
 mod state_tools;
 mod task_tools;
 pub(crate) mod worker_tools;

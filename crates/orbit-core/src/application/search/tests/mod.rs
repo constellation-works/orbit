@@ -1,4 +1,3 @@
-use orbit_search::{ScoreBreakdown, SemanticHit};
 use orbit_store::contracts::TaskCreateParams;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 
@@ -7,7 +6,6 @@ use crate::OrbitRuntime;
 
 mod federated;
 mod global;
-mod hybrid;
 mod path_match;
 mod types;
 
@@ -58,33 +56,4 @@ fn seed_search_fixture(runtime: &OrbitRuntime, query: &str, task_count: usize) {
             TaskStatus::Backlog,
         );
     }
-}
-
-fn task_semantic_hit(id: &str, score: f32) -> SemanticHit {
-    SemanticHit {
-        source_kind: "task".to_string(),
-        source_id: id.to_string(),
-        best_field: "title".to_string(),
-        snippet: "semantic task snippet".to_string(),
-        score,
-        score_breakdown: ScoreBreakdown {
-            rrf: Some(score),
-            bm25_rank: Some(2),
-            cosine_rank: Some(1),
-        },
-    }
-}
-
-fn with_task_semantic_override<T>(
-    result: Result<Vec<SemanticHit>, orbit_common::OrbitError>,
-    f: impl FnOnce() -> T,
-) -> T {
-    TASK_SEMANTIC_SEARCH_OVERRIDE.with(|cell| {
-        *cell.borrow_mut() = Some(result);
-    });
-    let out = f();
-    TASK_SEMANTIC_SEARCH_OVERRIDE.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
-    out
 }

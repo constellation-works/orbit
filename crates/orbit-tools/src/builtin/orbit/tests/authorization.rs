@@ -77,7 +77,6 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     // AGENT_FLOOR_GOVERNED_TOOLS below rather than to `operator`.
     ("orbit.drain.probe", Placement::Advertised),
     ("orbit.drain.receipt.lookup", Placement::Advertised),
-    ("orbit.semantic.uninstall", Placement::Unadvertised),
     ("orbit.task.delete", Placement::Unadvertised),
     ("orbit.task.locks.release", Placement::Unadvertised),
     ("orbit.task.locks.reserve", Placement::Unadvertised),
@@ -161,7 +160,6 @@ fn the_destructive_builtins_this_task_closed_are_still_governed() {
         "orbit.task.delete",
         "orbit.task.reject",
         "orbit.task.locks.release",
-        "orbit.semantic.uninstall",
     ] {
         assert!(
             governed.contains(&expected),

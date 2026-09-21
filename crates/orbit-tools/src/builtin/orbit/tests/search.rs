@@ -8,7 +8,7 @@ use super::super::search::*;
 use crate::Tool;
 
 #[test]
-fn search_schema_uses_hybrid_and_semantic_task_id_params() {
+fn search_schema_advertises_only_lexical_inputs() {
     let schema = OrbitSearchTool.schema();
     let params = schema
         .parameters
@@ -16,8 +16,8 @@ fn search_schema_uses_hybrid_and_semantic_task_id_params() {
         .map(|param| (param.name.as_str(), param.param_type.as_str()))
         .collect::<Vec<_>>();
 
-    assert!(params.contains(&("hybrid", "boolean")));
-    assert!(params.contains(&("semantic", "string")));
+    assert!(!params.contains(&("hybrid", "boolean")));
+    assert!(!params.contains(&("semantic", "string")));
     assert!(!params.iter().any(|(name, _)| *name == "related"));
     assert!(!params.iter().any(|(name, _)| *name == "field"));
     assert!(!params.iter().any(|(name, _)| *name == "embedding_model"));

@@ -12,7 +12,7 @@
 //! `ORBIT_SESSION_ID`, `ORBIT_TASK_ID`, `ORBIT_ACTIVE_TASK_ID`. Locators and
 //! activity bindings (`ORBIT_ROOT`, `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`,
 //! `ORBIT_WORKTREE_ROOT`, `ORBIT_SCRATCH_DIR`, `ORBIT_BIN`, `ORBIT_STEP_INDEX`,
-//! `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_*`, `ORBIT_SEARCH_COMPANION*`) are
+//! `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_*`) are
 //! injected by the CLI runner or forwarded from the parent when present.
 
 #[derive(Debug, Default)]

@@ -452,56 +452,37 @@ reporting it — through its own install channel — and re-run. Never hand-edit
 `layout.version` or `layout.compat`, and never delete the record to force an open: that
 converts a refusal into a binary operating on state it cannot interpret.
 
-## Mixed binaries and the workspace semantic index
+## Lexical search migration
 
-`.orbit/state/semantic.db` is a **forward-only** layout, independent of the workspace-layout and store-schema ledgers above. A current Orbit binary migrates `corpus_fts` from inline metadata columns (`source_kind`, `source_id`, `field`) to an external-content FTS5 table over `chunks`. The migration is in place: it does not rewrite task or doc source records, and it does not rebuild embeddings.
+Search now uses SQLite FTS5 BM25 only. `orbit semantic` (install, uninstall,
+stats, index), `orbit search --hybrid`, `orbit search similar`, and the
+`orbit.semantic.*` tools are removed. `orbit.search` rejects `semantic` and
+`hybrid` inputs. Use distinctive query terms and `orbit search reindex` to
+rebuild task chunks after imports or restores.
 
-Older binaries still run the pre-migration BM25 projection:
+The search database retains its `state/semantic.db` filename so existing
+backup and sandbox paths still work. On the first writable open, Orbit preserves
+`chunks` and `corpus_fts`, migrates older inline FTS tables, drops the obsolete
+`embeddings` table and its indexes plus `id_allocations`, and runs `VACUUM` to
+reclaim disk space. Read-only opens do not migrate. Task create/update/delete
+maintain chunks synchronously; `orbit doctor` reports `search-index` counts.
 
-```sql
-SELECT source_kind, source_id, field, rowid, bm25(corpus_fts)
-FROM corpus_fts
-WHERE corpus_fts MATCH ?1 AND source_kind=?2
-```
+Stop older Orbit writers and upgrade/restart MCP, dashboard, and pipeline
+processes together. The index migration is forward-only; older binaries must
+not write the migrated database. Align PATH and explicit `ORBIT_BIN` settings
+with the installed release before restarting those processes.
 
-Against a migrated index that query fails with `no such column: source_kind`. Hybrid search on that older process then falls back to lexical ranking. Plain lexical task and doc lookup does not use `semantic.db` and is not broken.
+The `orbit-search-companion` binary and downloaded models are no longer used
+or shipped. After stopping old processes, inspect `~/.orbit/embed/`, then
+manually remove that dedicated directory (including `bin/`, `models/`, and the
+active-model file) to reclaim the former model downloads. This does not affect
+task records or the lexical index. No automatic deletion of that global
+directory is performed.
 
-This mismatch is not a dual-read contract. Restoring the old FTS columns would let an older writer insert into `corpus_fts` without writing `chunks`, desynchronizing the index. Do not delete `semantic.db` to make the older binary work, and do not downgrade the schema.
-
-### Which process to upgrade or restart
-
-The binary that **already migrated** the file is current. Restart or upgrade every **other** Orbit process that still has the file open — typically a Homebrew or MCP install that is older than the cargo/`~/.orbit/bin` build:
-
-```sh
-type -a orbit
-/opt/homebrew/bin/orbit --version
-~/.cargo/bin/orbit --version
-~/.orbit/bin/orbit --version
-```
-
-On macOS, `lsof` on `.orbit/state/semantic.db` shows which process holds the migrated index. Align `PATH`, any explicit `ORBIT_BIN`, MCP client command paths, and long-lived dashboard/pipeline workers with the current binary, then restart those processes so they reopen the file. Building or running a newer cargo `orbit` does not upgrade Homebrew or change which executable an already-started MCP server is using.
-
-`orbit update` is the install-channel upgrade for Orbit-owned binaries; Homebrew packages upgrade through Homebrew. This runbook does not authorize replacing a global executable, restarting a host service, or rebuilding the live index as part of diagnosing the mismatch.
-
-### Distinguish lexical fallback from full hybrid success
-
-Ask the **same executable** the MCP client or agent is using, not a different `orbit` on `PATH`:
-
-```sh
-/path/to/suspect/orbit tool run orbit.search --input '{"query":"<term>","kind":"task","hybrid":true,"limit":2,"model":"codex"}'
-```
-
-Read `mode` and `notes` together:
-
-| Observation | Meaning |
-| --- | --- |
-| `mode` is `hybrid` and `notes` is empty | Full hybrid success on a current runtime. |
-| `mode` is `lexical` and a note contains `falling back to lexical` plus `semantic index layout is incompatible` | The answering process cannot read this `semantic.db` layout. Upgrade/restart **that** process. Lexical hits are not hybrid ranking. |
-| `mode` is `lexical` and a note contains `no such column` / `source_kind` | Same mismatch, reported by an older binary that does not yet translate the SQL error. Same remedy: upgrade/restart that process. |
-| `mode` is `lexical` with a companion/embeddings fallback note, no layout diagnostic | Hybrid was skipped for an unrelated reason (missing companion, empty embeddings). Layout is fine. |
-| Hybrid unset / `hybrid: false` | Lexical-only by request. Success here does not prove hybrid works. |
-
-A current binary on the same workspace answering `mode: hybrid` with empty notes, while an older MCP process on the same `semantic.db` falls back, is the mixed-runtime case — not a corrupt index.
+Legacy `[semantic]` configuration and `search.model` are ignored with a warning
+for the removal release; delete them from config.toml. Config get/set reject
+these retired keys with migration guidance. The runtime no longer honors
+`ORBIT_SEARCH_COMPANION*` environment overrides.
 
 ## Verify the upgrade
 

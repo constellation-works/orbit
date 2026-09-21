@@ -658,14 +658,29 @@ pub fn describe(key: &str) -> Option<&'static ConfigKeyDescriptor> {
 /// with the migration note instead of a did-you-mean, so the operator learns
 /// the key is gone rather than misspelled. Delete an entry together with its
 /// load warning once the release window has passed.
-pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[(
-    "workflow.pilot_max_complexity",
-    "the task pilot applies its assessed complexity as-is; route a tier with \
+pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[
+    (
+        "workflow.pilot_max_complexity",
+        "the task pilot applies its assessed complexity as-is; route a tier with \
      workflow.<tier>_complexity_crews or pin `crew` on the task instead",
-)];
+    ),
+    (
+        "semantic",
+        "semantic search was removed; delete the table and use lexical search",
+    ),
+    (
+        "search.model",
+        "search uses SQLite FTS5 and no longer selects a model; delete this key",
+    ),
+];
 
 /// The migration note for a removed key, or `None` for any other key.
 pub(crate) fn removed_key_note(key: &str) -> Option<&'static str> {
+    let key = if key.starts_with("semantic.") {
+        "semantic"
+    } else {
+        key
+    };
     REMOVED_CONFIG_KEYS
         .iter()
         .find(|(removed, _)| *removed == key)

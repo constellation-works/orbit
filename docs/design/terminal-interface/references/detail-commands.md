@@ -42,4 +42,4 @@ These views can truncate a column and have no detail command. Listed rather than
 | `orbit skill doctor` | `DETAILS` | As above. |
 | `orbit tool show` (parameters) | `DESCRIPTION` | Already the detail view; the parameter description has no deeper surface than `--json`. |
 
-`orbit semantic stats` and `orbit migrate status` are absent from both tables: every column they render is fixed or numeric, so neither can truncate.
+`orbit migrate status` is absent from both tables: every column it renders is fixed or numeric.

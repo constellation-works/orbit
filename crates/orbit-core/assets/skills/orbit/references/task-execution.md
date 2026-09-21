@@ -26,14 +26,9 @@ whole repository before editing. Verify paths and inspect the interfaces needed
 for the next increment; for directories use `rg --files` to find those targets.
 Read enough of each affected file and its consumers to make a correct change.
 
-Then look for related work the author did not link. Treat historical documents
-as context, not authority over current requirements:
-
-```bash
-orbit tool run orbit.search --input '{"semantic":"<task-id>","limit":5,"model":"<agent-family>"}'
-```
-
-Non-blocking — skip it if nothing is relevant, or if the task has no vectors yet.
+When prior context is needed, search distinctive title or description terms with
+`orbit.search` using `query`, `kind: "task"`, and a small `limit`. Inspect useful
+hits before reformulating. Include `all: true` when checking closed history.
 
 For personal execution or an authorized takeover, check that the task's `crew`
 represents your configured crew; correct stale delegation metadata through the

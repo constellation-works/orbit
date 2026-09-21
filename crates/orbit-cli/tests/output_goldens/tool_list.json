@@ -559,25 +559,13 @@
   {
     "active": true,
     "builtin": true,
-    "description": "Search tasks and frictions; hybrid vector ranking applies to indexed tasks.",
+    "description": "Search tasks and frictions using lexical matching.",
     "enabled": true,
     "name": "orbit.search",
     "parameters": [
       {
-        "description": "Free-text query. Defaults to lexical matching unless hybrid is true.",
+        "description": "Free-text lexical query. Multiple words need not be adjacent.",
         "name": "query",
-        "param_type": "string",
-        "required": false
-      },
-      {
-        "description": "Opt into hybrid lexical + cosine ranking for indexed task vectors; frictions remain lexical.",
-        "name": "hybrid",
-        "param_type": "boolean",
-        "required": false
-      },
-      {
-        "description": "Task ID for cosine-neighbor lookup. Mutually exclusive with query.",
-        "name": "semantic",
         "param_type": "string",
         "required": false
       },

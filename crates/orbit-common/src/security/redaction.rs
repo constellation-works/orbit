@@ -175,9 +175,6 @@ pub fn redact_sensitive_env_error(error: OrbitError) -> OrbitError {
         OrbitError::FrictionNotLocal(details) => OrbitError::FrictionNotLocal(
             redact_friction_not_local(*details, redact_sensitive_env_text),
         ),
-        OrbitError::CompanionNotInstalled(m) => {
-            OrbitError::CompanionNotInstalled(redact_sensitive_env_text(&m))
-        }
         OrbitError::InvalidInput(m) => OrbitError::InvalidInput(redact_sensitive_env_text(&m)),
         OrbitError::SensitiveInput { field, reason } => OrbitError::SensitiveInput {
             field: redact_sensitive_env_text(&field),
@@ -334,7 +331,6 @@ pub fn redact_all_error(error: OrbitError) -> OrbitError {
         OrbitError::FrictionNotLocal(details) => {
             OrbitError::FrictionNotLocal(redact_friction_not_local(*details, redact_all))
         }
-        OrbitError::CompanionNotInstalled(m) => OrbitError::CompanionNotInstalled(redact_all(&m)),
         OrbitError::InvalidInput(m) => OrbitError::InvalidInput(redact_all(&m)),
         OrbitError::SensitiveInput { field, reason } => OrbitError::SensitiveInput {
             field: redact_all(&field),

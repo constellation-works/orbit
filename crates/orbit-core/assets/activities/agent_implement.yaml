@@ -72,8 +72,6 @@ spec:
        do not call the file-read tool on the directory; after verifying it
        resolves beneath the workspace root, use `rg --files <directory>` to
        list it, then use the provider-native file-read tool for its key files.
-       Optionally run `orbit.search` with `semantic: "<task-id>"`; skip
-       when its companion is unavailable or no result is relevant.
     3. `input.workspace_path` and `input.repo_root` override task paths. Before
        any write, obtain `pwd -P` and `git rev-parse --show-toplevel`; both
        supplied roots must resolve to that same canonical checkout. Otherwise

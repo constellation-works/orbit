@@ -21,22 +21,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS builds both binaries on one runner — no glibc constraint.
           - slug: darwin-arm64
             target: aarch64-apple-darwin
             runs_on: macos-15
             cli: true
-            companion: true
             cli_asset: orbit-aarch64-apple-darwin.tar.gz
-            companion_asset: orbit-search-companion-macos-aarch64
-          # Intel macOS: CLI only. ort-sys (rc.12) has no ONNX Runtime
-          # prebuilt for x86_64-apple-darwin, so the companion can't link
-          # here; semantic search is unsupported on Intel macs.
           - slug: darwin-x86_64
             target: x86_64-apple-darwin
             runs_on: macos-15-intel
             cli: true
-            companion: false
             cli_asset: orbit-x86_64-apple-darwin.tar.gz
           # Linux CLI builds on ubuntu-22.04 (glibc 2.35) to keep the CLI's
           # runtime compatibility floor low for older distros.
@@ -44,30 +37,12 @@ jobs:
             target: x86_64-unknown-linux-gnu
             runs_on: ubuntu-22.04
             cli: true
-            companion: false
             cli_asset: orbit-x86_64-unknown-linux-gnu.tar.gz
           - slug: linux-arm64-cli
             target: aarch64-unknown-linux-gnu
             runs_on: ubuntu-22.04-arm
             cli: true
-            companion: false
             cli_asset: orbit-aarch64-unknown-linux-gnu.tar.gz
-          # Linux companion builds on ubuntu-24.04 (glibc 2.39): the prebuilt
-          # ONNX Runtime that orbit-search-companion links references glibc
-          # 2.38+ symbols (__isoc23_*) absent on 22.04. The companion already
-          # requires glibc 2.38+ at runtime regardless of build host.
-          - slug: linux-x86_64-companion
-            target: x86_64-unknown-linux-gnu
-            runs_on: ubuntu-24.04
-            cli: false
-            companion: true
-            companion_asset: orbit-search-companion-linux-x86_64
-          - slug: linux-arm64-companion
-            target: aarch64-unknown-linux-gnu
-            runs_on: ubuntu-24.04-arm
-            cli: false
-            companion: true
-            companion_asset: orbit-search-companion-linux-aarch64
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,10 +71,6 @@ jobs:
             cargo build -p orbit-cli --release --locked --target "${{ matrix.target }}"
             "./target/${{ matrix.target }}/release/orbit" --version
           fi
-          if [ "${{ matrix.companion }}" = "true" ]; then
-            cargo build -p orbit-search --features companion --bin orbit-search-companion --release --locked --target "${{ matrix.target }}"
-            "./target/${{ matrix.target }}/release/orbit-search-companion" --version-info
-          fi
 
       - name: Package release assets
         shell: bash
@@ -108,10 +79,6 @@ jobs:
           mkdir -p dist
           if [ "${{ matrix.cli }}" = "true" ]; then
             tar -czf "dist/${{ matrix.cli_asset }}" -C "target/${{ matrix.target }}/release" orbit
-          fi
-          if [ "${{ matrix.companion }}" = "true" ]; then
-            cp "target/${{ matrix.target }}/release/orbit-search-companion" "dist/${{ matrix.companion_asset }}"
-            chmod 755 "dist/${{ matrix.companion_asset }}"
           fi
           ls -lh dist
 
@@ -157,9 +124,6 @@ jobs:
               orbit-aarch64-unknown-linux-gnu.tar.gz
               orbit-x86_64-apple-darwin.tar.gz
               orbit-x86_64-unknown-linux-gnu.tar.gz
-              orbit-search-companion-macos-aarch64
-              orbit-search-companion-linux-aarch64
-              orbit-search-companion-linux-x86_64
             )
             for asset in "${expected_assets[@]}"; do
               [ -f "$asset" ] || {
@@ -228,9 +192,6 @@ jobs:
             dist/orbit-aarch64-unknown-linux-gnu.tar.gz
             dist/orbit-x86_64-apple-darwin.tar.gz
             dist/orbit-x86_64-unknown-linux-gnu.tar.gz
-            dist/orbit-search-companion-macos-aarch64
-            dist/orbit-search-companion-linux-aarch64
-            dist/orbit-search-companion-linux-x86_64
             dist/orbit-checksums.txt
             dist/orbit-checksums.txt.sig
           generate_release_notes: true
@@ -349,15 +310,7 @@ jobs:
           curl -sSfL "$INSTALL_URL" | ORBIT_INSTALL_DIR="$INSTALL_DIR" ORBIT_VERSION="${GITHUB_REF_NAME}" sh
           export PATH="$INSTALL_DIR:$PATH"
           orbit --version
-          SMOKE_ROOT="$(mktemp -d)"
-          export HOME="$SMOKE_ROOT/home"
-          export XDG_CACHE_HOME="$SMOKE_ROOT/cache"
-          WORKSPACE_DIR="$SMOKE_ROOT/workspace"
-          mkdir -p "$HOME" "$XDG_CACHE_HOME" "$WORKSPACE_DIR"
-          cd "$WORKSPACE_DIR"
-          orbit semantic install --json
-          test -x "$HOME/.orbit/embed/bin/orbit-search-companion-macos-aarch64"
-          test -f "$HOME/.orbit/embed/models/bge-small/orbit-model.json"
+          orbit search --help
 
   smoke-install-ubuntu:
     name: Smoke test installer on Ubuntu 24.04
@@ -382,12 +335,4 @@ jobs:
           curl -sSfL "$INSTALL_URL" | ORBIT_INSTALL_DIR="$INSTALL_DIR" ORBIT_VERSION="${GITHUB_REF_NAME}" sh
           export PATH="$INSTALL_DIR:$PATH"
           orbit --version
-          SMOKE_ROOT="$(mktemp -d)"
-          export HOME="$SMOKE_ROOT/home"
-          export XDG_CACHE_HOME="$SMOKE_ROOT/cache"
-          WORKSPACE_DIR="$SMOKE_ROOT/workspace"
-          mkdir -p "$HOME" "$XDG_CACHE_HOME" "$WORKSPACE_DIR"
-          cd "$WORKSPACE_DIR"
-          orbit semantic install --json
-          test -x "$HOME/.orbit/embed/bin/orbit-search-companion-linux-x86_64"
-          test -f "$HOME/.orbit/embed/models/bge-small/orbit-model.json"
+          orbit search --help

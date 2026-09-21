@@ -393,7 +393,7 @@
     "name": "orbit_friction_update"
   },
   {
-    "description": "Search tasks and frictions; hybrid vector ranking applies to indexed tasks.",
+    "description": "Search tasks and frictions using lexical matching.",
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
@@ -403,10 +403,6 @@
         },
         "all_workspaces": {
           "description": "Search every active workspace registered on the answering machine. Overrides `workspaces`. Not available inside an Orbit-managed run.",
-          "type": "boolean"
-        },
-        "hybrid": {
-          "description": "Opt into hybrid lexical + cosine ranking for indexed task vectors; frictions remain lexical.",
           "type": "boolean"
         },
         "kind": {
@@ -428,11 +424,7 @@
           "type": "string"
         },
         "query": {
-          "description": "Free-text query. Defaults to lexical matching unless hybrid is true.",
-          "type": "string"
-        },
-        "semantic": {
-          "description": "Task ID for cosine-neighbor lookup. Mutually exclusive with query.",
+          "description": "Free-text lexical query. Multiple words need not be adjacent.",
           "type": "string"
         },
         "status": {

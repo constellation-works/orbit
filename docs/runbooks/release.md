@@ -28,7 +28,7 @@ GitHub Releases require `ORBIT_RELEASE_SIGNING_KEY_PEM`, a PEM-encoded private
 key whose public half matches
 [`npm/release-signing.pub`](../../npm/release-signing.pub). The release
 workflow signs `orbit-checksums.txt` as `orbit-checksums.txt.sig`;
-`install.sh`, the npm postinstall, and `orbit semantic install` authenticate
+`install.sh`, the npm postinstall, and `orbit update` authenticate
 that signature before trusting release-hosted SHA-256 values.
 
 The installers carry a small release-signing trust set:
@@ -108,12 +108,11 @@ date has passed or its `revoked_at` field is set.
 8. **Watch [`.github/workflows/release.yml`](../../.github/workflows/release.yml).**
    Its jobs:
 
-   - build four platform CLI tarballs and the supported semantic companions;
+   - build four platform CLI tarballs;
    - generate and sign the combined checksum manifest, then create the GitHub
      Release;
    - update the Homebrew tap;
-   - smoke the tagged shell installer on macOS and Ubuntu, including semantic
-     companion installation where supported.
+   - smoke the tagged shell installer and search help on macOS and Ubuntu.
 
    Review the result of every job, but treat CI as informational on
    `agent-main`: no job is a merge gate. Failures are queued for asynchronous

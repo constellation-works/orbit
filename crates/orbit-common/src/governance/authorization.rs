@@ -433,12 +433,6 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "force-releasing a workspace claim displaces the operator currently driving dispatch",
     },
     GovernedOperation {
-        id: "orbit.semantic.uninstall",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "uninstalling tears down the local semantic index and companion",
-    },
-    GovernedOperation {
         id: "workspace teardown",
         surface: OperationSurface::CliCommand,
         allowed: &[McpCapability::Operator],
@@ -455,12 +449,6 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         surface: OperationSurface::CliCommand,
         allowed: &[McpCapability::Operator],
         rationale: "pruning permanently deletes audit history",
-    },
-    GovernedOperation {
-        id: "semantic uninstall",
-        surface: OperationSurface::CliCommand,
-        allowed: &[McpCapability::Operator],
-        rationale: "uninstalling tears down the local semantic index and companion",
     },
     GovernedOperation {
         id: "gc worktrees",

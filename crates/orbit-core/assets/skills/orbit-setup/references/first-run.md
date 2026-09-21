@@ -166,16 +166,6 @@ locks, and runs. Report its output. Distinguish failures affecting the requested
 not configured. Resolve relevant failures or report the specific blocker; a
 passing `--version` alone is not sufficient.
 
-If semantic search is requested, its local companion requires a model download.
-Use existing authorization or confirm this addition before downloading:
-
-```bash
-orbit semantic install
-orbit semantic stats
-```
-
-Lexical search works without it. → [search.md](../../orbit/references/search.md)
-
 ## Step 6 — Hand off
 
 - **First real task** — route through [task-authoring.md](../../orbit/references/task-authoring.md).
@@ -210,4 +200,4 @@ initial setup succeeded:
 - Don't pick a task prefix casually on a second machine. It cannot be changed.
 - Don't enable every seeded routine at once. Enable worktree GC before, not
   after, scheduling ship traffic.
-- A semantic model download needs authorization; lexical search remains available without it.
+- Task search uses the local SQLite index; no model download is needed.

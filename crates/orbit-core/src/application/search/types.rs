@@ -2,8 +2,6 @@ use std::str::FromStr;
 
 use serde::Serialize;
 
-use orbit_search::ScoreBreakdown;
-
 use crate::runtime::workspace_catalog::WorkspaceScope;
 
 use super::DEFAULT_LIMIT;
@@ -54,16 +52,11 @@ impl FromStr for GlobalSearchKind {
 #[serde(rename_all = "lowercase")]
 pub enum GlobalSearchMode {
     Lexical,
-    Hybrid,
-    Neighbor,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct GlobalSearchParams {
     pub query: Option<String>,
-    // ADR-0179: hybrid free-text ranking and task-neighbor lookup are distinct modes.
-    pub hybrid: bool,
-    pub semantic: Option<String>,
     pub kind: GlobalSearchKind,
     pub limit: usize,
     /// AND-filter by tag. Repeat for multi-tag AND semantics. Applies to
@@ -181,7 +174,7 @@ pub struct GlobalSearchHit {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub score: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub score_breakdown: Option<ScoreBreakdown>,
+    pub score_breakdown: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matched_by: Option<Vec<String>>,
     /// Set only on a federated query. `None` on the single-workspace path

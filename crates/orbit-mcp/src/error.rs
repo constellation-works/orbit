@@ -73,7 +73,6 @@ fn error_code(err: &OrbitError) -> &str {
             | NotFoundKind::AgentSession
             | NotFoundKind::Workspace => "not_found",
         },
-        OrbitError::CompanionNotInstalled(_) => "companion_not_installed",
         OrbitError::PolicyDenied(_) => "policy_denied",
         OrbitError::CapabilityDenied(_) => "capability_denied",
         OrbitError::UnknownSelector(_) => "unknown_selector",

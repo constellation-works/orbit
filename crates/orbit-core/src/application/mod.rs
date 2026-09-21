@@ -714,7 +714,6 @@ pub mod review;
 pub(crate) mod routine;
 pub mod routines;
 pub(crate) mod search;
-pub mod semantic;
 pub mod skill;
 pub mod task;
 pub(crate) mod workflow;

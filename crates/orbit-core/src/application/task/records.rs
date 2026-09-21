@@ -1,7 +1,7 @@
 //! Coordinated task document, history, artifact, and search-index writes.
 
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_search::{EmbedWorker, SemanticIndex};
+use orbit_search::LexicalIndex;
 use orbit_store::contracts::{
     TaskArtifactStoreBackend, TaskArtifactUpdateParams, TaskCreateParams, TaskDocumentStoreBackend,
     TaskDocumentUpdateParams, TaskHistoryStoreBackend, TaskHistoryUpdateParams, TaskStoreBackend,
@@ -18,8 +18,7 @@ impl OrbitStores {
             document: self.task_documents(),
             history: self.task_history(),
             artifact: self.task_artifacts(),
-            semantic_index: self.semantic_index(),
-            semantic_worker: self.semantic_worker(),
+            lexical_index: self.lexical_index(),
         }
     }
 }
@@ -32,14 +31,24 @@ pub(crate) struct TaskRecordService<'a> {
     document: &'a dyn TaskDocumentStoreBackend,
     history: &'a dyn TaskHistoryStoreBackend,
     artifact: &'a dyn TaskArtifactStoreBackend,
-    semantic_index: &'a SemanticIndex,
-    semantic_worker: &'a EmbedWorker,
+    lexical_index: &'a LexicalIndex,
 }
 
 impl TaskRecordService<'_> {
+    fn index_task(&self, task: &Task) {
+        if let Err(error) = self
+            .lexical_index
+            .store()
+            .and_then(|index| index.index_task(task))
+        {
+            orbit_common::tracing::warn!(task_id = %task.id, %error,
+                "task saved but search indexing failed; run orbit search reindex to repair");
+        }
+    }
+
     pub(crate) fn create(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
         let task = self.store.create_task(params)?;
-        self.semantic_worker.enqueue(task.clone());
+        self.index_task(&task);
         Ok(task)
     }
 
@@ -52,7 +61,7 @@ impl TaskRecordService<'_> {
             Some(key) => self.store.create_task_idempotent(params, key)?,
             None => return self.create(params),
         };
-        self.semantic_worker.enqueue(task.clone());
+        self.index_task(&task);
         Ok(task)
     }
 
@@ -127,7 +136,7 @@ impl TaskRecordService<'_> {
             || params.has_history_changes()
             || params.has_artifact_changes()
         {
-            self.semantic_worker.enqueue(task.clone());
+            self.index_task(&task);
         }
         Ok(task)
     }
@@ -139,15 +148,15 @@ impl TaskRecordService<'_> {
         // either way, and the index reconciles on its next reindex.
         if deleted
             && let Err(error) = self
-                .semantic_index
+                .lexical_index
                 .store()
-                .and_then(|vector| vector.delete_source("task", id))
+                .and_then(|index| index.delete_source("task", id))
         {
             orbit_common::tracing::debug!(
                 target: "orbit.search.indexer",
                 task_id = id,
                 error = %error,
-                "semantic delete cascade failed after task deletion",
+                "search delete cascade failed after task deletion",
             );
         }
         Ok(deleted)

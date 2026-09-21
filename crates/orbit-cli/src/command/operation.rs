@@ -299,28 +299,6 @@ impl Commands {
                     runtime_dispatch!(Config),
                 )
             }
-            Commands::Semantic(command) => {
-                use super::semantic::SemanticSubcommand;
-                let subcommand = match &command.command {
-                    SemanticSubcommand::Install(_) => "install",
-                    SemanticSubcommand::Uninstall(_) => "uninstall",
-                    SemanticSubcommand::Stats(_) => "stats",
-                    SemanticSubcommand::Index(_) => "index",
-                };
-                CommandOperation::new(
-                    RuntimeNeed::Required,
-                    Some(admin_meta(
-                        "semantic",
-                        Some(subcommand),
-                        Some("semantic_index"),
-                        None,
-                    )),
-                    None,
-                    false,
-                    runtime_dispatch!(Semantic),
-                )
-                .governed_when(subcommand == "uninstall", "semantic", subcommand)
-            }
             Commands::Migrate(command) => CommandOperation::new(
                 if command.confirm {
                     RuntimeNeed::Required
@@ -624,7 +602,11 @@ impl Commands {
                 )
             }
             Commands::Search(command) => CommandOperation::new(
-                RuntimeNeed::ReadOnly,
+                if command.command.is_some() {
+                    RuntimeNeed::Required
+                } else {
+                    RuntimeNeed::ReadOnly
+                },
                 Some(admin_meta(
                     "search",
                     Some(&command.audit_subcommand()),

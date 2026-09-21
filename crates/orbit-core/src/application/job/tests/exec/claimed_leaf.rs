@@ -55,6 +55,9 @@ fn init_remoteless_repo(repo_root: &Path) {
     );
     std::fs::create_dir_all(repo_root.join("src")).expect("src");
     std::fs::write(repo_root.join("src/lib.rs"), "// base\n").expect("seed source");
+    // Task writes synchronously update the search database and its sidecars.
+    // Runtime state is ignored in real workspaces and must not be committed here.
+    std::fs::write(repo_root.join(".gitignore"), "/.orbit/state/\n").expect("ignore runtime state");
     git_in(repo_root, &["add", "."]);
     git_in(repo_root, &["commit", "-m", "initial"]);
     git_in(repo_root, &["checkout", "-b", BASE_BRANCH]);
@@ -87,6 +90,7 @@ fn init_published_repo(repo_root: &Path, origin: &Path) {
     );
     std::fs::create_dir_all(repo_root.join("src")).expect("src");
     std::fs::write(repo_root.join("src/lib.rs"), "// base\n").expect("seed source");
+    std::fs::write(repo_root.join(".gitignore"), "/.orbit/state/\n").expect("ignore runtime state");
     git_in(repo_root, &["add", "."]);
     git_in(repo_root, &["commit", "-m", "initial"]);
     git_in(repo_root, &["checkout", "-b", BASE_BRANCH]);

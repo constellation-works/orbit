@@ -39,7 +39,7 @@ Keep incomplete entry points unavailable when later slices are needed for safety
    friction or triage, search open and closed work before filing a new owner.
    For an explicit user request, reuse a supplied task; search when duplication is
    plausible rather than turning every request into an investigation.
-   See [search](search.md); a new task has no vectors for `search similar`.
+   See [search](search.md) for lexical query guidance.
 2. Inspect the likely modification anchors and relevant interfaces. Background
    reading belongs in the description, not the lock footprint. Use targeted
    reads; a task does not need a dump of the surrounding subsystem.

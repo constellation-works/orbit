@@ -200,8 +200,8 @@ For diagnosing a host-level incident rather than tuning retention, see
 ## Search indexes
 
 ```bash
-orbit semantic stats                       # companion and index status
-orbit semantic index --kind tasks|all
+orbit doctor                              # search-index coverage
+orbit search reindex                       # rebuild task chunks
 ```
 
 Indexing is idempotent and safe to re-run. Reindex after bulk task imports or

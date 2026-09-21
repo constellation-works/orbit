@@ -132,11 +132,7 @@ fn an_agent_is_denied_out_of_scope_destruction() {
         agent_declared: true,
         ..envelope()
     });
-    for id in [
-        "orbit.task.delete",
-        "orbit.task.reject",
-        "orbit.semantic.uninstall",
-    ] {
+    for id in ["orbit.task.delete", "orbit.task.reject"] {
         assert!(
             authorize(operation(id), &caller).is_err(),
             "agent must not reach '{id}'"

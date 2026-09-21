@@ -304,10 +304,6 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         | OrbitBuiltinAction::PipelineInvoke
         | OrbitBuiltinAction::PipelineWait
         | OrbitBuiltinAction::Search
-        | OrbitBuiltinAction::SemanticIndex
-        | OrbitBuiltinAction::SemanticInstall
-        | OrbitBuiltinAction::SemanticStats
-        | OrbitBuiltinAction::SemanticUninstall
         | OrbitBuiltinAction::StateGet
         | OrbitBuiltinAction::StateSet
         | OrbitBuiltinAction::TaskArtifactGet

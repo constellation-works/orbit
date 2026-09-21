@@ -2144,54 +2144,54 @@ fn mcp_task_add_and_update_validate_context_selectors() {
 }
 
 #[test]
-fn mcp_hybrid_search_without_companion_returns_lexical_results() {
+fn task_mutations_are_immediately_searchable_from_the_cli_and_mcp() {
     let workspace = McpWorkspace::init();
-    let companion_state = workspace.home.join(".orbit").join("embed");
-    assert!(
-        !companion_state.exists(),
-        "test must start without companion state"
-    );
     let mut client = workspace.serve();
-
     let task = client.call_tool_ok(
         "orbit_task_add",
         json!({
-            "title": "MCP lexical fallback regression",
-            "description": "The optional companion is absent.",
-            "tags": ["fallback"],
-            "complexity": "low",
-            "model": "codex"
+            "title": "Cobalt routing observatory regression",
+            "description": "Synchronous lexical indexing",
+            "complexity": "low", "model": "codex"
         }),
     );
-    let task_id = task["id"].as_str().expect("task id");
-    let response = client.call_tool_ok(
-        "orbit_search",
-        json!({
-            "query": "MCP lexical fallback regression",
-            "hybrid": true,
-            "kind": "task",
-            "tag": ["fallback"],
-            "limit": 1,
-            "model": "codex"
-        }),
+    let id = task["id"].as_str().expect("id");
+    let search = |query: &str| {
+        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .args(["search", query, "--kind", "task", "--json"])
+            .output()
+            .expect("CLI search");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).expect("search JSON")
+    };
+    assert_eq!(search("Cobalt observatory")["results"][0]["id"], id);
+    client.call_tool_ok(
+        "orbit_task_update",
+        json!({"id": id, "title": "Quartz routing telescope regression", "model": "codex"}),
     );
-
-    assert_eq!(response["mode"], "lexical");
-    assert_eq!(response["results"][0]["id"], task_id);
-    assert_eq!(response["results"][0]["source"], "lexical");
-    let notes = response["notes"].as_array().expect("fallback notes");
-    assert!(notes.iter().any(|note| {
-        note.as_str()
-            .is_some_and(|note| note.contains("falling back to lexical task search"))
-    }));
-    assert!(notes.iter().all(|note| {
-        note.as_str()
-            .is_some_and(|note| !note.contains("orbit semantic install"))
-    }));
+    assert_eq!(search("Quartz telescope")["results"][0]["id"], id);
     assert!(
-        !companion_state.exists(),
-        "MCP fallback must not install companion state"
+        search("Cobalt observatory")["results"]
+            .as_array()
+            .expect("results")
+            .is_empty()
     );
+    let rebuilt = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["search", "reindex", "--json"])
+        .output()
+        .expect("CLI reindex");
+    assert!(
+        rebuilt.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebuilt.stderr)
+    );
+    let report: Value = serde_json::from_slice(&rebuilt.stdout).expect("reindex JSON");
+    assert!(report["chunks"].as_u64().expect("chunk count") > 0);
+    assert_eq!(search("Quartz telescope")["results"][0]["id"], id);
 }
 
 #[test]

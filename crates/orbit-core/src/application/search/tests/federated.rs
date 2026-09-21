@@ -1,18 +1,16 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_search::{Embedder, EmbedderPool, NoopEmbedder};
 use orbit_types::task::TaskStatus;
 
 use super::*;
 use crate::application::search::federated::{
     MAX_FEDERATED_CONCURRENCY, MAX_FEDERATED_WORKSPACES, apply_workspace_cap,
-    describe_model_mismatch, ensure_federated_scope_permitted, ensure_federated_scope_supported,
-    federated_worker_count, with_managed_run_override,
+    ensure_federated_scope_permitted, ensure_federated_scope_supported, federated_worker_count,
+    with_managed_run_override,
 };
 use crate::runtime::workspace_catalog::{
     FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope,
@@ -377,114 +375,6 @@ fn per_workspace_queries_run_concurrently() {
     );
 }
 
-/// A `NoopEmbedder` that counts real embed calls, handed out by a pool that
-/// counts spawns — the two costs a federated query is supposed to pay once.
-struct CountingEmbedder {
-    inner: NoopEmbedder,
-    embeds: Arc<AtomicUsize>,
-}
-
-impl Embedder for CountingEmbedder {
-    fn model_id(&self) -> &str {
-        self.inner.model_id()
-    }
-
-    fn dim(&self) -> usize {
-        self.inner.dim()
-    }
-
-    fn max_input_tokens(&self) -> usize {
-        self.inner.max_input_tokens()
-    }
-
-    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, OrbitError> {
-        self.embeds.fetch_add(1, Ordering::SeqCst);
-        self.inner.embed(texts)
-    }
-
-    fn token_count(&self, text: &str) -> Result<usize, OrbitError> {
-        self.inner.token_count(text)
-    }
-
-    fn token_boundaries(&self, text: &str) -> Result<Vec<usize>, OrbitError> {
-        self.inner.token_boundaries(text)
-    }
-}
-
-fn counting_pool() -> (Arc<EmbedderPool>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
-    let spawns = Arc::new(AtomicUsize::new(0));
-    let embeds = Arc::new(AtomicUsize::new(0));
-    let pool = EmbedderPool::with_spawner({
-        let spawns = Arc::clone(&spawns);
-        let embeds = Arc::clone(&embeds);
-        move |_model| {
-            spawns.fetch_add(1, Ordering::SeqCst);
-            Ok(Arc::new(CountingEmbedder {
-                inner: NoopEmbedder::small(),
-                embeds: Arc::clone(&embeds),
-            }) as Arc<dyn Embedder>)
-        }
-    });
-    (Arc::new(pool), spawns, embeds)
-}
-
-/// [DANI-10501] The fan-out borrows the host's warm companion instead of
-/// spawning its own, and embeds the query text once for every workspace.
-#[test]
-fn a_warm_pool_answers_a_federated_hybrid_query_without_spawning() {
-    let query = "pooled";
-    let entries = (0..3)
-        .map(|ordinal| {
-            let runtime = seeded_runtime(query, 2);
-            // Indexed under the fake companion's model, so each workspace's
-            // vector branch has rows to rank and the fused mode proves the
-            // branch ran through the shared embedder rather than degrading.
-            let store = runtime
-                .stores()
-                .semantic_index()
-                .store()
-                .expect("semantic index");
-            for task in runtime.list_tasks().expect("seeded tasks") {
-                store
-                    .index_task(&task, &NoopEmbedder::small(), false)
-                    .expect("index task");
-            }
-            (target(&format!("ws{ordinal}")), Some(runtime))
-        })
-        .collect::<Vec<_>>();
-    let (pool, spawns, embeds) = counting_pool();
-    // Warm the pool the way a long-lived host does: an earlier query already
-    // loaded the model this host resolves for query-side embedding.
-    let model = orbit_search::query_model_id(None).expect("query model");
-    pool.embedder(&model).expect("warm companion");
-    assert_eq!(spawns.load(Ordering::SeqCst), 1);
-
-    let mut runtime = hub(FakeCatalog::new(entries));
-    runtime.share_semantic_embedders(Arc::clone(&pool));
-
-    let response = with_managed_run_override(false, || {
-        runtime
-            .global_search(GlobalSearchParams {
-                hybrid: true,
-                ..federated_query(query, 8)
-            })
-            .expect("federated hybrid search")
-    });
-
-    assert_eq!(response.mode, GlobalSearchMode::Hybrid);
-    assert_eq!(response.workspaces.len(), 3);
-    assert_eq!(
-        spawns.load(Ordering::SeqCst),
-        1,
-        "a warm pool must answer the fan-out without loading the model again"
-    );
-    assert_eq!(
-        embeds.load(Ordering::SeqCst),
-        1,
-        "the query text must be embedded once for the whole fan-out"
-    );
-}
-
 #[test]
 fn the_fan_out_pool_is_bounded_and_never_wider_than_the_scope() {
     assert_eq!(federated_worker_count(0), 0);
@@ -516,20 +406,6 @@ fn workspace_fan_out_cap_is_announced_never_silent() {
 }
 
 #[test]
-fn model_mismatch_is_reported_and_a_shared_model_is_not() {
-    let indexed = BTreeSet::from(["minilm-l6".to_string()]);
-    let note = describe_model_mismatch(&indexed, "bge-small").expect("mismatch must be reported");
-    assert!(note.contains("minilm-l6"));
-    assert!(note.contains("bge-small"));
-    assert!(note.contains("cosine"));
-
-    assert!(describe_model_mismatch(&indexed, "minilm-l6").is_none());
-    // An unindexed workspace is not a mismatch — it simply has no vectors, and
-    // the existing hybrid fallback already narrates that.
-    assert!(describe_model_mismatch(&BTreeSet::new(), "bge-small").is_none());
-}
-
-#[test]
 fn federated_scope_is_denied_inside_a_managed_run() {
     let error = ensure_federated_scope_permitted(true)
         .expect_err("a managed run may only read its own workspace index");
@@ -538,19 +414,7 @@ fn federated_scope_is_denied_inside_a_managed_run() {
 }
 
 #[test]
-fn neighbor_and_path_lookups_refuse_a_federated_scope() {
-    let semantic = GlobalSearchParams {
-        semantic: Some("ORB-00001".to_string()),
-        workspaces: WorkspaceScope::AllRegistered,
-        ..Default::default()
-    };
-    assert!(
-        ensure_federated_scope_supported(&semantic)
-            .expect_err("neighbor lookup is single-workspace")
-            .to_string()
-            .contains("`semantic`")
-    );
-
+fn path_lookups_refuse_a_federated_scope() {
     let path = GlobalSearchParams {
         path: Some("src/main.rs".to_string()),
         workspaces: WorkspaceScope::AllRegistered,

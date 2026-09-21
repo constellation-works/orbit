@@ -3,7 +3,7 @@
 //! Complements the narrower `orbit skill doctor` / `orbit tool doctor`
 //! surfaces with whole-workspace checks: config validity, store database
 //! integrity and schema-ledger version, free disk space on the volume
-//! holding `.orbit`, semantic-index staleness, leftover lock
+//! holding `.orbit`, search-index coverage, leftover lock
 //! files from crashed holders, orphaned `running`/`pending` job runs, task
 //! reservations whose owner or terminal task association is conclusively
 //! inactive, task
@@ -166,7 +166,7 @@ impl DoctorCommands for OrbitRuntime {
         results.extend([
             doctor_check_database(self),
             doctor_check_disk_space(self),
-            doctor_check_semantic_index(self),
+            doctor_check_search_index(self),
             doctor_check_stale_locks(self),
             doctor_check_job_runs(self),
             doctor_check_task_reservations(self),
@@ -389,76 +389,36 @@ fn doctor_check_disk_space(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     disk_space_check(&root)
 }
 
-/// Semantic (docs/tasks) embedding index staleness, using the
-/// stale-row signal the vector store already tracks.
-fn doctor_check_semantic_index(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    match runtime.semantic_stats() {
+/// Cheap chunk coverage check against the authoritative task store.
+fn doctor_check_search_index(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    match runtime
+        .search_index_stats()
+        .and_then(|stats| Ok((stats, runtime.list_tasks()?.len())))
+    {
         Err(error) => check(
-            "semantic-index",
+            "search-index",
             WorkspaceDoctorStatus::Warning,
-            format!("cannot read semantic index: {error}"),
+            format!("cannot read search index: {error}"),
         ),
-        Ok(stats) => {
-            if stats.companion.installed
-                && let Some(message) =
-                    companion_version_mismatch(stats.companion.version.as_deref())
-            {
-                return actionable_check(
-                    "semantic-index",
-                    WorkspaceDoctorStatus::Warning,
-                    message,
-                    "Run `orbit semantic install` to install the matching companion, then rerun `orbit doctor`.".to_string(),
-                );
-            }
-            let total: usize = stats.rows.counts.iter().map(|count| count.rows).sum();
-            if total == 0 {
-                check(
-                    "semantic-index",
-                    WorkspaceDoctorStatus::Skipped,
-                    "no semantic embeddings indexed yet".to_string(),
-                )
-            } else if stats.rows.stale_rows > 0 {
+        Ok((stats, tasks)) => {
+            let detail = format!(
+                "{} chunks, {} indexed tasks / {tasks} stored tasks",
+                stats.chunks, stats.tasks
+            );
+            if stats.tasks != tasks {
                 actionable_check(
-                    "semantic-index",
+                    "search-index",
                     WorkspaceDoctorStatus::Warning,
-                    format!(
-                        "{} of {total} embedding rows are stale; re-run `orbit semantic index`",
-                        stats.rows.stale_rows
-                    ),
-                    "Run `orbit semantic index`, then rerun `orbit doctor`.".to_string(),
+                    detail,
+                    "Run `orbit search reindex`, then rerun `orbit doctor`.".to_string(),
                 )
             } else {
-                check(
-                    "semantic-index",
-                    WorkspaceDoctorStatus::Ok,
-                    format!("{total} embedding rows, none stale"),
-                )
+                check("search-index", WorkspaceDoctorStatus::Ok, detail)
             }
         }
     }
 }
 
-fn companion_version_mismatch(version: Option<&str>) -> Option<String> {
-    const ORBIT_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-    let detail = match version {
-        Some(version) if version == ORBIT_VERSION => return None,
-        Some(version) => format!(
-            "search companion version {version} does not match Orbit version {ORBIT_VERSION}"
-        ),
-        None => format!(
-            "search companion version is unknown; Orbit version {ORBIT_VERSION} cannot be verified"
-        ),
-    };
-    Some(format!(
-        "{detail}; run `orbit semantic install` to install the matching companion"
-    ))
-}
-
-/// Lock files whose recorded holder PID is dead. Clean lock-guard releases
-/// clear their diagnostic metadata while still holding the advisory `flock`,
-/// so metadata found here is from an interrupted/crashed holder — a crash
-/// signal, not an availability problem.
 fn doctor_check_stale_locks(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let lock_files = collect_lock_files(runtime.paths());
     let mut stale = Vec::new();

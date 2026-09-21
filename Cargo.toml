@@ -63,7 +63,6 @@ chrono-tz = "0.10"
 clap = { version = "4.5", features = ["derive"] }
 croner = "3"
 flate2 = "1"
-fastembed = { version = "5.13.4", default-features = false, features = ["hf-hub-native-tls", "ort-download-binaries-native-tls"] }
 fs2 = "0.4"
 futures-core = "0.3"
 getrandom = { version = "0.3", features = ["std"] }

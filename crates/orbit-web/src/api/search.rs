@@ -1,4 +1,4 @@
-//! Unified lexical, hybrid, and neighbor search over the dashboard HTTP API.
+//! Lexical search over the dashboard HTTP API.
 
 use std::str::FromStr;
 
@@ -30,8 +30,7 @@ fn parse_search_query(raw: Option<&str>) -> Result<GlobalSearchParams, String> {
     for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
         match key.as_ref() {
             "query" | "q" => params.query = non_empty_string(&value),
-            "hybrid" => params.hybrid = parse_bool("hybrid", &value)?,
-            "semantic" => params.semantic = non_empty_string(&value),
+            "hybrid" | "semantic" => return Err(format!("unknown search parameter `{key}`")),
             "kind" => {
                 params.kind = GlobalSearchKind::from_str(&value)?;
             }
@@ -81,13 +80,12 @@ mod query_tests {
     #[test]
     fn query_parser_accepts_repeated_and_csv_filters() {
         let params = parse_search_query(Some(
-            "query=agent+loop&kind=task&hybrid=true&tag=rust,search&tag=api&status=task%3Aopen&path=src%2Flib.rs&limit=7",
+            "query=agent+loop&kind=task&tag=rust,search&tag=api&status=task%3Aopen&path=src%2Flib.rs&limit=7",
         ))
         .expect("parse query");
 
         assert_eq!(params.query.as_deref(), Some("agent loop"));
         assert_eq!(params.kind, GlobalSearchKind::Task);
-        assert!(params.hybrid);
         assert_eq!(params.tags, ["rust", "search", "api"]);
         assert_eq!(params.status, ["task:open"]);
         assert_eq!(params.path.as_deref(), Some("src/lib.rs"));

@@ -363,20 +363,16 @@ fn explicit_data_dir_runtime_recovers_the_stored_checkout_repo_root() {
 }
 
 /// A read-only state mount carries no writable state directory, so an optional
-/// semantic index that was never built there cannot be created at startup.
+/// lexical index that was never built there cannot be created at startup.
 /// Opening the runtime and every read that does not need that index must still
-/// work; semantic ranking must name the unavailable index instead of answering
+/// work; lexical indexing must name the unavailable index instead of answering
 /// as a complete but empty corpus.
 #[cfg(unix)]
 #[test]
 fn absent_semantic_index_on_unwritable_state_keeps_the_runtime_observational() {
     use std::os::unix::fs::PermissionsExt;
 
-    use orbit_search::SemanticSearchParams;
-
-    use crate::application::search::{
-        GlobalSearchKind, GlobalSearchMode, GlobalSearchParams, GlobalSearchResponse,
-    };
+    use crate::application::search::{GlobalSearchKind, GlobalSearchParams, GlobalSearchResponse};
 
     let (_root, global_root, workspace_root, runtime) = v2_runtime();
     let task = runtime
@@ -393,7 +389,7 @@ fn absent_semantic_index_on_unwritable_state_keeps_the_runtime_observational() {
     let semantic_db = state_dir.join("semantic.db");
     assert!(
         semantic_db.exists(),
-        "writable initialization must create the semantic index"
+        "writable initialization must create the lexical index"
     );
     for suffix in ["", "-wal", "-shm"] {
         let sidecar = PathBuf::from(format!("{}{suffix}", semantic_db.display()));
@@ -420,34 +416,15 @@ fn absent_semantic_index_on_unwritable_state_keeps_the_runtime_observational() {
         "observing an unavailable index must not create it"
     );
 
-    let (listed, semantic, hybrid) = observed;
+    let (listed, lexical) = observed;
     assert_eq!(
         listed,
         vec![task.id.clone()],
         "task reads must still answer"
     );
 
-    let message = semantic.to_string();
-    assert!(
-        message.contains("semantic index") && message.contains("is unavailable"),
-        "semantic search must name the unavailable index: {message}"
-    );
     assert_eq!(
-        hybrid.mode,
-        GlobalSearchMode::Lexical,
-        "hybrid search must degrade rather than report an empty semantic corpus"
-    );
-    assert!(
-        hybrid
-            .notes
-            .iter()
-            .any(|note| note.contains("falling back to lexical task search")
-                && note.contains("is unavailable")),
-        "the fallback must disclose why semantic ranking was skipped: {:?}",
-        hybrid.notes
-    );
-    assert_eq!(
-        hybrid.results.first().and_then(|hit| hit.id.as_deref()),
+        lexical.results.first().and_then(|hit| hit.id.as_deref()),
         Some(task.id.as_str()),
         "lexical ranking must still find the task"
     );
@@ -459,38 +436,28 @@ fn absent_semantic_index_on_unwritable_state_keeps_the_runtime_observational() {
         global_root: &std::path::Path,
         workspace_root: &std::path::Path,
         task_id: &str,
-    ) -> (Vec<String>, OrbitError, GlobalSearchResponse) {
+    ) -> (Vec<String>, GlobalSearchResponse) {
         let runtime = OrbitRuntime::from_roots(global_root, workspace_root)
-            .expect("an absent optional semantic index must not refuse the runtime");
+            .expect("an absent optional lexical index must not refuse the runtime");
         let listed = runtime
             .list_tasks()
             .expect("list tasks through the unwritable state directory")
             .into_iter()
             .map(|task| task.id)
             .collect();
-        let semantic = runtime
-            .semantic_search(SemanticSearchParams {
-                query: "observational needle".to_string(),
-                limit: 3,
-                field: None,
-                kind: None,
-                model: None,
-            })
-            .expect_err("semantic search must refuse an unavailable index");
-        let hybrid = runtime
+        let lexical = runtime
             .global_search(GlobalSearchParams {
                 query: Some("observational needle".to_string()),
-                hybrid: true,
                 kind: GlobalSearchKind::Task,
                 limit: 3,
                 ..Default::default()
             })
-            .expect("hybrid search must fall back instead of failing");
+            .expect("lexical search must fall back instead of failing");
         assert_eq!(
             runtime.get_task(task_id).expect("read the task").title,
             "Observational needle"
         );
-        (listed, semantic, hybrid)
+        (listed, lexical)
     }
 }
 
