@@ -132,9 +132,10 @@ spec:
         non-deliverable output is only what `git status --short` adds to the
         item 3 baseline; ignored build output, caches, and sandbox-owned paths
         like `<worktree>/target` are not yours to remove and never block
-        handoff. Write scratch, logs, and review evidence outside the checkout,
-        attach it through the granted task tools before removing a temporary
-        copy, and before a successful exit, remove or revert the run-owned
+        handoff. Write scratch, logs, and review evidence under `.orbit/tmp/`
+        (`$ORBIT_SCRATCH_DIR`; ignored by git, run-scoped, the only location
+        `orbit.task.artifact.put` accepts). Never under `/tmp`. Attach it
+        through the granted task tools, and before a successful exit, remove or revert the run-owned
         output you verified is not part of the deliverable. Deleting is an
         exception for a stray untracked path, not a step: never use raw `rm -f`
         or `rm -rf`, and never clean broadly to catch a specific leftover. If a
@@ -174,8 +175,9 @@ spec:
         task identity, covering marker, scope, ancestry, and logs.
 
         Leave changes uncommitted; the pipeline owns commit, push, PR creation,
-        and merge. Temporary evidence or scratch files must remain outside the
-        worktree. Delivery refuses untracked paths without exact durable intent;
+        and merge. Write temporary evidence and scratch files under `.orbit/tmp/`
+        (`$ORBIT_SCRATCH_DIR`); never under `/tmp`. Interactive sessions share
+        `<repo>/.orbit/tmp/` — use a per-task subdirectory. Delivery refuses untracked paths without exact durable intent;
         deterministic gates read durable artifacts and task state and never
         parse the execution summary as an oracle. Do not invoke another agent
         or dispatch work. In the execution summary, map criteria to results,

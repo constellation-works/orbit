@@ -40,6 +40,7 @@ fn task_context_for_agent_input_embeds_canonical_task_with_input_overrides() {
     assert_eq!(context["plan"], "Read the task and implement it.");
     assert_eq!(context["workspace_path"], "/override/worktree");
     assert_eq!(context["repo_root"], "/override/repo");
+    assert_eq!(context["scratch_dir"], "/override/worktree/.orbit/tmp");
     assert_eq!(context["status"], task.status.cli_name());
     assert_eq!(context["terminal"], false);
     assert!(context.get("execution_summary").is_none());

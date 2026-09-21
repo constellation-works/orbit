@@ -144,6 +144,11 @@ fn agent_task_context_json(
         "external_refs": task.external_refs.clone(),
         "workspace_path": workspace_path,
         "repo_root": repo_root,
+        "scratch_dir": scratch_dir_for_context(
+            workspace_path.as_deref(),
+            repo_root.as_deref(),
+            fallback_repo_root,
+        ),
     }) {
         Value::Object(map) => map,
         _ => serde_json::Map::new(),
@@ -250,6 +255,27 @@ fn workflow_failure_status_note(task_history: &[TaskHistoryEntry]) -> Option<&st
             .flatten()
             .filter(|note| !note.trim().is_empty())
     })
+}
+
+fn scratch_dir_for_context(
+    workspace_path: Option<&str>,
+    repo_root: Option<&str>,
+    fallback_repo_root: &Path,
+) -> String {
+    let root = workspace_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(Path::new)
+        .or_else(|| {
+            repo_root
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(Path::new)
+        })
+        .unwrap_or(fallback_repo_root);
+    orbit_common::fs::path::orbit_scratch_dir(root)
+        .display()
+        .to_string()
 }
 
 fn push_unique_task_id(task_ids: &mut Vec<String>, task_id: &str) {

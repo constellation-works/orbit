@@ -58,7 +58,7 @@ pub(super) fn task_candidate_paths(
         return Err(OrbitError::Execution(format!(
             "task delivery refused unknown untracked paths: {unknown:?}. Declare every intended new \
              source path with an exact `file:` task selector (or stage it explicitly on a writable \
-             index), and leave scratch and evidence outside the worktree. Orbit did not change the \
+             index), and write scratch and evidence under `.orbit/tmp/`. Orbit did not change the \
              index or any listed file"
         )));
     }
