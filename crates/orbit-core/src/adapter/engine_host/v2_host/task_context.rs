@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use orbit_engine::{DispatchError, WORKFLOW_RUN_FAILED_EVENT};
-use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, refuses_implementer_writes};
 use serde_json::Value;
 
 use orbit_common::fs::selector::canonical_selector_in_workspace;
@@ -250,26 +250,6 @@ fn workflow_failure_status_note(task_history: &[TaskHistoryEntry]) -> Option<&st
             .flatten()
             .filter(|note| !note.trim().is_empty())
     })
-}
-
-/// Whether the task record refuses the writes an implementer must make.
-///
-/// Mirrors the `update_task` gate in `command::task::update` and its
-/// `orbit.task.update` tool-host twin: `Done` rejects every non-comment
-/// mutation, and `Archived` rejects everything except the bare restore to
-/// backlog. Neither admits an `execution_summary`, so an implement invocation
-/// dispatched against one of these can never persist what it produces.
-///
-/// An implement invocation is not guaranteed to be the only actor
-/// on its task. The executor re-dispatches a failed `agent_implement` step once
-/// after its `recovery_activity` succeeds, and a task can be promoted through
-/// the review/approve surface while an attempt is still running. Naming the
-/// condition in the envelope lets an invocation that has nothing left to do
-/// exit up front, instead of discovering it at its final persist call. See
-/// The envelope is a dispatch-time snapshot, so `agent_implement` also
-/// re-checks status mid-run.
-fn refuses_implementer_writes(status: TaskStatus) -> bool {
-    matches!(status, TaskStatus::Done | TaskStatus::Archived)
 }
 
 fn push_unique_task_id(task_ids: &mut Vec<String>, task_id: &str) {

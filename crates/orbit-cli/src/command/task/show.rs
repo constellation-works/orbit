@@ -27,11 +27,13 @@ pub struct TaskShowArgs {
             "Print only the specified field projection(s). Valid values: ",
             orbit_types::task_show_projection_fields_csv!(),
             ". Repeat the flag or use a comma-separated value list. Combined with --json, \
-             a single field returns that field as JSON and multiple fields return a JSON object."
+             a single field returns that field as JSON and multiple fields return a JSON object. \
+             The derived terminal field remains keyed as an object. \
+             With --with-context, the projection is an object with related_docs added."
         )
     )]
     pub fields: Vec<String>,
-    /// Include docs matched from task context files and task feature tags
+    /// Include matched docs; may be combined with --fields to add related_docs
     #[arg(long)]
     pub with_context: bool,
     /// Maximum related docs to include with --with-context (default 5)
@@ -44,23 +46,32 @@ impl Execute for TaskShowArgs {
         let task = runtime.get_task(&self.id)?;
         let status_by_id = runtime.task_status_index()?;
         let fields = normalize_task_show_fields(&self.fields)?;
-
-        if !fields.is_empty() {
-            if self.with_context {
-                return Err(OrbitError::InvalidInput(
-                    "`--with-context` cannot be combined with `--fields`".to_string(),
-                ));
-            }
-            let doc = task_fields_to_json(runtime, &task, &fields, Some(&status_by_id))?;
-            let text = format_task_fields(runtime, &task, &fields, Some(&status_by_id))?;
-            return Ok(Payload::detail(doc, text).into());
-        }
-
         let related_docs = if self.with_context {
             runtime.related_docs_for_task(&task, self.max_docs)?
         } else {
             Vec::new()
         };
+
+        if !fields.is_empty() {
+            let mut doc = task_fields_to_json(runtime, &task, &fields, Some(&status_by_id))?;
+            let text = format_task_fields(runtime, &task, &fields, Some(&status_by_id))?;
+            if fields.as_slice() == ["terminal"] {
+                doc = json!({ "terminal": doc });
+            }
+            if self.with_context {
+                if fields.len() == 1 && fields[0] != "terminal" {
+                    doc = json!({ fields[0].clone(): doc });
+                }
+                insert_related_docs(&mut doc, related_docs.clone())?;
+                let mut blocks = vec![Block::text(text)];
+                if !related_docs.is_empty() {
+                    blocks.extend(related_docs_blocks(&related_docs));
+                }
+                return Ok(Payload::blocks(doc, blocks).into());
+            }
+            return Ok(Payload::detail(doc, text).into());
+        }
+
         // The task may have been reached through the global registry rather
         // than the cwd, so every full projection names where it was read from.
         let owner = bound_workspace_identity(runtime);

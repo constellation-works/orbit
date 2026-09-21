@@ -1,6 +1,6 @@
 use crate::task::{
     TASK_SHOW_DERIVED_RESPONSE_FIELDS, TASK_SHOW_PROJECTION_FIELDS,
-    TASK_SHOW_PROJECTION_FIELDS_CSV, TASK_SHOW_PUBLIC_DTO_FIELDS, Task,
+    TASK_SHOW_PROJECTION_FIELDS_CSV, TASK_SHOW_PUBLIC_DTO_FIELDS, Task, TaskStatus,
     is_task_show_projection_field, task_show_record_field_json, unknown_task_show_field_message,
 };
 use serde_json::json;
@@ -51,6 +51,7 @@ fn vocabulary_includes_ordinary_top_level_fields() {
         "title",
         "type",
         "status",
+        "terminal",
         "priority",
         "complexity",
         "created_at",
@@ -94,13 +95,24 @@ fn unknown_field_error_lists_the_vocabulary() {
 }
 
 #[test]
-fn terminal_error_points_to_status_without_weakening_unknown_validation() {
-    let terminal = unknown_task_show_field_message("terminal");
-    assert!(terminal.contains("use `status`"), "{terminal}");
-    assert!(terminal.contains(TASK_SHOW_PROJECTION_FIELDS_CSV));
+fn terminal_projection_tracks_implementer_write_refusal() {
+    let mut task = fixture_task();
+    assert_eq!(
+        task_show_record_field_json(&task, "terminal"),
+        Some(json!(false))
+    );
 
-    let unknown = unknown_task_show_field_message("not_a_field");
-    assert!(!unknown.contains("use `status`"), "{unknown}");
+    task.status = TaskStatus::Done;
+    assert_eq!(
+        task_show_record_field_json(&task, "terminal"),
+        Some(json!(true))
+    );
+
+    task.status = TaskStatus::Archived;
+    assert_eq!(
+        task_show_record_field_json(&task, "terminal"),
+        Some(json!(true))
+    );
 }
 
 #[test]

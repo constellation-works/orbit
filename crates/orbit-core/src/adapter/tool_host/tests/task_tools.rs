@@ -2570,6 +2570,42 @@ fn task_show_tool_with_context_includes_related_docs() {
 }
 
 #[test]
+fn task_show_tool_composes_field_projection_with_context() {
+    let (_root, runtime, repo_root) = test_runtime();
+    fs::create_dir_all(repo_root.join("docs")).expect("docs dir");
+    fs::write(
+        repo_root.join("docs/cli.md"),
+        "---\ntype: design\nsummary: CLI command design\npaths: [\"crates/orbit-cli/**\"]\n---\n# CLI Commands\n",
+    )
+    .expect("write doc");
+    let task = create_task(
+        &runtime,
+        &repo_root,
+        "Projected related docs",
+        "Exercise projected MCP context injection.",
+        TaskStatus::Backlog,
+        &["file:crates/orbit-cli/src/command/docs.rs"],
+    );
+
+    let shown = runtime
+        .execute_tool_command(
+            "orbit.task.show",
+            json!({
+                "id": task.id,
+                "fields": ["title"],
+                "with_context": true,
+                "max_docs": 1,
+            }),
+            Some("codex".to_string()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+        )
+        .expect("projected task show with context succeeds");
+
+    assert_eq!(shown["title"], "Projected related docs");
+    assert_eq!(shown["related_docs"][0]["path"], "docs/cli.md");
+}
+
+#[test]
 fn task_add_tool_normalizes_tags_at_write_time() {
     let (_root, runtime, _repo_root) = test_runtime();
 
@@ -4004,24 +4040,28 @@ fn task_show_tool_rejects_unknown_projection_with_the_shared_vocabulary() {
 }
 
 #[test]
-fn task_show_tool_rejects_terminal_with_status_guidance() {
+fn task_show_tool_projects_terminal_from_write_refusal_statuses() {
     let (_root, runtime, repo_root) = test_runtime();
-    let task = create_task(
-        &runtime,
-        &repo_root,
-        "Terminal projection",
-        "Exercise actionable lifecycle guidance.",
-        TaskStatus::Backlog,
-        &[],
-    );
+    for (status, expected) in [(TaskStatus::Backlog, false), (TaskStatus::Done, true)] {
+        let task = create_task(
+            &runtime,
+            &repo_root,
+            "Terminal projection",
+            "Exercise derived lifecycle state.",
+            status,
+            &[],
+        );
 
-    let message = invalid_input_message(runtime.execute_tool_command(
-        "orbit.task.show",
-        json!({ "id": task.id, "field": "terminal" }),
-        Some("codex".to_string()),
-        Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
-    ));
-    assert!(message.contains("use `status`"), "{message}");
+        let shown = runtime
+            .execute_tool_command(
+                "orbit.task.show",
+                json!({ "id": task.id, "fields": ["terminal"] }),
+                Some("codex".to_string()),
+                Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.to_string()),
+            )
+            .expect("terminal field projects");
+        assert_eq!(shown, json!({ "terminal": expected }), "status {status}");
+    }
 }
 
 #[test]

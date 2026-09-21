@@ -26,7 +26,10 @@ impl Tool for OrbitTaskShowTool {
             name: "fields".to_string(),
             description: format!(
                 "Optional field projection as a string or array of strings. When set, returns only \
-                the requested field(s) as JSON. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}. \
+                the requested field(s) as JSON. May be combined with `with_context`; then the \
+                projection is an object with `related_docs` added. A single derived `terminal` \
+                selection remains keyed as an object. Valid values: \
+                {TASK_SHOW_PROJECTION_FIELDS_CSV}. \
                 `crew` is execution selection; `orchestrator` is separate orchestration attribution."
             ),
             param_type: "string_list".to_string(),
@@ -44,7 +47,8 @@ impl Tool for OrbitTaskShowTool {
             name: "with_context".to_string(),
             description:
                 "Optional boolean. When true, include a `related_docs` array matched from task \
-                context selectors and feature tags."
+                context selectors and feature tags. May be combined with `fields`; the requested \
+                projection and `related_docs` are returned in one object."
                     .to_string(),
             param_type: "boolean".to_string(),
             required: false,
@@ -77,7 +81,9 @@ impl Tool for OrbitTaskShowTool {
                 metadata, and linked-worktree runtime identities are not used as filters. An \
                 optional `workspace` argument is an explicit fail-closed filter only. Use the \
                 optional `fields` projection (or single-field alias `field`) to retrieve only \
-                specific task fields, such as `field: \"orchestrator\"`. The `crew` field \
+                specific task fields, including the derived read-only `terminal` field. \
+                `with_context` composes with a projection by adding `related_docs` to the result. \
+                The `crew` field \
                 selects execution, while `orchestrator` records orchestration attribution."
                 .to_string(),
             parameters,

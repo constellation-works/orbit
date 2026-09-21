@@ -186,15 +186,17 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
         optional_bool_alias(&input, &["with_context", "withContext", "with-context"])?
             .unwrap_or(false);
     let max_docs = optional_usize_alias(&input, &["max_docs", "maxDocs", "max-docs"])?;
-    if let Some(fields) = fields {
-        if with_context {
-            return Err(OrbitError::InvalidInput(
-                "`with_context` cannot be combined with `fields`".to_string(),
-            ));
+    let mut value = if let Some(fields) = &fields {
+        let projected = task_fields_to_json(runtime, &task, fields)?;
+        if fields.len() == 1 && (with_context || fields[0] == "terminal") {
+            json!({ fields[0].clone(): projected })
+        } else {
+            projected
         }
-        task_fields_to_json(runtime, &task, &fields)
-    } else if with_context {
-        let mut value = serialize_task(runtime, &task)?;
+    } else {
+        serialize_task(runtime, &task)?
+    };
+    if with_context {
         let object = value.as_object_mut().ok_or_else(|| {
             OrbitError::Execution("task JSON projection did not produce an object".to_string())
         })?;
@@ -204,10 +206,8 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
                 |error| OrbitError::Execution(format!("serialize related docs: {error}")),
             )?,
         );
-        Ok(value)
-    } else {
-        serialize_task(runtime, &task)
     }
+    Ok(value)
 }
 
 fn optional_usize_alias(input: &Value, names: &[&str]) -> Result<Option<usize>, OrbitError> {

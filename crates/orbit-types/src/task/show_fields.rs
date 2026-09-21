@@ -11,14 +11,14 @@
 
 use serde_json::{Value, json};
 
-use crate::task::Task;
+use crate::task::{Task, TaskStatus};
 
 /// String-literal CSV of [`TASK_SHOW_PROJECTION_FIELDS`], for `concat!` in
 /// clap help and other const contexts.
 #[macro_export]
 macro_rules! task_show_projection_fields_csv {
     () => {
-        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_host, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts"
+        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_host, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts"
     };
 }
 
@@ -40,6 +40,7 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "planned_by",
     "implemented_by",
     "status",
+    "terminal",
     "priority",
     "complexity",
     "type",
@@ -129,14 +130,17 @@ pub fn is_task_show_projection_field(name: &str) -> bool {
 
 /// Actionable error for a name that is not in the vocabulary.
 pub fn unknown_task_show_field_message(name: &str) -> String {
-    let guidance = if name == "terminal" {
-        " `terminal` is not a task field; use `status` for lifecycle state."
-    } else {
-        ""
-    };
-    format!(
-        "unknown field selector `{name}`.{guidance} Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}"
-    )
+    format!("unknown field selector `{name}`. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}")
+}
+
+/// Whether the task status refuses the writes an implementer must make.
+///
+/// This is the canonical predicate for both the injected task envelope and
+/// the derived `orbit.task.show` `terminal` projection. `Done` rejects every
+/// non-comment mutation, while `Archived` admits only a restore to backlog;
+/// neither permits an implementation execution summary.
+pub fn refuses_implementer_writes(status: TaskStatus) -> bool {
+    matches!(status, TaskStatus::Done | TaskStatus::Archived)
 }
 
 /// JSON for a Task-local (non-sidecar) projection field.
@@ -162,6 +166,7 @@ pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
         "implemented_by" => Some(json!(task.implemented_by)),
         "type" => Some(json!(task.task_type.to_string())),
         "status" => Some(json!(task.status.to_string())),
+        "terminal" => Some(json!(refuses_implementer_writes(task.status))),
         "priority" => Some(json!(task.priority.to_string())),
         "complexity" => Some(json!(task.complexity.map(|value| value.to_string()))),
         "pr_status" => Some(json!(task.pr_status)),
