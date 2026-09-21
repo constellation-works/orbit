@@ -13,9 +13,7 @@ Relations:
 Artifacts:
   - evidence.txt (text/plain, 17 bytes)
 Created By: claude
-Execution Crew: opus
 History:
   [<TIMESTAMP>] claude: created
-  [<TIMESTAMP>] system: crew_assigned (assigned crew `opus` from default)
 Created: <TIMESTAMP>
 Updated: <TIMESTAMP>

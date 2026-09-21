@@ -35,7 +35,7 @@ fn workspace_init_seeds_a_loadable_state_task_pilot_bound_to_this_host() {
             &root_arg,
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "state-seed-host",
             "--task-prefix",
             "SS",
