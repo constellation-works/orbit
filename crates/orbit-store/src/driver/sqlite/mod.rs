@@ -3,6 +3,7 @@ pub(crate) mod connection;
 pub(crate) mod invocation_store;
 pub(crate) mod job_run_store;
 pub mod migration;
+pub(crate) mod plugin_store;
 pub(crate) mod read_pool;
 pub(crate) mod reliability_store;
 pub(crate) mod routine_store;

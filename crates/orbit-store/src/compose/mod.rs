@@ -4,9 +4,10 @@ use std::sync::Arc;
 use crate::Store;
 use crate::contracts::{
     AuditEventStoreBackend, ExecutorDefStoreBackend, FrictionStoreBackend, InvocationStoreBackend,
-    JobRunStoreBackend, PolicyDefStoreBackend, RoutineStoreBackend, SessionLogStoreBackend,
-    TaskArtifactStoreBackend, TaskDocumentStoreBackend, TaskHistoryStoreBackend,
-    TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend, V2AuditStoreBackend,
+    JobRunStoreBackend, PluginStoreBackend, PolicyDefStoreBackend, RoutineStoreBackend,
+    SessionLogStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
+    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend,
+    V2AuditStoreBackend,
 };
 use crate::driver::file::executor_def_store::ExecutorDefFileStore;
 use crate::driver::file::policy_def_store::PolicyDefFileStore;
@@ -16,7 +17,8 @@ use crate::driver::sqlite::task_registry::TaskRegistryStore;
 use crate::repository::friction::FrictionStore;
 use crate::repository::layered_policy::LayeredPolicyDefStore;
 use crate::repository::sqlite_backends::{
-    SqliteAuditEventStoreBackend, SqliteTaskReservationStoreBackend, SqliteToolStoreBackend,
+    SqliteAuditEventStoreBackend, SqlitePluginStoreBackend, SqliteTaskReservationStoreBackend,
+    SqliteToolStoreBackend,
 };
 use crate::repository::task::{TaskCommitBoundary, TaskV2Store};
 use crate::workflow::friction::import_workspace_frictions;
@@ -162,6 +164,10 @@ pub fn v2_audit_store_from_store(store: Store) -> Arc<dyn V2AuditStoreBackend> {
 
 pub fn tool_store_sqlite(store: Store) -> Arc<dyn ToolStoreBackend> {
     Arc::new(SqliteToolStoreBackend { store })
+}
+
+pub fn plugin_store_sqlite(store: Store) -> Arc<dyn PluginStoreBackend> {
+    Arc::new(SqlitePluginStoreBackend { store })
 }
 
 pub fn audit_event_store_sqlite(store: Store) -> Arc<dyn AuditEventStoreBackend> {

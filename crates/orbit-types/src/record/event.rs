@@ -18,6 +18,19 @@ pub enum OrbitEvent {
     ToolDisabled {
         name: String,
     },
+    PluginInstalled {
+        name: String,
+        version: String,
+    },
+    PluginRemoved {
+        name: String,
+    },
+    PluginEnabled {
+        name: String,
+    },
+    PluginDisabled {
+        name: String,
+    },
     JobAdded {
         job_id: String,
     },

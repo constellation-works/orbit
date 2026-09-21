@@ -1,12 +1,13 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_types::plugin::InstalledPlugin;
 use orbit_types::telemetry::AuditEvent;
 use orbit_types::tool::StoredTool;
 
 use crate::contracts::{AuditEventFilter, AuditEventInsertParams};
 use crate::contracts::{
-    AuditEventStoreBackend, TaskReservationCheckParams, TaskReservationCheckResult,
-    TaskReservationListResult, TaskReservationOwnedConflictsParams,
+    AuditEventStoreBackend, PluginStoreBackend, TaskReservationCheckParams,
+    TaskReservationCheckResult, TaskReservationListResult, TaskReservationOwnedConflictsParams,
     TaskReservationOwnedConflictsResult, TaskReservationReleaseByOwnerParams,
     TaskReservationReleaseByOwnerResult, TaskReservationReleaseParams,
     TaskReservationReleaseResult, TaskReservationReserveParams, TaskReservationReserveResult,
@@ -43,6 +44,39 @@ impl ToolStoreBackend for SqliteToolStoreBackend {
     fn set_tool_enabled(&self, name: &str, enabled: bool) -> Result<bool, OrbitError> {
         self.store
             .with_transaction(|tx| tx.set_tool_enabled(name, enabled))
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SqlitePluginStoreBackend {
+    pub(crate) store: Store,
+}
+
+impl PluginStoreBackend for SqlitePluginStoreBackend {
+    fn list_plugins(&self) -> Result<Vec<InstalledPlugin>, OrbitError> {
+        self.store.list_plugins()
+    }
+
+    fn get_plugin(&self, name: &str) -> Result<Option<InstalledPlugin>, OrbitError> {
+        self.store.get_plugin(name)
+    }
+
+    fn upsert_plugin(&self, plugin: &InstalledPlugin) -> Result<(), OrbitError> {
+        self.store.with_transaction(|tx| tx.upsert_plugin(plugin))
+    }
+
+    fn delete_plugin(&self, name: &str) -> Result<bool, OrbitError> {
+        self.store.with_transaction(|tx| tx.delete_plugin(name))
+    }
+
+    fn set_plugin_enabled(
+        &self,
+        name: &str,
+        enabled: bool,
+        grants: &[String],
+    ) -> Result<bool, OrbitError> {
+        self.store
+            .with_transaction(|tx| tx.set_plugin_enabled(name, enabled, grants))
     }
 }
 

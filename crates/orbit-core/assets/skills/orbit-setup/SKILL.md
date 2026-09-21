@@ -25,6 +25,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Scheduled execution | [Automation](references/automation.md) |
 | Recurring QA and other task templates | [Auto-tasks](references/auto-tasks.md) |
 | MCP clients, SSH federation or remote dashboard | [Remote access](references/remote-access.md) |
+| Installing plugins and the `.orbit/plugins.yaml` pin file | [Plugins](references/plugins.md) |
 | Owner/replica roles and multiple machines | [Multi-host](references/multi-host.md) |
 | Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](../orbit/references/setup/distributed-drain.md) |
 | Task snapshots, backup and restore | [Publication](references/publication.md) |

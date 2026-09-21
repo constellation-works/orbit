@@ -8,6 +8,7 @@ use orbit_types::tool::{
 };
 use serde_json::Value;
 
+use crate::plugin::PluginToolBinding;
 use crate::{Tool, ToolContext, ToolExecutionKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +27,9 @@ struct ToolEntry {
     tool: Arc<dyn Tool>,
     availability: ToolAvailability,
     mcp_scope: Option<McpToolScope>,
+    /// Set for a plugin-backed entry: provenance for the audit row and, on
+    /// an inactive entry, the diagnostic naming the missing step.
+    plugin: Option<Arc<PluginToolBinding>>,
 }
 
 #[derive(Default)]
@@ -55,11 +59,42 @@ impl ToolRegistry {
         self.register_with_availability(tool, ToolAvailability::Inactive, None);
     }
 
+    /// Register one plugin tool. `mcp_scope: None` keeps it off `tools/list`
+    /// (`mcp_scope: none` in the manifest) while `orbit tool run` reaches it.
+    pub fn register_plugin_tool<T: Tool + 'static>(
+        &mut self,
+        tool: T,
+        mcp_scope: Option<McpToolScope>,
+        binding: Arc<PluginToolBinding>,
+    ) {
+        self.register_entry(tool, ToolAvailability::Active, mcp_scope, Some(binding));
+    }
+
+    /// Register a plugin tool the host could not activate. The binding's
+    /// diagnostic is what `orbit tool run` and `orbit plugin show` report.
+    pub fn register_inactive_plugin_tool<T: Tool + 'static>(
+        &mut self,
+        tool: T,
+        binding: Arc<PluginToolBinding>,
+    ) {
+        self.register_entry(tool, ToolAvailability::Inactive, None, Some(binding));
+    }
+
     fn register_with_availability<T: Tool + 'static>(
         &mut self,
         tool: T,
         availability: ToolAvailability,
         mcp_scope: Option<McpToolScope>,
+    ) {
+        self.register_entry(tool, availability, mcp_scope, None);
+    }
+
+    fn register_entry<T: Tool + 'static>(
+        &mut self,
+        tool: T,
+        availability: ToolAvailability,
+        mcp_scope: Option<McpToolScope>,
+        plugin: Option<Arc<PluginToolBinding>>,
     ) {
         let schema = tool.schema();
         if let Some(existing) = self.tools.get(&schema.name)
@@ -87,6 +122,7 @@ impl ToolRegistry {
                 tool: Arc::new(tool),
                 availability,
                 mcp_scope,
+                plugin,
             },
         );
     }
@@ -142,6 +178,24 @@ impl ToolRegistry {
         self.tools
             .get(name)
             .map(|entry| entry.tool.execution_kind())
+    }
+
+    /// The plugin behind a registry entry, when it is plugin-backed.
+    pub fn plugin_binding(&self, name: &str) -> Option<Arc<PluginToolBinding>> {
+        self.tools
+            .get(name)
+            .and_then(|entry| entry.plugin.as_ref().map(Arc::clone))
+    }
+
+    /// Why a plugin tool is inactive, when the loader recorded a reason.
+    pub fn inactive_diagnostic(&self, name: &str) -> Option<String> {
+        self.plugin_binding(name)
+            .and_then(|binding| binding.diagnostic.clone())
+    }
+
+    /// Advertised MCP scope of one entry, active or not.
+    pub fn mcp_scope(&self, name: &str) -> Option<McpToolScope> {
+        self.tools.get(name).and_then(|entry| entry.mcp_scope)
     }
 
     pub fn unregister(&mut self, name: &str) -> bool {

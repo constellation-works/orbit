@@ -8,8 +8,8 @@ use orbit_search::LexicalIndex;
 use orbit_store::Store;
 use orbit_store::contracts::{
     AuditEventStoreBackend, AutomationStoreBackend, ExecutorDefStoreBackend,
-    InvocationStoreBackend, JobRunStoreBackend, OperationStoreBackend, PolicyDefStoreBackend,
-    ReviewStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
+    InvocationStoreBackend, JobRunStoreBackend, OperationStoreBackend, PluginStoreBackend,
+    PolicyDefStoreBackend, ReviewStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
     TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend,
     V2AuditStoreBackend,
 };
@@ -17,6 +17,7 @@ use orbit_tools::ToolRegistry;
 use orbit_types::identity::{Crew, require_canonical_agent_family};
 use orbit_types::workspace::WorkspacePaths;
 
+use crate::runtime::plugin_host::PluginHostLoad;
 use crate::skill_catalog::SkillCatalog;
 use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy, PersistenceConfig};
 
@@ -221,6 +222,7 @@ pub(crate) struct OrbitStores {
     pub(crate) task_reservation: Arc<dyn TaskReservationStoreBackend>,
     pub(crate) job_run: Arc<dyn JobRunStoreBackend>,
     pub(crate) tool: Arc<dyn ToolStoreBackend>,
+    pub(crate) plugin: Arc<dyn PluginStoreBackend>,
     pub(crate) audit_event: Arc<dyn AuditEventStoreBackend>,
     pub(crate) executor_def: Arc<dyn ExecutorDefStoreBackend>,
     pub(crate) policy_def: Arc<dyn PolicyDefStoreBackend>,
@@ -238,6 +240,7 @@ impl OrbitStores {
         task_reservation: Arc<dyn TaskReservationStoreBackend>,
         job_run: Arc<dyn JobRunStoreBackend>,
         tool: Arc<dyn ToolStoreBackend>,
+        plugin: Arc<dyn PluginStoreBackend>,
         audit_event: Arc<dyn AuditEventStoreBackend>,
         executor_def: Arc<dyn ExecutorDefStoreBackend>,
         policy_def: Arc<dyn PolicyDefStoreBackend>,
@@ -252,6 +255,7 @@ impl OrbitStores {
             task_reservation,
             job_run,
             tool,
+            plugin,
             audit_event,
             executor_def,
             policy_def,
@@ -293,6 +297,10 @@ impl OrbitStores {
         self.tool.as_ref()
     }
 
+    pub(crate) fn plugins(&self) -> &dyn PluginStoreBackend {
+        self.plugin.as_ref()
+    }
+
     pub(crate) fn audit_events(&self) -> &dyn AuditEventStoreBackend {
         self.audit_event.as_ref()
     }
@@ -310,13 +318,22 @@ impl OrbitStores {
 pub(crate) struct OrbitExecutionAssets {
     registry: Arc<ToolRegistry>,
     skill_catalog: SkillCatalog,
+    /// What the host plugin load pass registered and refused, kept so
+    /// `orbit plugin list`/`show`/`doctor` report the same facts the tool
+    /// surface was built from rather than re-deriving them.
+    plugins: Arc<PluginHostLoad>,
 }
 
 impl OrbitExecutionAssets {
-    pub(crate) fn new(registry: Arc<ToolRegistry>, skill_catalog: SkillCatalog) -> Self {
+    pub(crate) fn new(
+        registry: Arc<ToolRegistry>,
+        skill_catalog: SkillCatalog,
+        plugins: PluginHostLoad,
+    ) -> Self {
         Self {
             registry,
             skill_catalog,
+            plugins: Arc::new(plugins),
         }
     }
 }
@@ -505,6 +522,10 @@ impl OrbitContext {
 
     pub(crate) fn skill_catalog(&self) -> &SkillCatalog {
         &self.execution.skill_catalog
+    }
+
+    pub(crate) fn plugin_load(&self) -> &PluginHostLoad {
+        &self.execution.plugins
     }
 
     pub(crate) fn execution_env_policy(&self) -> &ExecutionEnvPolicy {

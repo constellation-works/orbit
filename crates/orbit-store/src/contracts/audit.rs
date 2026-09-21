@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
+use orbit_types::plugin::PluginProvenance;
 use orbit_types::telemetry::{AuditAttribution, AuditEventStatus};
 use orbit_types::tool::{McpCapability, McpTransport};
 
@@ -154,6 +155,10 @@ pub struct AuditInvocationFields<'a> {
     /// [`AuditEventInsertParams::role`] or to the `actor_*` projection derived
     /// from it, so no query that reads trusted identity can pick it up.
     pub self_reported_actor: Option<&'a str>,
+    /// The plugin behind this tool call: name, version, and manifest digest
+    /// (design `docs/design/plugins/1_scope.md` §4.4). `None` for every
+    /// built-in and legacy external tool.
+    pub plugin: Option<&'a PluginProvenance>,
 }
 
 /// Per-(actor, attribution) aggregate of audited tool calls [ORB-10890].

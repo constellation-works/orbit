@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "operation": { "type": "string", "description": "history_sync, import, or orbit_sync." },
+    "repository": { "type": "string" }
+  },
+  "required": ["operation", "repository"]
+}

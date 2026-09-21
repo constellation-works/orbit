@@ -1,5 +1,6 @@
 mod authorization;
 mod builder;
+mod plugin_host;
 mod resolve;
 mod run_audit;
 mod run_input;

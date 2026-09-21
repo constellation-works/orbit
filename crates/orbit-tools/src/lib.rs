@@ -40,6 +40,7 @@
 pub(crate) mod builtin;
 pub mod external;
 pub mod github_cli;
+pub mod plugin;
 mod registry;
 
 use std::path::PathBuf;

@@ -4742,3 +4742,6 @@ fn runtime_opens(log_path: &Path) -> usize {
 
 #[path = "mcp_roundtrip/upgrade.rs"]
 mod upgrade;
+
+#[path = "mcp_roundtrip/plugins.rs"]
+mod plugins;

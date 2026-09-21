@@ -133,6 +133,7 @@ impl FailureFixture {
             activity_id: self.activity_id.map(str::to_string),
             step_index: None,
             self_reported_actor: None,
+            plugin: None,
         }
     }
 }

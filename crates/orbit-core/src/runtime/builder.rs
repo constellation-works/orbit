@@ -7,9 +7,9 @@ use orbit_store::Store;
 use orbit_store::compose::{
     CoordinatedWorkspaceBackends, audit_event_store_sqlite, automation_store,
     global_executor_def_store, global_policy_def_store, invocation_store_from_store,
-    layered_policy_def_store, operation_store, review_store, tool_store_sqlite,
-    v2_audit_store_from_store, workspace_coordinated_backends, workspace_job_run_store,
-    workspace_observational_backends, workspace_policy_def_store,
+    layered_policy_def_store, operation_store, plugin_store_sqlite, review_store,
+    tool_store_sqlite, v2_audit_store_from_store, workspace_coordinated_backends,
+    workspace_job_run_store, workspace_observational_backends, workspace_policy_def_store,
 };
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, WorkspaceConfig, read_workspace_config_optional,
@@ -133,6 +133,7 @@ pub(crate) fn build_context_from_roots(
     // Executors and policies are global-only. Jobs always persist run state
     // under the workspace state directory.
     let tool_store = tool_store_sqlite(store.clone());
+    let plugin_store = plugin_store_sqlite(store.clone());
     let audit_event_store = audit_event_store_sqlite(store.clone());
     let host_store = if write_free {
         OrbitHostStore {
@@ -183,6 +184,23 @@ pub(crate) fn build_context_from_roots(
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
     load_external_tools(&store, &mut registry)?;
+    // Plugins register after the builtins so a namespace collision is caught
+    // against the real surface, and each plugin fails closed on its own.
+    let plugin_load = crate::runtime::plugin_host::load_host_plugins(
+        global_root,
+        &paths.orbit_dir,
+        &store,
+        &mut registry,
+    );
+    for diagnostic in &plugin_load.diagnostics {
+        tracing::warn!(
+            target: "orbit.core.plugin",
+            plugin = %diagnostic.plugin,
+            status = diagnostic.status.as_str(),
+            "{}",
+            diagnostic.message
+        );
+    }
 
     let execution_env_policy = runtime_config.execution_env.clone();
     let codex_execution_policy = runtime_config.codex_execution.clone();
@@ -217,12 +235,13 @@ pub(crate) fn build_context_from_roots(
             task_reservation_store,
             job_run_store,
             tool_store,
+            plugin_store,
             audit_event_store,
             executor_def_store,
             policy_def_store,
             host_store,
         ),
-        OrbitExecutionAssets::new(Arc::new(registry), skill_catalog),
+        OrbitExecutionAssets::new(Arc::new(registry), skill_catalog, plugin_load),
         OrbitPolicyContext::new(
             PolicyEngine::from_def(&active_policy)?,
             execution_env_policy,

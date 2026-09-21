@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::identity::{Crew, OrbitId};
+use orbit_types::plugin::InstalledPlugin;
 use orbit_types::policy::PolicyDef;
 use orbit_types::task::{
     ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
@@ -757,6 +758,21 @@ pub trait ToolStoreBackend: Send + Sync {
     fn insert_tool(&self, tool: &StoredTool) -> Result<(), OrbitError>;
     fn delete_tool(&self, name: &str) -> Result<bool, OrbitError>;
     fn set_tool_enabled(&self, name: &str, enabled: bool) -> Result<bool, OrbitError>;
+}
+
+/// Host-local plugin records: what is installed, where, and whether it is
+/// enabled. Never synced; the workspace pin file is the versioned half.
+pub trait PluginStoreBackend: Send + Sync {
+    fn list_plugins(&self) -> Result<Vec<InstalledPlugin>, OrbitError>;
+    fn get_plugin(&self, name: &str) -> Result<Option<InstalledPlugin>, OrbitError>;
+    fn upsert_plugin(&self, plugin: &InstalledPlugin) -> Result<(), OrbitError>;
+    fn delete_plugin(&self, name: &str) -> Result<bool, OrbitError>;
+    fn set_plugin_enabled(
+        &self,
+        name: &str,
+        enabled: bool,
+        grants: &[String],
+    ) -> Result<bool, OrbitError>;
 }
 
 pub trait AuditEventStoreBackend: Send + Sync {

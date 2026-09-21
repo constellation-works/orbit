@@ -289,6 +289,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0023".to_string(),
                 "audit_machine_name_columns".to_string()
             ),
+            (
+                "migration.v0024".to_string(),
+                "plugins_and_audit_plugin_provenance".to_string()
+            ),
         ]
     );
 }
@@ -530,7 +534,7 @@ fn store_reopens_database_at_shipped_schema_v4_and_applies_through_latest() {
     );
     assert_eq!(
         applied.last().map(|migration| migration.name.as_str()),
-        Some("audit_machine_name_columns")
+        Some("plugins_and_audit_plugin_provenance")
     );
     let connection = store.connection();
     let conn = connection.lock().expect("connection");

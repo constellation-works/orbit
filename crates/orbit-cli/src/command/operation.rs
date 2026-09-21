@@ -875,6 +875,45 @@ impl Commands {
                     runtime_dispatch!(Tool),
                 )
             }
+            Commands::Plugin(command) => {
+                use super::plugin::PluginSubcommand;
+                let (subcommand, target_id) = match &command.command {
+                    PluginSubcommand::Add(args) => ("add", Some(args.source.clone())),
+                    PluginSubcommand::Enable(args) => ("enable", Some(args.name.clone())),
+                    PluginSubcommand::Disable(args) => ("disable", Some(args.name.clone())),
+                    PluginSubcommand::Remove(args) => ("remove", Some(args.name.clone())),
+                    PluginSubcommand::List(_) => ("list", None),
+                    PluginSubcommand::Show(args) => ("show", Some(args.name.clone())),
+                    PluginSubcommand::Doctor => ("doctor", None),
+                    PluginSubcommand::Validate(args) => {
+                        ("validate", Some(args.dir.to_string_lossy().into_owned()))
+                    }
+                    PluginSubcommand::Sync(_) => ("sync", None),
+                    PluginSubcommand::Migrate(args) => ("migrate", Some(args.binary.clone())),
+                };
+                // `list`, `show`, `doctor` and `validate` only read; the rest
+                // write the host's plugin records or its install root.
+                let runtime_need = match &command.command {
+                    PluginSubcommand::List(_)
+                    | PluginSubcommand::Show(_)
+                    | PluginSubcommand::Doctor
+                    | PluginSubcommand::Validate(_) => RuntimeNeed::ReadOnly,
+                    PluginSubcommand::Sync(args) if args.dry_run => RuntimeNeed::ReadOnly,
+                    _ => RuntimeNeed::Required,
+                };
+                CommandOperation::new(
+                    runtime_need,
+                    Some(admin_meta(
+                        "plugin",
+                        Some(subcommand),
+                        Some("plugin"),
+                        target_id.as_deref(),
+                    )),
+                    None,
+                    false,
+                    runtime_dispatch!(Plugin),
+                )
+            }
             Commands::Policy(command) => {
                 use super::policy::PolicySubcommand;
                 let (subcommand, target_id) = match &command.command {

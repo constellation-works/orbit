@@ -710,6 +710,7 @@ pub mod gc;
 pub mod job;
 pub mod landing;
 pub mod operation;
+pub mod plugin;
 pub mod review;
 pub(crate) mod routine;
 pub mod routines;

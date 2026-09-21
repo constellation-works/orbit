@@ -47,6 +47,7 @@ fn audit_list_json_projection_shape_is_stable() {
         activity_id: Some("implement".to_string()),
         step_index: Some(2),
         self_reported_actor: Some("claude-code".to_string()),
+        plugin: None,
     };
 
     assert_eq!(
@@ -138,6 +139,7 @@ fn denied_event(id: i64, execution_id: &str) -> AuditEvent {
         activity_id: None,
         step_index: None,
         self_reported_actor: None,
+        plugin: None,
     }
 }
 
