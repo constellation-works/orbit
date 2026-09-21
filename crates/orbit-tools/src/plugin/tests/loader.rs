@@ -2,7 +2,7 @@ use std::path::Path;
 
 use orbit_types::plugin::MANIFEST_FILE_NAME;
 
-use super::super::loader::load_plugin_dir;
+use super::super::loader::{fs_write_root_covers, load_plugin_dir, refuse_covering_fs_write_roots};
 
 const MANIFEST: &str = "\
 schemaVersion: 2
@@ -54,5 +54,68 @@ fn load_plugin_dir_refuses_an_installed_tree_that_contains_a_symlink() {
     assert!(
         error.contains("symbolic link"),
         "refusal must say why: {error}"
+    );
+}
+
+#[test]
+fn fs_write_root_covers_the_plugin_and_global_roots_and_not_their_children() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let plugin_root = temp.path().join("plugins/demo/1.0.0");
+    let global_root = temp.path().join("global");
+    std::fs::create_dir_all(&plugin_root).expect("plugin root");
+    std::fs::create_dir_all(&global_root).expect("global root");
+
+    assert_eq!(
+        fs_write_root_covers(&plugin_root, &plugin_root, &global_root),
+        Some("plugin install root")
+    );
+    assert_eq!(
+        fs_write_root_covers(Path::new("/"), &plugin_root, &global_root),
+        Some("plugin install root")
+    );
+    assert_eq!(
+        fs_write_root_covers(&global_root, &plugin_root, &global_root),
+        Some("Orbit global root")
+    );
+    assert_eq!(
+        fs_write_root_covers(&plugin_root.join("cache"), &plugin_root, &global_root),
+        None
+    );
+    assert_eq!(
+        fs_write_root_covers(
+            &global_root.join("state/plugins/demo"),
+            &plugin_root,
+            &global_root
+        ),
+        None
+    );
+}
+
+#[test]
+fn load_refuses_a_manifest_whose_fs_write_covers_the_plugin_root() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_plugin(temp.path());
+    let manifest = temp.path().join(MANIFEST_FILE_NAME);
+    let body = std::fs::read_to_string(&manifest).expect("read");
+    std::fs::write(
+        &manifest,
+        body.replace(
+            "  backend:\n",
+            "  permissions:\n    fs:\n      write: [\"{{plugin_root}}\"]\n  backend:\n",
+        ),
+    )
+    .expect("covering write");
+    let plugin = load_plugin_dir(temp.path()).expect("load");
+    let global_root = temp.path().join("global");
+    let error = refuse_covering_fs_write_roots(
+        &plugin,
+        &global_root,
+        &global_root.join("state/plugins/demo"),
+    )
+    .expect_err("plugin-root write is refused")
+    .to_string();
+    assert!(
+        error.contains("spec.permissions.fs.write[0]") && error.contains("plugin install root"),
+        "{error}"
     );
 }

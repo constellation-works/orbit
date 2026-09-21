@@ -150,6 +150,25 @@ impl PluginBackendSpec {
         } else {
             Vec::new()
         };
+        for (index, path) in write.iter().enumerate() {
+            if let Some(protected) =
+                super::loader::fs_write_root_covers(path, &self.plugin_root, &self.global_root)
+            {
+                return Err(plugin_refusal(PluginManifestError::new(
+                    format!("spec.permissions.fs.write[{index}]"),
+                    format!(
+                        "'{}' contains the {protected}; a plugin cannot request a write tree \
+                         that includes its own install root or Orbit's global root",
+                        self.permissions
+                            .fs
+                            .write
+                            .get(index)
+                            .map(String::as_str)
+                            .unwrap_or("")
+                    ),
+                )));
+            }
+        }
         let mut write_files = Vec::new();
         if self.granted(PluginGrant::OrbitTools) {
             // The callback runs `orbit tool run` in the child: its own

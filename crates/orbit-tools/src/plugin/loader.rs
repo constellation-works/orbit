@@ -4,15 +4,15 @@
 //! [`PluginLoadError`] naming the manifest field, and the caller decides
 //! whether that refuses `orbit plugin add` or registers the plugin inactive.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use orbit_types::plugin::{
     FIRST_PARTY_PUBLISHER, MANIFEST_FILE_NAME, PluginExecutionKind, PluginManifest,
-    PluginManifestError, PluginMcpScope, RESERVED_CLI_COMMANDS, namespace_collides_with_tool,
-    plugin_tool_name,
+    PluginManifestError, PluginMcpScope, PluginTemplateVars, RESERVED_CLI_COMMANDS,
+    namespace_collides_with_tool, plugin_tool_name, render_template, template_references,
 };
 use orbit_types::tool::ToolParam;
 use serde_json::Value;
@@ -655,6 +655,101 @@ pub fn validate_loaded_plugin(
         }
     }
     Ok(())
+}
+
+/// Refuse `spec.permissions.fs.write` roots that contain the plugin install
+/// tree or Orbit's global root.
+///
+/// A write tree on `{{plugin_root}}` (or any parent) lets the backend rewrite
+/// `plugin.yaml` under an already-recorded `fs` grant; a write tree on the
+/// global root does the same to the host install. `{{plugin_state}}` is a
+/// child of the global root and is allowed. Paths that need `{{workspace}}`
+/// are skipped here and checked again when a call renders them.
+pub fn refuse_covering_fs_write_roots(
+    plugin: &LoadedPlugin,
+    global_root: &Path,
+    plugin_state: &Path,
+) -> Result<(), PluginManifestError> {
+    let vars = PluginTemplateVars {
+        workspace: None,
+        plugin_root: plugin.root.to_string_lossy().into_owned(),
+        plugin_state: plugin_state.to_string_lossy().into_owned(),
+        config: plugin
+            .config_defaults
+            .iter()
+            .filter_map(|(key, value)| value.as_str().map(|text| (key.clone(), text.to_string())))
+            .collect(),
+    };
+    for (index, declared) in plugin.manifest.spec.permissions.fs.write.iter().enumerate() {
+        let field = format!("spec.permissions.fs.write[{index}]");
+        if template_references(declared)
+            .iter()
+            .any(|reference| reference == "workspace")
+        {
+            continue;
+        }
+        let rendered = render_template(declared, &vars, &field)?;
+        let path = PathBuf::from(&rendered);
+        let absolute = if path.is_absolute() {
+            path
+        } else {
+            plugin.root.join(path)
+        };
+        if let Some(protected) = fs_write_root_covers(&absolute, &plugin.root, global_root) {
+            return Err(PluginManifestError::new(
+                field,
+                format!(
+                    "'{declared}' contains the {protected}; a plugin cannot request a write \
+                     tree that includes its own install root or Orbit's global root"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Whether `write` contains `plugin_root` or `global_root`. Equality counts:
+/// a grant on the plugin root itself is how a backend rewrites `plugin.yaml`.
+pub fn fs_write_root_covers(
+    write: &Path,
+    plugin_root: &Path,
+    global_root: &Path,
+) -> Option<&'static str> {
+    let write = physical_or_lexical(write);
+    let plugin_root = physical_or_lexical(plugin_root);
+    let global_root = physical_or_lexical(global_root);
+    if is_path_prefix(&write, &plugin_root) {
+        Some("plugin install root")
+    } else if is_path_prefix(&write, &global_root) {
+        Some("Orbit global root")
+    } else {
+        None
+    }
+}
+
+fn physical_or_lexical(path: &Path) -> PathBuf {
+    path.canonicalize()
+        .unwrap_or_else(|_| lexical_normalize(path))
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if out.parent().is_some() {
+                    out.pop();
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn is_path_prefix(prefix: &Path, path: &Path) -> bool {
+    path == prefix || path.starts_with(prefix)
 }
 
 /// Whether `source` (the `orbit plugin add` argument) resolves to a

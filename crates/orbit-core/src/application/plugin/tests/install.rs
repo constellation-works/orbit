@@ -4,7 +4,9 @@ use std::path::Path;
 use orbit_types::plugin::PluginStatus;
 use orbit_types::telemetry::AuditEventStatus;
 
-use super::super::{PluginAddOptions, install_plugin, list_plugins, plugin_doctor, show_plugin};
+use super::super::{
+    PluginAddOptions, install_plugin, list_plugins, plugin_doctor, show_plugin, validate_plugin_dir,
+};
 use super::fixture::{PluginFixture, PluginSpecFixture, write_plugin_at};
 
 #[test]
@@ -145,7 +147,107 @@ fn an_enabled_plugin_tool_executes_through_audited_dispatch() {
         .expect("the audit row names the plugin");
     assert_eq!(plugin.name, "demo");
     assert_eq!(plugin.version, "1.0.0");
-    assert_eq!(plugin.manifest_digest.len(), 64);
+    let install_path = show_plugin(&runtime, "demo").expect("show").install_path;
+    let loaded = orbit_tools::plugin::manifest_digest(
+        &std::fs::read(Path::new(&install_path).join("plugin.yaml")).expect("manifest bytes"),
+    );
+    assert_eq!(
+        plugin.manifest_digest, loaded,
+        "audit provenance must name the digest of the bytes that ran"
+    );
+}
+
+/// Rewriting `plugin.yaml` after install is not a silent grant expansion: the
+/// next load registers the plugin inactive and names both digests plus the
+/// re-consent commands.
+#[test]
+fn a_rewritten_manifest_after_install_is_refused_until_reconsent() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let summary = install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("install");
+    let stored = summary.manifest_digest.clone();
+
+    let manifest = Path::new(&summary.install_path).join("plugin.yaml");
+    let body = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(
+        &manifest,
+        body.replace("Fixture plugin.", "Fixture plugin (tampered)."),
+    )
+    .expect("rewrite the installed manifest");
+    let loaded = orbit_tools::plugin::manifest_digest(&std::fs::read(&manifest).expect("bytes"));
+    assert_ne!(stored, loaded);
+
+    let runtime = fixture.reopen();
+    let shown = show_plugin(&runtime, "demo").expect("show");
+    assert_eq!(shown.status, PluginStatus::Inactive);
+    let diagnostic = shown.diagnostic.as_deref().unwrap_or_default();
+    assert!(
+        diagnostic.contains(&stored)
+            && diagnostic.contains(&loaded)
+            && diagnostic.contains("orbit plugin add --force")
+            && diagnostic.contains("orbit plugin enable demo"),
+        "{diagnostic}"
+    );
+}
+
+/// `orbit plugin validate` refuses a write tree that contains the plugin
+/// directory or the host global root, the same refusal registration applies.
+#[test]
+fn validate_refuses_fs_write_roots_that_cover_the_plugin_or_global_root() {
+    let fixture = PluginFixture::new();
+    let mut covering_plugin = PluginSpecFixture::new("cover", "cover");
+    covering_plugin.permissions =
+        Some("  permissions:\n    fs:\n      write: [\"{{plugin_root}}\"]\n");
+    let covering = fixture.write_plugin(covering_plugin);
+    let error = validate_plugin_dir(&fixture.runtime, &covering, false)
+        .expect_err("plugin-root write must be refused")
+        .to_string();
+    assert!(
+        error.contains("spec.permissions.fs.write[0]") && error.contains("plugin install root"),
+        "{error}"
+    );
+
+    let mut slash = PluginSpecFixture::new("slash", "slash");
+    slash.permissions = Some("  permissions:\n    fs:\n      write: [\"/\"]\n");
+    let slash_dir = fixture.write_plugin(slash);
+    let error = validate_plugin_dir(&fixture.runtime, &slash_dir, false)
+        .expect_err("write of / must be refused")
+        .to_string();
+    assert!(error.contains("spec.permissions.fs.write[0]"), "{error}");
+
+    let global_dir = fixture.write_plugin(PluginSpecFixture::new("hostroot", "hostroot"));
+    let manifest = global_dir.join("plugin.yaml");
+    let body = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(
+        &manifest,
+        body.replace(
+            "  backend:\n",
+            &format!(
+                "  permissions:\n    fs:\n      write: [\"{}\"]\n  backend:\n",
+                fixture.global_root.display()
+            ),
+        ),
+    )
+    .expect("request a global-root write");
+    let error = validate_plugin_dir(&fixture.runtime, &global_dir, false)
+        .expect_err("write of the global root must be refused")
+        .to_string();
+    assert!(
+        error.contains("spec.permissions.fs.write[0]") && error.contains("Orbit global root"),
+        "{error}"
+    );
+
+    let allowed = fixture.write_plugin(PluginSpecFixture::new("ok", "ok").requesting_fs_write());
+    validate_plugin_dir(&fixture.runtime, &allowed, false)
+        .expect("{{plugin_state}} is a child of the global root, not a covering write");
 }
 
 /// Every way a backend can fail short of a valid response is a tool error

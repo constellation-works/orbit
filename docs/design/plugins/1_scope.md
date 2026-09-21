@@ -236,6 +236,16 @@ Runner`; `mutating` plugin tools by `Operator | Runner` and by `Agent` only when
 verify against its authorization record is not authority either: the plugin is refused and
 every surface reports it as granting nothing (§3).
 
+Those grants are bound to the install-time `plugin.yaml` digest stored on the `plugins` row.
+Every load hashes the bytes on disk and compares them to that `manifest_digest`. A mismatch
+registers the plugin inactive with a diagnostic that names both digests and the re-consent
+commands (`orbit plugin add --force` and `orbit plugin enable`); the profile compiled for a
+call is the one the operator granted, never a later rewrite of the requested paths, env names,
+tools, or backend. Independently of that digest check, `permissions.fs.write` roots that
+contain the plugin install root (`{{plugin_root}}` or any parent) or Orbit's global root are
+refused at `orbit plugin validate` and at registration — a plugin may write `{{plugin_state}}`,
+not its own manifest and not `~/.orbit`.
+
 ### 4.2 Execution protocol
 
 `exec` backend — one process per call, current dir = caller cwd, env cleared to the
@@ -320,7 +330,9 @@ authorization record under `plugins/`, which this boundary keeps read-only to th
 A plugin refused because its stored grants do not match the set this host authorized is
 audited at load as `plugin.load` / `denied`, with the claimed grant set on the row (§3).
 Every call passes through the existing audited dispatch with `ToolEntryPoint` plus
-`plugin: {name, version, manifest_digest}`. Tasks minted by a plugin auto-task carry
+`plugin: {name, version, manifest_digest}`. `manifest_digest` is the SHA-256 of the
+`plugin.yaml` bytes actually loaded for that call, not a stale install-time value the
+on-disk file no longer matches (§4.1). Tasks minted by a plugin auto-task carry
 `plugin:<ns>` alongside the existing `auto-task:<name>` tag. Definitions seeded by a plugin
 carry the provenance header. Removing a plugin never rewrites task history.
 
