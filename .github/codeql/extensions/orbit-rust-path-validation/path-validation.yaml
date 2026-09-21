@@ -112,6 +112,18 @@ extensions:
           "manual",
         ]
       - [
+          "orbit_config::validated_machine_settings_path",
+          "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",
+          "path-injection",
+          "manual",
+        ]
+      - [
+          "orbit_registry::machine_identity::validated_host_toml_path",
+          "ReturnValue.Field[core::result::Result::Ok(0)].Field[core::option::Option::Some(0)]",
+          "path-injection",
+          "manual",
+        ]
+      - [
           "orbit_cmd::diagnostics::validated_diagnostics_category_dir",
           "ReturnValue.Field[core::result::Result::Ok(0)]",
           "path-injection",
@@ -203,6 +215,20 @@ extensions:
         ]
       - [
           "orbit_config::store::config_store_path_is_contained",
+          "Argument[0]",
+          "true",
+          "path-injection",
+          "manual",
+        ]
+      - [
+          "orbit_config::machine_settings_path_is_contained",
+          "Argument[0]",
+          "true",
+          "path-injection",
+          "manual",
+        ]
+      - [
+          "orbit_registry::machine_identity::host_toml_path_is_contained",
           "Argument[0]",
           "true",
           "path-injection",

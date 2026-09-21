@@ -63,9 +63,12 @@ mod roots;
 mod seed;
 mod store;
 
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::open_read_only_no_follow;
+use orbit_common::security::redaction::redact_home_dir;
 
 pub use crew_pools::{
     CanonicalCrewPool, ComplexityCrewPools, CrewPoolEntry, canonical_crew_pool,
@@ -93,33 +96,102 @@ pub use roots::ConfigRoots;
 pub use seed::{ConfigSeed, seed_default_config};
 pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};
 
+const MACHINE_SETTINGS_FILE: &str = "config.toml";
+
 /// Read the `[machine]` table from the global `config.toml` at `global_root`.
 ///
 /// Deliberately narrower than [`ResolvedConfig::load`]: this machine's identity
 /// is resolved on every runtime open and by `orbit init` before the rest of the
 /// document is known to admit, so an unrelated problem elsewhere in the file
 /// must not make Orbit forget who it is. A missing file has no identity.
-pub fn load_machine_settings(global_root: &std::path::Path) -> Result<MachineSettings, OrbitError> {
-    let path = global_root.join("config.toml");
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(raw) => raw,
+pub fn load_machine_settings(global_root: &Path) -> Result<MachineSettings, OrbitError> {
+    let Some(path) = validated_machine_settings_path(global_root)? else {
+        return Ok(MachineSettings::default());
+    };
+    let mut file = match open_read_only_no_follow(&path) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(MachineSettings::default());
         }
         Err(error) => {
             return Err(OrbitError::Io(format!(
                 "failed to read runtime config '{}': {error}",
-                orbit_common::security::redaction::redact_home_dir(&path.display().to_string())
+                redact_home_dir(&path.display().to_string())
             )));
         }
     };
+    let mut raw = String::new();
+    file.read_to_string(&mut raw).map_err(|error| {
+        OrbitError::Io(format!(
+            "failed to read runtime config '{}': {error}",
+            redact_home_dir(&path.display().to_string())
+        ))
+    })?;
     let document = toml::from_str::<toml::Value>(&raw).map_err(|error| {
         OrbitError::InvalidInput(format!(
             "invalid runtime config '{}': {error}",
-            orbit_common::security::redaction::redact_home_dir(&path.display().to_string())
+            redact_home_dir(&path.display().to_string())
         ))
     })?;
     MachineSettings::admit(&document, &path)
+}
+
+/// CodeQL `rust/path-injection` treats `Path::starts_with` as a SafeAccessCheck
+/// on the receiver. Call this after reconstructing `config.toml` so later
+/// filesystem sinks only see a prefix-checked value.
+fn machine_settings_path_is_contained(path: &Path, parent: &Path) -> bool {
+    path.starts_with(parent)
+}
+
+fn machine_settings_path_error(message: &str, path: &Path) -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "{message}: {}",
+        redact_home_dir(&path.display().to_string())
+    ))
+}
+
+/// Resolve the global `config.toml` before any identity read.
+///
+/// Callers pass a selected Orbit global root. The root is canonicalized so
+/// directory aliases collapse, then the fixed filename is rejoined and
+/// prefix-checked so later open/read sinks only see a reconstructed path.
+/// A missing root or missing file is treated as no identity. A present leaf
+/// that is a symlink or non-file is refused.
+fn validated_machine_settings_path(global_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    let canonical_root = match global_root.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "failed to canonicalize machine settings directory '{}': {error}",
+                redact_home_dir(&global_root.display().to_string())
+            )));
+        }
+    };
+    let candidate = canonical_root.join(MACHINE_SETTINGS_FILE);
+    if !machine_settings_path_is_contained(&candidate, &canonical_root) {
+        return Err(machine_settings_path_error(
+            "machine settings path escapes its parent",
+            &candidate,
+        ));
+    }
+
+    match std::fs::symlink_metadata(&candidate) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(machine_settings_path_error(
+            "machine settings path must not be a symlink",
+            &candidate,
+        )),
+        Ok(metadata) if !metadata.is_file() => Err(machine_settings_path_error(
+            "machine settings path must be a regular file",
+            &candidate,
+        )),
+        Ok(_) => Ok(Some(candidate)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(OrbitError::Io(format!(
+            "failed to inspect runtime config '{}': {error}",
+            redact_home_dir(&candidate.display().to_string())
+        ))),
+    }
 }
 
 /// Validate the effective (workspace-over-global) `config.toml` without
