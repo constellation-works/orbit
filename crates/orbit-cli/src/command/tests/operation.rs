@@ -228,3 +228,11 @@ fn audit_command_is_the_only_operation_without_audit_metadata() {
     assert_eq!(meta.subcommand.as_deref(), Some("show"));
     assert_eq!(meta.target_id.as_deref(), Some("ORB-10200"));
 }
+
+#[test]
+fn hidden_pipeline_worker_uses_bounded_bootstrap_recovery() {
+    assert_eq!(
+        operation_for(&["orbit", "job", "run-pipeline-worker", "jrun-child"]).runtime_need,
+        RuntimeNeed::PipelineWorker
+    );
+}
