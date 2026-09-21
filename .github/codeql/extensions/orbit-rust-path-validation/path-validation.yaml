@@ -221,13 +221,6 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_config::machine_settings_path_is_contained",
-          "Argument[0]",
-          "true",
-          "path-injection",
-          "manual",
-        ]
-      - [
           "orbit_registry::machine_identity::host_toml_path_is_contained",
           "Argument[0]",
           "true",

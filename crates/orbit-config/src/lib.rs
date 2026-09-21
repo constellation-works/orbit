@@ -136,13 +136,6 @@ pub fn load_machine_settings(global_root: &Path) -> Result<MachineSettings, Orbi
     MachineSettings::admit(&document, &path)
 }
 
-/// CodeQL `rust/path-injection` treats `Path::starts_with` as a SafeAccessCheck
-/// on the receiver. Call this after reconstructing `config.toml` so later
-/// filesystem sinks only see a prefix-checked value.
-fn machine_settings_path_is_contained(path: &Path, parent: &Path) -> bool {
-    path.starts_with(parent)
-}
-
 fn machine_settings_path_error(message: &str, path: &Path) -> OrbitError {
     OrbitError::InvalidInput(format!(
         "{message}: {}",
@@ -153,10 +146,12 @@ fn machine_settings_path_error(message: &str, path: &Path) -> OrbitError {
 /// Resolve the global `config.toml` before any identity read.
 ///
 /// Callers pass a selected Orbit global root. The root is canonicalized so
-/// directory aliases collapse, then the fixed filename is rejoined and
-/// prefix-checked so later open/read sinks only see a reconstructed path.
-/// A missing root or missing file is treated as no identity. A present leaf
-/// that is a symlink or non-file is refused.
+/// directory aliases collapse, then the fixed filename is rejoined. The
+/// reconstructed path is prefix-checked with `Path::starts_with` in this
+/// function (CodeQL `rust/path-injection` SafeAccessCheck on the receiver)
+/// so the leaf metadata probe and later open/read sinks only see a
+/// prefix-checked value. A missing root or missing file is treated as no
+/// identity. A present leaf that is a symlink or non-file is refused.
 fn validated_machine_settings_path(global_root: &Path) -> Result<Option<PathBuf>, OrbitError> {
     let canonical_root = match global_root.canonicalize() {
         Ok(path) => path,
@@ -169,7 +164,9 @@ fn validated_machine_settings_path(global_root: &Path) -> Result<Option<PathBuf>
         }
     };
     let candidate = canonical_root.join(MACHINE_SETTINGS_FILE);
-    if !machine_settings_path_is_contained(&candidate, &canonical_root) {
+    // `Path::starts_with` is CodeQL's rust/path-injection SafeAccessCheck
+    // BarrierGuard on the receiver; a helper wrapping it is not.
+    if !candidate.starts_with(&canonical_root) {
         return Err(machine_settings_path_error(
             "machine settings path escapes its parent",
             &candidate,
