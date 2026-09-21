@@ -505,6 +505,9 @@ fn register_installed_plugin(
             );
         }
     };
+    if let Some(message) = first_party_row_mismatch(installed, &plugin) {
+        return refused(PluginStatus::Inactive, message);
+    }
     if plugin.manifest_digest != installed.manifest_digest {
         return register_inactive_tools(
             global_root,
@@ -557,7 +560,7 @@ fn register_installed_plugin(
     let provenance = backend.spec().provenance.clone();
     let mut tools = Vec::with_capacity(plugin.tools.len());
     for tool in &plugin.tools {
-        let name = plugin_tool_name(plugin.namespace(), &tool.verb, installed.first_party);
+        let name = registered_plugin_tool_name(&plugin, &tool.verb);
         let binding = Arc::new(PluginToolBinding {
             provenance: provenance.clone(),
             execution_kind: tool.execution_kind,
@@ -601,7 +604,7 @@ fn register_inactive_tools(
     let provenance = backend.spec().provenance.clone();
     let mut tools = Vec::with_capacity(plugin.tools.len());
     for tool in &plugin.tools {
-        let name = plugin_tool_name(plugin.namespace(), &tool.verb, installed.first_party);
+        let name = registered_plugin_tool_name(plugin, &tool.verb);
         let binding = Arc::new(PluginToolBinding {
             provenance: provenance.clone(),
             execution_kind: tool.execution_kind,
@@ -622,6 +625,28 @@ fn register_inactive_tools(
         grants_authorized: true,
         loaded: None,
         config_values: BTreeMap::new(),
+    }
+}
+
+/// Canonical name the validator already checked: the manifest claim, never
+/// the store row's `first_party` flag. The row is only the verification
+/// answer passed into `with_first_party_verified`.
+fn registered_plugin_tool_name(plugin: &LoadedPlugin, verb: &str) -> String {
+    plugin.tool_name(verb, plugin.manifest.claims_first_party_namespace())
+}
+
+/// A `plugins` row that claims `first_party` for a manifest that does not
+/// declare `origin: orbit`. Validation named tools from the manifest; a
+/// `true` row would otherwise register `orbit.<ns>.*` over a built-in.
+fn first_party_row_mismatch(installed: &InstalledPlugin, plugin: &LoadedPlugin) -> Option<String> {
+    if installed.first_party && !plugin.manifest.claims_first_party_namespace() {
+        Some(format!(
+            "plugin '{}' is refused: the plugins row claims first_party but the manifest does \
+             not declare `origin: orbit`",
+            installed.name
+        ))
+    } else {
+        None
     }
 }
 
