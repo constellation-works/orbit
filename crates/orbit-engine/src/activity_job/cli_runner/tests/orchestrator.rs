@@ -4561,6 +4561,79 @@ fi
     assert_eq!(outcome.output["provider"], "grok");
 }
 
+#[test]
+fn run_cli_backend_injects_orbit_scratch_dir_under_workspace() {
+    let temp = tempdir().expect("tempdir");
+    let workspace = temp.path().join("worktree");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let expected_scratch = workspace
+        .canonicalize()
+        .expect("canonical workspace")
+        .join(".orbit")
+        .join("tmp");
+    let script = temp.path().join("grok");
+    write_executable(
+        &script,
+        &format!(
+            r#"#!/bin/sh
+cat > /dev/null
+if [ "$ORBIT_SCRATCH_DIR" = "{scratch}" ] && [ -d "$ORBIT_SCRATCH_DIR" ]; then
+  printf '%s\n' '{{"schemaVersion":1,"status":"success","result":{{"scratch":"ok"}},"error":null}}'
+else
+  printf '%s\n' "{{\"schemaVersion\":1,\"status\":\"failed\",\"error\":{{\"code\":\"scratch_dir_missing\",\"message\":\"ORBIT_SCRATCH_DIR=$ORBIT_SCRATCH_DIR\",\"details\":null}}}}"
+  exit 1
+fi
+"#,
+            scratch = expected_scratch.display(),
+        ),
+    );
+
+    let sink = Arc::new(RecordingSink::default());
+    let sink_for_writer: Arc<dyn AuditSink> = sink;
+    let audit = Arc::new(V2AuditWriter::new(
+        "job-grok-scratch-dir",
+        "grok:grok-build",
+        sink_for_writer,
+    ));
+    let host = TestHost {
+        command: script.display().to_string(),
+        executor_args: Vec::new(),
+        provider_config: HashMap::new(),
+        sandbox: None,
+        task_context: None,
+        workspace_root: Some(workspace.clone()),
+        orbit_registry_root: None,
+        orbit_workspace_selector: None,
+    };
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    spec.model = Some("grok-build".to_string());
+
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "test_activity",
+        "job-grok-scratch-dir",
+        audit,
+        &serde_json::json!({
+            "prompt": "hi",
+            "workspace_path": workspace
+        }),
+        None,
+    )
+    .expect("run succeeds");
+
+    assert!(
+        outcome.success,
+        "provider did not receive ORBIT_SCRATCH_DIR: {:?}",
+        outcome.output
+    );
+    assert!(
+        expected_scratch.is_dir(),
+        "dispatch must create {}",
+        expected_scratch.display()
+    );
+}
+
 /// [ORB-10980] A managed run executes in a linked worktree whose workspace and
 /// worktree-local `.orbit` state roots are mounted read-only. The child must be
 /// routed to the authoritative registry root the host reports without turning

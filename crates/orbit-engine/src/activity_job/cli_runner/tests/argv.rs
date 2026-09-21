@@ -105,6 +105,7 @@ fn task_pilot_reviewer_profile_starts_direct_linux_invocation_with_env_denies() 
             "!.orbit/routines/**",
             "!.orbit/config.toml",
             "!.orbit/resources/**",
+            "!.orbit/tmp/**",
             "**/.env",
             "**/.env.*",
             "**/*.env",

@@ -117,6 +117,7 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     // checkout whose HEAD is not `base_sha`, so admission never sees a
     // checkpoint that later commit provenance would reject.
     let branch_name = ensure_worktree(repo_root, &worktree_path, &base_sha, &branch_name)?;
+    orbit_common::fs::path::ensure_orbit_scratch_dir(&worktree_path)?;
 
     // ORB-10602: mount-anchor materialization deliberately does *not* happen
     // here any more. Setup only ever saw a snapshot of the task's context files

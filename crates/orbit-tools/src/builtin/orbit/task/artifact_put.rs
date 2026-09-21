@@ -23,7 +23,8 @@ impl Tool for OrbitTaskArtifactPutTool {
                 description: "Source file to store as a task artifact. Resolved against the \
                     caller cwd, then confined to the workspace checkout after symlink \
                     resolution. Absolute paths and symlinks that escape the workspace are \
-                    rejected."
+                    rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); \
+                    sources under `/tmp` are outside the workspace and are refused."
                     .to_string(),
                 param_type: "string".to_string(),
                 required: true,
@@ -190,7 +191,7 @@ fn confine_source_path(ctx: &ToolContext, source_path: &Path) -> Result<PathBuf,
     let resolved = resolve_symlinks(source_path)?;
     if !resolved.starts_with(&canonical_workspace) {
         return Err(OrbitError::InvalidInput(format!(
-            "source_path '{}' is outside workspace_root '{}'",
+            "source_path '{}' is outside workspace_root '{}'; write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)",
             resolved.display(),
             canonical_workspace.display()
         )));

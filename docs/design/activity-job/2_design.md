@@ -613,8 +613,9 @@ Failure-candidate preservation uses the same task-candidate boundary. The
 before-PR reviewer is deliberately different: it starts from a committed,
 pinned candidate, is forbidden to run staging commands, and its activity
 contract makes every path it leaves changed an intended reviewer repair.
-Reviewer scratch, logs, and attachment staging files must live outside the
-worktree; the host may therefore stage that reviewer's entire repair delta
+Reviewer scratch, logs, and attachment staging files must live under
+`.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`; gitignored), not as untracked worktree
+paths; the host may therefore stage that reviewer's entire repair delta
 without heuristically forcing implementer task selectors onto it.
 
 **Declared exceptions.** No shipped `agent_loop` activity opts out of

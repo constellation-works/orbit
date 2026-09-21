@@ -197,6 +197,39 @@ fn ensure_worktree_uses_commit_start_point_without_upstream_config() {
 }
 
 #[test]
+fn setup_worktree_creates_scratch_dir_ignored_by_git() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    init_repo(&repo, "agent-main");
+    commit_file(&repo, ".gitignore", ".orbit/\n");
+    commit_file(&repo, "base.txt", "v1");
+    let host = FakeHost::new(&repo, &["ORB-12740"]);
+    let run_id = "jrun-scratch-dir";
+    let input = json!({
+        "task_ids": ["ORB-12740"],
+        "run_id": run_id,
+        "base": "agent-main",
+        "base_sync": "local",
+        "dependency_delivery": "ignore",
+    });
+
+    let output = setup_worktree(&host, &input).expect("setup");
+    let workspace = PathBuf::from(output["workspace_path"].as_str().expect("workspace_path"));
+    let scratch = workspace.join(".orbit").join("tmp");
+    assert!(
+        scratch.is_dir(),
+        "fresh worktree must contain .orbit/tmp at {}",
+        scratch.display()
+    );
+    fs::write(scratch.join("evidence.json"), "{\"ok\":true}\n").unwrap();
+    let status = git(&workspace, &["status", "--short"]);
+    assert!(
+        status.is_empty(),
+        "files under .orbit/tmp must not appear in git status: {status:?}"
+    );
+}
+
+#[test]
 fn worktree_setup_output_includes_legacy_batch_id_alias() {
     let output = worktree_setup_output(
         "jrun-test",

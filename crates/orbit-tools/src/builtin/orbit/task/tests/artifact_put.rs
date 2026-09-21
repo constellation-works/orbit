@@ -167,8 +167,39 @@ fn artifact_put_rejects_source_outside_workspace_root() {
         .execute(&ctx, json!({"id": "ORB-00001", "source_path": source}))
         .expect_err("outside workspace_root must be refused");
 
+    let message = error.to_string();
     assert_invalid_input(error);
+    assert!(
+        message.contains(".orbit/tmp/"),
+        "outside-workspace rejection must name `.orbit/tmp/`: {message}"
+    );
     assert!(host.call.lock().expect("host call").is_none());
+}
+
+#[test]
+fn artifact_put_accepts_source_under_orbit_tmp() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let scratch = workspace.path().join(".orbit").join("tmp");
+    std::fs::create_dir_all(&scratch).expect("scratch dir");
+    let source = scratch.join("x.json");
+    std::fs::write(&source, "{\"ok\":true}\n").expect("write scratch source");
+    let host = RecordingHost::default();
+    let ctx = context_in(workspace.path(), host.clone());
+
+    OrbitTaskArtifactPutTool
+        .execute(
+            &ctx,
+            json!({
+                "id": "ORB-00001",
+                "source_path": source,
+                "model": "codex"
+            }),
+        )
+        .expect("in-workspace .orbit/tmp source must be accepted");
+
+    let call = host.call.lock().expect("recorded call").take().unwrap();
+    assert_eq!(call.action, OrbitBuiltinAction::TaskUpdate);
+    assert_eq!(call.input["artifacts"][0]["path"], "x.json");
 }
 
 #[cfg(unix)]

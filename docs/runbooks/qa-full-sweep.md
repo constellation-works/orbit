@@ -43,27 +43,23 @@ orbit task artifact put <TASK_ID> qa-full-sweep-report.json \
 `orbit.task.artifact.put` is intentionally fail-closed: its `source_path`
 must resolve beneath `workspace_root`, so ORB-11694 makes it refuse files
 that are still in `/tmp` (and symlinks inside the workspace that resolve
-outside it). Keep the retained browser evidence in `/tmp` while the sweep is
-running, then use this stage-attach-remove sequence for every file you retain:
+outside it). Stage retained evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`;
+gitignored, so it does not appear in `git status`) and attach from there:
 
 ```bash
-stage_dir=.qa-full-sweep-attach
+stage_dir=.orbit/tmp/qa-full-sweep
 mkdir -p "$stage_dir/browser"
 cp -R /tmp/orbit-qa-evidence/browser/. "$stage_dir/browser/"
 
 # Attach each staged evidence file; this example attaches the browser result.
 orbit task artifact put <TASK_ID> "$stage_dir/browser/result.json" \
   --path browser/result.json --model claude --json
-
-rm -r -- "$stage_dir"
-git status --short
 ```
 
-The copy must be inside the checkout before `artifact put` runs, and the
-staging directory must be deleted after all retained files have been
-attached. The final `git status --short` must be empty before handoff;
-leftover staged copies (or the generated report, if it is untracked) are
-untracked delivery-boundary failures. If the retained evidence is represented
+The copy must be inside the checkout (under `.orbit/tmp/`) before
+`artifact put` runs. Do not stage into a tracked or untracked-visible path;
+leftover copies outside `.orbit/` (or a generated report that is untracked)
+are delivery-boundary failures. If the retained evidence is represented
 by a file hash manifest instead of individual files, stage and attach that
 manifest by the same sequence.
 

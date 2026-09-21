@@ -408,6 +408,17 @@ pub fn run_cli_backend(
     if let Some(workspace) = host.orbit_workspace_selector() {
         dispatch_env.push(("ORBIT_WORKSPACE".to_string(), workspace));
     }
+    if let Some(cwd) = subprocess_cwd.as_ref() {
+        let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(cwd).map_err(|error| {
+            DispatchError::CliInvocationPermanent(format!(
+                "failed to create worker scratch dir: {error}"
+            ))
+        })?;
+        dispatch_env.push((
+            orbit_common::fs::path::ORBIT_SCRATCH_DIR_ENV.to_string(),
+            scratch.display().to_string(),
+        ));
+    }
     // The child's whole environment is composed here and applied to a cleared
     // one by every launcher, so the `[execution.env]` allowlist governs what an
     // untrusted provider subprocess can read. The provider's declared

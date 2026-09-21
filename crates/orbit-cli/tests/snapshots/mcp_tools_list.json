@@ -705,7 +705,7 @@
           "type": "string"
         },
         "source_path": {
-          "description": "Source file to store as a task artifact. Resolved against the caller cwd, then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected.",
+          "description": "Source file to store as a task artifact. Resolved against the caller cwd, then confined to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); sources under `/tmp` are outside the workspace and are refused.",
           "type": "string"
         },
         "workspace": {

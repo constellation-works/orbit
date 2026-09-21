@@ -17,15 +17,57 @@ pub(crate) fn seed_default_policies(
     let now = Utc::now();
     let mut count = 0;
     for (name, raw) in DEFAULT_POLICY_FILES {
-        let existing = store.get_policy_def(name)?;
-        if existing.is_some() && !overwrite {
-            continue;
+        let shipped = parse_default_policy(name, raw, now)?;
+        match store.get_policy_def(name)? {
+            Some(existing) if !overwrite => {
+                if let Some(merged) = merge_shipped_policy_defaults(existing, &shipped, now) {
+                    store.upsert_policy_def(&merged)?;
+                    count += 1;
+                }
+            }
+            _ => {
+                store.upsert_policy_def(&shipped)?;
+                count += 1;
+            }
         }
-        let def = parse_default_policy(name, raw, now)?;
-        store.upsert_policy_def(&def)?;
-        count += 1;
     }
     Ok(count)
+}
+
+/// Additive merge of shipped deny rules into an existing default policy.
+///
+/// Operator-added rules and profile bodies stay in place, matching friction
+/// `tags.yaml` merge. Returns `None` when there is nothing to add, or when
+/// the merge would not validate (a customized deny list that cannot accept a
+/// new exception).
+fn merge_shipped_policy_defaults(
+    mut existing: PolicyDef,
+    shipped: &PolicyDef,
+    now: chrono::DateTime<Utc>,
+) -> Option<PolicyDef> {
+    let deny_read_changed = insert_missing_rules(&mut existing.deny_read, &shipped.deny_read);
+    let deny_modify_changed = insert_missing_rules(&mut existing.deny_modify, &shipped.deny_modify);
+    if !deny_read_changed && !deny_modify_changed {
+        return None;
+    }
+    existing.updated_at = Some(now);
+    existing.validate().ok()?;
+    Some(existing)
+}
+
+fn insert_missing_rules(existing: &mut Vec<String>, shipped: &[String]) -> bool {
+    let mut changed = false;
+    let mut cursor = 0usize;
+    for rule in shipped {
+        if let Some(pos) = existing.iter().position(|item| item == rule) {
+            cursor = pos + 1;
+            continue;
+        }
+        existing.insert(cursor, rule.clone());
+        cursor += 1;
+        changed = true;
+    }
+    changed
 }
 
 fn parse_default_policy(
