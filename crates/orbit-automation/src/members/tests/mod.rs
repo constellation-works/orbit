@@ -79,7 +79,12 @@ impl MemberHost for Host {
 
     fn outcome(&self, _: &MemberAttempt) -> Result<MemberOutcome, AutomationError> {
         if let Some(evidence) = self.evidence.borrow().clone() {
-            Ok(MemberOutcome::Applied(evidence))
+            Ok(MemberOutcome::Settled(MemberBatchEvidence {
+                action_id: evidence.action_id.clone(),
+                attempt_id: evidence.attempt_id.clone(),
+                applied: vec![evidence],
+                failed: BTreeMap::new(),
+            }))
         } else if *self.failed.borrow() {
             Ok(MemberOutcome::Failed("fixture_failure".into()))
         } else {
@@ -93,7 +98,9 @@ struct SchedulerHost {
     withheld: RefCell<BTreeMap<String, String>>,
     retired: RefCell<BTreeSet<String>>,
     admission_checks: RefCell<Vec<String>>,
-    admitted: RefCell<Vec<String>>,
+    /// Task ids of every admitted attempt, one entry per run.
+    admitted: RefCell<Vec<Vec<String>>>,
+    settled: RefCell<Option<MemberBatchEvidence>>,
 }
 
 impl SchedulerHost {
@@ -104,6 +111,7 @@ impl SchedulerHost {
             retired: RefCell::new(BTreeSet::new()),
             admission_checks: RefCell::new(Vec::new()),
             admitted: RefCell::new(Vec::new()),
+            settled: RefCell::new(None),
         }
     }
 }
@@ -135,12 +143,17 @@ impl MemberHost for SchedulerHost {
     }
 
     fn admit(&self, attempt: &MemberAttempt) -> Result<String, AutomationError> {
-        self.admitted.borrow_mut().push(attempt.member.key.clone());
+        self.admitted.borrow_mut().push(attempt.task_ids());
         Ok(format!("run-{}", attempt.member.key))
     }
 
     fn outcome(&self, _: &MemberAttempt) -> Result<MemberOutcome, AutomationError> {
-        Ok(MemberOutcome::Pending)
+        Ok(self
+            .settled
+            .borrow()
+            .clone()
+            .map(MemberOutcome::Settled)
+            .unwrap_or(MemberOutcome::Pending))
     }
 }
 
@@ -202,7 +215,42 @@ fn trigger() -> StateTrigger {
         max_items: 50,
         retries: 1,
         deadline_minutes: 30,
+        batch_size: None,
         eligibility: PreparationEligibility::default(),
+    }
+}
+
+fn preparation_tick(
+    store: &dyn AutomationStoreBackend,
+    host: &SchedulerHost,
+    minute: i64,
+    dry_run: bool,
+) -> AutomationDiagnostic {
+    evaluate(
+        store,
+        host,
+        MemberEvaluation {
+            consumer: "host/ws/routine/pilot",
+            epoch: "epoch",
+            trigger: &trigger(),
+            enabled: true,
+            dry_run,
+            now: DateTime::from_timestamp(1_700_000_000, 0).unwrap() + Duration::minutes(minute),
+            constraints: MemberConstraints::default(),
+        },
+    )
+    .unwrap()
+}
+
+fn evidence_for(attempt: &MemberAttempt, key: &str, resulting: &str) -> MemberEvidence {
+    MemberEvidence {
+        action_id: attempt.action_id.clone().unwrap(),
+        attempt_id: attempt.id.clone(),
+        member_key: key.into(),
+        input_fingerprint: attempt.member_for(key).unwrap().fingerprint.clone(),
+        resulting_fingerprint: resulting.into(),
+        ready: true,
+        result: serde_json::json!({"task_id": key}),
     }
 }
 
@@ -315,7 +363,10 @@ fn execution_failed_retires_stale_prefix_without_losing_current_diagnostics() {
             "new-incident"
         ]
     );
-    assert_eq!(host.admitted.borrow().as_slice(), ["new-incident"]);
+    assert_eq!(
+        host.admitted.borrow().as_slice(),
+        [vec!["task-new".to_string()]]
+    );
 
     *host.candidates.borrow_mut() = vec![state_member("recovered-incident", &["task-a"], 5)];
     *host.withheld.borrow_mut() = BTreeMap::from([("task-b".into(), "human_block".into())]);
@@ -680,4 +731,407 @@ fn grant_scope_accelerates_only_in_scope_members() {
     assert_eq!(evaluate_with(0, &["other"]).reason, "debouncing");
     // In scope with a zero-second due interval: due now.
     assert_eq!(evaluate_with(0, &["task"]).reason, "would_fire");
+}
+
+/// [ORB-12746] A burst of due members is admitted as one attempt of up to
+/// `batch_size` members, oldest first; the rest stay pending for the next
+/// admission, and both the preview and the fired diagnostic list the batch.
+#[test]
+fn burst_of_due_members_admits_one_batch_and_keeps_the_rest_pending() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = SchedulerHost::new(
+        (0..8)
+            .map(|index| state_member(&format!("task-{index}"), &[&format!("task-{index}")], 0))
+            .collect(),
+    );
+
+    assert_eq!(
+        preparation_tick(store.as_ref(), &host, 0, false).reason,
+        "debouncing"
+    );
+
+    let preview = preparation_tick(store.as_ref(), &host, 3, true);
+    assert_eq!(preview.reason, "would_fire");
+    assert_eq!(
+        preview
+            .batch
+            .iter()
+            .map(|member| (member.key.as_str(), member.reason.as_str()))
+            .collect::<Vec<_>>(),
+        (0..5)
+            .map(|_| "settled")
+            .enumerate()
+            .map(|(i, r)| (["task-0", "task-1", "task-2", "task-3", "task-4"][i], r))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        host.admitted.borrow().is_empty(),
+        "a preview admits nothing"
+    );
+
+    let fired = preparation_tick(store.as_ref(), &host, 3, false);
+    assert_eq!(fired.reason, "fired");
+    assert_eq!(fired.batch.len(), 5);
+    assert_eq!(
+        host.admitted.borrow().as_slice(),
+        [vec!["task-0", "task-1", "task-2", "task-3", "task-4"]
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>()]
+    );
+    let members = fired.state.unwrap().members.unwrap();
+    let active = members.active.unwrap();
+    assert_eq!(active.members().len(), 5);
+    assert_eq!(active.member, active.members()[0]);
+    assert_eq!(active.attempt, 1);
+    assert_eq!(members.pending.len(), 8, "admission alone applies nothing");
+
+    let pending = preparation_tick(store.as_ref(), &host, 4, false);
+    assert_eq!(pending.reason, "batch_pending");
+    assert_eq!(pending.batch.len(), 5);
+    assert!(
+        pending
+            .batch
+            .iter()
+            .all(|member| member.reason == "admitted")
+    );
+    assert_eq!(host.admitted.borrow().len(), 1, "one run per batch");
+}
+
+/// [ORB-12746] One run settles each member on its own: applied members are
+/// assessed under a single receipt, a member the run did not apply is failed
+/// at its fingerprint and withheld with the run's reason, and neither blocks
+/// the other. A material edit to the failed member creates new work.
+#[test]
+fn partial_batch_outcome_records_assessed_and_failed_per_member() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = SchedulerHost::new(vec![
+        state_member("task-a", &["task-a"], 0),
+        state_member("task-b", &["task-b"], 0),
+        state_member("task-c", &["task-c"], 0),
+    ]);
+    preparation_tick(store.as_ref(), &host, 0, false);
+    let fired = preparation_tick(store.as_ref(), &host, 3, false);
+    assert_eq!(fired.reason, "fired");
+    let attempt = fired.state.unwrap().members.unwrap().active.unwrap();
+
+    *host.settled.borrow_mut() = Some(MemberBatchEvidence {
+        action_id: attempt.action_id.clone().unwrap(),
+        attempt_id: attempt.id.clone(),
+        applied: vec![
+            evidence_for(&attempt, "task-a", "task-a-assessed"),
+            evidence_for(&attempt, "task-c", "task-c-assessed"),
+        ],
+        failed: BTreeMap::from([("task-b".to_string(), "stale: task_deleted".to_string())]),
+    });
+
+    // Applying rewrote the material of a and c; b is unchanged.
+    let assessed = |key: &str| StateMember {
+        fingerprint: format!("{key}-assessed"),
+        ..state_member(key, &[key], 0)
+    };
+    *host.candidates.borrow_mut() = vec![
+        assessed("task-a"),
+        state_member("task-b", &["task-b"], 0),
+        assessed("task-c"),
+    ];
+    let settled = preparation_tick(store.as_ref(), &host, 4, false);
+    assert_eq!(
+        settled.reason, "needs_attention",
+        "the failed member is visible"
+    );
+    let members = settled.state.unwrap().members.unwrap();
+    assert!(members.active.is_none());
+    assert_eq!(
+        members.assessed.keys().cloned().collect::<Vec<_>>(),
+        ["task-a", "task-c"]
+    );
+    assert!(
+        members
+            .assessed
+            .values()
+            .all(|a| a.receipt_id == attempt.id)
+    );
+    assert_eq!(
+        members.failed.keys().cloned().collect::<Vec<_>>(),
+        ["task-b"]
+    );
+    let failed = &members.failed["task-b"];
+    assert!(failed.exhausted);
+    assert_eq!(failed.id, attempt.id);
+    assert_eq!(failed.member_for("task-b").unwrap().fingerprint, "task-b");
+    assert_eq!(
+        members.pending.keys().cloned().collect::<Vec<_>>(),
+        ["task-b"],
+        "applied members leave pending; the failed one waits for new material"
+    );
+    let receipts = store
+        .automation_receipts("host/ws/routine/pilot", 20)
+        .unwrap();
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].batch_id, attempt.id);
+    let receipt = store
+        .automation_receipt("host/ws/routine/pilot", &attempt.id)
+        .unwrap()
+        .unwrap();
+    let evidence: MemberBatchEvidence = serde_json::from_slice(&receipt.evidence).unwrap();
+    assert_eq!(evidence.applied.len(), 2);
+    assert_eq!(evidence.failed["task-b"], "stale: task_deleted");
+
+    // The failed fingerprint never refires; a material edit is new work.
+    *host.settled.borrow_mut() = None;
+    *host.candidates.borrow_mut() = vec![state_member("task-b", &["task-b"], 0)];
+    assert_eq!(
+        preparation_tick(store.as_ref(), &host, 20, false).reason,
+        "needs_attention"
+    );
+    let mut edited = state_member("task-b", &["task-b"], 21);
+    edited.fingerprint = "task-b-edited".into();
+    *host.candidates.borrow_mut() = vec![edited];
+    // It first appeared at minute 0, so the maximum wait is already spent.
+    let refired = preparation_tick(store.as_ref(), &host, 21, false);
+    assert_eq!(refired.reason, "fired");
+    assert_eq!(refired.batch[0].reason, "max_wait");
+    assert_eq!(host.admitted.borrow().len(), 2);
+    assert_eq!(host.admitted.borrow()[1], vec!["task-b".to_string()]);
+}
+
+/// [ORB-12746] A member that stopped being admissible before the batch was
+/// acknowledged leaves the attempt; its siblings still fire.
+#[test]
+fn stale_member_leaves_an_unadmitted_batch_without_failing_siblings() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = SchedulerHost::new(vec![
+        state_member("task-a", &["task-a"], 0),
+        state_member("task-b", &["task-b"], 0),
+    ]);
+    preparation_tick(store.as_ref(), &host, 0, false);
+    let fired = preparation_tick(store.as_ref(), &host, 3, false);
+    assert_eq!(fired.reason, "fired");
+    let attempt = fired.state.unwrap().members.unwrap().active.unwrap();
+    assert_eq!(attempt.members().len(), 2);
+
+    // The run stopped without any apply output: the whole attempt retries.
+    *host.settled.borrow_mut() = None;
+    let mut retrying = fired_state_after_failure(store.as_ref(), &host, &attempt, 4);
+    assert_eq!(retrying.attempt, 2);
+    assert!(retrying.action_id.is_none());
+
+    // Before the retry is acknowledged, task-b's source identity is retired
+    // and the source no longer observes it.
+    host.retired.borrow_mut().insert("task-b".into());
+    *host.candidates.borrow_mut() = vec![state_member("task-a", &["task-a"], 0)];
+    let refired = preparation_tick(store.as_ref(), &host, 10, false);
+    assert_eq!(refired.reason, "fired");
+    let members = refired.state.unwrap().members.unwrap();
+    let active = members.active.unwrap();
+    assert_eq!(active.id, retrying.id);
+    assert_eq!(
+        active
+            .members()
+            .iter()
+            .map(|m| m.key.as_str())
+            .collect::<Vec<_>>(),
+        ["task-a"]
+    );
+    assert_eq!(active.member.key, "task-a");
+    assert!(
+        members.failed.is_empty(),
+        "a retired member is not a failure"
+    );
+    assert!(!members.pending.contains_key("task-b"));
+    retrying.members.clear();
+    assert_eq!(
+        host.admitted.borrow().last().unwrap(),
+        &vec!["task-a".to_string()]
+    );
+}
+
+/// Drive the active attempt through one `Failed` outcome and return the
+/// retrying attempt.
+fn fired_state_after_failure(
+    store: &dyn AutomationStoreBackend,
+    host: &SchedulerHost,
+    attempt: &MemberAttempt,
+    minute: i64,
+) -> MemberAttempt {
+    struct Failing<'a>(&'a SchedulerHost);
+    impl MemberHost for Failing<'_> {
+        fn head(&self, b: &str) -> Result<(String, SourceRevision), AutomationError> {
+            self.0.head(b)
+        }
+        fn observe(
+            &self,
+            a: Option<&str>,
+            n: DateTime<Utc>,
+        ) -> Result<MemberPage, AutomationError> {
+            self.0.observe(a, n)
+        }
+        fn admission(&self, m: &StateMember) -> Result<MemberAdmission, AutomationError> {
+            self.0.admission(m)
+        }
+        fn lookup(&self, a: &MemberAttempt) -> Result<Option<String>, AutomationError> {
+            self.0.lookup(a)
+        }
+        fn admit(&self, a: &MemberAttempt) -> Result<String, AutomationError> {
+            self.0.admit(a)
+        }
+        fn outcome(&self, _: &MemberAttempt) -> Result<MemberOutcome, AutomationError> {
+            Ok(MemberOutcome::Failed("fixture_failure".into()))
+        }
+    }
+    let diagnostic = evaluate(
+        store,
+        &Failing(host),
+        MemberEvaluation {
+            consumer: "host/ws/routine/pilot",
+            epoch: "epoch",
+            trigger: &trigger(),
+            enabled: true,
+            dry_run: false,
+            now: DateTime::from_timestamp(1_700_000_000, 0).unwrap() + Duration::minutes(minute),
+            constraints: MemberConstraints::default(),
+        },
+    )
+    .unwrap();
+    assert_eq!(diagnostic.reason, "retry_backoff");
+    let retrying = diagnostic.state.unwrap().members.unwrap().active.unwrap();
+    assert_eq!(retrying.id, attempt.id);
+    retrying
+}
+
+/// [ORB-12746] State persisted before batching carries `member` alone; it
+/// still deserializes as a batch of one and completes through the same
+/// per-member receipt path.
+#[test]
+fn persisted_single_member_attempt_deserializes_and_completes() {
+    let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let member = state_member("task", &["task"], 0);
+    let legacy: MemberAttempt = serde_json::from_value(serde_json::json!({
+        "consumer": "host/ws/routine/pilot",
+        "kind": "preparation_eligible",
+        "id": "legacy-attempt",
+        "member": member,
+        "attempt": 1,
+        "max_attempts": 2,
+        "deadline": now + Duration::minutes(30),
+        "retry_after": now,
+        "action_key": "automation:legacy-attempt:1",
+        "action_id": "run-legacy",
+        "exhausted": false
+    }))
+    .unwrap();
+    assert!(legacy.members.is_empty());
+    assert_eq!(legacy.members(), std::slice::from_ref(&legacy.member));
+    assert_eq!(legacy.task_ids(), ["task"]);
+    assert!(legacy.batch_is_consistent());
+
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = SchedulerHost::new(vec![member.clone()]);
+    let state = AutomationState {
+        members: Some(MemberState::default()),
+        consumer: "host/ws/routine/pilot".into(),
+        epoch: "epoch".into(),
+        trigger: None,
+        repository: "repo".into(),
+        branch: "agent-main".into(),
+        generation: 0,
+        baseline: source(),
+        observed: source(),
+        covered: source(),
+        pending_commits: vec![],
+        pending: vec![],
+        waived: vec![],
+        excluded: vec![],
+        unresolved: BTreeMap::new(),
+        associations: BTreeMap::new(),
+        active: None,
+        stall: None,
+    };
+    assert!(store.automation_initialize(&state).unwrap());
+    // Persist the legacy claim the way the pre-batch evaluator did: claimed
+    // over its pending member, then acknowledged with the run id.
+    let mut claimed = state.clone();
+    claimed.generation += 1;
+    let members = claimed.members.as_mut().unwrap();
+    members.pending.insert("task".into(), member.clone());
+    members.active = Some(MemberAttempt {
+        action_id: None,
+        ..legacy.clone()
+    });
+    assert!(store.automation_commit(&state, &claimed, None).unwrap());
+    let mut acknowledged = claimed.clone();
+    acknowledged.generation += 1;
+    acknowledged.members.as_mut().unwrap().active = Some(legacy.clone());
+    assert!(
+        store
+            .automation_commit(&claimed, &acknowledged, None)
+            .unwrap()
+    );
+    assert_eq!(
+        preparation_tick(store.as_ref(), &host, 1, false).reason,
+        "batch_pending"
+    );
+
+    *host.settled.borrow_mut() = Some(MemberBatchEvidence {
+        action_id: "run-legacy".into(),
+        attempt_id: "legacy-attempt".into(),
+        applied: vec![evidence_for(&legacy, "task", "task-assessed")],
+        failed: BTreeMap::new(),
+    });
+    *host.candidates.borrow_mut() = vec![StateMember {
+        fingerprint: "task-assessed".into(),
+        ..member
+    }];
+    let completed = preparation_tick(store.as_ref(), &host, 2, false);
+    assert_eq!(completed.reason, "fresh");
+    let members = completed.state.unwrap().members.unwrap();
+    assert!(members.active.is_none());
+    assert_eq!(
+        members.assessed["task"].resulting_fingerprint,
+        "task-assessed"
+    );
+    assert_eq!(
+        store
+            .automation_receipts("host/ws/routine/pilot", 20)
+            .unwrap()[0]
+            .batch_id,
+        "legacy-attempt"
+    );
+}
+
+/// [ORB-12746] `batch_size` parses, defaults to five capped by `max_items`,
+/// and an explicit value outside `1..=min(50, max_items)` fails closed.
+#[test]
+fn batch_size_defaults_and_validates_against_max_items() {
+    use orbit_common::protocol::yaml::parse_routine_yaml;
+    let yaml = "schemaVersion: 1\nname: pilot\ntrigger:\n  state:\n    kind: preparation_eligible\n    owner_machine: machine\n    branch: agent-main\n    debounce_minutes: 2\n    max_wait_minutes: 10\n    max_items: 50\n    retries: 1\n    deadline_minutes: 30\ntarget: job:task_pilot_pipeline\n";
+    let parsed = parse_routine_yaml(yaml).unwrap();
+    let state = parsed.trigger.state.unwrap();
+    assert_eq!(state.batch_size, None);
+    assert_eq!(state.effective_batch_size(), 5);
+    assert_eq!(
+        StateTrigger {
+            max_items: 3,
+            ..trigger()
+        }
+        .effective_batch_size(),
+        3,
+        "the default never exceeds max_items"
+    );
+    let explicit =
+        parse_routine_yaml(&yaml.replace("max_items: 50", "max_items: 50\n    batch_size: 12"))
+            .unwrap()
+            .trigger
+            .state
+            .unwrap();
+    assert_eq!(explicit.batch_size, Some(12));
+    assert_eq!(explicit.effective_batch_size(), 12);
+    for invalid in [
+        yaml.replace("max_items: 50", "max_items: 50\n    batch_size: 0"),
+        yaml.replace("max_items: 50", "max_items: 50\n    batch_size: 51"),
+        yaml.replace("max_items: 50", "max_items: 4\n    batch_size: 5"),
+    ] {
+        assert!(parse_routine_yaml(&invalid).is_err(), "{invalid}");
+    }
 }

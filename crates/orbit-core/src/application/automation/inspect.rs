@@ -196,6 +196,7 @@ fn inspect(
         reason,
         state,
         ownership: Some(ownership),
+        batch: Vec::new(),
         waivers: store.automation_waivers(&consumer, 20)?,
         receipts: store
             .automation_receipts(&consumer, 20)?

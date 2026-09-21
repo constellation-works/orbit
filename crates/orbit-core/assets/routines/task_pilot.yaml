@@ -5,12 +5,13 @@
 # scheduled task preflight is an explicit, versioned workspace decision.
 #
 # State-triggered rather than cron [ORB-11331]: each clock tick fingerprints
-# the eligible tasks against the pinned branch head and admits one task whose
-# material has no fresh assessment once it has settled for debounce_minutes,
-# or waited max_wait_minutes. A fresh assessment, including an unready
-# verdict, never re-dispatches; a material edit creates new work. Nothing fires
-# while the backlog is unchanged. Preparation never promotes or dispatches the
-# assessed task.
+# the eligible tasks against the pinned branch head and admits the tasks whose
+# material has no fresh assessment once each has settled for debounce_minutes,
+# or waited max_wait_minutes, up to batch_size of them into one run whose
+# pilots take at most five tasks each [ORB-12746]. A fresh assessment,
+# including an unready verdict, never re-dispatches; a material edit creates
+# new work. Nothing fires while the backlog is unchanged. Preparation never
+# promotes or dispatches the assessed task.
 #
 # `eligibility` is optional and defaults to the values shown: proposed or
 # backlog tasks not tagged `no-diff-expected` / `no-diff-needed`, of any type,
@@ -38,6 +39,7 @@ trigger:
     debounce_minutes: 2
     max_wait_minutes: 10
     max_items: 50
+    batch_size: 5
     retries: 1
     deadline_minutes: 90
     eligibility:

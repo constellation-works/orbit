@@ -49,7 +49,10 @@ export function renderAutomation(diagnostic, key) {
       field('Usage', 'Unknown'),
     ]));
     const active = members.active;
-    if (active) panel.appendChild(el('p', { text: `Member ${active.member.key} · attempt ${active.attempt}/${active.max_attempts} · deadline ${active.deadline} · action ${active.action_id || 'awaiting acknowledgement'}` }));
+    if (active) {
+      const batch = (active.members?.length ? active.members : [active.member]).map(member => member.key).join(', ');
+      panel.appendChild(el('p', { text: `Batch ${batch} · attempt ${active.attempt}/${active.max_attempts} · deadline ${active.deadline} · action ${active.action_id || 'awaiting acknowledgement'}` }));
+    }
     const withheld = Object.entries(members.withheld || {}).slice(0, 20);
     if (withheld.length) panel.appendChild(el('pre', { text: withheld.map(([key, reason]) => `${key}: ${reason}`).join('\n') }));
     panel.appendChild(el('p', { text: 'Readiness evidence does not authorize promotion or execution.' }));

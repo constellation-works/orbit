@@ -18,6 +18,7 @@ fn trigger(kind: StateTriggerKind, eligibility: PreparationEligibility) -> State
         max_items: 50,
         retries: 1,
         deadline_minutes: 90,
+        batch_size: None,
         eligibility,
     }
 }

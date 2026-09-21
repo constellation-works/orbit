@@ -6,6 +6,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Members admitted per attempt when a definition names no `batch_size`.
+pub const DEFAULT_BATCH_SIZE: usize = 5;
+/// Upper bound on members in one attempt; also the largest observation page.
+pub const MAX_BATCH_SIZE: usize = 50;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StateTriggerKind {
@@ -27,6 +32,11 @@ pub struct StateTrigger {
     pub max_items: usize,
     pub retries: u32,
     pub deadline_minutes: u32,
+    /// How many due members one admission batches into a single attempt
+    /// [ORB-12746]. Absent, [`DEFAULT_BATCH_SIZE`] capped by `max_items`; an
+    /// explicit value must lie in `1..=min(50, max_items)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<usize>,
     /// Which tasks a `preparation_eligible` trigger fingerprints [ORB-12745].
     /// Absent, it is the predicate that was hard-coded before it became
     /// configurable, so an older definition keeps its behaviour.
@@ -149,6 +159,15 @@ impl StateTrigger {
                 "state trigger eligibility applies to kind preparation_eligible only".into(),
             ));
         }
+        if self
+            .batch_size
+            .is_some_and(|size| !(1..=MAX_BATCH_SIZE.min(self.max_items)).contains(&size))
+        {
+            return Err(super::super::error::WorkflowError::Invalid(
+                "state trigger batch_size must be between 1 and the smaller of 50 and max_items"
+                    .into(),
+            ));
+        }
         if self.owner_machine.trim().is_empty()
             || self.branch.is_empty()
             || self.branch.starts_with('-')
@@ -166,6 +185,15 @@ impl StateTrigger {
         }
 
         Ok(())
+    }
+
+    /// Members one admission batches into a single attempt: the configured
+    /// size, or the default, never above `max_items`.
+    pub fn effective_batch_size(&self) -> usize {
+        self.batch_size
+            .unwrap_or(DEFAULT_BATCH_SIZE)
+            .min(self.max_items)
+            .max(1)
     }
 
     /// The job a definition of this kind must target.
@@ -194,12 +222,18 @@ pub struct StateMember {
     pub changed_at: DateTime<Utc>,
 }
 
+/// One claim over a batch of due members [ORB-12746]. `member` is the first
+/// member and `members` the whole batch; a record persisted before batching
+/// carries `member` alone, which [`MemberAttempt::members`] reads as a batch
+/// of one so it still reconciles and completes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberAttempt {
     pub consumer: String,
     pub kind: StateTriggerKind,
     pub id: String,
     pub member: StateMember,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<StateMember>,
     pub attempt: u32,
     pub max_attempts: u32,
     pub deadline: DateTime<Utc>,
@@ -209,8 +243,46 @@ pub struct MemberAttempt {
     pub exhausted: bool,
 }
 
-/// A single-member action is deliberately also a valid pilot partition. This
-/// makes independently accepted results durable before any other member fails.
+impl MemberAttempt {
+    /// Every member of the batch, first member first.
+    pub fn members(&self) -> &[StateMember] {
+        if self.members.is_empty() {
+            std::slice::from_ref(&self.member)
+        } else {
+            &self.members
+        }
+    }
+
+    /// The batch member identified by `key`.
+    pub fn member_for(&self, key: &str) -> Option<&StateMember> {
+        self.members().iter().find(|member| member.key == key)
+    }
+
+    /// Every task the batch covers, in member order.
+    pub fn task_ids(&self) -> Vec<String> {
+        self.members()
+            .iter()
+            .flat_map(|member| member.task_ids.iter().cloned())
+            .collect()
+    }
+
+    /// Whether `members` is a well-formed batch: non-empty, bounded, keys
+    /// unique, and `member` is its first entry.
+    pub fn batch_is_consistent(&self) -> bool {
+        let members = self.members();
+        let mut keys = std::collections::BTreeSet::new();
+        !members.is_empty()
+            && members.len() <= MAX_BATCH_SIZE
+            && members[0] == self.member
+            && members
+                .iter()
+                .all(|member| keys.insert(member.key.as_str()))
+    }
+}
+
+/// Every member of an attempt is its own apply boundary: independently
+/// accepted results become durable in one receipt while a sibling that did
+/// not apply is recorded failed at its fingerprint.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberState {
     pub pending: BTreeMap<String, StateMember>,
@@ -229,7 +301,8 @@ pub struct MemberAssessment {
     pub receipt_id: String,
 }
 
-/// Deterministic apply evidence, never an agent-authored promotion grant.
+/// Deterministic apply evidence for one member, never an agent-authored
+/// promotion grant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemberEvidence {
     pub action_id: String,
@@ -239,4 +312,27 @@ pub struct MemberEvidence {
     pub resulting_fingerprint: String,
     pub ready: bool,
     pub result: serde_json::Value,
+}
+
+/// How one run settled every member of an attempt [ORB-12746]: the receipt
+/// evidence for a batch. Members absent from `applied` are recorded failed at
+/// their fingerprint with the reason in `failed`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberBatchEvidence {
+    pub action_id: String,
+    pub attempt_id: String,
+    pub applied: Vec<MemberEvidence>,
+    #[serde(default)]
+    pub failed: BTreeMap<String, String>,
+}
+
+/// One member of a pending or active batch and why it is there, for
+/// `orbit clock tick --dry-run` and `orbit routine show` [ORB-12746].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchMember {
+    pub key: String,
+    pub task_ids: Vec<String>,
+    /// `settled`, `max_wait` or `grant` for a member about to be admitted;
+    /// `admitted` for one already in flight.
+    pub reason: String,
 }

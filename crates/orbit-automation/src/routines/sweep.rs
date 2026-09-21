@@ -97,6 +97,9 @@ pub struct RoutineSweepReport {
     pub slot: Option<String>,
     /// Run id returned by dispatch, when one was submitted.
     pub run_id: Option<String>,
+    /// Members of the batch a state routine would admit, is admitting, or has
+    /// in flight, each with why it is there [ORB-12746]. Empty otherwise.
+    pub batch: Vec<orbit_types::workflow::automation::members::BatchMember>,
 }
 
 /// Per-auto-task outcome included in the host tick report.
@@ -232,6 +235,7 @@ fn sweep_routine(
             reason: Some(diagnostic.reason),
             slot: None,
             run_id,
+            batch: diagnostic.batch,
         });
     }
 
@@ -415,6 +419,7 @@ fn fire(
                 reason: None,
                 slot: Some(slot.to_string()),
                 run_id: Some(run_id),
+                batch: Vec::new(),
             })
         }
         Err(error) => {
@@ -437,6 +442,7 @@ fn fire(
                 reason: Some(format!("dispatch failed: {error}")),
                 slot: Some(slot.to_string()),
                 run_id: None,
+                batch: Vec::new(),
             })
         }
     }
@@ -611,6 +617,7 @@ fn skipped(routine: &LoadedRoutine, reason: &str) -> RoutineSweepReport {
         reason: Some(reason.to_string()),
         slot: None,
         run_id: None,
+        batch: Vec::new(),
     }
 }
 
@@ -623,6 +630,7 @@ fn failure_report(routine: &LoadedRoutine, reason: String) -> RoutineSweepReport
         reason: Some(reason),
         slot: None,
         run_id: None,
+        batch: Vec::new(),
     }
 }
 
@@ -635,6 +643,7 @@ fn action(routine: &LoadedRoutine, action: &'static str) -> RoutineSweepReport {
         reason: None,
         slot: None,
         run_id: None,
+        batch: Vec::new(),
     }
 }
 
