@@ -2312,9 +2312,9 @@ fn run_cli_backend_emits_provider_pid_between_the_started_and_finished_events() 
 }
 
 const TASK_LOCAL_PIPELINE_YAML: &str =
-    include_str!("../../../../../../.orbit/resources/jobs/task_local_pipeline.yaml");
+    include_str!("../../../../../orbit-core/assets/jobs/task_local_pipeline.yaml");
 const TASK_PR_PIPELINE_YAML: &str =
-    include_str!("../../../../../../.orbit/resources/jobs/task_pr_pipeline.yaml");
+    include_str!("../../../../../orbit-core/assets/jobs/task_pr_pipeline.yaml");
 
 #[test]
 fn actual_ship_pipeline_implementers_run_for_each_provider_and_stay_in_the_worktree() {

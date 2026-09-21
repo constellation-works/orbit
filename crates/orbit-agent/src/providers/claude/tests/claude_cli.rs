@@ -4,13 +4,11 @@ use serde_json::Value;
 
 use super::super::claude_cli::ClaudeCliTransport;
 
-/// Both packaged executor definitions Orbit ships for claude. The transport's
-/// per-request flags and these static arg lists are compiled and read from
-/// different places, which is exactly how they drift.
+/// The packaged executor definition Orbit ships for claude. The transport's
+/// per-request flags and this static arg list are compiled and read from
+/// different places, which is exactly how they can drift.
 const PACKAGED_EXECUTOR: &str =
     include_str!("../../../../../orbit-core/assets/executors/claude.yaml");
-const WORKSPACE_EXECUTOR: &str =
-    include_str!("../../../../../../.orbit/resources/executors/claude.yaml");
 
 fn schema_arg(args: &[String]) -> Value {
     let index = args
@@ -96,25 +94,17 @@ fn protocol_schema_leaves_the_status_error_correlation_to_the_rust_parser() {
     );
 }
 
-/// The flag rides on the per-request transport precisely so it cannot drift
-/// between the two static definitions. If someone later moves it into one
-/// YAML, this fails and points at the other copy.
+/// The flag rides on the per-request transport so the executor definition
+/// cannot drift from the invocation assembled in Rust.
 #[test]
-fn neither_packaged_executor_copy_declares_the_flag_the_transport_owns() {
+fn packaged_executor_does_not_declare_the_flag_the_transport_owns() {
     let packaged = static_args(PACKAGED_EXECUTOR);
-    let workspace = static_args(WORKSPACE_EXECUTOR);
 
-    assert_eq!(
-        packaged, workspace,
-        "the packaged asset and the workspace resource must declare identical static args"
+    assert!(
+        !packaged.iter().any(|arg| arg == "--json-schema"),
+        "--json-schema is emitted per-request by the transport; declaring it statically \
+         creates a second copy that can drift"
     );
-    for args in [&packaged, &workspace] {
-        assert!(
-            !args.iter().any(|arg| arg == "--json-schema"),
-            "--json-schema is emitted per-request by the transport; declaring it statically \
-             creates a second copy that can drift"
-        );
-    }
     // The static args the schema depends on: structured output is only
     // meaningful when the wrapper itself is JSON.
     assert!(packaged.iter().any(|arg| arg == "--output-format"));
