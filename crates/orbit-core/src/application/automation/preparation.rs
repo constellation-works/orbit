@@ -2,11 +2,15 @@
 
 use super::source::Source;
 use crate::OrbitRuntime;
+use orbit_automation::routines::loader::declared_routine_names;
 use orbit_automation::{AutomationError, automation_error_to_orbit, members::preparation};
 use orbit_common::OrbitError;
+use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::RegisteredTaskResolution;
 use orbit_types::task::Task;
-use orbit_types::workflow::automation::members::MemberAssessment;
+use orbit_types::workflow::automation::members::{
+    MemberAssessment, MemberAttempt, PreparationEligibility,
+};
 use serde_json::{Value, json};
 
 /// Repository instructions captured from one immutable source revision.
@@ -28,14 +32,14 @@ pub(crate) fn head_revision(runtime: &OrbitRuntime, branch: &str) -> Result<Stri
 }
 
 /// The accepted preparation assessment for `task_id`, from this machine's
-/// state consumers for this workspace. Read-only: Core consumes the record
-/// the shared evaluator accepted and never derives readiness itself
-/// [ORB-11332]. `None` without a registered machine identity, because no
-/// consumer can have been evaluated here.
+/// state consumers for this workspace, with the consumer key that accepted
+/// it. Read-only: Core consumes the record the shared evaluator accepted and
+/// never derives readiness itself [ORB-11332]. `None` without a registered
+/// machine identity, because no consumer can have been evaluated here.
 pub(crate) fn accepted_assessment(
     runtime: &OrbitRuntime,
     task_id: &str,
-) -> Result<Option<MemberAssessment>, OrbitError> {
+) -> Result<Option<(String, MemberAssessment)>, OrbitError> {
     let Some(machine) = runtime.automation_machine_identity() else {
         return Ok(None);
     };
@@ -45,18 +49,63 @@ pub(crate) fn accepted_assessment(
         .automation_states(&prefix, MAX_CONSUMER_STATES)?;
     Ok(states
         .into_iter()
-        .filter_map(|state| state.members)
-        .filter_map(|members| members.assessed.get(task_id).cloned())
-        .max_by_key(|assessment| assessment.receipt_id.clone()))
+        .filter_map(|state| {
+            let assessment = state.members?.assessed.get(task_id).cloned()?;
+            Some((state.consumer, assessment))
+        })
+        .max_by_key(|(_, assessment)| assessment.receipt_id.clone()))
+}
+
+/// The eligibility the state consumer `consumer` evaluates: the
+/// `trigger.state.eligibility` of the routine its key names, read from this
+/// workspace's routine catalog [ORB-12745]. Every consumer of an assessment
+/// — scheduling, the prepare/apply fingerprint check and promotion — resolves
+/// the predicate this way so one definition governs all of them.
+///
+/// A consumer whose routine no longer exists, or is no longer a state
+/// routine, resolves to the default predicate. That is fail-closed: a
+/// fingerprint computed under the wrong predicate never matches an accepted
+/// assessment, so stale evidence is withheld rather than trusted.
+pub(crate) fn consumer_eligibility(
+    runtime: &OrbitRuntime,
+    consumer: &str,
+) -> Result<PreparationEligibility, OrbitError> {
+    let Some((_, name)) = consumer.rsplit_once("/routine/") else {
+        return Ok(PreparationEligibility::default());
+    };
+    let Some(path) = declared_routine_names(&runtime.shared_root()).remove(name) else {
+        return Ok(PreparationEligibility::default());
+    };
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|error| OrbitError::Io(format!("read routine '{}': {error}", path.display())))?;
+    let definition = parse_routine_yaml(&raw)?;
+    Ok(definition
+        .trigger
+        .state
+        .map(|trigger| trigger.eligibility)
+        .unwrap_or_default())
+}
+
+/// The eligibility a task-pilot run evaluates: its state claim's consumer
+/// predicate, or the default for an explicit or manual run that carries no
+/// claim.
+pub(crate) fn claim_eligibility(
+    runtime: &OrbitRuntime,
+    claim: Option<&MemberAttempt>,
+) -> Result<PreparationEligibility, OrbitError> {
+    claim
+        .map(|claim| consumer_eligibility(runtime, &claim.consumer))
+        .unwrap_or_else(|| Ok(PreparationEligibility::default()))
 }
 
 pub(crate) fn fingerprint(
     runtime: &OrbitRuntime,
     task: &Task,
     revision: &str,
+    eligibility: &PreparationEligibility,
 ) -> Result<String, AutomationError> {
     let instructions = instructions(runtime, revision)?;
-    fingerprint_with_instructions(runtime, task, revision, &instructions)
+    fingerprint_with_instructions(runtime, task, revision, &instructions, eligibility)
 }
 
 pub(crate) fn instructions(
@@ -103,6 +152,7 @@ pub(crate) fn fingerprint_with_instructions(
     task: &Task,
     revision: &str,
     instructions: &InstructionSnapshot,
+    eligibility: &PreparationEligibility,
 ) -> Result<String, AutomationError> {
     let mut dependencies = Vec::new();
 
@@ -149,5 +199,11 @@ pub(crate) fn fingerprint_with_instructions(
     dependencies.push(json!({"effective_assignment": {"crew": assignment.name,
         "model": assignment.assignment.model, "provider": assignment.assignment.provider}}));
 
-    preparation::fingerprint(task, revision, &Value::Array(dependencies), &instructions.0)
+    preparation::fingerprint(
+        task,
+        revision,
+        &Value::Array(dependencies),
+        &instructions.0,
+        eligibility,
+    )
 }

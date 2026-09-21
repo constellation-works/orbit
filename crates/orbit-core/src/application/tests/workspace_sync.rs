@@ -12,7 +12,7 @@ use crate::application::workspace_sync::{
 use crate::bootstrap::init::{InitOptions, init_workspace_at_root};
 
 fn seed_identity(workspace_name: &str) -> RoutineSeedIdentity {
-    RoutineSeedIdentity::new(workspace_name).expect("routine seed identity")
+    RoutineSeedIdentity::new(workspace_name, "hm_test", "main").expect("routine seed identity")
 }
 
 fn initialized_roots(base: &Path) -> (PathBuf, PathBuf) {
@@ -32,7 +32,8 @@ fn initialized_roots(base: &Path) -> (PathBuf, PathBuf) {
         InitOptions {
             global_root_override: Some(global.clone()),
             routine_seed_identity: Some(
-                RoutineSeedIdentity::new("alpha").expect("routine seed identity"),
+                RoutineSeedIdentity::new("alpha", "hm_test", "main")
+                    .expect("routine seed identity"),
             ),
             refresh_defaults: true,
             ..Default::default()

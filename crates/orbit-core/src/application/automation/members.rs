@@ -102,6 +102,12 @@ impl<'a> Host<'a> {
         }
     }
 
+    /// The one predicate this consumer observes, admits and fingerprints
+    /// with [ORB-12745].
+    fn eligibility(&self) -> &PreparationEligibility {
+        &self.trigger.eligibility
+    }
+
     fn fingerprint(
         &self,
         task: &orbit_types::task::Task,
@@ -119,7 +125,13 @@ impl<'a> Host<'a> {
             }
         };
 
-        preparation::fingerprint_with_instructions(self.runtime, task, revision, &instructions)
+        preparation::fingerprint_with_instructions(
+            self.runtime,
+            task,
+            revision,
+            &instructions,
+            self.eligibility(),
+        )
     }
 
     #[cfg(test)]
@@ -149,9 +161,7 @@ impl MemberHost for Host<'_> {
             &TaskListFilter {
                 scan_before,
                 statuses: Some(match self.trigger.kind {
-                    StateTriggerKind::PreparationEligible => {
-                        vec![TaskStatus::Proposed, TaskStatus::Backlog]
-                    }
+                    StateTriggerKind::PreparationEligible => self.eligibility().statuses.clone(),
                     StateTriggerKind::ExecutionFailed => vec![TaskStatus::Blocked],
                 }),
                 ..Default::default()
@@ -181,7 +191,8 @@ impl MemberHost for Host<'_> {
 
             match self.trigger.kind {
                 StateTriggerKind::PreparationEligible => {
-                    if !orbit_automation::members::preparation::eligible(&task) {
+                    if !orbit_automation::members::preparation::eligible(&task, self.eligibility())
+                    {
                         withheld.insert(task.id, "task_ineligible".into());
                         continue;
                     }
@@ -282,7 +293,7 @@ impl MemberHost for Host<'_> {
             let (_, source) = self.head(&self.trigger.branch)?;
             for id in &member.task_ids {
                 let task = self.runtime.get_task(id)?;
-                if !orbit_automation::members::preparation::eligible(&task) {
+                if !orbit_automation::members::preparation::eligible(&task, self.eligibility()) {
                     return Ok(MemberAdmission::Retire("task_ineligible".into()));
                 }
                 if self.fingerprint(&task, &source.commit)? != member.fingerprint {

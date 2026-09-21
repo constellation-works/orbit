@@ -1,28 +1,52 @@
-# Default task-pilot routine [ORB-10739]. Seeded into `.orbit/routines/` on
-# `orbit init` with the routine name resolved at seed time. It is
-# intentionally disabled: enabling scheduled task preflight is an explicit,
-# versioned workspace decision.
+# Default task-pilot routine [ORB-10739, ORB-12745]. Seeded into
+# `.orbit/routines/` on `orbit init` with the routine name, this host's
+# registered machine id (`owner_machine`) and the workspace's registered base
+# branch resolved at seed time. It is intentionally disabled: enabling
+# scheduled task preflight is an explicit, versioned workspace decision.
 #
-# This routine supplies no inputs. `prepare_task_pilot` owns zero-input
-# discovery: it selects only proposed/backlog tasks with empty context_files,
-# excluding `no-diff-needed` and `no-diff-expected` tasks. Explicit task-ID
-# runs remain available for any workspace task and do not use this gate.
+# State-triggered rather than cron [ORB-11331]: each clock tick fingerprints
+# the eligible tasks against the pinned branch head and admits one task whose
+# material has no fresh assessment once it has settled for debounce_minutes,
+# or waited max_wait_minutes. A fresh assessment, including an unready
+# verdict, never re-dispatches; a material edit creates new work. Nothing fires
+# while the backlog is unchanged. Preparation never promotes or dispatches the
+# assessed task.
 #
-# The four-hour cadence bounds unattended agent work. At most 50 tasks form
-# five-task partitions; five reviewers on the `system` crew
-# run concurrently, so two 30-minute waves plus deterministic preparation/apply
-# fit inside the 90-minute timeout.
+# `eligibility` is optional and defaults to the values shown: proposed or
+# backlog tasks not tagged `no-diff-expected` / `no-diff-needed`, of any type,
+# with no required tags. Narrow it here; changing it invalidates assessments
+# accepted under the old predicate. See
+# docs/design/automation-triggers/5_operations.md.
+#
+# Only this host evaluates the trigger (`owner_machine`); a second host
+# registering the same workspace seeds its own owner. Explicit task-ID runs
+# (`orbit run task-pilot <id>`) remain available for any workspace task and do
+# not use this gate.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >
-  Preflight unscoped proposed/backlog tasks through the bounded task-pilot
-  pipeline. Disabled by default; set enabled to true in this versioned
-  definition to opt this workspace into scheduled task preflight.
+  Preflight proposed/backlog tasks whose material fingerprint has no fresh
+  task-pilot assessment. State-triggered: fires on creation or material edit
+  and stays quiet otherwise. Disabled by default; set enabled to true in this
+  versioned definition to opt this workspace into scheduled task preflight.
 enabled: false
 trigger:
-  cron: "*/40 * * * *"
-  missed_run: skip
+  state:
+    kind: preparation_eligible
+    owner_machine: __ORBIT_OWNER_MACHINE__
+    branch: __ORBIT_BASE_BRANCH__
+    debounce_minutes: 2
+    max_wait_minutes: 10
+    max_items: 50
+    retries: 1
+    deadline_minutes: 90
+    eligibility:
+      statuses: [proposed, backlog]
+      exclude_tags: [no-diff-expected, no-diff-needed]
+      require_tags: []
+      task_types: []
 target: job:task_pilot_pipeline
 policy:
   timeout_minutes: 90
   overlap: forbid
+  retries: {max: 1, backoff_minutes: 5}

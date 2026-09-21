@@ -2,7 +2,7 @@
 title: Routines — Design
 owner: claude
 last_updated: 2026-09-19
-last_validated: 2026-09-19
+last_validated: 2026-09-21
 status: Accepted
 feature: routines
 doc_role: design
@@ -11,7 +11,7 @@ summary: Contract for routine definitions, clock-tick dispatch, host-local state
 tags: [routines, scheduler]
 paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry_routines.rs", "crates/orbit-cmd/src/registry_runtime.rs", "crates/orbit-registry/src/host_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/sqlite/routine_store/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry]
-related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10800, ORB-10986, ORB-11082, ORB-11315, ORB-12236, ORB-12237]
+related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10800, ORB-10986, ORB-11082, ORB-11315, ORB-12236, ORB-12237, ORB-12745]
 ---
 
 # Routines — Design
@@ -146,10 +146,13 @@ as absent; it never degrades into "fire with defaults".
 
 `orbit workspace init` seeds `ci_failure_sweep.yaml`, `dependabot_alert_sweep.yaml`,
 `task_pilot.yaml`, `ship_sweep.yaml`, and `worktree_gc.yaml`
-with a workspace-unique name and `enabled: false`. Nothing else is resolved at seed time, so
-two hosts initializing the same workspace name write byte-identical definitions
-[ORB-12236]. Auto-task definitions are evaluated by the tick directly; there is no seeded
-auto-task scheduler routine. The definition's versioned
+with a workspace-unique name and `enabled: false`. The cron defaults resolve nothing else at
+seed time, so two hosts initializing the same workspace name write byte-identical cron
+definitions [ORB-12236]. `task_pilot.yaml` is a `preparation_eligible` state routine
+[ORB-12745]; a state trigger names the one machine that evaluates it, so its
+`owner_machine` renders this host's registered machine id and its `branch` the workspace's
+registered base branch — the only host-dependent bytes a seed writes. Auto-task definitions
+are evaluated by the tick directly; there is no seeded auto-task scheduler routine. The definition's versioned
 `enabled` field is the opt-in: changing it to `true` deliberately grants that scheduled
 capability in the workspace.
 
@@ -191,7 +194,10 @@ one of them in the same change. The consequences:
   to `.retired-managed/routines/` first, so nothing the operator wrote is lost.
 - A stale shipped default matching a superseded shape is refreshed onto the
   current template **with its `enabled` setting carried over**, so convergence
-  never silently switches off a routine an operator opted into.
+  never silently switches off a routine an operator opted into. A cron
+  `task_pilot.yaml` refreshed onto the state form takes this host as its owner;
+  a recorded binding that already names an owner keeps it, exactly as a
+  recorded name is kept [ORB-12745].
 - A current-shape default whose only difference is a lifecycle setting is adopted
   in place — recorded as Orbit's without being rewritten.
 - A default a prior release wrote without recording it in the manifest is adopted

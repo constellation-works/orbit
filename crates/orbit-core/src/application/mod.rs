@@ -112,15 +112,24 @@ pub(crate) struct RoutineAssetProvenance {
 
 /// The per-workspace values a shipped routine template is rendered against.
 ///
-/// Templates no longer render a host id [ORB-12236], so the binding is just
-/// the routine name. A manifest written before that change still carries a
-/// `hosts` entry, which is why `deny_unknown_fields` is off here: the stale
-/// entry loads and its routine reconciles as an ordinary managed refresh.
-/// Restore `deny_unknown_fields` after 2026-12-01.
+/// Templates no longer render a host pin [ORB-12236]; the binding is the
+/// routine name plus, only for a template that declares a state trigger, the
+/// owner machine and observed branch that trigger requires [ORB-12745]. A
+/// manifest written before the host pin was retired still carries a `hosts`
+/// entry, which is why `deny_unknown_fields` is off here: the stale entry
+/// loads and its routine reconciles as an ordinary managed refresh. Restore
+/// `deny_unknown_fields` after 2026-12-01.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RoutineMaterializationBinding {
     pub name: String,
+    /// The registered machine id a state trigger names as its owner; `None`
+    /// for a template without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_machine: Option<String>,
+    /// The branch a state trigger observes; `None` for a template without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 /// Materialize the current embedded resource set and reconcile assets retired

@@ -138,7 +138,7 @@ fn fresh_workspace_init_seeds_disabled_worktree_gc_routine() {
             global_root_override: Some(global_root.clone()),
             refresh_defaults: true,
             routine_seed_identity: Some(
-                RoutineSeedIdentity::new("repo").expect("routine seed identity"),
+                RoutineSeedIdentity::new("repo", "hm_test", "main").expect("routine seed identity"),
             ),
             ..Default::default()
         },
@@ -172,7 +172,7 @@ fn fresh_workspace_init_seeds_disabled_worktree_gc_routine() {
             global_root_override: Some(global_root.clone()),
             refresh_defaults: true,
             routine_seed_identity: Some(
-                RoutineSeedIdentity::new("repo").expect("routine seed identity"),
+                RoutineSeedIdentity::new("repo", "hm_test", "main").expect("routine seed identity"),
             ),
             ..Default::default()
         },
@@ -191,7 +191,7 @@ fn fresh_workspace_init_seeds_disabled_worktree_gc_routine() {
             force: true,
             refresh_defaults: true,
             routine_seed_identity: Some(
-                RoutineSeedIdentity::new("repo").expect("routine seed identity"),
+                RoutineSeedIdentity::new("repo", "hm_test", "main").expect("routine seed identity"),
             ),
             ..Default::default()
         },

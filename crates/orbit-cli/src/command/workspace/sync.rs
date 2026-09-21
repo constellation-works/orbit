@@ -45,18 +45,20 @@ impl WorkspaceSyncArgs {
             .ok_or_else(workspace_init_required)?;
         let workspace = workspace_registry::find_workspace_by_id(&registry, &checkout.workspace_id)
             .ok_or_else(workspace_init_required)?;
-        match inspect_machine_identity(&global_root)? {
-            MachineIdentityState::Present(_) => {}
+        let machine_id = match inspect_machine_identity(&global_root)? {
+            MachineIdentityState::Present(identity) => identity.id,
             MachineIdentityState::Absent => {
                 return Err(OrbitError::WorkspaceError(
                     "cannot sync workspace managed artifacts without an initialized host identity; run `orbit init`, then `orbit workspace init`".to_string(),
                 ));
             }
-        }
+        };
         // Routine names carry the registered workspace name, not the checkout
         // directory basename, so convergence renders the same binding that
-        // `orbit workspace init` recorded [ORB-12107].
-        let routine_identity = RoutineSeedIdentity::new(&workspace.name)?;
+        // `orbit workspace init` recorded [ORB-12107]; a state trigger seeded
+        // here is owned by this host and observes the registered base branch.
+        let routine_identity =
+            RoutineSeedIdentity::new(&workspace.name, &machine_id, &workspace.base_branch)?;
         if !self.check {
             // Rewrite the managed `.gitignore` block in place. Sync never
             // runs git on the operator's behalf; doctor names the

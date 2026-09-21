@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 pub mod members;
 pub mod recovery;
 
+#[cfg(test)]
+mod tests;
+
 /// Supported examination contracts; QA and review never share acceptance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

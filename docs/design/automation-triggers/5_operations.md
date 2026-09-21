@@ -2,7 +2,7 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_validated: 2026-09-12
+last_validated: 2026-09-21
 ---
 
 # Delivery automation operations [ORB-11330]
@@ -473,34 +473,62 @@ identity, frozen attempts and receipt acceptance. Store uses its existing
 consumer/coverage transaction and generation fence. No new database or clock is
 introduced. Source retention uses the existing `refs/orbit/automation/` namespace.
 
-Migration is an explicit edit of a selected routine. Disable its old temporal
-owner, settle any existing run, and replace only that definition's trigger.
-Preserve the user's policy. Do not run both old and new definitions;
-a sweep preview reports `duplicate_routine_ownership` for enabled definitions
-sharing the same source and target when one uses state scheduling. The existing
-shipped pilot cron definition remains unchanged and no live routine is enabled
-by this implementation.
+Since [ORB-12745] the shipped `task_pilot.yaml` default *is* this form:
+`orbit workspace init` renders `owner_machine` from the host's registered
+machine id and `branch` from the workspace's registered base branch (the
+delivery defaults observe the same branch), and ships it `enabled: false`. The
+cron form it replaces is kept as a superseded template shape, so
+`orbit workspace sync` refreshes an unmodified — or merely opted-in — cron
+`task_pilot.yaml` onto the state form owned by this host, keeping `enabled`; a
+cron file whose template-owned fields were hand-edited is preserved and
+reported. For any other routine, migration is an explicit edit of that
+definition: disable its old temporal owner, settle any existing run, and
+replace only that definition's trigger. Preserve the user's policy. Do not run
+both old and new definitions; a sweep preview reports
+`duplicate_routine_ownership` for enabled definitions sharing the same source
+and target when one uses state scheduling.
 
 ```yaml
 schemaVersion: 1
-name: state-pilot
+name: task-pilot-<workspace>
 enabled: false
 target: job:task_pilot_pipeline
 trigger:
   state:
     kind: preparation_eligible
-    owner_machine: hm_your_registered_machine
-    branch: agent-main
+    owner_machine: hm_your_registered_machine   # seed-time: this host
+    branch: agent-main                          # seed-time: registered base branch
     debounce_minutes: 2
     max_wait_minutes: 10
     max_items: 50
     retries: 1
     deadline_minutes: 90
+    eligibility:                                # optional; these are the defaults
+      statuses: [proposed, backlog]
+      exclude_tags: [no-diff-expected, no-diff-needed]
+      require_tags: []
+      task_types: []
 policy:
   overlap: forbid
   timeout_minutes: 90
   retries: {max: 1, backoff_minutes: 5}
 ```
+
+`eligibility` [ORB-12745] is the predicate a `preparation_eligible` consumer
+evaluates. Absent, or with any key absent, it resolves to the rule that was
+previously hard-coded: `proposed` or `backlog` tasks not tagged
+`no-diff-expected` / `no-diff-needed`, of any type, with no required tags.
+`statuses` must be a non-empty subset of those two; `task_types` empty admits
+every type; unknown keys, blank tags, and a tag both required and excluded fail
+the definition closed, and a non-default block is rejected on any other trigger kind.
+One resolved value governs observation (the status filter and the
+`task_ineligible` withhold), the admission recheck, the prepare/apply
+fingerprint of a claimed run, and operation-mode promotion, which resolves the
+predicate of the consumer whose assessment it is judging. The resolved
+predicate is material input: a non-default value is folded into the
+fingerprint, so changing it invalidates assessments accepted under the old
+one, while the default adds nothing and keeps the fingerprints accepted before
+the block existed. Explicit task-ID runs do not consult it.
 
 `kind: execution_failed` targets `job:task_triage_pipeline`, which this Orbit no
 longer ships; the shape is recorded here for definitions written before the
@@ -514,7 +542,8 @@ source page contains at most 50 task envelopes and retains a continuation.
 Preparation includes populated selectors when their assessment is missing or
 stale. The material fingerprint covers task meaning, criteria, plan, selectors,
 relationships, dependency decisions, task/crew assignment, resolved model/provider,
-required tools, tags, pinned repository instructions and source revision. Comments,
+required tools, tags, pinned repository instructions, source revision and the
+consumer's non-default resolved eligibility. Comments,
 audit writes, priority and execution summaries do not invalidate it. Accepted
 apply records certify the resulting fingerprint, retaining the original input
 and exact resulting assessment in immutable receipt bytes. A fresh unready result
@@ -554,10 +583,14 @@ lets the drain promote in-scope tasks whose accepted assessment is still fresh;
 see [operation-mode operations](../operation-mode/5_operations.md).
 
 Keep definitions disabled for rollout review. Inspect `orbit routine list`,
-`orbit routine show <name> --json`, and the existing `orbit sweep --dry-run`
-preview before deliberate enablement. Timing edits retain active budgets. Changes
-to trigger kind, owner, target or branch return `definition_changed`; restore the
-original definition to settle it rather than deleting state. Rollback disables
+`orbit routine show <name> --json` (which reports the resolved owner, branch and
+eligibility), and the existing `orbit clock tick --dry-run` preview before
+deliberate enablement; the seeded disabled definition reports `disabled`, and an
+enabled one with nothing to prepare reports `fresh`. Timing and eligibility
+edits retain active budgets — an eligibility edit re-fingerprints pending
+members and withholds the ones it no longer admits. Changes to trigger kind,
+owner, target or branch return `definition_changed`; restore the original
+definition to settle it rather than deleting state. Rollback disables
 new admissions and preserves receipts; a binary without state-trigger support
 rejects the unknown configuration key. General multi-member batching, automatic
 host/epoch transfer and automatic promotion are not part of this implementation.

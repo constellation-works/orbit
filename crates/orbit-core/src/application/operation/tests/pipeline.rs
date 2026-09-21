@@ -11,7 +11,9 @@ use orbit_config::OperationLayer;
 use orbit_engine::{RuntimeHost, StepRecoveryAdmission, TaskAutomationUpdate};
 use orbit_tools::ToolContext;
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::automation::members::{MemberAssessment, MemberState};
+use orbit_types::workflow::automation::members::{
+    MemberAssessment, MemberState, PreparationEligibility,
+};
 use orbit_types::workflow::automation::{AutomationState, SourceRevision};
 use orbit_types::workflow::{
     GrantRights, JobRun, JobRunState, OPERATION_ADMISSION_KEY, OperationAdmission, OperationGrant,
@@ -219,10 +221,48 @@ fn seed_assessment(fixture: &Fixture, task_id: &str, fingerprint: &str, ready: b
 }
 
 fn current_fingerprint(fixture: &Fixture, task_id: &str) -> String {
+    current_fingerprint_under(fixture, task_id, &PreparationEligibility::default())
+}
+
+fn current_fingerprint_under(
+    fixture: &Fixture,
+    task_id: &str,
+    eligibility: &PreparationEligibility,
+) -> String {
     let runtime = &fixture.runtime;
     let task = runtime.get_task(task_id).expect("task");
     let head = preparation::head_revision(runtime, "main").expect("head");
-    preparation::fingerprint(runtime, &task, &head).expect("fingerprint")
+    preparation::fingerprint(runtime, &task, &head, eligibility).expect("fingerprint")
+}
+
+/// Declare the `state-pilot` routine the seeded assessments name as their
+/// consumer, with `eligibility` as its predicate.
+fn declare_state_pilot_routine(fixture: &Fixture, eligibility: &str) {
+    let routines = fixture.runtime.shared_root().join("routines");
+    std::fs::create_dir_all(&routines).expect("create routines dir");
+    let definition = [
+        "schemaVersion: 1",
+        "name: state-pilot",
+        "enabled: true",
+        "target: job:task_pilot_pipeline",
+        "trigger:",
+        "  state:",
+        "    kind: preparation_eligible",
+        &format!("    owner_machine: {MACHINE}"),
+        "    branch: main",
+        "    debounce_minutes: 2",
+        "    max_wait_minutes: 10",
+        "    max_items: 50",
+        "    retries: 1",
+        "    deadline_minutes: 90",
+        eligibility.trim_end_matches('\n'),
+        "policy:",
+        "  timeout_minutes: 90",
+        "  overlap: forbid",
+        "",
+    ]
+    .join("\n");
+    std::fs::write(routines.join("state_pilot.yaml"), definition).expect("write state routine");
 }
 
 #[test]
@@ -482,6 +522,90 @@ fn promotion_needs_fresh_positive_evidence_and_the_promote_right() {
     );
     assert_eq!(
         runtime.get_task(&second.id).expect("task").status,
+        TaskStatus::Proposed
+    );
+}
+
+/// [ORB-12745] Promotion judges a task by the predicate of the consumer that
+/// assessed it: a task outside the routine's narrowed eligibility is
+/// withheld, an assessment accepted under the default predicate is stale
+/// once the routine narrows it, and only an assessment at the narrowed
+/// fingerprint promotes.
+#[test]
+fn promotion_evaluates_the_assessing_consumers_eligibility() {
+    let fixture = fixture(AUTONOMOUS_DONE);
+    let runtime = &fixture.runtime;
+    declare_state_pilot_routine(&fixture, "    eligibility:\n      require_tags: [pilot]\n");
+    let narrowed = PreparationEligibility {
+        require_tags: vec!["pilot".into()],
+        ..Default::default()
+    };
+
+    let tagged = seed_task(runtime, "tagged", TaskStatus::Proposed);
+    let assessed_under_default = seed_task(runtime, "default assessed", TaskStatus::Proposed);
+    let untagged = seed_task(runtime, "untagged", TaskStatus::Proposed);
+    for task_id in [&tagged.id, &assessed_under_default.id, &untagged.id] {
+        runtime
+            .update_task(
+                task_id,
+                crate::application::task::TaskUpdateParams {
+                    complexity: Some(orbit_types::task::TaskComplexity::Medium),
+                    tags: (task_id != &untagged.id).then(|| vec!["pilot".to_string()]),
+                    ..Default::default()
+                },
+            )
+            .expect("assess promotion candidate");
+    }
+    seed_assessment(
+        &fixture,
+        &tagged.id,
+        &current_fingerprint_under(&fixture, &tagged.id, &narrowed),
+        true,
+    );
+    seed_assessment(
+        &fixture,
+        &assessed_under_default.id,
+        &current_fingerprint(&fixture, &assessed_under_default.id),
+        true,
+    );
+    seed_assessment(
+        &fixture,
+        &untagged.id,
+        &current_fingerprint_under(&fixture, &untagged.id, &narrowed),
+        true,
+    );
+
+    let scope = vec![
+        tagged.id.clone(),
+        assessed_under_default.id.clone(),
+        untagged.id.clone(),
+    ];
+    let grant = enable(runtime, &scope, all_rights(), OperationLayer::default());
+    let (drain, _) = start_drain(runtime, &grant.id);
+    let report = classify(runtime, &drain.run_id);
+    let decisions = report["operation"]["promotions"]
+        .as_array()
+        .expect("promotions")
+        .iter()
+        .map(|decision| {
+            (
+                decision["task_id"].as_str().expect("id").to_string(),
+                decision["reason"].as_str().expect("reason").to_string(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(decisions[&tagged.id], "fresh_positive_assessment");
+    assert_eq!(decisions[&assessed_under_default.id], "assessment_stale");
+    assert_eq!(decisions[&untagged.id], "special_disposition_withheld");
+    assert_eq!(
+        runtime.get_task(&tagged.id).expect("task").status,
+        TaskStatus::Backlog
+    );
+    assert_eq!(
+        runtime
+            .get_task(&assessed_under_default.id)
+            .expect("task")
+            .status,
         TaskStatus::Proposed
     );
 }

@@ -2,8 +2,8 @@
 //!
 //! Routines are workspace-authored YAML under `.orbit/routines/` — unlike
 //! activities and jobs there is no global routines directory, so defaults
-//! are seeded per workspace on `orbit init`. One placeholder is resolved at
-//! seed time:
+//! are seeded per workspace on `orbit init`. Three placeholders are resolved
+//! at seed time:
 //!
 //! - `__ORBIT_ROUTINE_NAME__` — routine names must be unique across all
 //!   routine sources on a host, so the seeded name carries the registered
@@ -12,11 +12,16 @@
 //!   from the workspace name the operator registered, never from the checkout
 //!   directory: two checkouts whose directories share a basename would
 //!   otherwise seed the same names on one host [ORB-12107].
+//! - `__ORBIT_OWNER_MACHINE__` and `__ORBIT_BASE_BRANCH__` — a state trigger
+//!   names the one machine that evaluates it and the branch it observes, so
+//!   the seeded `task_pilot` definition renders this host's registered
+//!   machine id and the workspace's registered base branch [ORB-12745].
 //!
-//! Nothing else is machine-dependent [ORB-12236]: two hosts initializing the
-//! same workspace name write byte-identical definitions. Seeded routines are
-//! disabled when written; they exist so a fresh workspace gets reviewable,
-//! opt-in schedules without silently enabling unattended work.
+//! Cron definitions carry no host pin [ORB-12236]: two hosts initializing the
+//! same workspace name write byte-identical cron definitions, and differ only
+//! in the state trigger's owner. Seeded routines are disabled when written;
+//! they exist so a fresh workspace gets reviewable, opt-in schedules without
+//! silently enabling unattended work.
 //!
 //! Provenance is byte-exact first and shape-aware second. The manifest records
 //! the digest Orbit last wrote; a file that still matches is Orbit's. A file
@@ -111,6 +116,10 @@ pub(crate) const SUPERSEDED_ROUTINE_TEMPLATES: &[(&str, &str)] = &[
         include_str!("../../assets/routines/superseded/task_pilot.2026-08-15.yaml"),
     ),
     (
+        "task_pilot",
+        include_str!("../../assets/routines/superseded/task_pilot.2026-09-21.yaml"),
+    ),
+    (
         "worktree_gc",
         include_str!("../../assets/routines/superseded/worktree_gc.2026-07-12.yaml"),
     ),
@@ -118,22 +127,36 @@ pub(crate) const SUPERSEDED_ROUTINE_TEMPLATES: &[(&str, &str)] = &[
 
 // Widened to pub(crate) for test access in sibling tests/routine.rs.
 pub(crate) const ROUTINE_NAME_PLACEHOLDER: &str = "__ORBIT_ROUTINE_NAME__";
+/// The registered machine id a seeded state trigger names as its owner.
+pub(crate) const OWNER_MACHINE_PLACEHOLDER: &str = "__ORBIT_OWNER_MACHINE__";
+/// The registered base branch a seeded state trigger observes; the same
+/// placeholder the delivery auto-task defaults use.
+pub(crate) const BASE_BRANCH_PLACEHOLDER: &str = super::auto_tasks::BASE_BRANCH_PLACEHOLDER;
 
 /// The identity a workspace's default routines are materialized against: the
-/// registered workspace name their names are suffixed with.
+/// registered workspace name their names are suffixed with, plus the host
+/// machine id and registered base branch a state trigger is bound to.
 ///
-/// Construction validates that name, which is why the field is private: an
+/// Construction validates the name, which is why the fields are private: an
 /// existing value always renders a loadable routine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoutineSeedIdentity {
     name_suffix: String,
+    owner_machine: String,
+    base_branch: String,
 }
 
 impl RoutineSeedIdentity {
-    /// Build the seed identity for `workspace_name`, rejecting a workspace
-    /// name with no characters usable in a routine name — that name would
-    /// otherwise silently fall back to a host-wide unsuffixed routine.
-    pub fn new(workspace_name: &str) -> Result<Self, OrbitError> {
+    /// Build the seed identity for `workspace_name` on the host registered
+    /// as `machine_id`, observing `base_branch`. Rejects a workspace name
+    /// with no characters usable in a routine name — that name would
+    /// otherwise silently fall back to a host-wide unsuffixed routine — and
+    /// a blank machine id or branch, which no state trigger validates with.
+    pub fn new(
+        workspace_name: &str,
+        machine_id: &str,
+        base_branch: &str,
+    ) -> Result<Self, OrbitError> {
         let name_suffix = sanitize_routine_name_part(workspace_name);
         if name_suffix.is_empty() {
             return Err(OrbitError::InvalidInput(format!(
@@ -142,8 +165,56 @@ impl RoutineSeedIdentity {
                  choose a workspace name containing letters or digits"
             )));
         }
+        if machine_id.trim().is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "seeding default routines requires this host's registered machine id; run `orbit init` first".to_string(),
+            ));
+        }
+        if base_branch.is_empty() || base_branch.chars().any(char::is_whitespace) {
+            return Err(OrbitError::InvalidInput(format!(
+                "workspace base branch '{base_branch}' cannot be observed by a seeded routine"
+            )));
+        }
 
-        Ok(Self { name_suffix })
+        Ok(Self {
+            name_suffix,
+            owner_machine: machine_id.trim().to_string(),
+            base_branch: base_branch.to_string(),
+        })
+    }
+
+    /// The binding `template` renders against on this host: the workspace
+    /// routine name, plus the owner and branch only when the template asks
+    /// for them, so a cron default's provenance stays host-independent.
+    fn binding(&self, file_stem: &str, template: &str) -> RoutineMaterializationBinding {
+        RoutineMaterializationBinding {
+            name: self.routine_name(file_stem),
+            owner_machine: template
+                .contains(OWNER_MACHINE_PLACEHOLDER)
+                .then(|| self.owner_machine.clone()),
+            branch: template
+                .contains(BASE_BRANCH_PLACEHOLDER)
+                .then(|| self.base_branch.clone()),
+        }
+    }
+
+    /// A recorded binding completed for `template`: a routine adopted or
+    /// recorded before its template gained a state trigger has a name but no
+    /// owner or branch, and takes this host's. A binding that already
+    /// carries them keeps them — a recorded owner is preserved exactly as a
+    /// recorded name is.
+    fn complete(
+        &self,
+        file_stem: &str,
+        template: &str,
+        binding: &RoutineMaterializationBinding,
+    ) -> RoutineMaterializationBinding {
+        let requested = self.binding(file_stem, template);
+        RoutineMaterializationBinding {
+            name: binding.name.clone(),
+            owner_machine: binding.owner_machine.clone().or(requested.owner_machine),
+            branch: binding.branch.clone().or(requested.branch),
+        }
     }
 
     /// Compose a per-workspace routine name: `<stem>-<workspace-name>`, using
@@ -218,7 +289,7 @@ pub(crate) fn seed_default_routines(
     workspace_name: &str,
     overwrite: bool,
 ) -> Result<ManagedAssetReconciliation, OrbitError> {
-    let identity = RoutineSeedIdentity::new(workspace_name)?;
+    let identity = RoutineSeedIdentity::new(workspace_name, "hm_test", "main")?;
     reconcile_default_routines(
         routines_dir,
         &identity,
@@ -342,9 +413,7 @@ pub(crate) fn reconcile_default_routines(
 
     for (name, template) in DEFAULT_ROUTINE_FILES {
         let path = routines_dir.join(format!("{name}.yaml"));
-        let requested_binding = RoutineMaterializationBinding {
-            name: identity.routine_name(name),
-        };
+        let requested_binding = identity.binding(name, template);
         let template_digest = sha256_hex(template.as_bytes());
         let previous_digest = previous.as_ref().and_then(|value| value.assets.get(*name));
         let previous_provenance = previous
@@ -355,7 +424,7 @@ pub(crate) fn reconcile_default_routines(
             let binding = if overwrite_bindings {
                 requested_binding.clone()
             } else {
-                provenance.binding.clone()
+                identity.complete(name, template, &provenance.binding)
             };
             let rendered = render_routine_template(name, template, &binding)?;
             let rendered_digest = sha256_hex(rendered.as_bytes());
@@ -369,6 +438,7 @@ pub(crate) fn reconcile_default_routines(
                 let existing_digest = sha256_hex(existing.as_bytes());
                 if existing_digest != provenance.rendered_digest && !overwrite_bindings {
                     if let Some(outcome) = reconcile_lifecycle_variant(
+                        identity,
                         name,
                         template,
                         &template_digest,
@@ -395,14 +465,15 @@ pub(crate) fn reconcile_default_routines(
                     next_provenance.insert((*name).to_string(), provenance.clone());
                     continue;
                 }
-                if !overwrite_bindings && provenance.binding != requested_binding {
+                if !overwrite_bindings && binding != requested_binding {
                     result.actions.push(ManagedAssetAction {
                         name: (*name).to_string(),
                         path: path.clone(),
                         outcome: ManagedAssetOutcome::BindingDrift,
                         detail: Some(format!(
-                            "current workspace binding would render name '{}'; preserving recorded name '{}'",
-                            requested_binding.name, provenance.binding.name
+                            "current workspace binding would render {}; preserving recorded {}",
+                            requested_binding.describe(),
+                            binding.describe()
                         )),
                     });
                 }
@@ -514,6 +585,7 @@ pub(crate) fn reconcile_default_routines(
             })?;
             if sha256_hex(existing.as_bytes()) != *legacy_digest {
                 if let Some(outcome) = reconcile_lifecycle_variant(
+                    identity,
                     name,
                     template,
                     &template_digest,
@@ -546,9 +618,7 @@ pub(crate) fn reconcile_default_routines(
                     path.display()
                 ))
             })?;
-            let binding = RoutineMaterializationBinding {
-                name: definition.name,
-            };
+            let binding = identity.complete(name, template, &binding_of(&definition));
             let rendered = render_refresh(name, template, &binding, &existing)?;
             let rendered_digest = sha256_hex(rendered.as_bytes());
             let changed = rendered_digest != *legacy_digest;
@@ -621,6 +691,7 @@ pub(crate) fn reconcile_default_routines(
                 if parse_routine_yaml(&existing)
                     .is_ok_and(|definition| definition.name == requested_binding.name)
                     && let Some(outcome) = reconcile_lifecycle_variant(
+                        identity,
                         name,
                         template,
                         &template_digest,
@@ -635,7 +706,7 @@ pub(crate) fn reconcile_default_routines(
                     continue;
                 }
                 if previous.is_none()
-                    && let Some(binding) = adoptable_binding(name, template, &existing)
+                    && let Some(binding) = adoptable_binding(identity, name, template, &existing)
                 {
                     result.actions.push(ManagedAssetAction {
                         name: (*name).to_string(),
@@ -898,10 +969,10 @@ fn template_owned_shape(definition: &RoutineDefinition) -> RoutineDefinition {
 /// template-owned field changed: a genuine local edit.
 pub(crate) fn shipped_shape_of(file_stem: &str, existing: &str) -> Option<ShippedShape> {
     let definition = parse_routine_yaml(existing).ok()?;
-    let binding = RoutineMaterializationBinding {
-        name: definition.name.clone(),
-    };
+    let binding = binding_of(&definition);
     let shape = template_owned_shape(&definition);
+    // A template that needs an owner the document does not declare (a cron
+    // document judged against the state template) cannot be that shape.
     let matches = |templates: &[(&str, &str)]| {
         templates
             .iter()
@@ -942,7 +1013,9 @@ pub(crate) fn is_orbit_written_routine(
 /// the current template with the operator's `enabled` kept. Returns the
 /// provenance to record, or `None` for a genuine local edit the caller
 /// preserves.
+#[allow(clippy::too_many_arguments)]
 fn reconcile_lifecycle_variant(
+    identity: &RoutineSeedIdentity,
     file_stem: &str,
     template: &str,
     template_digest: &str,
@@ -954,11 +1027,10 @@ fn reconcile_lifecycle_variant(
     let Some(shape) = shipped_shape_of(file_stem, existing) else {
         return Ok(None);
     };
-    // `shipped_shape_of` parsed the document, so this cannot fail.
+    // `shipped_shape_of` parsed the document, so this cannot fail. A cron
+    // document refreshed onto a state template takes this host as its owner.
     let definition = parse_routine_yaml(existing)?;
-    let binding = RoutineMaterializationBinding {
-        name: definition.name,
-    };
+    let binding = identity.complete(file_stem, template, &binding_of(&definition));
     match shape {
         ShippedShape::Current => {
             result.actions.push(ManagedAssetAction {
@@ -1043,31 +1115,82 @@ fn render_refresh(
 /// hard-failing the whole workspace sync on a binding Orbit adopted but cannot
 /// use.
 fn adoptable_binding(
+    identity: &RoutineSeedIdentity,
     file_stem: &str,
     template: &str,
     existing: &str,
 ) -> Option<RoutineMaterializationBinding> {
     let definition = parse_routine_yaml(existing).ok()?;
-    let binding = RoutineMaterializationBinding {
-        name: definition.name,
-    };
+    let binding = identity.complete(file_stem, template, &binding_of(&definition));
     render_routine_template(file_stem, template, &binding).ok()?;
     Some(binding)
 }
 
+/// The binding an on-disk document declares: its name, and the owner and
+/// branch of its state trigger when it has one.
+fn binding_of(definition: &RoutineDefinition) -> RoutineMaterializationBinding {
+    let state = definition.trigger.state.as_ref();
+    RoutineMaterializationBinding {
+        name: definition.name.clone(),
+        owner_machine: state.map(|trigger| trigger.owner_machine.clone()),
+        branch: state.map(|trigger| trigger.branch.clone()),
+    }
+}
+
+impl RoutineMaterializationBinding {
+    /// The values this binding renders, for a drift report.
+    fn describe(&self) -> String {
+        let mut described = format!("name '{}'", self.name);
+        if let Some(owner_machine) = &self.owner_machine {
+            described.push_str(&format!(", owner '{owner_machine}'"));
+        }
+        if let Some(branch) = &self.branch {
+            described.push_str(&format!(", branch '{branch}'"));
+        }
+        described
+    }
+}
+
+/// Render `template` against `binding`, failing closed on any placeholder the
+/// binding cannot resolve and on a document that does not reproduce the
+/// binding it was rendered from.
 fn render_routine_template(
     file_stem: &str,
     template: &str,
     binding: &RoutineMaterializationBinding,
 ) -> Result<String, OrbitError> {
-    let rendered = template.replace(ROUTINE_NAME_PLACEHOLDER, &binding.name);
+    let mut rendered = template.replace(ROUTINE_NAME_PLACEHOLDER, &binding.name);
+    if let Some(owner_machine) = &binding.owner_machine {
+        rendered = rendered.replace(OWNER_MACHINE_PLACEHOLDER, owner_machine);
+    }
+    if let Some(branch) = &binding.branch {
+        rendered = rendered.replace(BASE_BRANCH_PLACEHOLDER, branch);
+    }
+    if let Some(placeholder) = [OWNER_MACHINE_PLACEHOLDER, BASE_BRANCH_PLACEHOLDER]
+        .into_iter()
+        .find(|placeholder| rendered.contains(placeholder))
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "default routine `{file_stem}` needs `{placeholder}` resolved, which its recorded materialization binding does not carry"
+        )));
+    }
     let definition = parse_routine_yaml(&rendered).map_err(|error| {
         OrbitError::InvalidInput(format!(
             "default routine `{file_stem}` failed validation with recorded name '{}': {error}",
             binding.name
         ))
     })?;
-    if definition.name != binding.name {
+    let reproduced = binding_of(&definition);
+    let reproduces = reproduced.name == binding.name
+        && binding
+            .owner_machine
+            .as_ref()
+            .is_none_or(|owner| reproduced.owner_machine.as_ref() == Some(owner))
+        && binding
+            .branch
+            .as_ref()
+            .is_none_or(|branch| reproduced.branch.as_ref() == Some(branch));
+    if !reproduces {
         return Err(OrbitError::InvalidInput(format!(
             "default routine `{file_stem}` did not reproduce its recorded materialization binding"
         )));

@@ -17,6 +17,7 @@ use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{TaskReferenceIndex, TaskStatus, task_dependencies_ready_with_index};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::OperationGrant;
+use orbit_types::workflow::automation::members::PreparationEligibility;
 use serde::Serialize;
 use serde_json::json;
 
@@ -67,6 +68,10 @@ pub(crate) fn promote_within_grant(
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
     let branch = runtime.workspace_base_branch().to_string();
     let mut source: Option<(String, InstructionSnapshot)> = None;
+    // The predicate is the accepting consumer's, resolved once per routine:
+    // promotion judges a task by the same rule that assessed it [ORB-12745].
+    let mut eligibilities: std::collections::BTreeMap<String, PreparationEligibility> =
+        std::collections::BTreeMap::new();
 
     for task_id in &grant.task_ids {
         let task = match runtime.get_task(task_id) {
@@ -91,7 +96,19 @@ pub(crate) fn promote_within_grant(
             ));
             continue;
         }
-        if !orbit_automation::members::preparation::eligible(&task) {
+        let Some((consumer, assessment)) = preparation::accepted_assessment(runtime, task_id)?
+        else {
+            decisions.push(PromotionDecision::withheld(task_id, "assessment_missing"));
+            continue;
+        };
+        let eligibility = match eligibilities.get(&consumer) {
+            Some(eligibility) => eligibility,
+            None => {
+                let resolved = preparation::consumer_eligibility(runtime, &consumer)?;
+                eligibilities.entry(consumer).or_insert(resolved)
+            }
+        };
+        if !orbit_automation::members::preparation::eligible(&task, eligibility) {
             decisions.push(PromotionDecision::withheld(
                 task_id,
                 "special_disposition_withheld",
@@ -102,10 +119,6 @@ pub(crate) fn promote_within_grant(
             decisions.push(PromotionDecision::withheld(task_id, "unmet_dependency"));
             continue;
         }
-        let Some(assessment) = preparation::accepted_assessment(runtime, task_id)? else {
-            decisions.push(PromotionDecision::withheld(task_id, "assessment_missing"));
-            continue;
-        };
         if !assessment.ready {
             decisions.push(PromotionDecision::withheld(task_id, "assessment_unready"));
             continue;
@@ -125,9 +138,14 @@ pub(crate) fn promote_within_grant(
                 (&source.0, &source.1)
             }
         };
-        let fingerprint =
-            preparation::fingerprint_with_instructions(runtime, &task, revision, instructions)
-                .map_err(orbit_automation::automation_error_to_orbit)?;
+        let fingerprint = preparation::fingerprint_with_instructions(
+            runtime,
+            &task,
+            revision,
+            instructions,
+            eligibility,
+        )
+        .map_err(orbit_automation::automation_error_to_orbit)?;
         if fingerprint != assessment.resulting_fingerprint {
             decisions.push(PromotionDecision::withheld(task_id, "assessment_stale"));
             continue;
@@ -139,6 +157,7 @@ pub(crate) fn promote_within_grant(
             task_id,
             revision,
             instructions,
+            eligibility,
             &fingerprint,
         )?;
         runtime.record_pipeline_audit(
@@ -171,6 +190,7 @@ fn promote_locked(
     task_id: &str,
     revision: &str,
     instructions: &InstructionSnapshot,
+    eligibility: &PreparationEligibility,
     expected_fingerprint: &str,
 ) -> Result<PromotionDecision, OrbitError> {
     let mut decision = None;
@@ -180,9 +200,14 @@ fn promote_locked(
             decision = Some(PromotionDecision::withheld(task_id, "status_changed"));
             return Ok(());
         }
-        let fingerprint =
-            preparation::fingerprint_with_instructions(runtime, &current, revision, instructions)
-                .map_err(orbit_automation::automation_error_to_orbit)?;
+        let fingerprint = preparation::fingerprint_with_instructions(
+            runtime,
+            &current,
+            revision,
+            instructions,
+            eligibility,
+        )
+        .map_err(orbit_automation::automation_error_to_orbit)?;
         if fingerprint != expected_fingerprint {
             decision = Some(PromotionDecision::withheld(task_id, "assessment_stale"));
             return Ok(());

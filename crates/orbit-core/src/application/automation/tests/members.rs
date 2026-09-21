@@ -14,7 +14,7 @@ use orbit_types::{
     task::{TaskPriority, TaskStatus, TaskType},
     workflow::{
         ChildDispatch, ChildDispatchPhase, JobRunState, JobTargetType, PipelineState,
-        automation::members::{StateTrigger, StateTriggerKind},
+        automation::members::{PreparationEligibility, StateTrigger, StateTriggerKind},
     },
 };
 use serde_json::json;
@@ -70,6 +70,7 @@ fn trigger() -> StateTrigger {
         max_items: 50,
         retries: 0,
         deadline_minutes: 30,
+        eligibility: PreparationEligibility::default(),
     }
 }
 
@@ -304,13 +305,113 @@ fn cached_instruction_snapshot_preserves_preparation_fingerprint_bytes() {
     let task = runtime.get_task(&id).expect("task");
     let revision = preparation::head_revision(&runtime, "agent-main").expect("head");
 
-    let before = preparation::fingerprint(&runtime, &task, &revision).expect("fingerprint");
+    let eligibility = PreparationEligibility::default();
+    let before =
+        preparation::fingerprint(&runtime, &task, &revision, &eligibility).expect("fingerprint");
     let instructions = preparation::instructions(&runtime, &revision).expect("instructions");
-    let after =
-        preparation::fingerprint_with_instructions(&runtime, &task, &revision, &instructions)
-            .expect("fingerprint with cached instructions");
+    let after = preparation::fingerprint_with_instructions(
+        &runtime,
+        &task,
+        &revision,
+        &instructions,
+        &eligibility,
+    )
+    .expect("fingerprint with cached instructions");
 
     assert_eq!(before, after);
+}
+
+/// [ORB-12745] The trigger's resolved eligibility is the one predicate the
+/// host observes, admits and fingerprints with: a narrowed block changes
+/// which tasks are candidates versus withheld, produces a different material
+/// fingerprint for the same task, and retires a member the predicate no
+/// longer admits at the admission recheck.
+#[test]
+fn host_observes_admits_and_fingerprints_with_the_triggers_eligibility() {
+    let (_root, runtime, repo) = test_runtime();
+    let proposed = create_proposed_task(&runtime, &repo, "proposed");
+    let backlog = create_backlog_task(&runtime, &repo, "backlog");
+    let now = Utc::now();
+
+    let default_trigger = preparation_trigger();
+    let default_page = Host::new(&runtime, &default_trigger)
+        .observe(None, now)
+        .unwrap();
+    let mut default_keys: Vec<_> = default_page
+        .candidates
+        .iter()
+        .map(|member| member.key.clone())
+        .collect();
+    default_keys.sort();
+    let mut both = vec![proposed.clone(), backlog.clone()];
+    both.sort();
+    assert_eq!(default_keys, both);
+    assert!(default_page.withheld.is_empty());
+
+    let narrowed_trigger = StateTrigger {
+        eligibility: PreparationEligibility {
+            statuses: vec![TaskStatus::Backlog],
+            require_tags: vec!["pilot".into()],
+            ..Default::default()
+        },
+        ..preparation_trigger()
+    };
+    let narrowed_host = Host::new(&runtime, &narrowed_trigger);
+    let page = narrowed_host.observe(None, now).unwrap();
+    assert!(
+        page.candidates.is_empty(),
+        "the backlog task lacks the required tag: {:?}",
+        page.candidates
+    );
+    assert_eq!(
+        page.withheld.get(&backlog).map(String::as_str),
+        Some("task_ineligible")
+    );
+    assert!(
+        !page.withheld.contains_key(&proposed),
+        "a status outside the predicate is never listed, so it is not withheld"
+    );
+
+    runtime
+        .update_task(
+            &backlog,
+            crate::application::task::TaskUpdateParams {
+                tags: Some(vec!["pilot".into()]),
+                ..Default::default()
+            },
+        )
+        .expect("tag the backlog task");
+    let page = narrowed_host.observe(None, now).unwrap();
+    assert_eq!(page.candidates.len(), 1);
+    let member = page.candidates[0].clone();
+    assert_eq!(member.task_ids, vec![backlog.clone()]);
+    assert!(matches!(
+        narrowed_host.admission(&member).unwrap(),
+        MemberAdmission::Admit
+    ));
+
+    // Same task, same revision, different predicate: different material.
+    let default_member = Host::new(&runtime, &default_trigger)
+        .observe(None, now)
+        .unwrap()
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.key == backlog)
+        .expect("the default predicate still lists the task");
+    assert_ne!(default_member.fingerprint, member.fingerprint);
+
+    // The predicate is re-evaluated at admission, so a task that stopped
+    // satisfying it between observe and admission is retired.
+    runtime
+        .update_task(
+            &backlog,
+            crate::application::task::TaskUpdateParams {
+                tags: Some(vec![]),
+                ..Default::default()
+            },
+        )
+        .expect("drop the required tag");
+    assert_retire(narrowed_host.admission(&member).unwrap(), "task_ineligible");
 }
 
 #[test]
