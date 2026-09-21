@@ -16,8 +16,9 @@ pub struct PluginAddArgs {
     /// Enable the plugin as part of the install
     #[arg(long)]
     pub enable: bool,
-    /// Permission grants to record when enabling (repeatable, comma-separated):
-    /// fs, network, env_pass, orbit_tools, unsandboxed
+    /// Complete permission grant set to record when enabling (repeatable,
+    /// comma-separated): fs, network, env_pass, orbit_tools, unsandboxed.
+    /// Replaces any recorded set.
     #[arg(long = "grant", value_delimiter = ',')]
     pub grants: Vec<String>,
 }

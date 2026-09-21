@@ -276,6 +276,129 @@ fn grants_injected_into_the_store_row_never_become_an_unconfined_plugin() {
         .expect("an authorized grant activates the tool");
 }
 
+/// The recovery command named by the refusal must state a new grant set, not
+/// sign whatever a writer injected into the store row. Otherwise the witness
+/// turns the diagnostic's own remediation into an authorization bypass.
+#[test]
+fn enable_with_grants_replaces_an_unauthorized_stored_superset() {
+    let fixture = PluginFixture::new();
+    install(
+        &fixture,
+        PluginSpecFixture::new("loose", "loose").unsandboxed(),
+    );
+
+    let injected = ["fs".to_string(), "unsandboxed".to_string()];
+    fixture
+        .runtime
+        .stores()
+        .plugins()
+        .set_plugin_enabled("loose", true, &injected)
+        .expect("inject a grant the operator never authorized");
+
+    let runtime = fixture.reopen();
+    let refusal = show_plugin(&runtime, "loose")
+        .expect("show")
+        .diagnostic
+        .expect("the injected row is refused");
+    assert!(
+        refusal.contains("orbit plugin enable loose --grant <grants>"),
+        "the recovery command exercised below must be the one the refusal names: {refusal}"
+    );
+
+    enable_plugin(&runtime, "loose", &grant_options(&["fs"]))
+        .expect("authorize the intended narrower set");
+    let stored = runtime
+        .stores()
+        .plugins()
+        .get_plugin("loose")
+        .expect("read plugin row")
+        .expect("installed plugin");
+    assert_eq!(stored.grants, ["fs"]);
+
+    let runtime = fixture.reopen();
+    let summary = show_plugin(&runtime, "loose").expect("show narrowed set");
+    assert_eq!(summary.granted, ["fs"]);
+    assert!(
+        !summary.unsandboxed,
+        "the recovery command must not bless the injected grant: {summary:?}"
+    );
+
+    // Restoring the injected row must fail closed again. This proves the new
+    // witness covers only `fs`, not the superset that preceded the command.
+    runtime
+        .stores()
+        .plugins()
+        .set_plugin_enabled("loose", true, &injected)
+        .expect("restore the injected superset");
+    let runtime = fixture.reopen();
+    let summary = show_plugin(&runtime, "loose").expect("show refused superset");
+    assert!(
+        summary.granted.is_empty() && !summary.unsandboxed,
+        "the narrowed witness must not cover the injected superset: {summary:?}"
+    );
+    assert!(
+        summary
+            .diagnostic
+            .as_deref()
+            .is_some_and(|message| message.contains("do not match")),
+        "the restored superset must mismatch the narrowed witness: {summary:?}"
+    );
+}
+
+#[test]
+fn add_and_enable_with_grants_both_replace_the_recorded_set() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            grants: vec!["fs".to_string()],
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("initial add with an explicit grant set");
+
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            force: true,
+            enable: true,
+            grants: vec!["network".to_string()],
+        },
+    )
+    .expect("replacement add with a new explicit grant set");
+    let stored = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read plugin row")
+        .expect("installed plugin");
+    assert_eq!(
+        stored.grants,
+        ["network"],
+        "add --enable --grant replaces the old set"
+    );
+
+    enable_plugin(&fixture.runtime, "demo", &grant_options(&["fs"]))
+        .expect("enable with a replacement grant set");
+    let stored = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read plugin row")
+        .expect("installed plugin");
+    assert_eq!(
+        stored.grants,
+        ["fs"],
+        "an explicit enable grant list replaces, just like add --enable --grant"
+    );
+}
+
 /// Enable, disable, re-enable and a reinstall all keep the row and its
 /// authorization record in step, so the check never refuses a plugin an
 /// operator maintained through the ordinary commands.
@@ -308,7 +431,8 @@ fn the_ordinary_lifecycle_keeps_the_row_authorized() {
         PluginStatus::Disabled
     );
 
-    enable_plugin(&runtime, "demo", &grant_options(&["fs"])).expect("re-enable");
+    enable_plugin(&runtime, "demo", &PluginEnableOptions::default())
+        .expect("re-enable without changing grants");
     let runtime = fixture.reopen();
     let summary = show_plugin(&runtime, "demo").expect("show");
     assert_eq!(summary.status, PluginStatus::Active);

@@ -246,6 +246,13 @@ Runner`; `mutating` plugin tools by `Operator | Runner` and by `Agent` only when
 verify against its authorization record is not authority either: the plugin is refused and
 every surface reports it as granting nothing (§3).
 
+An explicit grant list is the complete set the operator authorizes, not an addition to the
+stored row: both `orbit plugin add --enable --grant …` and `orbit plugin enable --grant …`
+replace the recorded set. Omitting `--grant` on `plugin enable` preserves the recorded grants,
+so disable followed by an ordinary re-enable does not require restating them. Supplying a
+narrower list is the supported way to revoke grants and replaces the authorization witness
+with one covering only that narrower set.
+
 Those grants are bound to the install-time `plugin.yaml` digest stored on the `plugins` row.
 Every load hashes the bytes on disk and compares them to that `manifest_digest`. A mismatch
 registers the plugin inactive with a diagnostic that names both digests and the re-consent

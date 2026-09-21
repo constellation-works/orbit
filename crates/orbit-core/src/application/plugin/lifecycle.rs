@@ -21,7 +21,8 @@ use crate::runtime::plugin_definitions::load_plugin_definitions;
 /// What `orbit plugin enable` was asked to do beyond recording grants.
 #[derive(Debug, Clone, Default)]
 pub struct PluginEnableOptions {
-    /// Grants to record (`--grant`).
+    /// Complete grant set to record when `--grant` is present. An empty list
+    /// preserves the existing set for an ordinary re-enable.
     pub grants: Vec<String>,
     /// Overwrite a seeded definition the operator has since edited (§3).
     pub force: bool,
@@ -146,14 +147,8 @@ fn set_enabled(
         .plugins()
         .get_plugin(name)?
         .ok_or_else(|| missing_install(runtime, name))?;
-    let grants = if enabled {
-        let mut merged = existing.grants.clone();
-        for grant in grants {
-            if !merged.iter().any(|existing| existing == grant) {
-                merged.push(grant.clone());
-            }
-        }
-        merged
+    let grants = if enabled && !grants.is_empty() {
+        grants.to_vec()
     } else {
         existing.grants.clone()
     };
