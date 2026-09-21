@@ -25,7 +25,6 @@ Only *flexible* columns are ever truncated — fixed columns render whole or are
 | `orbit routine list` | `SOURCE` | `orbit routine show <name>` |
 | `orbit executor list` | `COMMAND` | `orbit executor show <name>` |
 | `orbit policy list` | `DESCRIPTION`, `FSPROFILES` | `orbit policy show <name>` |
-| `orbit operation list` | `RIGHTS`, `TASKS` | `orbit operation show <id>` |
 | `orbit skill list` | `SUMMARY` | `orbit skill show <id>` |
 | `orbit friction list` | `TAGS`, `TITLE` | `orbit friction show <id>` |
 | `orbit search` | `ID`, `TITLE/SUMMARY` | per hit kind: `orbit task show`, `orbit friction show` |

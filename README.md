@@ -98,10 +98,9 @@ orbit task update "$TASK_ID" --approve     # after the PR is merged: review → 
 
 ### When you are not in the loop
 
-Agents and auto-tasks keep filing work; these are the ways it gets shipped without you at the keyboard. Every `orbit run` command is asynchronous: it prints a durable run ID and returns before the outcome is known. Finishing delivery is always a separate, explicit authorization: `--complete` on the command, or the `complete` right on a grant. No workspace setting, environment variable, or routine turns it on by itself.
+Agents and auto-tasks keep filing work; these are the ways it gets shipped without you at the keyboard. Every `orbit run` command is asynchronous: it prints a durable run ID and returns before the outcome is known. Finishing delivery is always a separate, explicit authorization — `--complete` on the command. No workspace setting, environment variable, or routine turns it on by itself.
 
 - **A bounded drain.** `orbit run auto --for 4h --concurrency 8` ships the backlog conflict-aware until the window closes; `--for` only stops new work from starting. Check first with `orbit run readiness`, which reserves and submits nothing.
-- **A scoped grant.** `orbit operation enable --task "$IDS" --for 2h --right prepare,promote` then `orbit run auto --grant "$GRANT_ID"`: a finite task set, at most 50 tasks and 24 hours. Only a grant carrying the `complete` right finishes delivery; `--complete` is refused alongside `--grant`.
 - **Finishing delivery.** `orbit run ship "$TASK_ID" --complete` merges the PR as soon as GitHub allows it and moves the task to `done` once the merge is verified. `orbit run auto --for 2h --complete` is blanket authorization for every task admitted during the whole window. Neither approves `proposed` work into the backlog.
 - **Continuous review.** Enable the shipped `code-review`, `qa-sweep`, and `security-review` auto-tasks. They inspect landed windows and file confirmed findings back into the backlog; they do not grant completion authority.
 

@@ -10,7 +10,7 @@ type: design
 summary: Alternatives, costs and open decisions for bounded shared trigger evaluation over the existing sweep machinery.
 tags: [automation-triggers, scheduling, architecture]
 paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**"]
-related_features: [routines, auto-tasks, operation-mode]
+related_features: [routines, auto-tasks, review-gate]
 related_artifacts: [ORB-11315, ORB-11314, ORB-11316]
 ---
 
@@ -35,7 +35,7 @@ product/architecture choices that materially change the contract.
 3. **Coverage acceptance.** Agree the minimum QA/review evidence schema and who
    can accept it. The candidate requires an authorized deterministic validator;
    process success or unstructured summary prose is insufficient. Review meaning
-   stays with [operation-mode's review proposal](../operation-mode/3_vision.md).
+   stays with the [review gate](../review-gate/2_design.md).
 4. **Pilot base churn.** Begin with conservative full-revision invalidation or
    invest in a proven dependency/path fingerprint? The candidate chooses the
    conservative rule first, accepting more pilot work and possible escalation.
@@ -79,9 +79,10 @@ admission and receipt application get idempotency guarantees.
   fire history; [auto-tasks](../auto-tasks/2_design.md) own recurring task minting.
   The source inventory in [Design section 1](./2_design.md#1-current-implementation-and-gaps)
   distinguishes those actual contracts from proposed extensions.
-- [Operation-mode design](../operation-mode/2_design.md) and
-  [proposal](../operation-mode/3_vision.md), from [ORB-11314] and [ORB-11316],
-  define cadence/authority and review semantics that can consume trigger evidence.
+- The [review gate](../review-gate/2_design.md), from [ORB-11333], defines the
+  review semantics that consume trigger evidence. Operation mode, which also
+  proposed cadence and scoped authority, was removed on 2026-09-21
+  ([orbit-core decisions](../orbit-core/4_decisions.md)).
 - Existing pilot partitions, triage disposition application, run child linkage,
   store claims and repository delivery checks supply concrete ownership seams.
 
@@ -113,7 +114,7 @@ Orbit-internal:
 - [Proposed contract and rollout](./2_design.md).
 - [Architecture and ownership](../../../ARCHITECTURE.md).
 - [Routines vision](../routines/3_vision.md) and [auto-tasks vision](../auto-tasks/3_vision.md).
-- [Operation-mode proposal](../operation-mode/3_vision.md).
+- [Review gate](../review-gate/1_overview.md).
 
 External: none required; provider-specific delivery evidence must be verified
 against its actual adapter contract during implementation.

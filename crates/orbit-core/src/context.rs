@@ -8,8 +8,8 @@ use orbit_search::LexicalIndex;
 use orbit_store::Store;
 use orbit_store::contracts::{
     AuditEventStoreBackend, AutomationStoreBackend, ExecutorDefStoreBackend,
-    InvocationStoreBackend, JobRunStoreBackend, OperationStoreBackend, PluginStoreBackend,
-    PolicyDefStoreBackend, ReviewStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
+    InvocationStoreBackend, JobRunStoreBackend, PluginStoreBackend, PolicyDefStoreBackend,
+    ReviewStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
     TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend,
     V2AuditStoreBackend,
 };
@@ -207,7 +207,6 @@ pub(crate) struct OrbitHostStore {
     pub(crate) sqlite: Store,
     pub(crate) automation: Arc<dyn AutomationStoreBackend>,
     pub(crate) review: Arc<dyn ReviewStoreBackend>,
-    pub(crate) operation: Arc<dyn OperationStoreBackend>,
     pub(crate) v2_audit: Arc<dyn V2AuditStoreBackend>,
     pub(crate) invocation: Arc<dyn InvocationStoreBackend>,
 }
@@ -381,8 +380,7 @@ pub(crate) struct OrbitRuntimeSettings {
     default_crew: Option<String>,
     complexity_crews: orbit_config::ComplexityCrewPools,
     system_crew: String,
-    /// Resolved operation-mode preferences with provenance (`[operation]`).
-    /// Preferences only; authority is a separate durable grant [ORB-11332].
+    /// Resolved `[operation]` review preferences with provenance [ORB-11333].
     operation: orbit_config::OperationPolicy,
 }
 

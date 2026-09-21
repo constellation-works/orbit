@@ -49,12 +49,9 @@ base_branch = "main"
 # log_max_file_mb    = 100  # roll the active log once it exceeds N MiB (>= 1, <= log_max_total_mb)
 
 # [operation]
-# Operation-mode preferences. They describe desired defaults and authorize
-# nothing: scoped automation needs an explicit `orbit operation enable` grant,
-# and no grant authorizes merge. Selecting a preset resets the preset-managed
-# keys (preparation, preparation_due_seconds, leaf_ceiling, promotion,
-# completion, recovery, recovery_episodes_per_task, recovery_minutes_per_task)
-# at that layer; review_policy, review_crew and delivery_cap are independent.
-# preset = "supervised"        # or "autonomous"
-# delivery_cap = "review"      # raise to "done" only where managed completion is allowed
+# Automatic review policy. `before-pr` holds PR creation for a fresh reviewer
+# from `review_crew` on the PR route; `after-landing` schedules review of
+# landed deliveries. The lineage budget keys (review_reviewer_starts,
+# review_repair_cycles, review_minutes) bound one delivery candidate.
 # review_policy = "none"       # or "before-pr", "after-landing"
+# review_crew = "sol"          # reviewer crew for before-pr

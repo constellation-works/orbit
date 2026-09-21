@@ -22,10 +22,7 @@ use orbit_types::identity::{
 use orbit_types::workflow::automation::recovery::DEFAULT_STALL_WINDOW_MINUTES;
 use orbit_types::workflow::{CODEX_PROVIDER_SANDBOX_MODES, Provider};
 
-use crate::operation::{
-    self, CompletionPreference, DeliveryCap, OperationPreset, PreparationPreference,
-    PromotionPreference, RecoveryPreference, ReviewPolicy, admit_choice,
-};
+use crate::operation::{self, ReviewPolicy};
 use serde::de::DeserializeOwned;
 use serde_json::{Value as JsonValue, json};
 
@@ -78,7 +75,7 @@ pub enum ConfigSection {
     Crews,
     /// `execution.*` — how agent subprocesses run.
     Execution,
-    /// `operation.*` — unattended-operation policy.
+    /// `operation.*` — automatic review policy.
     Operation,
     /// Everything else: `automation.*`, `runtime.*`, `scoring.*`, `tasks.*`, `pr.*`.
     Housekeeping,
@@ -102,7 +99,7 @@ impl ConfigSection {
             Self::Delivery => "Delivery (workflow.*)",
             Self::Crews => "Crews (crews.*)",
             Self::Execution => "Execution (execution.*)",
-            Self::Operation => "Operation mode (operation.*)",
+            Self::Operation => "Review (operation.*)",
             Self::Housekeeping => "Housekeeping",
         }
     }
@@ -114,7 +111,7 @@ impl ConfigSection {
             Self::Delivery => "how tasks are shipped",
             Self::Crews => "named provider/model assignments",
             Self::Execution => "how agent subprocesses run",
-            Self::Operation => "unattended-operation policy",
+            Self::Operation => "automatic review policy",
             Self::Housekeeping => "logs, scoring, ids, and PR links",
         }
     }
@@ -291,94 +288,34 @@ define_config_settings! {
         section: ConfigSection::Machine, order: 30,
         resolve: |raw: Option<String>| resolve_task_prefix(raw),
     },
-    operation_completion: Option<String> => String {
-        key: "operation.completion", value_type: "string",
-        description: "Operation-mode completion preference: review or done. Preset-managed; bounded by operation.delivery_cap and the grant.",
-        section: ConfigSection::Operation, order: 40,
-        resolve: |raw: Option<String>| admit_choice::<CompletionPreference>(raw, CompletionPreference::as_str),
-    },
-    operation_delivery_cap: Option<String> => String {
-        key: "operation.delivery_cap", value_type: "string",
-        description: "Repository ceiling on managed delivery: review (default) or done. Independent of the preset.",
-        section: ConfigSection::Operation, order: 20,
-        resolve: |raw: Option<String>| admit_choice::<DeliveryCap>(raw, DeliveryCap::as_str),
-    },
-    operation_leaf_ceiling: Option<u32> => u32 {
-        key: "operation.leaf_ceiling", value_type: "integer",
-        description: "Operation-mode ceiling on concurrently live leaf runs (1..=500). Preset-managed; the job's hard limit still applies.",
-        section: ConfigSection::Operation, order: 70,
-        resolve: |raw: Option<u32>| operation::leaf_ceiling(raw),
-    },
-    operation_preparation: Option<String> => String {
-        key: "operation.preparation", value_type: "string",
-        description: "Operation-mode preparation preference: manual or automatic. Preset-managed.",
-        section: ConfigSection::Operation, order: 50,
-        resolve: |raw: Option<String>| admit_choice::<PreparationPreference>(raw, PreparationPreference::as_str),
-    },
-    operation_preparation_due_seconds: Option<u64> => u64 {
-        key: "operation.preparation_due_seconds", value_type: "integer",
-        description: "Seconds after a material change before an in-grant task's preparation is due (1..=86400). Preset-managed.",
-        section: ConfigSection::Operation, order: 60,
-        resolve: |raw: Option<u64>| operation::preparation_due_seconds(raw),
-    },
-    operation_preset: Option<String> => String {
-        key: "operation.preset", value_type: "string",
-        description: "Operation-mode preset: supervised (default) or autonomous. Selecting a preset resets the preset-managed operation.* fields at that layer. Grants nothing by itself.",
-        section: ConfigSection::Operation, order: 10,
-        resolve: |raw: Option<String>| admit_choice::<OperationPreset>(raw, OperationPreset::as_str),
-    },
-    operation_promotion: Option<String> => String {
-        key: "operation.promotion", value_type: "string",
-        description: "Operation-mode promotion preference: separate_approval or automatic. Preset-managed; automatic promotion still needs a grant with the promote right.",
-        section: ConfigSection::Operation, order: 30,
-        resolve: |raw: Option<String>| admit_choice::<PromotionPreference>(raw, PromotionPreference::as_str),
-    },
-    operation_recovery: Option<String> => String {
-        key: "operation.recovery", value_type: "string",
-        description: "Operation-mode recovery preference: existing or scheduled. Preset-managed.",
-        section: ConfigSection::Operation, order: 80,
-        resolve: |raw: Option<String>| admit_choice::<RecoveryPreference>(raw, RecoveryPreference::as_str),
-    },
-    operation_recovery_episodes_per_task: Option<u32> => u32 {
-        key: "operation.recovery_episodes_per_task", value_type: "integer",
-        description: "Aggregate recovery episodes allowed per task inside a grant (0..=10). Preset-managed.",
-        section: ConfigSection::Operation, order: 90,
-        resolve: |raw: Option<u32>| operation::recovery_episodes_per_task(raw),
-    },
-    operation_recovery_minutes_per_task: Option<u32> => u32 {
-        key: "operation.recovery_minutes_per_task", value_type: "integer",
-        description: "Aggregate recovery wall-time minutes allowed per task inside a grant (1..=1440). Preset-managed.",
-        section: ConfigSection::Operation, order: 100,
-        resolve: |raw: Option<u32>| operation::recovery_minutes_per_task(raw),
-    },
     operation_review_crew: Option<String> => String {
         key: "operation.review_crew", value_type: "string",
-        description: "Crew selected for before-PR automatic review. Independent of the preset. After-landing review runs from its delivery auto-task and uses that definition's template crew.",
-        section: ConfigSection::Operation, order: 120,
+        description: "Crew selected for before-PR automatic review. After-landing review runs from its delivery auto-task and uses that definition's template crew.",
+        section: ConfigSection::Operation, order: 20,
         resolve: |raw: Option<String>| operation::review_crew(raw),
     },
     operation_review_minutes: Option<u32> => u32 {
         key: "operation.review_minutes", value_type: "integer",
-        description: "Aggregate before-PR reviewer, repair, and final-validation wall-time minutes per delivery candidate lineage (1..=1440, default 30). Independent of the preset.",
-        section: ConfigSection::Operation, order: 130,
+        description: "Aggregate before-PR reviewer, repair, and final-validation wall-time minutes per delivery candidate lineage (1..=1440, default 30).",
+        section: ConfigSection::Operation, order: 50,
         resolve: |raw: Option<u32>| operation::review_minutes(raw),
     },
     operation_review_policy: Option<String> => String {
         key: "operation.review_policy", value_type: "string",
-        description: "Automatic review timing: none (default), before-pr, or after-landing. Independent of the preset. before-pr holds PR creation for a fresh reviewer on the PR route and is refused for local-only delivery.",
-        section: ConfigSection::Operation, order: 110,
-        resolve: |raw: Option<String>| admit_choice::<ReviewPolicy>(raw, ReviewPolicy::as_str),
+        description: "Automatic review timing: none (default), before-pr, or after-landing. before-pr holds PR creation for a fresh reviewer on the PR route and is refused for local-only delivery.",
+        section: ConfigSection::Operation, order: 10,
+        resolve: |raw: Option<String>| operation::admit_review_policy(raw),
     },
     operation_review_repair_cycles: Option<u32> => u32 {
         key: "operation.review_repair_cycles", value_type: "integer",
-        description: "Reviewer repair/validation cycles allowed per delivery candidate lineage (0..=10, default 2). Independent of the preset.",
-        section: ConfigSection::Operation, order: 140,
+        description: "Reviewer repair/validation cycles allowed per delivery candidate lineage (0..=10, default 2).",
+        section: ConfigSection::Operation, order: 40,
         resolve: |raw: Option<u32>| operation::review_repair_cycles(raw),
     },
     operation_review_reviewer_starts: Option<u32> => u32 {
         key: "operation.review_reviewer_starts", value_type: "integer",
-        description: "Fresh reviewer invocations allowed per delivery candidate lineage, including retries and invalidations (1..=10, default 2). Independent of the preset.",
-        section: ConfigSection::Operation, order: 150,
+        description: "Fresh reviewer invocations allowed per delivery candidate lineage, including retries and invalidations (1..=10, default 2).",
+        section: ConfigSection::Operation, order: 30,
         resolve: |raw: Option<u32>| operation::review_reviewer_starts(raw),
     },
     pr_task_url_template: Option<String> => String {
@@ -525,7 +462,7 @@ impl ConfigSnapshot {
 ///
 /// Identity is resolved on every runtime open and by `orbit init` before the
 /// rest of the document is known to admit, so it is readable without resolving
-/// crews, execution policy, or operation preferences. The values still go
+/// crews, execution policy, or review preferences. The values still go
 /// through the registry rows' own resolvers, so there is exactly one validator
 /// and `orbit config get machine.id` cannot disagree with a runtime open.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -625,12 +562,6 @@ pub fn config_key_options(key: &str) -> Vec<&'static str> {
     match key {
         "execution.codex.sandbox" => CODEX_PROVIDER_SANDBOX_MODES.to_vec(),
         "execution.codex.approval_policy" => CODEX_APPROVAL_POLICIES.to_vec(),
-        "operation.completion" => CompletionPreference::CHOICES.to_vec(),
-        "operation.delivery_cap" => DeliveryCap::CHOICES.to_vec(),
-        "operation.preparation" => PreparationPreference::CHOICES.to_vec(),
-        "operation.preset" => OperationPreset::CHOICES.to_vec(),
-        "operation.promotion" => PromotionPreference::CHOICES.to_vec(),
-        "operation.recovery" => RecoveryPreference::CHOICES.to_vec(),
         "operation.review_policy" => ReviewPolicy::CHOICES.to_vec(),
         _ => Vec::new(),
     }
@@ -672,7 +603,32 @@ pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[
         "search.model",
         "search uses SQLite FTS5 and no longer selects a model; delete this key",
     ),
+    // Operation mode was removed on 2026-09-21; the `[operation]` table keeps
+    // only the review keys. See docs/design/orbit-core/4_decisions.md.
+    ("operation.preset", OPERATION_MODE_REMOVED_NOTE),
+    ("operation.completion", OPERATION_MODE_REMOVED_NOTE),
+    ("operation.preparation", OPERATION_MODE_REMOVED_NOTE),
+    (
+        "operation.preparation_due_seconds",
+        OPERATION_MODE_REMOVED_NOTE,
+    ),
+    ("operation.promotion", OPERATION_MODE_REMOVED_NOTE),
+    ("operation.leaf_ceiling", OPERATION_MODE_REMOVED_NOTE),
+    ("operation.recovery", OPERATION_MODE_REMOVED_NOTE),
+    (
+        "operation.recovery_episodes_per_task",
+        OPERATION_MODE_REMOVED_NOTE,
+    ),
+    (
+        "operation.recovery_minutes_per_task",
+        OPERATION_MODE_REMOVED_NOTE,
+    ),
+    ("operation.delivery_cap", OPERATION_MODE_REMOVED_NOTE),
 ];
+
+const OPERATION_MODE_REMOVED_NOTE: &str = "operation mode was removed; the [operation] table \
+     keeps only review_policy, review_crew, review_reviewer_starts, review_repair_cycles and \
+     review_minutes";
 
 /// The migration note for a removed key, or `None` for any other key.
 pub(crate) fn removed_key_note(key: &str) -> Option<&'static str> {

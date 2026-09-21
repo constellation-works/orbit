@@ -27,7 +27,7 @@ Execution (execution.*)      how agent subprocesses run          ⚠ workspace f
   env.pass                         HOME, PATH, CODEX_HOME, TMPDIR, USER  default    Environment variable names allow-listed for passthrough into agent subprocesses.
   env.inherit                      false                 derived    Not settable: an agent subprocess environment is always composed from execution.env.pass.
 
-Operation mode (operation.*) unattended-operation policy — 15 keys unset (pass --all to list them)
+Review (operation.*)         automatic review policy — 5 keys unset (pass --all to list them)
 
 Housekeeping                 logs, scoring, ids, and PR links
   scoring.enabled                  true                  default    Whether scoreboard metrics are recorded for task runs.

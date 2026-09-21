@@ -64,50 +64,13 @@ pub struct MemberEvaluation<'a> {
     pub enabled: bool,
     pub dry_run: bool,
     pub now: DateTime<Utc>,
-    /// Resolved operation-mode scheduling preferences and admission scope
-    /// supplied by Core [ORB-11332]. Empty constraints leave the trigger's
-    /// own timing untouched.
-    pub constraints: MemberConstraints,
-}
-
-/// Operation-mode inputs to the shared due decision [ORB-11332].
-///
-/// Core resolves preferences and the active grant; this evaluator only applies
-/// them. A member inside `scope` becomes due once it has settled for
-/// `due_after_seconds`, in addition to the trigger's own debounce/max-wait
-/// rule. Members outside the scope, and every member when the scope is
-/// empty, keep the operator's routine timing unchanged, so a grant can only
-/// accelerate the work it names and never gates an independently enabled
-/// routine. Constraints never grant authority: admission still goes through
-/// [`MemberHost::admission`] and the pipeline's own checks.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct MemberConstraints {
-    /// Task ids the active grant covers.
-    pub scope: BTreeSet<String>,
-    /// Seconds after the last material change before an in-scope member is
-    /// due. `None` applies no acceleration.
-    pub due_after_seconds: Option<u64>,
-}
-
-impl MemberConstraints {
-    /// Whether the constraints accelerate `member`.
-    fn accelerates(&self, member: &StateMember, now: DateTime<Utc>) -> bool {
-        let Some(due_after) = self.due_after_seconds else {
-            return false;
-        };
-        member.task_ids.iter().any(|id| self.scope.contains(id))
-            && now.signed_duration_since(member.changed_at).num_seconds()
-                >= i64::try_from(due_after).unwrap_or(i64::MAX)
-    }
 }
 
 /// Why a pending member is due now, or `None` while it still debounces: it
-/// settled for the debounce window, waited out the maximum, or an
-/// operation-mode grant accelerated it.
+/// settled for the debounce window, or it waited out the maximum.
 fn due_reason(
     member: &StateMember,
     trigger: &StateTrigger,
-    constraints: &MemberConstraints,
     now: DateTime<Utc>,
 ) -> Option<&'static str> {
     if now.signed_duration_since(member.changed_at).num_minutes()
@@ -118,8 +81,6 @@ fn due_reason(
         >= i64::from(trigger.max_wait_minutes)
     {
         Some("max_wait")
-    } else if constraints.accelerates(member, now) {
-        Some("grant")
     } else {
         None
     }
@@ -162,7 +123,6 @@ pub fn evaluate(
         enabled,
         dry_run,
         now,
-        constraints,
     } = request;
 
     trigger.validate().map_err(orbit_common::OrbitError::from)?;
@@ -313,7 +273,7 @@ pub fn evaluate(
             })
         })
         .filter_map(|member| {
-            due_reason(member, trigger, &constraints, now).map(|reason| (member.clone(), reason))
+            due_reason(member, trigger, now).map(|reason| (member.clone(), reason))
         })
         .collect::<Vec<_>>();
 

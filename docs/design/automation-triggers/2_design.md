@@ -10,7 +10,7 @@ type: design
 summary: Proposed trigger contract for immutable delivery batches, separate coverage checkpoints, preparation freshness, and correlated failure triage.
 tags: [automation-triggers, scheduling, coverage, pilot, triage]
 paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-store/src/contracts/**", "crates/orbit-types/src/workflow/**", "crates/orbit-core/src/adapter/engine_host/v2_host/**"]
-related_features: [routines, auto-tasks, operation-mode, activity-job]
+related_features: [routines, auto-tasks, review-gate, activity-job]
 related_artifacts: [ORB-11315, ORB-11314, ORB-11316]
 ---
 
@@ -166,8 +166,8 @@ mint/submission. Workers inspect that pinned revision, not whatever HEAD is when
 they start. Retain source objects and manifests until obligations settle and the
 audit retention window ends; missing objects make coverage unverifiable.
 
-Operation-mode's [review contract](../operation-mode/3_vision.md#313-content-specific-coverage-through-delivery)
-from [ORB-11316] determines whether before-PR coverage maps to actual landing
+The [review gate's coverage contract](../review-gate/2_design.md#7-delivery-coverage)
+from [ORB-11333] determines whether before-PR coverage maps to actual landing
 content. Trigger code consumes that validated result; it does not infer review
 from a tag, patch ID, timestamp, or task status. Exclude proven patch coverage
 from redundant review counts, retain neighboring context, and keep QA independent.
@@ -528,20 +528,21 @@ drift from task completion time. No OR/AND trigger language is proposed.
 | Child fails, wrapper propagates failure, retry remains | One unsettled incident, no diagnosis. Final retry exhaustion settles it; one triage batch includes affected tasks. |
 | Operator intentionally cancels instead / triage itself fails | Intentional cancellation is filtered; triage failure retries or escalates the original incident without recursive diagnosis. |
 
-## 10. Mode, compatibility, and migration
+## 10. Compatibility and migration
 
-[Operation mode](../operation-mode/3_vision.md), proposed in [ORB-11314], supplies
-cadence, thresholds, batch/resource defaults and scoped grants. Resolve mode
-defaults through its global → workspace → run rules, then explicit definition
-values override operational defaults. An explicit operator invocation may provide
-an audited override for that invocation, subject to the same hard ceilings. Never
-let an unrelated run's override retune global scheduled consumers. Record each
-effective value's source, definition hash and policy revision at batch admission.
+Cadence, thresholds and batch/resource defaults come from the definition
+itself. Operation mode, which once proposed supplying them as global →
+workspace → run defaults plus scoped grants, was removed on 2026-09-21
+([orbit-core decisions](../orbit-core/4_decisions.md)). An explicit operator
+invocation may provide an audited override for that invocation, subject to the
+same hard ceilings. Never let an unrelated run's override retune global
+scheduled consumers. Record each effective value's source, definition hash and
+policy revision at batch admission.
 
 Authority is an intersection, not a numeric precedence ladder: definition enabled,
-host ownership, local pause, applicable grant/window, job availability, capacity,
-task approval and repository rules all constrain action. Neither a lower threshold
-nor an autonomous preset creates permission to promote/commit/merge. Current
+host ownership, local pause, job availability, capacity,
+task approval and repository rules all constrain action. A lower threshold
+creates no permission to promote/commit/merge. Current
 `--complete` is default-off; triggers do not alter it. Orbit task PRs target
 `agent-main`; this task's PR is left unmerged, with no auto-merge or scheduled
 agent review. A finding task is not authorization to implement it. Routine
@@ -639,7 +640,6 @@ to change; implementation scope and defaults still require approval.
 ## Task References
 
 - [ORB-11315] — specifies shared triggers, batch/coverage and pilot/triage semantics.
-- [ORB-11314] — proposes operation-mode defaults and authorization snapshots.
-- [ORB-11316] — proposes review timing and content-specific coverage exclusions.
+- [ORB-11333] — implements review timing and content-specific coverage exclusions.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

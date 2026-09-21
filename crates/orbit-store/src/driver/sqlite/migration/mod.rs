@@ -1612,6 +1612,20 @@ fn apply_audit_plugin_grants(conn: &Connection) -> Result<(), OrbitError> {
     )
 }
 
+/// v26 `remove_operation_mode` migration (ORB-12772): drop the operation-mode
+/// grant and recovery-ledger tables. The `feature_schema_meta` rows for the
+/// retired `operation` feature stay: that ledger is immutable by design, and
+/// nothing reads the feature any more.
+fn apply_remove_operation_mode(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            DROP TABLE IF EXISTS operation_grants;
+            DROP TABLE IF EXISTS operation_recovery;
+        "#,
+    )
+    .map_err(|error| OrbitError::Store(error.to_string()))
+}
+
 /// v23 `audit_machine_name_columns` migration (ORB-12725): *host* is reserved
 /// for the MCP-host/process sense, so the two audit columns that carry a
 /// machine's display name are renamed to say so. A rename rather than an

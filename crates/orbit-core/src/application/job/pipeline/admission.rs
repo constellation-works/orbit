@@ -120,14 +120,10 @@ impl OrbitRuntime {
                         attempt: 1,
                         scheduled_at: submitted_at,
                         input: Some(input.clone()),
-                        authority: None,
                     })? {
                     ChildJobRunAdmissionOutcome::Admitted(run) => *run,
                     ChildJobRunAdmissionOutcome::AdmissionsStopped => {
                         return Ok(ChildSubmission::Skipped("admissions_stopped".to_string()));
-                    }
-                    ChildJobRunAdmissionOutcome::Refused { reason } => {
-                        return Ok(ChildSubmission::Skipped(reason));
                     }
                 }
             } else if let Some(key) = action_key {

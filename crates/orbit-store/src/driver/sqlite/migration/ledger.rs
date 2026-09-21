@@ -244,12 +244,22 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_audit_plugin_grants,
     },
+    // Operation mode was removed on 2026-09-21 (ORB-12772): the grant and
+    // recovery-ledger tables its `operation` feature migration created go
+    // with it. Breaking: an older binary reads `operation_grants` at handoff
+    // commit and would fail there rather than silently skipping the check.
+    Migration {
+        version: 26,
+        name: "remove_operation_mode",
+        compat: MigrationCompatibility::Breaking,
+        apply: super::apply_remove_operation_mode,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 25;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 26;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

@@ -66,7 +66,7 @@ A delivery review definition mints its tasks with the crew named in its own
 template, exactly like any other auto-task. `operation.review_crew` is a
 different setting: it selects the reviewer for `before-pr` review only and does
 not apply to `after-landing` review, which runs through this definition. See
-[operation-mode operations](../operation-mode/5_operations.md).
+the [review gate](../review-gate/2_design.md).
 
 `coverage` is `integrated_qa_v1` or `landed_code_review_v1`. Threshold must be
 positive and at most `max_items` (maximum 50). Maximum wait is positive and retries
@@ -436,8 +436,8 @@ substitutes for review.
 
 ## Before-PR coverage exclusions [ORB-11333]
 
-Passed before-PR certificates (see [operation-mode operations
-§10](../operation-mode/5_operations.md)) are the only exclusion producer.
+Passed before-PR certificates (see the [review
+gate](../review-gate/2_design.md)) are the only exclusion producer.
 When observation first sees a landing, Core looks up passed certificates
 whose final tree equals the landed tree, verifies that the certificate's
 objects still exist and every task still has the reviewed meaning, and asks
@@ -524,8 +524,7 @@ every type; unknown keys, blank tags, and a tag both required and excluded fail
 the definition closed, and a non-default block is rejected on any other trigger kind.
 One resolved value governs observation (the status filter and the
 `task_ineligible` withhold), the admission recheck, the prepare/apply
-fingerprint of a claimed run, and operation-mode promotion, which resolves the
-predicate of the consumer whose assessment it is judging. The resolved
+fingerprint of a claimed run. The resolved
 predicate is material input: a non-default value is folded into the
 fingerprint, so changing it invalidates assessments accepted under the old
 one, while the default adds nothing and keeps the fingerprints accepted before
@@ -600,15 +599,14 @@ reports missing or invalid partitions.
 state projection: pending fingerprints, fresh/unready assessments, withheld
 reasons, consumed attempts, absolute deadlines, continuation and immutable
 receipt links. `orbit clock tick --dry-run` and `orbit routine show` also list
-the batch: each member the pass would admit with why it is due (`settled`,
-`max_wait` or `grant`), or, while an attempt is in flight, each admitted
+the batch: each member the pass would admit with why it is due (`settled` or
+`max_wait`), or, while an attempt is in flight, each admitted
 member, beside the existing `debouncing` / `fresh` / `needs_attention`
 reasons (`batch` in the JSON report). Usage stays unknown when no measurement exists. Readiness is
 positive evidence only; this trigger grants no promotion, commit, merge or
-implementation authority. Operation-mode grants [ORB-11332] are separate
-records: a valid grant supplies this evaluator a scope and due interval and
-lets the drain promote in-scope tasks whose accepted assessment is still fresh;
-see [operation-mode operations](../operation-mode/5_operations.md).
+implementation authority. Operation mode, which once supplied this evaluator a
+grant scope and due interval and let the drain promote in-scope tasks, was
+removed on 2026-09-21 ([orbit-core decisions](../orbit-core/4_decisions.md)).
 
 Keep definitions disabled for rollout review. Inspect `orbit routine list`,
 `orbit routine show <name> --json` (which reports the resolved owner, branch and

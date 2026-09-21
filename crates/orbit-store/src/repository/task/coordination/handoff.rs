@@ -191,7 +191,6 @@ impl TaskCommitBoundary {
         state: &ClaimInspection,
         handoff: &TaskHandoff,
         params: &mut TaskCoordinationCommitParams,
-        effects: &mut ClaimCommitEffects,
     ) -> Result<(), OrbitError> {
         let observation = self.observe_handoff(auth, &handoff.candidate)?;
         let bound = state
@@ -269,26 +268,14 @@ impl TaskCommitBoundary {
             required_commands: observation.required_commands.clone(),
             accepted_at: Utc::now(),
         };
-        params.rows.push(row(HANDOFF, &auth.claim_id, &accepted)?);
+        // Managed completion was authorized by an operation-mode grant; with
+        // grants removed [ORB-12772] nothing can authorize a `done` contract,
+        // so it is refused before the handoff row exists rather than being
+        // silently downgraded to a review handoff the worker did not request.
         if ship.completion == "done" {
-            let grant_id = ship
-                .authorization_reference
-                .ok_or_else(|| invalid("completion authority missing"))?;
-            let grant = self
-                .store
-                .operation_grant(&self.workspace_id, &grant_id)?
-                .ok_or_else(|| invalid("completion grant missing"))?;
-            if !grant.completion_allowed() || !grant.covers(&auth.task_id) {
-                return Err(invalid("completion grant refused"));
-            }
-            effects.completion_grant = Some((grant_id.clone(), auth.task_id.clone()));
-            self.add_handoff_authorization(
-                &accepted,
-                &grant.actor,
-                HandoffAuthorizationSource::Grant { grant_id },
-                params,
-            )?;
+            return Err(invalid("managed completion unsupported"));
         }
+        params.rows.push(row(HANDOFF, &auth.claim_id, &accepted)?);
         Ok(())
     }
 
@@ -464,7 +451,6 @@ impl TaskCommitBoundary {
         &self,
         auth: &ClaimInvocation,
         state: &ClaimInspection,
-        effects: &mut ClaimCommitEffects,
     ) -> Result<(), OrbitError> {
         if !auth.operator || state.landing_invalidated {
             return Err(invalid("landing authority revoked"));
@@ -482,8 +468,10 @@ impl TaskCommitBoundary {
         {
             return Err(invalid("completion authorization scope mismatch"));
         }
-        if let HandoffAuthorizationSource::Grant { grant_id } = authorization.source {
-            effects.completion_grant = Some((grant_id, auth.task_id.clone()));
+        // A grant-sourced authorization persisted before operation mode was
+        // removed can no longer be rechecked, so it fails closed.
+        if let HandoffAuthorizationSource::Grant { .. } = authorization.source {
+            return Err(invalid("managed completion unsupported"));
         }
         Ok(())
     }

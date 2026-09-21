@@ -378,7 +378,7 @@ Each rail subtab is its own hash route:
 | **Keys** | `#config/keys` | Every settable key with its type, section, description, and accepted values. |
 
 The Effective view opens with a **layers strip** naming both files, then one
-panel per section — Delivery, Crews, Execution, Operation mode,
+panel per section — Delivery, Crews, Execution, Review,
 Housekeeping — and a read-only **Paths** grid. Each row carries its value,
 the layer that supplied it, and the registry's one-line description. The
 source chip is the provenance: `workspace`, `global`, `default` (no file

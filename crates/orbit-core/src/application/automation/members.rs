@@ -74,7 +74,6 @@ pub(crate) fn evaluate(
             enabled: definition.enabled && owned,
             dry_run,
             now,
-            constraints: Default::default(),
         },
     )
     .map_err(automation_error_to_orbit)

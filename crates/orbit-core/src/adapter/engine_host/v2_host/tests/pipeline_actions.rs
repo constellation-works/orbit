@@ -315,7 +315,6 @@ fn atomic_child_admission(parent_run_id: &str, blocking: bool) -> ChildJobRunAdm
         attempt: 1,
         scheduled_at: chrono::Utc::now(),
         input: Some(json!({ "task_ids": ["ORB-1", "ORB-2"] })),
-        authority: None,
     }
 }
 
@@ -330,11 +329,6 @@ fn admitted_output(outcome: ChildJobRunAdmissionOutcome) -> Value {
         ChildJobRunAdmissionOutcome::AdmissionsStopped => json!({
             "skipped": true,
             "reason": "admissions_stopped",
-            "job_name": "task_auto_pipeline",
-        }),
-        ChildJobRunAdmissionOutcome::Refused { reason } => json!({
-            "skipped": true,
-            "reason": reason,
             "job_name": "task_auto_pipeline",
         }),
     }

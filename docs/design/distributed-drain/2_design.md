@@ -710,7 +710,7 @@ hide exactly the host-specific failures the operator needs to see.
 What is removed: `task_triage_pipeline.yaml`, `routines/task_triage.yaml` (shipped `enabled:
 false`), the `list_triage_candidates` / `triage_failed_runs` / `apply_triage_dispositions`
 activities, the triage recursion guard in `application/automation/incidents.rs`, the seed entry in
-`application/routine.rs`, and the references in `CONFIG.md`, operation-mode, automation-triggers,
+`application/routine.rs`, and the references in `CONFIG.md`, automation-triggers,
 and the orbit-orchestrate recovery reference.
 
 What replaces it: nothing automatic. A failed run parks its task in `blocked` with the failure and

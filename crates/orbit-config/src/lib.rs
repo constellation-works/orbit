@@ -45,8 +45,8 @@
 //! - `registry` — the fixed-key registry and its admitted [`ConfigSnapshot`].
 //! - `layering` — document reading, per-key merge, replace-only rules, and
 //!   source provenance.
-//! - `operation` — typed operation-mode preferences and their layered
-//!   preset-reset resolution [ORB-11332].
+//! - `operation` — typed `[operation]` review preferences and their layered
+//!   resolution [ORB-11333].
 //! - `resolved` — the consumer-facing [`ResolvedConfig`] views.
 //! - `persistence` — artifact path resolution from the two roots.
 //! - `store` — comment-preserving [`ConfigStore`] edits and atomic save.
@@ -80,9 +80,8 @@ pub use layering::{
     EffectiveConfigValue, ShadowReason, ShadowedConfigValue, load_effective_config,
 };
 pub use operation::{
-    CompletionPreference, DeliveryCap, OPERATION_POLICY_VERSION, OperationField,
-    OperationFieldSource, OperationLayer, OperationLayerSource, OperationPolicy, OperationPreset,
-    PreparationPreference, PromotionPreference, RecoveryPreference, ReviewPolicy,
+    OPERATION_POLICY_VERSION, OperationField, OperationLayer, OperationLayerSource,
+    OperationPolicy, ReviewPolicy,
 };
 pub use persistence::PersistenceConfig;
 pub use plugins::{
