@@ -11,7 +11,7 @@ use orbit_automation::routines::loader::{
 };
 use orbit_common::OrbitError;
 use orbit_types::workspace::Workspace;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// Registered workspaces with their runtimes, ready for routine discovery
@@ -41,9 +41,49 @@ pub fn collect_routines(workspaces: &[(Workspace, OrbitRuntime)]) -> RoutineColl
             orbit_dir: runtime.shared_root(),
         })
         .collect::<Vec<_>>();
-    let mut collection = collect_from_sources(&sources, &job_names_by_root);
+    let active_plugins = active_plugin_namespaces(workspaces);
+    let mut collection =
+        collect_from_sources(&sources, &job_names_by_root, &move |path, _definition| {
+            inactive_plugin_skip(path, &active_plugins)
+        });
     narrow_retired_advice(&sources, &mut collection);
     collection
+}
+
+/// Every plugin namespace active on any discovered workspace's runtime.
+///
+/// Plugin installs are host-local, so one workspace's view is the host's, but
+/// discovery may open several and a plugin enabled for any of them is active
+/// for the host.
+fn active_plugin_namespaces(workspaces: &[(Workspace, OrbitRuntime)]) -> BTreeSet<String> {
+    workspaces
+        .iter()
+        .flat_map(|(_, runtime)| {
+            runtime
+                .plugin_load()
+                .active()
+                .map(|plugin| plugin.namespace().to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Skip a definition a plugin seeded while that plugin is disabled or removed.
+///
+/// The seeded file stays on disk with the operator's edits; it simply does not
+/// fire, and the reason names the plugin (design §4.5). This is deliberately
+/// not a load error: a disabled plugin is an ordinary operator state, not a
+/// broken workspace.
+fn inactive_plugin_skip(path: &Path, active: &BTreeSet<String>) -> Option<String> {
+    let (namespace, version) = crate::application::plugin::read_definition_provenance(path)?;
+    if active.contains(&namespace) {
+        return None;
+    }
+    Some(format!(
+        "seeded by plugin:{namespace}@{version}, which is not enabled on this host; run \
+         `orbit plugin enable {namespace}` to fire it again, or delete '{}'",
+        path.display()
+    ))
 }
 
 /// Discovery states the synchronization step for every retired definition
@@ -86,23 +126,28 @@ fn collect_from_sources(
         PathBuf,
         crate::application::job::catalog::V2JobExecutionMembership,
     >,
+    skip: &orbit_automation::routines::loader::RoutineSkipRule<'_>,
 ) -> RoutineCollection {
-    orbit_automation::routines::loader::collect_routines(sources, &|root, job| {
-        job_names_by_root
-            .get(root)
-            .map(|membership| RoutineCatalogLookup {
-                resolves: membership.names.contains(job),
-                error: (!membership.errors.is_empty()).then(|| {
-                    membership
-                        .errors
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                }),
-            })
-            .unwrap_or_default()
-    })
+    orbit_automation::routines::loader::collect_routines_with_skips(
+        sources,
+        &|root, job| {
+            job_names_by_root
+                .get(root)
+                .map(|membership| RoutineCatalogLookup {
+                    resolves: membership.names.contains(job),
+                    error: (!membership.errors.is_empty()).then(|| {
+                        membership
+                            .errors
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    }),
+                })
+                .unwrap_or_default()
+        },
+        skip,
+    )
 }
 
 fn preload_job_execution_names(

@@ -140,7 +140,32 @@ pub fn show_plugin(runtime: &OrbitRuntime, name: &str) -> Result<PluginSummary, 
 /// One row per plugin, naming the step that would make it active, or the
 /// finding an active plugin carries (an unsandboxed backend).
 pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, OrbitError> {
-    Ok(list_plugins(runtime)?
+    let summaries = list_plugins(runtime)?;
+    // A skill link whose target is gone is invisible to the skill catalog's
+    // own doctor — it only walks seeded trees — and to the plugin record,
+    // which says nothing about the provider discovery roots (§3).
+    let mut dangling = Vec::new();
+    for summary in &summaries {
+        if summary.install_path.is_empty() {
+            continue;
+        }
+        for (link, target) in
+            super::skills::dangling_plugin_skill_links(Path::new(&summary.install_path))
+        {
+            dangling.push(PluginDoctorResult {
+                plugin: summary.name.clone(),
+                status: summary.status,
+                message: format!(
+                    "skill link '{}' points at '{}', which no longer exists; run `orbit plugin \
+                     enable {}` to relink it, or delete the link",
+                    link.display(),
+                    target.display(),
+                    summary.name
+                ),
+            });
+        }
+    }
+    let mut rows: Vec<PluginDoctorResult> = summaries
         .into_iter()
         .map(|summary| {
             let message = summary.diagnostic.clone().unwrap_or_else(|| match summary.status {
@@ -171,7 +196,9 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
                 message,
             }
         })
-        .collect())
+        .collect();
+    rows.extend(dangling);
+    Ok(rows)
 }
 
 /// Validate a plugin directory without installing it.
@@ -189,17 +216,28 @@ pub fn validate_plugin_dir(
     if let Some(message) = unmet_requirement(&plugin) {
         warnings.push(message);
     }
-    if plugin.manifest.spec.definitions.is_some()
-        || plugin.manifest.spec.web.is_some()
-        || plugin.manifest.spec.config.is_some()
-        || !plugin.manifest.spec.skills.is_empty()
-        || !plugin.manifest.spec.tests.is_empty()
-    {
+    // Definitions, skills and config are installed by this Orbit; `web` and
+    // `tests` are parsed and still inert, so only those two get the note.
+    if plugin.manifest.spec.web.is_some() || !plugin.manifest.spec.tests.is_empty() {
         warnings.push(
-            "`definitions`, `skills`, `config`, `web` and `tests` are accepted by this Orbit but \
-             not yet installed; only `spec.tools` reaches the tool surface today"
+            "`web` and `tests` are accepted by this Orbit but not yet installed; dashboard \
+             panels and conformance goldens arrive in a later phase"
                 .to_string(),
         );
+    }
+    match super::load_plugin_definitions(&plugin, &super::shipped_job_names()) {
+        Ok(definitions) => {
+            if !definitions.routines.is_empty() || !definitions.auto_tasks.is_empty() {
+                warnings.push(format!(
+                    "`orbit plugin enable {}` seeds {} routine(s) and {} auto-task(s) as \
+                     `enabled: false`; review each before switching it on",
+                    plugin.namespace(),
+                    definitions.routines.len(),
+                    definitions.auto_tasks.len()
+                ));
+            }
+        }
+        Err(message) => return Err(OrbitError::InvalidInput(message)),
     }
     let required = plugin.manifest.required_grants();
     if !required.is_empty() {

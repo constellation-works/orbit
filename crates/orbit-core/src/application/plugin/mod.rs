@@ -4,20 +4,38 @@
 //! Install is global only: a plugin lives once per host under
 //! `~/.orbit/plugins/<ns>/<version>/` and every workspace on that host shares
 //! it. The repository commits only `.orbit/plugins.yaml`.
+//!
+//! Beyond tools, a plugin contributes definitions ([`definitions`]), seeded
+//! schedules ([`seed`]), skills ([`skills`]) and a `[plugins.<ns>]` config
+//! section ([`config`]). Everything a plugin contributes is refused as a unit:
+//! a manifest whose definitions break the §4.5 rules registers no tools
+//! either, because half a plugin is not a state an operator can reason about.
 
 mod inspect;
 mod install;
-mod lifecycle;
+pub(crate) mod lifecycle;
+pub(crate) mod seed;
+pub(crate) mod skills;
 
 #[cfg(test)]
 mod tests;
 
+pub(crate) use crate::runtime::plugin_definitions::shipped_job_names;
+/// The definition rules and the provenance header live in the runtime kernel:
+/// the plugin host applies them while it builds the tool surface, and the
+/// lifecycle here reads the same rules when it seeds. Re-exported so one
+/// import path serves the whole use case.
+pub use crate::runtime::plugin_definitions::{
+    PluginDefinition, PluginDefinitionSet, load_plugin_definitions, read_definition_provenance,
+    seeded_definition_name,
+};
 pub use inspect::{
     PluginDoctorResult, PluginPermissionSummary, PluginSummary, PluginToolSummary,
     PluginValidationReport, list_plugins, plugin_doctor, show_plugin, validate_plugin_dir,
 };
 pub use install::{PluginAddOptions, install_plugin};
 pub use lifecycle::{
-    PluginMigrateRequest, PluginSyncOutcome, disable_plugin, enable_plugin,
-    migrate_plugin_sidecars, remove_plugin, sync_plugins,
+    PluginEnableOptions, PluginEnableResult, PluginMigrateRequest, PluginSyncOutcome,
+    disable_plugin, enable_plugin, migrate_plugin_sidecars, remove_plugin, sync_plugins,
 };
+pub use seed::{PluginSeedAction, PluginSeedOutcome, seed_plugin_definitions};

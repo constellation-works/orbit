@@ -79,6 +79,14 @@ pub(crate) fn run_deterministic(
         }
     }
     match deterministic_action {
+        // The one deterministic action a plugin contributes behaviour through
+        // (design `docs/design/plugins/1_scope.md` §4.5). It reaches a plugin
+        // tool and nothing else: an ordinary built-in still goes through
+        // `orbit_tool_call`, so a plugin activity cannot use this variant to
+        // borrow Orbit's own authority under plugin provenance.
+        CoreDeterministicAction::PluginToolCall => {
+            plugin_tool_call(runtime, action, config, input, tool_context)
+        }
         CoreDeterministicAction::OrbitToolCall => {
             // The `config` block shape (see deterministic_reference.yaml):
             //   config: { tool_name: <name>, args: <object> }
@@ -427,6 +435,61 @@ pub(crate) fn run_deterministic(
             pipeline_actions::gate_starvation_fail(runtime, action, input)
         }
     }
+}
+
+/// `plugin.tool_call { tool: <ns>.<verb>, input: {…} }` (§4.5).
+///
+/// The call goes through the ordinary audited tool dispatch, so the row it
+/// writes carries the plugin's provenance and the governed-operation row for
+/// the tool's `execution_kind` decides it. A name the registry does not hold
+/// as a plugin tool is refused here rather than executed: the action exists to
+/// let a routine drive a plugin, not to widen what a deterministic step may
+/// call.
+fn plugin_tool_call(
+    runtime: &OrbitRuntime,
+    action: &str,
+    config: &Value,
+    input: &Value,
+    tool_context: ToolContext,
+) -> Result<Value, DispatchError> {
+    let failed = |message: String| DispatchError::DeterministicActionFailed {
+        action: action.to_string(),
+        message,
+    };
+    let tool_name = input
+        .get("tool")
+        .or_else(|| config.get("tool"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| failed("missing `tool` in config or input".to_string()))?
+        .to_string();
+    let args = input
+        .get("input")
+        .or_else(|| config.get("input"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    if runtime.tool_registry().plugin_binding(&tool_name).is_none() {
+        return Err(failed(format!(
+            "tool '{tool_name}' is not a plugin tool on this host; `plugin.tool_call` dispatches \
+             only tools contributed by an installed plugin — check `orbit plugin list`, or use \
+             `orbit_tool_call` for a built-in tool"
+        )));
+    }
+
+    runtime
+        .execute_in_process_tool_dispatch(
+            &tool_name,
+            args,
+            crate::adapter::command::ToolEntryPoint::Cli,
+            tool_context.session_context.clone(),
+            |args| {
+                runtime.run_tool_with_context_and_role(&tool_name, args, Role::Admin, tool_context)
+            },
+        )
+        .map(|outcome| outcome.value)
+        .map_err(|error| failed(error.to_string()))
 }
 
 /// [ORB-11187] This activity resolves the *workspace's* shipping defaults —

@@ -28,7 +28,8 @@ pub use dispatch::{
     mark_tool_audit_recorded, take_tool_audit_recorded, trusted_mcp_audit_context,
 };
 pub use plugin::{
-    PluginAddOptions, PluginDoctorResult, PluginMigrateRequest, PluginPermissionSummary,
+    PluginAddOptions, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
+    PluginMigrateRequest, PluginPermissionSummary, PluginSeedAction, PluginSeedOutcome,
     PluginSummary, PluginSyncOutcome, PluginToolSummary, PluginValidationReport,
     execute_global_plugin_tool, host_plugin_mcp_definitions, migrate_plugin_sidecars,
 };

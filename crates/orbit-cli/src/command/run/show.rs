@@ -1,6 +1,6 @@
 use clap::Args;
 use orbit_core::runtime::run_audit::RunProviderProcess;
-use orbit_core::{NotFoundKind, OrbitError, OrbitRuntime};
+use orbit_core::{CatalogReferenceLayer, NotFoundKind, OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
 
 use crate::command::{Block, CommandOut, Execute, Payload};
@@ -15,7 +15,7 @@ use super::steps::{
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape: {\"run\":<job-run>,\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON shape: {\"run\":<job-run>,\"catalog_layers\":[{\"reference\":\"job:…|activity:…\",\"layer\":\"workspace|shipped|plugin:<ns>|explicit\",\"shadows\":[…]}],\"pipeline_state\":<state|null>,\"steps\":[<step>],\"steps_source\":\"record|audit\",\"provider_processes\":[{\"pid\":...,\"liveness\":\"alive|exited|unknown\",...}]} or {\"run_id\":...,\"job_id\":...,\"step\":<step>,\"step_output\":<json|null>} with -s.\nThe State: line above is `.run.state`, not a top-level `.state`; `.pipeline_state` is the pipeline checkpoint document and is null for a run that keeps none. `.steps` are the steps this view renders, and `.steps_source` says whether they came from the run record or its audit trail.\nExamples:\n  orbit run show\n  orbit run show jrun-20260426-0631\n  orbit run show jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunShowArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
@@ -68,8 +68,18 @@ pub(crate) fn run_show_payload(
 
     let run_projection =
         cli_job_run_to_json_with_activity_provenance(runtime, &run, state.as_ref());
+    // Which catalog layer answered for each reference this run's job makes,
+    // and what that layer shadowed. A plugin activity a workspace file
+    // overrides is otherwise invisible (plugins design §8).
+    let catalog_layers = runtime
+        .catalog_reference_layers(&run.job_id)
+        .unwrap_or_default();
     let doc = json!({
         "run": run_projection,
+        "catalog_layers": catalog_layers
+            .iter()
+            .map(CatalogReferenceLayer::to_json)
+            .collect::<Vec<_>>(),
         "pipeline_state": state,
         // The steps the view below renders, whichever source answered. The
         // record's own `run.steps` stay exactly as stored, so a caller can
@@ -101,6 +111,7 @@ pub(crate) fn run_show_payload(
     {
         header.push('\n');
     }
+    header.push_str(&catalog_layer_lines(&catalog_layers));
     header.push_str(&live_provider_process_lines(&provider_processes));
     header.push_str(&agent_invocation_lines(&doc["run"]["agent_invocation"]));
     let exclusion_lines = format_backlog_exclusion_lines(state.as_ref());
@@ -124,6 +135,24 @@ pub(crate) fn run_show_payload(
         ],
     )
     .into())
+}
+
+/// One line per catalog reference, naming the layer that resolved it.
+///
+/// Printed for every run, not only one that touches a plugin: "which file is
+/// this step actually running" is the question, and the answer is the same
+/// shape whether a plugin is involved or not.
+fn catalog_layer_lines(layers: &[CatalogReferenceLayer]) -> String {
+    layers
+        .iter()
+        .map(|layer| {
+            format!(
+                "\n{} {}",
+                crate::output::color::bold("Catalog:"),
+                layer.to_line()
+            )
+        })
+        .collect()
 }
 
 /// The operator-facing result of an agent invocation run [ORB-11354].

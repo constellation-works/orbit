@@ -20,9 +20,10 @@ mod tests;
 pub use grant::{PluginGrant, PluginGrantRequest, parse_grants};
 pub use manifest::{
     MANIFEST_FILE_NAME, MANIFEST_KIND, MANIFEST_SCHEMA_VERSION, PluginBackend, PluginBackendType,
-    PluginCliShape, PluginExecutionKind, PluginFsPermissions, PluginManifest, PluginManifestError,
-    PluginMcpScope, PluginMetadata, PluginNetworkPermission, PluginOrigin, PluginPermissions,
-    PluginRequires, PluginSandbox, PluginSpec, PluginToolSpec, PluginUnusedSections,
+    PluginCliShape, PluginConfigSection, PluginDefinitions, PluginExecutionKind,
+    PluginFsPermissions, PluginManifest, PluginManifestError, PluginMcpScope, PluginMetadata,
+    PluginNetworkPermission, PluginOrigin, PluginPermissions, PluginRequires, PluginSandbox,
+    PluginSpec, PluginToolSpec, plugin_provenance_label, validate_plugin_relative_path,
 };
 pub use namespace::{
     FIRST_PARTY_PUBLISHER, ORBIT_NAMESPACE_PREFIX, RESERVED_CLI_COMMANDS, is_valid_namespace,

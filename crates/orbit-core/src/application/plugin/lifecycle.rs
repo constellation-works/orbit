@@ -2,8 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
+use orbit_automation::auto_tasks::loader::AUTO_TASKS_DIR;
+use orbit_automation::routines::loader::ROUTINES_DIR;
 use orbit_common::OrbitError;
-use orbit_tools::plugin::{load_sidecar_manifest, migrate_sidecars};
+use orbit_tools::plugin::{load_plugin_dir, load_sidecar_manifest, migrate_sidecars};
 use orbit_types::plugin::{MANIFEST_FILE_NAME, PluginStatus, parse_grants};
 use orbit_types::record::OrbitEvent;
 
@@ -11,26 +13,125 @@ use crate::OrbitRuntime;
 use crate::runtime::plugin_host::{plugin_current_link, read_pin_file};
 
 use super::inspect::{PluginSummary, show_plugin};
+use super::seed::{PluginSeedOutcome, seed_plugin_definitions};
+use super::skills::{PluginSkillLink, link_plugin_skills, unlink_plugin_skills};
+use crate::runtime::plugin_definitions::load_plugin_definitions;
 
-/// Record the operator's grants and put the plugin's tools on the surface at
-/// the next runtime build. The recorded grants are the only authority the
-/// loader consults (§4.1): a tool whose plugin still lacks a required grant
-/// registers inactive with a diagnostic naming it.
+/// What `orbit plugin enable` was asked to do beyond recording grants.
+#[derive(Debug, Clone, Default)]
+pub struct PluginEnableOptions {
+    /// Grants to record (`--grant`).
+    pub grants: Vec<String>,
+    /// Overwrite a seeded definition the operator has since edited (§3).
+    pub force: bool,
+}
+
+/// Record the operator's grants, seed the plugin's schedules and link its
+/// skills, then put its tools on the surface at the next runtime build.
+///
+/// The recorded grants are the only authority the loader consults (§4.1): a
+/// tool whose plugin still lacks a required grant registers inactive with a
+/// diagnostic naming it. Seeding writes each routine and auto-task once with
+/// `enabled: false` and a provenance header, and never silently overwrites a
+/// file the operator edited.
 pub fn enable_plugin(
     runtime: &OrbitRuntime,
     name: &str,
-    grants: &[String],
-) -> Result<PluginSummary, OrbitError> {
-    let grants: Vec<String> = parse_grants(grants)
+    options: &PluginEnableOptions,
+) -> Result<PluginEnableResult, OrbitError> {
+    let grants: Vec<String> = parse_grants(&options.grants)
         .map_err(OrbitError::InvalidInput)?
         .into_iter()
         .map(|grant| grant.as_str().to_string())
         .collect();
-    set_enabled(runtime, name, true, &grants)
+    let summary = set_enabled(runtime, name, true, &grants)?;
+
+    let installed = runtime
+        .stores()
+        .plugins()
+        .get_plugin(name)?
+        .ok_or_else(|| missing_install(runtime, name))?;
+    let contributions =
+        apply_enabled_contributions(runtime, Path::new(&installed.install_path), options.force)?;
+
+    Ok(PluginEnableResult {
+        summary,
+        seeded: contributions.seeded,
+        skills: contributions.skills,
+        warnings: contributions.warnings,
+    })
 }
 
+/// What a plugin contributes to the workspace once it is enabled.
+#[derive(Debug, Clone, Default)]
+pub(super) struct PluginContributions {
+    pub(super) seeded: Vec<PluginSeedOutcome>,
+    pub(super) skills: Vec<PluginSkillLink>,
+    pub(super) warnings: Vec<String>,
+}
+
+/// Seed the plugin's schedules and link its skills.
+///
+/// Applied at the moment the operator enables the plugin rather than at the
+/// next runtime build: enabling is when they accepted what it contributes, and
+/// a seeded file has to exist before the clock tick can see it. `orbit plugin
+/// add --enable` runs the same path, so the two ways of enabling leave the
+/// workspace in the same state.
+pub(super) fn apply_enabled_contributions(
+    runtime: &OrbitRuntime,
+    install_path: &Path,
+    force: bool,
+) -> Result<PluginContributions, OrbitError> {
+    let plugin = load_plugin_dir(install_path)?;
+    let definitions =
+        load_plugin_definitions(&plugin, &super::shipped_job_names()).map_err(|message| {
+            OrbitError::InvalidInput(format!(
+                "plugin '{}' is refused: {message}",
+                plugin.namespace()
+            ))
+        })?;
+    let seeded = seed_plugin_definitions(
+        &plugin,
+        &definitions,
+        &runtime.shared_root().join(ROUTINES_DIR),
+        &runtime.paths().local_dir.join(AUTO_TASKS_DIR),
+        force,
+    )?;
+    let (skills, mut warnings) = link_plugin_skills(&plugin);
+    warnings.extend(seeded.iter().filter_map(|outcome| outcome.warning.clone()));
+    Ok(PluginContributions {
+        seeded,
+        skills,
+        warnings,
+    })
+}
+
+/// Everything `orbit plugin enable` did, beyond flipping the record.
+#[derive(Debug, Clone)]
+pub struct PluginEnableResult {
+    pub summary: PluginSummary,
+    /// Routines and auto-tasks written (or deliberately preserved).
+    pub seeded: Vec<PluginSeedOutcome>,
+    /// Skill links maintained in the provider discovery roots.
+    pub skills: Vec<PluginSkillLink>,
+    /// Non-fatal problems an operator has to know about.
+    pub warnings: Vec<String>,
+}
+
+/// Take the plugin off the surface: its tools stop registering, its seeded
+/// definitions are skipped with a warning by the clock tick, and its skills
+/// are unlinked from provider discovery.
+///
+/// The seeded files themselves stay: they are workspace content that may
+/// carry an operator's edits, and a re-enable must not have to recreate them
+/// (§3).
 pub fn disable_plugin(runtime: &OrbitRuntime, name: &str) -> Result<PluginSummary, OrbitError> {
-    set_enabled(runtime, name, false, &[])
+    let installed = runtime.stores().plugins().get_plugin(name)?;
+    let summary = set_enabled(runtime, name, false, &[])?;
+    if let Some(installed) = installed {
+        unlink_plugin_skills(Path::new(&installed.install_path))?;
+    }
+    Ok(summary)
 }
 
 fn set_enabled(

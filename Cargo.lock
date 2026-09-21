@@ -1870,6 +1870,7 @@ dependencies = [
 name = "orbit-config"
 version = "0.23.0"
 dependencies = [
+ "jsonschema",
  "orbit-common",
  "orbit-types",
  "serde",

@@ -7,7 +7,7 @@ last_validated: 2026-09-21
 
 # Scope: Orbit plugin standard
 
-Status: phases 1 and 2 landed (2026-09-21); phases 3-5 remain proposal.
+Status: phases 1-3 landed (2026-09-21); phases 4-5 remain proposal.
 Namespace, dashboard-feature, install and mirror questions resolved 2026-09-20.
 Bearing: [Operations as data, not inherent methods](../orbit-core/4_decisions.md) (orbit-core ADR).
 Precedents: `*.orbit-tool.yaml` sidecar manifests (orbit-graph ships three); the shelved
@@ -351,11 +351,11 @@ tool, one panel, one disabled auto-task, one skill stub, a passing conformance t
 | `canonical_mcp_tool_definitions()` memoised in a `OnceLock`, external tools never in `tools/list` | MCP surface reads the registry; plugin tools advertised with their scope |
 | `ExternalTool` unsandboxed, 15 s, no output validation | `PluginBackend::{Exec,Mcp}` with sandbox profile, schema validation, versioned envelope *(done)* |
 | `Commands` enum only | one `Plugin(PluginGroupArgs)` variant that builds clap subcommands from loaded manifests |
-| `define_config_settings!` closed | dynamic `plugins.<ns>.<key>` admission validated by the plugin's JSON Schema, provenance-aware |
+| `define_config_settings!` closed | dynamic `plugins.<ns>.<key>` admission validated by the plugin's JSON Schema, provenance-aware *(done)* |
 | `GOVERNED_OPERATIONS` per-op rows | two generic plugin rows keyed on `execution_kind` |
-| `DeterministicAction` closed | `plugin.tool_call` |
-| `RETIRED_ROUTINE_JOBS` only skip path | provenance-aware skip for disabled plugins |
-| `DEFAULT_*_FILES` + `skill_link_roots` | managed-asset reconciliation accepts a plugin layer with `plugin:<ns>@<version>` provenance |
+| `DeterministicAction` closed | `plugin.tool_call` *(done)* |
+| `RETIRED_ROUTINE_JOBS` only skip path | provenance-aware skip for disabled plugins *(done)* |
+| `DEFAULT_*_FILES` + `skill_link_roots` | managed-asset reconciliation accepts a plugin layer with `plugin:<ns>@<version>` provenance *(done: plugin-seeded definitions are tracked in their own `.orbit-managed-plugin-assets.json` so a plugin's entries never retire a shipped default)* |
 | `TABS` arrays + per-asset `include_str!` | one `plugins` group + one generic panel renderer |
 
 ## 7. Phases (each its own PR into agent-main)
@@ -368,8 +368,16 @@ tool, one panel, one disabled auto-task, one skill stub, a passing conformance t
    `--grant` enforced at load and at the call, envelope v1, output-schema validation,
    Landlock/sandbox-exec profile (§4.3), callback allowlist, MCP proxy. orbit-research can
    plug in without a rewrite.
-3. **Definitions + skills + config.** Catalog layer, seeding with provenance, `plugin.tool_call`,
-   `[plugins.<ns>]` with schema validation and Config-tab provenance.
+3. **Definitions + skills + config.** *Landed [ORB-12737].* Catalog layer, seeding with
+   provenance, `plugin.tool_call`, `[plugins.<ns>]` with schema validation and
+   Config-tab provenance. As implemented, the activity/job layer loads after the
+   workspace *and* the shipped defaults, so a workspace file shadows a plugin's and
+   L-0060's rule that a shipped default is never displaced still holds;
+   `orbit run show` prints the resolving layer and what it shadowed. The seeded
+   provenance is a `# provenance: plugin:<ns>@<version>` header comment rather than a
+   field, because `RoutineDefinition` and `AutoTaskDefinition` are
+   `deny_unknown_fields`. A `[plugins.<ns>]` value the plugin's schema rejects refuses
+   that plugin at load, naming the key, and leaves the runtime standing (§4.9).
 4. **Derived CLI + dashboard panels.** `orbit <ns> <verb>`, `/api/plugins`, generic renderer,
    `plugins` tab group, `orbit plugin test` and `scaffold`.
 5. **Provider plugins** (deferred): open `ProviderRegistry` and collapse the four provider

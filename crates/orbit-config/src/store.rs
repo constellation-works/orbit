@@ -184,6 +184,9 @@ impl ConfigStore {
         if let Some(value) = resolved.snapshot.value_for(key) {
             return Ok(value);
         }
+        if let Some(value) = plugin_field_value(&resolved, key)? {
+            return Ok(value);
+        }
         Ok(crew_field_value(&resolved, key)?.unwrap_or(JsonValue::Null))
     }
 
@@ -412,6 +415,19 @@ impl ConfigStore {
         {
             return Err(OrbitError::InvalidInput(ignored.error_message.clone()));
         }
+        // A `[plugins.<ns>]` value is the plugin's contract, so it is checked
+        // against that plugin's own JSON Schema before the write lands. The
+        // check is available only once a runtime has published the installed
+        // plugins' schemas; without them the write is admitted and the plugin
+        // load reports any violation.
+        if let Some(parsed) = crate::plugins::parse_plugin_field_key(key)?
+            && let Some(schema) = crate::plugins::plugin_config_schema(parsed.namespace)
+        {
+            let section = resolved.plugins.get(parsed.namespace);
+            schema
+                .validate_section(&schema.with_defaults(section))
+                .map_err(OrbitError::InvalidInput)?;
+        }
         Ok(())
     }
 
@@ -427,6 +443,29 @@ impl ConfigStore {
             ))
         })
     }
+}
+
+/// The value one `plugins.<ns>.<key>` holds in this document, falling back to
+/// the plugin's declared default when the file does not set it.
+fn plugin_field_value(
+    resolved: &ResolvedConfig,
+    key: &str,
+) -> Result<Option<JsonValue>, OrbitError> {
+    let Some(parsed) = crate::plugins::parse_plugin_field_key(key)? else {
+        return Ok(None);
+    };
+    if let Some(value) = resolved
+        .plugins
+        .get(parsed.namespace)
+        .and_then(|section| section.get(parsed.key))
+    {
+        return Ok(Some(value.clone()));
+    }
+    Ok(Some(
+        crate::plugins::plugin_config_schema(parsed.namespace)
+            .and_then(|schema| schema.defaults.get(parsed.key).cloned())
+            .unwrap_or(JsonValue::Null),
+    ))
 }
 
 fn crew_field_value(resolved: &ResolvedConfig, key: &str) -> Result<Option<JsonValue>, OrbitError> {

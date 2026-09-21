@@ -24,6 +24,8 @@ pub(crate) mod friction;
 #[cfg(target_os = "linux")]
 pub(crate) mod git_sandbox;
 pub mod mutation;
+pub(crate) mod plugin_config;
+pub(crate) mod plugin_definitions;
 pub mod plugin_host;
 pub(crate) mod recovery_authority;
 mod resolve;
@@ -692,6 +694,20 @@ impl OrbitRuntime {
                     );
                 }
             }
+        }
+        // The `plugin:<ns>` layer loads last, so a workspace file of the same
+        // name shadows a plugin's activity and a shipped default stays
+        // authoritative (L-0060). `orbit run show` prints which layer answered
+        // for each reference, which is what makes the shadowing legible.
+        for plugin in self.plugin_load().active() {
+            let files: Vec<PathBuf> = plugin.definitions.activities.clone();
+            if files.is_empty() {
+                continue;
+            }
+            warn_skipped_retired_activity_assets(
+                &plugin.root,
+                catalog.load_files_prefer_existing(&files)?,
+            );
         }
         let registered_tools = self.allowlist_known_tool_names();
         catalog.validate_tool_allowlists(registered_tools.iter().map(String::as_str))?;

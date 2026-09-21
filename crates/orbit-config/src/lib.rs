@@ -56,6 +56,7 @@ mod crew_pools;
 mod layering;
 pub mod operation;
 mod persistence;
+pub mod plugins;
 mod raw;
 mod registry;
 mod resolved;
@@ -84,6 +85,11 @@ pub use operation::{
     PreparationPreference, PromotionPreference, RecoveryPreference, ReviewPolicy,
 };
 pub use persistence::PersistenceConfig;
+pub use plugins::{
+    PLUGIN_CONFIG_PREFIX, PluginConfigSchema, PluginFieldKey, parse_plugin_field_key,
+    plugin_config_schema, register_plugin_config_schemas, registered_plugin_namespaces,
+    validate_plugin_sections,
+};
 pub use registry::{
     CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection, ConfigSnapshot,
     GLOBAL_ONLY_KEY_PREFIX, MachineSettings, admit_config_key, admit_settable_config_key,

@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use serde_json::Value;
+
 use orbit_common::OrbitError;
 use orbit_store::Store;
 use orbit_tools::ToolRegistry;
@@ -32,7 +34,7 @@ pub struct PluginDiagnostic {
 }
 
 /// What the runtime registered for one host plugin.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RegisteredPlugin {
     pub name: String,
     pub version: String,
@@ -40,13 +42,48 @@ pub struct RegisteredPlugin {
     /// Canonical tool names, active or inactive.
     pub tools: Vec<String>,
     pub diagnostic: Option<String>,
+    /// The manifest this pass loaded, when it loaded at all. Retained so the
+    /// catalog layer, the seeded definitions and the config contract all read
+    /// the same document the tool surface was built from.
+    pub loaded: Option<Arc<LoadedPlugin>>,
 }
 
 /// Outcome of a host plugin load pass.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct PluginHostLoad {
     pub registered: Vec<RegisteredPlugin>,
     pub diagnostics: Vec<PluginDiagnostic>,
+}
+
+impl PluginHostLoad {
+    /// Every plugin whose tools and definitions are on the active surface.
+    pub fn active(&self) -> impl Iterator<Item = &Arc<LoadedPlugin>> {
+        self.registered
+            .iter()
+            .filter(|entry| entry.status == PluginStatus::Active)
+            .filter_map(|entry| entry.loaded.as_ref())
+    }
+
+    /// Whether a plugin of this namespace is active on the host.
+    pub fn is_active(&self, namespace: &str) -> bool {
+        self.active().any(|plugin| plugin.namespace() == namespace)
+    }
+}
+
+/// Check everything a plugin contributes beyond its tools: the definition
+/// rules of §4.5 and its own `[plugins.<ns>]` schema.
+///
+/// One message, naming the file or key at fault, because the caller reports it
+/// as this plugin's single diagnostic.
+pub(crate) fn validate_plugin_contributions(
+    plugin: &LoadedPlugin,
+    plugin_config: &BTreeMap<String, Value>,
+) -> Result<(), String> {
+    super::plugin_definitions::load_plugin_definitions(
+        plugin,
+        &super::plugin_definitions::shipped_job_names(),
+    )?;
+    super::plugin_config::validate_plugin_config(plugin, plugin_config)
 }
 
 /// Where a plugin lives on this host: `<global>/plugins/<ns>/<version>`.
@@ -110,7 +147,13 @@ pub fn host_plugin_registry(
     let mut registry = ToolRegistry::new();
     // No workspace here, so no pin file: the global root holds none, and an
     // absent pin file is a valid configuration.
-    let load = load_host_plugins(global_root, global_root, &store, &mut registry);
+    let load = load_host_plugins(
+        global_root,
+        global_root,
+        &store,
+        &mut registry,
+        &BTreeMap::new(),
+    );
     Ok((registry, load))
 }
 
@@ -121,6 +164,7 @@ pub fn load_host_plugins(
     orbit_dir: &Path,
     store: &Store,
     registry: &mut ToolRegistry,
+    plugin_config: &BTreeMap<String, Value>,
 ) -> PluginHostLoad {
     let installed = match store.list_plugins() {
         Ok(installed) => installed,
@@ -139,7 +183,8 @@ pub fn load_host_plugins(
     let mut load = PluginHostLoad::default();
     let policy = PluginValidationPolicy::host_default();
     for plugin in &installed {
-        let registered = register_installed_plugin(global_root, plugin, &policy, registry);
+        let registered =
+            register_installed_plugin(global_root, plugin, &policy, registry, plugin_config);
         if let Some(message) = &registered.diagnostic {
             load.diagnostics.push(PluginDiagnostic {
                 plugin: plugin.name.clone(),
@@ -190,6 +235,7 @@ fn register_installed_plugin(
     installed: &InstalledPlugin,
     policy: &PluginValidationPolicy,
     registry: &mut ToolRegistry,
+    plugin_config: &BTreeMap<String, Value>,
 ) -> RegisteredPlugin {
     let refused = |status: PluginStatus, message: String| RegisteredPlugin {
         name: installed.name.clone(),
@@ -197,6 +243,7 @@ fn register_installed_plugin(
         status,
         tools: Vec::new(),
         diagnostic: Some(message),
+        loaded: None,
     };
 
     if !installed.enabled {
@@ -206,6 +253,7 @@ fn register_installed_plugin(
             status: PluginStatus::Disabled,
             tools: Vec::new(),
             diagnostic: None,
+            loaded: None,
         };
     }
 
@@ -237,8 +285,18 @@ fn register_installed_plugin(
     if let Some(message) = missing_grant_diagnostic(installed, &plugin) {
         return register_inactive_tools(global_root, installed, &plugin, registry, message);
     }
+    // A plugin whose shipped definitions break the §4.5 rules, or whose
+    // `[plugins.<ns>]` section its own schema rejects, contributes nothing:
+    // registering its tools while its catalog layer is unusable would leave
+    // half a plugin on the surface.
+    if let Err(message) = validate_plugin_contributions(&plugin, plugin_config) {
+        return refused(
+            PluginStatus::Inactive,
+            format!("plugin '{}' is refused: {message}", installed.name),
+        );
+    }
 
-    let backend = plugin_backend(global_root, installed, &plugin);
+    let backend = plugin_backend(global_root, installed, &plugin, plugin_config);
     let provenance = backend.spec().provenance.clone();
     let mut tools = Vec::with_capacity(plugin.tools.len());
     for tool in &plugin.tools {
@@ -266,6 +324,7 @@ fn register_installed_plugin(
         status: PluginStatus::Active,
         tools,
         diagnostic: None,
+        loaded: Some(Arc::new(plugin)),
     }
 }
 
@@ -279,7 +338,7 @@ fn register_inactive_tools(
     registry: &mut ToolRegistry,
     message: String,
 ) -> RegisteredPlugin {
-    let backend = plugin_backend(global_root, installed, plugin);
+    let backend = plugin_backend(global_root, installed, plugin, &BTreeMap::new());
     let provenance = backend.spec().provenance.clone();
     let mut tools = Vec::with_capacity(plugin.tools.len());
     for tool in &plugin.tools {
@@ -301,6 +360,7 @@ fn register_inactive_tools(
         status: PluginStatus::Inactive,
         tools,
         diagnostic: Some(message),
+        loaded: None,
     }
 }
 
@@ -342,32 +402,17 @@ fn plugin_backend(
     global_root: &Path,
     installed: &InstalledPlugin,
     plugin: &LoadedPlugin,
+    plugin_config: &BTreeMap<String, Value>,
 ) -> PluginBackend {
     let grants: Vec<PluginGrant> = installed
         .grants
         .iter()
         .filter_map(|name| PluginGrant::parse(name))
         .collect();
-    let config_defaults: BTreeMap<String, String> = plugin
-        .manifest
-        .spec
-        .config
-        .as_ref()
-        .and_then(|config| config.defaults.as_ref())
-        .and_then(|defaults| defaults.as_object())
-        .map(|defaults| {
-            defaults
-                .iter()
-                .map(|(key, value)| {
-                    let rendered = match value {
-                        serde_json::Value::String(text) => text.clone(),
-                        other => other.to_string(),
-                    };
-                    (key.clone(), rendered)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // `{{config.<key>}}` resolves against the effective section: what the
+    // operator configured in `[plugins.<ns>]`, over what the manifest
+    // defaults (§1).
+    let config_defaults = super::plugin_config::plugin_config_values(plugin, plugin_config);
     let spec = Arc::new(PluginBackendSpec {
         provenance: PluginProvenance {
             name: installed.name.clone(),

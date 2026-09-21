@@ -41,6 +41,10 @@ impl AutoTaskDispatch for OrbitRuntime {
         mint_task(self, definition).map(|task| task.id)
     }
 
+    fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<String> {
+        OrbitRuntime::auto_task_skip_reason(self, definition)
+    }
+
     fn probe_change_since_last_sweep(
         &self,
         _definition: &AutoTaskDefinition,
@@ -51,6 +55,28 @@ impl AutoTaskDispatch for OrbitRuntime {
 }
 
 impl OrbitRuntime {
+    /// Why an auto-task definition is skipped this pass, when it is.
+    ///
+    /// A definition a plugin seeded fires only while that plugin is enabled:
+    /// its template belongs to the plugin, and firing it after a disable would
+    /// mint chores nothing on this host can carry out (design §4.5). The file
+    /// is left exactly where it is, edits and all.
+    pub fn auto_task_skip_reason(&self, definition: &AutoTaskDefinition) -> Option<String> {
+        let path = crate::application::auto_tasks::definition_path(
+            &self.paths().local_dir,
+            &definition.name,
+        );
+        let (namespace, version) = crate::application::plugin::read_definition_provenance(&path)?;
+        if self.plugin_load().is_active(&namespace) {
+            return None;
+        }
+        Some(format!(
+            "seeded by plugin:{namespace}@{version}, which is not enabled on this host; run \
+             `orbit plugin enable {namespace}` to fire it again, or delete '{}'",
+            path.display()
+        ))
+    }
+
     /// The id of a still-open instance of `definition`'s prior mints, if any.
     /// Returns `None` if no prior mint is open, meaning `skip_if_open` dedupe
     /// will permit minting and the dashboard reports no open duplicate [ORB-12158].
@@ -106,7 +132,21 @@ pub(super) fn mint_task(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Result<Task, OrbitError> {
-    runtime.add_task(template_params(definition))
+    let mut params = template_params(definition);
+    // A task minted from a plugin's seeded definition carries `plugin:<ns>`
+    // beside `auto-task:<name>`, so its provenance survives in task history
+    // even after the plugin is removed (design §4.4).
+    let path = crate::application::auto_tasks::definition_path(
+        &runtime.paths().local_dir,
+        &definition.name,
+    );
+    if let Some((namespace, _)) = crate::application::plugin::read_definition_provenance(&path) {
+        let tag = format!("plugin:{namespace}");
+        if !params.tags.contains(&tag) {
+            params.tags.push(tag);
+        }
+    }
+    runtime.add_task(params)
 }
 
 pub(crate) fn template_params(definition: &AutoTaskDefinition) -> TaskAddParams {

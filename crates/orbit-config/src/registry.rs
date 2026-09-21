@@ -736,7 +736,8 @@ pub fn admit_settable_config_key(key: &str) -> Result<(), OrbitError> {
 
 /// Admit a dotted key for `orbit config get`/`set`.
 ///
-/// Fixed registry keys and live `crews.<name>.<field>` keys succeed. A
+/// Fixed registry keys, live `crews.<name>.<field>` keys and
+/// `plugins.<ns>.<key>` keys owned by an installed plugin succeed. A
 /// removed key fails with its migration note; unknown registry keys and
 /// misspelled crew fields fail with suggestions. All before any document
 /// mutation.
@@ -748,6 +749,9 @@ pub fn admit_config_key(key: &str) -> Result<(), OrbitError> {
         return Err(OrbitError::InvalidInput(format!(
             "config key '{key}' was removed and is ignored: {note}"
         )));
+    }
+    if let Some(parsed) = crate::plugins::parse_plugin_field_key(key)? {
+        return crate::plugins::admit_plugin_field_key(parsed);
     }
     match parse_crew_field_key(key)? {
         Some(_) => Ok(()),

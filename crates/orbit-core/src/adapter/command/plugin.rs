@@ -12,7 +12,8 @@ use crate::application::plugin;
 use crate::runtime::plugin_host;
 
 pub use crate::application::plugin::{
-    PluginAddOptions, PluginDoctorResult, PluginMigrateRequest, PluginPermissionSummary,
+    PluginAddOptions, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
+    PluginMigrateRequest, PluginPermissionSummary, PluginSeedAction, PluginSeedOutcome,
     PluginSummary, PluginSyncOutcome, PluginToolSummary, PluginValidationReport,
 };
 
@@ -28,9 +29,9 @@ impl OrbitRuntime {
     pub fn enable_plugin(
         &self,
         name: &str,
-        grants: &[String],
-    ) -> Result<PluginSummary, OrbitError> {
-        plugin::enable_plugin(self, name, grants)
+        options: &PluginEnableOptions,
+    ) -> Result<PluginEnableResult, OrbitError> {
+        plugin::enable_plugin(self, name, options)
     }
 
     pub fn disable_plugin(&self, name: &str) -> Result<PluginSummary, OrbitError> {
