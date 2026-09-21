@@ -153,6 +153,40 @@ fn the_profile_follows_the_grants_not_the_requests() {
 }
 
 #[test]
+fn fs_write_of_the_plugin_root_or_global_root_is_refused() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("plugin");
+    std::fs::create_dir_all(&root).expect("plugin root");
+    let mut covering = PluginPermissions::default();
+    covering.fs.write = vec!["{{plugin_root}}".into()];
+    let covering_spec = spec(root.join("bin"), &root, covering, &[PluginGrant::Fs]);
+    let error = covering_spec.sandbox_profile(None).unwrap_err().to_string();
+    assert!(
+        error.contains("spec.permissions.fs.write[0]") && error.contains("plugin install root"),
+        "{error}"
+    );
+
+    let mut host = PluginPermissions::default();
+    host.fs.write = vec![root.join("global").to_string_lossy().into_owned()];
+    let host_spec = spec(root.join("bin"), &root, host, &[PluginGrant::Fs]);
+    let error = host_spec.sandbox_profile(None).unwrap_err().to_string();
+    assert!(
+        error.contains("spec.permissions.fs.write[0]") && error.contains("Orbit global root"),
+        "{error}"
+    );
+
+    let profile = spec(
+        root.join("bin"),
+        &root,
+        fs_state_permissions(),
+        &[PluginGrant::Fs],
+    )
+    .sandbox_profile(None)
+    .expect("plugin_state is a child of the plugin root fixture, not a covering write");
+    assert_eq!(profile.write, vec![root.join("state")]);
+}
+
+#[test]
 fn declared_programs_are_bounded_by_a_restricted_caller() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("plugin");

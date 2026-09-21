@@ -51,14 +51,16 @@ fn write_plugin_unsandboxed(root: &Path, name: &str) {
 }
 
 fn record(global_root: &Path, name: &str) -> InstalledPlugin {
+    let install_path = plugin_install_path(global_root, name, "1.0.0");
+    let manifest_digest = std::fs::read(install_path.join("plugin.yaml"))
+        .map(|bytes| orbit_tools::plugin::manifest_digest(&bytes))
+        .unwrap_or_else(|_| "0".repeat(64));
     InstalledPlugin {
         name: name.to_string(),
         version: "1.0.0".to_string(),
         source: "fixture".to_string(),
-        install_path: plugin_install_path(global_root, name, "1.0.0")
-            .to_string_lossy()
-            .into_owned(),
-        manifest_digest: "0".repeat(64),
+        install_path: install_path.to_string_lossy().into_owned(),
+        manifest_digest,
         enabled: true,
         grants: Vec::new(),
         first_party: false,
@@ -353,4 +355,120 @@ fn a_plugin_enabled_without_any_grant_still_loads_without_a_record() {
     );
     assert!(registry.is_active("plain.hello"), "{:?}", load.diagnostics);
     assert!(load.diagnostics.is_empty(), "{:?}", load.diagnostics);
+}
+
+/// A hand-edited `plugin.yaml` after install is not the granted manifest:
+/// the loader registers the plugin inactive and names both digests plus the
+/// re-consent commands (design §4.1).
+#[test]
+fn a_rewritten_manifest_is_registered_inactive_naming_both_digests() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let orbit_dir = temp.path().join("repo/.orbit");
+    std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
+    let install_path = plugin_install_path(&global_root, "demo", "1.0.0");
+    write_plugin(&install_path, "demo", "");
+
+    let store = Store::open(&global_root.join("orbit.db")).expect("open store");
+    store
+        .with_transaction(|tx| tx.upsert_plugin(&record(&global_root, "demo")))
+        .expect("record the install");
+
+    let stored = store
+        .get_plugin("demo")
+        .expect("row")
+        .expect("installed")
+        .manifest_digest;
+    let manifest = install_path.join("plugin.yaml");
+    let body = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(
+        &manifest,
+        body.replace("version: 1.0.0", "version: 1.0.0\n  description: tampered"),
+    )
+    .expect("rewrite manifest");
+    let loaded = orbit_tools::plugin::manifest_digest(&std::fs::read(&manifest).expect("bytes"));
+    assert_ne!(stored, loaded, "the rewrite must change the digest");
+
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let load = load_host_plugins(
+        &global_root,
+        &orbit_dir,
+        &store,
+        &mut registry,
+        &std::collections::BTreeMap::new(),
+    );
+
+    let entry = load
+        .registered
+        .iter()
+        .find(|entry| entry.name == "demo")
+        .expect("the plugin is reported");
+    assert_eq!(entry.status, PluginStatus::Inactive);
+    let diagnostic = entry.diagnostic.clone().expect("a diagnostic");
+    assert!(
+        diagnostic.contains(&stored)
+            && diagnostic.contains(&loaded)
+            && diagnostic.contains("orbit plugin add --force")
+            && diagnostic.contains("orbit plugin enable demo"),
+        "{diagnostic}"
+    );
+    assert!(
+        registry.has("demo.hello") && !registry.is_active("demo.hello"),
+        "the rewritten plugin is inactive, not missing"
+    );
+}
+
+/// `fs.write` on the plugin root (or a parent, or `/`) would let the backend
+/// rewrite `plugin.yaml` under an already-recorded `fs` grant. Registration
+/// refuses it independently of the digest check.
+#[test]
+fn fs_write_covering_the_plugin_root_is_refused_at_registration() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let orbit_dir = temp.path().join("repo/.orbit");
+    std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
+    let install_path = plugin_install_path(&global_root, "wide", "1.0.0");
+    write_plugin(&install_path, "wide", "");
+    let manifest = install_path.join("plugin.yaml");
+    let body = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(
+        &manifest,
+        body.replace(
+            "  backend:\n",
+            "  permissions:\n    fs:\n      write: [\"{{plugin_root}}\"]\n  backend:\n",
+        ),
+    )
+    .expect("request a covering write");
+
+    let store = Store::open(&global_root.join("orbit.db")).expect("open store");
+    let mut installed = record(&global_root, "wide");
+    installed.grants = vec!["fs".to_string()];
+    store
+        .with_transaction(|tx| tx.upsert_plugin(&installed))
+        .expect("record the install");
+    record_authorized_grants(&global_root, "wide", true, &["fs".to_string()])
+        .expect("authorize fs");
+
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let load = load_host_plugins(
+        &global_root,
+        &orbit_dir,
+        &store,
+        &mut registry,
+        &std::collections::BTreeMap::new(),
+    );
+    let entry = load
+        .registered
+        .iter()
+        .find(|entry| entry.name == "wide")
+        .expect("the plugin is reported");
+    assert_eq!(entry.status, PluginStatus::Inactive);
+    let diagnostic = entry.diagnostic.clone().expect("a diagnostic");
+    assert!(
+        diagnostic.contains("plugin install root")
+            && diagnostic.contains("spec.permissions.fs.write[0]"),
+        "{diagnostic}"
+    );
 }

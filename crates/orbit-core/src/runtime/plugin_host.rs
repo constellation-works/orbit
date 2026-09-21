@@ -19,7 +19,8 @@ use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_tools::ToolRegistry;
 use orbit_tools::plugin::{
     LoadedPlugin, McpBackend, McpExpectedTool, PluginBackend, PluginBackendSpec, PluginTool,
-    PluginToolBinding, PluginValidationPolicy, load_plugin_dir, validate_loaded_plugin,
+    PluginToolBinding, PluginValidationPolicy, load_plugin_dir, refuse_covering_fs_write_roots,
+    validate_loaded_plugin,
 };
 use orbit_types::plugin::{
     InstalledPlugin, PLUGIN_HOST_API, PluginBackendType, PluginGrant, PluginMcpScope,
@@ -392,12 +393,34 @@ fn register_installed_plugin(
             );
         }
     };
+    if plugin.manifest_digest != installed.manifest_digest {
+        return register_inactive_tools(
+            global_root,
+            installed,
+            &plugin,
+            registry,
+            digest_mismatch_diagnostic(installed, &plugin),
+        );
+    }
     let policy = policy
         .clone()
         .with_first_party_verified(installed.first_party);
     if let Err(error) = validate_loaded_plugin(&plugin, &policy) {
         return refused(
             PluginStatus::Inactive,
+            format!("plugin '{}' is refused: {error}", installed.name),
+        );
+    }
+    if let Err(error) = refuse_covering_fs_write_roots(
+        &plugin,
+        global_root,
+        &plugin_state_dir(global_root, &installed.name),
+    ) {
+        return register_inactive_tools(
+            global_root,
+            installed,
+            &plugin,
+            registry,
             format!("plugin '{}' is refused: {error}", installed.name),
         );
     }
@@ -488,6 +511,17 @@ fn register_inactive_tools(
     }
 }
 
+/// The on-disk manifest is not the one this host recorded at install; the
+/// grants apply only to that stored digest (design §4.1).
+fn digest_mismatch_diagnostic(installed: &InstalledPlugin, plugin: &LoadedPlugin) -> String {
+    format!(
+        "plugin '{}' on-disk manifest digest {} does not match the stored digest {}; grants \
+         apply only to the stored manifest. Re-consent with `orbit plugin add --force` and \
+         `orbit plugin enable {}`",
+        installed.name, plugin.manifest_digest, installed.manifest_digest, installed.name
+    )
+}
+
 /// A required grant the operator has not recorded refuses the whole plugin,
 /// naming the grant, the manifest key that asks for it, and the command that
 /// records it (design §4.1). `backend.sandbox: none` is the `unsandboxed`
@@ -541,7 +575,7 @@ fn plugin_backend(
         provenance: PluginProvenance {
             name: installed.name.clone(),
             version: installed.version.clone(),
-            manifest_digest: installed.manifest_digest.clone(),
+            manifest_digest: plugin.manifest_digest.clone(),
             grants: grants
                 .iter()
                 .map(|grant| grant.as_str().to_string())

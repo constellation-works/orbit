@@ -4,7 +4,8 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_tools::plugin::{
-    LoadedPlugin, PluginValidationPolicy, load_plugin_dir, manifest_refusal, validate_loaded_plugin,
+    LoadedPlugin, PluginValidationPolicy, load_plugin_dir, manifest_refusal,
+    refuse_covering_fs_write_roots, validate_loaded_plugin,
 };
 use orbit_types::plugin::{
     InstalledPlugin, PluginExecutionKind, PluginGrant, PluginSandbox, PluginStatus,
@@ -12,7 +13,7 @@ use orbit_types::plugin::{
 };
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin_host::{read_pin_file, unmet_requirement};
+use crate::runtime::plugin_host::{plugin_state_dir, read_pin_file, unmet_requirement};
 
 /// One plugin tool as the CLI reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,28 +169,31 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     let mut rows: Vec<PluginDoctorResult> = summaries
         .into_iter()
         .map(|summary| {
-            let message = summary.diagnostic.clone().unwrap_or_else(|| match summary.status {
-                PluginStatus::Active if summary.unsandboxed => format!(
+            let message = summary
+                .diagnostic
+                .clone()
+                .unwrap_or_else(|| match summary.status {
+                    PluginStatus::Active if summary.unsandboxed => format!(
                     "plugin '{}' runs unsandboxed: its manifest declares `backend.sandbox: none` \
                      and this host granted `unsandboxed`, so its backend is not confined by \
                      Landlock or sandbox-exec",
                     summary.name
                 ),
-                PluginStatus::Active => String::new(),
-                PluginStatus::Disabled => format!(
-                    "plugin '{}' is installed but disabled; run `orbit plugin enable {}`",
-                    summary.name, summary.name
-                ),
-                PluginStatus::Missing => format!(
+                    PluginStatus::Active => String::new(),
+                    PluginStatus::Disabled => format!(
+                        "plugin '{}' is installed but disabled; run `orbit plugin enable {}`",
+                        summary.name, summary.name
+                    ),
+                    PluginStatus::Missing => format!(
                     "plugin '{}' is pinned by this workspace but not installed on this host; run \
                      `orbit plugin sync`",
                     summary.name
                 ),
-                PluginStatus::Inactive => format!(
+                    PluginStatus::Inactive => format!(
                     "plugin '{}' is enabled but was refused at load; run `orbit plugin show {}`",
                     summary.name, summary.name
                 ),
-            });
+                });
             PluginDoctorResult {
                 plugin: summary.name,
                 status: summary.status,
@@ -211,6 +215,13 @@ pub fn validate_plugin_dir(
     let policy =
         PluginValidationPolicy::host_default().with_first_party_verified(first_party_verified);
     validate_loaded_plugin(&plugin, &policy).map_err(manifest_refusal)?;
+    let global_root = runtime.global_root();
+    refuse_covering_fs_write_roots(
+        &plugin,
+        &global_root,
+        &plugin_state_dir(&global_root, plugin.namespace()),
+    )
+    .map_err(manifest_refusal)?;
 
     let mut warnings = Vec::new();
     if let Some(message) = unmet_requirement(&plugin) {
@@ -259,7 +270,6 @@ pub fn validate_plugin_dir(
                 .to_string(),
         );
     }
-    let _ = runtime;
     Ok(PluginValidationReport {
         name: plugin.namespace().to_string(),
         version: plugin.manifest.metadata.version.clone(),
