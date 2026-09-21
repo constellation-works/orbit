@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use crate::output::sink;
 
-pub(super) const STDIN_CLOSED_BEFORE_PROMPT: &str = "stdin closed before an interactive prompt was answered; pass --task-prefix/--host-name or --non-interactive";
+pub(super) const STDIN_CLOSED_BEFORE_PROMPT: &str = "stdin closed before an interactive prompt was answered; pass --task-prefix/--machine-name or --non-interactive";
 
-pub(super) const STDIN_PROMPT_TIMEOUT: &str = "stdin did not answer an interactive prompt; pass --task-prefix/--host-name or --non-interactive";
+pub(super) const STDIN_PROMPT_TIMEOUT: &str = "stdin did not answer an interactive prompt; pass --task-prefix/--machine-name or --non-interactive";
 
 /// Ceiling for one non-TTY prompt. Piped answers are already in the kernel
 /// buffer, so a working pipe returns immediately; this only trips when the

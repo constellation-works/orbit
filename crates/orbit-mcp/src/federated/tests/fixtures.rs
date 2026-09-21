@@ -22,8 +22,8 @@ pub(super) fn destination(ssh: &str, machine_id: &str) -> Destination {
     Destination::ssh(ssh, machine_id)
 }
 
-pub(super) fn local_destination(machine_id: &str, host_id: &str) -> Destination {
-    Destination::local(machine_id, host_id)
+pub(super) fn local_destination(machine_id: &str, machine_name: &str) -> Destination {
+    Destination::local(machine_id, machine_name)
 }
 
 pub(super) fn workspace(id: &str, owner_machine_id: Option<&str>) -> Workspace {

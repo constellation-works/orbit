@@ -10,10 +10,10 @@
 //
 // What it has to prove, in the order an operator meets it:
 //
-//  * a claim reads as host-qualified, and a row with no recorded machine reads
+//  * a claim reads as machine-qualified, and a row with no recorded machine reads
 //    as *unknown* rather than as this one;
 //  * an elapsed reservation is a diagnostic, not a revocation;
-//  * a run that executed elsewhere names its host instead of offering a link
+//  * a run that executed elsewhere names its machine instead of offering a link
 //    into this checkout's job store;
 //  * `review` is a delivery handoff awaiting authority, not a code review, and
 //    merged is not deployed;
@@ -54,8 +54,8 @@ const claim = (overrides = {}) => ({
   phase_summary: "delivery handed off and awaiting completion authority — this is not a code review",
   authorizes_execution: false,
   unsettled: true,
-  executed_on: { known: true, machine_id: "hm_follower", host_id: "runner-2" },
-  run_context: { run_id: "drain-1", job_name: "auto", host_id: null },
+  executed_on: { known: true, machine_id: "hm_follower", machine_name: "runner-2" },
+  run_context: { run_id: "drain-1", job_name: "auto", machine_name: null },
   bound_run: { machine_id: "hm_follower", run_id: "leaf-1" },
   bound_run_navigable: false,
   inspect_on: "inspect this run on machine hm_follower (no owner-local run exists)",
@@ -78,7 +78,7 @@ const claim = (overrides = {}) => ({
     accepted_at: "2026-09-19T00:00:00+00:00",
     task_id: "ORB-2",
     claim_id: "claim-1",
-    executed_on: { known: true, machine_id: "hm_follower", host_id: null },
+    executed_on: { known: true, machine_id: "hm_follower", machine_name: null },
     run_id: "leaf-1",
     execution_summary: "Outcome: success",
     candidate: {
@@ -182,8 +182,8 @@ const mount = async (taskId = "ORB-2") => {
   assert.ok(!/owner/i.test(unknown), `unknown provenance must not name an owner: ${unknown}`);
   assert.equal(formatExecutionLocation({ known: true, machine_id: "hm_a" }), "machine hm_a");
   assert.equal(
-    formatExecutionLocation({ known: true, machine_id: "hm_a", host_id: "box" }),
-    "machine hm_a · host box",
+    formatExecutionLocation({ known: true, machine_id: "hm_a", machine_name: "box" }),
+    "machine hm_a · name box",
   );
 }
 
@@ -193,9 +193,9 @@ const mount = async (taskId = "ORB-2") => {
 
   assert.equal(block.style.display, "", "a task with a claim shows the block");
   assert.equal(block.querySelector("h4").getAttribute("aria-expanded"), "true");
-  assert.ok(text.includes("machine hm_follower · host runner-2"), "execution is host-qualified");
+  assert.ok(text.includes("machine hm_follower · name runner-2"), "execution is machine-qualified");
 
-  // The bound run lives in the follower's job store: name the host to inspect
+  // The bound run lives in the follower's job store: name the machine to inspect
   // rather than linking into this checkout.
   assert.equal(block.querySelector("a"), null, "no owner-local link is minted for a remote run");
   assert.ok(text.includes("inspect this run on machine hm_follower"), text);

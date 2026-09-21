@@ -10,7 +10,7 @@ use orbit_core::bootstrap::task_publication::{
     PublicationRecoveryCompleteness, PublicationRenderAuthority, PublicationRestoreMode,
     PublicationRestoreRequest, ScannerFailureBehavior,
 };
-use orbit_registry::{load_host_identity, workspace_registry};
+use orbit_registry::{load_machine_identity, workspace_registry};
 use orbit_types::workspace::{
     DEFAULT_PUBLICATION_BRANCH, WorkspaceCheckoutRole, WorkspacePublicationBinding,
     redact_git_remote,
@@ -112,7 +112,7 @@ impl Execute for TaskPublicationPublishArgs {
         let workspace_id = selected_workspace_id(runtime)?;
         let task_workspace_id = selected_task_workspace_id(runtime)?;
         let global_root = runtime.global_root();
-        let host = load_host_identity(&global_root)?;
+        let machine = load_machine_identity(&global_root)?;
         let registry_path = workspace_registry::registry_path_for(&global_root);
         let mut registry = workspace_registry::load_registry_from(&registry_path)?;
         let binding = workspace_registry::find_publication_binding_by_id(&registry, &workspace_id)
@@ -136,7 +136,7 @@ impl Execute for TaskPublicationPublishArgs {
         let request = publish_request(
             &binding,
             task_workspace_id,
-            host.machine_id,
+            machine.id,
             caller_role,
             publication_cache(runtime),
         );
@@ -461,7 +461,7 @@ fn assert_restore_authority(
         )));
     }
     let global_root = runtime.global_root();
-    let local_machine_id = load_host_identity(&global_root)?.machine_id;
+    let local_machine_id = load_machine_identity(&global_root)?.id;
     if local_machine_id != expected.authority_machine_id {
         return Err(orbit_core::OrbitError::PolicyDenied(format!(
             "publication restore authority '{}' does not match local machine '{}'",

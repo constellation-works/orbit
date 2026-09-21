@@ -167,7 +167,7 @@ impl AdmissionIdentity {
 pub struct AdmissionRunContext {
     pub run_id: String,
     pub job_name: String,
-    pub host_id: Option<String>,
+    pub machine_name: Option<String>,
 }
 
 /// Owner-resolved configuration, included in immutable retry comparison.

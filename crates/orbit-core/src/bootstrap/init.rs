@@ -300,8 +300,8 @@ pub fn init_workspace_at_root(
             let mut managed_asset_warnings = global_result.managed_asset_warnings;
             // Routines are workspace-authored (`.orbit/routines/`, no global
             // directory), so defaults seed here rather than in the global branch.
-            // Host identity is owned by higher-level composition and injected;
-            // Core never opens host.toml or falls back to an OS hostname.
+            // Machine identity is owned by higher-level composition and
+            // injected; Core never resolves it or falls back to an OS hostname.
             {
                 let reconciliation = reconcile_workspace_managed_artifacts(
                     &global_root,

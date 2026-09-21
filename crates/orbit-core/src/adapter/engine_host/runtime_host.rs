@@ -1104,7 +1104,7 @@ fn apply_task_automation_update_under_lock(
         let task = runtime.stores().task_records().update(
             task_id,
             StoreTaskUpdateParams {
-                job_run_host: update
+                job_run_machine: update
                     .job_run_id
                     .as_ref()
                     .map(|run_id| {

@@ -812,7 +812,7 @@ fn artifact_origin_comes_only_from_trusted_put_context() {
     );
     params.origin = Some(orbit_types::task::ExecutionLocation {
         machine_id: "authenticated-machine".into(),
-        host_id: Some("display".into()),
+        machine_name: Some("display".into()),
     });
     store
         .upsert_task_artifacts(&task.id, &params)
@@ -836,12 +836,12 @@ fn task_run_location_is_immutable_for_a_binding_and_unknown_without_trusted_orig
         .expect("task");
     let location = orbit_types::task::ExecutionLocation {
         machine_id: "trusted".into(),
-        host_id: None,
+        machine_name: None,
     };
     let mut params = TaskDocumentUpdateParams {
         actor: "test".into(),
         job_run_id: Some(Some("run-a".into())),
-        job_run_host: Some(Some(location.clone())),
+        job_run_machine: Some(Some(location.clone())),
         ..Default::default()
     };
     store
@@ -852,10 +852,10 @@ fn task_run_location_is_immutable_for_a_binding_and_unknown_without_trusted_orig
             .get_task(&task.id)
             .expect("read")
             .expect("task")
-            .job_run_host,
+            .job_run_machine,
         Some(location)
     );
-    params.job_run_host = Some(None);
+    params.job_run_machine = Some(None);
     assert!(store.update_task_document(&task.id, &params).is_err());
     params.job_run_id = Some(Some("run-b".into()));
     store
@@ -866,7 +866,7 @@ fn task_run_location_is_immutable_for_a_binding_and_unknown_without_trusted_orig
             .get_task(&task.id)
             .expect("read")
             .expect("task")
-            .job_run_host,
+            .job_run_machine,
         None
     );
 }

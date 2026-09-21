@@ -43,7 +43,7 @@ impl FromStr for WorkspaceStatus {
 pub struct Workspace {
     pub id: String,
     pub name: String,
-    /// Stable owner identity. Standalone registries created before host
+    /// Stable owner identity. Standalone registries created before machine
     /// identity existed may omit this; hub and spoke registries may not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_machine_id: Option<String>,
@@ -138,11 +138,14 @@ impl WorkspaceCheckout {
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceRegistry {
     pub schema_version: u32,
-    /// Human host names known through this machine's local workspace records,
-    /// keyed by stable owner machine id. This is not a fleet inventory: an
-    /// entry exists only for an owner named by a local workspace record.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub owner_host_ids: BTreeMap<String, String>,
+    /// [ORB-12725] Retired machine-id-to-display-name projection. The catalog
+    /// records the stable owner only; a machine's display name is read from
+    /// its own `machine.name`. Accepted and dropped for one release so a
+    /// `workspaces.json` written by an older build still loads under
+    /// `deny_unknown_fields`; delete this field after that release, when the
+    /// key becomes an ordinary unknown one.
+    #[serde(default, rename = "owner_host_ids", skip_serializing)]
+    pub retired_owner_host_ids: BTreeMap<String, String>,
     #[serde(default)]
     pub workspaces: Vec<Workspace>,
     #[serde(default)]
@@ -157,7 +160,7 @@ impl Default for WorkspaceRegistry {
     fn default() -> Self {
         Self {
             schema_version: WORKSPACE_REGISTRY_SCHEMA_VERSION,
-            owner_host_ids: BTreeMap::new(),
+            retired_owner_host_ids: BTreeMap::new(),
             workspaces: Vec::new(),
             checkouts: Vec::new(),
             publication_bindings: Vec::new(),

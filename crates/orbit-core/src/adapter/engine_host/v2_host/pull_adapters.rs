@@ -182,7 +182,7 @@ impl PullPeer for OwnerPullPeer<'_> {
         self.ensure_owner_local(destination)?;
         let identity = AdmissionIdentity::trusted_local(ExecutionLocation {
             machine_id: destination.execution_machine_id.clone(),
-            host_id: None,
+            machine_name: None,
         });
         match self.boundary()?.admit_task(
             &identity,

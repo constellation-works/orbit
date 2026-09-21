@@ -282,20 +282,6 @@ impl Commands {
                 )
                 .governed_when(governed, "workspace", subcommand)
             }
-            Commands::Host(command) => {
-                use super::host::HostSubcommand;
-                let (subcommand, runtime_need, json_output) = match &command.command {
-                    HostSubcommand::Show(args) => ("show", RuntimeNeed::Forbidden, args.json),
-                    HostSubcommand::Rename(_) => ("rename", RuntimeNeed::Required, false),
-                };
-                CommandOperation::new(
-                    runtime_need,
-                    Some(admin_meta("host", Some(subcommand), Some("host"), None)),
-                    json_output.then_some(true),
-                    false,
-                    dispatch_host,
-                )
-            }
             Commands::Config(command) => {
                 use super::config::ConfigSubcommand;
                 let subcommand = match &command.command {
@@ -1052,17 +1038,6 @@ fn dispatch_init(command: Commands, context: DispatchContext<'_>) -> CommandOut 
     match command {
         Commands::Init(command) => command.execute_without_runtime(context.root_override),
         _ => dispatch_mismatch("Init"),
-    }
-}
-
-fn dispatch_host(command: Commands, context: DispatchContext<'_>) -> CommandOut {
-    use super::host::{HostCommand, HostSubcommand};
-    match command {
-        Commands::Host(HostCommand {
-            command: HostSubcommand::Show(args),
-        }) => args.execute_without_runtime(context.root_override),
-        Commands::Host(command) => command.execute(context.runtime()?),
-        _ => dispatch_mismatch("Host"),
     }
 }
 

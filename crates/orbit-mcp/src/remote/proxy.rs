@@ -15,11 +15,13 @@ use std::process::{Command, Stdio};
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::agent_context_declared;
 use orbit_common::process::shell::quote_posix_arg;
-use orbit_registry::{HostIdentityState, inspect_host_identity};
+use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 
 use super::identity::McpSessionAuthority;
 
 /// Audit-only identity used when this machine has no persisted Orbit identity.
+/// Pinned mcp-bridge conformance-v1 audit label; see
+/// [`super::identity`]. Not renamed by ORB-12725.
 pub(super) const LOCAL_CALLER_MACHINE_ID_FALLBACK: &str = "host/local";
 
 /// What `orbit mcp serve --mode remote` was asked to do.
@@ -146,22 +148,16 @@ fn propagated_authority(requested: McpSessionAuthority) -> McpSessionAuthority {
 /// Identity is metadata, not a credential, so an absent or unreadable local
 /// identity must not prevent a client from reaching the authoritative server.
 pub(super) fn caller_machine_id_at(global_root: Option<&Path>) -> String {
-    let state = global_root.map(inspect_host_identity);
+    let state = global_root.map(inspect_machine_identity);
     match state {
-        Some(Ok(HostIdentityState::Present(identity))) => identity.machine_id,
-        Some(Ok(HostIdentityState::Legacy {
-            machine_id: Some(machine_id),
-            ..
-        })) => machine_id,
+        Some(Ok(MachineIdentityState::Present(identity))) => identity.id,
         Some(Err(error)) => {
             tracing::warn!(%error, "could not read local Orbit machine identity; using audit fallback");
             LOCAL_CALLER_MACHINE_ID_FALLBACK.to_string()
         }
-        Some(Ok(HostIdentityState::Legacy {
-            machine_id: None, ..
-        }))
-        | Some(Ok(HostIdentityState::Absent))
-        | None => LOCAL_CALLER_MACHINE_ID_FALLBACK.to_string(),
+        Some(Ok(MachineIdentityState::Absent)) | None => {
+            LOCAL_CALLER_MACHINE_ID_FALLBACK.to_string()
+        }
     }
 }
 

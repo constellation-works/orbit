@@ -240,7 +240,7 @@ fn admission_request(runtime: &OrbitRuntime, drain: &str, mode: &str) -> Admissi
         run_context: AdmissionRunContext {
             run_id: drain.to_string(),
             job_name: "workspace_auto_pipeline".into(),
-            host_id: None,
+            machine_name: None,
         },
         ship: AdmissionShipContract {
             mode: mode.into(),

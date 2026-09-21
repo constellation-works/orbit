@@ -35,7 +35,7 @@ impl RoutineShowArgs {
         let definition = &status.routine.definition;
 
         let doc = json!({
-            "host_id": report.host_id,
+            "machine_name": report.machine_name,
             "machine_id": report.machine_id,
             "name": definition.name,
             "description": definition.description,

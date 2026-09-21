@@ -2,7 +2,7 @@ use std::path::Path;
 
 use clap::{Args, Subcommand};
 use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_registry::{load_host_identity, workspace_registry};
+use orbit_registry::{load_machine_identity, workspace_registry};
 use orbit_types::workspace::{
     Workspace, WorkspaceRegistry, git_remote_identity, redact_git_remote,
 };
@@ -80,7 +80,7 @@ impl Execute for WorkspaceSourceRemoteRebindArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let workspace_id = selected_workspace_id(runtime)?;
         let global_root = runtime.global_root();
-        let local_machine_id = load_host_identity(&global_root)?.machine_id;
+        let local_machine_id = load_machine_identity(&global_root)?.id;
         let registry_path = workspace_registry::registry_path_for(&global_root);
         let outcome = rebind_at_registry_path(
             &registry_path,

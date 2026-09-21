@@ -2,6 +2,8 @@ orbit config — effective
 
 Layers (later wins)          built-in defaults → global <global-root>/config.toml → workspace <workspace-root>/config.toml (absent)
 
+Machine (machine.*)          who this machine is (global config only) — 3 keys unset (pass --all to list them)
+
 Delivery (workflow.*)        how tasks are shipped
   base_branch                      main                  global   Config fallback for ship/auto/pilot base branch when no registered workspace base_branch is bound.
   default_crew                     sol                   global   Named crew used when a task does not declare `crew` and no CLI override is given.

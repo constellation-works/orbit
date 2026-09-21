@@ -269,7 +269,7 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
             raise ValueError(f"command exited {evidence['exit_code']}")
 
     checked("isolated-cli-lifecycle",
-            [orbit_bin, "init", "--non-interactive", "--host-name", "qa-host", "--task-prefix", "QAF"],
+            [orbit_bin, "init", "--non-interactive", "--machine-name", "qa-machine", "--task-prefix", "QAF"],
             temp, ["global-init-persists-isolated-root"], succeeds)
     checked("isolated-cli-lifecycle", [orbit_bin, "workspace", "init", "--name", "qa-primary"],
             work, ["workspace-init-registers-primary"], succeeds)
@@ -380,53 +380,72 @@ def run_builtins(repo: Path, orbit_bin: str, temp: Path, env: dict, candidate_id
             ["invalid-setting-refused-without-byte-change"], invalid_config_refused,
             accept_nonzero=True)
 
-    identity_path = root / "host.toml"
+    identity_path = root / "config.toml"
     registry_path = root / "workspaces.json"
 
-    def host_identity(evidence):
-        body = parse_json(evidence, "host show")
-        if body.get("host_id") != "qa-host" or body.get("task_prefix") != "QAF":
-            raise ValueError("host show did not return the initialized identity")
-        machine_id = body.get("machine_id")
+    def machine_identity(evidence):
+        body = parse_json(evidence, "config show")
+        settings = body.get("settings", {})
+        if settings.get("machine.name") != "qa-machine" or settings.get("machine.task_prefix") != "QAF":
+            raise ValueError("config show did not return the initialized identity")
+        machine_id = settings.get("machine.id")
         if not isinstance(machine_id, str) or not machine_id.startswith("hm_"):
-            raise ValueError("host show returned an invalid stable machine_id")
+            raise ValueError("config show returned an invalid stable machine.id")
 
-    initial_host = checked("host-identity-transaction",
-                           [orbit_bin, "--root", str(root), "host", "show", "--format", "json"],
-                           work, ["initialized-identity-readback"], host_identity)
-    initial_machine_id = json.loads(initial_host["stdout"])["machine_id"] if initial_host else None
-    checked("host-identity-transaction",
-            [orbit_bin, "--root", str(root), "--workspace", str(work), "host", "rename",
-             "qa-host", "qa-renamed"], work, ["supported-rename-updates-local-records"], succeeds)
+    initial_machine = checked("machine-identity-transaction",
+                              [orbit_bin, "--root", str(root), "--workspace", str(work),
+                               "config", "show", "--scope", "global", "--format", "json"],
+                              work, ["initialized-identity-readback"], machine_identity)
+    initial_machine_id = (
+        json.loads(initial_machine["stdout"])["settings"]["machine.id"] if initial_machine else None
+    )
+    checked("machine-identity-transaction",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "config", "set",
+             "--global", "machine.name", "qa-renamed"], work,
+            ["supported-rename-updates-the-machine-name"], succeeds)
 
     def renamed_identity(evidence):
-        body = parse_json(evidence, "renamed host show")
-        if body.get("machine_id") != initial_machine_id or body.get("host_id") != "qa-renamed":
-            raise ValueError("rename changed stable identity or failed host_id readback")
-        registry = json.loads(registry_path.read_text())
-        if registry.get("owner_host_ids", {}).get(initial_machine_id) != "qa-renamed":
-            raise ValueError("rename did not update the isolated registry owner projection")
+        body = parse_json(evidence, "renamed config show")
+        settings = body.get("settings", {})
+        if settings.get("machine.id") != initial_machine_id or settings.get("machine.name") != "qa-renamed":
+            raise ValueError("rename changed stable identity or failed machine.name readback")
 
-    checked("host-identity-transaction",
-            [orbit_bin, "--root", str(root), "host", "show", "--format", "json"], work,
+    checked("machine-identity-transaction",
+            [orbit_bin, "--root", str(root), "--workspace", str(work),
+             "config", "show", "--scope", "global", "--format", "json"], work,
             ["rename-preserves-machine-id-and-reads-back"], renamed_identity)
-    host_before_invalid = identity_path.read_bytes()
+    identity_before_invalid = identity_path.read_bytes()
     registry_before_invalid = registry_path.read_bytes()
 
-    def invalid_host_refused(evidence):
+    def invalid_identity_refused(evidence):
         refused(evidence)
-        if (identity_path.read_bytes() != host_before_invalid
+        if (identity_path.read_bytes() != identity_before_invalid
                 or registry_path.read_bytes() != registry_before_invalid):
-            raise ValueError("refused host rename changed identity or registry bytes")
+            raise ValueError("refused machine edit changed identity or registry bytes")
 
-    checked("host-identity-transaction",
-            [orbit_bin, "--root", str(root), "--workspace", str(work), "host", "rename",
-             "stale-host", "other-name"], work, ["stale-rename-refused-without-mutation"],
-            invalid_host_refused, accept_nonzero=True)
-    checked("host-identity-transaction",
-            [orbit_bin, "--root", str(root), "--workspace", str(work), "host", "rename",
-             "qa-renamed", "invalid/name"], work, ["invalid-rename-refused-without-mutation"],
-            invalid_host_refused, accept_nonzero=True)
+    # `machine.id` and `machine.task_prefix` are read-only, a workspace layer
+    # may not carry `[machine]` at all, and a malformed name is refused — each
+    # without touching a byte of either file.
+    checked("machine-identity-transaction",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "config", "set",
+             "--global", "machine.id", "hm_forged"], work,
+            ["immutable-machine-id-refused-without-mutation"],
+            invalid_identity_refused, accept_nonzero=True)
+    checked("machine-identity-transaction",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "config", "set",
+             "--global", "machine.task_prefix", "ZZ"], work,
+            ["immutable-task-prefix-refused-without-mutation"],
+            invalid_identity_refused, accept_nonzero=True)
+    checked("machine-identity-transaction",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "config", "set",
+             "machine.name", "workspace-scoped"], work,
+            ["workspace-scoped-machine-key-refused-without-mutation"],
+            invalid_identity_refused, accept_nonzero=True)
+    checked("machine-identity-transaction",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "config", "set",
+             "--global", "machine.name", "invalid/name"], work,
+            ["invalid-rename-refused-without-mutation"],
+            invalid_identity_refused, accept_nonzero=True)
 
     log_path = temp / "qa-unified-log.jsonl"
     selected_event = {
@@ -519,7 +538,7 @@ spec:
     migration_init = checked(
         "migration-lifecycle",
         [orbit_bin, "--root", str(migration_root), "init", "--non-interactive",
-         "--host-name", "qa-migration", "--task-prefix", "QAM"],
+         "--machine-name", "qa-migration", "--task-prefix", "QAM"],
         temp, ["disposable-migration-fixture-initialized"], succeeds,
     )
     if migration_init is None:
@@ -564,7 +583,7 @@ spec:
             temp, ["repeated-migration-is-idempotent"], idempotent_migration)
     migration_marker.write_text("99\n")
     newer_before = migration_marker.read_bytes()
-    migration_identity_path = migration_root / "host.toml"
+    migration_identity_path = migration_root / "config.toml"
     migration_identity_before = migration_identity_path.read_bytes()
 
     def newer_migration_refused(evidence):
@@ -573,7 +592,7 @@ spec:
             raise ValueError("newer migration refusal did not explain the incompatibility")
         if (migration_marker.read_bytes() != newer_before
                 or migration_identity_path.read_bytes() != migration_identity_before):
-            raise ValueError("newer migration refusal changed marker or host identity bytes")
+            raise ValueError("newer migration refusal changed marker or machine identity bytes")
 
     checked("migration-lifecycle",
             [orbit_bin, "--root", str(migration_root), "migrate", "--dry-run", "--json"],

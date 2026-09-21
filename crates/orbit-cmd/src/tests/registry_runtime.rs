@@ -193,9 +193,11 @@ fn registered_checkout_opens_a_bound_runtime() {
     let workspace = workspace("logical-abc123", "local");
     let checkout = WorkspaceCheckout::owner(workspace.id.clone(), repo.clone(), orbit_dir);
 
-    std::fs::write(global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_local\"\nhost_id = \"local\"\ntask_prefix = \"ORB\"\n")
-        .expect("host identity");
+    std::fs::write(
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_local\"\nname = \"local\"\ntask_prefix = \"ORB\"\n",
+    )
+    .expect("host identity");
     let runtime =
         RegisteredRuntimeFactory::open_registered_checkout(&global, &workspace, &checkout)
             .expect("bound runtime");
@@ -291,8 +293,8 @@ fn registered_checkout_task_creation_uses_host_task_prefix() {
     std::fs::create_dir_all(&global).expect("global");
     std::fs::create_dir_all(&orbit_dir).expect("orbit dir");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_runtime_test\"\nhost_id = \"runtime-test\"\ntask_prefix = \"DE\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_runtime_test\"\nname = \"runtime-test\"\ntask_prefix = \"DE\"\n",
     )
     .expect("host identity");
     write_workspace_config(
@@ -325,41 +327,32 @@ fn registered_checkout_task_creation_uses_host_task_prefix() {
     assert_eq!(task["id"], "DE-00000");
 }
 
+/// A half-written `[machine]` table names what is missing rather than
+/// projecting a namespace from an identity that does not exist.
 #[test]
-fn sync_task_prefix_rejects_legacy_host_identity() {
+fn sync_task_prefix_rejects_a_partial_machine_identity() {
     let root = tempfile::tempdir().expect("root");
-    std::fs::write(root.path().join("host.toml"), "host_id = \"legacy\"\n")
-        .expect("legacy host identity");
+    std::fs::write(
+        root.path().join("config.toml"),
+        "[machine]\nname = \"partial\"\n",
+    )
+    .expect("partial machine identity");
 
-    let error =
-        sync_task_prefix(root.path()).expect_err("legacy host identity must require migration");
+    let error = sync_task_prefix(root.path()).expect_err("a partial identity must require repair");
 
+    let message = error.to_string();
     assert!(
-        matches!(error, OrbitError::InvalidInput(message) if message.contains("legacy pre-migration"))
+        matches!(error, OrbitError::InvalidInput(_)) && message.contains("machine.id"),
+        "unexpected: {message}"
     );
 }
 
-#[cfg(unix)]
+/// An uninitialized root has no namespace to project, and says so by leaving
+/// the allocator alone rather than failing every command.
 #[test]
-fn sync_task_prefix_rejects_a_symlinked_host_identity() {
-    use std::os::unix::fs::symlink;
-
+fn sync_task_prefix_leaves_an_uninitialized_root_alone() {
     let root = tempfile::tempdir().expect("root");
-    let outside = tempfile::tempdir().expect("outside");
-    let outside_identity = outside.path().join("host.toml");
-    std::fs::write(
-        &outside_identity,
-        "schema_version = 2\nmachine_id = \"hm_outside\"\nhost_id = \"outside\"\ntask_prefix = \"DE\"\n",
-    )
-    .expect("outside host identity");
-    symlink(&outside_identity, root.path().join("host.toml")).expect("host identity symlink");
-
-    let error =
-        sync_task_prefix(root.path()).expect_err("symlinked host identity must fail closed");
-
-    assert!(
-        matches!(error, OrbitError::InvalidInput(message) if message.contains("regular host.toml"))
-    );
+    sync_task_prefix(root.path()).expect("an absent identity projects nothing");
 }
 
 #[test]
@@ -455,8 +448,8 @@ fn dual_workspace_fixture() -> DualWorkspaceFixture {
     let global = root.path().join("global");
     std::fs::create_dir_all(&global).expect("global");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_cli_bind\"\nhost_id = \"cli-bind\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_cli_bind\"\nname = \"cli-bind\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("host identity");
 
@@ -712,8 +705,8 @@ fn read_only_global_registry_supports_mcp_and_cli_workspace_bindings() {
     let global = root.path().join("global");
     std::fs::create_dir_all(&global).expect("global root");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_read_only\"\nhost_id = \"read-only\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_read_only\"\nname = \"read-only\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("host identity");
 
@@ -785,7 +778,7 @@ fn read_only_global_registry_supports_mcp_and_cli_workspace_bindings() {
     )
     .expect("make registry file read-only");
     std::fs::set_permissions(
-        global.join("host.toml"),
+        global.join("config.toml"),
         std::fs::Permissions::from_mode(0o444),
     )
     .expect("make host identity read-only");
@@ -823,8 +816,8 @@ fn bootstrap_hint_stays_within_its_registered_git_repository() {
     let global = home.join(".orbit");
     std::fs::create_dir_all(&global).expect("global root");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_nested_hint\"\nhost_id = \"nested-hint\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_nested_hint\"\nname = \"nested-hint\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("host identity");
 
@@ -1112,8 +1105,8 @@ fn managed_worktree_fixture() -> ManagedWorktreeFixture {
     let registry_root = root.path().join("registry");
     std::fs::create_dir_all(&registry_root).expect("registry root");
     std::fs::write(
-        registry_root.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_managed\"\nhost_id = \"managed\"\ntask_prefix = \"ORB\"\n",
+        registry_root.join("config.toml"),
+        "[machine]\nid = \"hm_managed\"\nname = \"managed\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("host identity");
 
@@ -1489,8 +1482,8 @@ fn colliding_id_name_fixture() -> CollidingIdNameFixture {
     let global = root.path().join("global");
     std::fs::create_dir_all(&global).expect("global");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_collision\"\nhost_id = \"collision\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_collision\"\nname = \"collision\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("host identity");
 
@@ -1569,8 +1562,8 @@ fn deleted_checkout_workspace_selector_reports_inactive_status_and_recorded_path
     let global = root.path().join("global");
     std::fs::create_dir_all(&global).expect("global");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_deleted_test\"\nhost_id = \"deleted-test\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_deleted_test\"\nname = \"deleted-test\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("host identity");
 
@@ -1675,8 +1668,8 @@ fn non_active_workspace_with_readable_orbit_root_fails_to_bind_for_read_verbs() 
     let global = root.path().join("global");
     std::fs::create_dir_all(&global).expect("global");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_readable_test\"\nhost_id = \"readable-test\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_readable_test\"\nname = \"readable-test\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("host identity");
 
@@ -1793,8 +1786,8 @@ fn path_selector_fixture() -> PathSelectorFixture {
     let global = root.path().join("global");
     std::fs::create_dir_all(&global).expect("global");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_path_sel\"\nhost_id = \"path-sel\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_path_sel\"\nname = \"path-sel\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("host identity");
 
@@ -1938,8 +1931,8 @@ fn path_selector_falls_back_to_git_spawn_when_recorded_git_dir_is_missing() {
     let global = root.path().join("global");
     std::fs::create_dir_all(&global).expect("global");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_path_fallback\"\nhost_id = \"path-fallback\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_path_fallback\"\nname = \"path-fallback\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("host identity");
 
@@ -2179,7 +2172,7 @@ fn linked_worktree_root_override_is_not_a_store_and_invalid_selectors_fail_close
                 message.contains("unknown workspace selector")
                     || message.contains("not an Orbit workspace")
                     || message.contains("workspaces.json")
-                    || message.contains("host.toml"),
+                    || message.contains("[machine]"),
                 "worktree .orbit as --root must be refused as a store shadow: {message}"
             );
         }

@@ -75,12 +75,16 @@ pub struct AuditEvent {
     pub workspace_id: Option<String>,
     #[serde(default)]
     pub caller_machine_id: Option<String>,
-    #[serde(default)]
-    pub caller_host_id: Option<String>,
+    /// [ORB-12725] `caller_host_id` is read for one release so an audit
+    /// export written by an older build still loads.
+    #[serde(default, alias = "caller_host_id")]
+    pub caller_machine_name: Option<String>,
     #[serde(default)]
     pub process_machine_id: Option<String>,
-    #[serde(default)]
-    pub process_host_id: Option<String>,
+    /// [ORB-12725] `process_host_id` is read for one release; see
+    /// [`Self::caller_machine_name`].
+    #[serde(default, alias = "process_host_id")]
+    pub process_machine_name: Option<String>,
     #[serde(default)]
     pub transport: Option<McpTransport>,
     /// Complete effective MCP capability set, canonically ordered by the

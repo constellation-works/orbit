@@ -683,7 +683,7 @@ fn worker_binding() -> orbit_types::tool::WorkerInvocation {
         claim_id: "claim".into(),
         execution: orbit_types::task::ExecutionLocation {
             machine_id: "execution-machine".into(),
-            host_id: None,
+            machine_name: None,
         },
         bound_run_id: "immutable-leaf".into(),
     }

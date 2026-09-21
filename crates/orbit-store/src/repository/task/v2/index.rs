@@ -226,7 +226,7 @@ impl TaskV2Store {
     pub(crate) fn task_from_bundle(&self, bundle: TaskBundleV2) -> Result<Task, OrbitError> {
         let status = bundle.envelope.status;
         Ok(Task {
-            job_run_host: bundle.envelope.job_run_host,
+            job_run_machine: bundle.envelope.job_run_machine,
             id: bundle.envelope.id,
             title: bundle.envelope.title,
             description: bundle.description,

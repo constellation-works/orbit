@@ -18,9 +18,11 @@ executions become runs; ordinary tool calls have their own audit records.
 
 ## Places
 
-**Host** — one machine. It has an identity (`~/.orbit/host.toml`): a host ID
-used to pin routines, a machine ID, and an **immutable task prefix** that
-namespaces every task ID this machine allocates. Chosen once, at `orbit init`.
+**Machine** — one machine. It has an identity, the `[machine]` table in the
+global `~/.orbit/config.toml`: a stable `id`, a renameable display `name`, and
+an **immutable `task_prefix`** that namespaces every task ID this machine
+allocates. Written once, at `orbit init`. `orbit config show` displays it; only
+`machine.name` is settable.
 
 **Workspace** — a logical project registered with a local checkout, with
 `.orbit/` at its root. A checkout declares an owner or replica role; the owner
@@ -31,7 +33,7 @@ in a machine-global registry, so commands can address it by name, by logical ID
 checkout rather than registering separately.
 
 **Global root** (`~/.orbit/`) — the machine's own state: the store, the
-workspace registry, host identity, installed resources, logs. Never in version
+workspace registry, machine identity, installed resources, logs. Never in version
 control.
 
 **Workspace `.orbit/`** — per-user checkout state, gitignored in full.

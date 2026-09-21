@@ -15,10 +15,12 @@ workspace = true
 chrono.workspace = true
 hostname.workspace = true
 orbit-common = { path = "../orbit-common" }
+orbit-config = { path = "../orbit-config" }
 orbit-types = { path = "../orbit-types" }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

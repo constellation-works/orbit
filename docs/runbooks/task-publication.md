@@ -15,7 +15,7 @@ snapshot, diagnose authentication or workspace-identity failures, or recover tha
 under the same authority.
 
 Task publication is an explicit, task-only durability channel. It does not back up audit
-events, run history, claims, reservations, configuration, host identity, or runtime caches.
+events, run history, claims, reservations, configuration, machine identity, or runtime caches.
 No task mutation publishes automatically, and v1 seeds no publication routine. Keep the
 global-root and database backups described in [Inventory and Protect Orbit State](./state-and-backup.md).
 
@@ -218,7 +218,7 @@ authority, publication ID, commit, freshness, completeness, and `render_authorit
 It is not live owner state. Pairing mismatch, unsupported schema, corrupt JSONL, changed bundle
 or attachment bytes, or invalid Git lineage returns no trusted task projection.
 
-Restore global configuration plus `host.toml` and `workspaces.json` authority evidence first.
+Restore the global `config.toml` (including its `[machine]` table) plus `workspaces.json` authority evidence first.
 V1 has no authority-transfer command: the selected recovery workspace must be an owner checkout
 whose machine, logical workspace ID, and source remote match the publication. Start with an
 empty canonical task destination:

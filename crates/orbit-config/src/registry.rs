@@ -15,7 +15,10 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_common::security::redaction::redact_home_dir;
-use orbit_types::identity::{Crew, CrewAssignment, resolve_crew};
+use orbit_types::identity::{
+    Crew, CrewAssignment, resolve_crew, validate_machine_id, validate_machine_name,
+    validate_stored_task_prefix,
+};
 use orbit_types::workflow::automation::recovery::DEFAULT_STALL_WINDOW_MINUTES;
 use orbit_types::workflow::{CODEX_PROVIDER_SANDBOX_MODES, Provider};
 
@@ -65,6 +68,9 @@ pub(crate) struct CrewFieldKey<'a> {
 /// section by relevance rather than alphabetically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConfigSection {
+    /// `machine.*` — this machine's identity. Global-only: a workspace
+    /// `config.toml` may neither supply nor override it.
+    Machine,
     /// `workflow.*` — how tasks are shipped.
     Delivery,
     /// `crews.*` — named provider/model assignments. No fixed registry rows:
@@ -81,6 +87,7 @@ pub enum ConfigSection {
 impl ConfigSection {
     /// Sections in rendering order.
     pub const ORDER: &'static [ConfigSection] = &[
+        ConfigSection::Machine,
         ConfigSection::Delivery,
         ConfigSection::Crews,
         ConfigSection::Execution,
@@ -91,6 +98,7 @@ impl ConfigSection {
     /// Section heading shown by `orbit config show`.
     pub fn title(self) -> &'static str {
         match self {
+            Self::Machine => "Machine (machine.*)",
             Self::Delivery => "Delivery (workflow.*)",
             Self::Crews => "Crews (crews.*)",
             Self::Execution => "Execution (execution.*)",
@@ -102,6 +110,7 @@ impl ConfigSection {
     /// One-line explanation of what the section governs.
     pub fn blurb(self) -> &'static str {
         match self {
+            Self::Machine => "who this machine is (global config only)",
             Self::Delivery => "how tasks are shipped",
             Self::Crews => "named provider/model assignments",
             Self::Execution => "how agent subprocesses run",
@@ -115,6 +124,7 @@ impl ConfigSection {
     /// the full key.
     pub fn key_prefix(self) -> Option<&'static str> {
         match self {
+            Self::Machine => Some("machine"),
             Self::Delivery => Some("workflow"),
             Self::Crews => Some("crews"),
             Self::Execution => Some("execution"),
@@ -126,6 +136,7 @@ impl ConfigSection {
     /// Stable lowercase token for `--json` output.
     pub fn token(self) -> &'static str {
         match self {
+            Self::Machine => "machine",
             Self::Delivery => "delivery",
             Self::Crews => "crews",
             Self::Execution => "execution",
@@ -261,6 +272,24 @@ define_config_settings! {
         description: "Environment variable names allow-listed for passthrough into agent subprocesses.",
         section: ConfigSection::Execution, order: 30,
         resolve: |raw: Option<Vec<String>>| raw.map(normalize_pass_list).unwrap_or_else(|| Ok(default_pass_list())),
+    },
+    machine_id: Option<String> => String {
+        key: "machine.id", value_type: "string",
+        description: "Stable generated identity of this machine (hm_...). Written once by `orbit init` and never reused; not settable.",
+        section: ConfigSection::Machine, order: 10,
+        resolve: |raw: Option<String>| resolve_machine_id(raw),
+    },
+    machine_name: Option<String> => String {
+        key: "machine.name", value_type: "string",
+        description: "Operator-chosen display name for this machine. The one [machine] value that may change: `orbit config set --global machine.name <value>`.",
+        section: ConfigSection::Machine, order: 20,
+        resolve: |raw: Option<String>| resolve_machine_name(raw),
+    },
+    machine_task_prefix: Option<String> => String {
+        key: "machine.task_prefix", value_type: "string",
+        description: "Immutable task-id namespace for ids minted on this machine (2-5 uppercase ASCII letters). Chosen once by `orbit init`; not settable.",
+        section: ConfigSection::Machine, order: 30,
+        resolve: |raw: Option<String>| resolve_task_prefix(raw),
     },
     operation_completion: Option<String> => String {
         key: "operation.completion", value_type: "string",
@@ -477,7 +506,83 @@ impl ConfigSnapshot {
         )?;
         self.workflow_default_crew =
             resolve_default_crew(self.workflow_default_crew.take(), crews, env_default)?;
+        self.machine().check_complete()?;
         Ok(())
+    }
+
+    /// This machine's identity, as admitted from the same registry rows every
+    /// other consumer reads.
+    pub fn machine(&self) -> MachineSettings {
+        MachineSettings {
+            id: self.machine_id.clone(),
+            name: self.machine_name.clone(),
+            task_prefix: self.machine_task_prefix.clone(),
+        }
+    }
+}
+
+/// The `[machine]` table, admitted on its own.
+///
+/// Identity is resolved on every runtime open and by `orbit init` before the
+/// rest of the document is known to admit, so it is readable without resolving
+/// crews, execution policy, or operation preferences. The values still go
+/// through the registry rows' own resolvers, so there is exactly one validator
+/// and `orbit config get machine.id` cannot disagree with a runtime open.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MachineSettings {
+    /// `machine.id` — the stable generated `hm_…` identity.
+    pub id: Option<String>,
+    /// `machine.name` — the operator-chosen display name.
+    pub name: Option<String>,
+    /// `machine.task_prefix` — the immutable task-id namespace.
+    pub task_prefix: Option<String>,
+}
+
+impl MachineSettings {
+    /// Admit `[machine]` from one already-parsed document.
+    pub(crate) fn admit(document: &toml::Value, config_path: &Path) -> Result<Self, OrbitError> {
+        let settings = Self {
+            id: resolve_machine_id(read_optional(document, "machine.id", config_path)?)?,
+            name: resolve_machine_name(read_optional(document, "machine.name", config_path)?)?,
+            task_prefix: resolve_task_prefix(read_optional(
+                document,
+                "machine.task_prefix",
+                config_path,
+            )?)?,
+        };
+        settings.check_complete()?;
+        Ok(settings)
+    }
+
+    /// The complete identity, or `None` when no `[machine]` table exists.
+    /// A partial table never reaches here — [`Self::check_complete`] refuses it.
+    pub fn complete(self) -> Option<(String, String, String)> {
+        Some((self.id?, self.name?, self.task_prefix?))
+    }
+
+    /// `[machine]` is one identity, not three independent settings: a file
+    /// either carries the whole table or none of it. A partial table is a hand
+    /// edit that would otherwise resolve to a machine with no id or no
+    /// namespace, so it fails closed naming the missing keys.
+    fn check_complete(&self) -> Result<(), OrbitError> {
+        let present = [
+            ("machine.id", self.id.is_some()),
+            ("machine.name", self.name.is_some()),
+            ("machine.task_prefix", self.task_prefix.is_some()),
+        ];
+        if present.iter().all(|(_, set)| *set) || present.iter().all(|(_, set)| !*set) {
+            return Ok(());
+        }
+        let missing = present
+            .iter()
+            .filter(|(_, set)| !*set)
+            .map(|(key, _)| *key)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(OrbitError::InvalidInput(format!(
+            "[machine] is incomplete: {missing} must be set alongside the keys already present; \
+             run `orbit init` to create this machine's identity"
+        )))
     }
 }
 
@@ -565,6 +670,53 @@ pub(crate) fn removed_key_note(key: &str) -> Option<&'static str> {
         .iter()
         .find(|(removed, _)| *removed == key)
         .map(|(_, note)| *note)
+}
+
+/// Registry keys `orbit config set` refuses to write, with the reason an
+/// operator needs. Unlike [`REMOVED_CONFIG_KEYS`] these are live settings —
+/// readable by `orbit config get`/`show` and admitted at load — they are
+/// simply not the operator's to change after `orbit init` recorded them.
+pub(crate) const IMMUTABLE_CONFIG_KEYS: &[(&str, &str)] = &[
+    (
+        "machine.id",
+        "a machine identity is generated once by `orbit init` and never reused; \
+         changing it would orphan every task, run, and workspace record minted under it",
+    ),
+    (
+        "machine.task_prefix",
+        "the task-id namespace is fixed for the life of this machine's task store; \
+         ids already minted under it cannot be renumbered",
+    ),
+];
+
+/// The refusal note for an unsettable key, or `None` for any other key.
+pub(crate) fn immutable_key_note(key: &str) -> Option<&'static str> {
+    IMMUTABLE_CONFIG_KEYS
+        .iter()
+        .find(|(immutable, _)| *immutable == key)
+        .map(|(_, note)| *note)
+}
+
+/// Dotted prefix of the one table only the global `config.toml` may carry.
+pub const GLOBAL_ONLY_KEY_PREFIX: &str = "machine.";
+
+/// Whether `key` names a setting a workspace `config.toml` may not supply.
+pub fn is_global_only_key(key: &str) -> bool {
+    key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.') || key.starts_with(GLOBAL_ONLY_KEY_PREFIX)
+}
+
+/// Admit a dotted key for a write through `orbit config set`.
+///
+/// Everything [`admit_config_key`] accepts, minus the keys that are read-only
+/// after `orbit init` recorded them.
+pub fn admit_settable_config_key(key: &str) -> Result<(), OrbitError> {
+    admit_config_key(key)?;
+    if let Some(note) = immutable_key_note(key) {
+        return Err(OrbitError::InvalidInput(format!(
+            "config key '{key}' is read-only: {note}"
+        )));
+    }
+    Ok(())
 }
 
 /// Admit a dotted key for `orbit config get`/`set`.
@@ -683,6 +835,34 @@ fn resolve_bounded_minutes(raw: Option<u32>, default: u32, key: &str) -> Result<
         Some(value) => Ok(value),
         None => Ok(default),
     }
+}
+
+fn resolve_machine_id(raw: Option<String>) -> Result<Option<String>, OrbitError> {
+    let Some(value) = resolve_optional_non_empty(raw, "machine.id")? else {
+        return Ok(None);
+    };
+    validate_machine_id(&value)
+        .map_err(|error| OrbitError::InvalidInput(format!("machine.id is invalid: {error}")))?;
+    Ok(Some(value))
+}
+
+fn resolve_machine_name(raw: Option<String>) -> Result<Option<String>, OrbitError> {
+    let Some(value) = resolve_optional_non_empty(raw, "machine.name")? else {
+        return Ok(None);
+    };
+    validate_machine_name(&value)
+        .map_err(|error| OrbitError::InvalidInput(format!("machine.name is invalid: {error}")))?;
+    Ok(Some(value))
+}
+
+fn resolve_task_prefix(raw: Option<String>) -> Result<Option<String>, OrbitError> {
+    let Some(value) = resolve_optional_non_empty(raw, "machine.task_prefix")? else {
+        return Ok(None);
+    };
+    validate_stored_task_prefix(&value).map_err(|error| {
+        OrbitError::InvalidInput(format!("machine.task_prefix is invalid: {error}"))
+    })?;
+    Ok(Some(value))
 }
 
 fn resolve_choice(

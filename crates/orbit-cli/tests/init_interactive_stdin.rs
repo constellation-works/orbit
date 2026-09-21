@@ -21,7 +21,7 @@ use tempfile::{TempDir, tempdir};
 
 const HANG_DEADLINE: Duration = Duration::from_secs(8);
 const SUCCESS_DEADLINE: Duration = Duration::from_secs(60);
-const CLOSED_STDIN_MESSAGE: &str = "stdin closed before an interactive prompt was answered; pass --task-prefix/--host-name or --non-interactive";
+const CLOSED_STDIN_MESSAGE: &str = "stdin closed before an interactive prompt was answered; pass --task-prefix/--machine-name or --non-interactive";
 
 struct IsolatedHome {
     _temp: TempDir,
@@ -96,7 +96,7 @@ fn combined_output(stdout: &str, stderr: &str) -> String {
 
 fn names_identity_flags(output: &str) -> bool {
     output.contains("--task-prefix")
-        && output.contains("--host-name")
+        && output.contains("--machine-name")
         && output.contains("--non-interactive")
 }
 
@@ -156,7 +156,7 @@ fn closed_stdin_keeps_the_existing_message() {
 }
 
 #[test]
-fn piped_host_name_and_task_prefix_still_complete_interactive_init() {
+fn piped_machine_name_and_task_prefix_still_complete_interactive_init() {
     let fixture = IsolatedHome::new();
     let mut child = orbit_init(&fixture.home, &fixture.work, &fixture.empty_path)
         .stdin(Stdio::piped())
@@ -182,8 +182,9 @@ fn piped_host_name_and_task_prefix_still_complete_interactive_init() {
         "piped answers must complete init\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 
-    let host = fs::read_to_string(fixture.home.join(".orbit").join("host.toml"))
-        .expect("host.toml after interactive init");
-    assert!(host.contains("host_id = \"pipe-host\""), "{host}");
-    assert!(host.contains("task_prefix = \"ZZ\""), "{host}");
+    let config = fs::read_to_string(fixture.home.join(".orbit").join("config.toml"))
+        .expect("config.toml after interactive init");
+    assert!(config.contains("[machine]"), "{config}");
+    assert!(config.contains("name = \"pipe-host\""), "{config}");
+    assert!(config.contains("task_prefix = \"ZZ\""), "{config}");
 }

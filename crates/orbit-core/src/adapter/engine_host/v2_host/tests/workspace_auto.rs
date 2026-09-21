@@ -1027,7 +1027,7 @@ fn claimed_leaves_and_pending_admissions_consume_the_legacy_drain_ceiling() {
             run_context: orbit_store::contracts::AdmissionRunContext {
                 run_id: parent.run_id,
                 job_name: "workspace_auto_pipeline".into(),
-                host_id: None,
+                machine_name: None,
             },
             ship: orbit_store::contracts::AdmissionShipContract {
                 mode: "local".into(),

@@ -63,7 +63,7 @@ updated_at: 2026-05-10T12:00:00Z
 
     fn valid_envelope(id: &str) -> TaskEnvelopeV2 {
         TaskEnvelopeV2 {
-            job_run_host: None,
+            job_run_machine: None,
             schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
             id: id.to_string(),
             title: "Build the thing".to_string(),
@@ -126,7 +126,7 @@ updated_at: 2026-05-10T12:00:00Z
             .expect("legacy v1 envelope remains readable");
         assert_eq!(envelope.schema_version, TASK_ARTIFACT_SCHEMA_VERSION);
         assert_eq!(envelope.orchestrator, None);
-        assert_eq!(envelope.job_run_host, None);
+        assert_eq!(envelope.job_run_machine, None);
         assert!(envelope.required_tools.is_empty());
     }
 

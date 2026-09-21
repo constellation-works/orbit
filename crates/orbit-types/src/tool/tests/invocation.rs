@@ -9,7 +9,7 @@ fn binding() -> WorkerInvocation {
         claim_id: "claim".into(),
         execution: ExecutionLocation {
             machine_id: "executor".into(),
-            host_id: None,
+            machine_name: None,
         },
         bound_run_id: "run".into(),
     }

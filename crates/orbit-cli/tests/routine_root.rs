@@ -37,7 +37,7 @@ impl Fixture {
                 &root_arg,
                 "init",
                 "--non-interactive",
-                "--host-name",
+                "--machine-name",
                 "routine-root-host",
                 "--task-prefix",
                 "RR",
@@ -95,7 +95,7 @@ fn routine_list_honors_explicit_root_over_uninitialized_home_and_environment() {
         Some(&uninitialized_env_root),
     );
 
-    assert_eq!(list["host_id"], "routine-root-host");
+    assert_eq!(list["machine_name"], "routine-root-host");
     let routines = list["routines"].as_array().expect("routine list array");
     let expected_prefixes = [
         "ci-failure-sweep-",
@@ -138,7 +138,7 @@ fn routine_commands_honor_orbit_root_and_mutate_only_the_selected_root() {
         &["routine", "list", "--format", "json"],
         Some(&fixture.root),
     );
-    assert_eq!(list["host_id"], "routine-root-host");
+    assert_eq!(list["machine_name"], "routine-root-host");
 
     run_success(
         &fixture.repo,

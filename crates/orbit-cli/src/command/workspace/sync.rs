@@ -9,7 +9,7 @@ use orbit_core::{
     WorkspaceManagedArtifactSyncReport, reconcile_workspace_managed_artifacts,
 };
 use orbit_registry::workspace_registry;
-use orbit_registry::{HostIdentityState, inspect_host_identity};
+use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 
 use super::support::ensure_orbit_gitignore_entry;
 use crate::command::{CommandOut, Payload};
@@ -45,9 +45,9 @@ impl WorkspaceSyncArgs {
             .ok_or_else(workspace_init_required)?;
         let workspace = workspace_registry::find_workspace_by_id(&registry, &checkout.workspace_id)
             .ok_or_else(workspace_init_required)?;
-        match inspect_host_identity(&global_root)? {
-            HostIdentityState::Present(_) => {}
-            HostIdentityState::Legacy { .. } | HostIdentityState::Absent => {
+        match inspect_machine_identity(&global_root)? {
+            MachineIdentityState::Present(_) => {}
+            MachineIdentityState::Absent => {
                 return Err(OrbitError::WorkspaceError(
                     "cannot sync workspace managed artifacts without an initialized host identity; run `orbit init`, then `orbit workspace init`".to_string(),
                 ));

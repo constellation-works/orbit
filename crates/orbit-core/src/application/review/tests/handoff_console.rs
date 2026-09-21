@@ -53,7 +53,7 @@ fn console(handed_off: bool) -> Console {
         .admit_task(
             &AdmissionIdentity::trusted_remote(ExecutionLocation {
                 machine_id: "follower".into(),
-                host_id: Some("runner-2".into()),
+                machine_name: Some("runner-2".into()),
             }),
             &AdmissionRequest {
                 request_id: "pull".into(),
@@ -63,7 +63,7 @@ fn console(handed_off: bool) -> Console {
                 run_context: AdmissionRunContext {
                     run_id: "drain".into(),
                     job_name: "auto".into(),
-                    host_id: None,
+                    machine_name: None,
                 },
                 ship: ship.clone(),
             },
@@ -218,13 +218,13 @@ impl Console {
 }
 
 #[test]
-fn the_console_reports_host_qualified_execution_and_a_live_claim() {
+fn the_console_reports_machine_qualified_execution_and_a_live_claim() {
     let console = console(false);
     let claim = console.claim();
 
     assert_eq!(claim["executed_on"]["known"], true);
     assert_eq!(claim["executed_on"]["machine_id"], "follower");
-    assert_eq!(claim["executed_on"]["host_id"], "runner-2");
+    assert_eq!(claim["executed_on"]["machine_name"], "runner-2");
     assert_eq!(claim["phase"], "running");
     assert_eq!(claim["authorizes_execution"], true);
     assert_eq!(claim["bound_run"]["machine_id"], "follower");

@@ -199,7 +199,7 @@ fn run_projection_exposes_recorded_location_without_input_inference() {
     assert_eq!(job_run_to_json(&run, None)["executed_on"], Value::Null);
     run.executed_on = Some(orbit_types::task::ExecutionLocation {
         machine_id: "trusted-machine".into(),
-        host_id: None,
+        machine_name: None,
     });
     assert_eq!(
         job_run_to_json(&run, None)["executed_on"]["machine_id"],

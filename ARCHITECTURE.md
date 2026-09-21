@@ -8,6 +8,7 @@ flowchart LR
   CLI --> Cmd["orbit-cmd"]
   CLI --> Config["orbit-config"]
   CLI --> Registry["orbit-registry"]
+  Registry --> Config
   CLI --> MCP["orbit-mcp"]
   CLI --> Web["orbit-web"]
   Cmd --> MCP
@@ -74,18 +75,20 @@ feature.
   allowlist-based builder for agent-subprocess environments that `orbit-config`
   parameterizes with `[execution.env]` and every subprocess launcher applies to a
   cleared environment). Operation registries still live here so every consumer surface can read them without a new dependency edge; the matching handler table lives in `orbit-core` and is joined to it by the noun's verb enum. MCP v1 explicitly defers capability decisions inside Core while retaining ordinary domain and sandbox validation.
-- **orbit-config**: owner of `config.toml`. Fixed-key admission registry, global-over-workspace layering with replace-only security keys, source provenance for `orbit config show`/`get`, resolved views (`ResolvedConfig`, execution/env policies, crew registry, persistence paths, config-owned PR settings), comment-preserving `ConfigStore` edits with atomic save, and default-config seeding. Callers pass an explicit `ConfigRoots`, so the crate performs no cwd or `$HOME` discovery; host provider-CLI detection and interactive prompting stay in the `orbit-cli` init adapter, which hands down a `ConfigSeed`. Depends only on `orbit-types` and `orbit-common`, and deliberately not on `orbit-engine` — Core translates `PrSettings` into `orbit_engine::PrConfig` at composition time.
+- **orbit-config**: owner of `config.toml`. Fixed-key admission registry, global-over-workspace layering with replace-only security keys and the global-only `[machine]` identity table [ORB-12725], source provenance for `orbit config show`/`get`, resolved views (`ResolvedConfig`, execution/env policies, crew registry, persistence paths, config-owned PR settings), comment-preserving `ConfigStore` edits with atomic save, and default-config seeding. Callers pass an explicit `ConfigRoots`, so the crate performs no cwd or `$HOME` discovery; provider-CLI detection and interactive prompting stay in the `orbit-cli` init adapter, which hands down a `ConfigSeed`. `load_machine_settings` admits `[machine]` on its own, so a runtime open resolves this machine's identity without inheriting the rest of the document's failure domain. Depends only on `orbit-types` and `orbit-common`, and deliberately not on `orbit-engine` — Core translates `PrSettings` into `orbit_engine::PrConfig` at composition time.
 - **orbit-policy**: filesystem-scoping policy engine. Owns `FsProfile` resolution and `denyRead` / `denyModify` evaluation. Depends on `orbit-types` and `orbit-common`.
 - **orbit-exec**: process / sandbox / supervision primitives for shell-command execution under an `FsProfile`. Depends on `orbit-types` and `orbit-common`.
 - **orbit-search**: retrieval and ranking feature crate. Owns lexical docs/ADR scoring, the `Embedder` trait, JSON-Lines RPC types, `SubprocessEmbedder`, `EmbedderPool` (one live companion per model for the life of the host process, shared by every semantic caller), `NoopEmbedder`, the workspace-local vector store (`vector::VectorStore` with its own `rusqlite::Connection`, WAL + busy_timeout pragmas, idempotent `embeddings` / `chunks` / `corpus_fts` schema, `EmbedWorker`, paragraph chunker, BLAKE3 dedup, BM25, cosine, and reciprocal-rank fusion helpers), and the install/uninstall/reindex/stats `commands::*` surface. Depends on `orbit-types` and `orbit-common` for its library surface; does not depend on `orbit-core` or `orbit-store`.
   Retrieval and ranking live in `orbit-search`. `orbit-core` owns the domain (corpora, records, lifecycle) and projects records into search-source structs. `orbit-search` owns lexical (BM25), semantic (cosine), and hybrid scoring. CLI verbs are presets layered on the same backend.
   It also builds `orbit-search-companion`, a separately installed search companion binary, as an additional `[[bin]]` target (folded from the standalone `orbit-search-companion` crate, ORB-10357); that target alone depends on fastembed-rs and is not linked into the default `orbit` CLI binary.
 - **orbit-registry**: machine identity and workspace registry feature crate. It
-  owns `host.toml`, the logical workspace catalog, local checkout bindings,
+  owns this machine's `[machine]` identity (admitted through `orbit-config`
+  from the global `config.toml`, including the one-release `host.toml`
+  migration), the logical workspace catalog, local checkout bindings,
   owner-local task-publication repository bindings, validation, and atomic file
   persistence. It contains no shared database, command orchestration, MCP
-  transport, or Core runtime execution. Depends only on `orbit-types` and
-  `orbit-common` among workspace crates.
+  transport, or Core runtime execution. Depends only on `orbit-types`,
+  `orbit-common`, and `orbit-config` among workspace crates.
 - **orbit-store**: one directional persistence crate. `contracts` owns every
   consumer-visible trait, parameter, query/filter, and result projection;
   `fs` owns narrowly named lock, path-safety, and YAML mechanics; private

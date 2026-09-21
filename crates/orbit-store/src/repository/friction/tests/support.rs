@@ -72,7 +72,7 @@ pub(super) fn legacy_body(id: &str, model: &str, status: FrictionStatus) -> Fric
 
 pub(super) fn done_task(id: &str, implemented_by: &str) -> Task {
     Task {
-        job_run_host: None,
+        job_run_machine: None,
         id: id.to_string(),
         title: id.to_string(),
         description: String::new(),

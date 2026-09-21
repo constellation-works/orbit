@@ -129,7 +129,7 @@ fn root_help_groups_scheduler_commands_in_layer_order() {
     let help = Cli::command().render_long_help().to_string();
     assert_eq!(
         root_help_section(&help, "Scheduler"),
-        "  clock       Inspect, control, and manually tick the host scheduler\n  sweep       Compatibility alias for `orbit clock tick`\n  routine     Inspect and control scheduled routines on this host\n  auto-task   Define recurring auto-task templates (the scheduler primitive)",
+        "  clock       Inspect, control, and manually tick the machine scheduler\n  sweep       Compatibility alias for `orbit clock tick`\n  routine     Inspect and control scheduled routines on this machine\n  auto-task   Define recurring auto-task templates (the scheduler primitive)",
         "{help}"
     );
     assert!(
@@ -150,6 +150,13 @@ fn root_help_groups_scheduler_commands_in_layer_order() {
             .any(|line| line.trim_start().starts_with("locks")),
         "{help}"
     );
+    // ORB-12725: `orbit host` folded into `orbit config`; the row is gone from
+    // the Environment section and the subcommand errors like any unknown one.
+    assert!(
+        !root_help_section(&help, "Environment").contains("host"),
+        "{help}"
+    );
+    assert!(Cli::try_parse_from(["orbit", "host", "--help"]).is_err());
 }
 
 #[test]

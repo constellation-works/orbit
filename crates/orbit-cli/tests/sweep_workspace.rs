@@ -56,7 +56,7 @@ impl Fixture {
             &[
                 "init",
                 "--non-interactive",
-                "--host-name",
+                "--machine-name",
                 "sweep-workspace-host",
                 "--task-prefix",
                 "SW",

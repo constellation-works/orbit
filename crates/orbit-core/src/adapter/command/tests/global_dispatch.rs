@@ -18,7 +18,7 @@ fn persists_one_row_with_mcp_context() {
     let context = ToolSessionContext {
         caller_machine_id: Some("hm_caller".to_string()),
         process_machine_id: Some("hm_server".to_string()),
-        process_host_id: Some("server-host".to_string()),
+        process_machine_name: Some("server-host".to_string()),
         transport: Some(McpTransport::SshMcp),
         trace_id: Some("trace-global".to_string()),
         caller_ip: Some("192.0.2.8".to_string()),
@@ -53,7 +53,7 @@ fn persists_one_row_with_mcp_context() {
     assert_eq!(row.workspace_id, None);
     assert_eq!(row.caller_machine_id.as_deref(), Some("hm_caller"));
     assert_eq!(row.process_machine_id.as_deref(), Some("hm_server"));
-    assert_eq!(row.process_host_id.as_deref(), Some("server-host"));
+    assert_eq!(row.process_machine_name.as_deref(), Some("server-host"));
     assert_eq!(row.transport, Some(McpTransport::SshMcp));
     assert_eq!(row.trace_id.as_deref(), Some("trace-global"));
     assert_eq!(row.caller_ip.as_deref(), Some("192.0.2.8"));
@@ -100,7 +100,7 @@ fn audits_unknown_mcp_tool_as_denied_once() {
     let context = ToolSessionContext {
         caller_machine_id: Some("hm_caller".to_string()),
         process_machine_id: Some("hm_server".to_string()),
-        process_host_id: Some("server-host".to_string()),
+        process_machine_name: Some("server-host".to_string()),
         transport: Some(McpTransport::SshMcp),
         trace_id: Some("trace-unknown".to_string()),
         origin_session_id: Some("mcp-session-unknown".to_string()),
@@ -144,7 +144,7 @@ fn audits_unknown_mcp_tool_as_denied_once() {
     assert_eq!(row.workspace_id, None);
     assert_eq!(row.caller_machine_id.as_deref(), Some("hm_caller"));
     assert_eq!(row.process_machine_id.as_deref(), Some("hm_server"));
-    assert_eq!(row.process_host_id.as_deref(), Some("server-host"));
+    assert_eq!(row.process_machine_name.as_deref(), Some("server-host"));
     assert_eq!(row.transport, Some(McpTransport::SshMcp));
     assert_eq!(row.trace_id.as_deref(), Some("trace-unknown"));
     assert_eq!(

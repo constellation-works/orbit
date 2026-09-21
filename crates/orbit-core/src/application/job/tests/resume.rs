@@ -507,7 +507,7 @@ fn claimed_leaf_refuses_generic_resume_but_same_run_evidence_retries_work() {
     .expect("backends");
     let identity = AdmissionIdentity::trusted_local(ExecutionLocation {
         machine_id: "machine".into(),
-        host_id: None,
+        machine_name: None,
     });
     let request = AdmissionRequest {
         request_id: "pull".into(),
@@ -517,7 +517,7 @@ fn claimed_leaf_refuses_generic_resume_but_same_run_evidence_retries_work() {
         run_context: AdmissionRunContext {
             run_id: "drain".into(),
             job_name: "auto".into(),
-            host_id: None,
+            machine_name: None,
         },
         ship: AdmissionShipContract {
             mode: "pr".into(),

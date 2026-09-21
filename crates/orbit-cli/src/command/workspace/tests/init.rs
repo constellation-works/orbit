@@ -3,7 +3,7 @@ use tempfile::tempdir;
 use chrono::Utc;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::protocol::yaml::parse_routine_yaml;
-use orbit_registry::{HostIdentityState, inspect_host_identity, workspace_registry};
+use orbit_registry::{MachineIdentityState, inspect_machine_identity, workspace_registry};
 use orbit_types::workflow::{OverlapPolicy, RoutineTarget};
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
@@ -28,7 +28,7 @@ fn task_id_start_uses_the_host_task_prefix() {
 }
 
 #[test]
-fn workspace_init_before_host_identity_is_repaired_after_orbit_init() {
+fn workspace_init_before_machine_identity_is_repaired_after_orbit_init() {
     let workspace = tempdir().expect("workspace tempdir");
     let home = tempdir().expect("home tempdir");
     let global = home.path().join(".orbit");
@@ -62,14 +62,14 @@ fn workspace_init_before_host_identity_is_repaired_after_orbit_init() {
     InitCommand {
         force: false,
         non_interactive: true,
-        host_name: Some("late-identity-host".to_string()),
+        machine_name: Some("late-identity-host".to_string()),
         task_prefix: Some("LATE".to_string()),
     }
     .execute_without_runtime(Some(&global))
     .expect("create host identity after workspace init");
 
-    let identity = match inspect_host_identity(&global).expect("inspect host identity") {
-        HostIdentityState::Present(identity) => identity,
+    let identity = match inspect_machine_identity(&global).expect("inspect host identity") {
+        MachineIdentityState::Present(identity) => identity,
         other => panic!("expected current host identity, got {other:?}"),
     };
     let runtime = RegisteredRuntimeFactory::initialize_with_root_override(Some(&global))
@@ -87,7 +87,7 @@ fn workspace_init_before_host_identity_is_repaired_after_orbit_init() {
         .expect("load repaired registry after workspace list");
     assert_eq!(
         registry.workspaces[0].owner_machine_id.as_deref(),
-        Some(identity.machine_id.as_str())
+        Some(identity.id.as_str())
     );
 
     let output = crate::command::doctor::DoctorCommand {
@@ -116,8 +116,8 @@ fn workspace_init_uses_the_checked_out_branch_when_base_branch_is_omitted() {
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_branch\"\nhost_id = \"branch-host\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_branch\"\nname = \"branch-host\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("write host identity");
 
@@ -212,8 +212,8 @@ fn workspace_reinit_requires_force_and_force_reconciles_matching_registration() 
     // A host identity must exist for workspace init to seed default routines
     // (which creates `.orbit/routines/`); `orbit init` owns its creation.
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_reinit\"\nhost_id = \"reinit-host\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_reinit\"\nname = \"reinit-host\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("write host identity");
 
@@ -422,8 +422,8 @@ fn workspace_init_rejects_existing_checkout_path_with_different_id_without_force
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 1\nmachine_id = \"hm_path_collision\"\nhost_id = \"path-collision\"\nmode = \"standalone\"\n",
+        global.join("config.toml"),
+        "schema_version = 1\nmachine_id = \"hm_path_collision\"\nmachine_name = \"path-collision\"\nmode = \"standalone\"\n",
     )
     .expect("write host identity");
     let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
@@ -470,8 +470,8 @@ fn workspace_init_rejects_existing_durable_id_without_force() {
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 1\nmachine_id = \"hm_id_collision\"\nhost_id = \"id-collision\"\nmode = \"standalone\"\n",
+        global.join("config.toml"),
+        "schema_version = 1\nmachine_id = \"hm_id_collision\"\nmachine_name = \"id-collision\"\nmode = \"standalone\"\n",
     )
     .expect("write host identity");
     let _env = EnvGuard::acquire().home(home.path()).cwd(first.path());
@@ -513,8 +513,8 @@ fn force_replaces_a_checkout_identity_that_no_registration_claims() {
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 1\nmachine_id = \"hm_bootstrap\"\nhost_id = \"bootstrap-host\"\nmode = \"standalone\"\n",
+        global.join("config.toml"),
+        "schema_version = 1\nmachine_id = \"hm_bootstrap\"\nmachine_name = \"bootstrap-host\"\nmode = \"standalone\"\n",
     )
     .expect("write host identity");
     let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
@@ -580,8 +580,8 @@ fn force_refuses_to_replace_a_checkout_identity_a_registration_still_claims() {
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 1\nmachine_id = \"hm_claimed\"\nhost_id = \"claimed-host\"\nmode = \"standalone\"\n",
+        global.join("config.toml"),
+        "schema_version = 1\nmachine_id = \"hm_claimed\"\nmachine_name = \"claimed-host\"\nmode = \"standalone\"\n",
     )
     .expect("write host identity");
     let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
@@ -656,8 +656,8 @@ fn forced_workspace_reconciliation_preserves_registry_and_identity_on_validation
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 1\nmachine_id = \"hm_force_failure\"\nhost_id = \"force-failure\"\nmode = \"standalone\"\n",
+        global.join("config.toml"),
+        "schema_version = 1\nmachine_id = \"hm_force_failure\"\nmachine_name = \"force-failure\"\nmode = \"standalone\"\n",
     )
     .expect("write host identity");
     let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
@@ -708,8 +708,8 @@ fn force_recovers_empty_or_missing_identity_only_for_the_exact_registration() {
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_identity_recovery\"\nhost_id = \"identity-recovery\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_identity_recovery\"\nname = \"identity-recovery\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("write host identity");
     let _env = EnvGuard::acquire().home(home.path()).cwd(workspace.path());
@@ -812,8 +812,8 @@ fn multi_host_workspace_init_persists_an_explicit_local_owner() {
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_local\"\nhost_id = \"local\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_local\"\nname = \"local\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("write host identity");
 
@@ -840,10 +840,6 @@ fn multi_host_workspace_init_persists_an_explicit_local_owner() {
         Some("hm_local")
     );
     assert_eq!(
-        registry.owner_host_ids.get("hm_local").map(String::as_str),
-        Some("local")
-    );
-    assert_eq!(
         registry.checkouts[0].role,
         Some(orbit_types::workspace::WorkspaceCheckoutRole::Owner)
     );
@@ -856,8 +852,8 @@ fn workspace_init_can_atomically_declare_a_remote_owner_replica() {
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_local\"\nhost_id = \"local\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_local\"\nname = \"local\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("write host identity");
 
@@ -891,10 +887,6 @@ fn workspace_init_can_atomically_declare_a_remote_owner_replica() {
         registry.checkouts[0].owner_machine_id.as_deref(),
         Some("hm_owner")
     );
-    assert_eq!(
-        registry.owner_host_ids.get("hm_owner").map(String::as_str),
-        Some("hm_owner")
-    );
 }
 
 #[test]
@@ -905,8 +897,8 @@ fn invalid_replica_init_fails_before_workspace_artifacts_or_registry_mutation() 
         let global = home.path().join(".orbit");
         std::fs::create_dir_all(&global).expect("create global orbit");
         std::fs::write(
-            global.join("host.toml"),
-            "schema_version = 2\nmachine_id = \"hm_local\"\nhost_id = \"local\"\ntask_prefix = \"ORB\"\n",
+            global.join("config.toml"),
+            "[machine]\nid = \"hm_local\"\nname = \"local\"\ntask_prefix = \"ORB\"\n",
         )
         .expect("write host identity");
 
@@ -1041,8 +1033,8 @@ fn workspace_init_seeds_disabled_routines_and_reinit_preserves_authored_files() 
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_inithost\"\nhost_id = \"init-host\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_inithost\"\nname = \"init-host\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("write host identity");
 
@@ -1124,7 +1116,7 @@ policy:
 fn seeded_routine_names_follow_the_workspace_name_not_the_checkout_directory() {
     let base = tempdir().expect("base tempdir");
     let home = tempdir().expect("home tempdir");
-    seed_host_identity(home.path());
+    seed_machine_identity(home.path());
     let checkout = base.path().join("repo");
     std::fs::create_dir_all(&checkout).expect("create checkout directory");
 
@@ -1152,7 +1144,7 @@ fn seeded_routine_names_follow_the_workspace_name_not_the_checkout_directory() {
 fn same_basename_checkouts_with_distinct_names_seed_distinct_routine_names() {
     let base = tempdir().expect("base tempdir");
     let home = tempdir().expect("home tempdir");
-    seed_host_identity(home.path());
+    seed_machine_identity(home.path());
     let alpha = base.path().join("a/server");
     let beta = base.path().join("b/server");
     std::fs::create_dir_all(&alpha).expect("create first checkout");
@@ -1181,12 +1173,12 @@ fn same_basename_checkouts_with_distinct_names_seed_distinct_routine_names() {
 /// initialized on two machines produces the same bytes — a repository can be
 /// registered on a second host with no definition edits.
 #[test]
-fn seeded_routines_are_byte_identical_across_host_identities() {
+fn seeded_routines_are_byte_identical_across_machine_nameentities() {
     let base = tempdir().expect("base tempdir");
     let first_home = tempdir().expect("first home tempdir");
     let second_home = tempdir().expect("second home tempdir");
-    seed_named_host_identity(first_home.path(), "hm_first", "first-host");
-    seed_named_host_identity(second_home.path(), "hm_second", "second-host");
+    seed_named_machine_identity(first_home.path(), "hm_first", "first-host");
+    seed_named_machine_identity(second_home.path(), "hm_second", "second-host");
     let first = base.path().join("first/server");
     let second = base.path().join("second/server");
     std::fs::create_dir_all(&first).expect("create first checkout");
@@ -1232,7 +1224,7 @@ fn seeded_routines_are_byte_identical_across_host_identities() {
 fn workspace_init_refuses_a_name_whose_seeded_routines_already_exist() {
     let base = tempdir().expect("base tempdir");
     let home = tempdir().expect("home tempdir");
-    seed_host_identity(home.path());
+    seed_machine_identity(home.path());
     let alpha = base.path().join("a/server");
     let beta = base.path().join("b/server");
     std::fs::create_dir_all(&alpha).expect("create first checkout");
@@ -1276,17 +1268,17 @@ fn workspace_init_refuses_a_name_whose_seeded_routines_already_exist() {
     );
 }
 
-fn seed_host_identity(home: &std::path::Path) {
-    seed_named_host_identity(home, "hm_inithost", "init-host");
+fn seed_machine_identity(home: &std::path::Path) {
+    seed_named_machine_identity(home, "hm_inithost", "init-host");
 }
 
-fn seed_named_host_identity(home: &std::path::Path, machine_id: &str, host_id: &str) {
+fn seed_named_machine_identity(home: &std::path::Path, machine_id: &str, machine_name: &str) {
     let global = home.join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
-        global.join("host.toml"),
+        global.join("config.toml"),
         format!(
-            "schema_version = 2\nmachine_id = \"{machine_id}\"\nhost_id = \"{host_id}\"\ntask_prefix = \"ORB\"\n"
+            "[machine]\nid = \"{machine_id}\"\nname = \"{machine_name}\"\ntask_prefix = \"ORB\"\n"
         ),
     )
     .expect("write host identity");
@@ -1895,8 +1887,8 @@ fn workspace_init_in_independent_nested_git_repo_preserves_parent_binding() {
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_nested_init\"\nhost_id = \"nested-init\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_nested_init\"\nname = \"nested-init\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("write host identity");
     let parent_git = std::process::Command::new("git")
@@ -2286,8 +2278,8 @@ fn workspace_init_guidance_and_generated_onboarding_files_lifecycle() {
     let global = home.path().join(".orbit");
     std::fs::create_dir_all(&global).expect("create global orbit");
     std::fs::write(
-        global.join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_guidance\"\nhost_id = \"guidance-host\"\ntask_prefix = \"ORB\"\n",
+        global.join("config.toml"),
+        "[machine]\nid = \"hm_guidance\"\nname = \"guidance-host\"\ntask_prefix = \"ORB\"\n",
     )
     .expect("write host identity");
 

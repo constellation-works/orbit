@@ -987,7 +987,7 @@ fn executor_list_with_explicit_root_does_not_bind_parent_of_data_dir() {
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "qa",
             "--task-prefix",
             "QAZ",
@@ -1058,7 +1058,7 @@ fn clean_root_workspace_init_then_auto_task_list_succeeds() {
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "qa",
             "--task-prefix",
             "QAZ",
@@ -1105,7 +1105,7 @@ fn workspace_init_force_rebinds_synthetic_data_dir_checkout() {
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "qa",
             "--task-prefix",
             "QAZ",

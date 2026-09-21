@@ -167,16 +167,16 @@ impl TaskV2Store {
             }
             if let Some(value) = &fields.job_run_id {
                 if value != &bundle.envelope.job_run_id {
-                    bundle.envelope.job_run_host = fields.job_run_host.clone().flatten();
-                } else if let Some(host) = &fields.job_run_host
-                    && host != &bundle.envelope.job_run_host
+                    bundle.envelope.job_run_machine = fields.job_run_machine.clone().flatten();
+                } else if let Some(location) = &fields.job_run_machine
+                    && location != &bundle.envelope.job_run_machine
                 {
                     return Err(OrbitError::InvalidInput(
                         "execution location is immutable for a run binding".into(),
                     ));
                 }
                 if value.is_none() {
-                    bundle.envelope.job_run_host = None;
+                    bundle.envelope.job_run_machine = None;
                 }
                 bundle.envelope.job_run_id = value.clone();
                 envelope_changed = true;

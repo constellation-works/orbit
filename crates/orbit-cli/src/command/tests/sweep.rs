@@ -51,7 +51,7 @@ fn format_report_line_includes_slot_and_run() {
 #[test]
 fn json_shape_is_stable() {
     let outcome = SweepOutcome {
-        host_id: "dk-mac".to_string(),
+        machine_name: "dk-mac".to_string(),
         machine_id: "hm_dk_mac".to_string(),
         lock_busy: false,
         reports: vec![RoutineSweepReport {
@@ -78,7 +78,7 @@ fn json_shape_is_stable() {
     let value = outcome_json(&outcome, false);
     let object = value.as_object().expect("json object");
     for key in [
-        "host_id",
+        "machine_name",
         "machine_id",
         "dry_run",
         "lock_busy",
@@ -114,7 +114,7 @@ fn json_shape_is_stable() {
 #[test]
 fn json_includes_the_no_workspace_loaded_row() {
     let outcome = SweepOutcome {
-        host_id: "dk-mac".to_string(),
+        machine_name: "dk-mac".to_string(),
         machine_id: "hm_dk_mac".to_string(),
         lock_busy: false,
         reports: Vec::new(),

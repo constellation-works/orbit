@@ -36,7 +36,7 @@ impl Fixture {
                 &root_arg,
                 "init",
                 "--non-interactive",
-                "--host-name",
+                "--machine-name",
                 "sweep-root-host",
                 "--task-prefix",
                 "SR",
@@ -142,7 +142,7 @@ fn routine_clock_is_not_a_compatibility_alias() {
 }
 
 fn assert_sweep_used_custom_root(outcome: &Value) {
-    assert_eq!(outcome["host_id"], "sweep-root-host");
+    assert_eq!(outcome["machine_name"], "sweep-root-host");
     assert_eq!(outcome["dry_run"], true);
     assert!(
         outcome["reports"]

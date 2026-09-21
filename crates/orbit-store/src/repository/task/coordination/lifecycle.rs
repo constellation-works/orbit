@@ -271,9 +271,9 @@ impl TaskCommitBoundary {
             && (bundle.envelope.job_run_id.as_deref() != Some(&bound.run_id)
                 || bundle
                     .envelope
-                    .job_run_host
+                    .job_run_machine
                     .as_ref()
-                    .map(|h| h.machine_id.as_str())
+                    .map(|location| location.machine_id.as_str())
                     != Some(bound.machine_id.as_str()))
         {
             return Err(invalid("stale_claim"));
@@ -635,8 +635,8 @@ impl TaskCommitBoundary {
         }
         if let Some(run) = binding {
             intent.envelope.job_run_id = Some(run.run_id.clone());
-            // Host display labels never participate in ownership checks.
-            intent.envelope.job_run_host = origin.cloned();
+            // A machine's display name never participates in ownership checks.
+            intent.envelope.job_run_machine = origin.cloned();
         }
         intent.evidence.summary = evidence.summary.clone();
         if let Some(message) = &evidence.comment {

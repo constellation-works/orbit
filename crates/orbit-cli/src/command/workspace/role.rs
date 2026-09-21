@@ -1,7 +1,7 @@
 use clap::{Args, ValueEnum};
 use orbit_core::OrbitRuntime;
 use orbit_registry::workspace_registry;
-use orbit_registry::{HostIdentityState, inspect_host_identity};
+use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::workspace::WorkspaceCheckoutRole;
 
 use crate::command::{CommandOut, CommandOutput, Execute};
@@ -39,9 +39,9 @@ pub struct WorkspaceRoleArgs {
 impl Execute for WorkspaceRoleArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let global_root = runtime.global_root();
-        let local_machine_id = match inspect_host_identity(&global_root)? {
-            HostIdentityState::Present(identity) => Some(identity.machine_id),
-            HostIdentityState::Legacy { .. } | HostIdentityState::Absent => None,
+        let local_machine_id = match inspect_machine_identity(&global_root)? {
+            MachineIdentityState::Present(identity) => Some(identity.id),
+            MachineIdentityState::Absent => None,
         };
         let registry_path = workspace_registry::registry_path_for(&global_root);
         let mut registry = workspace_registry::load_registry_from(&registry_path)?;

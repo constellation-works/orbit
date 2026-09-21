@@ -16,6 +16,12 @@
 //! layer recursively, so a workspace can override one model without restating the
 //! crew or registry.
 //!
+//! The `[machine]` table — this machine's generated `id`, operator-chosen
+//! `name`, and immutable `task_prefix` — is global-only. A workspace file that
+//! supplies it is refused at load, and `orbit config set` refuses it without
+//! `--global`. `machine.id` and `machine.task_prefix` are never settable:
+//! `orbit init` writes them once.
+//!
 //! Three security-sensitive settings are replace-only when a workspace file
 //! exists: `execution.codex.sandbox`, `execution.codex.approval_policy`, and
 //! `execution.env.pass`. An omitted replace-only setting uses its built-in default
@@ -76,8 +82,9 @@ pub use operation::{
 };
 pub use persistence::PersistenceConfig;
 pub use registry::{
-    CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection, ConfigSnapshot, admit_config_key,
-    config_key_options, describe as describe_config_key,
+    CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection, ConfigSnapshot,
+    GLOBAL_ONLY_KEY_PREFIX, MachineSettings, admit_config_key, admit_settable_config_key,
+    config_key_options, describe as describe_config_key, is_global_only_key,
 };
 pub use resolved::{
     CodexExecutionPolicy, ExecutionEnvPolicy, IgnoredCrewProperty, PrSettings, ResolvedConfig,
@@ -85,6 +92,35 @@ pub use resolved::{
 pub use roots::ConfigRoots;
 pub use seed::{ConfigSeed, seed_default_config};
 pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};
+
+/// Read the `[machine]` table from the global `config.toml` at `global_root`.
+///
+/// Deliberately narrower than [`ResolvedConfig::load`]: this machine's identity
+/// is resolved on every runtime open and by `orbit init` before the rest of the
+/// document is known to admit, so an unrelated problem elsewhere in the file
+/// must not make Orbit forget who it is. A missing file has no identity.
+pub fn load_machine_settings(global_root: &std::path::Path) -> Result<MachineSettings, OrbitError> {
+    let path = global_root.join("config.toml");
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(MachineSettings::default());
+        }
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "failed to read runtime config '{}': {error}",
+                orbit_common::security::redaction::redact_home_dir(&path.display().to_string())
+            )));
+        }
+    };
+    let document = toml::from_str::<toml::Value>(&raw).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "invalid runtime config '{}': {error}",
+            orbit_common::security::redaction::redact_home_dir(&path.display().to_string())
+        ))
+    })?;
+    MachineSettings::admit(&document, &path)
+}
 
 /// Validate the effective (workspace-over-global) `config.toml` without
 /// exposing the internal [`ResolvedConfig`] shape. Used by the workspace

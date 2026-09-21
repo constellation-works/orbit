@@ -201,13 +201,13 @@ fn source_remote_help_names_inspection_dry_run_and_rebind() {
         .stdout(predicate::str::contains("Credentials"));
 }
 
-fn initialize_workspace(repo: &Path, home: &Path, host_name: &str) {
+fn initialize_workspace(repo: &Path, home: &Path, machine_name: &str) {
     orbit(repo, home)
         .args([
             "init",
             "--non-interactive",
-            "--host-name",
-            host_name,
+            "--machine-name",
+            machine_name,
             "--task-prefix",
             "TST",
         ])

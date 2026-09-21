@@ -215,7 +215,7 @@ export function renderRunDetailMeta() {
 function runExecutionLocation(run) {
   const location = run && run.executed_on;
   if (!location || !location.machine_id) return { known: false };
-  return { known: true, machine_id: location.machine_id, host_id: location.host_id || null };
+  return { known: true, machine_id: location.machine_id, machine_name: location.machine_name || null };
 }
 
 // [ORB-10971] The child Runs this run dispatched, from the durable dispatch

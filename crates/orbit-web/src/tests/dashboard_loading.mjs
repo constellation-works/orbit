@@ -36,7 +36,7 @@ function fixture(url) {
     }
     case '/api/job-runs': return list([{ run_id: marker, job_id: 'fixture', state: 'failed' }]);
     case '/api/diagnostics/errors': return [{ message: marker, source: 'fixture' }];
-    case '/api/routines': return { host_id: marker, routines: [{ name: marker, source: workspace, enabled: true }], clock: {} };
+    case '/api/routines': return { machine_name: marker, routines: [{ name: marker, source: workspace, enabled: true }], clock: {} };
     case '/api/auto-tasks': return { definitions: [] };
     case '/api/audit/summary': summaryReads++; return { events: summaryReads };
     default: return [];

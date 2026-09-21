@@ -166,30 +166,33 @@ fn a_blank_orchestrator_default_forwards_nothing() {
 #[test]
 fn persisted_machine_identity_is_forwarded() {
     let root = tempfile::tempdir().expect("global root");
-    let outcome = orbit_registry::ensure_host_identity(root.path(), || {
-        Ok(orbit_registry::NewHostIdentity {
-            host_id: "client".to_string(),
+    let outcome = orbit_registry::ensure_machine_identity(root.path(), || {
+        Ok(orbit_registry::NewMachineIdentity {
+            name: "client".to_string(),
             task_prefix: "CL".to_string(),
         })
     })
-    .expect("host identity");
+    .expect("machine identity");
 
     assert_eq!(
         caller_machine_id_at(Some(root.path())),
-        outcome.identity().machine_id
+        outcome.identity().id
     );
 }
 
+/// A pre-ORB-12725 `host.toml` is folded into `[machine]` on the first read,
+/// so the machine keeps forwarding the identity it was already minting under.
 #[test]
-fn legacy_persisted_machine_identity_is_forwarded() {
+fn legacy_host_toml_identity_is_migrated_and_forwarded() {
     let root = tempfile::tempdir().expect("global root");
     std::fs::write(
         root.path().join("host.toml"),
-        "schema_version = 1\nmachine_id = \"hm_legacy\"\nhost_id = \"client\"\n",
+        "schema_version = 2\nmachine_id = \"hm_legacy\"\nhost_id = \"client\"\ntask_prefix = \"LG\"\n",
     )
     .expect("legacy host identity");
 
     assert_eq!(caller_machine_id_at(Some(root.path())), "hm_legacy");
+    assert!(!root.path().join("host.toml").exists());
 }
 
 #[test]
@@ -202,8 +205,8 @@ fn absent_or_unreadable_identity_uses_the_audit_fallback() {
     assert_eq!(caller_machine_id_at(None), LOCAL_CALLER_MACHINE_ID_FALLBACK);
 
     let malformed = tempfile::tempdir().expect("malformed global root");
-    std::fs::write(malformed.path().join("host.toml"), "not valid toml = [")
-        .expect("malformed host identity");
+    std::fs::write(malformed.path().join("config.toml"), "not valid toml = [")
+        .expect("malformed machine identity");
     assert_eq!(
         caller_machine_id_at(Some(malformed.path())),
         LOCAL_CALLER_MACHINE_ID_FALLBACK

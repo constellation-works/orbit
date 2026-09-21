@@ -6,10 +6,13 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 
-use orbit_registry::{HostIdentityState, inspect_host_identity, os_hostname};
+use orbit_registry::{MachineIdentityState, inspect_machine_identity, os_hostname};
 
+/// Pinned mcp-bridge conformance-v1 audit label. Deliberately keeps the
+/// `host/` spelling through the ORB-12725 rename: it is a wire value other
+/// implementations match on, not Orbit's own vocabulary.
 const LOCAL_MACHINE_FALLBACK: &str = "host/local";
-const LOCAL_HOST_FALLBACK: &str = "local";
+const LOCAL_MACHINE_NAME_FALLBACK: &str = "local";
 
 /// The authority an MCP server process serves its sessions with.
 ///
@@ -41,7 +44,7 @@ impl McpSessionAuthority {
 /// Identity and trusted audit context derived by the accepting machine.
 pub struct McpServerIdentity {
     pub process_machine_id: String,
-    pub process_host_id: String,
+    pub process_machine_name: String,
     pub session_context: ToolSessionContext,
 }
 
@@ -62,7 +65,7 @@ pub fn mcp_server_identity(
     remote_caller_machine_id: Option<String>,
     authority: McpSessionAuthority,
 ) -> Result<McpServerIdentity, OrbitError> {
-    let (process_machine_id, process_host_id) = local_identity(global_root)?;
+    let (process_machine_id, process_machine_name) = local_identity(global_root)?;
     // A forwarded label is the whole origination test. The destination no
     // longer second-guesses it from `SSH_CONNECTION` or terminal shape: those
     // observations only ever decided how much of the argv to honor, and the
@@ -74,9 +77,9 @@ pub fn mcp_server_identity(
         .unwrap_or_else(|| process_machine_id.clone());
     let session_context = ToolSessionContext {
         caller_machine_id: Some(caller_machine_id),
-        caller_host_id: (!is_remote).then(|| process_host_id.clone()),
+        caller_machine_name: (!is_remote).then(|| process_machine_name.clone()),
         process_machine_id: Some(process_machine_id.clone()),
-        process_host_id: Some(process_host_id.clone()),
+        process_machine_name: Some(process_machine_name.clone()),
         transport: Some(if is_remote {
             McpTransport::SshMcp
         } else {
@@ -88,20 +91,17 @@ pub fn mcp_server_identity(
     };
     Ok(McpServerIdentity {
         process_machine_id,
-        process_host_id,
+        process_machine_name,
         session_context,
     })
 }
 
 pub(super) fn local_identity(global_root: &Path) -> Result<(String, String), OrbitError> {
-    match inspect_host_identity(global_root)? {
-        HostIdentityState::Present(identity) => Ok((identity.machine_id, identity.host_id)),
-        HostIdentityState::Legacy { host_id, .. } => {
-            Ok((LOCAL_MACHINE_FALLBACK.to_string(), host_id))
-        }
-        HostIdentityState::Absent => Ok((
+    match inspect_machine_identity(global_root)? {
+        MachineIdentityState::Present(identity) => Ok((identity.id, identity.name)),
+        MachineIdentityState::Absent => Ok((
             LOCAL_MACHINE_FALLBACK.to_string(),
-            os_hostname().unwrap_or_else(|| LOCAL_HOST_FALLBACK.to_string()),
+            os_hostname().unwrap_or_else(|| LOCAL_MACHINE_NAME_FALLBACK.to_string()),
         )),
     }
 }

@@ -46,15 +46,15 @@ pub use sweep::{
     run_sweep_at_with_providers, run_sweep_with_providers,
 };
 
-/// Who this host is, as reported by routine status and sweep output. Routine
-/// eligibility no longer consults it: it identifies the host whose store and
-/// clock a pass acted on, for display and audit.
+/// Who this machine is, as reported by routine status and sweep output.
+/// Routine eligibility no longer consults it: it identifies the machine whose
+/// store and clock a pass acted on, for display and audit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoutineHostIdentity {
-    /// Stable machine identity.
+pub struct RoutineMachineIdentity {
+    /// Stable machine identity (`machine.id`).
     pub machine_id: String,
-    /// Operator-facing host name.
-    pub host_id: String,
+    /// Operator-facing machine name (`machine.name`).
+    pub machine_name: String,
 }
 
 /// Open the config-resolved machine-local scheduler store.

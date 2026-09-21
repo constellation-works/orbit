@@ -307,7 +307,7 @@ fn a_session_defaulted_bare_workspace_id_is_unknown_before_forwarding() {
 }
 
 #[test]
-fn federated_task_show_without_a_host_qualified_selector_is_refused() {
+fn federated_task_show_without_a_machine_qualified_selector_is_refused() {
     let (host, log) = routed_mux();
 
     let omitted = host

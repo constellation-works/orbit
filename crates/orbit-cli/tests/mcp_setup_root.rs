@@ -56,7 +56,7 @@ impl ExternalRootFixture {
                 &fixture.rooted(&[
                     "init",
                     "--non-interactive",
-                    "--host-name",
+                    "--machine-name",
                     "external-root-host",
                     "--task-prefix",
                     "EXR",
@@ -512,7 +512,7 @@ impl SharedRootCheckoutPairFixture {
                     root,
                     "init",
                     "--non-interactive",
-                    "--host-name",
+                    "--machine-name",
                     "shared-root-host",
                     "--task-prefix",
                     "SHR",
@@ -608,7 +608,7 @@ impl RegisteredCheckoutPairFixture {
                 &argv(&[
                     "init",
                     "--non-interactive",
-                    "--host-name",
+                    "--machine-name",
                     "local-root-host",
                     "--task-prefix",
                     "LCL",

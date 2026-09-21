@@ -60,7 +60,7 @@ globalThis.fetch = async (path, options = {}) => {
     return response(payload);
   }
   if (url.pathname === '/api/routines') return response({
-    host_id: 'fixture-host', controls_authorized: capabilities.routine_toggle.authorized, capabilities: { ...capabilities }, session_explanation: 'Session access: restart the dashboard server with explicit operator authority.',
+    machine_name: 'fixture-host', controls_authorized: capabilities.routine_toggle.authorized, capabilities: { ...capabilities }, session_explanation: 'Session access: restart the dashboard server with explicit operator authority.',
     routines: [
       ...['one', 'two'].map(source => ({ name: `Routine ${source}`, source, target: 'job:fixture', enabled: enabled[source], cron: '30 14 * * *', description: 'Sweep landed deliveries.', last_fire: { state: 'succeeded', run_id: 'jrun-fixture-done', started_at: '2026-09-07T20:30:05Z', finished_at: '2026-09-07T20:33:10Z', duration_ms: 185000 }, next_evaluation: { state: enabled[source] ? 'scheduled' : 'disabled', at: '2026-09-07T21:30:00Z', hypothetical: !enabled[source] } })),
       { name: 'Parked one', source: 'one', target: 'job:parked_pipeline', enabled: false, cron: '*/20 * * * *', description: 'Kept in the repo, never fires.', next_evaluation: { state: 'disabled', at: '2026-09-07T21:40:00Z', hypothetical: true } },

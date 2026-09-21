@@ -1,5 +1,6 @@
 mod crew_pools;
 mod layering;
+mod machine;
 mod operation;
 mod resolved;
 mod seed;

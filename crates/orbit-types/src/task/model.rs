@@ -874,8 +874,15 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_run_id: Option<String>,
     /// Trusted execution location of the linked run; legacy links are unknown.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub job_run_host: Option<ExecutionLocation>,
+    ///
+    /// [ORB-12725] `job_run_host` is read for one release so a task bundle
+    /// written by an older build still loads; only the new name is written.
+    #[serde(
+        default,
+        alias = "job_run_host",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub job_run_machine: Option<ExecutionLocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
     /// Explicit named crew that owns orchestration of this task. This is
@@ -1357,9 +1364,13 @@ pub fn automatic_dispatch_cmp(left: &Task, right: &Task) -> std::cmp::Ordering {
 }
 
 /// Persisted execution location. Absence on older records means unknown.
-/// Host labels are display metadata; only the stable machine identifies execution.
+///
+/// A machine's display name is metadata; only the stable machine id identifies
+/// execution. [ORB-12725] `host_id` is read for one release so a run record
+/// written by an older build still loads; only `machine_name` is written.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionLocation {
     pub machine_id: String,
-    pub host_id: Option<String>,
+    #[serde(default, alias = "host_id")]
+    pub machine_name: Option<String>,
 }

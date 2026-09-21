@@ -20,10 +20,7 @@ use orbit_types::workspace::{
 };
 use serde_json::Value;
 
-use orbit_registry::{
-    HOST_TOML_FILE, HostIdentityState, inspect_host_identity, load_host_identity,
-    workspace_registry,
-};
+use orbit_registry::{MachineIdentityState, inspect_machine_identity, workspace_registry};
 
 use crate::workspace_catalog::attach as attach_workspace_catalog;
 
@@ -59,15 +56,13 @@ pub struct ResolvedWorkspaceSelection {
 /// that keeps a built runtime to notice an edit without re-opening anything. A
 /// caller that also compares the registry records it resolved (as the MCP
 /// server does) covers same-size edits to those records; the stamp covers the
-/// remaining composition inputs — the rest of the registry file, the host
-/// identity behind the task-prefix projection and machine identity, the
+/// remaining composition inputs — the rest of the registry file, the
 /// checkout's own `config.yaml` task binding, and both `config.toml` layers
-/// the runtime settings (crews, default crew, execution policy) are resolved
-/// from at open.
+/// the runtime settings (crews, default crew, execution policy, and this
+/// machine's `[machine]` identity) are resolved from at open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredRuntimeStamp {
     registry: FileStamp,
-    host_identity: FileStamp,
     workspace_binding: FileStamp,
     global_config: FileStamp,
     workspace_config: FileStamp,
@@ -84,7 +79,6 @@ impl RegisteredRuntimeStamp {
     pub fn read(global_root: &Path, checkout: &WorkspaceCheckout) -> Self {
         Self {
             registry: FileStamp::read(&workspace_registry::registry_path_for(global_root)),
-            host_identity: FileStamp::read(&global_root.join(HOST_TOML_FILE)),
             workspace_binding: FileStamp::read(&workspace_config_path(&checkout.orbit_dir)),
             global_config: FileStamp::read(&global_root.join(CONFIG_TOML_FILE)),
             workspace_config: FileStamp::read(&checkout.orbit_dir.join(CONFIG_TOML_FILE)),
@@ -287,7 +281,7 @@ impl RegisteredRuntimeFactory {
         };
 
         let global_root = global_root_for(root_override)?;
-        let identity = inspect_host_identity(&global_root)?;
+        let identity = inspect_machine_identity(&global_root)?;
         let registry = load_registry_for_selector_resolution(
             &workspace_registry::registry_path_for(&global_root),
             &identity,
@@ -342,7 +336,7 @@ impl RegisteredRuntimeFactory {
     ) -> Result<WorkspaceRegistry, OrbitError> {
         load_registry_for_selector_resolution(
             &workspace_registry::registry_path_for(global_root),
-            &inspect_host_identity(global_root)?,
+            &inspect_machine_identity(global_root)?,
         )
     }
 
@@ -413,10 +407,10 @@ impl RegisteredRuntimeFactory {
         checkout: &WorkspaceCheckout,
         host_lifetime: HostLifetime,
     ) -> Result<OrbitRuntime, OrbitError> {
-        // One host-identity read serves both the task-prefix projection and the
+        // One identity read serves both the task-prefix projection and the
         // automation machine identity; a long-lived host opens enough runtimes
-        // for a second parse of the same `host.toml` to be pure overhead.
-        let identity = inspect_host_identity(global_root)?;
+        // for a second resolution of the same global config to be pure overhead.
+        let identity = inspect_machine_identity(global_root)?;
         Self::open_registered_checkout_with_identity(
             global_root,
             workspace,
@@ -426,14 +420,15 @@ impl RegisteredRuntimeFactory {
         )
     }
 
-    /// [`Self::open_registered_checkout_for`] from a `host.toml` classification
-    /// the caller already read to resolve the selector [DANI-10371].
+    /// [`Self::open_registered_checkout_for`] from a machine-identity
+    /// classification the caller already read to resolve the selector
+    /// [DANI-10371].
     fn open_registered_checkout_with_identity(
         global_root: &Path,
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
         host_lifetime: HostLifetime,
-        identity: &HostIdentityState,
+        identity: &MachineIdentityState,
     ) -> Result<OrbitRuntime, OrbitError> {
         Self::open_registered_checkout_with_identity_and_local_root(
             global_root,
@@ -457,7 +452,7 @@ impl RegisteredRuntimeFactory {
         checkout: &WorkspaceCheckout,
         local_root: &Path,
         host_lifetime: HostLifetime,
-        identity: &HostIdentityState,
+        identity: &MachineIdentityState,
     ) -> Result<OrbitRuntime, OrbitError> {
         sync_task_prefix_for_identity(global_root, identity)?;
         let binding = workspace_runtime_binding(workspace, checkout)?;
@@ -484,7 +479,7 @@ impl RegisteredRuntimeFactory {
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
     ) -> Result<OrbitRuntime, OrbitError> {
-        let identity = inspect_host_identity(global_root)?;
+        let identity = inspect_machine_identity(global_root)?;
         Self::open_registered_checkout_read_only_with_identity(
             global_root,
             workspace,
@@ -499,7 +494,7 @@ impl RegisteredRuntimeFactory {
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
         local_root: &Path,
-        identity: &HostIdentityState,
+        identity: &MachineIdentityState,
     ) -> Result<OrbitRuntime, OrbitError> {
         let binding = workspace_runtime_binding(workspace, checkout)?;
         OrbitRuntime::from_resolved_roots_read_only_with_binding(
@@ -539,7 +534,7 @@ impl RegisteredRuntimeFactory {
         binding: WorkspaceRuntimeBinding,
         host_lifetime: HostLifetime,
     ) -> Result<OrbitRuntime, OrbitError> {
-        let identity = inspect_host_identity(global_root)?;
+        let identity = inspect_machine_identity(global_root)?;
         sync_task_prefix_for_identity(global_root, &identity)?;
         OrbitRuntime::from_resolved_roots_with_binding_for(
             global_root,
@@ -565,7 +560,7 @@ impl RegisteredRuntimeFactory {
             return Ok(None);
         };
         let global_root = runtime.global_root();
-        let identity = inspect_host_identity(&global_root)?;
+        let identity = inspect_machine_identity(&global_root)?;
         let registry = load_registry_for_selector_resolution(
             &workspace_registry::registry_path_for(&global_root),
             &identity,
@@ -623,10 +618,10 @@ pub(crate) fn retry_pipeline_worker_bootstrap<T>(
 /// so a concurrent registration cannot be overwritten by the maintenance save.
 fn load_registry_for_selector_resolution(
     registry_path: &Path,
-    identity: &HostIdentityState,
+    identity: &MachineIdentityState,
 ) -> Result<WorkspaceRegistry, OrbitError> {
     let loaded =
-        workspace_registry::load_registry_from_read_only_with_host(registry_path, identity)?;
+        workspace_registry::load_registry_from_read_only_with_machine(registry_path, identity)?;
     let mut registry = loaded.registry;
     let validation_required = workspace_registry::validate_workspaces(&mut registry);
     if !loaded.migration_required && !validation_required {
@@ -635,7 +630,7 @@ fn load_registry_for_selector_resolution(
 
     workspace_registry::with_registry_lock(registry_path, || {
         let mut registry =
-            workspace_registry::load_registry_from_with_host(registry_path, identity)?;
+            workspace_registry::load_registry_from_with_machine(registry_path, identity)?;
         if workspace_registry::validate_workspaces(&mut registry) {
             let _ = workspace_registry::save_registry_to(&registry, registry_path);
         }
@@ -1014,22 +1009,23 @@ fn inactive_cli_workspace(workspace: &Workspace, checkout: &WorkspaceCheckout) -
     ))
 }
 
-/// The two files every runtime open reads before it dispatches anything:
-/// `host.toml`, which classifies this machine for the task-prefix projection,
-/// the automation identity, and registry validation; and `workspaces.json`,
-/// which selects the checkout. Agents shell out to `orbit` hundreds of times
-/// per run, so each is read once and threaded through the open rather than
-/// re-read by every step that needs it [DANI-10371].
+/// The two inputs every runtime open reads before it dispatches anything: the
+/// global `config.toml` `[machine]` table, which classifies this machine for
+/// the task-prefix projection, the automation identity, and registry
+/// validation; and `workspaces.json`, which selects the checkout. Agents shell
+/// out to `orbit` hundreds of times per run, so each is read once and threaded
+/// through the open rather than re-read by every step that needs it
+/// [DANI-10371].
 struct RuntimeOpenInputs {
     global_root: PathBuf,
-    identity: HostIdentityState,
+    identity: MachineIdentityState,
     registry: WorkspaceRegistry,
 }
 
 impl RuntimeOpenInputs {
     fn read(global_root: &Path) -> Result<Self, OrbitError> {
-        let identity = inspect_host_identity(global_root)?;
-        let registry = workspace_registry::load_registry_from_with_host(
+        let identity = inspect_machine_identity(global_root)?;
+        let registry = workspace_registry::load_registry_from_with_machine(
             &workspace_registry::registry_path_for(global_root),
             &identity,
         )?;
@@ -1041,24 +1037,22 @@ impl RuntimeOpenInputs {
     }
 }
 
-/// Project the host-owned task namespace into the neutral task allocator.
-/// Custom/legacy roots without host.toml retain the historical ORB default;
-/// once an identity exists, malformed or conflicting state fails closed.
+/// Project the machine-owned task namespace into the neutral task allocator.
+/// Custom/legacy roots without a `[machine]` table retain the historical ORB
+/// default; once an identity exists, a `machine.task_prefix` that contradicts
+/// the ids already minted locally fails closed at the allocator.
 pub(crate) fn sync_task_prefix(global_root: &Path) -> Result<(), OrbitError> {
-    sync_task_prefix_for_identity(global_root, &inspect_host_identity(global_root)?)
+    sync_task_prefix_for_identity(global_root, &inspect_machine_identity(global_root)?)
 }
 
-/// The same projection for a caller that already classified `host.toml`.
+/// The same projection for a caller that already classified the identity.
 fn sync_task_prefix_for_identity(
     global_root: &Path,
-    identity: &HostIdentityState,
+    identity: &MachineIdentityState,
 ) -> Result<(), OrbitError> {
     let task_prefix = match identity {
-        HostIdentityState::Present(identity) => identity.task_prefix.clone(),
-        HostIdentityState::Absent => return Ok(()),
-        // Keep legacy files on the established migration-required path while
-        // using Registry's validated classifier for every host.toml access.
-        HostIdentityState::Legacy { .. } => load_host_identity(global_root)?.task_prefix,
+        MachineIdentityState::Present(identity) => identity.task_prefix.clone(),
+        MachineIdentityState::Absent => return Ok(()),
     };
 
     let registry = TaskRegistryStore::open(&task_registry_path(global_root))?;
@@ -1178,19 +1172,16 @@ fn registered_checkout_for_shared_root<'a>(
 }
 
 /// Assemble registry-derived facts at the existing runtime composition
-/// boundary, from the `host.toml` classification the caller already read.
+/// boundary, from the machine-identity classification the caller already read.
 ///
-/// Only a complete, current-schema identity names a machine: a legacy or
-/// absent file leaves automation unattributed rather than failing the open.
+/// Only a complete identity names a machine: an uninitialized root leaves
+/// automation unattributed rather than failing the open.
 fn attach_registry_context(
     runtime: OrbitRuntime,
     global_root: &Path,
-    identity: &HostIdentityState,
+    identity: &MachineIdentityState,
 ) -> OrbitRuntime {
-    let machine_id = match identity {
-        HostIdentityState::Present(identity) => Some(identity.machine_id.clone()),
-        HostIdentityState::Legacy { .. } | HostIdentityState::Absent => None,
-    };
+    let machine_id = identity.id().map(ToOwned::to_owned);
     let runtime = attach_workspace_catalog(
         runtime.with_automation_machine_identity(machine_id),
         global_root,

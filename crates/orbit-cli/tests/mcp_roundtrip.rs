@@ -116,7 +116,7 @@ impl McpWorkspace {
         let init_args = vec![
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "mcp-roundtrip-host",
             "--task-prefix",
             "TST",
@@ -1692,7 +1692,7 @@ fn ssh_marked_mcp_server_audits_caller_and_server_identity_separately() {
 
     let workspace_audit = connection
         .query_row(
-            "SELECT COUNT(*), workspace_id, caller_machine_id, process_machine_id, process_host_id, transport, trace_id, caller_ip
+            "SELECT COUNT(*), workspace_id, caller_machine_id, process_machine_id, process_machine_name, transport, trace_id, caller_ip
              FROM audit_events WHERE tool_name = 'orbit.workspace.list'",
             [],
             |row| {
@@ -2269,7 +2269,7 @@ fn mcp_calls_are_audited_once_including_unknown_raw_names() {
     assert!(row["workspace_id"].is_null());
     assert!(row["caller_machine_id"].as_str().is_some());
     assert_eq!(row["caller_machine_id"], row["process_machine_id"]);
-    assert!(row["process_host_id"].as_str().is_some());
+    assert!(row["process_machine_name"].as_str().is_some());
     assert!(row["trace_id"].as_str().is_some());
     assert!(row["origin_session_id"].as_str().is_some());
 
@@ -2536,7 +2536,7 @@ fn managed_mcp_config_updates_a_task_without_a_workspace_argument() {
 /// `unknown_selector` before forwarding. `orbit.task.show` does not inherit
 /// the v1 id-only default in this namespace.
 #[test]
-fn federated_mcp_serve_requires_the_host_qualified_list_selector() {
+fn federated_mcp_serve_requires_the_machine_qualified_list_selector() {
     let workspace = McpWorkspace::init();
     std::fs::write(
         workspace.home.join(".orbit").join("mcp-destinations.toml"),
@@ -2632,17 +2632,16 @@ fn federated_client(workspace: &McpWorkspace) -> McpClient {
     client
 }
 
-fn host_identity(home: &Path) -> (String, String) {
+fn machine_identity(home: &Path) -> (String, String) {
     let parsed: toml::Value = toml::from_str(
-        &std::fs::read_to_string(home.join(".orbit").join("host.toml")).expect("read host.toml"),
+        &std::fs::read_to_string(home.join(".orbit").join("config.toml"))
+            .expect("read config.toml"),
     )
-    .expect("parse host.toml");
+    .expect("parse config.toml");
+    let machine = &parsed["machine"];
     (
-        parsed["machine_id"]
-            .as_str()
-            .expect("machine_id")
-            .to_string(),
-        parsed["host_id"].as_str().expect("host_id").to_string(),
+        machine["id"].as_str().expect("machine.id").to_string(),
+        machine["name"].as_str().expect("machine.name").to_string(),
     )
 }
 
@@ -2663,7 +2662,7 @@ fn federated_mcp_serve_lists_and_routes_local_workspaces_without_destinations() 
     plant_ssh_stub(&McpWorkspace::stub_bin_dir(&workspace.home), &ssh_log);
 
     let mut client = federated_client(&workspace);
-    let (machine_id, host_id) = host_identity(&workspace.home);
+    let (machine_id, machine_name) = machine_identity(&workspace.home);
     let listed = client.call_tool_ok("orbit_workspace_list", json!({}));
     let rows = listed["workspaces"].as_array().expect("workspace rows");
     assert_eq!(
@@ -2673,7 +2672,7 @@ fn federated_mcp_serve_lists_and_routes_local_workspaces_without_destinations() 
     );
     let row = &rows[0];
     assert_eq!(row["machine_id"], machine_id);
-    assert_eq!(row["host"], host_id);
+    assert_eq!(row["machine_name"], machine_name);
     assert_eq!(row["reachability"], "reachable");
     assert_eq!(row["checkout_health"], "active");
     assert!(
@@ -2707,7 +2706,7 @@ fn federated_mcp_serve_lists_and_routes_local_workspaces_without_destinations() 
 #[test]
 fn direct_and_federated_local_calls_record_equivalent_audit_contexts() {
     let workspace = McpWorkspace::init();
-    let (machine_id, host_id) = host_identity(&workspace.home);
+    let (machine_id, machine_name) = machine_identity(&workspace.home);
 
     let mut direct = workspace.serve();
     direct.call_tool_ok("orbit_crew_list", json!({}));
@@ -2748,9 +2747,9 @@ fn direct_and_federated_local_calls_record_equivalent_audit_contexts() {
 
     for row in [direct_row, federated_row] {
         assert_eq!(row["caller_machine_id"], machine_id);
-        assert_eq!(row["caller_host_id"], host_id);
+        assert_eq!(row["caller_machine_name"], machine_name);
         assert_eq!(row["process_machine_id"], machine_id);
-        assert_eq!(row["process_host_id"], host_id);
+        assert_eq!(row["process_machine_name"], machine_name);
         assert_eq!(row["transport"], "local");
         assert_eq!(row["effective_capabilities"], json!(["agent"]));
     }
@@ -2760,7 +2759,7 @@ fn direct_and_federated_local_calls_record_equivalent_audit_contexts() {
 #[test]
 fn federated_mcp_serve_collapses_an_explicit_local_destination_row() {
     let workspace = McpWorkspace::init();
-    let (machine_id, host_id) = host_identity(&workspace.home);
+    let (machine_id, machine_name) = machine_identity(&workspace.home);
     std::fs::write(
         workspace.home.join(".orbit").join("mcp-destinations.toml"),
         format!("[[destinations]]\nssh = \"localhost\"\nmachine_id = \"{machine_id}\"\n"),
@@ -2781,7 +2780,7 @@ fn federated_mcp_serve_collapses_an_explicit_local_destination_row() {
         1,
         "explicit local SSH row must not duplicate selectors: {listed}"
     );
-    assert_eq!(local_rows[0]["host"], host_id);
+    assert_eq!(local_rows[0]["machine_name"], machine_name);
     let selector = local_rows[0]["selector"].as_str().expect("selector");
     client.call_tool_ok("orbit_crew_list", json!({ "workspace": selector }));
     assert!(
@@ -2806,7 +2805,7 @@ fn federated_mcp_serve_lists_local_workspaces_beside_unreachable_remotes() {
     plant_ssh_stub(&McpWorkspace::stub_bin_dir(&workspace.home), &ssh_log);
 
     let mut client = federated_client(&workspace);
-    let (machine_id, _) = host_identity(&workspace.home);
+    let (machine_id, _) = machine_identity(&workspace.home);
     let listed = client.call_tool_ok("orbit_workspace_list", json!({}));
     let rows = listed["workspaces"].as_array().expect("workspace rows");
     assert!(

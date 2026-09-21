@@ -19,8 +19,11 @@ allowed_internal_deps() {
       echo "orbit-common orbit-types"
       ;;
     orbit-registry)
-      # Registry owns local machine/workspace files and needs only shared types.
-      echo "orbit-common orbit-types"
+      # Registry owns local machine/workspace files. Since ORB-12725 this
+      # machine's identity is the `[machine]` table in the global config.toml,
+      # so Registry reads it through orbit-config's admission rather than
+      # keeping a second parser and a second set of validators.
+      echo "orbit-common orbit-config orbit-types"
       ;;
     orbit-policy | orbit-exec | orbit-store)
       echo "orbit-common orbit-types"

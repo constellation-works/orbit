@@ -44,7 +44,7 @@ data-handling review:
 | Process logs | `~/.orbit/state/logs/orbit.jsonl` | JSONL, rotated locally; secret-looking values are redacted before reaching the sink. See [logging](./runbooks/logging.md). |
 | Semantic index (docs and tasks) | `<repo>/.orbit/state/semantic.db` | Local vector index; regenerable. Embeddings are computed on the host by the search companion. |
 | Worktrees | `<repo>/.orbit/state/worktrees/` | Scratch; regenerable. |
-| Host identity (`machine_id`, `host_id`, task prefix) | `~/.orbit/host.toml` | A locally generated stable identifier. It is never transmitted to the Orbit project. |
+| Machine identity (`machine.id`, `machine.name`, `machine.task_prefix`) | `~/.orbit/config.toml` `[machine]` | A locally generated stable identifier. It is never transmitted to the Orbit project. |
 | Workspace registry, runtime config, resource overrides | `~/.orbit/config.toml`, `workspaces.json`, `resources/` | Host-global configuration only. |
 | Workspace config, routines, auto-tasks, resources | `<repo>/.orbit/config.toml`, `routines/`, `auto_tasks/`, `resources/` | Per-user checkout settings. Seeded by `orbit workspace init`; not committed. |
 

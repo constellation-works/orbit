@@ -133,7 +133,7 @@ impl ClockTickArgs {
         {
             return vec![format!(
                 "clock tick[{}]: no schedules configured",
-                outcome.host_id
+                outcome.machine_name
             )];
         }
 
@@ -158,7 +158,7 @@ impl ClockTickArgs {
                 .count();
             lines.push(format!(
                 "clock tick[{}]: {} routine(s), {} auto-task(s), nothing due",
-                outcome.host_id,
+                outcome.machine_name,
                 evaluated,
                 outcome.auto_task_reports.len()
             ));
@@ -216,7 +216,7 @@ pub(crate) fn outcome_json(outcome: &SweepOutcome, dry_run: bool) -> serde_json:
     }));
 
     json!({
-        "host_id": outcome.host_id,
+        "machine_name": outcome.machine_name,
         "machine_id": outcome.machine_id,
         "dry_run": dry_run,
         "lock_busy": outcome.lock_busy,

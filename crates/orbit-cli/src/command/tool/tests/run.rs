@@ -438,19 +438,19 @@ fn parsed_input_reads_an_input_file_once() {
 }
 
 #[test]
-fn local_machine_identity_prefers_persisted_host_identity() {
+fn local_machine_identity_prefers_persisted_machine_identity() {
     let root = tempfile::tempdir().expect("tempdir");
     std::fs::write(
-        root.path().join("host.toml"),
-        "schema_version = 2\nmachine_id = \"hm_cli\"\nhost_id = \"cli-host\"\ntask_prefix = \"CLI\"\n",
+        root.path().join("config.toml"),
+        "[machine]\nid = \"hm_cli\"\nname = \"cli-machine\"\ntask_prefix = \"CLI\"\n",
     )
-    .expect("write host identity");
+    .expect("write machine identity");
 
     let identity = local_machine_identity(root.path()).expect("load local machine identity");
 
     assert_eq!(
         identity,
-        ("hm_cli".to_string(), Some("cli-host".to_string()))
+        ("hm_cli".to_string(), Some("cli-machine".to_string()))
     );
 }
 

@@ -33,7 +33,7 @@ fn shared_explicit_root_keeps_task_bundles_isolated_by_selected_workspace() {
             root_arg,
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "shared-root-host",
             "--task-prefix",
             "SHR",

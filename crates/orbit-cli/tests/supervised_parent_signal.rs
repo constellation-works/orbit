@@ -54,7 +54,7 @@ impl Fixture {
             .args([
                 "init",
                 "--non-interactive",
-                "--host-name",
+                "--machine-name",
                 "signal-host",
                 "--task-prefix",
                 "SIG",

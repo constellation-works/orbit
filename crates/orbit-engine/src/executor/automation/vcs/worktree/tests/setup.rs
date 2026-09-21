@@ -811,7 +811,7 @@ impl FakeHost {
                 (
                     id.to_string(),
                     Task {
-                        job_run_host: None,
+                        job_run_machine: None,
                         id: id.to_string(),
                         title: format!("Task {id}"),
                         description: String::new(),

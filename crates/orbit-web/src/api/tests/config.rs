@@ -147,6 +147,7 @@ async fn effective_view_groups_every_registry_key_into_its_section() {
     assert_eq!(
         tokens,
         vec![
+            "machine",
             "delivery",
             "crews",
             "execution",

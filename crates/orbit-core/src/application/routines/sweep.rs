@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
-use super::RoutineHostIdentity;
+use super::RoutineMachineIdentity;
 use super::loader::{RoutineLoadError, RoutineWorkspaceProvider, collect_routines};
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
@@ -134,7 +134,7 @@ impl RuntimeDispatch<'_> {
 /// workspace provider.
 pub fn run_sweep_with_providers(
     options: SweepOptions,
-    local_host: RoutineHostIdentity,
+    local_machine: RoutineMachineIdentity,
     workspace_provider: &dyn RoutineWorkspaceProvider,
 ) -> Result<SweepOutcome, OrbitError> {
     let global_root = crate::runtime::resolve_global_root()?;
@@ -149,7 +149,7 @@ pub fn run_sweep_with_providers(
         &super::clock::sweep_log_path(&global_root),
         &LogRotationConfig::load_global_best_effort(),
     );
-    run_sweep_at_with_providers(&global_root, options, local_host, workspace_provider)
+    run_sweep_at_with_providers(&global_root, options, local_machine, workspace_provider)
 }
 
 /// Run one sweep pass against an explicit global root using injected
@@ -157,13 +157,13 @@ pub fn run_sweep_with_providers(
 pub fn run_sweep_at_with_providers(
     global_root: &Path,
     options: SweepOptions,
-    local_host: RoutineHostIdentity,
+    local_machine: RoutineMachineIdentity,
     workspace_provider: &dyn RoutineWorkspaceProvider,
 ) -> Result<SweepOutcome, OrbitError> {
     run_sweep_at_with_providers_at(
         global_root,
         options,
-        local_host,
+        local_machine,
         workspace_provider,
         Utc::now(),
     )
@@ -173,7 +173,7 @@ pub fn run_sweep_at_with_providers(
 pub(crate) fn run_sweep_at_with_providers_at(
     global_root: &Path,
     options: SweepOptions,
-    local_host: RoutineHostIdentity,
+    local_machine: RoutineMachineIdentity,
     workspace_provider: &dyn RoutineWorkspaceProvider,
     now_utc: chrono::DateTime<Utc>,
 ) -> Result<SweepOutcome, OrbitError> {
@@ -186,8 +186,8 @@ pub(crate) fn run_sweep_at_with_providers_at(
     let lock = orbit_store::try_acquire_routine_sweep_lock(&global_root.join("state"))?;
     let Some(_lock) = lock else {
         return Ok(SweepOutcome {
-            host_id: local_host.host_id,
-            machine_id: local_host.machine_id,
+            machine_name: local_machine.machine_name,
+            machine_id: local_machine.machine_id,
             lock_busy: true,
             ..SweepOutcome::default()
         });
@@ -285,8 +285,8 @@ pub(crate) fn run_sweep_at_with_providers_at(
     }
 
     Ok(SweepOutcome {
-        host_id: local_host.host_id,
-        machine_id: local_host.machine_id,
+        machine_name: local_machine.machine_name,
+        machine_id: local_machine.machine_id,
         lock_busy: false,
         reports,
         auto_task_reports,

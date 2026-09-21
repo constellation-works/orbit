@@ -63,12 +63,13 @@ new executor.
 orbit init
 ```
 
-This creates `~/.orbit/` and, on a fresh machine, establishes host identity. Two
-values are asked for and both matter:
+This creates `~/.orbit/` and, on a fresh machine, writes the `[machine]`
+identity into the global `config.toml`. Two values are asked for and both
+matter:
 
-**Host name** — how this machine is named in run ownership, task claims, and
+**Machine name** — how this machine is named in run ownership, task claims, and
 Orbit's own output. Defaults to the OS hostname. Renameable later with
-`orbit host rename`.
+`orbit config set --global machine.name <new-name>`.
 
 **Task prefix** — 2–5 uppercase ASCII letters that namespace every task ID this
 machine allocates. **Chosen once and never changed.** Its whole purpose is to
@@ -79,7 +80,7 @@ before initializing one.
 Non-interactive runs must pass both explicitly:
 
 ```bash
-orbit init --non-interactive --host-name <name> --task-prefix <PREFIX>
+orbit init --non-interactive --machine-name <name> --task-prefix <PREFIX>
 ```
 
 ## Step 4 — Initialize the workspace

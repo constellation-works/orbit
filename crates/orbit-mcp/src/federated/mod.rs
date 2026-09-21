@@ -28,8 +28,9 @@ pub use self::capability::{
     CapabilityClasses, McpToolClass, ensure_tool_class_held, mcp_tool_class,
 };
 pub use self::config::{
-    DESTINATIONS_FILE, Destination, DestinationTransport, DestinationsFile, HostQualifiedSelector,
-    RemoteDestination, destinations_path, federated_membership, load_destinations,
+    DESTINATIONS_FILE, Destination, DestinationTransport, DestinationsFile,
+    MachineQualifiedSelector, RemoteDestination, destinations_path, federated_membership,
+    load_destinations,
 };
 pub use self::descriptor::{Capability, CheckoutHealth, Reachability, WorkspaceDescriptor};
 pub use self::host::{FEDERATED_WORKSPACE_LIST_TOOL, FederatedMcpHost};

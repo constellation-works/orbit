@@ -50,9 +50,9 @@ pub(crate) fn audit_event_to_json(event: &AuditEvent) -> Value {
         "session_id": event.session_id,
         "workspace_id": event.workspace_id,
         "caller_machine_id": event.caller_machine_id,
-        "caller_host_id": event.caller_host_id,
+        "caller_machine_name": event.caller_machine_name,
         "process_machine_id": event.process_machine_id,
-        "process_host_id": event.process_host_id,
+        "process_machine_name": event.process_machine_name,
         "transport": event.transport,
         "trace_id": event.trace_id,
         "caller_ip": event.caller_ip,
@@ -174,7 +174,7 @@ pub(crate) fn task_to_json(task: &Task, status_by_id: &BTreeMap<String, TaskStat
         // dangling reference without the machine that ran it. Absent stays
         // absent: a row recorded before execution provenance existed is
         // *unknown*, never "the owner".
-        "job_run_host": task.job_run_host,
+        "job_run_machine": task.job_run_machine,
         "crew": task.crew,
         "orchestrator": task.orchestrator,
         "created_at": task.created_at.to_rfc3339(),
@@ -247,7 +247,7 @@ fn job_run_is_locally_navigable(runtime: &OrbitRuntime, task: &Task) -> bool {
     if task.job_run_id.is_none() {
         return false;
     }
-    let Some(host) = task.job_run_host.as_ref() else {
+    let Some(host) = task.job_run_machine.as_ref() else {
         return true;
     };
     // A recorded host has to *match* to navigate: with no local identity there

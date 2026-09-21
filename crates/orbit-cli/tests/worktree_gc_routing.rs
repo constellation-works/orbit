@@ -76,7 +76,7 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "gc-routing-host",
             "--task-prefix",
             "WG",
@@ -99,7 +99,7 @@ fn routine_dispatch_ignores_ambient_orbit_root_and_reaps_only_the_owning_workspa
             &decoy_root.to_string_lossy(),
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "decoy-host",
             "--task-prefix",
             "DC",

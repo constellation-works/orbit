@@ -1,25 +1,26 @@
 //! Registry composition over Core's scheduler kernels: which checkouts this
-//! host evaluates schedules for, and who this host is.
+//! machine evaluates schedules for, and who this machine is.
 //!
-//! Both come exclusively from `host.toml` and `workspaces.json`.
+//! Both come exclusively from the global `config.toml` `[machine]` table and
+//! `workspaces.json`.
 
 use std::path::Path;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_core::application::routines::{
-    DiscoveredWorkspaces, RoutineHostIdentity, RoutineLoadError, RoutineStatusReport,
+    DiscoveredWorkspaces, RoutineLoadError, RoutineMachineIdentity, RoutineStatusReport,
     RoutineWorkspaceProvider, SweepOptions, SweepOutcome,
 };
 use orbit_types::workspace::{WorkspaceCheckoutRole, WorkspaceStatus};
 
-use orbit_registry::host_identity::{HostIdentity, load_host_identity};
+use orbit_registry::machine_identity::{MachineIdentity, load_machine_identity};
 use orbit_registry::workspace_registry;
 
 use crate::registry_runtime::RegisteredRuntimeFactory;
 
 struct RegistryRoutineEnvironment {
-    identity: HostIdentity,
+    identity: MachineIdentity,
     /// Registered workspace this pass is restricted to, resolved from the
     /// caller's `--workspace` selector. `None` visits every local workspace.
     workspace_filter: Option<String>,
@@ -28,7 +29,7 @@ struct RegistryRoutineEnvironment {
 impl RegistryRoutineEnvironment {
     /// An unknown, unregistered, or inactive selector fails closed here,
     /// before the sweep touches any scheduler state: an operator asking for
-    /// one workspace must never silently get the whole host.
+    /// one workspace must never silently get the whole machine.
     fn load(global_root: &Path, workspace_selector: Option<&str>) -> Result<Self, OrbitError> {
         let workspace_filter = workspace_selector
             .map(|selector| {
@@ -37,15 +38,15 @@ impl RegistryRoutineEnvironment {
             })
             .transpose()?;
         Ok(Self {
-            identity: load_host_identity(global_root)?,
+            identity: load_machine_identity(global_root)?,
             workspace_filter,
         })
     }
 
-    fn local_host(&self) -> RoutineHostIdentity {
-        RoutineHostIdentity {
-            machine_id: self.identity.machine_id.clone(),
-            host_id: self.identity.host_id.clone(),
+    fn local_machine(&self) -> RoutineMachineIdentity {
+        RoutineMachineIdentity {
+            machine_id: self.identity.id.clone(),
+            machine_name: self.identity.name.clone(),
         }
     }
 }
@@ -56,7 +57,7 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
     }
 }
 
-/// Discover the checkouts this host evaluates schedules for, optionally
+/// Discover the checkouts this machine evaluates schedules for, optionally
 /// restricted to one registered workspace id: every active **owner** checkout
 /// with a `.orbit/` directory. Registration is the whole opt-in [ORB-12236];
 /// a replica is skipped because it cannot write the owner's coordination
@@ -101,7 +102,7 @@ pub fn routine_statuses(global_root: &Path) -> Result<RoutineStatusReport, Orbit
     let environment = RegistryRoutineEnvironment::load(global_root, None)?;
     orbit_core::application::routines::routine_statuses_with_providers(
         global_root,
-        environment.local_host(),
+        environment.local_machine(),
         &environment,
         Utc::now(),
     )
@@ -117,7 +118,7 @@ pub fn run_sweep(
     let environment = RegistryRoutineEnvironment::load(&global_root, workspace_selector)?;
     orbit_core::application::routines::run_sweep_with_providers(
         options,
-        environment.local_host(),
+        environment.local_machine(),
         &environment,
     )
 }
@@ -132,7 +133,7 @@ pub fn run_sweep_at(
     orbit_core::application::routines::run_sweep_at_with_providers(
         global_root,
         options,
-        environment.local_host(),
+        environment.local_machine(),
         &environment,
     )
 }

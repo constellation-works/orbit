@@ -128,7 +128,7 @@ fn admission_request(request_id: &str, caller_version: &str) -> AdmissionRequest
         run_context: AdmissionRunContext {
             run_id: "drain-1".to_string(),
             job_name: "workspace_auto".to_string(),
-            host_id: Some("laptop".to_string()),
+            machine_name: Some("laptop".to_string()),
         },
         ship: AdmissionShipContract {
             mode: "pr".to_string(),
@@ -155,7 +155,7 @@ fn admit(
         .admit_task(
             &AdmissionIdentity::trusted_remote(ExecutionLocation {
                 machine_id: machine.to_string(),
-                host_id: None,
+                machine_name: None,
             }),
             request,
             owner_version,

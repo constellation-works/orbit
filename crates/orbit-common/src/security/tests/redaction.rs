@@ -87,7 +87,7 @@ fn redact_all_scrubs_provider_scm_cloud_tokens_and_connection_passwords() {
 }
 
 #[test]
-fn redact_all_scrubs_structural_ssh_key_and_host_identifiers() {
+fn redact_all_scrubs_structural_ssh_key_and_machine_nameentifiers() {
     let fingerprint = format!("SHA256:{}", "A".repeat(43));
     let public_key = format!("ssh-ed25519 {}", "B".repeat(48));
     let raw = format!(

@@ -100,7 +100,7 @@ fn local_only_mux() -> FederatedMcpHost {
     let inner = Arc::new(RecordingLocalHost::new(OWNER_MACHINE));
     let context = ToolSessionContext {
         process_machine_id: Some(OWNER_MACHINE.to_string()),
-        process_host_id: Some("local-host".to_string()),
+        process_machine_name: Some("local-host".to_string()),
         transport: Some(orbit_types::tool::McpTransport::Local),
         ..ToolSessionContext::default()
     };
@@ -118,9 +118,9 @@ fn recording_local_mux() -> (Arc<FederatedMcpHost>, Arc<RecordingLocalHost>) {
     let inner = Arc::new(RecordingLocalHost::new(OWNER_MACHINE));
     let context = ToolSessionContext {
         caller_machine_id: Some(OWNER_MACHINE.to_string()),
-        caller_host_id: Some("local-host".to_string()),
+        caller_machine_name: Some("local-host".to_string()),
         process_machine_id: Some(OWNER_MACHINE.to_string()),
-        process_host_id: Some("local-host".to_string()),
+        process_machine_name: Some("local-host".to_string()),
         transport: Some(orbit_types::tool::McpTransport::Local),
         effective_capabilities: std::collections::BTreeSet::from([McpCapability::Agent]),
         ..ToolSessionContext::default()
@@ -144,7 +144,7 @@ fn local_only_membership_lists_the_accepting_machines_workspaces() {
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["machine_id"], OWNER_MACHINE);
-    assert_eq!(rows[0]["host"], "local-host");
+    assert_eq!(rows[0]["machine_name"], "local-host");
     assert_eq!(rows[0]["selector"], format!("{OWNER_MACHINE}/ws_orbit"));
     assert_eq!(rows[0]["reachability"], "reachable");
     assert_eq!(rows[0]["checkout_health"], "active");
@@ -204,9 +204,9 @@ fn mixed_membership_lists_local_then_configured_remotes() {
             .collect::<Vec<_>>(),
         [OWNER_MACHINE, REPLICA_MACHINE, "hm_down"]
     );
-    assert_eq!(rows[0]["host"], "local-host");
+    assert_eq!(rows[0]["machine_name"], "local-host");
     assert_eq!(rows[0]["selector"], format!("{OWNER_MACHINE}/ws_orbit"));
-    assert_eq!(rows[1]["host"], "operator@orbit-replica");
+    assert_eq!(rows[1]["machine_name"], "operator@orbit-replica");
     assert_eq!(rows[2]["reachability"], "unreachable");
 }
 
@@ -240,7 +240,7 @@ fn an_explicit_local_ssh_row_does_not_duplicate_the_local_descriptor() {
 
     assert_eq!(rows.len(), 1, "exactly one route for the local machine");
     assert_eq!(rows[0]["machine_id"], OWNER_MACHINE);
-    assert_eq!(rows[0]["host"], "local-host");
+    assert_eq!(rows[0]["machine_name"], "local-host");
     assert_eq!(rows[0]["selector"], format!("{OWNER_MACHINE}/ws_orbit"));
 }
 
@@ -249,7 +249,7 @@ fn a_copied_local_selector_is_delivered_in_process_without_ssh() {
     let (host, inner) = recording_local_mux();
     let call_context = ToolSessionContext {
         process_machine_id: Some("hm_spoofed".to_string()),
-        process_host_id: Some("spoofed-host".to_string()),
+        process_machine_name: Some("spoofed-host".to_string()),
         transport: Some(orbit_types::tool::McpTransport::SshMcp),
         trace_id: Some("trace-current-call".to_string()),
         effective_capabilities: std::collections::BTreeSet::from([McpCapability::Operator]),
@@ -274,9 +274,15 @@ fn a_copied_local_selector_is_delivered_in_process_without_ssh() {
         calls[0].2.process_machine_id.as_deref(),
         Some(OWNER_MACHINE)
     );
-    assert_eq!(calls[0].2.process_host_id.as_deref(), Some("local-host"));
+    assert_eq!(
+        calls[0].2.process_machine_name.as_deref(),
+        Some("local-host")
+    );
     assert_eq!(calls[0].2.caller_machine_id.as_deref(), Some(OWNER_MACHINE));
-    assert_eq!(calls[0].2.caller_host_id.as_deref(), Some("local-host"));
+    assert_eq!(
+        calls[0].2.caller_machine_name.as_deref(),
+        Some("local-host")
+    );
     assert_eq!(
         calls[0].2.transport,
         Some(orbit_types::tool::McpTransport::Local)
@@ -336,7 +342,7 @@ fn concurrent_local_routes_keep_each_calls_audit_evidence_isolated() {
     );
     for (_, _, context) in calls.iter() {
         assert_eq!(context.process_machine_id.as_deref(), Some(OWNER_MACHINE));
-        assert_eq!(context.process_host_id.as_deref(), Some("local-host"));
+        assert_eq!(context.process_machine_name.as_deref(), Some("local-host"));
         assert_eq!(
             context.effective_capabilities,
             std::collections::BTreeSet::from([McpCapability::Agent])
@@ -403,7 +409,7 @@ fn worker_context_survives_local_route_without_operator_elevation() {
         claim_id: "claim".into(),
         execution: orbit_types::task::ExecutionLocation {
             machine_id: REPLICA_MACHINE.into(),
-            host_id: None,
+            machine_name: None,
         },
         bound_run_id: "immutable-leaf".into(),
     };

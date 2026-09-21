@@ -884,7 +884,7 @@ const formatAbsoluteTime = (value) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 const routines = {
-  host_id: "host-1",
+  machine_name: "host-1",
   session_explanation: "test",
   capabilities: {},
   clock: {
@@ -4531,7 +4531,7 @@ globalThis.document = { getElementById: get, createElement: (tag) => new Node(""
 globalThis.window = { confirm: () => true, location: new URL("http://dashboard.test/"), addEventListener: () => {} };
 
 const routines = {
-  host_id: "hm_local",
+  machine_name: "hm_local",
   session_explanation: "session access",
   capabilities: { routine_toggle: { authorized: true }, clock_service: { authorized: true }, clock_cadence: { authorized: true } },
   routines: [{

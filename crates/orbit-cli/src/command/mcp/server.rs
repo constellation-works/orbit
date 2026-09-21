@@ -101,13 +101,13 @@ pub(super) fn serve_mcp_federated_stdio(
     }
     let destinations = federated::federated_membership(
         identity.process_machine_id.clone(),
-        identity.process_host_id.clone(),
+        identity.process_machine_name.clone(),
         remotes,
     );
-    let local_host = Arc::new(ServerMcpHost::new(
+    let local_machine = Arc::new(ServerMcpHost::new(
         global_root,
         identity.process_machine_id.clone(),
-        identity.process_host_id.clone(),
+        identity.process_machine_name.clone(),
     ));
     // Two budgets, not one: the probe timeout bounds the round trips that
     // decide where a call goes, while the routed `tools/call` is stamped
@@ -115,7 +115,7 @@ pub(super) fn serve_mcp_federated_stdio(
     // is not cut short by the time spent classifying its route [ORB-11023].
     let probe = federated::CompositeDestinationProbe::new(
         Arc::new(federated::InProcessDestinationProbe::new(
-            local_host,
+            local_machine,
             identity.session_context.clone(),
         )),
         Arc::new(federated::SshDestinationProbe::new(
@@ -205,7 +205,7 @@ fn compose_server(
     let host = Arc::new(ServerMcpHost::new(
         global_root,
         identity.process_machine_id,
-        identity.process_host_id,
+        identity.process_machine_name,
     ));
     Ok((host, identity.session_context))
 }
@@ -353,17 +353,17 @@ impl<T> WorkspaceRuntimeCache<T> {
 struct ServerMcpHost {
     global_root: PathBuf,
     process_machine_id: String,
-    process_host_id: String,
+    process_machine_name: String,
     /// Runtimes this long-lived host has already opened.
     workspace_runtimes: WorkspaceRuntimeCache,
 }
 
 impl ServerMcpHost {
-    fn new(global_root: PathBuf, process_machine_id: String, process_host_id: String) -> Self {
+    fn new(global_root: PathBuf, process_machine_id: String, process_machine_name: String) -> Self {
         Self {
             global_root,
             process_machine_id,
-            process_host_id,
+            process_machine_name,
             workspace_runtimes: WorkspaceRuntimeCache::default(),
         }
     }
@@ -549,7 +549,7 @@ impl ServerMcpHost {
                 federated::load_destinations(&federated::destinations_path(&self.global_root))?;
             let destinations = federated::federated_membership(
                 self.process_machine_id.clone(),
-                self.process_host_id.clone(),
+                self.process_machine_name.clone(),
                 remotes,
             );
             context.workspace = Some(binding.owner_destination.clone());
@@ -577,7 +577,7 @@ impl ServerMcpHost {
         context.workspace_id = Some(selected.workspace.id.clone());
         context.workspace = Some(repo_root.clone());
         context.process_machine_id = Some(self.process_machine_id.clone());
-        context.process_host_id = Some(self.process_host_id.clone());
+        context.process_machine_name = Some(self.process_machine_name.clone());
 
         if let Some(object) = input.as_object_mut()
             && object.contains_key("workspace")

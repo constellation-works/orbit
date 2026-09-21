@@ -36,7 +36,7 @@ On every participating host:
 
 ```bash
 orbit --version
-orbit host show
+orbit config get machine.id
 orbit workspace show
 orbit doctor
 orbit config get operation.review_policy
@@ -140,8 +140,8 @@ Generic resume of a claimed leaf is refused:
 orbit job resume <run-id>
 ```
 
-Inspect the claim, task, locks, and the run on the execution host named by
-`job_run_host`. Reconcile an uncertain merge intent before any reassignment — a
+Inspect the claim, task, locks, and the run on the execution machine named by
+`job_run_machine`. Reconcile an uncertain merge intent before any reassignment — a
 revocation or recovery is refused with `uncertain_merge_intent` until it is.
 
 Approve, revoke and recover are owner-operator actions on the owner's dashboard
@@ -160,7 +160,7 @@ There is no epic execution path. Gather evidence with ordinary commands:
 ```bash
 orbit run history -j epic_pipeline --limit 50
 orbit task list --tag epic
-orbit task show <task-id> --fields status,context_files,job_run_id,job_run_host
+orbit task show <task-id> --fields status,context_files,job_run_id,job_run_machine
 orbit task locks list
 orbit doctor
 ```
@@ -171,7 +171,7 @@ epic roots (no own context, descendants that have some) need operator-supplied
 own context; nothing inherits the old union.
 
 Failed-run triage is gone. Re-backlog is a deliberate status write after
-someone inspects `blocked` and `job_run_host`.
+someone inspects `blocked` and `job_run_machine`.
 
 ## Verify, then stop
 

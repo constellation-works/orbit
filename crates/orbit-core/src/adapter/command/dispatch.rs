@@ -437,15 +437,15 @@ where
         caller_machine_id: session_context
             .as_ref()
             .and_then(|context| context.caller_machine_id.clone()),
-        caller_host_id: session_context
+        caller_machine_name: session_context
             .as_ref()
-            .and_then(|context| context.caller_host_id.clone()),
+            .and_then(|context| context.caller_machine_name.clone()),
         process_machine_id: session_context
             .as_ref()
             .and_then(|context| context.process_machine_id.clone()),
-        process_host_id: session_context
+        process_machine_name: session_context
             .as_ref()
-            .and_then(|context| context.process_host_id.clone()),
+            .and_then(|context| context.process_machine_name.clone()),
         transport: session_context
             .as_ref()
             .and_then(|context| context.transport),

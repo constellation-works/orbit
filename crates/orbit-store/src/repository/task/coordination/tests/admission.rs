@@ -4,7 +4,7 @@ use crate::contracts::*;
 pub(super) fn identity() -> AdmissionIdentity {
     AdmissionIdentity::trusted_remote(ExecutionLocation {
         machine_id: "machine-a".into(),
-        host_id: Some("display".into()),
+        machine_name: Some("display".into()),
     })
 }
 pub(super) fn request(id: &str) -> AdmissionRequest {
@@ -16,7 +16,7 @@ pub(super) fn request(id: &str) -> AdmissionRequest {
         run_context: AdmissionRunContext {
             run_id: "drain".into(),
             job_name: "auto".into(),
-            host_id: Some("untrusted-label".into()),
+            machine_name: Some("untrusted-label".into()),
         },
         ship: AdmissionShipContract {
             mode: "pr".into(),
@@ -76,7 +76,7 @@ fn lost_reply_replays_exact_claim_and_immutable_input() {
             .as_ref()
             .expect("claim")
             .executed_on
-            .host_id
+            .machine_name
             .as_deref(),
         Some("display")
     );
@@ -391,7 +391,7 @@ fn receipt_identity_is_machine_scoped_and_current_phase_is_not_history() {
     let original = receipt(pull(&fixture, &request("one")));
     let other = AdmissionIdentity::trusted_remote(ExecutionLocation {
         machine_id: "other-machine".into(),
-        host_id: None,
+        machine_name: None,
     });
     assert_eq!(
         fixture

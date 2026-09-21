@@ -14,7 +14,7 @@ Two things it deliberately is not:
 - **It is not automatic.** No task mutation publishes anything. Orbit ships no
   publication routine. You publish when you decide to.
 - **It is not a full backup.** Audit events, run history, claims, reservations,
-  configuration, host identity, and runtime caches are all out of scope. For
+  configuration, machine identity, and runtime caches are all out of scope. For
   those, back up the global root and database — see the [state and backup
 runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/state-and-backup.md).
 
@@ -173,8 +173,8 @@ What to expect:
   store.
 - There is no authority-transfer command. The destination must be an owner
   checkout whose machine, logical workspace ID, and source remote match the
-  publication. Restore global configuration plus `host.toml` and
-  `workspaces.json` first.
+  publication. Restore the global `config.toml` (including its `[machine]`
+  table) plus `workspaces.json` first.
 - The default refuses any non-empty destination. For an interrupted or repeated
   recovery, `--allow-identical-retry` admits only byte-identical task-ID
   collisions; a single non-identical collision aborts the whole restore, with no

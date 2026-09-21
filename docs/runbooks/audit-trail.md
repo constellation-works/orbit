@@ -56,7 +56,7 @@ Per-invocation fields include `id`, `execution_id`, `timestamp`, `command`, `sub
 `exit_code`, `duration_ms`, `working_directory`, `arguments_json`, `stdout_truncated`,
 `stderr_truncated`, `error_message`, `host`, `pid`, `session_id`, `task_id`, `job_run_id`,
 `activity_id`, and `step_index`. MCP rows add optional `workspace_id`, caller/process
-`machine_id` and display `host_id`, `transport`, the complete `effective_capabilities` set,
+`machine_id` and display `machine_name`, `transport`, the complete `effective_capabilities` set,
 `origin_session_id`, `mcp_call_id`, and `lease_id`.
 
 Compatibility matters when interpreting those fields: legacy `host` is always the hostname of

@@ -133,7 +133,7 @@ fn every_configured_destination_is_listed_with_its_own_identity() {
     );
     assert_eq!(
         rows.iter()
-            .map(|row| row["host"].as_str().expect("host"))
+            .map(|row| row["machine_name"].as_str().expect("machine_name"))
             .collect::<Vec<_>>(),
         ["orbit-owner", "operator@orbit-replica", "orbit-down"],
     );
@@ -194,7 +194,7 @@ fn an_ssh_down_destination_is_listed_as_unreachable_with_unknown_health() {
 fn every_descriptor_carries_the_pinned_federated_keys() {
     let federated_keys = BTreeSet::from([
         "selector",
-        "host",
+        "machine_name",
         "machine_id",
         "reachability",
         "checkout_health",
@@ -326,7 +326,7 @@ fn destination_registry_discovery_preserves_invalid_owner_and_replica_descriptor
 
     let pinned = BTreeSet::from([
         "selector",
-        "host",
+        "machine_name",
         "machine_id",
         "reachability",
         "checkout_health",

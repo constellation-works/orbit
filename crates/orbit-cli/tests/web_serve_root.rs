@@ -50,7 +50,7 @@ fn web_serve_honors_an_explicit_root_over_the_global_registry() {
             &root_arg,
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "web-root-host",
             "--task-prefix",
             "WR",
@@ -69,7 +69,7 @@ fn web_serve_honors_an_explicit_root_over_the_global_registry() {
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "web-home-host",
             "--task-prefix",
             "WH",
@@ -111,7 +111,7 @@ fn web_serve_without_an_explicit_root_still_serves_the_global_registry() {
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "web-home-host",
             "--task-prefix",
             "WH",

@@ -117,7 +117,7 @@ fn owner_routing_fences_generic_writes_across_separate_stores() {
         run_context: AdmissionRunContext {
             run_id: "drain".into(),
             job_name: "auto".into(),
-            host_id: None,
+            machine_name: None,
         },
         ship: AdmissionShipContract {
             mode: "pr".into(),
@@ -130,7 +130,7 @@ fn owner_routing_fences_generic_writes_across_separate_stores() {
     };
     let location = ExecutionLocation {
         machine_id: "executor".into(),
-        host_id: Some("display".into()),
+        machine_name: Some("display".into()),
     };
     let AdmissionLookup::Found { receipt, .. } = boundary
         .admit_task(
@@ -251,7 +251,11 @@ fn owner_routing_fences_generic_writes_across_separate_stores() {
     assert_eq!(manifest.len(), 1);
     assert_eq!(manifest[0].origin.as_ref(), Some(&binding.execution));
     assert_eq!(
-        owner.runtime.get_task(&task.id).expect("link").job_run_host,
+        owner
+            .runtime
+            .get_task(&task.id)
+            .expect("link")
+            .job_run_machine,
         Some(binding.execution.clone())
     );
     assert!(

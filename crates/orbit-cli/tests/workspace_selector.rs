@@ -35,7 +35,7 @@ fn workspace_remove_deregisters_deleted_checkout_by_name_id_and_path() {
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "remove-host",
             "--task-prefix",
             "REM",
@@ -116,7 +116,7 @@ fn global_workspace_flag_selects_by_name_and_id_from_a_foreign_checkout() {
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "selector-host",
             "--task-prefix",
             "SEL",
@@ -286,7 +286,7 @@ fn global_workspace_flag_fails_closed_on_unknown_selector() {
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "selector-host",
             "--task-prefix",
             "SEL",
@@ -331,7 +331,7 @@ fn global_workspace_flag_on_deleted_checkout_reports_inactive_status_and_recorde
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "selector-host",
             "--task-prefix",
             "DEL",
@@ -442,7 +442,7 @@ fn migrate_dry_run_honors_selected_checkout_and_confirm_uses_the_same_one() {
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "migration-selector-host",
             "--task-prefix",
             "MIG",
@@ -593,7 +593,7 @@ fn tool_run_workspace_selection_uses_global_flag_and_input_precedence() {
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "selector-host",
             "--task-prefix",
             "SEL",
@@ -734,7 +734,7 @@ fn checkout_path_and_cwd_resolve_an_id_that_collides_with_another_workspace_name
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "selector-host",
             "--task-prefix",
             "SEL",
@@ -870,7 +870,7 @@ fn publication_lifecycle_survives_id_collision_when_selected_by_checkout_or_name
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "selector-host",
             "--task-prefix",
             "SEL",
@@ -1020,7 +1020,7 @@ fn task_show_follows_the_global_task_id_and_explicit_workspace_stays_a_filter() 
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "selector-host",
             "--task-prefix",
             "SEL",
@@ -1119,7 +1119,7 @@ fn tool_run_task_show_follows_the_global_task_id_and_explicit_workspace_stays_a_
         &[
             "init",
             "--non-interactive",
-            "--host-name",
+            "--machine-name",
             "selector-host",
             "--task-prefix",
             "SEL",
