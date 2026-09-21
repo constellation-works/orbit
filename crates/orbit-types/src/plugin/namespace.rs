@@ -26,7 +26,6 @@ pub const RESERVED_CLI_COMMANDS: &[&str] = &[
     "friction",
     "search",
     "run",
-    "operation",
     "gc",
     "audit",
     "log",

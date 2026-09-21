@@ -15,7 +15,6 @@ pub mod mcp;
 pub mod migrate;
 pub mod operation;
 pub mod operation_args;
-pub mod operation_mode;
 pub mod plugin;
 pub mod policy;
 pub mod routine;
@@ -91,7 +90,6 @@ Knowledge:
 
 Operate:
   run         Run a workflow (ship, job)
-  operation   Explain, enable, stop, and revoke scoped operation-mode automation
   gc          Inspect and explicitly reap Orbit-managed garbage
 
 Observe:
@@ -152,8 +150,6 @@ pub enum Commands {
 
     // ── Operate ──
     Run(run::RunCommand),
-    #[command(name = "operation")]
-    Operation(operation_mode::OperationModeCommand),
     Gc(gc::GcCommand),
 
     // ── Observe ──

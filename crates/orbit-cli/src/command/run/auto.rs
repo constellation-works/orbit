@@ -1,9 +1,7 @@
 //! `orbit run auto` workspace logistics entrypoint.
 
 use clap::Args;
-use orbit_core::{
-    CompletionPolicy, DrainAdmissionsStopRequest, OperationDrainRequest, OrbitRuntime,
-};
+use orbit_core::{CompletionPolicy, DrainAdmissionsStopRequest, OrbitRuntime};
 use serde_json::json;
 
 use crate::command::{CommandOut, Execute, Payload};
@@ -41,11 +39,6 @@ pub(super) const AUTO_WORKFLOW: &str = "auto";
                   completion authority they were started with; this is not cancellation.\n\
                   To cancel those workers, `orbit run cancel <RUN_ID> --confirm` each child.\n\
                   A second `--stop`, or `--stop` with no active coordinator, is a no-op.\n\n\
-                  `--grant <ID>` binds the drain to an operation-mode grant enabled with\n\
-                  `orbit operation enable`: the window is capped at the grant's remaining time,\n\
-                  only the grant's finite task set is admitted, promotion follows fresh pilot\n\
-                  evidence, and completion is the grant's captured authority rather than\n\
-                  `--complete`. Each child admission rechecks the grant.\n\n\
                   Inspect submitted runs with `orbit run history -j workspace_auto_pipeline` and\n\
                   `orbit run show <RUN_ID>`."
 )]
@@ -100,11 +93,6 @@ pub struct AutoCommand {
     /// workflow pool; pass the flag with no names to disable it.
     #[arg(long, value_name = "CREW", value_delimiter = ',', num_args = 0..)]
     pub xhard_complexity_crews: Option<Vec<String>>,
-    /// Bind this drain to an operation-mode grant (see `orbit operation`).
-    /// Completion, scope, and limits come from the grant; `--complete` is
-    /// not accepted alongside it.
-    #[arg(long, value_name = "GRANT_ID", conflicts_with = "complete")]
-    pub grant: Option<String>,
     /// Output as JSON.
     #[arg(long)]
     pub json: bool,
@@ -117,7 +105,7 @@ pub struct AutoCommand {
     /// start a drain.
     #[arg(
         long,
-        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "grant", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews"]
+        conflicts_with_all = ["for_duration", "concurrency", "complete", "allow_crew", "low_complexity_crews", "medium_complexity_crews", "hard_complexity_crews", "xhard_complexity_crews"]
     )]
     pub stop: bool,
 }
@@ -138,17 +126,6 @@ impl Execute for AutoCommand {
             .as_deref()
             .map(parse_duration_seconds)
             .transpose()?;
-        if let Some(grant_id) = self.grant.as_deref() {
-            return execute_grant_bound(
-                runtime,
-                grant_id,
-                for_seconds,
-                self.concurrency,
-                &self.allow_crew,
-                &complexity_crews,
-                self.claim_token.as_deref(),
-            );
-        }
         let completion = if self.complete {
             CompletionPolicy::Done
         } else {
@@ -178,51 +155,6 @@ impl Execute for AutoCommand {
         };
         workflow_dispatch_payload(AUTO_WORKFLOW, &[run])
     }
-}
-
-/// [ORB-11332] A drain whose every admission is bound to a grant.
-#[allow(clippy::too_many_arguments)]
-fn execute_grant_bound(
-    runtime: &OrbitRuntime,
-    grant_id: &str,
-    for_seconds: Option<u64>,
-    concurrency: Option<u32>,
-    allow_crew: &[String],
-    complexity_crews: &orbit_config::ComplexityCrewPools,
-    claim_token: Option<&str>,
-) -> CommandOut {
-    let result = runtime.submit_operation_drain(OperationDrainRequest {
-        grant_id: Some(grant_id),
-        for_seconds,
-        max_active_leaf_runs: concurrency,
-        allowed_crews: allow_crew,
-        complexity_crews,
-        actor: None,
-        claim_token,
-    })?;
-    Ok(Payload::detail(
-        json!({
-            "workflow": AUTO_WORKFLOW,
-            "job_id": result.invoke.job_name,
-            "run_id": result.invoke.run_id,
-            "state": if result.invoke.queued { "queued" } else { "submitted" },
-            "grant_id": result.admission.grant_id,
-            "grant_revision": result.admission.grant_revision,
-            "completion": result.admission.completion,
-            "window_seconds": result.window_seconds,
-            "leaf_ceiling": result.leaf_ceiling,
-            "expires_at": result.admission.expires_at.to_rfc3339(),
-        }),
-        format!(
-            "Submitted auto run {} under grant {} (completion: {}, window: {}s, leaf ceiling: {}).",
-            result.invoke.run_id,
-            result.admission.grant_id,
-            result.admission.completion,
-            result.window_seconds,
-            result.leaf_ceiling
-        ),
-    )
-    .into())
 }
 
 fn execute_stop(runtime: &OrbitRuntime, claim_token: Option<&str>) -> CommandOut {

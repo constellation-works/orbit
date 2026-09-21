@@ -384,24 +384,6 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "retuning a live drain's worker ceiling changes how much work the workspace starts",
     },
     GovernedOperation {
-        id: "orbit.operation.enable",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "enabling a grant authorizes automatic preparation, promotion, and possibly completion for a task set without asking again",
-    },
-    GovernedOperation {
-        id: "orbit.operation.stop",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "stopping a grant ends scoped automation for the workspace",
-    },
-    GovernedOperation {
-        id: "orbit.operation.revoke",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "revocation withdraws completion authority from admitted work",
-    },
-    GovernedOperation {
         id: "orbit.agent.invoke",
         surface: OperationSurface::Tool,
         // Deliberately not `Runner`. Every other run-reachable operation lists

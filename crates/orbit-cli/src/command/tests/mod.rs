@@ -9,7 +9,6 @@ mod init;
 mod locks;
 mod operation;
 mod operation_args;
-mod operation_mode;
 mod search;
 mod sweep;
 

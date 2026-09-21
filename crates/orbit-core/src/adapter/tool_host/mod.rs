@@ -9,7 +9,6 @@ mod host;
 mod hub_registry;
 mod input;
 mod json;
-mod operation_mode_tools;
 mod pipeline_tools;
 mod search_tools;
 mod state_tools;
