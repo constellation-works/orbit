@@ -97,12 +97,23 @@ impl ToolRegistry {
         plugin: Option<Arc<PluginToolBinding>>,
     ) {
         let schema = tool.schema();
-        if let Some(existing) = self.tools.get(&schema.name)
-            && (existing.mcp_scope.is_some() || mcp_scope.is_some())
-        {
-            self.record_mcp_error(McpToolDefinitionError::DuplicateCanonicalName(
-                schema.name.clone(),
-            ));
+        let collision = self.tools.get(&schema.name).map(|existing| {
+            (
+                existing.mcp_scope.is_some() || mcp_scope.is_some(),
+                existing.plugin.is_none() && existing.tool.schema().builtin,
+            )
+        });
+        if let Some((mcp_collision, hold_builtin)) = collision {
+            if mcp_collision {
+                self.record_mcp_error(McpToolDefinitionError::DuplicateCanonicalName(
+                    schema.name.clone(),
+                ));
+            }
+            // Built-ins register first. A later insert must not replace one:
+            // a plugin that collides would otherwise take the name.
+            if hold_builtin {
+                return;
+            }
         }
         if mcp_scope.is_some() {
             let advertised_name = mcp_advertised_tool_name(&schema.name);

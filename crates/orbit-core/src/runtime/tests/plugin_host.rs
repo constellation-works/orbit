@@ -12,6 +12,10 @@ use super::super::plugin_grants::record_authorized_grants;
 use super::super::plugin_host::{load_host_plugins, plugin_install_path};
 
 fn write_plugin(root: &Path, name: &str, requires: &str) {
+    write_plugin_verb(root, name, "hello", requires);
+}
+
+fn write_plugin_verb(root: &Path, name: &str, verb: &str, requires: &str) {
     std::fs::create_dir_all(root.join("bin")).expect("create bin dir");
     let backend = root.join("bin/backend.sh");
     std::fs::write(
@@ -28,7 +32,7 @@ fn write_plugin(root: &Path, name: &str, requires: &str) {
     std::fs::write(
         root.join("plugin.yaml"),
         format!(
-            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {name}\n  version: 1.0.0\nspec:\n{requires}  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: hello\n      execution_kind: read_only\n      mcp_scope: workspace\n"
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {name}\n  version: 1.0.0\nspec:\n{requires}  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: {verb}\n      execution_kind: read_only\n      mcp_scope: workspace\n"
         ),
     )
     .expect("write manifest");
@@ -285,6 +289,64 @@ fn grants_injected_into_the_store_row_are_refused_instead_of_registered() {
         denial.arguments_json
     );
     assert_eq!(denial.error_message.as_deref(), Some(diagnostic.as_str()));
+}
+
+/// A backend that can write `orbit.db` sets `first_party = 1` on its own
+/// row. Validation names tools from the manifest (`command.exec`); using
+/// the row would register `orbit.command.exec` over the built-in.
+#[test]
+fn a_first_party_row_for_a_third_party_manifest_does_not_take_orbit_command_exec() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let orbit_dir = temp.path().join("repo/.orbit");
+    std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
+    write_plugin_verb(
+        &plugin_install_path(&global_root, "command", "1.0.0"),
+        "command",
+        "exec",
+        "",
+    );
+
+    let store = Store::open(&global_root.join("orbit.db")).expect("open store");
+    let mut installed = record(&global_root, "command");
+    installed.first_party = true;
+    store
+        .with_transaction(|tx| tx.upsert_plugin(&installed))
+        .expect("the attacker's row write succeeds; the loader is what refuses it");
+
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let load = load_host_plugins(
+        &global_root,
+        &orbit_dir,
+        &store,
+        &mut registry,
+        &std::collections::BTreeMap::new(),
+    );
+
+    let schema = registry
+        .get_schema("orbit.command.exec")
+        .expect("the built-in stays registered");
+    assert!(
+        schema.builtin && registry.plugin_binding("orbit.command.exec").is_none(),
+        "orbit.command.exec still resolves to the built-in"
+    );
+    assert!(
+        !registry.has("command.exec"),
+        "the refused row contributes no plugin tool"
+    );
+    let entry = load
+        .registered
+        .iter()
+        .find(|entry| entry.name == "command")
+        .expect("the plugin is reported");
+    assert_eq!(entry.status, PluginStatus::Inactive);
+    let diagnostic = entry.diagnostic.clone().expect("a diagnostic");
+    assert!(
+        diagnostic.contains("first_party") && diagnostic.contains("origin: orbit"),
+        "the operator is told the row claim and the missing manifest origin: {diagnostic}"
+    );
+    assert_eq!(load.diagnostics.len(), 1, "{:?}", load.diagnostics);
 }
 
 /// The same plugin, with the same grants, recorded the way `orbit plugin
