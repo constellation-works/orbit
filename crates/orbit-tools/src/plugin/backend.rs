@@ -65,7 +65,9 @@ const ORBIT_TOOLS_WORKSPACE_WRITE_DIRS: &[&str] = &[
 ];
 
 /// The workspace lexical index's WAL file set, granted on the same terms as
-/// [`ORBIT_TOOLS_GLOBAL_WRITE_FILES`].
+/// [`ORBIT_TOOLS_GLOBAL_WRITE_FILES`]. Callback session files live at
+/// `state/plugin-callbacks/` under the global root, which is absent from
+/// both write inventories: the host writes them, and the child must not.
 const ORBIT_TOOLS_WORKSPACE_WRITE_FILES: &[&str] = &[
     "state/semantic.db",
     "state/semantic.db-wal",
@@ -274,8 +276,8 @@ impl PluginBackendSpec {
             );
         }
         // Always present, even when empty: information for the backend.
-        // `orbit tool run` identifies a callback from `ORBIT_PLUGIN` and
-        // enforces the recorded install, not this value.
+        // The callback gate does not read this value; identity is the
+        // host-issued session (`ORBIT_PLUGIN_CALLBACK` plus ancestry).
         set("ORBIT_ALLOWED_TOOLS", self.allowed_tools(ctx).join(","));
         // `requires.programs` is what a callback through `proc.spawn` may run.
         set("ORBIT_PROC_ALLOWED_PROGRAMS", self.programs.join(","));

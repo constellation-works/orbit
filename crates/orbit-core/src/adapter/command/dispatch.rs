@@ -1,9 +1,7 @@
 //! Tool dispatch: audit correlation, agent-identity resolution, and the
 //! trusted MCP envelope boundary.
 
-use std::cell::Cell;
-#[cfg(test)]
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::time::Instant;
 
@@ -11,7 +9,9 @@ use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::Store;
 use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields, PluginStoreBackend};
-use orbit_tools::plugin::load_plugin_dir;
+use orbit_tools::plugin::{
+    CallbackResolution, PluginCallbackIdentity, load_plugin_dir, resolve_plugin_callback_session,
+};
 use orbit_tools::{ReservationOwnerContext, ToolContext, ToolExecutionKind};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
@@ -57,6 +57,8 @@ impl ToolEntryPoint {
 
 thread_local! {
     static TOOL_AUDIT_RECORDED: Cell<bool> = const { Cell::new(false) };
+    static CALLBACK_PLUGIN_PROVENANCE: RefCell<Option<PluginProvenance>> =
+        const { RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -128,7 +130,10 @@ where
             )?;
             Store::open(&audit_db)
         },
-        dispatch,
+        |input| {
+            enforce_plugin_callback_allowlist_from_root(global_root, name)?;
+            dispatch(input)
+        },
     )
 }
 
@@ -182,6 +187,7 @@ pub(super) fn execute_global_plugin_dispatch(
             // this one has no runtime, so the same generic plugin row is
             // resolved here — inside the audited closure, so a refusal lands
             // on the row for this call.
+            enforce_plugin_callback_allowlist_from_root(&global_root, name)?;
             authorize_plugin_tool(
                 binding.execution_kind == orbit_types::plugin::PluginExecutionKind::Mutating,
                 entry_point,
@@ -331,9 +337,6 @@ impl OrbitRuntime {
             },
             |input| {
                 self.ensure_tool_agent_facing(name)?;
-                if entry_point == ToolEntryPoint::Cli {
-                    enforce_plugin_callback_allowlist(self.stores().plugins(), name)?;
-                }
                 let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context();
                 let allowed_tools = if trusted_env {
                     read_activity_tools_from_env()
@@ -445,7 +448,14 @@ impl OrbitRuntime {
             plugin,
             audit,
             || self.sqlite_store(),
-            dispatch,
+            |input| {
+                enforce_plugin_callback_allowlist(
+                    &self.global_root(),
+                    self.stores().plugins(),
+                    name,
+                )?;
+                dispatch(input)
+            },
         )
     }
 }
@@ -484,6 +494,7 @@ where
     // Keep the callback inside the audit boundary so setup, policy, and
     // implementation failures all produce a failure-status row.
     let result = dispatch(input);
+    let plugin = take_callback_plugin_provenance().or(plugin);
     let duration_ms = (start.elapsed().as_millis() as i64).max(1);
 
     let (status, exit_code, error_message) = match &result {
@@ -787,27 +798,87 @@ fn resolve_agent_identity_for_entry_point(
 }
 
 /// The environment variable a plugin backend's child carries: the plugin
-/// namespace, which marks the process as a plugin callback context.
-pub const ORBIT_PLUGIN_ENV: &str = "ORBIT_PLUGIN";
+/// namespace. Informational; identity is the host-issued callback session.
+#[cfg(test)]
+pub(crate) use orbit_tools::plugin::ORBIT_PLUGIN_ENV;
 
 /// A process launched as a plugin backend reaches Orbit only through
-/// `orbit tool run`, and only for tools in that plugin's recorded
-/// `permissions.orbit_tools` once the host has granted `orbit_tools`.
-/// `ORBIT_PLUGIN` identifies the caller; `ORBIT_ALLOWED_TOOLS` is not the
-/// gate. Anything else is refused before the tool runs; a missing install,
-/// missing grant, or unloadable manifest refuses everything.
+/// `orbit tool run` or MCP `tools/call`, and only for tools in that plugin's
+/// recorded `permissions.orbit_tools` once the host has granted `orbit_tools`.
+/// Identity is the host-issued session (token plus process ancestry), not
+/// `ORBIT_PLUGIN`. Anything else is refused before the tool runs; a missing
+/// install, missing grant, or unloadable manifest refuses everything.
 fn enforce_plugin_callback_allowlist(
+    global_root: &Path,
     plugins: &dyn PluginStoreBackend,
     name: &str,
 ) -> Result<(), OrbitError> {
-    let Some(plugin) = std::env::var(ORBIT_PLUGIN_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    else {
+    apply_callback_resolution(
+        resolve_plugin_callback_session(global_root)?,
+        |plugin| plugins.get_plugin(plugin),
+        name,
+    )
+}
+
+fn enforce_plugin_callback_allowlist_from_root(
+    global_root: &Path,
+    name: &str,
+) -> Result<(), OrbitError> {
+    let resolution = resolve_plugin_callback_session(global_root)?;
+    if matches!(resolution, CallbackResolution::None) {
         return Ok(());
-    };
-    let allowed = match plugins.get_plugin(&plugin)? {
-        Some(installed) => recorded_orbit_tools(&installed)?,
+    }
+    let db =
+        orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
+    let store = Store::open(&db)?;
+    apply_callback_resolution(resolution, |plugin| store.get_plugin(plugin), name)
+}
+
+fn apply_callback_resolution(
+    resolution: CallbackResolution,
+    get_plugin: impl Fn(&str) -> Result<Option<InstalledPlugin>, OrbitError>,
+    name: &str,
+) -> Result<(), OrbitError> {
+    match resolution {
+        CallbackResolution::None => Ok(()),
+        CallbackResolution::Identified(identity) => {
+            let installed = get_plugin(&identity.name)?;
+            stamp_callback_plugin_provenance(&identity, installed.as_ref());
+            refuse_unless_recorded(installed.as_ref(), &identity.name, name)
+        }
+        CallbackResolution::InvalidCredential(identity) => {
+            if let Some(identity) = identity.as_ref() {
+                let installed = get_plugin(&identity.name).ok().flatten();
+                stamp_callback_plugin_provenance(identity, installed.as_ref());
+            }
+            Err(OrbitError::PolicyDenied(match identity {
+                Some(identity) => format!(
+                    "plugin '{}' callback credential is missing or invalid; a backend the host \
+                     launched cannot reach Orbit without the host-issued session",
+                    identity.name
+                ),
+                None => {
+                    "plugin callback credential is missing or invalid; a backend the host launched \
+                     cannot reach Orbit without the host-issued session"
+                        .to_string()
+                }
+            }))
+        }
+        CallbackResolution::Mismatched { token, ancestry } => {
+            Err(OrbitError::PolicyDenied(format!(
+                "plugin callback credential for '{token}' does not match the live backend process '{ancestry}'"
+            )))
+        }
+    }
+}
+
+fn refuse_unless_recorded(
+    installed: Option<&InstalledPlugin>,
+    plugin: &str,
+    name: &str,
+) -> Result<(), OrbitError> {
+    let allowed = match installed {
+        Some(installed) => recorded_orbit_tools(installed)?,
         None => Vec::new(),
     };
     if allowed.iter().any(|tool| tool == name) {
@@ -819,6 +890,23 @@ fn enforce_plugin_callback_allowlist(
          `orbit_tools`",
         allowed.join(", ")
     )))
+}
+
+fn stamp_callback_plugin_provenance(
+    identity: &PluginCallbackIdentity,
+    installed: Option<&InstalledPlugin>,
+) {
+    let mut provenance = identity.provenance();
+    if let Some(installed) = installed {
+        provenance.grants = installed.grants.clone();
+    }
+    CALLBACK_PLUGIN_PROVENANCE.with(|cell| {
+        *cell.borrow_mut() = Some(provenance);
+    });
+}
+
+fn take_callback_plugin_provenance() -> Option<PluginProvenance> {
+    CALLBACK_PLUGIN_PROVENANCE.with(|cell| cell.replace(None))
 }
 
 fn recorded_orbit_tools(installed: &InstalledPlugin) -> Result<Vec<String>, OrbitError> {

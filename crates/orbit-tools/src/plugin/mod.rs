@@ -9,6 +9,7 @@
 //! store.
 
 mod backend;
+mod callback;
 mod envelope;
 mod loader;
 mod mcp;
@@ -21,6 +22,10 @@ mod tool;
 mod tests;
 
 pub use backend::{PLUGIN_TIMEOUT_CEILING_MS, PluginBackendSpec, PluginSandboxProfile};
+pub use callback::{
+    CallbackResolution, ORBIT_PLUGIN_CALLBACK_ENV, ORBIT_PLUGIN_ENV, PluginCallbackIdentity,
+    PluginCallbackSession, resolve_plugin_callback, resolve_plugin_callback_session,
+};
 pub use envelope::{PLUGIN_ENVELOPE_SCHEMA_VERSION, parse_response, validate_output};
 pub use loader::{
     FIRST_PARTY_MANIFEST_DIGESTS, LoadedPlugin, PluginDefinitionFiles, PluginLoadError,

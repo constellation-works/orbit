@@ -1,4 +1,5 @@
 mod backend;
+mod callback;
 mod loader;
 mod mcp;
 mod schema;
