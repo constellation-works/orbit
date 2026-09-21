@@ -542,8 +542,8 @@ fn portability_checker_skips_non_utf8_files_without_hiding_text_violations() {
 fn embedded_assets_are_repository_agnostic() {
     // Both trees ship: skills are embedded, and activities are
     // `include_str!`'d by
-    // `command::activity` and seeded into every workspace on `orbit init`
-    // (with a byte-identical copy under `.orbit/resources/activities/`).
+    // `command::activity` and seeded into Orbit's global resources on
+    // `orbit init`.
     // Activities were outside this check until a task description's own
     // wording — a maintainer's name plus a concrete ADR id — was copied
     // verbatim into `agent_implement.yaml` (PR #702).

@@ -141,11 +141,6 @@ fn agent_implement_guidance_allows_bounded_scope_expansion() {
         .iter()
         .find(|(name, _)| *name == "agent_implement")
         .expect("agent implement activity is seeded");
-    assert_eq!(
-        *yaml,
-        include_str!("../../../../../.orbit/resources/activities/agent_implement.yaml"),
-        "shipped and workspace implementation activities must remain byte-identical"
-    );
     let asset = load_activity_asset(yaml).expect("parse agent implement activity");
     match asset.spec.spec {
         ActivityV2Spec::AgentLoop(spec) => {
@@ -254,20 +249,16 @@ fn agent_implement_context_loading_reads_files_and_lists_directories() {
     );
 }
 
-/// The effective implementation instruction — the packaged asset and the
-/// versioned workspace override a run actually loads — must carry the
-/// final scope-reconciliation and cleanup contract, not the older
-/// permissive "record the bounded leftover" handoff.
+/// The effective implementation instruction must carry the final
+/// scope-reconciliation and cleanup contract, not the older permissive
+/// "record the bounded leftover" handoff.
 #[test]
 fn agent_implement_requires_final_scope_reconciliation_before_handoff() {
     let (_, shipped) = DEFAULT_ACTIVITY_FILES
         .iter()
         .find(|(name, _)| *name == "agent_implement")
         .expect("agent implement activity is seeded");
-    let workspace_override =
-        include_str!("../../../../../.orbit/resources/activities/agent_implement.yaml");
-
-    for (source, yaml) in [("packaged", *shipped), ("workspace", workspace_override)] {
+    for (source, yaml) in [("packaged", *shipped)] {
         let instruction = agent_implement_instruction(yaml);
 
         for clause in [
@@ -283,7 +274,7 @@ fn agent_implement_requires_final_scope_reconciliation_before_handoff() {
             "a containing directory selector is not new-file intent",
             // Cleanup before a successful exit, and what stays untouched.
             "before a successful exit, remove or revert the run-owned output",
-            "write scratch, logs, and review evidence outside the checkout",
+            "write scratch, logs, and review evidence under `.orbit/tmp/`",
             "preserve pre-existing contents, another actor's edits, and legitimate task outputs",
             // Cleanup is scoped to what git reports, never to ignored
             // build output the sandbox owns.
@@ -355,11 +346,12 @@ fn agent_implement_reconciliation_answers_each_handoff_scenario() {
             ],
         ),
         (
-            "review evidence and scratch live outside the checkout",
+            "review evidence and scratch live in the run-scoped scratch dir",
             vec![
-                "write scratch, logs, and review evidence outside the checkout",
-                "before removing a temporary copy",
-                "temporary evidence or scratch files must remain outside the worktree",
+                "write scratch, logs, and review evidence under `.orbit/tmp/`",
+                "the only location `orbit.task.artifact.put` accepts",
+                "write temporary evidence and scratch files under `.orbit/tmp/`",
+                "never under `/tmp`",
             ],
         ),
         (
@@ -473,11 +465,6 @@ fn task_pilot_is_read_only_bounded_and_uses_advisory_output() {
         .iter()
         .find(|(name, _)| *name == "task_pilot")
         .expect("task pilot activity is seeded");
-    let workspace_yaml = include_str!("../../../../../.orbit/resources/activities/task_pilot.yaml");
-    assert_eq!(
-        *yaml, workspace_yaml,
-        "shipped and workspace task-pilot resources must remain byte-identical"
-    );
     let asset = load_activity_asset(yaml).expect("parse task pilot activity");
     assert_eq!(
         asset.spec.fs_profile.as_deref(),
@@ -733,12 +720,6 @@ fn step_failure_recovery_cannot_write_persistent_git_configuration() {
         .iter()
         .find(|(name, _)| *name == "step_failure_recovery")
         .expect("step failure recovery activity is seeded");
-    let workspace_yaml =
-        include_str!("../../../../../.orbit/resources/activities/step_failure_recovery.yaml");
-    assert_eq!(
-        *yaml, workspace_yaml,
-        "shipped and workspace step_failure_recovery resources must remain byte-identical"
-    );
     let asset = load_activity_asset(yaml).expect("parse step failure recovery activity");
     let ActivityV2Spec::AgentLoop(spec) = asset.spec.spec else {
         panic!("expected agent_loop activity");

@@ -362,25 +362,12 @@ fn dependabot_sweep_pipeline_is_two_deterministic_steps_and_single_flight() {
 }
 
 #[test]
-fn seeded_recovery_assets_stay_aligned_without_retired_role() {
+fn seeded_recovery_assets_omit_retired_role() {
     for name in ["step_failure_recovery", "pr_conflict_recovery"] {
         let seeded = DEFAULT_ACTIVITY_FILES
             .iter()
             .find_map(|(activity_name, yaml)| (*activity_name == name).then_some(*yaml))
             .unwrap_or_else(|| panic!("seeded {name} activity"));
-        let dogfood = match name {
-            "step_failure_recovery" => include_str!(
-                "../../../../../../.orbit/resources/activities/step_failure_recovery.yaml"
-            ),
-            "pr_conflict_recovery" => include_str!(
-                "../../../../../../.orbit/resources/activities/pr_conflict_recovery.yaml"
-            ),
-            _ => unreachable!("fixed recovery activity list"),
-        };
-        assert_eq!(
-            seeded, dogfood,
-            "dogfood and seeded {name} assets must remain behaviorally aligned"
-        );
 
         let asset = load_activity_asset(seeded).expect("parse recovery activity");
         let ActivityV2Spec::AgentLoop(_) = asset.spec.spec else {
@@ -1317,7 +1304,7 @@ fn auto_pipeline_list_backlog_step_forwards_allowed_crews() {
 }
 
 #[test]
-fn shipped_supervision_budgets_are_composed_bounded_and_mirrored() {
+fn shipped_supervision_budgets_are_composed_and_bounded() {
     let yaml = DEFAULT_JOB_FILES
         .iter()
         .find_map(|(name, yaml)| (*name == "task_gate_pipeline").then_some(*yaml))
@@ -1379,58 +1366,15 @@ fn shipped_supervision_budgets_are_composed_bounded_and_mirrored() {
         "gate supervision must cover the supported implementation plus delivery tail"
     );
 
-    let assert_mirrored_budget = |canonical: &str, workspace: &str, fields: &[&str]| {
-        let canonical: serde_yaml::Value = serde_yaml::from_str(canonical).expect("canonical YAML");
-        let workspace: serde_yaml::Value = serde_yaml::from_str(workspace).expect("workspace YAML");
-        for field in fields {
-            assert_eq!(
-                canonical["spec"]["default_input"][*field],
-                workspace["spec"]["default_input"][*field],
-                "workspace {field} must mirror the shipped budget"
-            );
-        }
-    };
-    assert_mirrored_budget(
-        yaml,
-        include_str!("../../../../../../.orbit/resources/jobs/task_gate_pipeline.yaml"),
-        &[
-            "max_wait_seconds",
-            "ttl_seconds",
-            "dispatch_timeout_seconds",
-        ],
-    );
-
-    let workspace_auto =
-        include_str!("../../../../../../.orbit/resources/jobs/task_auto_pipeline.yaml");
-    let workspace_auto: serde_yaml::Value =
-        serde_yaml::from_str(workspace_auto).expect("workspace auto YAML");
-    assert_eq!(
-        workspace_auto["spec"]["steps"][2]["fan_out"]["worker"]["default_input"]["timeout_seconds"],
-        outer_timeout_seconds
-    );
-
-    for (name, workspace_yaml, maximum) in [
-        (
-            "invoke_and_wait",
-            include_str!("../../../../../../.orbit/resources/activities/invoke_and_wait.yaml"),
-            PIPELINE_WAIT_MAX_TIMEOUT_SECONDS,
-        ),
-        (
-            "reserve_locks",
-            include_str!("../../../../../../.orbit/resources/activities/reserve_locks.yaml"),
-            u64::from(MAX_TASK_RESERVATION_TTL_SECONDS),
-        ),
+    for (name, maximum) in [
+        ("invoke_and_wait", PIPELINE_WAIT_MAX_TIMEOUT_SECONDS),
+        ("reserve_locks", u64::from(MAX_TASK_RESERVATION_TTL_SECONDS)),
     ] {
         let canonical_yaml = DEFAULT_ACTIVITY_FILES
             .iter()
             .find_map(|(activity, yaml)| (*activity == name).then_some(*yaml))
             .unwrap_or_else(|| panic!("{name} activity exists"));
         let canonical = load_activity_asset(canonical_yaml).expect("parse canonical activity");
-        let workspace = load_activity_asset(workspace_yaml).expect("parse workspace activity");
-        assert_eq!(
-            canonical.spec, workspace.spec,
-            "workspace {name} activity must mirror the shipped contract"
-        );
         assert_eq!(
             canonical.spec.input_schema_json["properties"][if name == "invoke_and_wait" {
                 "timeout_seconds"

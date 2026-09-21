@@ -62,8 +62,10 @@ def source_contracts(repo: Path):
             cli.add(name)
             pending_name = None
 
-    jobs = {path.stem for path in (repo / ".orbit/resources/jobs").glob("*.yaml")}
-    activities = {path.stem for path in (repo / ".orbit/resources/activities").glob("*.yaml")}
+    jobs = {path.stem for path in (repo / "crates/orbit-core/assets/jobs").glob("*.yaml")}
+    activities = {
+        path.stem for path in (repo / "crates/orbit-core/assets/activities").glob("*.yaml")
+    }
     mcp_snapshot = json.loads((repo / "crates/orbit-cli/tests/snapshots/mcp_tools_list.json").read_text())
     mcp = {entry["name"] for entry in mcp_snapshot}
     api_source = (repo / "crates/orbit-web/src/api/mod.rs").read_text()
