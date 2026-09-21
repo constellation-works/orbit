@@ -1,7 +1,8 @@
 use orbit_common::OrbitError;
 use orbit_store::Store;
 use orbit_tools::ToolExecutionKind;
-use orbit_types::plugin::InstalledPlugin;
+use orbit_tools::plugin::PluginCallbackSession;
+use orbit_types::plugin::{InstalledPlugin, PluginProvenance};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use std::collections::BTreeSet;
@@ -848,18 +849,49 @@ fn set_plugin_callback_env(plugin: &str, allowed_tools: Option<&str>) {
     }
 }
 
-fn dispatch_cli(runtime: &OrbitRuntime, tool: &str) -> Result<serde_json::Value, OrbitError> {
+fn bind_live_callback_session(runtime: &OrbitRuntime) -> PluginCallbackSession {
+    let installed = runtime
+        .stores()
+        .plugins()
+        .get_plugin("callback")
+        .expect("read plugin")
+        .expect("callback plugin is recorded");
+    let mut session = PluginCallbackSession::mint(
+        &runtime.global_root(),
+        &PluginProvenance {
+            name: installed.name,
+            version: installed.version,
+            manifest_digest: installed.manifest_digest,
+            grants: installed.grants,
+        },
+    )
+    .expect("mint callback session");
+    session
+        .bind_pid(std::process::id())
+        .expect("bind this process as the plugin child");
+    session
+}
+
+fn dispatch_entry(
+    runtime: &OrbitRuntime,
+    tool: &str,
+    entry_point: ToolEntryPoint,
+) -> Result<serde_json::Value, OrbitError> {
     let input = match tool {
         "orbit.search" => json!({
             "query": "callback",
             "model": orbit_common::test_fixtures::TEST_CODEX_MODEL
         }),
         "orbit.task.list" => json!({ "limit": 10 }),
-        other => panic!("dispatch_cli fixture does not cover {other}"),
+        other => panic!("dispatch fixture does not cover {other}"),
     };
     runtime
-        .execute_tool_command_dispatch(tool, input, None, None, ToolEntryPoint::Cli)
+        .execute_tool_command_dispatch(tool, input, None, None, entry_point)
         .map(|outcome| outcome.value)
+}
+
+fn dispatch_cli(runtime: &OrbitRuntime, tool: &str) -> Result<serde_json::Value, OrbitError> {
+    dispatch_entry(runtime, tool, ToolEntryPoint::Cli)
 }
 
 fn assert_plugin_allowlist_denied(error: &OrbitError, tool: &str) {
@@ -881,6 +913,7 @@ fn plugin_callback_allowlist_ignores_forged_or_unset_env() {
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list"]);
+    let _session = bind_live_callback_session(&runtime);
 
     let run = |allowed_tools: Option<&str>, tool: &str| {
         set_plugin_callback_env("callback", allowed_tools);
@@ -914,4 +947,78 @@ fn plugin_callback_allowlist_is_idle_without_orbit_plugin() {
     }
     dispatch_cli(&runtime, "orbit.search")
         .expect("ordinary CLI callers are not gated by a plugin allowlist");
+}
+
+/// Clearing `ORBIT_PLUGIN` in a live backend process does not drop the
+/// allowlist: ancestry still names the plugin.
+#[test]
+fn plugin_callback_allowlist_holds_after_orbit_plugin_is_cleared() {
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    record_callback_plugin(&runtime, &["orbit.task.list"]);
+    let _session = bind_live_callback_session(&runtime);
+    // SAFETY: callers hold `env_guard()` while changing process environment.
+    unsafe {
+        std::env::remove_var(ORBIT_PLUGIN_ENV);
+        std::env::remove_var(orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV);
+        std::env::remove_var("ORBIT_ALLOWED_TOOLS");
+    }
+
+    dispatch_cli(&runtime, "orbit.task.list")
+        .expect("a recorded callback still runs after ORBIT_PLUGIN is cleared");
+    assert_plugin_allowlist_denied(
+        &dispatch_cli(&runtime, "orbit.search")
+            .expect_err("clearing ORBIT_PLUGIN must not admit an unrecorded tool"),
+        "orbit.search",
+    );
+}
+
+#[test]
+fn plugin_callback_allowlist_applies_on_mcp_entry_point() {
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    record_callback_plugin(&runtime, &["orbit.task.list"]);
+    let _session = bind_live_callback_session(&runtime);
+    // SAFETY: callers hold `env_guard()` while changing process environment.
+    unsafe {
+        std::env::remove_var(ORBIT_PLUGIN_ENV);
+        std::env::remove_var(orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV);
+    }
+
+    dispatch_entry(&runtime, "orbit.task.list", ToolEntryPoint::Mcp)
+        .expect("a recorded callback still runs over MCP");
+    assert_plugin_allowlist_denied(
+        &dispatch_entry(&runtime, "orbit.search", ToolEntryPoint::Mcp)
+            .expect_err("MCP must apply the same plugin allowlist as CLI"),
+        "orbit.search",
+    );
+}
+
+#[test]
+fn plugin_callback_refusal_is_audited_with_plugin_identity() {
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    record_callback_plugin(&runtime, &["orbit.task.list"]);
+    let _session = bind_live_callback_session(&runtime);
+    // SAFETY: callers hold `env_guard()` while changing process environment.
+    unsafe {
+        std::env::remove_var(ORBIT_PLUGIN_ENV);
+        std::env::remove_var(orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV);
+    }
+
+    assert_plugin_allowlist_denied(
+        &dispatch_cli(&runtime, "orbit.search").expect_err("unrecorded tool is refused"),
+        "orbit.search",
+    );
+
+    let events = runtime
+        .list_audit_events(None, Some("orbit.search".to_string()), None, None, 16)
+        .expect("list audit events");
+    let row = events
+        .iter()
+        .find(|event| event.status == AuditEventStatus::Denied)
+        .expect("denied callback row");
+    let plugin = row.plugin.as_ref().expect("plugin identity on the refusal");
+    assert_eq!(plugin.name, "callback");
+    assert_eq!(plugin.version, "1.0.0");
 }

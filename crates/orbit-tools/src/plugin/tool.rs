@@ -9,12 +9,13 @@
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_exec::{EnvironmentMode, ExecRequest, StdinMode, run_process};
+use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode, supervise_child};
 use orbit_types::plugin::{PluginExecutionKind, PluginProvenance};
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::{Value, json};
 
 use super::backend::PluginBackendSpec;
+use super::callback::PluginCallbackSession;
 use super::envelope::{PLUGIN_ENVELOPE_SCHEMA_VERSION, parse_response, validate_output};
 use super::mcp::McpBackend;
 use crate::{Tool, ToolContext, ToolExecutionKind};
@@ -123,22 +124,26 @@ impl PluginTool {
         })?;
         let timeout_ms = spec.timeout_ms();
         let sandbox = spec.sandbox_profile(ctx.workspace_root.as_deref())?;
-        let output = run_process(
-            &ExecRequest {
-                program: spec.command.to_string_lossy().into_owned(),
-                args: spec.args.clone(),
-                current_dir: Some(cwd.clone()),
-                timeout_ms: Some(timeout_ms),
-                stdin_mode: StdinMode::Bytes(stdin),
-                environment_mode: EnvironmentMode::ClearAndSet(spec.child_environment(
-                    ctx,
-                    &cwd,
-                    Some(&self.name),
-                )),
-                debug: false,
-            },
-            &sandbox,
-        )?;
+        let mut environment = spec.child_environment(ctx, &cwd, Some(&self.name));
+        let mut callback = PluginCallbackSession::mint(&spec.global_root, &spec.provenance)?;
+        callback.stamp_env(&mut environment);
+        let request = ExecRequest {
+            program: spec.command.to_string_lossy().into_owned(),
+            args: spec.args.clone(),
+            current_dir: Some(cwd.clone()),
+            timeout_ms: Some(timeout_ms),
+            stdin_mode: StdinMode::Bytes(stdin.clone()),
+            environment_mode: EnvironmentMode::ClearAndSet(environment),
+            debug: false,
+        };
+        sandbox.validate(&request)?;
+        let mut child = sandbox.spawn(&request)?;
+        if let Err(error) = callback.bind_pid(child.id()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        let output = supervise_child(child, Some(timeout_ms), Some(stdin))?.result;
 
         if output.timed_out {
             return Err(OrbitError::Execution(format!(

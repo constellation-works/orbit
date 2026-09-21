@@ -24,6 +24,7 @@ use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode};
 use serde_json::{Value, json};
 
 use super::backend::PluginBackendSpec;
+use super::callback::PluginCallbackSession;
 use crate::ToolContext;
 
 /// Lines the reader may queue ahead of the consumer before it blocks.
@@ -69,6 +70,9 @@ struct McpSession {
     stdin: ChildStdin,
     lines: Receiver<String>,
     next_id: i64,
+    /// Host-issued callback identity for this child. Dropped when the
+    /// session ends so ancestry no longer treats the pid as a plugin.
+    callback: Option<PluginCallbackSession>,
 }
 
 impl McpBackend {
@@ -98,6 +102,7 @@ impl McpBackend {
 
     fn end_session(&self, session: &mut McpSession) {
         let pid = session.child.id();
+        session.callback.take();
         session.kill();
         let _ = self
             .pid
@@ -247,6 +252,10 @@ impl McpBackend {
                     "plugin tool '{tool_name}' requires ToolContext.cwd"
                 ))
             })?;
+        let mut environment = self.spec.child_environment(ctx, &cwd, None);
+        let mut callback =
+            PluginCallbackSession::mint(&self.spec.global_root, &self.spec.provenance)?;
+        callback.stamp_env(&mut environment);
         let request = ExecRequest {
             program: self.spec.command.to_string_lossy().into_owned(),
             args: self.spec.args.clone(),
@@ -254,14 +263,20 @@ impl McpBackend {
             timeout_ms: None,
             // A piped stdin the session keeps open for its lifetime.
             stdin_mode: StdinMode::Bytes(Vec::new()),
-            environment_mode: EnvironmentMode::ClearAndSet(
-                self.spec.child_environment(ctx, &cwd, None),
-            ),
+            environment_mode: EnvironmentMode::ClearAndSet(environment),
             debug: false,
         };
         let sandbox = self.spec.sandbox_profile(ctx.workspace_root.as_deref())?;
-        let child = sandbox.spawn(&request)?;
-        McpSession::start(child)
+        sandbox.validate(&request)?;
+        let mut child = sandbox.spawn(&request)?;
+        if let Err(error) = callback.bind_pid(child.id()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        let mut session = McpSession::start(child)?;
+        session.callback = Some(callback);
+        Ok(session)
     }
 }
 
@@ -397,6 +412,7 @@ impl McpSession {
             stdin,
             lines,
             next_id: 0,
+            callback: None,
         })
     }
 

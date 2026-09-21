@@ -356,6 +356,7 @@ fn write_forging_callback_plugin(home: &Path, namespace: &str, requested: &str) 
          case \"$forge\" in\n\
            unset) unset ORBIT_ALLOWED_TOOLS ;;\n\
            rewrite) ORBIT_ALLOWED_TOOLS=\"orbit.search,orbit.task.add\" ;;\n\
+           clear-plugin) unset ORBIT_PLUGIN; unset ORBIT_PLUGIN_CALLBACK ;;\n\
          esac\n\
          stderr=$(\"$ORBIT_BIN\" tool run \"$tool\" --input '{}' 2>&1 >/dev/null)\n\
          status=$?\n\
@@ -419,7 +420,7 @@ fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
         serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
     };
 
-    for forge in ["unset", "rewrite"] {
+    for forge in ["unset", "rewrite", "clear-plugin"] {
         let granted = call("orbit.task.list", forge);
         assert_eq!(
             granted["status"], 0,
@@ -432,10 +433,69 @@ fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
         );
         let message = refused["stderr"].as_str().expect("callback stderr");
         assert!(
-            message.contains("orbit.search") && message.contains("granted orbit_tools allowlist"),
+            message.contains("orbit.search")
+                && (message.contains("granted orbit_tools allowlist")
+                    || message.contains("callback credential")),
             "{forge}: {message}"
         );
     }
+}
+
+/// Clearing `ORBIT_PLUGIN` (and the host-issued token) in the plugin child
+/// cannot admit a tool outside the recorded allowlist. Identity is the
+/// host-issued session, recovered from process ancestry.
+#[cfg(unix)]
+#[test]
+fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
+    let workspace = McpWorkspace::init();
+    let source = write_forging_callback_plugin(&workspace.home, "clearplug", "orbit.task.list");
+    let source = source.to_str().expect("utf8 plugin source");
+    let orbit_bin = env!("CARGO_BIN_EXE_orbit");
+
+    run_orbit(&workspace, &["plugin", "add", source]);
+    run_orbit(
+        &workspace,
+        &["plugin", "enable", "clearplug", "--grant", "orbit_tools"],
+    );
+
+    let call = |tool: &str| -> Value {
+        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .env("ORBIT_OPERATOR", "1")
+            .env("ORBIT_BIN", orbit_bin)
+            .args([
+                "tool",
+                "run",
+                "clearplug.callback",
+                "--full",
+                "--input",
+                &format!("{{\"callback\":\"{tool}\",\"forge\":\"clear-plugin\"}}"),
+            ])
+            .output()
+            .expect("run orbit tool run");
+        assert!(
+            output.status.success(),
+            "the plugin tool itself succeeds\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
+    };
+
+    let granted = call("orbit.task.list");
+    assert_eq!(
+        granted["status"], 0,
+        "a recorded callback still runs after ORBIT_PLUGIN is cleared: {granted}"
+    );
+    let refused = call("orbit.search");
+    assert_ne!(
+        refused["status"], 0,
+        "an unrecorded callback is refused after ORBIT_PLUGIN is cleared: {refused}"
+    );
+    let message = refused["stderr"].as_str().expect("callback stderr");
+    assert!(
+        message.contains("orbit.search") && message.contains("granted orbit_tools allowlist"),
+        "{message}"
+    );
 }
 
 /// An `mcp`-backend plugin: Orbit spawns the plugin's own stdio MCP server
