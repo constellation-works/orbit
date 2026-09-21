@@ -54,6 +54,25 @@ fn cli_parses_the_plugin_lifecycle() {
         _ => panic!("expected the plugin command"),
     }
 
+    let cli = Cli::parse_from([
+        "orbit",
+        "plugin",
+        "enable",
+        "demo",
+        "--grant",
+        "network,orbit_tools",
+    ]);
+    match cli.command {
+        Commands::Plugin(command) => match command.command {
+            PluginSubcommand::Enable(args) => {
+                assert_eq!(args.name, "demo");
+                assert_eq!(args.grants, ["network", "orbit_tools"]);
+            }
+            _ => panic!("expected plugin enable"),
+        },
+        _ => panic!("expected the plugin command"),
+    }
+
     let cli = Cli::parse_from(["orbit", "plugin", "sync", "--dry-run"]);
     match cli.command {
         Commands::Plugin(command) => match command.command {
@@ -82,4 +101,35 @@ fn cli_parses_the_plugin_lifecycle() {
         },
         _ => panic!("expected the plugin command"),
     }
+}
+
+#[test]
+fn plugin_enable_help_says_an_explicit_grant_list_replaces() {
+    let mut command = Cli::command();
+    let help = command
+        .find_subcommand_mut("plugin")
+        .expect("plugin command")
+        .find_subcommand_mut("enable")
+        .expect("plugin enable command")
+        .render_long_help()
+        .to_string();
+    assert!(
+        help.contains("Replaces the recorded set when present")
+            && help.contains("omitting --grant preserves it"),
+        "plugin enable help must distinguish replacement from omission:\n{help}"
+    );
+
+    let mut command = Cli::command();
+    let help = command
+        .find_subcommand_mut("plugin")
+        .expect("plugin command")
+        .find_subcommand_mut("add")
+        .expect("plugin add command")
+        .render_long_help()
+        .to_string();
+    assert!(
+        help.contains("Complete permission grant set")
+            && help.contains("Replaces any recorded set"),
+        "plugin add help must state the same replacement semantics:\n{help}"
+    );
 }
