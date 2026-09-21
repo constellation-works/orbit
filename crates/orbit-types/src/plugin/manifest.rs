@@ -19,6 +19,85 @@ pub const MANIFEST_FILE_NAME: &str = "plugin.yaml";
 pub const MANIFEST_SCHEMA_VERSION: u32 = 2;
 pub const MANIFEST_KIND: &str = "Plugin";
 
+/// The long option derived for one top-level tool input property.
+///
+/// This is shared by manifest validation and the CLI adapter so an accepted
+/// manifest cannot produce a different spelling at registration time.
+pub fn derive_plugin_cli_flag(name: &str, property: &Value) -> String {
+    let mut flag = String::new();
+    let mut previous_was_lower_or_digit = false;
+    for character in name.chars() {
+        match character {
+            '_' | ' ' | '-' => {
+                flag.push('-');
+                previous_was_lower_or_digit = false;
+            }
+            character if character.is_ascii_uppercase() => {
+                if previous_was_lower_or_digit {
+                    flag.push('-');
+                }
+                flag.push(character.to_ascii_lowercase());
+                previous_was_lower_or_digit = false;
+            }
+            character if character.is_ascii_lowercase() || character.is_ascii_digit() => {
+                flag.push(character);
+                previous_was_lower_or_digit = true;
+            }
+            _ => {}
+        }
+    }
+    if !flag.is_empty() && schema_property_uses_json_flag(property) {
+        flag.push_str("-json");
+    }
+    flag
+}
+
+fn schema_property_uses_json_flag(property: &Value) -> bool {
+    match property.get("type").and_then(Value::as_str) {
+        Some("string" | "integer" | "number" | "boolean") => false,
+        Some("array") => !matches!(
+            property
+                .get("items")
+                .and_then(|items| items.get("type"))
+                .and_then(Value::as_str),
+            Some("string" | "integer" | "number")
+        ),
+        _ => true,
+    }
+}
+
+/// Refuse top-level schema properties that would produce an ambiguous or
+/// unusable plugin CLI flag.
+pub fn validate_plugin_cli_flags(
+    input_schema: &Value,
+    field: &str,
+) -> Result<(), PluginManifestError> {
+    let Some(properties) = input_schema.get("properties").and_then(Value::as_object) else {
+        return Ok(());
+    };
+
+    let mut flags = std::collections::BTreeMap::new();
+    for (property_name, property) in properties {
+        let flag = derive_plugin_cli_flag(property_name, property);
+        let property_field = format!("{field}.properties.{property_name}");
+        if flag.is_empty() {
+            return Err(PluginManifestError::new(
+                property_field,
+                format!("property '{property_name}' derives an empty CLI flag"),
+            ));
+        }
+        if let Some(previous_property) = flags.insert(flag.clone(), property_name) {
+            return Err(PluginManifestError::new(
+                property_field,
+                format!(
+                    "properties '{previous_property}' and '{property_name}' both derive CLI flag '--{flag}'"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// A manifest rejection. `field` is the dotted path of the offending key so
 /// every diagnostic names what to fix.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -484,6 +563,12 @@ impl PluginManifest {
                         "must be a JSON Schema object or `{ $ref: <path> }`",
                     ));
                 }
+            }
+            if let Some(input_schema) = &tool.input_schema {
+                validate_plugin_cli_flags(
+                    input_schema,
+                    &format!("spec.tools[{index}].input_schema"),
+                )?;
             }
         }
         self.validate_definition_paths()?;

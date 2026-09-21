@@ -38,6 +38,30 @@ fn load_plugin_dir_accepts_a_tree_with_no_symbolic_links() {
     assert_eq!(plugin.namespace(), "demo");
 }
 
+#[test]
+fn load_refuses_resolved_schema_properties_with_colliding_cli_flags() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_plugin(temp.path());
+    let manifest = temp.path().join(MANIFEST_FILE_NAME);
+    let body = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(
+        &manifest,
+        body.replace(
+            "      execution_kind: read_only\n",
+            "      execution_kind: read_only\n      input_schema:\n        type: object\n        properties:\n          task_id: { type: string }\n          taskId: { type: string }\n",
+        ),
+    )
+    .expect("write manifest");
+
+    let error = load_plugin_dir(temp.path())
+        .expect_err("colliding flags refuse load")
+        .to_string();
+    assert!(
+        error.contains("task_id") && error.contains("taskId"),
+        "the load diagnostic names both colliding properties: {error}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn load_plugin_dir_refuses_an_installed_tree_that_contains_a_symlink() {

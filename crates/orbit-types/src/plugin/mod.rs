@@ -29,7 +29,8 @@ pub use manifest::{
     PluginManifest, PluginManifestError, PluginMcpScope, PluginMetadata, PluginNetworkPermission,
     PluginOrigin, PluginPanelGroup, PluginPanelRender, PluginPermissions, PluginRequires,
     PluginSandbox, PluginSpec, PluginToolSpec, PluginWebLink, PluginWebPanel, PluginWebSection,
-    plugin_provenance_label, validate_plugin_relative_path,
+    derive_plugin_cli_flag, plugin_provenance_label, validate_plugin_cli_flags,
+    validate_plugin_relative_path,
 };
 pub use namespace::{
     FIRST_PARTY_PUBLISHER, ORBIT_NAMESPACE_PREFIX, RESERVED_CLI_COMMANDS, is_valid_namespace,

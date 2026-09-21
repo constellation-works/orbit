@@ -105,6 +105,43 @@ fn structure_validation_names_the_field() {
 }
 
 #[test]
+fn schema_properties_with_colliding_or_empty_cli_flags_are_refused() {
+    let mut manifest = minimal();
+    manifest.spec.tools[0].input_schema = Some(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "task_id": { "type": "string" },
+            "taskId": { "type": "string" }
+        }
+    }));
+    let error = manifest
+        .validate_structure()
+        .expect_err("colliding flags refuse the manifest");
+    assert!(
+        error.message.contains("task_id") && error.message.contains("taskId"),
+        "the diagnostic names both colliding properties: {}",
+        error.message
+    );
+
+    manifest.spec.tools[0].input_schema = Some(serde_json::json!({
+        "type": "object",
+        "properties": { "###": { "type": "object" } }
+    }));
+    let error = manifest
+        .validate_structure()
+        .expect_err("an empty flag refuses the manifest");
+    assert!(error.message.contains("###"), "{}", error.message);
+
+    manifest.spec.tools[0].input_schema = Some(serde_json::json!({
+        "type": "object",
+        "properties": { "task_id": { "type": "string" } }
+    }));
+    manifest
+        .validate_structure()
+        .expect("a well-formed schema remains valid");
+}
+
+#[test]
 fn env_pass_refuses_orbit_reserved_names() {
     let mut manifest = minimal();
 

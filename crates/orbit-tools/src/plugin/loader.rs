@@ -198,12 +198,12 @@ pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
 
     let mut tools = Vec::with_capacity(manifest.spec.tools.len());
     for (index, tool) in manifest.spec.tools.iter().enumerate() {
+        let input_schema_field = format!("spec.tools[{index}].input_schema");
         let input_schema = match &tool.input_schema {
-            Some(schema) => {
-                resolve_schema(&root, schema, &format!("spec.tools[{index}].input_schema"))?
-            }
+            Some(schema) => resolve_schema(&root, schema, &input_schema_field)?,
             None => serde_json::json!({ "type": "object", "properties": {} }),
         };
+        orbit_types::plugin::validate_plugin_cli_flags(&input_schema, &input_schema_field)?;
         let output_schema = tool
             .output_schema
             .as_ref()
