@@ -245,10 +245,12 @@ client; the plugin never listens on a socket. This is how orbit-research plugs i
 rewrite.
 
 Callbacks: the backend reaches Orbit only through `orbit tool run`, and only for tools listed
-in `permissions.orbit_tools` *and* granted; the same allowlist is stamped into
-`ORBIT_ALLOWED_TOOLS`. No socket, no shared store handle. `ORBIT_ALLOWED_TOOLS` is written
-even when it is empty, so a child process that carries `ORBIT_PLUGIN` is recognised as a
-callback context and an unlisted tool is refused by the CLI before it runs — the backend's
+in `permissions.orbit_tools` *and* granted. The same intersection is stamped into
+`ORBIT_ALLOWED_TOOLS` as information for the backend. No socket, no shared store handle.
+`ORBIT_PLUGIN` marks the process as a callback context; `orbit tool run` then looks up that
+plugin's recorded install (the `orbit_tools` grant and the manifest's `permissions.orbit_tools`)
+and refuses anything outside it before the tool runs. The inherited `ORBIT_ALLOWED_TOOLS`
+value is not the gate — unsetting or rewriting it cannot expand the set. The backend's
 restraint is not the boundary.
 
 As implemented, the child also carries `ORBIT_PLUGIN_VERSION`, `ORBIT_TOOL_CWD` and
@@ -274,7 +276,7 @@ plugin missing a required grant never reaches this point (§4.1).
 | `permissions.network: none` (default) | — | `ACCESS_NET_BIND_TCP \| ACCESS_NET_CONNECT_TCP` handled with no rule, which refuses every TCP endpoint (needs Landlock ABI 4; an older kernel fails closed) | `(deny network*)` appended after the compiler's broad allow |
 | `permissions.network: loopback` | `network` | TCP left open — Landlock has no address filter, and the design's confinement claim is the filesystem | `(deny network*)` then loopback re-allows |
 | `permissions.network: any` | `network` | TCP left open | the compiler's `(allow network*)` stands |
-| `permissions.orbit_tools` | `orbit_tools` | Orbit's own global root and the workspace's `.orbit/` become writable, because a callback *is* `orbit tool run`; what that call may do is decided by `ORBIT_ALLOWED_TOOLS` and the ordinary governed-operation rows, not by the sandbox | same, through the profile's `modify` rules |
+| `permissions.orbit_tools` | `orbit_tools` | Orbit's own global root and the workspace's `.orbit/` become writable, because a callback *is* `orbit tool run`; what that call may do is decided by the plugin's recorded `orbit_tools` grant and `permissions.orbit_tools` (looked up when `orbit tool run` sees `ORBIT_PLUGIN`) together with the ordinary governed-operation rows, not by the sandbox and not by the inherited `ORBIT_ALLOWED_TOOLS` value | same, through the profile's `modify` rules |
 | `permissions.env_pass` | `env_pass` | Those names are copied from Orbit's environment into the otherwise allowlisted child environment, composed through the same `allowlisted_child_env` admission path as the baseline — `ORBIT_*` names are reserved for Orbit's own envelope and refused by `validate_structure`, so a privilege-bearing name (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`) can never reach a plugin child even if requested | same |
 | `requires.programs` | — | Not a sandbox rule: the declared programs are checked against a restricted caller's own `proc.spawn` allowlist and stamped into `ORBIT_PROC_ALLOWED_PROGRAMS` | same |
 | `backend.sandbox: none` | `unsandboxed` | No ruleset at all | No `sandbox-exec` wrapper at all |
