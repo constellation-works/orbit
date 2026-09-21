@@ -867,6 +867,34 @@ fn unset_and_named_crew_do_not_share_a_bundle() {
     );
 }
 
+/// [ORB-12796] The crew-homogeneity filter is not specific to
+/// `preparation_eligible`: two due `execution_failed` members carrying
+/// different stored `task.crew` never fire in the same attempt either.
+#[test]
+fn execution_failed_mixed_crew_members_do_not_share_a_bundle() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = SchedulerHost::new(vec![
+        state_member_with_crew("task-0", &["task-0"], 0, Some("opus")),
+        state_member_with_crew("task-1", &["task-1"], 0, Some("sol")),
+    ]);
+
+    assert_eq!(
+        execution_tick(store.as_ref(), &host, 0).reason,
+        "debouncing"
+    );
+
+    let fired = execution_tick(store.as_ref(), &host, 3);
+    assert_eq!(fired.reason, "fired");
+    assert_eq!(
+        host.admitted.borrow().as_slice(),
+        [vec!["task-0".to_string()]],
+        "the sol-crewed member must wait rather than share this bundle"
+    );
+    let attempt = fired.state.unwrap().members.unwrap().active.unwrap();
+    assert_eq!(attempt.members().len(), 1);
+    assert_eq!(attempt.member.crew.as_deref(), Some("opus"));
+}
+
 /// [ORB-12746] One run settles each member on its own: applied members are
 /// assessed under a single receipt, a member the run did not apply is failed
 /// at its fingerprint and withheld with the run's reason, and neither blocks
