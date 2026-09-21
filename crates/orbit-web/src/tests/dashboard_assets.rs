@@ -535,6 +535,7 @@ async fn dashboard_top_level_nav_matches_the_operator_tabs() {
             "diagnostics",
             "operations",
             "knowledge",
+            "plugins",
             "config"
         ]
     );
@@ -1005,7 +1006,7 @@ fn dashboard_auto_drain_action_is_bounded_governed_and_guarded() {
         tasks_at < drain_at,
         "Auto-drain sits beneath Tasks in the Work group"
     );
-    assert!(router.contains(r#"const TABS = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge", "config", "run-detail"];"#));
+    assert!(router.contains(r#"const TABS = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge", "plugins", "config", "run-detail"];"#));
     assert!(
         router.contains(r#"if (head === "operations" && segments[1] === "auto-drain") {"#)
             && router.contains(r#"head = "auto-drain";"#),
