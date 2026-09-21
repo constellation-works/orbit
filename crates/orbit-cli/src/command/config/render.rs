@@ -16,7 +16,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_config::{
@@ -567,21 +567,11 @@ fn crew_table(values: &[EffectiveConfigValue]) -> Vec<CrewRow> {
 }
 
 /// The resolved roots and store locations, replacing the old `derived:` block
-/// and its single-line `persistence` JSON blob.
+/// and its single-line `persistence` JSON blob. The rows themselves come from
+/// `orbit_core::application::config`, so this view and the dashboard's Paths
+/// grid name the same locations.
 fn write_paths(out: &mut String, runtime: &OrbitRuntime, config_path: Option<&Path>) {
-    let mut rows: Vec<(String, String)> = vec![
-        ("global root".to_string(), path_cell(&runtime.global_root())),
-        (
-            "workspace root".to_string(),
-            path_cell(&runtime.shared_root()),
-        ),
-        ("local root".to_string(), path_cell(&runtime.local_root())),
-    ];
-    if let Some(config_path) = config_path {
-        rows.push(("config file".to_string(), path_cell(config_path)));
-    }
-    rows.extend(persistence_rows(&runtime.persistence_config_json()));
-
+    let rows = orbit_core::application::config::path_rows(runtime, config_path);
     let width = rows
         .iter()
         .map(|(label, _)| label.chars().count())
@@ -592,78 +582,6 @@ fn write_paths(out: &mut String, runtime: &OrbitRuntime, config_path: Option<&Pa
     for (label, value) in rows {
         let _ = writeln!(out, "  {label:<width$}  {value}");
     }
-}
-
-/// Expand the persistence object into rows, folding resource directories that
-/// share a parent into one row instead of repeating the prefix.
-fn persistence_rows(persistence: &JsonValue) -> Vec<(String, String)> {
-    const RESOURCE_LABELS: &[(&str, &str)] = &[
-        ("activity", "activities"),
-        ("executor", "executors"),
-        ("job", "jobs"),
-        ("policy", "policies"),
-        ("skill", "skills"),
-    ];
-    const FILE_LABELS: &[(&str, &str)] = &[("audit", "audit db"), ("semantic", "semantic db")];
-
-    let Some(entries) = persistence.as_object() else {
-        return Vec::new();
-    };
-    let path_of = |name: &str| {
-        entries
-            .get(name)
-            .and_then(|entry| entry.get("path"))
-            .and_then(JsonValue::as_str)
-            .map(PathBuf::from)
-    };
-
-    let mut rows = Vec::new();
-    for (name, label) in FILE_LABELS {
-        if let Some(path) = path_of(name) {
-            rows.push(((*label).to_string(), path_cell(&path)));
-        }
-    }
-
-    let mut grouped: BTreeMap<PathBuf, Vec<(&str, PathBuf)>> = BTreeMap::new();
-    for (name, label) in RESOURCE_LABELS {
-        if let Some(path) = path_of(name) {
-            let parent = path.parent().unwrap_or(&path).to_path_buf();
-            grouped.entry(parent).or_default().push((label, path));
-        }
-    }
-    for (parent, members) in grouped {
-        match members.as_slice() {
-            [(label, path)] => rows.push(((*label).to_string(), path_cell(path))),
-            members => rows.push((
-                members
-                    .iter()
-                    .map(|(label, _)| *label)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                format!("{}/", path_cell(&parent)),
-            )),
-        }
-    }
-
-    // Anything the persistence shape gains later is still reported, under its
-    // own name, rather than silently dropped from this view.
-    let known = RESOURCE_LABELS
-        .iter()
-        .chain(FILE_LABELS.iter())
-        .map(|(name, _)| *name)
-        .collect::<Vec<_>>();
-    for (name, entry) in entries {
-        if known.contains(&name.as_str()) {
-            continue;
-        }
-        let value = entry
-            .get("path")
-            .and_then(JsonValue::as_str)
-            .map(|path| path_cell(Path::new(path)))
-            .unwrap_or_else(|| entry.to_string());
-        rows.push((name.clone(), value));
-    }
-    rows
 }
 
 /// Registry rows for one section, most relevant first.

@@ -115,6 +115,7 @@ The left rail is the section map:
 | **Diagnostics** | Recent runs, metrics, errors, incidents, reliability, and the scoreboard. |
 | **Operations** | Three rail subtabs: **Routines** (with the sweep clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
+| **Config** | The effective `config.toml` for the selected workspace, with five rail subtabs: **Effective**, **Workspace file**, **Global file**, **Crews**, and **Keys**. |
 
 ### Tasks
 
@@ -369,6 +370,87 @@ task set and explicit rights; that decision stays on the CLI
 (`orbit operation enable`). Do not treat a missing Enable control as a broken
 button.
 
+## Config: read and edit config.toml
+
+**Manage → Config** (`#config/effective`) shows what this workspace actually
+runs on. It is the browser view of `orbit config show`: the same layering,
+the same sections, and the same registry descriptions, read from the server
+rather than re-derived in the page.
+
+Each rail subtab is its own hash route:
+
+| Subtab | Hash | What it shows |
+|---|---|---|
+| **Effective** | `#config/effective` | The layered result — global under workspace under the built-in defaults. |
+| **Workspace file** | `#config/workspace-file` | `.orbit/config.toml` resolved on its own (`orbit config show --scope workspace`). |
+| **Global file** | `#config/global-file` | `~/.orbit/config.toml` resolved on its own. Edits here write global. |
+| **Crews** | `#config/crews` | The crew table alone. |
+| **Keys** | `#config/keys` | Every settable key with its type, section, description, and accepted values. |
+
+The Effective view opens with a **layers strip** naming both files, then one
+panel per section — Delivery, Crews, Execution, Operation mode,
+Housekeeping — and a read-only **Paths** grid. Each row carries its value,
+the layer that supplied it, and the registry's one-line description. The
+source chip is the provenance: `workspace`, `global`, `default` (no file
+sets it; the built-in value is in force), `unset` (no value at all), or
+`registry` for a fact that comes from the workspace registry rather than
+from `config.toml`.
+
+Two facts the value alone cannot tell you are written on the row:
+
+- **A shadowed lower layer** — `overrides global: trunk` means the workspace
+  file won and names what it replaced.
+- **A global `execution.*` value that was not inherited** — a workspace
+  `config.toml` must restate the security keys
+  (`execution.codex.sandbox`, `execution.codex.approval_policy`,
+  `execution.env.pass`) to keep them. When one is dropped, the row says
+  `global sets … — not inherited while a workspace file exists`, and the
+  Execution panel carries a badge. The strip's warning appears only when a
+  workspace file exists, because that is when the rule applies.
+
+**Set only** hides keys nothing sets. A row whose lower layer was overridden
+or not inherited stays visible at every filter setting; **All keys** adds the
+rest, and expands a section that collapsed because every key in it is unset.
+
+When the checkout is registered, a **registry strip** shows the registered
+`base_branch` and `ship_mode`. Delivery reads those, not
+`workflow.base_branch`, so the strip flags a disagreement between the two.
+Changing them is an `orbit workspace` operation; the strip only displays
+them.
+
+### Editing a value
+
+Click a row (or its pencil) to edit it in place. The editor is typed by the
+registry: a choice list for a key with fixed values, a toggle for a boolean,
+a number field for an integer, and a chip list for a string array. Each row
+saves on its own — there is no staged batch.
+
+**Saves go to the workspace file** (`.orbit/config.toml`, per-user and
+git-ignored) from the Effective view; only the Global file subtab writes
+`~/.orbit/config.toml`. A save takes the same admission path as `orbit config
+set`, so a refused value comes back with the CLI's own message printed on the
+row, and the saved row re-renders with the layer it now comes from.
+
+If the workspace has no `config.toml` yet, the first save is refused on
+purpose — creating that file moves the security keys off global policy — and
+the row offers the two explicit choices `orbit config set` has: copy the
+current global policy (`--seed-from-global`) or start empty (`--fresh`).
+
+**Crews** render one row per crew with its provider, model, effort, tags, and
+the layer it came from; a crew named by `workflow.default_crew` or
+`workflow.system_crew` is annotated and tinted. Add, edit, and delete are
+inline. Deleting a crew one of those keys still names is refused, with the
+key in the message. A file that defines any `[crews.*]` table must also
+resolve `workflow.default_crew` within itself, so adding the first crew to a
+file that names no default crew is refused with that admission error.
+
+Config writes need an **operator session** like the Operations controls, and
+each one records a `config.set` audit event with the key, both values, and
+the file it wrote. Without that capability, the rows render read-only.
+
+Not editable here: routines, auto-task definitions, and the workspace
+registry. Multi-workspace comparison is out of scope — select one workspace.
+
 ## Authorization
 
 The dashboard has **no application login**. It binds loopback only. Origin
@@ -382,7 +464,8 @@ Two independent gates still apply:
 1. **Workspace scope.** Aggregate view and inactive workspaces are
    read-only, even for an operator.
 2. **Operator capability** for Operations controls (routine/auto-task
-   toggle, mint, clock, auto-drain completion, grant stop/revoke). The
+   toggle, mint, clock, auto-drain completion, grant stop/revoke) and for
+   Config writes. The
    server resolves the same capability vocabulary as the CLI. A local
    interactive terminal counts as an operator session. `orbit web serve
    --operator` grants the same capability without a TTY or
@@ -418,6 +501,8 @@ ship, workspace claim held).
 | Ship returns 409 `ship_run_in_flight` | That task already has a non-terminal ship run. Open the named `run_id`. |
 | 409 `workspace_claim_held` | Another operator holds the workspace claim. Wait for expiry or inspect the holder; do not retry in a loop. |
 | Top-bar **Failed runs** disagrees with Diagnostics → Errors | Different denominators. See [Runs and errors](#runs-and-errors). |
+| Config save returns "no workspace config exists yet" | Expected on the first write: choose **Copy global policy** or **Start empty** on the row. |
+| Config save returns an admission error | The value is refused by the same rule `orbit config set` applies; the message names the accepted values. |
 | Stale workspace list after `orbit workspace init` | A running server reloads `workspaces.json` on the next request after that file's mtime or length changes; click **Refresh**. A malformed refresh keeps the last good snapshot. |
 
 Readiness with per-workspace store and log-sink checks:

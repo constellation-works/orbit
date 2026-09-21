@@ -242,6 +242,56 @@ impl ConfigStore {
         Ok(())
     }
 
+    /// Remove `key` from this document, reporting whether it was present.
+    ///
+    /// The inverse of [`Self::set_value`] for a dashboard or script that
+    /// clears one key so the layer below (or the built-in default) takes over
+    /// again. Emptied parent tables are left in place: a `[workflow]` header
+    /// with a hand-written comment above it is content an operator wrote, and
+    /// an empty table admits exactly like an absent one.
+    pub fn unset_value(&mut self, key: &str) -> Result<bool, OrbitError> {
+        registry::admit_config_key(key)?;
+        Ok(self.remove_path(key))
+    }
+
+    /// Remove a whole `[crews.<name>]` table, reporting whether it existed.
+    ///
+    /// Crew tables are dynamically named, so they are not registry keys and
+    /// [`Self::unset_value`] refuses their bare path; deleting a crew still
+    /// has to be expressible without listing its fields one by one.
+    pub fn remove_crew_table(&mut self, name: &str) -> Result<bool, OrbitError> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "crew config keys require a non-empty crew name".to_string(),
+            ));
+        }
+        if trimmed.contains('.') {
+            return Err(OrbitError::InvalidInput(format!(
+                "crew name '{trimmed}' must not contain '.'"
+            )));
+        }
+        crate::crew_pools::reject_unpoolable_crew_name(trimmed, "crew config keys")?;
+        Ok(self.remove_path(&format!("crews.{trimmed}")))
+    }
+
+    /// Drop one dotted path from the document, if every segment along it is a
+    /// table and the leaf exists.
+    fn remove_path(&mut self, key: &str) -> bool {
+        let segments: Vec<&str> = key.split('.').collect();
+        let Some((last, ancestors)) = segments.split_last() else {
+            return false;
+        };
+        let mut table: &mut dyn TableLike = self.doc.as_table_mut();
+        for segment in ancestors {
+            let Some(next) = table.get_mut(segment).and_then(Item::as_table_like_mut) else {
+                return false;
+            };
+            table = next;
+        }
+        table.remove(last).is_some()
+    }
+
     /// Run the in-memory document through the exact same
     /// `RawRuntimeConfig` → [`ResolvedConfig`] validation pipeline as
     /// [`ResolvedConfig::load`], without writing anything.

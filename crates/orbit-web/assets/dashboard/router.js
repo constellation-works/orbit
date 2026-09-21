@@ -44,7 +44,7 @@ function markWorkspaceSelectorScope(fleetWide) {
 // not host management, so it is a destination of its own (`#auto-drain`)
 // rather than an Operations subtab. The old `#operations/auto-drain` hash is
 // still accepted and rewritten so bookmarks keep resolving.
-const TABS = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge", "run-detail"];
+const TABS = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge", "config", "run-detail"];
 const DIAG_SUBTABS = ["runs", "metrics", "errors", "incidents", "reliability", "scoreboard"];
 const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "jobs"];
 // ORB-10444/ORB-10588: subtabs that replace the two-column diagnostics layout
@@ -55,6 +55,9 @@ const DIAG_FULL_WIDTH_MAINS = {
 };
 const RUN_DETAIL_SUBTABS = ["steps", "events"];
 const KNOWLEDGE_SUBTABS = ["frictions"];
+// ORB-12724: `effective` is the layered view; the two `*-file` views are the
+// `--scope` equivalents, and `keys` is the settable-key reference.
+const CONFIG_SUBTABS = ["effective", "workspace-file", "global-file", "crews", "keys"];
 const REFRESH_INTERVAL_MS = 30_000;
 const MAX_REFRESH_INTERVAL_MS = 5 * 60_000;
 
@@ -180,6 +183,14 @@ function setKnowledgeSubtabImpl(ctx, name) {
   toggle("friction-detail-panel", true);
 }
 
+function setConfigSubtabImpl(ctx, name) {
+  if (!CONFIG_SUBTABS.includes(name)) name = "effective";
+  ctx.setConfigSubtab(name);
+  for (const btn of document.querySelectorAll("#config-subtabs .subtab")) {
+    btn.classList.toggle("active", btn.dataset.subtab === name);
+  }
+}
+
 function setActiveTabImpl(ctx, raw, opts = {}) {
   const { segments, query } = parseHashRoute(raw);
   let head = segments[0] || "tasks";
@@ -231,7 +242,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
       : top.charAt(0).toUpperCase() + top.slice(1);
   }
   // Auto-drain shares the Operations panel layout, so it scrolls the same way.
-  document.body.classList.toggle("operations-active", top === "operations" || top === "auto-drain");
+  document.body.classList.toggle("operations-active", top === "operations" || top === "auto-drain" || top === "config");
   // ORB-10972: the Diagnostics subtabs are permanently visible in the rail now,
   // so the remembered-subtab highlight must be muted while another destination
   // is active — otherwise the rail shows two things selected at once. The
@@ -241,6 +252,8 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // The Operations subtabs live in the rail the same way.
   const operationsSubtabs = $("operations-subtabs");
   if (operationsSubtabs) operationsSubtabs.classList.toggle("dimmed", top !== "operations");
+  const configSubtabs = $("config-subtabs");
+  if (configSubtabs) configSubtabs.classList.toggle("dimmed", top !== "config");
   if (top !== "diagnostics") {
     document.body.classList.remove("reliability-active");
     markWorkspaceSelectorScope(false);
@@ -295,6 +308,10 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     const sub = OPERATIONS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getOperationsSubtab();
     setOperationsSubtabImpl(ctx, sub);
     hash = `#operations/${sub}`;
+  } else if (top === "config") {
+    const sub = CONFIG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getConfigSubtab();
+    setConfigSubtabImpl(ctx, sub);
+    hash = `#config/${sub}`;
   } else if (top === "tasks") {
     // ORB-10874: the status chips and search box are represented in the hash
     // (mirroring the audit tab) so they survive a reload or the browser's
@@ -416,6 +433,12 @@ function initTabsImpl(ctx) {
     btn.addEventListener("click", () =>
       setActiveTabImpl(ctx, `operations/${btn.dataset.subtab}`, { refresh: false }),
     );
+  }
+  for (const btn of document.querySelectorAll("#config-subtabs .subtab")) {
+    btn.addEventListener("click", () => {
+      setActiveTabImpl(ctx, `config/${btn.dataset.subtab}`, { refresh: false });
+      ctx.refreshDashboard();
+    });
   }
   window.addEventListener("hashchange", () => {
     setActiveTabImpl(ctx, window.location.hash);

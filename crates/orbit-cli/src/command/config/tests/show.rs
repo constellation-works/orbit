@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use orbit_config::{ConfigRoots, admit_config_key, load_effective_config};
+use orbit_config::{ConfigRoots, admit_config_key, describe_config_key, load_effective_config};
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_types::workflow::ShipMode;
@@ -289,9 +289,13 @@ sandbox = "danger-full-access"
     assert_eq!(base_branch["section"], "delivery");
     assert_eq!(base_branch["state"], "set");
     assert_eq!(base_branch["scope"], "workspace");
+    // The registry owns the wording; asserting a copy of it here only breaks
+    // this test when a description is reworded (ORB-12714 did exactly that).
     assert_eq!(
         base_branch["description"],
-        "Default base branch for ship workflows."
+        describe_config_key("workflow.base_branch")
+            .expect("workflow.base_branch is a registry key")
+            .description
     );
     assert_eq!(base_branch["shadowed_by"][0]["layer"], "global");
     assert_eq!(base_branch["shadowed_by"][0]["value"], "main");

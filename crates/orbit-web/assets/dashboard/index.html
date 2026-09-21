@@ -56,6 +56,14 @@
               <button class="subtab" data-subtab="jobs" type="button">Jobs<span class="rail-count" id="rail-count-ops-jobs"></span></button>
             </nav>
           <button class="tab" data-tab="knowledge" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5a2 2 0 0 1 2 2v10a2 2 0 0 0-2-2H4z"/><path d="M16 4h-5a2 2 0 0 0-2 2v10a2 2 0 0 1 2-2h5z"/></svg><span class="rail-label">Knowledge</span><span class="rail-count" id="rail-count-knowledge"></span></button>
+          <button class="tab" data-tab="config" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h12"/><circle cx="8" cy="6" r="1.6"/><circle cx="13" cy="10" r="1.6"/><circle cx="7" cy="14" r="1.6"/></svg><span class="rail-label">Config</span><span class="rail-count" id="rail-count-config"></span></button>
+            <nav class="subtabs rail-subtabs" id="config-subtabs" aria-label="Config views">
+              <button class="subtab active" data-subtab="effective" type="button">Effective</button>
+              <button class="subtab" data-subtab="workspace-file" type="button">Workspace file</button>
+              <button class="subtab" data-subtab="global-file" type="button">Global file</button>
+              <button class="subtab" data-subtab="crews" type="button">Crews</button>
+              <button class="subtab" data-subtab="keys" type="button">Keys</button>
+            </nav>
           </div>
         </div>
 
@@ -461,6 +469,31 @@
             <div class="empty-state">
               <div class="icon">✧</div>
               <div class="text">No friction selected.</div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </section>
+    <section class="tab-pane" data-tab="config">
+      <!-- ORB-12724: the Config tab reads the same layered resolution
+           `orbit config show` prints, so a row's value, its layer, and the
+           lower layer it shadows are the server's answer, not the client's. -->
+      <main class="config-layout">
+        <section class="panel" id="config-panel">
+          <header>
+            <span>Configuration</span>
+            <span class="count" id="config-count">-</span>
+          </header>
+          <p class="config-explainer">
+            What this workspace actually runs on: every setting with the layer its value came from.
+            An edit writes one key to the workspace <span class="mono">.orbit/config.toml</span> (per-user, git-ignored).
+          </p>
+          <div class="controls" id="config-controls"></div>
+          <div class="body" id="config-body">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
+              <div class="skeleton skeleton-row"></div>
+              <div class="skeleton skeleton-row" style="width: 80%"></div>
+              <div class="skeleton skeleton-row" style="width: 90%"></div>
             </div>
           </div>
         </section>

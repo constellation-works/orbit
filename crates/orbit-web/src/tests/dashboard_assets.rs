@@ -8,11 +8,11 @@ use std::process::Command;
 
 use crate::{
     DASHBOARD_CSP, serve_app_js, serve_audit_js, serve_automation_js, serve_common_js,
-    serve_dashboard_css, serve_diagnostics_js, serve_distributed_js, serve_field_editor_js,
-    serve_index, serve_index_with_headers, serve_inter_font, serve_jetbrains_mono_font,
-    serve_log_tail_js, serve_markdown_js, serve_marked_js, serve_operations_js, serve_purify_js,
-    serve_reliability_js, serve_router_js, serve_run_detail_js, serve_runs_js, serve_scoreboard_js,
-    serve_tasks_js,
+    serve_config_js, serve_dashboard_css, serve_diagnostics_js, serve_distributed_js,
+    serve_field_editor_js, serve_index, serve_index_with_headers, serve_inter_font,
+    serve_jetbrains_mono_font, serve_log_tail_js, serve_markdown_js, serve_marked_js,
+    serve_operations_js, serve_purify_js, serve_reliability_js, serve_router_js,
+    serve_run_detail_js, serve_runs_js, serve_scoreboard_js, serve_tasks_js,
 };
 
 // The recent-history, aggregate-request, and route-selection assertions
@@ -65,6 +65,7 @@ async fn dashboard_html_and_js_routes_emit_csp() {
         ("purify", serve_purify_js().await),
         ("app", serve_app_js().await),
         ("common", serve_common_js().await),
+        ("config", serve_config_js().await),
         ("markdown", serve_markdown_js().await),
         ("tasks", serve_tasks_js().await),
         ("field_editor", serve_field_editor_js().await),
@@ -525,7 +526,8 @@ async fn dashboard_top_level_nav_matches_the_operator_tabs() {
             "audit",
             "diagnostics",
             "operations",
-            "knowledge"
+            "knowledge",
+            "config"
         ]
     );
 
@@ -537,6 +539,7 @@ async fn dashboard_top_level_nav_matches_the_operator_tabs() {
         "diagnostics",
         "operations",
         "knowledge",
+        "config",
         "run-detail",
     ] {
         assert!(
@@ -613,8 +616,82 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
     assert!(operations.contains("operation-row-head"));
     assert!(operations.contains(r#"{ class: "operation-details" }"#));
     assert!(router.contains(
-        r#"classList.toggle("operations-active", top === "operations" || top === "auto-drain")"#
+        r#"classList.toggle("operations-active", top === "operations" || top === "auto-drain" || top === "config")"#
     ));
+}
+
+/// The Config tab routes like every other destination and renders from the
+/// API's own description of the configuration.
+#[test]
+fn dashboard_config_tab_is_routed_and_renders_provenance() {
+    let index = include_str!("../../assets/dashboard/index.html");
+    let config = include_str!("../../assets/dashboard/config.js");
+    let router = include_str!("../../assets/dashboard/router.js");
+    let app = include_str!("../../assets/dashboard/app.js");
+    let css = include_str!("../../assets/dashboard/dashboard.css");
+
+    for id in [
+        "config-subtabs",
+        "config-body",
+        "config-count",
+        "config-controls",
+    ] {
+        assert!(index.contains(&format!(r#"id="{id}""#)), "{id}");
+    }
+    assert!(router.contains(
+        r#"const CONFIG_SUBTABS = ["effective", "workspace-file", "global-file", "crews", "keys"];"#
+    ));
+    assert!(router.contains(r#"hash = `#config/${sub}`;"#));
+    assert!(app.contains("fetchAndRenderConfig()"));
+
+    assert!(config.contains(r#""/api/config/effective""#));
+    assert!(config.contains(r#""/api/config/file?scope=workspace""#));
+    assert!(config.contains(r#""/api/config/file?scope=global""#));
+    assert!(config.contains(r#""/api/config/keys""#));
+    assert!(config.contains(r#"/api/config/keys/${encodeURIComponent(row.key)}"#));
+    assert!(config.contains(r#"/api/config/crews/${encodeURIComponent(name)}"#));
+    // The surprising cases the tab exists to show: a shadowed lower layer, the
+    // execution non-inheritance warning, and the registry binding's branch.
+    assert!(config.contains("shadowed_by"));
+    assert!(config.contains("execution_not_inherited"));
+    assert!(config.contains("base_branch_matches_workflow"));
+    // A denied caller sees rows, not an edit that 403s on save.
+    assert!(config.contains("config_set?.authorized"));
+    assert!(css.contains(".config-source.workspace"));
+    assert!(css.contains(".config-source.unset"));
+    assert!(css.contains(".config-source.registry"));
+}
+
+/// Sections, key names, types, and enum options come from the API. A literal
+/// key or choice spelled in the JS would go stale the moment `orbit-config`
+/// renames or retires it, and the tab would then offer a value no write
+/// admits.
+#[test]
+fn dashboard_config_hard_codes_no_key_names_or_enum_options() {
+    let config = include_str!("../../assets/dashboard/config.js");
+    let catalog = orbit_core::application::config::key_catalog();
+
+    for key in catalog["keys"].as_array().expect("keys") {
+        let name = key["key"].as_str().expect("key name");
+        assert!(
+            !config.contains(&format!("\"{name}\"")),
+            "config.js spells the registry key '{name}'; read it from the API instead"
+        );
+        for option in key["options"].as_array().expect("options") {
+            let option = option.as_str().expect("option");
+            assert!(
+                !config.contains(&format!("\"{option}\"")),
+                "config.js spells the '{name}' choice '{option}'; read it from the API instead"
+            );
+        }
+    }
+    for section in catalog["sections"].as_array().expect("sections") {
+        let title = section["title"].as_str().expect("title");
+        assert!(
+            !config.contains(title),
+            "config.js spells the section title '{title}'; read it from the API instead"
+        );
+    }
 }
 
 /// The Operations subtabs live in the rail like the Diagnostics ones, and the
@@ -920,7 +997,7 @@ fn dashboard_auto_drain_action_is_bounded_governed_and_guarded() {
         tasks_at < drain_at,
         "Auto-drain sits beneath Tasks in the Work group"
     );
-    assert!(router.contains(r#"const TABS = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge", "run-detail"];"#));
+    assert!(router.contains(r#"const TABS = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge", "config", "run-detail"];"#));
     assert!(
         router.contains(r#"if (head === "operations" && segments[1] === "auto-drain") {"#)
             && router.contains(r#"head = "auto-drain";"#),
@@ -928,7 +1005,7 @@ fn dashboard_auto_drain_action_is_bounded_governed_and_guarded() {
     );
     assert!(
         router.contains(
-            r#"classList.toggle("operations-active", top === "operations" || top === "auto-drain")"#
+            r#"classList.toggle("operations-active", top === "operations" || top === "auto-drain" || top === "config")"#
         ),
         "the auto-drain pane must scroll like the operations pane"
     );
@@ -5188,6 +5265,18 @@ globalThis.window = { location: new URL("http://dashboard.test"), localStorage: 
     run_dashboard_javascript_test(&format!(
         "{dom}\n{}",
         include_str!("dashboard_operations.mjs")
+    ));
+}
+
+/// The Config tab's contract is what it paints from a layered payload and
+/// what it writes when a row is edited; the scenario drives the shipped
+/// module against a fetch stub rather than asserting its internals.
+#[test]
+fn dashboard_config_renders_provenance_and_writes_one_key_per_save() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_loading_dom.mjs"),
+        include_str!("dashboard_config.mjs")
     ));
 }
 
