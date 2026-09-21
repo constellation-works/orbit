@@ -44,6 +44,9 @@ impl Execute for PluginShowArgs {
             bold("Pinned by this workspace:"),
             if plugin.pinned { "yes" } else { "no" }
         ));
+        if let Some(version) = &plugin.certified_orbit_version {
+            header.push_str(&format!("\n{} {version}", bold("Certified for:")));
+        }
         if plugin.unsandboxed {
             header.push_str(&format!(
                 "\n{} yes (backend.sandbox: none, granted)",
@@ -75,6 +78,27 @@ impl Execute for PluginShowArgs {
                 ]);
             }
             blocks.push(Block::table(permissions));
+        }
+
+        if !plugin.panels.is_empty() || !plugin.links.is_empty() {
+            blocks.push(Block::text(bold("Dashboard:")));
+            let mut dashboard =
+                crate::output::table::build_table(&["KIND", "NAME", "SOURCE"]).keep_all_columns();
+            for panel in &plugin.panels {
+                dashboard.add_row(vec![
+                    format!("panel ({})", panel.render.as_str()),
+                    panel.title.clone(),
+                    panel.tool.clone(),
+                ]);
+            }
+            for link in &plugin.links {
+                dashboard.add_row(vec![
+                    "link".to_string(),
+                    link.title.clone(),
+                    link.url.clone(),
+                ]);
+            }
+            blocks.push(Block::table(dashboard));
         }
 
         if plugin.tools.is_empty() {

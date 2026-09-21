@@ -11,7 +11,7 @@ use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use orbit_types::plugin::{
     FIRST_PARTY_PUBLISHER, MANIFEST_FILE_NAME, PluginExecutionKind, PluginManifest,
-    PluginManifestError, PluginMcpScope, PluginTemplateVars, RESERVED_CLI_COMMANDS,
+    PluginManifestError, PluginMcpScope, PluginTemplateVars, PluginTestFile, RESERVED_CLI_COMMANDS,
     namespace_collides_with_tool, plugin_tool_name, render_template, template_references,
 };
 use orbit_types::tool::ToolParam;
@@ -99,6 +99,9 @@ pub struct LoadedPlugin {
     pub config_schema: Option<Value>,
     /// `spec.config.defaults`, flattened to one entry per declared key.
     pub config_defaults: BTreeMap<String, Value>,
+    /// `spec.tests[]` resolved to golden files inside the root, parsed and
+    /// structurally validated (§5). Empty when the manifest ships none.
+    pub tests: Vec<PluginTestFile>,
 }
 
 impl LoadedPlugin {
@@ -223,6 +226,7 @@ pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
     let definitions = resolve_definitions(&root, &manifest)?;
     let skills = resolve_skills(&root, &manifest)?;
     let (config_schema, config_defaults) = resolve_config_section(&root, &manifest)?;
+    let tests = resolve_tests(&root, &manifest)?;
 
     Ok(LoadedPlugin {
         root,
@@ -234,7 +238,54 @@ pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
         skills,
         config_schema,
         config_defaults,
+        tests,
     })
+}
+
+/// Read every `spec.tests` golden file and validate its structure (§5).
+///
+/// A golden that names a tool the manifest does not declare is a manifest
+/// error: `orbit plugin test` could never run it, and a conformance suite
+/// that silently skips a case certifies nothing.
+fn resolve_tests(
+    root: &Path,
+    manifest: &PluginManifest,
+) -> Result<Vec<PluginTestFile>, PluginLoadError> {
+    let paths = resolve_patterns(root, &manifest.spec.tests, "spec.tests")?;
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        let display = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .into_owned();
+        let field = format!("spec.tests ({display})");
+        let bytes = std::fs::read(&path).map_err(|error| {
+            PluginManifestError::new(&field, format!("cannot be read: {error}"))
+        })?;
+        let file: PluginTestFile = serde_yaml::from_slice(&bytes)
+            .map_err(|error| PluginManifestError::new(&field, format!("is invalid: {error}")))?;
+        file.validate(&field)?;
+        for case in &file.tests {
+            if !manifest
+                .spec
+                .tools
+                .iter()
+                .any(|tool| tool.name == case.tool)
+            {
+                return Err(PluginManifestError::new(
+                    &field,
+                    format!(
+                        "test '{}' calls tool '{}', which this manifest does not declare",
+                        case.name, case.tool
+                    ),
+                )
+                .into());
+            }
+        }
+        files.push(file);
+    }
+    Ok(files)
 }
 
 /// Resolve every `spec.definitions` pattern against the plugin root.

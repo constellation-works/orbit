@@ -1,3 +1,4 @@
+mod conformance;
 mod definition_fixture;
 mod definitions;
 mod fixture;

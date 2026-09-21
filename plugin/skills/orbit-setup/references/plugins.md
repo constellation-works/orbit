@@ -36,11 +36,12 @@ copy would follow it and place the target's bytes inside the plugin root.
 ## Install
 
 ```bash
+orbit plugin scaffold demo               # start a new plugin from a working example
 orbit plugin validate ./my-plugin        # check the manifest before installing
 orbit plugin add ./my-plugin             # install for this machine (disabled)
 orbit plugin enable my-plugin            # put its tools on the surface
 orbit plugin list                        # what is installed or pinned here
-orbit plugin show my-plugin              # tools, and requested versus granted
+orbit plugin show my-plugin              # tools, panels, and requested versus granted
 ```
 
 `add` also accepts `git+<url>#<ref>` and a `.tar.gz` archive. `--enable`
@@ -83,6 +84,59 @@ Configure a plugin the ordinary way — `orbit config set plugins.<ns>.<key>
 <value>` accepts only keys the plugin declares, and `orbit config show` prints
 the value with its workspace/global provenance. A value the plugin's schema
 rejects refuses *that plugin* at load, naming the key.
+
+## The `orbit <ns>` command group
+
+Enabling a plugin also gives it a command group: `orbit <ns> <verb>` is built at startup
+from each tool's `input_schema`, and is the same audited operation as
+`orbit tool run <ns>.<verb>` — same dispatch, same dry-run, same audit row. The flags come
+from the top level of the schema and nowhere deeper:
+
+| Property shape | Flag |
+|---|---|
+| `string` | `--kebab-case <VALUE>`; a schema `enum` is offered as the allowed values |
+| `integer` / `number` | `--kebab-case <N>` |
+| `boolean` | `--kebab-case`, or `--kebab-case false` |
+| `array` of scalars | `--kebab-case <VALUE>`, repeated |
+| `object` or an array of objects | `--kebab-case-json '<JSON>'` |
+| named in the manifest's `cli.positional` | a positional argument, in that order |
+
+`--input '<json>'`, `--input-file` and `--dry-run` are always accepted, and `--input`
+overrides every flag — that is the escape hatch for a shape no flag expresses. A property
+whose flag would collide with one Orbit owns keeps its place in the schema and is reached
+through `--input`.
+
+Only an enabled, loading plugin has a group. `orbit <ns>` for a disabled one is an unknown
+command, not a silent no-op, and `orbit --help` lists the groups a machine actually has
+under `Plugins:`.
+
+## The dashboard's Plugins tab
+
+`orbit web serve` grows a Plugins tab listing what is installed here, each plugin's state
+and diagnostic, and the panels its manifest declares. A panel is one `read_only` tool's
+JSON drawn by a generic renderer — `kv` (label/value rows), `table` (an array of objects),
+`markdown` (sanitised) or `json` — plus plain link tiles to plugin-hosted UIs (`http://` or
+`https://` only). No plugin ships JavaScript, and a manifest that declares a panel over a
+*mutating* tool is refused by `orbit plugin validate`, naming the panel. Installing, enabling and granting stay on the
+CLI: the dashboard reads.
+
+## Certifying a plugin for this Orbit
+
+```bash
+orbit plugin scaffold demo            # a starter plugin: backend, tool, panel, skill, goldens
+orbit plugin validate ./demo          # manifest, paths, namespace, panels
+orbit plugin test ./demo              # run its goldens through the real protocol
+```
+
+`orbit plugin test` runs each `spec.tests` golden — `{name, tool, input, expect.output}` —
+in a temp workspace with the grants the manifest requests, compares the output exactly, and
+exits non-zero when a case fails, naming it. A passing run records this Orbit's version on
+the installed plugin, and `orbit plugin show <ns>` prints it as `Certified for: <version>`.
+The record is only written when the directory tested is the installed one (same manifest
+digest); reinstalling a changed manifest drops the claim.
+
+`orbit tool scaffold` still writes the older executable-plus-sidecar form for one more
+release and prints a deprecation pointing here.
 
 ## When a plugin is not serving its tools
 

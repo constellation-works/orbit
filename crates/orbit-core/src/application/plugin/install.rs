@@ -72,8 +72,19 @@ pub fn install_plugin(
             .map(|grant| grant.as_str().to_string())
             .collect()
     } else {
-        existing.map(|plugin| plugin.grants).unwrap_or_default()
+        existing
+            .as_ref()
+            .map(|plugin| plugin.grants.clone())
+            .unwrap_or_default()
     };
+    // A conformance run certifies one tree. Installing a different manifest
+    // drops the claim rather than carrying it onto bytes no suite has run
+    // against (§5).
+    let certified_orbit_version = existing.as_ref().and_then(|installed| {
+        (installed.manifest_digest == plugin.manifest_digest)
+            .then(|| installed.certified_orbit_version.clone())
+            .flatten()
+    });
     let record = InstalledPlugin {
         name: name.clone(),
         version: version.clone(),
@@ -83,6 +94,7 @@ pub fn install_plugin(
         enabled,
         grants,
         first_party,
+        certified_orbit_version,
         // The store keeps the original `installed_at`; these are the values a
         // fresh row takes.
         installed_at: String::new(),

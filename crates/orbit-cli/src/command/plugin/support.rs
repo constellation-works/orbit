@@ -25,7 +25,24 @@ pub(super) fn plugin_record(summary: &PluginSummary) -> Value {
             .collect::<Vec<_>>(),
         "granted": summary.granted,
         "unsandboxed": summary.unsandboxed,
+        "certified_orbit_version": summary.certified_orbit_version,
         "diagnostic": summary.diagnostic,
+        "panels": summary
+            .panels
+            .iter()
+            .map(|panel| json!({
+                "id": panel.id,
+                "title": panel.title,
+                "tool": panel.tool,
+                "render": panel.render.as_str(),
+                "group": panel.group.as_str(),
+            }))
+            .collect::<Vec<_>>(),
+        "links": summary
+            .links
+            .iter()
+            .map(|link| json!({ "title": link.title, "url": link.url }))
+            .collect::<Vec<_>>(),
         "tools": summary
             .tools
             .iter()

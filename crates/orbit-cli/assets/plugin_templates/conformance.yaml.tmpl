@@ -1,0 +1,24 @@
+# Request/response goldens. `orbit plugin test <dir>` runs each case through
+# the real protocol in a temp workspace with the grants the manifest requests,
+# and records the passing Orbit version so `orbit plugin show` can print
+# "certified for <version>".
+schemaVersion: 1
+kind: PluginTest
+tests:
+  - name: status_reports_ready
+    tool: status
+    input: {}
+    expect:
+      output:
+        plugin: __ORBIT_PLUGIN_NS__
+        status: ready
+        subject: Orbit
+  - name: status_echoes_its_subject
+    tool: status
+    input:
+      subject: conformance
+    expect:
+      output:
+        plugin: __ORBIT_PLUGIN_NS__
+        status: ready
+        subject: conformance

@@ -11,6 +11,9 @@ use orbit_types::plugin::{
     InstalledPlugin, PluginExecutionKind, PluginGrant, PluginSandbox, PluginStatus,
     plugin_tool_name,
 };
+use std::collections::BTreeMap;
+
+use super::panels::{PluginLinkSummary, PluginPanelSummary, web_summaries};
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin_host::{plugin_state_dir, read_pin_file, unmet_requirement};
@@ -58,6 +61,14 @@ pub struct PluginSummary {
     /// unconfined, which `doctor` reports as a finding (§4.3).
     pub unsandboxed: bool,
     pub tools: Vec<PluginToolSummary>,
+    /// `spec.web.panels[]` of an active plugin (§4.7). Empty for a plugin
+    /// that is not serving its tools: a panel reads one of them.
+    pub panels: Vec<PluginPanelSummary>,
+    /// `spec.web.links[]`, with `{{config.<key>}}` resolved.
+    pub links: Vec<PluginLinkSummary>,
+    /// The Orbit version this plugin's conformance goldens last passed on
+    /// (§5), when `orbit plugin test` has recorded one.
+    pub certified_orbit_version: Option<String>,
     /// Why the plugin is not active, when it is not.
     pub diagnostic: Option<String>,
     /// Whether `.orbit/plugins.yaml` pins this plugin.
@@ -119,6 +130,9 @@ pub fn list_plugins(runtime: &OrbitRuntime) -> Result<Vec<PluginSummary>, OrbitE
             granted: Vec::new(),
             unsandboxed: false,
             tools: Vec::new(),
+            panels: Vec::new(),
+            links: Vec::new(),
+            certified_orbit_version: None,
             diagnostic: runtime_diagnostic(runtime, &name),
             pinned: true,
         });
@@ -227,14 +241,29 @@ pub fn validate_plugin_dir(
     if let Some(message) = unmet_requirement(&plugin) {
         warnings.push(message);
     }
-    // Definitions, skills and config are installed by this Orbit; `web` and
-    // `tests` are parsed and still inert, so only those two get the note.
-    if plugin.manifest.spec.web.is_some() || !plugin.manifest.spec.tests.is_empty() {
+    if let Some(web) = plugin.manifest.spec.web.as_ref()
+        && !(web.panels.is_empty() && web.links.is_empty())
+    {
+        warnings.push(format!(
+            "this plugin contributes {} dashboard panel(s) and {} link tile(s) to the \
+             dashboard's Plugins tab once it is enabled",
+            web.panels.len(),
+            web.links.len()
+        ));
+    }
+    let tests: usize = plugin.tests.iter().map(|file| file.tests.len()).sum();
+    if tests == 0 {
         warnings.push(
-            "`web` and `tests` are accepted by this Orbit but not yet installed; dashboard \
-             panels and conformance goldens arrive in a later phase"
+            "this plugin ships no `spec.tests` goldens, so `orbit plugin test` cannot certify \
+             it for this Orbit"
                 .to_string(),
         );
+    } else {
+        warnings.push(format!(
+            "run `orbit plugin test {}` to check its {tests} conformance golden(s) against this \
+             Orbit",
+            dir.display()
+        ));
     }
     match super::load_plugin_definitions(&plugin, &super::shipped_job_names()) {
         Ok(definitions) => {
@@ -310,6 +339,16 @@ fn summary_from_runtime(runtime: &OrbitRuntime, installed: &InstalledPlugin) -> 
     );
     let loaded = load_plugin_dir(Path::new(&installed.install_path)).ok();
     let mut summary = summary_for_installed(installed, loaded.as_ref(), status);
+    // Panels and links are the *active* surface, so they are projected from
+    // the load pass that built it — including the effective `[plugins.<ns>]`
+    // values a link template reads — rather than from the manifest alone.
+    if let Some(entry) = registered.filter(|entry| entry.status == PluginStatus::Active)
+        && let Some(plugin) = entry.loaded.as_ref()
+    {
+        let (panels, links) = web_summaries(plugin, installed.first_party, &entry.config_values);
+        summary.panels = panels;
+        summary.links = links;
+    }
     // A row whose grants this host could not verify granted nothing, so the
     // report says so rather than repeating the row's claim back as authority —
     // otherwise `orbit plugin show` would print `unsandboxed` for a plugin the
@@ -346,6 +385,10 @@ pub(super) fn summary_for_installed(
     plugin: Option<&LoadedPlugin>,
     status: PluginStatus,
 ) -> PluginSummary {
+    let (panels, links) = plugin
+        .filter(|_| status == PluginStatus::Active)
+        .map(|plugin| web_summaries(plugin, installed.first_party, &BTreeMap::new()))
+        .unwrap_or_default();
     let tools = plugin
         .map(|plugin| {
             plugin
@@ -393,6 +436,9 @@ pub(super) fn summary_for_installed(
                     .any(|grant| grant == PluginGrant::Unsandboxed.as_str())
         }),
         tools,
+        panels,
+        links,
+        certified_orbit_version: installed.certified_orbit_version.clone(),
         diagnostic: None,
         pinned: false,
     }

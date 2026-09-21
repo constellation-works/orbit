@@ -69,6 +69,15 @@ impl PluginStoreBackend for SqlitePluginStoreBackend {
         self.store.with_transaction(|tx| tx.delete_plugin(name))
     }
 
+    fn set_plugin_certification(
+        &self,
+        name: &str,
+        orbit_version: Option<&str>,
+    ) -> Result<bool, OrbitError> {
+        self.store
+            .with_transaction(|tx| tx.set_plugin_certification(name, orbit_version))
+    }
+
     fn set_plugin_enabled(
         &self,
         name: &str,

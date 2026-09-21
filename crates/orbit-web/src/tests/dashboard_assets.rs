@@ -11,7 +11,7 @@ use crate::{
     serve_config_js, serve_dashboard_css, serve_diagnostics_js, serve_distributed_js,
     serve_field_editor_js, serve_index, serve_index_with_headers, serve_inter_font,
     serve_jetbrains_mono_font, serve_log_tail_js, serve_markdown_js, serve_marked_js,
-    serve_operations_js, serve_purify_js, serve_reliability_js, serve_router_js,
+    serve_operations_js, serve_plugins_js, serve_purify_js, serve_reliability_js, serve_router_js,
     serve_run_detail_js, serve_runs_js, serve_scoreboard_js, serve_tasks_js,
 };
 
@@ -80,6 +80,7 @@ async fn dashboard_html_and_js_routes_emit_csp() {
         ("distributed", serve_distributed_js().await),
         ("operations", serve_operations_js().await),
         ("automation", serve_automation_js().await),
+        ("plugins", serve_plugins_js().await),
     ];
 
     for (name, response) in routes {
@@ -230,11 +231,18 @@ fn dashboard_markdown_call_sites_use_sanitizing_wrapper() {
     assert!(wrapper.contains("DOMPurify"));
     assert!(wrapper.contains(".sanitize("));
     assert!(wrapper.contains("marked[methodName]"));
+    let plugins = include_str!("../../assets/dashboard/plugins.js");
     assert!(!app.contains("marked.parse"));
     assert!(!tasks.contains("marked.parse"));
+    assert!(!plugins.contains("marked.parse"));
     assert!(app.contains("renderMarkdown("));
     assert!(tasks.contains("renderMarkdown("));
     assert!(tasks.contains("renderMarkdownInline("));
+    // Plugin output is untrusted text like a task comment, so the Plugins
+    // tab reaches for the same wrapper and never assigns a source string to
+    // innerHTML on its own.
+    assert!(plugins.contains("renderMarkdown("));
+    assert!(!plugins.contains("innerHTML = source"));
 }
 
 #[test]
@@ -5181,6 +5189,18 @@ fn dashboard_config_renders_provenance_and_writes_one_key_per_save() {
         "{}\n{}",
         include_str!("dashboard_loading_dom.mjs"),
         include_str!("dashboard_config.mjs")
+    ));
+}
+
+/// The Plugins tab's contract is the generic renderer: four render modes,
+/// link tiles, and sanitised markdown, all from fixture data with no
+/// plugin-specific script [ORB-12738].
+#[test]
+fn dashboard_plugins_tab_renders_every_panel_mode_and_sanitises_markdown() {
+    run_dashboard_javascript_test(&format!(
+        "{}\n{}",
+        include_str!("dashboard_loading_dom.mjs"),
+        include_str!("dashboard_plugins.mjs")
     ));
 }
 

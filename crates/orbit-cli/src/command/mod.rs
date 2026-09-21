@@ -66,12 +66,11 @@ pub(crate) fn require_confirmation(confirm: bool, action: &str) -> Result<(), Or
 // hand-roll the template below. Keep the variant order and the template's
 // section order in sync when adding new commands — the variant order also
 // determines where a missing-from-template command would otherwise appear.
-#[derive(Parser)]
-#[command(name = "orbit")]
-#[command(about = "Orbit CLI", version)]
-#[command(
-    disable_help_subcommand = true,
-    help_template = "\
+//
+// It is a named constant rather than an inline literal because `main`
+// splices in a `Plugins:` section for the host's installed plugin groups
+// before parsing, and clap does not hand a built template back out.
+pub(crate) const ROOT_HELP_TEMPLATE: &str = "\
 {name} {version}
 
 {usage-heading} {usage}
@@ -116,7 +115,14 @@ Services:
   web         Run the Orbit dashboard
 
 Options:
-{options}"
+{options}";
+
+#[derive(Parser)]
+#[command(name = "orbit")]
+#[command(about = "Orbit CLI", version)]
+#[command(
+    disable_help_subcommand = true,
+    help_template = ROOT_HELP_TEMPLATE
 )]
 pub struct Cli {
     /// Override the Orbit root directory (highest precedence)
@@ -175,6 +181,16 @@ pub enum Commands {
     // ── Services ──
     Mcp(mcp::McpCommand),
     Web(web::WebCommand),
+
+    // ── plugin-derived command groups ──
+    //
+    // Not a clap-visible variant: `orbit <ns> <verb>` is built at startup
+    // from the installed manifests (`crate::plugin_cli`), parsed against the
+    // augmented tree in `main`, and handed here already reduced to the tool
+    // call it performs. `#[command(skip)]` keeps the derive from inventing a
+    // literal `orbit plugin-group` subcommand for it.
+    #[command(skip)]
+    PluginGroup(Box<crate::plugin_cli::PluginGroupInvocation>),
 
     // ── hidden compatibility commands ──
     #[command(hide = true)]

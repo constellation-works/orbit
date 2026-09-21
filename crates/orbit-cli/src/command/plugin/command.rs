@@ -10,16 +10,19 @@ use super::enable::PluginEnableArgs;
 use super::list::PluginListArgs;
 use super::migrate::PluginMigrateArgs;
 use super::remove::PluginRemoveArgs;
+use super::scaffold::PluginScaffoldArgs;
 use super::show::PluginShowArgs;
 use super::sync::PluginSyncArgs;
+use super::test::PluginTestArgs;
 use super::validate::PluginValidateArgs;
 
 const PLUGIN_COMMAND_AFTER_HELP: &str = "\
 Examples:
-  orbit plugin validate ./my-plugin
-  orbit plugin add ./my-plugin --enable
+  orbit plugin scaffold demo
+  orbit plugin validate ./demo
+  orbit plugin test ./demo
+  orbit plugin add ./demo --enable
   orbit plugin list
-  orbit plugin sync
 
 Plugins install once per machine under the Orbit global root; a repository
 commits only the `.orbit/plugins.yaml` pin file, never a plugin tree.
@@ -59,6 +62,10 @@ pub enum PluginSubcommand {
     Doctor,
     /// Check a plugin directory without installing it
     Validate(PluginValidateArgs),
+    /// Run a plugin's conformance goldens against this Orbit
+    Test(PluginTestArgs),
+    /// Generate a starter plugin: backend, tool, panel, skill and goldens
+    Scaffold(PluginScaffoldArgs),
     /// Install what this workspace pins but the machine is missing
     Sync(PluginSyncArgs),
     /// Write a v2 manifest from v1 `*.orbit-tool.yaml` sidecars
@@ -76,6 +83,8 @@ impl Execute for PluginSubcommand {
             PluginSubcommand::Show(args) => args.execute(runtime),
             PluginSubcommand::Doctor => execute_doctor(runtime),
             PluginSubcommand::Validate(args) => args.execute(runtime),
+            PluginSubcommand::Test(args) => args.execute(runtime),
+            PluginSubcommand::Scaffold(args) => args.execute(runtime),
             PluginSubcommand::Sync(args) => args.execute(runtime),
             PluginSubcommand::Migrate(args) => args.execute(runtime),
         }

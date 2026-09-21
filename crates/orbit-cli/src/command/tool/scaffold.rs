@@ -14,7 +14,24 @@ const EXTERNAL_TOOL_TEMPLATE: &str =
 const SCAFFOLD_DEFAULT_DESCRIPTION: &str =
     "Return a greeting and optionally echo Orbit tool context.";
 
+/// What `orbit tool scaffold` prints before it does its work.
+///
+/// The v1 sidecar form still works and is still supported for one release
+/// (design §4.8); this names its replacement at the moment an operator is
+/// about to author a new tool, which is the only moment the choice is free.
+pub(super) const SCAFFOLD_DEPRECATION: &str = concat!(
+    "warning: `orbit tool scaffold` is deprecated and will be removed in a future \
+     release. It writes the v1 form: one executable plus one `*.orbit-tool.yaml` \
+     sidecar.\n",
+    "         `orbit plugin scaffold <namespace>` writes a v2 plugin instead — a \
+     manifest, a dashboard panel, a skill stub and passing conformance goldens — \
+     and `orbit plugin migrate <binary>` converts existing sidecars."
+);
+
 #[derive(Args)]
+#[command(
+    about = "Generate a starter external tool plugin (deprecated: use `orbit plugin scaffold`)"
+)]
 pub struct ToolScaffoldArgs {
     /// Path to the starter executable to create
     pub path: String,
@@ -31,6 +48,7 @@ pub struct ToolScaffoldArgs {
 
 impl Execute for ToolScaffoldArgs {
     fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
+        eprintln!("{SCAFFOLD_DEPRECATION}");
         let script_path = PathBuf::from(&self.path);
         let manifest_path = sidecar_manifest_path(&script_path);
         let tool_name = self
@@ -69,6 +87,7 @@ impl Execute for ToolScaffoldArgs {
         println!("  orbit tool add {}", script_path.display());
         println!("  orbit tool show {}", tool_name);
         println!("  orbit mcp serve");
+        println!("\nTo author this as a v2 plugin instead: orbit plugin scaffold <namespace>");
         Ok(CommandOutput::Silent)
     }
 }

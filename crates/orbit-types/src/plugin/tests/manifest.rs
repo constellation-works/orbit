@@ -1,6 +1,7 @@
 use super::super::manifest::{
     PluginBackend, PluginBackendType, PluginExecutionKind, PluginManifest, PluginMcpScope,
-    PluginMetadata, PluginPermissions, PluginRequires, PluginSandbox, PluginSpec, PluginToolSpec,
+    PluginMetadata, PluginPanelGroup, PluginPanelRender, PluginPermissions, PluginRequires,
+    PluginSandbox, PluginSpec, PluginToolSpec, PluginWebLink, PluginWebPanel, PluginWebSection,
 };
 
 fn minimal() -> PluginManifest {
@@ -135,4 +136,142 @@ fn unknown_keys_are_rejected_everywhere() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("colour"), "{error}");
+}
+
+fn panel(id: &str, source: &str) -> PluginWebPanel {
+    PluginWebPanel {
+        id: id.into(),
+        title: "Status".into(),
+        source: source.into(),
+        render: PluginPanelRender::Kv,
+        group: PluginPanelGroup::Diagnostics,
+    }
+}
+
+/// §4.7: a panel may only read a `read_only` tool, and the refusal names the
+/// panel so `orbit plugin validate` can point at it.
+#[test]
+fn a_panel_over_a_mutating_tool_is_refused_by_name() {
+    let mut manifest = minimal();
+    manifest.spec.tools.push(PluginToolSpec {
+        name: "maintain".into(),
+        description: String::new(),
+        execution_kind: PluginExecutionKind::Mutating,
+        mcp_scope: PluginMcpScope::Workspace,
+        input_schema: None,
+        output_schema: None,
+        cli: None,
+    });
+    manifest.spec.web = Some(PluginWebSection {
+        panels: vec![panel("index", "tool:hello")],
+        links: vec![],
+    });
+    manifest
+        .validate_structure()
+        .expect("a panel over a read_only tool is valid");
+
+    manifest.spec.web = Some(PluginWebSection {
+        panels: vec![panel("index", "tool:maintain")],
+        links: vec![],
+    });
+    let error = manifest.validate_structure().unwrap_err();
+    assert_eq!(error.field, "spec.web.panels[0].source");
+    assert!(
+        error.message.contains("index") && error.message.contains("maintain"),
+        "the refusal names the panel and its source: {}",
+        error.message
+    );
+}
+
+#[test]
+fn a_panel_source_must_name_a_declared_tool_exactly_once() {
+    let mut manifest = minimal();
+    manifest.spec.web = Some(PluginWebSection {
+        panels: vec![panel("index", "hello")],
+        links: vec![],
+    });
+    let error = manifest.validate_structure().unwrap_err();
+    assert_eq!(error.field, "spec.web.panels[0].source");
+    assert!(error.message.contains("tool:<verb>"), "{}", error.message);
+
+    manifest.spec.web = Some(PluginWebSection {
+        panels: vec![panel("index", "tool:absent")],
+        links: vec![],
+    });
+    assert_eq!(
+        manifest.validate_structure().unwrap_err().field,
+        "spec.web.panels[0].source"
+    );
+
+    manifest.spec.web = Some(PluginWebSection {
+        panels: vec![panel("index", "tool:hello"), panel("index", "tool:hello")],
+        links: vec![],
+    });
+    assert_eq!(
+        manifest.validate_structure().unwrap_err().field,
+        "spec.web.panels[1].id"
+    );
+}
+
+#[test]
+fn a_link_url_may_only_use_the_manifest_template_variables() {
+    let mut manifest = minimal();
+    manifest.spec.web = Some(PluginWebSection {
+        panels: vec![],
+        links: vec![PluginWebLink {
+            title: "Explorer".into(),
+            url: "http://127.0.0.1:{{config.port}}".into(),
+        }],
+    });
+    manifest
+        .validate_structure()
+        .expect("{{config.<key>}} is an allowed reference");
+
+    manifest.spec.web = Some(PluginWebSection {
+        panels: vec![],
+        links: vec![PluginWebLink {
+            title: "Explorer".into(),
+            url: "http://127.0.0.1:{{home}}".into(),
+        }],
+    });
+    assert_eq!(
+        manifest.validate_structure().unwrap_err().field,
+        "spec.web.links[0].url"
+    );
+}
+
+#[test]
+fn a_link_url_must_be_http_or_https() {
+    let mut manifest = minimal();
+    for url in [
+        "javascript:alert(1)",
+        "data:text/html,hi",
+        "127.0.0.1:7890",
+        "file:///etc",
+    ] {
+        manifest.spec.web = Some(PluginWebSection {
+            panels: vec![],
+            links: vec![PluginWebLink {
+                title: "Explorer".into(),
+                url: url.into(),
+            }],
+        });
+        let error = manifest.validate_structure().unwrap_err();
+        assert_eq!(error.field, "spec.web.links[0].url", "{url}");
+        assert!(
+            error.message.contains("http://"),
+            "{url}: {}",
+            error.message
+        );
+    }
+    manifest.spec.web = Some(PluginWebSection {
+        panels: vec![],
+        links: vec![PluginWebLink {
+            title: "Explorer".into(),
+            url: "HTTPS://example.test/{{config.path}}".into(),
+        }],
+    });
+    manifest
+        .validate_structure()
+        .expect("the scheme check is case-insensitive");
 }

@@ -1,0 +1,16 @@
+# Seeded to .orbit/auto_tasks/__ORBIT_PLUGIN_NS__-review.yaml on
+# `orbit plugin enable`, always disabled. A plugin may ship a schedule; only a
+# human may switch one on.
+schemaVersion: 1
+name: review
+description: Review what the __ORBIT_PLUGIN_NS__ plugin reported this week.
+enabled: false
+schedule:
+  every_minutes: 10080
+template:
+  title: Review the __ORBIT_PLUGIN_NS__ plugin's status
+  description: |
+    Read the plugin's Status panel on the dashboard and decide whether
+    anything needs doing.
+  task_type: chore
+  priority: low

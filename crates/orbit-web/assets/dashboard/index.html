@@ -56,6 +56,7 @@
               <button class="subtab" data-subtab="jobs" type="button">Jobs<span class="rail-count" id="rail-count-ops-jobs"></span></button>
             </nav>
           <button class="tab" data-tab="knowledge" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5a2 2 0 0 1 2 2v10a2 2 0 0 0-2-2H4z"/><path d="M16 4h-5a2 2 0 0 0-2 2v10a2 2 0 0 1 2-2h5z"/></svg><span class="rail-label">Knowledge</span><span class="rail-count" id="rail-count-knowledge"></span></button>
+          <button class="tab" data-tab="plugins" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v3M13 3v3"/><rect x="4" y="6" width="12" height="7" rx="1.5"/><path d="M10 13v4"/></svg><span class="rail-label">Plugins</span><span class="rail-count" id="rail-count-plugins"></span></button>
           <button class="tab" data-tab="config" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h12"/><circle cx="8" cy="6" r="1.6"/><circle cx="13" cy="10" r="1.6"/><circle cx="7" cy="14" r="1.6"/></svg><span class="rail-label">Config</span><span class="rail-count" id="rail-count-config"></span></button>
             <nav class="subtabs rail-subtabs" id="config-subtabs" aria-label="Config views">
               <button class="subtab active" data-subtab="effective" type="button">Effective</button>
@@ -459,6 +460,29 @@
             <div class="empty-state">
               <div class="icon">✧</div>
               <div class="text">No friction selected.</div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </section>
+    <section class="tab-pane" data-tab="plugins">
+      <!-- One generic surface for every installed plugin: its state, the
+           panels its manifest declares, and its link tiles. No plugin ships
+           markup or script, so a new plugin needs no dashboard edit. -->
+      <main class="plugins-layout">
+        <section class="panel" id="plugins-panel">
+          <header>
+            <span>Plugins</span>
+            <span class="count" id="plugins-count">-</span>
+          </header>
+          <p class="plugins-explainer">
+            Installed on this machine, with the panels each plugin's manifest declares.
+            Installing, enabling and granting stay on the CLI (<span class="mono">orbit plugin</span>), where the operator answers the grant request.
+          </p>
+          <div class="body" id="plugins-body">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
+              <div class="skeleton skeleton-row"></div>
+              <div class="skeleton skeleton-row" style="width: 80%"></div>
             </div>
           </div>
         </section>

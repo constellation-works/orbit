@@ -5,15 +5,18 @@
 //! `~/.orbit/plugins/<ns>/<version>/` and every workspace on that host shares
 //! it. The repository commits only `.orbit/plugins.yaml`.
 //!
-//! Beyond tools, a plugin contributes definitions ([`definitions`]), seeded
-//! schedules ([`seed`]), skills ([`skills`]) and a `[plugins.<ns>]` config
-//! section ([`config`]). Everything a plugin contributes is refused as a unit:
-//! a manifest whose definitions break the §4.5 rules registers no tools
-//! either, because half a plugin is not a state an operator can reason about.
+//! Beyond tools, a plugin contributes definitions, seeded schedules
+//! ([`seed`]), skills ([`skills`]), a `[plugins.<ns>]` config section,
+//! dashboard panels ([`panels`]) and conformance goldens ([`conformance`]).
+//! Everything a plugin contributes is refused as a unit: a manifest whose
+//! definitions break the §4.5 rules registers no tools either, because half a
+//! plugin is not a state an operator can reason about.
 
+mod conformance;
 mod inspect;
 mod install;
 pub(crate) mod lifecycle;
+mod panels;
 pub(crate) mod seed;
 pub(crate) mod skills;
 
@@ -29,6 +32,7 @@ pub use crate::runtime::plugin_definitions::{
     PluginDefinition, PluginDefinitionSet, load_plugin_definitions, read_definition_provenance,
     seeded_definition_name,
 };
+pub use conformance::{PluginTestOutcome, PluginTestReport, test_plugin_dir};
 pub use inspect::{
     PluginDoctorResult, PluginPermissionSummary, PluginSummary, PluginToolSummary,
     PluginValidationReport, list_plugins, plugin_doctor, show_plugin, validate_plugin_dir,
@@ -38,4 +42,5 @@ pub use lifecycle::{
     PluginEnableOptions, PluginEnableResult, PluginMigrateRequest, PluginSyncOutcome,
     disable_plugin, enable_plugin, migrate_plugin_sidecars, remove_plugin, sync_plugins,
 };
+pub use panels::{PluginLinkSummary, PluginPanelSummary, read_plugin_panel};
 pub use seed::{PluginSeedAction, PluginSeedOutcome, seed_plugin_definitions};

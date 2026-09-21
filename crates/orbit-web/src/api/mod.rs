@@ -35,6 +35,7 @@ mod jobs;
 mod log;
 mod metrics;
 mod pagination;
+mod plugins;
 mod reliability;
 mod routines;
 mod runs;
@@ -661,6 +662,15 @@ pub(super) fn router() -> Router<crate::state::DashboardState> {
             get(diagnostics::diagnostics_implement_one),
         )
         .route("/diagnostics/denials", get(denials::list_denials))
+        // Installed plugins and their declared panels [§4.7]. Read-only: a
+        // panel source is a `read_only` tool, and nothing here enables,
+        // disables or configures a plugin — that stays on the CLI, where the
+        // grant decision is made.
+        .route("/plugins", get(plugins::list_plugins))
+        .route(
+            "/plugins/:namespace/panels/:panel",
+            get(plugins::read_panel),
+        )
         .layer(middleware::map_response(json_client_error))
         .layer(middleware::from_fn(require_localhost_origin))
         // Outer so Host/Origin 403s and handler JSON both carry nosniff.

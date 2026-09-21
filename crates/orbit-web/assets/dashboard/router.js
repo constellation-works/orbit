@@ -44,7 +44,7 @@ function markWorkspaceSelectorScope(fleetWide) {
 // not host management, so it is a destination of its own (`#auto-drain`)
 // rather than an Operations subtab. The old `#operations/auto-drain` hash is
 // still accepted and rewritten so bookmarks keep resolving.
-const TABS = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge", "config", "run-detail"];
+const TABS = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge", "plugins", "config", "run-detail"];
 const DIAG_SUBTABS = ["runs", "metrics", "errors", "incidents", "reliability", "scoreboard"];
 const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "jobs"];
 // ORB-10444/ORB-10588: subtabs that replace the two-column diagnostics layout

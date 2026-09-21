@@ -739,6 +739,12 @@ pub trait PluginStoreBackend: Send + Sync {
     fn get_plugin(&self, name: &str) -> Result<Option<InstalledPlugin>, OrbitError>;
     fn upsert_plugin(&self, plugin: &InstalledPlugin) -> Result<(), OrbitError>;
     fn delete_plugin(&self, name: &str) -> Result<bool, OrbitError>;
+    /// Record the Orbit version whose conformance run this plugin passed.
+    fn set_plugin_certification(
+        &self,
+        name: &str,
+        orbit_version: Option<&str>,
+    ) -> Result<bool, OrbitError>;
     fn set_plugin_enabled(
         &self,
         name: &str,
