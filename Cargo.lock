@@ -2044,6 +2044,7 @@ version = "0.23.0"
 dependencies = [
  "chrono",
  "flate2",
+ "jsonschema",
  "orbit-common",
  "orbit-exec",
  "orbit-policy",

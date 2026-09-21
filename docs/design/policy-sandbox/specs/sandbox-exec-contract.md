@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Sandboxed Exec Contract"
 tags: ["policy-sandbox"]
-last_validated: 2026-09-08
+last_validated: 2026-09-21
 ---
 
 # Spec: Sandboxed Exec Contract
@@ -34,6 +34,18 @@ Process supervision is full of subtle deadlocks (full pipe buffers, orphan grand
 - **Clean-exit reaping.** When the child exits cleanly, the wait loop calls `kill_process_group(child.id())` to reap any orphan subprocesses still holding pipe write ends, then joins the reader threads. Without this, an orphan grandchild can keep the pipes open and block reader-thread completion indefinitely.
 - **Stderr annotation.** Timeouts append `process timed out` to stderr; parent-signal interruption appends `process interrupted by signal SIG<NAME>`. The annotations are added before the result is constructed, not by the caller.
 - **Exit code reporting.** `ExecutionResult::exit_code` is `Some(code)` for clean exits, `Some(128 + signal)` for parent-signal exits, and `None` for timeouts.
+
+## Sandbox strategies
+
+Every strategy reaches the child through the same `Sandbox::spawn` seam, so supervision, capture, and timeout behaviour are identical whichever one is selected.
+
+| Strategy | Used by | What it confines |
+|---|---|---|
+| `NoSandbox` | direct `run_process` callers, registered v1 external tools | Nothing beyond what already confines the parent. |
+| `ActivityFsSandbox` (`orbit-tools`) | activity-scoped `proc.spawn` | Request-time path arguments against the activity's `fsProfile`, plus a Landlock read ruleset applied to the child. |
+| `PluginSandboxProfile` (`orbit-tools`) | plugin `exec` and `mcp` backends | The granted plugin profile: read roots, write roots, and `network: none`, via Landlock on Linux and `sandbox-exec` on macOS. A host that can enforce neither refuses the spawn; `backend.sandbox: none` with the `unsandboxed` grant is the only opt-out. See [plugins §4.3](../../plugins/1_scope.md#43-sandboxing). [ORB-12736] |
+
+A strategy that confines the process overrides `Sandbox::spawn`; returning `Ok` from `validate` alone never establishes a boundary (see Migration Rules).
 
 ## Result Shape
 
@@ -69,6 +81,7 @@ Process supervision is full of subtle deadlocks (full pipe buffers, orphan grand
 ## Agent Signature
 
 Live-read investigation and spawn-seam clarification revised by codex on 2026-09-07.
+Sandbox-strategy table added with the plugin backend boundary on 2026-09-21 [ORB-12736].
 
 ## Live read enforcement investigation (2026-09-07)
 

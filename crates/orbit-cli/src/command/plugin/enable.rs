@@ -9,8 +9,9 @@ use super::support::plugin_record;
 pub struct PluginEnableArgs {
     /// Plugin namespace
     pub name: String,
-    /// Permission grants to record (repeatable, comma-separated). Grants are
-    /// recorded now and enforced by a later Orbit release.
+    /// Permission grants to record (repeatable, comma-separated): fs, network,
+    /// env_pass, orbit_tools, unsandboxed. A tool whose plugin requests a
+    /// grant it has not been given registers inactive.
     #[arg(long = "grant", value_delimiter = ',')]
     pub grants: Vec<String>,
 }

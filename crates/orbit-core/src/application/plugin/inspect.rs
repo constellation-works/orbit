@@ -6,7 +6,10 @@ use orbit_common::OrbitError;
 use orbit_tools::plugin::{
     LoadedPlugin, PluginValidationPolicy, load_plugin_dir, manifest_refusal, validate_loaded_plugin,
 };
-use orbit_types::plugin::{InstalledPlugin, PluginExecutionKind, PluginStatus, plugin_tool_name};
+use orbit_types::plugin::{
+    InstalledPlugin, PluginExecutionKind, PluginGrant, PluginSandbox, PluginStatus,
+    plugin_tool_name,
+};
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin_host::{read_pin_file, unmet_requirement};
@@ -23,6 +26,16 @@ pub struct PluginToolSummary {
     pub active: bool,
 }
 
+/// One grant as `orbit plugin show` reports it: what the manifest asks for
+/// beside whether the operator granted it (design §4.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginPermissionSummary {
+    pub grant: PluginGrant,
+    /// The manifest's request, `None` when it does not ask for this grant.
+    pub requested: Option<String>,
+    pub granted: bool,
+}
+
 /// One plugin as `orbit plugin list` / `show` reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginSummary {
@@ -35,10 +48,14 @@ pub struct PluginSummary {
     pub publisher: Option<String>,
     pub description: String,
     pub first_party: bool,
-    /// Permissions the manifest requests (§4.1). Never a grant.
-    pub requested_permissions: Vec<String>,
+    /// Every grant, with the manifest's request and the operator's answer
+    /// side by side (§4.1). Only the answer is authority.
+    pub permissions: Vec<PluginPermissionSummary>,
     /// Grants recorded at `orbit plugin enable --grant …`.
     pub granted: Vec<String>,
+    /// `backend.sandbox: none` with the `unsandboxed` grant: the backend runs
+    /// unconfined, which `doctor` reports as a finding (§4.3).
+    pub unsandboxed: bool,
     pub tools: Vec<PluginToolSummary>,
     /// Why the plugin is not active, when it is not.
     pub diagnostic: Option<String>,
@@ -97,8 +114,9 @@ pub fn list_plugins(runtime: &OrbitRuntime) -> Result<Vec<PluginSummary>, OrbitE
             publisher: None,
             description: String::new(),
             first_party: false,
-            requested_permissions: Vec::new(),
+            permissions: Vec::new(),
             granted: Vec::new(),
+            unsandboxed: false,
             tools: Vec::new(),
             diagnostic: runtime_diagnostic(runtime, &name),
             pinned: true,
@@ -119,12 +137,19 @@ pub fn show_plugin(runtime: &OrbitRuntime, name: &str) -> Result<PluginSummary, 
         })
 }
 
-/// One row per plugin, naming the step that would make it active.
+/// One row per plugin, naming the step that would make it active, or the
+/// finding an active plugin carries (an unsandboxed backend).
 pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, OrbitError> {
     Ok(list_plugins(runtime)?
         .into_iter()
         .map(|summary| {
             let message = summary.diagnostic.clone().unwrap_or_else(|| match summary.status {
+                PluginStatus::Active if summary.unsandboxed => format!(
+                    "plugin '{}' runs unsandboxed: its manifest declares `backend.sandbox: none` \
+                     and this host granted `unsandboxed`, so its backend is not confined by \
+                     Landlock or sandbox-exec",
+                    summary.name
+                ),
                 PluginStatus::Active => String::new(),
                 PluginStatus::Disabled => format!(
                     "plugin '{}' is installed but disabled; run `orbit plugin enable {}`",
@@ -176,15 +201,23 @@ pub fn validate_plugin_dir(
                 .to_string(),
         );
     }
-    if !plugin.manifest.spec.permissions.orbit_tools.is_empty()
-        || plugin.manifest.spec.permissions.network
-            != orbit_types::plugin::PluginNetworkPermission::None
-        || !plugin.manifest.spec.permissions.fs.read.is_empty()
-        || !plugin.manifest.spec.permissions.fs.write.is_empty()
-    {
+    let required = plugin.manifest.required_grants();
+    if !required.is_empty() {
+        warnings.push(format!(
+            "this plugin needs the grant{} {} at `orbit plugin enable --grant …`; without them \
+             its tools register inactive",
+            if required.len() == 1 { "" } else { "s" },
+            required
+                .iter()
+                .map(|grant| format!("`{grant}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if plugin.manifest.spec.backend.sandbox == PluginSandbox::None {
         warnings.push(
-            "`spec.permissions` is recorded as requested; grants are not enforced by this Orbit \
-             release"
+            "`backend.sandbox: none` runs the backend unconfined once `unsandboxed` is granted; \
+             `orbit plugin doctor` reports it"
                 .to_string(),
         );
     }
@@ -289,8 +322,17 @@ pub(super) fn summary_for_installed(
             .map(|plugin| plugin.manifest.metadata.description.clone())
             .unwrap_or_default(),
         first_party: installed.first_party,
-        requested_permissions: plugin.map(requested_permissions).unwrap_or_default(),
+        permissions: plugin
+            .map(|plugin| permission_rows(plugin, &installed.grants))
+            .unwrap_or_default(),
         granted: installed.grants.clone(),
+        unsandboxed: plugin.is_some_and(|plugin| {
+            plugin.manifest.spec.backend.sandbox == PluginSandbox::None
+                && installed
+                    .grants
+                    .iter()
+                    .any(|grant| grant == PluginGrant::Unsandboxed.as_str())
+        }),
         tools,
         diagnostic: None,
         pinned: false,
@@ -305,30 +347,18 @@ fn mcp_scope_label(scope: orbit_types::plugin::PluginMcpScope) -> &'static str {
     }
 }
 
-/// The manifest's requests, rendered for `orbit plugin show`'s
-/// requested-vs-granted columns.
-fn requested_permissions(plugin: &LoadedPlugin) -> Vec<String> {
-    let permissions = &plugin.manifest.spec.permissions;
-    let mut requested = Vec::new();
-    if !permissions.fs.read.is_empty() {
-        requested.push(format!("fs.read={}", permissions.fs.read.join(",")));
-    }
-    if !permissions.fs.write.is_empty() {
-        requested.push(format!("fs.write={}", permissions.fs.write.join(",")));
-    }
-    if permissions.network != orbit_types::plugin::PluginNetworkPermission::None {
-        requested.push(format!("network={:?}", permissions.network).to_lowercase());
-    }
-    if !permissions.env_pass.is_empty() {
-        requested.push(format!("env_pass={}", permissions.env_pass.join(",")));
-    }
-    if !permissions.orbit_tools.is_empty() {
-        requested.push(format!("orbit_tools={}", permissions.orbit_tools.join(",")));
-    }
-    if plugin.manifest.spec.backend.sandbox == orbit_types::plugin::PluginSandbox::None {
-        requested.push("unsandboxed".to_string());
-    }
-    requested
+/// Requested versus granted, one row per grant, for `orbit plugin show`.
+fn permission_rows(plugin: &LoadedPlugin, granted: &[String]) -> Vec<PluginPermissionSummary> {
+    plugin
+        .manifest
+        .grant_requests()
+        .into_iter()
+        .map(|request| PluginPermissionSummary {
+            granted: granted.iter().any(|name| name == request.grant.as_str()),
+            grant: request.grant,
+            requested: request.requested,
+        })
+        .collect()
 }
 
 fn pinned_names(runtime: &OrbitRuntime) -> Vec<String> {

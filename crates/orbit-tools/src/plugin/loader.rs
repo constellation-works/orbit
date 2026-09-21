@@ -53,6 +53,10 @@ pub struct ResolvedPluginTool {
     pub execution_kind: PluginExecutionKind,
     pub mcp_scope: PluginMcpScope,
     pub input_schema: Value,
+    /// Whether the manifest declared `input_schema` (as opposed to the
+    /// empty-object default). An `mcp` backend's server is held to a
+    /// declared schema only.
+    pub input_schema_declared: bool,
     pub output_schema: Option<Value>,
     pub parameters: Vec<ToolParam>,
 }
@@ -129,6 +133,7 @@ pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
             mcp_scope: tool.mcp_scope,
             parameters: params_from_input_schema(&input_schema),
             input_schema,
+            input_schema_declared: tool.input_schema.is_some(),
             output_schema,
         });
     }

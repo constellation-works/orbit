@@ -10,26 +10,65 @@ use std::process::Child;
 
 use orbit_common::OrbitError;
 
-use super::{LandlockGrant, LandlockPathGrant};
+use super::{LandlockGrant, LandlockPathGrant, NETWORK_LANDLOCK_ABI, RulesetScope};
 use crate::runner::ExecRequest;
 
 const ACCESS_FS_EXECUTE: u64 = 1 << 0;
+const ACCESS_FS_WRITE_FILE: u64 = 1 << 1;
 const ACCESS_FS_READ_FILE: u64 = 1 << 2;
 const ACCESS_FS_READ_DIR: u64 = 1 << 3;
+const ACCESS_FS_REMOVE_DIR: u64 = 1 << 4;
+const ACCESS_FS_REMOVE_FILE: u64 = 1 << 5;
+const ACCESS_FS_MAKE_CHAR: u64 = 1 << 6;
+const ACCESS_FS_MAKE_DIR: u64 = 1 << 7;
+const ACCESS_FS_MAKE_REG: u64 = 1 << 8;
+const ACCESS_FS_MAKE_SOCK: u64 = 1 << 9;
+const ACCESS_FS_MAKE_FIFO: u64 = 1 << 10;
+const ACCESS_FS_MAKE_BLOCK: u64 = 1 << 11;
+const ACCESS_FS_MAKE_SYM: u64 = 1 << 12;
 /// Moving or linking a file into a different directory. Landlock refuses a
 /// reparent that would give the file more access at its destination, which is
 /// what keeps a denied file from being relocated into a readable directory.
 const ACCESS_FS_REFER: u64 = 1 << 13;
+/// ABI 3: `truncate(2)` and `O_TRUNC` on an already-granted file.
+const ACCESS_FS_TRUNCATE: u64 = 1 << 14;
 
 const HANDLED_FS_ACCESS: u64 =
     ACCESS_FS_EXECUTE | ACCESS_FS_READ_FILE | ACCESS_FS_READ_DIR | ACCESS_FS_REFER;
 
+/// Every write-side right the plugin boundary takes over from the kernel's
+/// default allow. `TRUNCATE` is masked off below ABI 3, where the kernel does
+/// not know it.
+const HANDLED_FS_WRITE_ACCESS: u64 = ACCESS_FS_WRITE_FILE
+    | ACCESS_FS_REMOVE_DIR
+    | ACCESS_FS_REMOVE_FILE
+    | ACCESS_FS_MAKE_CHAR
+    | ACCESS_FS_MAKE_DIR
+    | ACCESS_FS_MAKE_REG
+    | ACCESS_FS_MAKE_SOCK
+    | ACCESS_FS_MAKE_FIFO
+    | ACCESS_FS_MAKE_BLOCK
+    | ACCESS_FS_MAKE_SYM
+    | ACCESS_FS_TRUNCATE;
+
+/// ABI 4: TCP bind and connect. Handling both with no port rule refuses every
+/// TCP endpoint, which is how `network: none` is held at the kernel.
+const ACCESS_NET_BIND_TCP: u64 = 1 << 0;
+const ACCESS_NET_CONNECT_TCP: u64 = 1 << 1;
+
+/// First ABI that knows `TRUNCATE`.
+const TRUNCATE_ABI: i64 = 3;
+
 const LANDLOCK_CREATE_RULESET_VERSION: u32 = 1 << 0;
 const LANDLOCK_RULE_PATH_BENEATH: u32 = 1;
 
+/// `struct landlock_ruleset_attr` as of ABI 4. A kernel that predates the
+/// network field accepts the longer struct as long as the extra bytes are
+/// zero, so one layout serves every ABI this module runs on.
 #[repr(C)]
 struct RulesetAttr {
     handled_access_fs: u64,
+    handled_access_net: u64,
 }
 
 #[repr(C, packed)]
@@ -56,8 +95,9 @@ pub(super) fn abi_version() -> i64 {
 pub(super) fn spawn_restricted(
     req: &ExecRequest,
     grants: &[LandlockPathGrant],
+    scope: RulesetScope,
 ) -> Result<Child, OrbitError> {
-    let ruleset = Ruleset::create()?;
+    let ruleset = Ruleset::create(scope, abi_version())?;
     for grant in grants {
         ruleset.add_path(grant)?;
     }
@@ -94,12 +134,34 @@ fn restrict_child(command: &mut std::process::Command, ruleset_fd: i32) {
 
 struct Ruleset {
     fd: OwnedFd,
+    /// The filesystem rights this ruleset takes over; a rule may only grant a
+    /// subset of them.
+    handled_fs: u64,
 }
 
 impl Ruleset {
-    fn create() -> Result<Self, OrbitError> {
+    fn create(scope: RulesetScope, abi: i64) -> Result<Self, OrbitError> {
+        let mut handled_fs = HANDLED_FS_ACCESS;
+        if scope.confine_writes {
+            handled_fs |= HANDLED_FS_WRITE_ACCESS;
+            if abi < TRUNCATE_ABI {
+                handled_fs &= !ACCESS_FS_TRUNCATE;
+            }
+        }
+        let handled_access_net = if scope.deny_tcp {
+            if abi < NETWORK_LANDLOCK_ABI {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "refusing TCP at the process boundary requires Landlock ABI \
+                     {NETWORK_LANDLOCK_ABI} or later; this kernel supports ABI {abi}"
+                )));
+            }
+            ACCESS_NET_BIND_TCP | ACCESS_NET_CONNECT_TCP
+        } else {
+            0
+        };
         let attr = RulesetAttr {
-            handled_access_fs: HANDLED_FS_ACCESS,
+            handled_access_fs: handled_fs,
+            handled_access_net,
         };
         // SAFETY: `attr` is a well-formed `landlock_ruleset_attr` and its size
         // is passed alongside it.
@@ -120,6 +182,7 @@ impl Ruleset {
         // SAFETY: `fd` is a freshly created ruleset descriptor this scope owns.
         let ruleset = Self {
             fd: unsafe { OwnedFd::from_raw_fd(fd as i32) },
+            handled_fs,
         };
         set_cloexec(ruleset.as_raw_fd())?;
         Ok(ruleset)
@@ -149,7 +212,7 @@ impl Ruleset {
             )));
         }
         let rule = PathBeneathAttr {
-            allowed_access: access_bits(grant.grant),
+            allowed_access: access_bits(grant.grant) & self.handled_fs,
             parent_fd,
         };
         // SAFETY: `rule` holds the live `O_PATH` descriptor opened above and an
@@ -178,7 +241,9 @@ impl Ruleset {
 }
 
 /// `REFER` is only meaningful on a directory, so a file grant omits it along
-/// with `READ_DIR`.
+/// with `READ_DIR`. The write bits are masked to the handled set by the
+/// caller, so a read-only ruleset never asks the kernel for a right it did
+/// not take over.
 fn access_bits(grant: LandlockGrant) -> u64 {
     match grant {
         LandlockGrant::ReadTree => {
@@ -186,6 +251,14 @@ fn access_bits(grant: LandlockGrant) -> u64 {
         }
         LandlockGrant::ListOnly => ACCESS_FS_READ_DIR | ACCESS_FS_REFER,
         LandlockGrant::ReadFile => ACCESS_FS_EXECUTE | ACCESS_FS_READ_FILE,
+        LandlockGrant::WriteTree => {
+            ACCESS_FS_EXECUTE
+                | ACCESS_FS_READ_FILE
+                | ACCESS_FS_READ_DIR
+                | ACCESS_FS_REFER
+                | HANDLED_FS_WRITE_ACCESS
+        }
+        LandlockGrant::WriteFile => ACCESS_FS_READ_FILE | ACCESS_FS_WRITE_FILE | ACCESS_FS_TRUNCATE,
     }
 }
 

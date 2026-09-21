@@ -64,7 +64,11 @@ pub fn install_plugin(
     let existing = runtime.stores().plugins().get_plugin(&name)?;
     let enabled = options.enable || existing.as_ref().is_some_and(|plugin| plugin.enabled);
     let grants = if options.enable {
-        options.grants.clone()
+        orbit_types::plugin::parse_grants(&options.grants)
+            .map_err(OrbitError::InvalidInput)?
+            .into_iter()
+            .map(|grant| grant.as_str().to_string())
+            .collect()
     } else {
         existing.map(|plugin| plugin.grants).unwrap_or_default()
     };

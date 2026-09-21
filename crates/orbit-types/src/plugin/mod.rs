@@ -6,15 +6,18 @@
 //! validation only; reading a plugin directory, resolving `$ref` targets, and
 //! computing digests belong to `orbit-tools`.
 
+mod grant;
 mod manifest;
 mod namespace;
 mod pin;
 mod record;
+mod template;
 mod version;
 
 #[cfg(test)]
 mod tests;
 
+pub use grant::{PluginGrant, PluginGrantRequest, parse_grants};
 pub use manifest::{
     MANIFEST_FILE_NAME, MANIFEST_KIND, MANIFEST_SCHEMA_VERSION, PluginBackend, PluginBackendType,
     PluginCliShape, PluginExecutionKind, PluginFsPermissions, PluginManifest, PluginManifestError,
@@ -27,4 +30,8 @@ pub use namespace::{
 };
 pub use pin::{PIN_FILE_NAME, PIN_FILE_SCHEMA_VERSION, PluginPin, PluginPinFile};
 pub use record::{InstalledPlugin, PluginProvenance, PluginStatus};
+pub use template::{
+    PluginTemplateVars, is_allowed_template_reference, render_template, template_references,
+    validate_template,
+};
 pub use version::{PLUGIN_HOST_API, SemverRange, Version, VersionError};

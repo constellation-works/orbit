@@ -14,8 +14,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbit_exec::{
-    EnvironmentMode, ExecRequest, StdinMode, linux_landlock_read_boundary, probe_landlock,
-    spawn_under_linux_landlock,
+    EnvironmentMode, ExecRequest, LandlockBoundary, NETWORK_LANDLOCK_ABI, StdinMode,
+    linux_landlock_read_boundary, probe_landlock, spawn_under_linux_landlock,
+    spawn_under_linux_landlock_boundary,
 };
 use orbit_types::policy::ResolvedFsProfile;
 
@@ -655,4 +656,129 @@ fn a_profile_that_cannot_be_compiled_refuses_to_spawn() {
         error.to_string().contains("landlock workspace"),
         "the error must name what it could not compile: {error}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The explicit boundary plugin backends run under (design plugins §4.3).
+// ---------------------------------------------------------------------------
+
+fn spawn_bounded(fixture: &Fixture, boundary: &LandlockBoundary, script: &str) -> Output {
+    let request = ExecRequest {
+        program: "/bin/sh".to_string(),
+        args: vec!["-c".to_string(), script.to_string()],
+        current_dir: Some(fixture.root().display().to_string()),
+        timeout_ms: Some(10_000),
+        stdin_mode: StdinMode::Null,
+        environment_mode: EnvironmentMode::ClearAndSet(fixture.environment.clone()),
+        debug: false,
+    };
+    Output::of(
+        spawn_under_linux_landlock_boundary(&request, boundary).expect("spawn bounded child"),
+    )
+}
+
+#[test]
+fn a_bounded_child_writes_only_inside_its_granted_roots() {
+    if unenforceable() {
+        return;
+    }
+    let fixture = Fixture::new();
+    fixture.write("input.txt", "READABLE");
+    let state = fixture.host_root().join("state");
+    let boundary = LandlockBoundary {
+        read: vec![fixture.root()],
+        write: vec![state.clone()],
+        deny_tcp: false,
+    };
+    assert!(
+        !state.exists(),
+        "the granted write directory is created at spawn, not by the fixture"
+    );
+
+    // Reads inside the read root work; a write there is refused.
+    spawn_bounded(&fixture, &boundary, "cat input.txt").assert_returned("READABLE");
+    let refused = spawn_bounded(
+        &fixture,
+        &boundary,
+        "echo LEAK > input.txt && echo WROTE_READ_ROOT",
+    );
+    refused.assert_withheld("WROTE_READ_ROOT");
+    assert_eq!(
+        fs::read_to_string(fixture.root().join("input.txt")).expect("read back"),
+        "READABLE",
+        "a write outside the granted write roots must not reach the disk"
+    );
+    let refused = spawn_bounded(
+        &fixture,
+        &boundary,
+        "touch created.txt && echo CREATED_IN_READ_ROOT",
+    );
+    refused.assert_withheld("CREATED_IN_READ_ROOT");
+    assert!(!fixture.root().join("created.txt").exists());
+
+    // Writes inside the granted write root work, including creating files.
+    spawn_bounded(
+        &fixture,
+        &boundary,
+        &format!(
+            "echo saved > {}/out.txt && cat {}/out.txt",
+            state.display(),
+            state.display()
+        ),
+    )
+    .assert_returned("saved");
+
+    // `>/dev/null` is a write every shell script makes and is always allowed.
+    spawn_bounded(
+        &fixture,
+        &boundary,
+        "echo hidden >/dev/null && echo DEVNULL_OK",
+    )
+    .assert_returned("DEVNULL_OK");
+
+    // Nothing outside the grants is readable, either.
+    let secret = fixture.host_root().join("secret.txt");
+    fs::write(&secret, "HOST_SENTINEL").expect("write host sentinel");
+    spawn_bounded(&fixture, &boundary, &format!("cat {}", secret.display()))
+        .assert_withheld("HOST_SENTINEL");
+}
+
+#[test]
+fn a_bounded_child_with_deny_tcp_cannot_connect() {
+    if unenforceable() {
+        return;
+    }
+    let fixture = Fixture::new();
+    let boundary = LandlockBoundary {
+        read: vec![fixture.root()],
+        write: vec![],
+        deny_tcp: true,
+    };
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a local listener");
+    let port = listener.local_addr().expect("local addr").port();
+    if probe_landlock().abi < NETWORK_LANDLOCK_ABI {
+        let request = ExecRequest {
+            program: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), "true".to_string()],
+            current_dir: None,
+            timeout_ms: Some(1_000),
+            stdin_mode: StdinMode::Null,
+            environment_mode: EnvironmentMode::ClearAndSet(fixture.environment.clone()),
+            debug: false,
+        };
+        let error = spawn_under_linux_landlock_boundary(&request, &boundary)
+            .expect_err("an older ABI fails closed instead of spawning");
+        assert!(error.to_string().contains("Landlock ABI"), "{error}");
+        return;
+    }
+    if !on_path("python3", &fixture.environment) {
+        println!("skipping the connect half: python3 is not on the child PATH");
+        return;
+    }
+    let script = format!(
+        "python3 -c \"import socket\ns = socket.socket()\ntry:\n    s.connect(('127.0.0.1', {port}))\n    print('CONNECTED')\nexcept OSError as error:\n    print('REFUSED', error.errno)\n\""
+    );
+    let output = spawn_bounded(&fixture, &boundary, &script);
+    output.assert_withheld("CONNECTED");
+    output.assert_returned("REFUSED");
 }

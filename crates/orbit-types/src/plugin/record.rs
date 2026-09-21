@@ -16,8 +16,8 @@ pub struct InstalledPlugin {
     /// SHA-256 of the manifest bytes at install time, hex encoded.
     pub manifest_digest: String,
     pub enabled: bool,
-    /// Grants recorded at `orbit plugin enable --grant …`. Recorded, not yet
-    /// enforced (phase 2).
+    /// Grants recorded at `orbit plugin enable --grant …`; the loader refuses
+    /// a tool whose plugin lacks one it requires (design §4.1).
     #[serde(default)]
     pub grants: Vec<String>,
     /// Whether the loader verified a first-party origin for `orbit.<ns>.*`.
@@ -58,4 +58,8 @@ pub struct PluginProvenance {
     pub name: String,
     pub version: String,
     pub manifest_digest: String,
+    /// The grant set the plugin ran under, as recorded at enable time
+    /// (design §4.4). Empty for a plugin that requested nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grants: Vec<String>,
 }

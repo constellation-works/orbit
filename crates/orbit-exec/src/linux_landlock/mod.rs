@@ -15,10 +15,18 @@
 //!
 //! # What the ruleset covers
 //! Read and execute access (`READ_FILE`, `READ_DIR`, `EXECUTE`) plus
-//! `REFER`, which governs moving a file between directories. Writes are not
-//! handled here: agent write confinement belongs to the Bubblewrap mount
-//! namespace in [`crate::linux_sandbox`], and handling writes in two places
-//! would leave two answers to one question.
+//! `REFER`, which governs moving a file between directories. For the
+//! activity-scoped profile, writes are not handled here: agent write
+//! confinement belongs to the Bubblewrap mount namespace in
+//! [`crate::linux_sandbox`], and handling writes in two places would leave
+//! two answers to one question.
+//!
+//! A plugin backend has no Bubblewrap wrapper and no agent profile: its
+//! boundary is the explicit read and write roots the operator granted
+//! ([`LandlockBoundary`]). That ruleset additionally takes over every
+//! write-side right, so a write outside the granted roots is refused by the
+//! kernel, and on ABI 4 refuses TCP for a plugin whose manifest declares
+//! `network: none` (design `docs/design/plugins/1_scope.md` §4.3).
 //!
 //! `REFER` is handled because Landlock refuses a rename or link that would
 //! give a file *more* access at its destination. Without it, a child could
@@ -68,6 +76,10 @@ pub use host::HOST_READ_ENV_VARS;
 /// enforced with a known hole.
 pub const MINIMUM_LANDLOCK_ABI: i64 = 2;
 
+/// First Landlock ABI (Linux 6.7) that can refuse TCP bind and connect, which
+/// is what holds a plugin's `network: none` at the kernel.
+pub const NETWORK_LANDLOCK_ABI: i64 = 4;
+
 /// What a compiled grant lets the child do with one path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LandlockGrant {
@@ -81,6 +93,12 @@ pub enum LandlockGrant {
     ListOnly,
     /// Read and execute one file.
     ReadFile,
+    /// Read, execute, and modify anything beneath a directory: create,
+    /// remove, rename, truncate, write. Only a write-confining ruleset
+    /// ([`LandlockBoundary`]) hands out this grant.
+    WriteTree,
+    /// Read, write, and truncate one existing file.
+    WriteFile,
 }
 
 /// One compiled Landlock rule: a path and what the child may do beneath it.
@@ -112,14 +130,157 @@ impl LandlockPathGrant {
         }
     }
 
+    fn write_tree(path: PathBuf) -> Self {
+        Self {
+            path,
+            grant: LandlockGrant::WriteTree,
+        }
+    }
+
+    fn write_file(path: PathBuf) -> Self {
+        Self {
+            path,
+            grant: LandlockGrant::WriteFile,
+        }
+    }
+
     /// Whether this grant alone lets the child open `path` for reading.
     pub fn reads(&self, path: &Path) -> bool {
         match self.grant {
-            LandlockGrant::ReadTree => path.starts_with(&self.path),
-            LandlockGrant::ReadFile => path == self.path,
+            LandlockGrant::ReadTree | LandlockGrant::WriteTree => path.starts_with(&self.path),
+            LandlockGrant::ReadFile | LandlockGrant::WriteFile => path == self.path,
             LandlockGrant::ListOnly => false,
         }
     }
+
+    /// Whether this grant alone lets the child modify `path`.
+    pub fn writes(&self, path: &Path) -> bool {
+        match self.grant {
+            LandlockGrant::WriteTree => path.starts_with(&self.path),
+            LandlockGrant::WriteFile => path == self.path,
+            LandlockGrant::ReadTree | LandlockGrant::ReadFile | LandlockGrant::ListOnly => false,
+        }
+    }
+}
+
+/// Which rights a ruleset takes over beyond the read set every ruleset
+/// handles.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RulesetScope {
+    /// Handle every write-side right, so a path without a write grant is
+    /// read-only to the child.
+    pub(crate) confine_writes: bool,
+    /// Handle TCP bind and connect with no rules, refusing every endpoint.
+    pub(crate) deny_tcp: bool,
+}
+
+/// An explicit confinement: the roots a child may read, the roots it may
+/// also modify, and whether it may reach TCP.
+///
+/// This is the plugin backend's boundary. Unlike the activity path there is
+/// no policy profile to compile: the operator granted concrete paths at
+/// `orbit plugin enable`, and those are what the ruleset carries beside the
+/// host runtime grants every confined child needs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LandlockBoundary {
+    /// Directories (read as trees) or files the child may read and execute.
+    pub read: Vec<PathBuf>,
+    /// Directories or files the child may also modify. A directory that does
+    /// not exist yet is created before spawn: the grant names it, and a rule
+    /// cannot bind to an inode that is not there.
+    pub write: Vec<PathBuf>,
+    /// Refuse TCP bind and connect. Requires Landlock ABI 4; an older kernel
+    /// fails closed rather than spawning a child with network access.
+    pub deny_tcp: bool,
+}
+
+/// Device nodes a confined writer opens for output. `/dev/null` is what a
+/// shell's `>/dev/null` needs; `/dev/tty` is what an interactive program
+/// probes. Neither reaches the filesystem the boundary protects.
+const WRITABLE_DEVICES: &[&str] = &["/dev/null", "/dev/tty", "/dev/zero", "/dev/full"];
+
+/// Compile the grant list for [`spawn_under_linux_landlock_boundary`]: the
+/// host runtime grants for the child's own environment, the program itself,
+/// then the boundary's roots.
+pub fn linux_landlock_boundary_grants(
+    req: &ExecRequest,
+    boundary: &LandlockBoundary,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    let environment = child_environment(req);
+    let mut grants = host::host_read_grants(&environment);
+    grants.extend(host::program_grants(&req.program, &environment));
+    for device in WRITABLE_DEVICES {
+        let path = Path::new(device);
+        if path.exists() {
+            grants.push(LandlockPathGrant::write_file(path.to_path_buf()));
+        }
+    }
+    for root in &boundary.read {
+        let Some(path) = existing_canonical(root) else {
+            continue;
+        };
+        grants.push(if path.is_dir() {
+            LandlockPathGrant::read_tree(path)
+        } else {
+            LandlockPathGrant::read_file(path)
+        });
+    }
+    for root in &boundary.write {
+        if !root.exists() {
+            std::fs::create_dir_all(root).map_err(|error| {
+                OrbitError::Io(format!(
+                    "create granted write directory `{}`: {error}",
+                    root.display()
+                ))
+            })?;
+        }
+        let path = root.canonicalize().map_err(|error| {
+            OrbitError::Io(format!(
+                "resolve granted write path `{}`: {error}",
+                root.display()
+            ))
+        })?;
+        grants.push(if path.is_dir() {
+            LandlockPathGrant::write_tree(path)
+        } else {
+            LandlockPathGrant::write_file(path)
+        });
+    }
+    Ok(dedupe(grants))
+}
+
+/// Spawn `req` confined to an explicit boundary.
+///
+/// Fails closed like [`spawn_under_linux_landlock`]: no Landlock, or a
+/// `deny_tcp` the kernel cannot hold, is a capability error and never an
+/// unconfined child.
+pub fn spawn_under_linux_landlock_boundary(
+    req: &ExecRequest,
+    boundary: &LandlockBoundary,
+) -> Result<Child, OrbitError> {
+    let probe = probe_landlock();
+    if !probe.available {
+        return Err(OrbitError::PolicyDenied(format!(
+            "the plugin sandbox requires Linux Landlock ABI {MINIMUM_LANDLOCK_ABI} or later ({})",
+            probe.detail
+        )));
+    }
+    let grants = linux_landlock_boundary_grants(req, boundary)?;
+    spawn_restricted(
+        req,
+        &grants,
+        RulesetScope {
+            confine_writes: true,
+            deny_tcp: boundary.deny_tcp,
+        },
+    )
+}
+
+/// A read root that is absent grants nothing; the caller's diagnostic names
+/// it when a read fails, and creating it would be a write the grant never
+/// made.
+fn existing_canonical(path: &Path) -> Option<PathBuf> {
+    path.canonicalize().ok()
 }
 
 /// Whether any compiled grant lets the child read `path`.
@@ -266,7 +427,7 @@ pub fn spawn_under_linux_landlock(
 
     let mut grants = boundary.grants;
     grants.extend(host::program_grants(&req.program, &environment));
-    spawn_restricted(req, &dedupe(grants))
+    spawn_restricted(req, &dedupe(grants), RulesetScope::default())
 }
 
 /// Record the part of the profile the kernel is not holding for this child.
@@ -336,14 +497,19 @@ fn unavailable_detail(_abi: i64) -> String {
 }
 
 #[cfg(target_os = "linux")]
-fn spawn_restricted(req: &ExecRequest, grants: &[LandlockPathGrant]) -> Result<Child, OrbitError> {
-    ruleset::spawn_restricted(req, grants)
+fn spawn_restricted(
+    req: &ExecRequest,
+    grants: &[LandlockPathGrant],
+    scope: RulesetScope,
+) -> Result<Child, OrbitError> {
+    ruleset::spawn_restricted(req, grants, scope)
 }
 
 #[cfg(not(target_os = "linux"))]
 fn spawn_restricted(
     _req: &ExecRequest,
     _grants: &[LandlockPathGrant],
+    _scope: RulesetScope,
 ) -> Result<Child, OrbitError> {
     Err(OrbitError::PolicyDenied(landlock_unavailable_message(
         &probe_landlock(),

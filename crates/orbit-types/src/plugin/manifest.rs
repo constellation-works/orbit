@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::namespace::{is_valid_namespace, is_valid_verb};
+use super::template::validate_template;
 use super::version::{SemverRange, Version};
 
 pub const MANIFEST_FILE_NAME: &str = "plugin.yaml";
@@ -131,9 +132,20 @@ pub struct PluginBackend {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PluginBackendType {
+    /// One process per call with the JSON envelope on stdin/stdout (§4.2).
     Exec,
-    /// Parses, but this phase refuses it at load with a clear diagnostic.
+    /// A stdio MCP server Orbit spawns once per runtime and proxies
+    /// `<ns>.<verb>` to as `tools/call` (§4.2).
     Mcp,
+}
+
+impl PluginBackendType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exec => "exec",
+            Self::Mcp => "mcp",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -327,17 +339,25 @@ impl PluginManifest {
                 "must not be empty",
             ));
         }
-        if self.spec.backend.backend_type == PluginBackendType::Mcp {
-            return Err(PluginManifestError::new(
-                "spec.backend.type",
-                "the `mcp` backend is not supported in this Orbit release; use `exec`",
-            ));
-        }
         if self.spec.backend.timeout_ms == Some(0) {
             return Err(PluginManifestError::new(
                 "spec.backend.timeout_ms",
                 "must be greater than zero",
             ));
+        }
+        for (index, path) in self.spec.permissions.fs.read.iter().enumerate() {
+            validate_template(path, &format!("spec.permissions.fs.read[{index}]"))?;
+        }
+        for (index, path) in self.spec.permissions.fs.write.iter().enumerate() {
+            validate_template(path, &format!("spec.permissions.fs.write[{index}]"))?;
+        }
+        for (index, name) in self.spec.permissions.env_pass.iter().enumerate() {
+            if name.trim().is_empty() || name.contains('=') {
+                return Err(PluginManifestError::new(
+                    format!("spec.permissions.env_pass[{index}]"),
+                    format!("'{name}' is not an environment variable name"),
+                ));
+            }
         }
         if self.spec.tools.is_empty() {
             return Err(PluginManifestError::new(

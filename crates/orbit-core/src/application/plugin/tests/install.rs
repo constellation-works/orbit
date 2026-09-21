@@ -1,4 +1,5 @@
 use orbit_types::plugin::PluginStatus;
+use orbit_types::telemetry::AuditEventStatus;
 
 use super::super::{PluginAddOptions, install_plugin, list_plugins, plugin_doctor, show_plugin};
 use super::fixture::{PluginFixture, PluginSpecFixture, write_plugin_at};
@@ -141,6 +142,103 @@ fn an_enabled_plugin_tool_executes_through_audited_dispatch() {
     assert_eq!(plugin.name, "demo");
     assert_eq!(plugin.version, "1.0.0");
     assert_eq!(plugin.manifest_digest.len(), 64);
+}
+
+/// Every way a backend can fail short of a valid response is a tool error
+/// carrying an audit row with the plugin's provenance and grants, and none of
+/// them returns part of the backend's output (design §4.2, §4.4).
+#[cfg(unix)]
+#[test]
+fn a_failing_plugin_call_is_audited_with_plugin_provenance_and_no_partial_output() {
+    for (backend, expected, status) in [
+        (
+            "#!/bin/sh\ncat >/dev/null\necho boom >&2\nexit 7\n",
+            "exited with 7",
+            AuditEventStatus::Failure,
+        ),
+        (
+            "#!/bin/sh\ncat >/dev/null\nprintf 'almost {\"ok\":true}'\n",
+            "invalid JSON output",
+            AuditEventStatus::Failure,
+        ),
+        (
+            "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":true,\"output\":{\"count\":\"three\"}}\\n'\n",
+            "violates its output_schema",
+            AuditEventStatus::Failure,
+        ),
+    ] {
+        let fixture = PluginFixture::new();
+        let source = fixture.write_plugin(
+            PluginSpecFixture::new("demo", "demo")
+                .with_backend(backend)
+                .with_output_schema(
+                    "        type: object\n        required: [count]\n        properties:\n          count: { type: integer }\n",
+                ),
+        );
+        install_plugin(
+            &fixture.runtime,
+            source.to_str().expect("utf8 path"),
+            &PluginAddOptions {
+                enable: true,
+                ..PluginAddOptions::default()
+            },
+        )
+        .expect("install");
+
+        let runtime = fixture.reopen();
+        // The call returning `Err` *is* the no-partial-success property:
+        // there is no value for the caller to act on, whichever way the
+        // backend failed. The diagnostic may quote the offending value.
+        let error = fixture
+            .call(&runtime, "demo.hello")
+            .expect_err("the backend failed")
+            .to_string();
+        assert!(error.contains(expected), "{error}");
+
+        let events = runtime
+            .list_audit_events(None, Some("demo.hello".to_string()), None, None, 10)
+            .expect("audit events");
+        let event = events.first().expect("the failed call was audited");
+        assert_eq!(event.status, status);
+        let plugin = event
+            .plugin
+            .as_ref()
+            .expect("the audit row names the plugin");
+        assert_eq!(plugin.name, "demo");
+        assert_eq!(plugin.manifest_digest.len(), 64);
+    }
+}
+
+/// A refusal before the backend starts is audited as `Denied`, still naming
+/// the plugin.
+#[cfg(unix)]
+#[test]
+fn an_ungranted_plugin_call_is_audited_as_denied_with_plugin_provenance() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo").requesting_fs_write());
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("install");
+
+    let runtime = fixture.reopen();
+    fixture
+        .call(&runtime, "demo.hello")
+        .expect_err("the grant is missing");
+    let events = runtime
+        .list_audit_events(None, Some("demo.hello".to_string()), None, None, 10)
+        .expect("audit events");
+    let event = events.first().expect("the refusal was audited");
+    assert_eq!(event.status, AuditEventStatus::Denied);
+    assert_eq!(
+        event.plugin.as_ref().map(|plugin| plugin.name.as_str()),
+        Some("demo")
+    );
 }
 
 #[test]

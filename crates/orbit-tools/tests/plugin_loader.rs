@@ -9,7 +9,7 @@ use orbit_tools::plugin::{
     PluginLoadError, PluginValidationPolicy, load_plugin_dir, load_sidecar_manifest,
     migrate_sidecars, validate_loaded_plugin,
 };
-use orbit_types::plugin::PluginMcpScope;
+use orbit_types::plugin::{PluginBackendType, PluginMcpScope};
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -151,7 +151,7 @@ fn rejects_namespace_collisions_with_builtin_tools_and_cli_commands() {
 }
 
 #[test]
-fn rejects_other_schema_versions_and_the_mcp_backend() {
+fn rejects_other_schema_versions_and_accepts_both_backend_types() {
     let temp = scratch_example();
     rewrite_manifest(temp.path(), "schemaVersion: 2", "schemaVersion: 1");
     assert_eq!(
@@ -161,9 +161,27 @@ fn rejects_other_schema_versions_and_the_mcp_backend() {
 
     let temp = scratch_example();
     rewrite_manifest(temp.path(), "type: exec ", "type: mcp  ");
+    let plugin = load_plugin_dir(temp.path()).expect("the mcp backend loads");
+    assert_eq!(
+        plugin.manifest.spec.backend.backend_type,
+        PluginBackendType::Mcp
+    );
+}
+
+#[test]
+fn rejects_a_template_variable_outside_the_allowed_set() {
+    let temp = scratch_example();
+    rewrite_manifest(
+        temp.path(),
+        "write: [\"{{workspace}}/.orbit-graph\", \"{{plugin_state}}\"]",
+        "write: [\"{{home}}/.orbit-graph\"]",
+    );
     let error = load_plugin_dir(temp.path()).unwrap_err();
-    assert_eq!(manifest_field(error.clone()), "spec.backend.type");
-    assert!(error.to_string().contains("not supported"), "{error}");
+    assert_eq!(
+        manifest_field(error.clone()),
+        "spec.permissions.fs.write[0]"
+    );
+    assert!(error.to_string().contains("{{home}}"), "{error}");
 }
 
 #[test]

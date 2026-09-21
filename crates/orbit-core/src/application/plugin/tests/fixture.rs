@@ -45,6 +45,21 @@ impl PluginFixture {
         OrbitRuntime::from_roots(&self.global_root, &self.workspace_root).expect("reopen runtime")
     }
 
+    /// Call one plugin tool through the audited dispatch this runtime uses,
+    /// with the activity allowlist pinned to that tool so a managed
+    /// executor's inherited envelope cannot decide the outcome.
+    pub(super) fn call(
+        &self,
+        runtime: &OrbitRuntime,
+        tool: &str,
+    ) -> Result<serde_json::Value, orbit_common::OrbitError> {
+        let _activity_tools =
+            crate::adapter::command::dispatch_test_support::override_activity_tools_for_test([
+                tool,
+            ]);
+        runtime.execute_tool_command(tool, serde_json::json!({}), None, None)
+    }
+
     pub(super) fn write_pin_file(&self, contents: &str) {
         std::fs::write(self.workspace_root.join("plugins.yaml"), contents).expect("write pin file");
     }
@@ -65,6 +80,14 @@ pub(super) struct PluginSpecFixture<'a> {
     pub(super) requires_orbit: Option<&'a str>,
     pub(super) requires_host_api: Option<u32>,
     pub(super) verb: &'a str,
+    /// A `spec.permissions:` block, indented for the manifest.
+    pub(super) permissions: Option<&'a str>,
+    /// `spec.backend.sandbox`, when the fixture declares one.
+    pub(super) sandbox: Option<&'a str>,
+    /// Replacement backend script; the default echoes its envelope back.
+    pub(super) backend: Option<&'a str>,
+    /// The tool's `output_schema` body, indented for the manifest.
+    pub(super) output_schema: Option<&'a str>,
 }
 
 impl<'a> PluginSpecFixture<'a> {
@@ -76,7 +99,32 @@ impl<'a> PluginSpecFixture<'a> {
             requires_orbit: None,
             requires_host_api: None,
             verb: "hello",
+            permissions: None,
+            sandbox: None,
+            backend: None,
+            output_schema: None,
         }
+    }
+
+    pub(super) fn with_backend(mut self, script: &'a str) -> Self {
+        self.backend = Some(script);
+        self
+    }
+
+    pub(super) fn with_output_schema(mut self, schema: &'a str) -> Self {
+        self.output_schema = Some(schema);
+        self
+    }
+
+    /// Request `fs.write` under the plugin's own state directory.
+    pub(super) fn requesting_fs_write(mut self) -> Self {
+        self.permissions = Some("  permissions:\n    fs:\n      write: [\"{{plugin_state}}\"]\n");
+        self
+    }
+
+    pub(super) fn unsandboxed(mut self) -> Self {
+        self.sandbox = Some("none");
+        self
     }
 }
 
@@ -87,7 +135,9 @@ pub(super) fn write_plugin_at(root: &Path, spec: PluginSpecFixture<'_>) -> PathB
     let backend = root.join("bin/backend.sh");
     std::fs::write(
         &backend,
-        "#!/bin/sh\ninput=$(cat)\nprintf '{\"ok\":true,\"output\":{\"plugin\":\"%s\",\"envelope\":%s}}\\n' \"$ORBIT_PLUGIN\" \"$input\"\n",
+        spec.backend.unwrap_or(
+            "#!/bin/sh\ninput=$(cat)\nprintf '{\"ok\":true,\"output\":{\"plugin\":\"%s\",\"envelope\":%s}}\\n' \"$ORBIT_PLUGIN\" \"$input\"\n",
+        ),
     )
     .expect("write backend");
     #[cfg(unix)]
@@ -108,12 +158,21 @@ pub(super) fn write_plugin_at(root: &Path, spec: PluginSpecFixture<'_>) -> PathB
     } else {
         format!("  requires:\n{requires}")
     };
+    let sandbox = spec
+        .sandbox
+        .map(|sandbox| format!("    sandbox: {sandbox}\n"))
+        .unwrap_or_default();
     let manifest = format!(
-        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {name}\n  version: {version}\n  description: Fixture plugin.\nspec:\n{requires_block}  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: {verb}\n      description: Say hello.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n        properties:\n          subject: {{ type: string, description: Who to greet. }}\n",
+        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {name}\n  version: {version}\n  description: Fixture plugin.\nspec:\n{requires_block}  backend:\n    type: exec\n    command: bin/backend.sh\n{sandbox}{permissions}  tools:\n    - name: {verb}\n      description: Say hello.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n        properties:\n          subject: {{ type: string, description: Who to greet. }}\n",
         name = spec.name,
         version = spec.version,
         verb = spec.verb,
+        permissions = spec.permissions.unwrap_or_default(),
     );
+    let manifest = match spec.output_schema {
+        Some(schema) => format!("{manifest}      output_schema:\n{schema}"),
+        None => manifest,
+    };
     std::fs::write(root.join("plugin.yaml"), manifest).expect("write manifest");
     root.to_path_buf()
 }

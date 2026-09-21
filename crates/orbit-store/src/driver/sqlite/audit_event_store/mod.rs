@@ -31,7 +31,8 @@ pub(super) const AUDIT_EVENT_COLUMNS: &str = "id, execution_id, timestamp, comma
      caller_machine_name, process_machine_id, process_machine_name, transport, \
      capabilities_json, origin_session_id, mcp_call_id, lease_id, task_id, \
      job_run_id, activity_id, step_index, trace_id, caller_ip, \
-     self_reported_actor, plugin_name, plugin_version, plugin_manifest_digest";
+     self_reported_actor, plugin_name, plugin_version, plugin_manifest_digest, \
+     plugin_grants";
 
 use crate::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
@@ -116,11 +117,15 @@ fn plugin_provenance_from_row(
     let name: Option<String> = row.get(37)?;
     let version: Option<String> = row.get(38)?;
     let manifest_digest: Option<String> = row.get(39)?;
+    let grants: Option<String> = row.get(40)?;
     Ok(match (name, version, manifest_digest) {
         (Some(name), Some(version), Some(manifest_digest)) => Some(PluginProvenance {
             name,
             version,
             manifest_digest,
+            grants: grants
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default(),
         }),
         _ => None,
     })
@@ -211,8 +216,8 @@ fn insert_audit_event_record_on_connection(
             task_id, job_run_id, activity_id, step_index, trace_id, caller_ip,
             actor_kind, actor_id, actor_vendor, actor_family, actor_model,
             actor_alias_version, self_reported_actor,
-            plugin_name, plugin_version, plugin_manifest_digest
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45)"#,
+            plugin_name, plugin_version, plugin_manifest_digest, plugin_grants
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46)"#,
         rusqlite::params![
             params.execution_id,
             now_string(),
@@ -259,6 +264,9 @@ fn insert_audit_event_record_on_connection(
             invocation.plugin.map(|plugin| plugin.name.as_str()),
             invocation.plugin.map(|plugin| plugin.version.as_str()),
             invocation.plugin.map(|plugin| plugin.manifest_digest.as_str()),
+            invocation
+                .plugin
+                .map(|plugin| serde_json::to_string(&plugin.grants).unwrap_or_default()),
         ],
     )
         .map_err(|e| OrbitError::Store(e.to_string()))?;

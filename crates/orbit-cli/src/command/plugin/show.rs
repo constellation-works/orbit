@@ -44,25 +44,44 @@ impl Execute for PluginShowArgs {
             bold("Pinned by this workspace:"),
             if plugin.pinned { "yes" } else { "no" }
         ));
-        // Requested versus granted side by side: the manifest asks, the
-        // operator grants, and only the second is authority.
-        header.push_str(&format!(
-            "\n{} {}\n{} {}",
-            bold("Requested permissions:"),
-            display_list(&plugin.requested_permissions),
-            bold("Granted:"),
-            display_list(&plugin.granted),
-        ));
+        if plugin.unsandboxed {
+            header.push_str(&format!(
+                "\n{} yes (backend.sandbox: none, granted)",
+                bold("Unsandboxed:")
+            ));
+        }
         if let Some(diagnostic) = &plugin.diagnostic {
             header.push_str(&format!("\n{} {diagnostic}", bold("Diagnostic:")));
         }
 
         let doc = plugin_record(&plugin);
-        if plugin.tools.is_empty() {
-            header.push_str(&format!("\n{} (none)", bold("Tools:")));
-            return Ok(Payload::detail(doc, header).into());
+        let mut blocks = vec![Block::text(header)];
+
+        // Requested versus granted side by side: the manifest asks, the
+        // operator grants, and only the second is authority.
+        if !plugin.permissions.is_empty() {
+            blocks.push(Block::text(bold("Permissions:")));
+            let mut permissions =
+                crate::output::table::build_table(&["GRANT", "REQUESTED", "GRANTED"])
+                    .keep_all_columns();
+            for permission in &plugin.permissions {
+                permissions.add_row(vec![
+                    permission.grant.as_str().to_string(),
+                    permission
+                        .requested
+                        .clone()
+                        .unwrap_or_else(|| "-".to_string()),
+                    if permission.granted { "yes" } else { "no" }.to_string(),
+                ]);
+            }
+            blocks.push(Block::table(permissions));
         }
-        header.push_str(&format!("\n{}", bold("Tools:")));
+
+        if plugin.tools.is_empty() {
+            blocks.push(Block::text(format!("{} (none)", bold("Tools:"))));
+            return Ok(Payload::blocks(doc, blocks).into());
+        }
+        blocks.push(Block::text(bold("Tools:")));
         let mut table = crate::output::table::build_table(&["NAME", "MCP", "KIND", "STATUS"])
             .keep_all_columns();
         for tool in &plugin.tools {
@@ -75,14 +94,7 @@ impl Execute for PluginShowArgs {
                 if tool.active { "active" } else { "inactive" }.to_string(),
             ]);
         }
-        Ok(Payload::blocks(doc, vec![Block::text(header), Block::table(table)]).into())
-    }
-}
-
-fn display_list(values: &[String]) -> String {
-    if values.is_empty() {
-        "(none)".to_string()
-    } else {
-        values.join(", ")
+        blocks.push(Block::table(table));
+        Ok(Payload::blocks(doc, blocks).into())
     }
 }

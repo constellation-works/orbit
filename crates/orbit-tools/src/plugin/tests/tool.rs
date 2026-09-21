@@ -1,70 +1,46 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use orbit_types::plugin::{PluginExecutionKind, PluginProvenance};
+use orbit_types::plugin::{PluginGrant, PluginPermissions};
 use serde_json::json;
 
-use super::super::tool::{PluginTool, PluginToolBinding};
+use super::support::{context, sandbox_unavailable, spec, stub_backend, tool};
 use crate::{Tool, ToolContext, ToolExecutionKind};
 
-fn stub_backend(dir: &std::path::Path, script: &str) -> PathBuf {
-    let path = dir.join("backend.sh");
-    std::fs::write(&path, script).expect("write backend");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-    }
-    path
-}
+const ECHO_BACKEND: &str = "#!/bin/sh\ninput=$(cat)\nprintf '{\"ok\":true,\"output\":{\"arg\":\"%s\",\"plugin\":\"%s\",\"allowed\":\"%s\",\"programs\":\"%s\",\"envelope\":%s}}\\n' \"$1\" \"$ORBIT_PLUGIN\" \"$ORBIT_ALLOWED_TOOLS\" \"$ORBIT_PROC_ALLOWED_PROGRAMS\" \"$input\"\n";
 
-fn tool(command: PathBuf, root: PathBuf) -> PluginTool {
-    PluginTool {
-        name: "demo.hello".into(),
-        description: "demo".into(),
-        parameters: vec![],
-        execution_kind: PluginExecutionKind::ReadOnly,
-        binding: Arc::new(PluginToolBinding {
-            provenance: PluginProvenance {
-                name: "demo".into(),
-                version: "1.0.0".into(),
-                manifest_digest: "abc".into(),
-            },
-            execution_kind: PluginExecutionKind::ReadOnly,
-            diagnostic: None,
-        }),
-        plugin_root: root.clone(),
-        state_dir: root.join("state"),
-        command,
-        args: vec!["--serve".into()],
-        timeout_ms: Some(5_000),
-        requested_orbit_tools: vec!["orbit.task.show".into()],
-    }
-}
-
-fn context(cwd: &std::path::Path) -> ToolContext {
-    ToolContext {
-        cwd: Some(cwd.to_string_lossy().into_owned()),
-        allowed_tools: vec!["orbit.task.show".into(), "demo.hello".into()],
-        ..ToolContext::default()
+fn orbit_tools_permissions() -> PluginPermissions {
+    PluginPermissions {
+        orbit_tools: vec!["orbit.task.show".into(), "orbit.search".into()],
+        ..PluginPermissions::default()
     }
 }
 
 #[cfg(unix)]
 #[test]
 fn exec_backend_receives_the_envelope_and_returns_output() {
+    if sandbox_unavailable() {
+        return;
+    }
     let temp = tempfile::tempdir().expect("tempdir");
-    let command = stub_backend(
-        temp.path(),
-        "#!/bin/sh\ninput=$(cat)\nprintf '{\"ok\":true,\"output\":{\"arg\":\"%s\",\"plugin\":\"%s\",\"allowed\":\"%s\",\"envelope\":%s}}\\n' \"$1\" \"$ORBIT_PLUGIN\" \"$ORBIT_ALLOWED_TOOLS\" \"$input\"\n",
+    let command = stub_backend(temp.path(), ECHO_BACKEND);
+    let tool = tool(
+        spec(
+            command,
+            temp.path(),
+            orbit_tools_permissions(),
+            &[PluginGrant::OrbitTools],
+        ),
+        None,
     );
-    let tool = tool(command, temp.path().to_path_buf());
     assert_eq!(tool.execution_kind(), ToolExecutionKind::ReadOnly);
+    let ctx = ToolContext {
+        allowed_tools: vec!["orbit.task.show".into(), "demo.hello".into()],
+        ..context(temp.path())
+    };
     let output = tool
-        .execute(&context(temp.path()), json!({ "name": "world" }))
+        .execute(&ctx, json!({ "name": "world" }))
         .expect("backend succeeds");
     assert_eq!(output["arg"], "--serve");
     assert_eq!(output["plugin"], "demo");
+    // Requested ∩ granted ∩ the caller's own allowlist.
     assert_eq!(output["allowed"], "orbit.task.show");
     assert_eq!(output["envelope"]["schema_version"], 1);
     assert_eq!(output["envelope"]["tool"], "demo.hello");
@@ -73,13 +49,54 @@ fn exec_backend_receives_the_envelope_and_returns_output() {
 
 #[cfg(unix)]
 #[test]
-fn exec_backend_failures_are_tool_errors() {
+fn the_callback_allowlist_is_exactly_the_granted_orbit_tools() {
+    if sandbox_unavailable() {
+        return;
+    }
     let temp = tempfile::tempdir().expect("tempdir");
+    let command = stub_backend(temp.path(), ECHO_BACKEND);
+
+    // Granted, no caller allowlist: every requested tool.
+    let granted = tool(
+        spec(
+            command.clone(),
+            temp.path(),
+            orbit_tools_permissions(),
+            &[PluginGrant::OrbitTools],
+        ),
+        None,
+    );
+    let output = granted
+        .execute(&context(temp.path()), json!({}))
+        .expect("backend succeeds");
+    assert_eq!(output["allowed"], "orbit.task.show,orbit.search");
+
+    // Requested but not granted: the variable is present and empty, so the
+    // child's `orbit tool run` refuses everything.
+    let ungranted = tool(
+        spec(command, temp.path(), orbit_tools_permissions(), &[]),
+        None,
+    );
+    let output = ungranted
+        .execute(&context(temp.path()), json!({}))
+        .expect("backend succeeds");
+    assert_eq!(output["allowed"], "");
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_backend_failures_are_tool_errors_with_no_partial_output() {
+    if sandbox_unavailable() {
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let permissions = PluginPermissions::default();
+
     let command = stub_backend(
         temp.path(),
         "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":false,\"error\":{\"code\":\"nope\",\"message\":\"declined\"}}\\n'\n",
     );
-    let error = tool(command, temp.path().to_path_buf())
+    let error = tool(spec(command, temp.path(), permissions.clone(), &[]), None)
         .execute(&context(temp.path()), json!({}))
         .unwrap_err()
         .to_string();
@@ -89,7 +106,7 @@ fn exec_backend_failures_are_tool_errors() {
     );
 
     let command = stub_backend(temp.path(), "#!/bin/sh\ncat >/dev/null\necho not-json\n");
-    let error = tool(command, temp.path().to_path_buf())
+    let error = tool(spec(command, temp.path(), permissions.clone(), &[]), None)
         .execute(&context(temp.path()), json!({}))
         .unwrap_err()
         .to_string();
@@ -99,7 +116,7 @@ fn exec_backend_failures_are_tool_errors() {
         temp.path(),
         "#!/bin/sh\ncat >/dev/null\necho boom >&2\nexit 3\n",
     );
-    let error = tool(command, temp.path().to_path_buf())
+    let error = tool(spec(command, temp.path(), permissions.clone(), &[]), None)
         .execute(&context(temp.path()), json!({}))
         .unwrap_err()
         .to_string();
@@ -107,4 +124,35 @@ fn exec_backend_failures_are_tool_errors() {
         error.contains("exited with 3") && error.contains("boom"),
         "{error}"
     );
+
+    // A response that parses but violates `output_schema` never reaches the
+    // caller either.
+    let command = stub_backend(
+        temp.path(),
+        "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":true,\"output\":{\"count\":\"three\"}}\\n'\n",
+    );
+    let schema = json!({
+        "type": "object",
+        "required": ["count"],
+        "properties": { "count": { "type": "integer" } }
+    });
+    let error = tool(
+        spec(command.clone(), temp.path(), permissions.clone(), &[]),
+        Some(schema.clone()),
+    )
+    .execute(&context(temp.path()), json!({}))
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("violates its output_schema") && error.contains("count"),
+        "{error}"
+    );
+    let command = stub_backend(
+        temp.path(),
+        "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":true,\"output\":{\"count\":3}}\\n'\n",
+    );
+    let output = tool(spec(command, temp.path(), permissions, &[]), Some(schema))
+        .execute(&context(temp.path()), json!({}))
+        .expect("valid output passes the schema");
+    assert_eq!(output["count"], 3);
 }

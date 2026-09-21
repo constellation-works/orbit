@@ -14,8 +14,17 @@ pub(super) fn plugin_record(summary: &PluginSummary) -> Value {
         "description": summary.description,
         "first_party": summary.first_party,
         "pinned": summary.pinned,
-        "requested_permissions": summary.requested_permissions,
+        "permissions": summary
+            .permissions
+            .iter()
+            .map(|permission| json!({
+                "grant": permission.grant.as_str(),
+                "requested": permission.requested,
+                "granted": permission.granted,
+            }))
+            .collect::<Vec<_>>(),
         "granted": summary.granted,
+        "unsandboxed": summary.unsandboxed,
         "diagnostic": summary.diagnostic,
         "tools": summary
             .tools
