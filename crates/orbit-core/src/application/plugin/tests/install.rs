@@ -1,3 +1,6 @@
+use std::collections::BTreeSet;
+use std::path::Path;
+
 use orbit_types::plugin::PluginStatus;
 use orbit_types::telemetry::AuditEventStatus;
 
@@ -265,5 +268,124 @@ fn a_pinned_but_uninstalled_plugin_is_reported_without_breaking_the_runtime() {
     assert!(
         doctor[0].message.contains("orbit plugin sync"),
         "{doctor:?}"
+    );
+}
+
+fn relative_inventory(root: &Path) -> BTreeSet<String> {
+    fn walk(root: &Path, dir: &Path, out: &mut BTreeSet<String>) {
+        for entry in std::fs::read_dir(dir).expect("read inventory") {
+            let entry = entry.expect("entry");
+            let file_type = entry.file_type().expect("file type");
+            let relative = entry
+                .path()
+                .strip_prefix(root)
+                .expect("inventory path is under root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.insert(relative);
+            if file_type.is_dir() {
+                walk(root, &entry.path(), out);
+            }
+        }
+    }
+    let mut out = BTreeSet::new();
+    walk(root, root, &mut out);
+    out
+}
+
+#[test]
+fn install_inventory_matches_the_source_tree() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let source_inventory = relative_inventory(&source);
+
+    let summary = install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install");
+    let installed = Path::new(&summary.install_path);
+    assert_eq!(
+        relative_inventory(installed),
+        source_inventory,
+        "install must copy the source tree and nothing else"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn add_refuses_a_source_with_a_symlink_to_a_file_outside_the_tree() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let secret = fixture.sources.join("outside-secret");
+    std::fs::write(&secret, "SECRET-CONTENT-OUTSIDE-PLUGIN-TREE").expect("secret");
+    std::os::unix::fs::symlink(&secret, source.join("leaked")).expect("symlink");
+
+    let error = install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions::default(),
+    )
+    .expect_err("an outside-tree symlink must be refused");
+    let message = error.to_string();
+    assert!(
+        message.contains("leaked"),
+        "refusal must name the offending entry: {message}"
+    );
+    assert!(
+        message.contains("symbolic link"),
+        "refusal must say why: {message}"
+    );
+    assert!(
+        list_plugins(&fixture.runtime).expect("list").is_empty(),
+        "the refusal must not record an install"
+    );
+    let plugins_root = fixture.global_root.join("plugins");
+    if plugins_root.exists() {
+        let listing = relative_inventory(&plugins_root);
+        assert!(
+            listing.iter().all(|path| {
+                let bytes = std::fs::read(plugins_root.join(path)).unwrap_or_default();
+                !bytes
+                    .windows(b"SECRET-CONTENT-OUTSIDE-PLUGIN-TREE".len())
+                    .any(|window| window == b"SECRET-CONTENT-OUTSIDE-PLUGIN-TREE")
+            }),
+            "no installed file may hold the outside-tree target: {listing:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_hand_edited_install_with_a_symlink_cannot_become_active() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let summary = install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("install");
+
+    let secret = fixture.sources.join("outside-secret");
+    std::fs::write(&secret, "SECRET-CONTENT-OUTSIDE-PLUGIN-TREE").expect("secret");
+    std::os::unix::fs::symlink(&secret, Path::new(&summary.install_path).join("env"))
+        .expect("plant symlink in the install tree");
+
+    let runtime = fixture.reopen();
+    let shown = show_plugin(&runtime, "demo").expect("show");
+    assert_eq!(shown.status, PluginStatus::Inactive);
+    let diagnostic = shown.diagnostic.as_deref().unwrap_or_default();
+    assert!(
+        diagnostic.contains("symbolic link") || diagnostic.contains("env"),
+        "load must name the planted link: {diagnostic}"
+    );
+    assert!(
+        runtime.show_tool("demo.hello").is_err(),
+        "a tree with a planted symlink must not register tools"
     );
 }

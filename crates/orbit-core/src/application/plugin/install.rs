@@ -6,7 +6,8 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_tools::plugin::{
     PluginValidationPolicy, first_party_source, load_plugin_dir, manifest_refusal,
-    resolve_plugin_source, validate_loaded_plugin,
+    plugin_symlink_refusal, refuse_plugin_tree_symlinks, resolve_plugin_source,
+    validate_loaded_plugin,
 };
 use orbit_types::plugin::{InstalledPlugin, PluginStatus};
 use orbit_types::record::OrbitEvent;
@@ -191,6 +192,11 @@ fn link_current(global_root: &Path, name: &str, version: &str) -> Result<(), Orb
 }
 
 fn copy_tree(source: &Path, target: &Path) -> Result<(), OrbitError> {
+    refuse_plugin_tree_symlinks(source)?;
+    copy_tree_inner(source, source, target)
+}
+
+fn copy_tree_inner(tree_root: &Path, source: &Path, target: &Path) -> Result<(), OrbitError> {
     std::fs::create_dir_all(target)
         .map_err(|error| OrbitError::Io(format!("create {}: {error}", target.display())))?;
     for entry in std::fs::read_dir(source)
@@ -198,17 +204,24 @@ fn copy_tree(source: &Path, target: &Path) -> Result<(), OrbitError> {
     {
         let entry =
             entry.map_err(|error| OrbitError::Io(format!("read {}: {error}", source.display())))?;
+        let path = entry.path();
         let file_type = entry
             .file_type()
-            .map_err(|error| OrbitError::Io(format!("stat {}: {error}", entry.path().display())))?;
+            .map_err(|error| OrbitError::Io(format!("stat {}: {error}", path.display())))?;
+        if file_type.is_symlink() {
+            let target = std::fs::read_link(&path).ok();
+            return Err(OrbitError::InvalidInput(plugin_symlink_refusal(
+                path.strip_prefix(tree_root).unwrap_or(&path),
+                target.as_deref(),
+            )));
+        }
         let destination = target.join(entry.file_name());
         if file_type.is_dir() {
-            copy_tree(&entry.path(), &destination)?;
+            copy_tree_inner(tree_root, &path, &destination)?;
         } else {
-            std::fs::copy(entry.path(), &destination).map_err(|error| {
-                OrbitError::Io(format!("copy {}: {error}", entry.path().display()))
-            })?;
-            copy_permissions(&entry.path(), &destination)?;
+            std::fs::copy(&path, &destination)
+                .map_err(|error| OrbitError::Io(format!("copy {}: {error}", path.display())))?;
+            copy_permissions(&path, &destination)?;
         }
     }
     Ok(())

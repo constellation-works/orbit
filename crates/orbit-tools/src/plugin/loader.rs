@@ -119,12 +119,65 @@ pub fn manifest_digest(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Walk `root` without following links and refuse any symbolic link, naming
+/// the relative entry.
+///
+/// `std::fs::copy` follows a link and writes the *target's* bytes as a
+/// regular file. The install root is always readable to the plugin backend,
+/// so a link to `/proc/self/environ` (or any other readable path) would leak
+/// into a location the sandbox is supposed to hide.
+pub fn refuse_plugin_tree_symlinks(root: &Path) -> Result<(), PluginLoadError> {
+    refuse_plugin_tree_symlinks_in(root, root)
+}
+
+fn refuse_plugin_tree_symlinks_in(root: &Path, dir: &Path) -> Result<(), PluginLoadError> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|error| PluginLoadError::Io(format!("read {}: {error}", dir.display())))?;
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| PluginLoadError::Io(format!("read {}: {error}", dir.display())))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| PluginLoadError::Io(format!("stat {}: {error}", path.display())))?;
+        if file_type.is_symlink() {
+            let target = std::fs::read_link(&path).ok();
+            return Err(PluginLoadError::Io(plugin_symlink_refusal(
+                path.strip_prefix(root).unwrap_or(&path),
+                target.as_deref(),
+            )));
+        }
+        if file_type.is_dir() {
+            refuse_plugin_tree_symlinks_in(root, &path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Diagnostic that names the offending plugin-tree entry.
+pub fn plugin_symlink_refusal(entry: &Path, target: Option<&Path>) -> String {
+    match target {
+        Some(target) => format!(
+            "refusing '{}': it is a symbolic link to '{}'; plugin trees cannot contain \
+             symbolic links because they would be copied as regular files into the install root",
+            entry.display(),
+            target.display()
+        ),
+        None => format!(
+            "refusing '{}': it is a symbolic link; plugin trees cannot contain symbolic \
+             links because they would be copied as regular files into the install root",
+            entry.display()
+        ),
+    }
+}
+
 /// Read `<root>/plugin.yaml`, validate its structure, resolve schema `$ref`s
 /// inside the root, and locate the backend command.
 pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
     let root = std::fs::canonicalize(root).map_err(|error| {
         PluginLoadError::Io(format!("plugin root '{}': {error}", root.display()))
     })?;
+    refuse_plugin_tree_symlinks(&root)?;
     let manifest_path = root.join(MANIFEST_FILE_NAME);
     let bytes = std::fs::read(&manifest_path).map_err(|error| {
         PluginLoadError::Io(format!("cannot read {}: {error}", manifest_path.display()))

@@ -1291,6 +1291,9 @@ workspace on that machine shares it. Enable state, grants, install paths and
 manifest digests are host-local and never synced. A repository commits only
 the pin file, so a plugin tree is never vendored into a checkout — `orbit
 plugin add` refuses a source inside the current repository for that reason.
+It also refuses a directory, `git+` clone, or archive that contains a
+symbolic link, naming the entry: following the link would copy the target's
+bytes into the install root the plugin backend can read.
 
 ```yaml
 # .orbit/plugins.yaml — committed

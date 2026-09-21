@@ -187,6 +187,10 @@ plugins:
 Install is global only: the plugin lives once per host under `~/.orbit/plugins/` and every
 workspace on that host shares it. The repository commits only the pin file; plugin trees are
 never vendored under `.orbit/`, so a `source:` pointing inside the repository is refused.
+A directory, `git+` clone, or archive that contains a symbolic link is refused before the
+tree is copied into the install root, naming the entry; `load_plugin_dir` applies the same
+walk so a hand-edited install cannot become active. Following a link at copy time would
+materialise the target's bytes inside the install root, which every backend may read.
 Cloning a repo therefore does not make its plugins available; `orbit plugin sync` reads the
 pin file and installs or reports whatever the host is missing.
 
