@@ -25,13 +25,14 @@
 #
 # Crew resolution
 # - The pilot step names the `system` crew directly, so this definition states
-#   which crew does the work instead of deferring it to a config key. `orbit
-#   init` seeds `[crews.system]` for whichever agent CLI it detects, choosing
-#   that family's cheapest tier, so the name resolves on any host rather than
-#   pinning a family the way a `luna` or `sonnet` here would.
-# - Change the model behind these pilots by editing `[crews.system]`. A config
-#   written before that crew existed resolves the name onto whichever crew its
-#   `workflow.system_crew` names, or onto `qa` when that key is unset.
+#   which crew does the work instead of deferring it to a config key. Config
+#   loading resolves that name onto whichever crew `workflow.system_crew`
+#   names — `orbit init` points it at the cheapest seeded crew of the
+#   detected family — so the name resolves on any host rather than pinning a
+#   family the way a `luna` or `sonnet` here would.
+# - Change the model behind these pilots with `workflow.system_crew`, or with
+#   an explicit `[crews.system]` table, which wins. A config written before
+#   that key existed resolves the name onto `qa` when that crew exists.
 # - There is deliberately no per-run `crew` job input: the step-level crew
 #   below already wins over run input during dispatch, so such an input could
 #   never take effect.

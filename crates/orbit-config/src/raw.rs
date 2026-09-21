@@ -3,8 +3,7 @@
 //! continued presence has to be diagnosed rather than ignored.
 //!
 //! Fixed settings are admitted by [`crate::registry`] instead. Nothing here is
-//! public except [`CrewSeed`], which is the narrow DTO the CLI init adapter
-//! fills in from its prompts.
+//! public.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -32,23 +31,6 @@ pub(crate) struct RawRuntimeConfig {
     /// Retired in ORB-12236. Existing workspaces may still carry
     /// `[routines] role = "source"`; loaders warn and ignore it.
     pub(crate) routines: Option<toml::Value>,
-}
-
-/// One provider-model crew assignment supplied by a caller seeding a fresh
-/// `config.toml`.
-///
-/// This is the crate's only public raw DTO. It exists because the CLI init
-/// adapter — which owns host detection and the interactive prompts — has to
-/// hand its collected answers back across the crate boundary; see
-/// [`crate::ConfigSeed`].
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct CrewSeed {
-    /// Provider family (`claude`, `codex`, `gemini`, `grok`, ...).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    /// Model name dispatched for this crew.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]

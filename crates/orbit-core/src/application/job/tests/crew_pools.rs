@@ -200,6 +200,67 @@ fn xhard_pool_overrides_config_and_an_empty_pool_falls_back_to_the_default_chain
     assert_eq!(fallback["crew_selection"]["source"], "default");
 }
 
+/// [ORB-12719] The file `orbit init` seeds scaffolds all four pools empty.
+/// An empty configured pool is "no pool": a crew-less task of any complexity
+/// is routed to `default_crew`, at creation and at admission alike.
+#[test]
+fn the_seeded_empty_pools_route_every_complexity_to_the_default_crew() {
+    let seeded = tempfile::tempdir().expect("seed dir");
+    let seeded_path = seeded.path().join("config.toml");
+    orbit_config::seed_default_config(
+        &seeded_path,
+        Some(&orbit_config::ConfigSeed::from_families([
+            "claude", "codex",
+        ])),
+    )
+    .expect("seed the init shape");
+    let config = std::fs::read_to_string(&seeded_path).expect("seeded config");
+    assert!(config.contains("low_complexity_crews = []"), "{config}");
+    let (_root, runtime, _, _) = test_runtime_with_workspace_config(&config);
+
+    let mut policy = json!({});
+    runtime
+        .install_auto_crew_admission(
+            "workspace_auto_pipeline",
+            &mut policy,
+            None,
+            false,
+            &mut no_draw,
+        )
+        .expect("capture coordinator policy");
+    let parent = persist(&runtime, "workspace_auto_pipeline", policy.clone());
+    for complexity in COMPLEXITIES_UNDER_TEST {
+        let captured = &policy["auto_crew_pools"][complexity.as_str()];
+        assert_eq!(
+            captured["source"],
+            format!("workflow.{complexity}_complexity_crews")
+        );
+        assert_eq!(captured["crews"], json!([]));
+
+        let created = added_task(&runtime, complexity, None);
+        assert_eq!(created.crew.as_deref(), Some("opus"), "{complexity}");
+        assert_eq!(
+            crew_assigned_notes(&runtime, &created.id),
+            vec!["assigned crew `opus` from default".to_string()],
+            "{complexity}"
+        );
+
+        let admitted = admit(&runtime, &parent, &task(&runtime, complexity, None), 0);
+        assert_eq!(admitted["crew"], "opus", "{complexity}");
+        assert_eq!(
+            admitted["crew_selection"]["source"], "default",
+            "{complexity}"
+        );
+    }
+}
+
+const COMPLEXITIES_UNDER_TEST: [TaskComplexity; 4] = [
+    TaskComplexity::Low,
+    TaskComplexity::Medium,
+    TaskComplexity::Hard,
+    TaskComplexity::XHard,
+];
+
 #[test]
 fn explicit_task_crews_empty_pools_and_unassessed_tasks_preserve_fallback() {
     let (_root, runtime, _, _) = test_runtime_with_workspace_config(

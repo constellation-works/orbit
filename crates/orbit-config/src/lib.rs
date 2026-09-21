@@ -75,7 +75,6 @@ pub use operation::{
     PreparationPreference, PromotionPreference, RecoveryPreference, ReviewPolicy,
 };
 pub use persistence::PersistenceConfig;
-pub use raw::CrewSeed;
 pub use registry::{
     CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigSection, ConfigSnapshot, admit_config_key,
     config_key_options, describe as describe_config_key,

@@ -752,6 +752,43 @@ fn an_absent_system_crew_resolves_onto_the_configured_system_crew() {
     );
 }
 
+/// [ORB-12719] The shape `orbit init` seeds: no `[crews.system]` table and
+/// `system_crew` naming a real cheap-tier crew. Shipped job steps that name
+/// `crew: system` must resolve onto exactly that crew, and an explicit
+/// `[crews.system]` in a pre-existing config must still win over the alias.
+#[test]
+fn the_seeded_shape_aliases_system_onto_the_named_system_crew() {
+    let seeded = load_config(
+        "[workflow]\ndefault_crew = \"opus\"\nsystem_crew = \"luna\"\nlow_complexity_crews = []\nmedium_complexity_crews = []\nhard_complexity_crews = []\nxhard_complexity_crews = []\n\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n\n[crews.sonnet]\nprovider = \"claude\"\nmodel = \"sonnet\"\n\n[crews.luna]\nprovider = \"codex\"\nmodel = \"gpt-5.6-luna\"\n",
+    )
+    .expect("the seeded shape must load");
+
+    assert_eq!(seeded.system_crew, "luna");
+    let system = seeded.crews.get("system").expect("system crew resolves");
+    assert_eq!(system.name, "system");
+    assert_eq!(system.assignment.provider, "codex");
+    assert_eq!(system.assignment.model, "gpt-5.6-luna");
+    assert!(!seeded.crews.contains_key("qa"));
+
+    let explicit = load_config(
+        "[workflow]\ndefault_crew = \"opus\"\nsystem_crew = \"luna\"\n\n[crews.opus]\nprovider = \"claude\"\nmodel = \"opus\"\n\n[crews.luna]\nprovider = \"codex\"\nmodel = \"gpt-5.6-luna\"\n\n[crews.system]\nprovider = \"claude\"\nmodel = \"sonnet\"\n",
+    )
+    .expect("a pre-existing config with an explicit system table must load");
+
+    let system = explicit
+        .crews
+        .get("system")
+        .expect("system crew is defined");
+    assert_eq!(
+        (
+            system.assignment.provider.as_str(),
+            system.assignment.model.as_str()
+        ),
+        ("claude", "sonnet"),
+        "an explicit [crews.system] table wins over the system_crew alias"
+    );
+}
+
 /// With no `system_crew` key the configured name is still the default `system`,
 /// so the only thing left to resolve against is the crew that carried the lane.
 #[test]

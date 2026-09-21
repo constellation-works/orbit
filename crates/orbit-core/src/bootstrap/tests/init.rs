@@ -2,7 +2,6 @@
 //! defaults that survive operator edits, and skill-link reconciliation that
 //! reaps Orbit's own stale links without touching anyone else's.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -530,57 +529,59 @@ fn runtime_open_keeps_global_skills_when_root_doubles_as_workspace() {
     );
 }
 
+/// [ORB-12719] A seed carrying operator choices writes them by crew name into
+/// `[workflow]`, next to the empty complexity pools, and defines only the
+/// detected families' built-in crews — no `custom` or `system` table.
 #[test]
-fn global_init_writes_crew_settings_as_custom_crew_to_config_toml() {
+fn global_init_writes_chosen_crews_by_name_to_config_toml() {
     let home = tempdir().expect("home tempdir");
     let _env = global_init_env(home.path());
 
-    let settings = BTreeMap::from([(
-        "custom".to_string(),
-        orbit_config::CrewSeed {
-            provider: Some("codex".into()),
-            model: Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.into()),
-        },
-    )]);
-
+    let seed = ConfigSeed::from_families(["claude", "codex"])
+        .with_default_crew("astra")
+        .with_system_crew("sonnet");
     let result = init_global(
         None,
         InitOptions {
             refresh_defaults: true,
-            config_seed: Some(ConfigSeed::default().with_crews(settings)),
+            config_seed: Some(seed),
             ..Default::default()
         },
     );
 
-    let result = result.expect("init global with crew settings");
+    let result = result.expect("init global with crew choices");
     assert!(result.created_config);
 
     let config_path = home.path().join(".orbit").join("config.toml");
     let contents = fs::read_to_string(&config_path).expect("read config");
     assert!(!contents.contains("[agent.reviewer]"));
-    assert!(contents.contains("default_crew = \"custom\""));
-    assert!(contents.contains("provider = \"codex\""));
-    assert!(contents.contains(&format!(
-        "model = \"{}\"",
-        orbit_common::test_fixtures::TEST_CODEX_MODEL
-    )));
+    assert!(contents.contains("default_crew = \"astra\""));
+    assert!(contents.contains("system_crew = \"sonnet\""));
+    assert!(contents.contains("low_complexity_crews = []"));
+    assert!(contents.contains("xhard_complexity_crews = []"));
+    assert!(!contents.contains("[crews.custom]"));
+    assert!(!contents.contains("[crews.system]"));
 
-    // Round-trips through toml: custom crew is one flat assignment.
     let parsed: toml::Value = toml::from_str(&contents).expect("parse");
-    let custom = parsed
+    let crews = parsed
         .get("crews")
         .and_then(|v| v.as_table())
-        .and_then(|v| v.get("custom"))
-        .and_then(|v| v.as_table())
-        .expect("custom crew table");
-    assert_eq!(custom.len(), 2);
+        .expect("crews table");
     assert_eq!(
-        custom.get("provider").and_then(|v| v.as_str()),
+        crews.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec!["astra", "fable", "luna", "opus", "sol", "sonnet", "terra"]
+    );
+    let astra = crews
+        .get("astra")
+        .and_then(|v| v.as_table())
+        .expect("astra");
+    assert_eq!(
+        astra.get("provider").and_then(|v| v.as_str()),
         Some("codex")
     );
     assert_eq!(
-        custom.get("model").and_then(|v| v.as_str()),
-        Some(orbit_common::test_fixtures::TEST_CODEX_MODEL)
+        astra.get("model").and_then(|v| v.as_str()),
+        Some(orbit_common::model_defaults::CODEX_ASTRA_MODEL)
     );
 }
 
@@ -596,19 +597,11 @@ fn global_init_with_existing_config_does_not_overwrite_crew_settings() {
     let user_content = "# pre-existing user config\n";
     fs::write(&config_path, user_content).expect("preseed");
 
-    let settings = BTreeMap::from([(
-        "custom".to_string(),
-        orbit_config::CrewSeed {
-            provider: Some("claude".into()),
-            model: None,
-        },
-    )]);
-
     let result = init_global(
         None,
         InitOptions {
             refresh_defaults: true,
-            config_seed: Some(ConfigSeed::default().with_crews(settings)),
+            config_seed: Some(ConfigSeed::from_families(["claude"]).with_default_crew("sonnet")),
             ..Default::default()
         },
     );
@@ -644,7 +637,8 @@ fn global_init_without_crew_settings_writes_clean_template() {
         );
     }
     assert!(!contents.contains("[crews."));
-    assert!(!contents.contains("default_crew"));
+    assert!(!contents.contains("default_crew ="));
+    assert!(!contents.contains("system_crew ="));
 }
 
 fn retired_skill_ids() -> [&'static str; 5] {

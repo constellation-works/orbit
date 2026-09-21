@@ -329,9 +329,10 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
         ("opencode", OPENCODE_DEFAULT_MODEL, "opencode"),
         // [ORB-10877] Shipped job steps name `system` directly, so the
         // built-in set used by a config with no `[crews]` table must define it
-        // or those pipelines fail validation. `orbit init` overwrites this with
-        // the detected family's cheapest tier; the claude tier here matches the
-        // family the built-in `default_crew` already assumes.
+        // or those pipelines fail validation. A seeded config omits this table
+        // and names a real cheap-tier crew in `workflow.system_crew` instead;
+        // the claude tier here matches the family the built-in `default_crew`
+        // already assumes.
         (DEFAULT_WORKFLOW_SYSTEM_CREW, CLAUDE_DEFAULT_WEAK, "claude"),
     ] {
         crews.insert(
@@ -437,9 +438,11 @@ fn crews_from_raw(
 }
 
 /// [ORB-10877] Shipped job steps name the `system` crew directly so the
-/// definition says which crew does the work. A config written before that crew
-/// was seeded has no `[crews.system]` table, so resolve the name rather than
-/// failing those hosts at dispatch.
+/// definition says which crew does the work. A seeded config has no
+/// `[crews.system]` table — `orbit init` names a real crew in
+/// `workflow.system_crew` instead — and neither does a config written before
+/// that key existed, so resolve the name rather than failing those hosts at
+/// dispatch.
 ///
 /// `configured` is `workflow.system_crew`, which is how such a config already
 /// says where system work belongs. A defined configured crew wins. For the two

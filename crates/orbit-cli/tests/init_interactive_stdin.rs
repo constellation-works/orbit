@@ -100,9 +100,10 @@ fn names_identity_flags(output: &str) -> bool {
         && output.contains("--non-interactive")
 }
 
-/// Fresh `orbit init` with no identity flags hits the crew prompt first
-/// (`StdinPrompter`), so a silent open pipe covers the agent-detection path
-/// through the same guarded read as host-name / task-prefix.
+/// Fresh `orbit init` with no identity flags and no crew-backed CLI on PATH
+/// asks nothing about crews and hits the host-name prompt first; the crew
+/// prompts (`StdinPrompter`) share the same guarded read, so a silent open
+/// pipe covers both.
 #[test]
 fn silent_open_stdin_pipe_exits_instead_of_hanging() {
     let fixture = IsolatedHome::new();
@@ -166,10 +167,10 @@ fn piped_host_name_and_task_prefix_still_complete_interactive_init() {
 
     {
         let mut stdin = child.stdin.take().expect("piped stdin");
-        // Empty line accepts the recommended default crew; no system-crew
-        // prompt runs when PATH has no provider CLIs. Then identity.
+        // PATH has no provider CLIs, so no crew prompt runs [ORB-12719]; the
+        // first answers are the identity prompts.
         stdin
-            .write_all(b"\npipe-host\nZZ\n")
+            .write_all(b"pipe-host\nZZ\n")
             .expect("write interactive answers");
     }
 
