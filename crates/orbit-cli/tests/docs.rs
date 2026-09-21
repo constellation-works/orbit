@@ -216,6 +216,12 @@ fn cli_task_show_with_context_includes_related_docs_json() {
     );
     let task_id = task["id"].as_str().expect("task id");
 
+    let terminal = workspace.run_json(
+        &["task", "show", task_id, "--fields", "terminal", "--json"],
+        "task show terminal projection",
+    );
+    assert_eq!(terminal, json!({ "terminal": false }));
+
     let shown = workspace.run_json(
         &[
             "task",
@@ -224,10 +230,13 @@ fn cli_task_show_with_context_includes_related_docs_json() {
             "--with-context",
             "--max-docs",
             "1",
+            "--fields",
+            "title",
             "--json",
         ],
         "task show with context",
     );
+    assert_eq!(shown["title"], "Wire docs");
     assert_eq!(
         shown["related_docs"],
         json!([

@@ -47,5 +47,5 @@ pub use plan::{TaskPlan, TaskPlanCheckpoint, TaskPlanSuccessCriterion};
 pub use show_fields::{
     TASK_SHOW_DERIVED_RESPONSE_FIELDS, TASK_SHOW_PROJECTION_FIELDS,
     TASK_SHOW_PROJECTION_FIELDS_CSV, TASK_SHOW_PUBLIC_DTO_FIELDS, is_task_show_projection_field,
-    task_show_record_field_json, unknown_task_show_field_message,
+    refuses_implementer_writes, task_show_record_field_json, unknown_task_show_field_message,
 };

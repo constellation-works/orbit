@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use orbit_common::OrbitError;
 
 use super::super::add::OrbitTaskAddTool;
+use super::super::show::OrbitTaskShowTool;
 use super::super::update::OrbitTaskUpdateTool;
 use crate::{OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, Tool, ToolContext};
 
@@ -78,6 +79,35 @@ fn update_rejects_bogus_key() {
         )
         .expect_err("undeclared update keys must fail");
     assert_unknown_field(error, "bogus_key", None);
+}
+
+#[test]
+fn update_rejects_terminal_as_a_writable_field() {
+    let error = OrbitTaskUpdateTool
+        .execute(
+            &ctx(),
+            json!({
+                "id": "ORB-00001",
+                "terminal": true,
+                "model": "codex",
+            }),
+        )
+        .expect_err("derived terminal state must remain read-only");
+    assert_unknown_field(error, "terminal", None);
+}
+
+#[test]
+fn show_schema_documents_terminal_and_context_composition() {
+    let schema = OrbitTaskShowTool.schema();
+    assert!(schema.description.contains("read-only `terminal`"));
+    assert!(schema.description.contains("`with_context` composes"));
+    let fields = schema
+        .parameters
+        .iter()
+        .find(|parameter| parameter.name == "fields")
+        .expect("fields parameter");
+    assert!(fields.description.contains("terminal"));
+    assert!(fields.description.contains("`related_docs` added"));
 }
 
 #[test]

@@ -8,6 +8,7 @@ use crate::command::task::show::normalize_task_show_fields;
 fn normalize_accepts_ordinary_top_level_fields() {
     let fields = normalize_task_show_fields(&[
         "status".to_string(),
+        "terminal".to_string(),
         " id ".to_string(),
         "title".to_string(),
         "type".to_string(),
@@ -24,6 +25,7 @@ fn normalize_accepts_ordinary_top_level_fields() {
         fields,
         vec![
             "status",
+            "terminal",
             "id",
             "title",
             "type",
@@ -39,12 +41,12 @@ fn normalize_accepts_ordinary_top_level_fields() {
 }
 
 #[test]
-fn normalize_rejects_terminal_with_status_guidance() {
-    let error = normalize_task_show_fields(&["terminal".to_string()])
-        .expect_err("terminal is derived lifecycle state, not a field");
-    let message = error.to_string();
-    assert!(message.contains("use `status`"), "{message}");
-    assert!(message.contains(TASK_SHOW_PROJECTION_FIELDS_CSV));
+fn normalize_accepts_derived_terminal_field() {
+    assert_eq!(
+        normalize_task_show_fields(&["terminal".to_string()])
+            .expect("terminal is a projectable derived field"),
+        ["terminal"]
+    );
 }
 
 #[test]
@@ -70,4 +72,8 @@ fn task_show_help_advertises_the_authoritative_field_vocabulary() {
             "task show help must advertise `{field}`:\n{help}"
         );
     }
+    assert!(
+        help.contains("With --with-context"),
+        "task show help must document projection/context composition:\n{help}"
+    );
 }
