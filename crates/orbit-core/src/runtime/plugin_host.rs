@@ -409,8 +409,5 @@ pub fn host_version() -> Version {
 }
 
 fn current_platform() -> &'static str {
-    match std::env::consts::OS {
-        "macos" => "macos",
-        other => other,
-    }
+    std::env::consts::OS
 }
