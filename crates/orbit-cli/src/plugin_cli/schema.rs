@@ -21,6 +21,7 @@
 
 use clap::{Arg, ArgAction, ArgMatches, builder::PossibleValuesParser};
 use orbit_core::OrbitError;
+use orbit_types::plugin::derive_plugin_cli_flag;
 use serde_json::{Map, Value};
 
 /// Flags this CLI owns on every plugin subcommand. A property with one of
@@ -88,16 +89,24 @@ pub(super) fn derive_args(input_schema: &Value, positional: &[String]) -> Vec<De
         }
         args.push(derive_one(name, property));
     }
-    args.retain(|arg| !RESERVED_FLAGS.contains(&arg.long.as_str()));
+    let mut long_counts = std::collections::BTreeMap::new();
+    for arg in &args {
+        *long_counts.entry(arg.long.clone()).or_insert(0_usize) += 1;
+    }
+    // Loading validates this shape, but an already-registered plugin from an
+    // older host must never make clap reject every built-in command. Omit all
+    // ambiguous or empty shortcuts; `--input` remains the lossless fallback.
+    args.retain(|arg| {
+        !arg.long.is_empty()
+            && long_counts.get(&arg.long) == Some(&1)
+            && !RESERVED_FLAGS.contains(&arg.long.as_str())
+    });
     args
 }
 
 fn derive_one(name: &str, property: &Value) -> DerivedArg {
     let kind = flag_kind(property);
-    let long = match kind {
-        FlagKind::Json => format!("{}-json", kebab_case(name)),
-        _ => kebab_case(name),
-    };
+    let long = derive_plugin_cli_flag(name, property);
     DerivedArg {
         property: name.to_string(),
         long,
@@ -139,18 +148,6 @@ fn flag_kind(property: &Value) -> FlagKind {
         },
         _ => FlagKind::Json,
     }
-}
-
-/// `max_depth` → `max-depth`. Underscores and spaces become hyphens; any
-/// other character a namespace/verb would not carry is dropped.
-pub(super) fn kebab_case(name: &str) -> String {
-    name.chars()
-        .filter_map(|character| match character {
-            '_' | ' ' | '-' => Some('-'),
-            character if character.is_ascii_alphanumeric() => Some(character.to_ascii_lowercase()),
-            _ => None,
-        })
-        .collect()
 }
 
 /// The clap argument for one derived property.

@@ -62,6 +62,37 @@ fn every_top_level_type_maps_to_its_documented_spelling() {
 }
 
 #[test]
+fn malformed_derived_flags_are_omitted_without_breaking_valid_flags() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "task_id": { "type": "string" },
+            "taskId": { "type": "string" },
+            "###": { "type": "object" },
+            "query": { "type": "string" }
+        }
+    });
+    let args = derive_args(&schema, &[]);
+    assert_eq!(
+        args.iter()
+            .map(|arg| arg.property.as_str())
+            .collect::<Vec<_>>(),
+        ["query"],
+        "ambiguous and empty shortcuts degrade to --input while valid flags remain"
+    );
+
+    let mut plugin_verb = Command::new("recommend");
+    for arg in &args {
+        plugin_verb = plugin_verb.arg(clap_arg(arg));
+    }
+    Command::new("orbit")
+        .subcommand(Command::new("task").subcommand(Command::new("list")))
+        .subcommand(Command::new("demo").subcommand(plugin_verb))
+        .try_get_matches_from(["orbit", "task", "list"])
+        .expect("a malformed plugin schema cannot make built-in commands fail clap validation");
+}
+
+#[test]
 fn cli_positional_promotes_named_properties_in_order() {
     let args = derive_args(&schema(), &["query".to_string(), "mode".to_string()]);
     let promoted: Vec<&str> = args
