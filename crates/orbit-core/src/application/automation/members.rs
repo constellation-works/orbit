@@ -242,6 +242,22 @@ impl MemberHost for Host<'_> {
                                 continue;
                             }
 
+                            // An incident's task_ids span whatever cohort
+                            // diagnose grouped, not one task's stored crew,
+                            // so the member's own bundle must agree before
+                            // it can carry a crew identity at all [ORB-12796].
+                            let crew = match incident_crew(self.runtime, &task_ids) {
+                                Ok(Some(crew)) => crew,
+                                Ok(None) => {
+                                    withheld.insert(task.id, "incident_mixed_crew".into());
+                                    continue;
+                                }
+                                Err(error) => {
+                                    withheld.insert(task.id, error.to_string());
+                                    continue;
+                                }
+                            };
+
                             candidates.push(StateMember {
                                 fingerprint: key.clone(),
                                 key,
@@ -250,7 +266,7 @@ impl MemberHost for Host<'_> {
                                 evidence,
                                 first_seen: now,
                                 changed_at: now,
-                                crew: None,
+                                crew,
                             });
                         }
                         Err(error) => {
@@ -485,6 +501,27 @@ impl MemberHost for Host<'_> {
             failed,
         }))
     }
+}
+
+/// The stored `task.crew` shared by every id in an incident's `task_ids`,
+/// or `None` when they disagree. Unlike preparation's single-task read, an
+/// execution-failed member's ids come from incident grouping and can
+/// themselves carry mixed crews [ORB-12796].
+fn incident_crew(
+    runtime: &OrbitRuntime,
+    task_ids: &[String],
+) -> Result<Option<Option<String>>, AutomationError> {
+    let mut agreed: Option<Option<String>> = None;
+    for id in task_ids {
+        let task = runtime.get_task(id)?;
+        let crew = bundle_crew(task.crew.as_deref());
+        match &agreed {
+            None => agreed = Some(crew),
+            Some(existing) if existing == &crew => {}
+            Some(_) => return Ok(None),
+        }
+    }
+    Ok(Some(agreed.flatten()))
 }
 
 /// Step indices of the two deterministic apply steps in

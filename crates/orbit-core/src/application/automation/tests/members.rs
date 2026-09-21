@@ -310,6 +310,86 @@ fn preparation_observe_stamps_stored_task_crew() {
     assert_eq!(crew_of(&unset), Some(None));
 }
 
+/// [ORB-12796] An execution-failed member's `task_ids` come from incident
+/// grouping, not one task's stored crew: the member carries that crew only
+/// once every id in the incident agrees.
+#[test]
+fn execution_failed_observe_stamps_agreed_incident_crew() {
+    let (_root, runtime, repo) = test_runtime();
+    let child_task = create_backlog_task(&runtime, &repo, "child");
+    let child = fail_pipeline_attempt(&runtime, &child_task, None, dead_pid());
+    let parent_task = create_backlog_task(&runtime, &repo, "parent");
+    couple_parent_to_child(&runtime, &parent_task, &child, dead_pid());
+
+    for id in [&child_task, &parent_task] {
+        runtime
+            .update_task(
+                id,
+                crate::application::task::TaskUpdateParams {
+                    crew: Some(Some("opus".into())),
+                    ..Default::default()
+                },
+            )
+            .expect("assign opus");
+    }
+
+    let trigger = trigger();
+    let host = Host::new(&runtime, &trigger);
+    let page = host.observe(None, Utc::now()).unwrap();
+    assert_eq!(page.candidates.len(), 1);
+    let member = &page.candidates[0];
+    assert_eq!(member.task_ids.len(), 2);
+    assert_eq!(member.crew.as_deref(), Some("opus"));
+}
+
+/// [ORB-12796] Two tasks in one incident cohort with different stored crews
+/// must not masquerade as an unset (`None`) crew: the batching filter that
+/// keeps a dispatch bundle crew-homogeneous trusts `StateMember.crew`, so a
+/// disagreeing incident is withheld instead of silently admitted.
+#[test]
+fn execution_failed_incident_with_mixed_crew_is_withheld() {
+    let (_root, runtime, repo) = test_runtime();
+    let child_task = create_backlog_task(&runtime, &repo, "child");
+    let child = fail_pipeline_attempt(&runtime, &child_task, None, dead_pid());
+    let parent_task = create_backlog_task(&runtime, &repo, "parent");
+    couple_parent_to_child(&runtime, &parent_task, &child, dead_pid());
+
+    runtime
+        .update_task(
+            &child_task,
+            crate::application::task::TaskUpdateParams {
+                crew: Some(Some("opus".into())),
+                ..Default::default()
+            },
+        )
+        .expect("assign opus");
+    runtime
+        .update_task(
+            &parent_task,
+            crate::application::task::TaskUpdateParams {
+                crew: Some(Some("sol".into())),
+                ..Default::default()
+            },
+        )
+        .expect("assign sol");
+
+    let trigger = trigger();
+    let host = Host::new(&runtime, &trigger);
+    let page = host.observe(None, Utc::now()).unwrap();
+    assert!(
+        page.candidates.is_empty(),
+        "a mixed-crew incident must not be admitted as a candidate: {:?}",
+        page.candidates
+    );
+    assert!(
+        page.withheld
+            .values()
+            .any(|reason| reason == "incident_mixed_crew"),
+        "mixed-crew incident cohort must be withheld: {:?}",
+        page.withheld
+    );
+}
+
 #[test]
 fn preparation_admission_resolves_branch_head_once_per_call() {
     let (_root, runtime, repo) = test_runtime();
