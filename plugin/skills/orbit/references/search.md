@@ -1,7 +1,7 @@
 # Search
 
 `orbit search` finds project context by topic, literal phrase, or related task
-ID across three corpora: tasks, docs, and frictions. It is corpus retrieval, not
+ID across tasks and frictions. It is record retrieval, not
 structural traversal — for callers, refs, implementors, or symbol selectors,
 read files with the provider-native file-read tool or use `rg`.
 
@@ -11,26 +11,17 @@ The *lifecycle* surface — `orbit semantic install|uninstall|stats|index` —
 manages the embedding companion and is not a way to query anything.
 
 ```bash
-orbit search "slow inference after model swap" --limit 5          # lexical, all corpora
+orbit search "slow inference after model swap" --limit 5          # lexical, all kinds
 orbit search "scheduler" --tag perf --kind all                    # --tag is AND when repeated
-orbit search path src/lib.rs --kind all                           # applicability lookup
 orbit search "agent loop deadlock" --hybrid --kind task --limit 5 # lexical + cosine
 orbit search similar "<task-id>" --limit 5                        # MCP: {"semantic":"<task-id>"}
 ```
 
-**Applicability (`search path`) filters tasks only.** A task matches when one of
-its `context_files` selectors overlaps the query path — `file:`, `dir:`, and
-`symbol:<file>#<name>:<kind>` all collapse to a plain path first, and
-containment is bidirectional, so querying a parent directory matches every
-selector beneath it. Docs are content-indexed and never match by path; frictions
-carry no path scope at all. Both are absent from `search path` results
-regardless of `--kind`.
-
-**`--status` takes `kind:value` tokens** (`--status task:open,doc:active`). Bare
+**`--status` takes `kind:value` tokens** (`--status task:open`). Bare
 tokens are rejected because statuses collide across corpora.
 
-**Index coverage:** lexical covers all three corpora. Vector search covers task
-fields and docs once `orbit semantic index --kind <kind>` has run; frictions are
+**Index coverage:** lexical covers both kinds. Vector search covers task
+fields once `orbit semantic index` has run; frictions are
 never embedded, so they stay lexical even under `--hybrid`. CLI task add/update
 does not spawn a background embedder — re-run `orbit semantic index` after CLI
 mutations. Long-lived hosts (MCP serve, the dashboard) still index mutations
@@ -68,17 +59,12 @@ before judging relevance.
 
 **Tasks** — the full lifecycle record, embedded when indexed.
 
-**Docs** — reviewed Markdown under configured `[docs].roots` (default `docs/`):
-designs, patterns, domain notes, glossaries, runbooks. Orbit walks the roots on
-demand and indexes anything with valid frontmatter. Authoring a doc, registering
-a root, or migrating legacy files: [docs-corpus.md](docs-corpus.md).
-
 **Frictions** — records of what made the work harder. Lexical only.
 → [friction.md](friction.md)
 
-**Historical decision documents**, when present under docs roots, are ordinary
-docs, not a separate corpus or an authority source. Evaluate retrieved claims
-against current requirements and evidence. The retired `--kind adr` is rejected.
+Historical decision documents are not a search kind or an authority source.
+Read them as ordinary repository files and evaluate claims against current
+requirements and evidence. The retired `--kind adr` remains rejected.
 
 ## Scope and hidden history
 

@@ -79,9 +79,7 @@ a conservative title/status fallback.
 | [Operation Mode](./design/operation-mode/1_overview.md) | Operation-mode presets, scoped grants and bounded recovery (shipped in ORB-11332) plus the before-PR review gate, reviewer repairs, lineage budgets and exact-tree delivery coverage (shipped in ORB-11333). | Accepted | codex |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of four hand-copied layers. | Accepted | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional application, runtime, adapter, bootstrap, and composition boundaries inside orbit-core. | Accepted | codex |
-| [Orbit Docs](./design/orbit-docs/1_overview.md) | Orbit Docs — the human-authored workspace corpus and how operators and agents retrieve from it. | Draft | claude |
-| [Orbit Docs Plugin](./design/orbit-docs-plugin/1_scope.md) | Scope: extract docs + search into a plugin-style feature crate | Draft | — |
-| [Semantic Search](./design/orbit-search/1_overview.md) | Semantic search is a local, offline-first retrieval layer over Orbit's task artifacts and explicitly indexed docs. | Draft | claude |
+| [Semantic Search](./design/orbit-search/1_overview.md) | Semantic search is a local, offline-first retrieval layer over Orbit tasks. | Draft | claude |
 | [Plugins](./design/plugins/1_scope.md) | Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest | Draft | — |
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | Policy & Sandboxing is Orbit's safety surface for filesystem access and process execution. | Draft | claude |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Project Learnings — Decisions | Superseded | claude |

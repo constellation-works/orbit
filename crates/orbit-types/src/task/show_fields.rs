@@ -109,16 +109,10 @@ pub const TASK_SHOW_PUBLIC_DTO_FIELDS: &[&str] = &[
 /// conditional, but the unprojected readout emits them, and a key a reader can
 /// see is a key it must be able to ask for: rejecting `resolved_crew` while
 /// printing it was the defect in [ORB-12113].
-pub const TASK_SHOW_DERIVED_RESPONSE_FIELDS: &[(&str, &str)] = &[
-    (
-        "workspace",
-        "lookup-owner metadata attached by the CLI, not task data",
-    ),
-    (
-        "related_docs",
-        "derived only when with_context is requested",
-    ),
-];
+pub const TASK_SHOW_DERIVED_RESPONSE_FIELDS: &[(&str, &str)] = &[(
+    "workspace",
+    "lookup-owner metadata attached by the CLI, not task data",
+)];
 
 /// Comma-separated form of [`TASK_SHOW_PROJECTION_FIELDS`].
 pub const TASK_SHOW_PROJECTION_FIELDS_CSV: &str = crate::task_show_projection_fields_csv!();

@@ -3,32 +3,10 @@ use std::str::FromStr;
 use super::*;
 
 #[test]
-fn global_search_all_round_robins_across_two_corpora() {
-    let runtime = OrbitRuntime::in_memory().expect("runtime");
-    let query = "threecorpora";
-    seed_search_fixture(&runtime, query, 12, 12);
-
-    let response = runtime
-        .global_search(GlobalSearchParams {
-            query: Some(query.to_string()),
-            kind: GlobalSearchKind::All,
-            limit: 6,
-            ..Default::default()
-        })
-        .expect("search all");
-
-    assert_eq!(response.results.len(), 6);
-    for kind in ["task", "doc"] {
-        assert_eq!(count_kind(&response.results, kind), 3, "{kind} count");
-    }
-    assert_eq!(count_kind(&response.results, "adr"), 0);
-}
-
-#[test]
 fn global_search_single_kind_limit_keeps_task_behavior() {
     let runtime = OrbitRuntime::in_memory().expect("runtime");
     let query = "taskonly";
-    seed_search_fixture(&runtime, query, 20, 3);
+    seed_search_fixture(&runtime, query, 20);
 
     let response = runtime
         .global_search(GlobalSearchParams {
@@ -42,7 +20,6 @@ fn global_search_single_kind_limit_keeps_task_behavior() {
     assert_eq!(response.results.len(), 8);
     assert!(response.results.iter().all(|hit| hit.kind == "task"));
 }
-
 #[test]
 fn lexical_task_search_uses_fts_when_task_corpus_is_indexed() {
     let runtime = OrbitRuntime::in_memory().expect("runtime");
@@ -191,44 +168,6 @@ fn indexed_lexical_task_search_still_matches_comments_refs_and_artifact_paths() 
 }
 
 #[test]
-fn doc_branch_searches_inlined_adr_body_content() {
-    let runtime = OrbitRuntime::in_memory().expect("runtime");
-    add_doc_with_body(
-        &runtime,
-        "docs/design/example/4_decisions.md",
-        "Example decisions",
-        "## ADR-0999 — Inline test\n\n### Decision\n\nUse the heliotrope-dispatch invariant.",
-    );
-
-    let response = runtime
-        .global_search(GlobalSearchParams {
-            query: Some("heliotrope-dispatch".to_string()),
-            kind: GlobalSearchKind::Doc,
-            limit: 5,
-            ..Default::default()
-        })
-        .expect("search docs");
-
-    assert_eq!(response.results.len(), 1);
-    let hit = &response.results[0];
-    assert_eq!(hit.kind, "doc");
-    assert_eq!(
-        hit.path.as_deref(),
-        Some("docs/design/example/4_decisions.md")
-    );
-    assert!(
-        hit.matched_by
-            .as_deref()
-            .is_some_and(|fields| fields.contains(&"body".to_string()))
-    );
-    assert!(
-        hit.snippet
-            .as_deref()
-            .is_some_and(|snippet| snippet.contains("heliotrope-dispatch"))
-    );
-}
-
-#[test]
 fn lexical_task_search_notes_empty_multi_word_substring_miss() {
     let runtime = OrbitRuntime::in_memory().expect("runtime");
     let id = add_task(
@@ -314,14 +253,14 @@ fn friction_branch_searches_open_records_and_rejects_learning_kind() {
 #[test]
 fn adr_search_kind_is_rejected() {
     let error = GlobalSearchKind::from_str("adr").expect_err("ADR corpus was retired");
-    assert!(error.contains("expected one of: task, doc, friction, all"));
+    assert!(error.contains("expected one of: task, friction, all"));
 }
 
 #[test]
 fn learning_search_kind_is_rejected() {
     let error = GlobalSearchKind::from_str("learning").expect_err("learning corpus was retired");
     assert!(error.contains("`learning`"));
-    assert!(error.contains("expected one of: task, doc, friction, all"));
+    assert!(error.contains("expected one of: task, friction, all"));
 }
 
 #[test]
@@ -338,31 +277,9 @@ fn global_search_status_filter_requires_kind_prefix() {
     assert!(error.to_string().contains("kind:value"));
 }
 
-#[test]
-fn global_search_path_filter_notes_doc_branch_skip() {
-    let runtime = OrbitRuntime::in_memory().expect("runtime");
-    add_doc(&runtime, "docs/path-note.md", "needle path note");
-
-    let response = runtime
-        .global_search(GlobalSearchParams {
-            kind: GlobalSearchKind::All,
-            path: Some("crates/orbit-cli/".to_string()),
-            ..Default::default()
-        })
-        .expect("path search");
-
-    assert!(
-        response
-            .notes
-            .iter()
-            .any(|note| note.contains("doc branch skipped"))
-    );
-}
-
 /// [ORB-12259] `--path` search carries the skipped kinds as structured data,
 /// not just prose in `notes`, so an agent reading an empty `results` array
-/// does not mistake "docs and frictions were never asked" for "nothing
-/// relevant exists".
+/// does not mistake "frictions were never asked" for "nothing relevant exists".
 #[test]
 fn global_search_path_filter_lists_skipped_kinds_in_response() {
     let runtime = OrbitRuntime::in_memory().expect("runtime");
@@ -375,13 +292,10 @@ fn global_search_path_filter_lists_skipped_kinds_in_response() {
         })
         .expect("path search");
 
-    assert_eq!(response.skipped_kinds, vec!["doc", "friction"]);
+    assert_eq!(response.skipped_kinds, vec!["friction"]);
 
     let json = serde_json::to_value(&response).expect("serialize response");
-    assert_eq!(
-        json["skipped_kinds"],
-        serde_json::json!(["doc", "friction"])
-    );
+    assert_eq!(json["skipped_kinds"], serde_json::json!(["friction"]));
 }
 
 /// A query that does not set `--path` never skips a kind, and the field must

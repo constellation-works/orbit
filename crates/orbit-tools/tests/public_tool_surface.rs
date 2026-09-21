@@ -28,11 +28,6 @@ const INACTIVE_TOOL_NAMES: &[&str] = &[
     "orbit.auto_task.show",
     "orbit.auto_task.toggle",
     "orbit.auto_task.update",
-    "orbit.docs.index",
-    "orbit.docs.migrate",
-    "orbit.docs.add",
-    "orbit.docs.list",
-    "orbit.docs.show",
     "orbit.task.locks",
     "orbit.task.locks.release",
     "orbit.task.locks.reserve",
@@ -109,10 +104,9 @@ fn unused_tools_are_not_registered_in_public_surface() {
         );
     }
 
-    let removed_docs_reindex = ["orbit.docs", "reindex"].join(".");
     assert!(
-        !names.contains(removed_docs_reindex.as_str()),
-        "removed docs reindex tool still registered"
+        names.iter().all(|name| !name.starts_with("orbit.docs.")),
+        "retired orbit.docs tool family still registered"
     );
 }
 

@@ -8,8 +8,6 @@
 //! - [`upsert`] — `upsert_embeddings`, the BLAKE3-deduped per-field write path,
 //!   plus its private SQL helpers (`delete_field_rows`, content-hash check).
 //! - [`tasks`] — `index_task` / `reindex_tasks` task-corpus entry points.
-//! - [`docs`] — `index_doc` / `reindex_docs` docs-corpus entry points, plus
-//!   `indexed_doc_fields`, the read-back of the stored doc frontmatter.
 //! - [`queries`] — `has_sources`, `delete_source`, and `stats` read/cascade
 //!   operations.
 //!
@@ -18,13 +16,10 @@
 //! from `orbit_common::storage::sqlite`) and the small `pub(super)`
 //! constants shared across the submodules above.
 
-mod docs;
 mod queries;
 pub(crate) mod schema;
 mod tasks;
 mod upsert;
-
-pub use docs::IndexedDocFields;
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -33,8 +28,6 @@ use orbit_common::OrbitError;
 use rusqlite::Connection;
 
 pub const SOURCE_KIND_TASK: &str = "task";
-// ADR-0180: docs share the embeddings table through source_kind, not a separate schema.
-pub const SOURCE_KIND_DOC: &str = "doc";
 
 #[derive(Clone)]
 pub struct VectorStore {

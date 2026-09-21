@@ -147,16 +147,6 @@ available. Unsupported platforms have only in-process filesystem guards. A
 read-only profile is not a claim of network isolation or private host reads.
 See [first-run.md](first-run.md) for the Linux prerequisite.
 
-## Docs roots
-
-```toml
-[docs]
-roots = ["docs/"]
-```
-
-Add more with `orbit docs add <path>` rather than hand-editing.
-→ [docs-corpus.md](../../orbit/references/docs-corpus.md)
-
 ## Crew selection and actual execution
 
 For ship dispatch, an explicit run crew overrides `task.crew`, which overrides

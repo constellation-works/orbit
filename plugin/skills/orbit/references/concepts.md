@@ -8,7 +8,7 @@ after that, use it to disambiguate a term rather than reading it end to end.
 ```text
 host (one machine, one identity, one task-id prefix)
 └── workspace (logical identity with a registered checkout and owner)
-    ├── tasks, docs, frictions          ← what the work is
+    ├── tasks, frictions                ← what the work is
     ├── routines, auto-tasks            ← what fires on a schedule
     └── runs                            ← what actually executed
 ```
@@ -57,11 +57,6 @@ dedicated Git repository. It has source/workspace/authority identity, a
 generation, a commit, and attachment completeness labels. Inspection is not a
 live task read; restore is an explicit same-authority operation.
 See [publication.md](../../orbit-setup/references/publication.md).
-
-**Doc** — reviewed markdown under the configured docs roots, indexed for
-retrieval by concept rather than filename. Historical decision documents can be indexed as ordinary docs; there is no
-separate decision store. Retrieved history does not override current
-requirements, code, or explicit instructions.
 
 **Friction** — a record of something that made the work harder than it should
 have been. A ledger of experience, not a queue of work; see

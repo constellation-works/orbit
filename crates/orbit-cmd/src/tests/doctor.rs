@@ -210,9 +210,9 @@ fn healthy_fresh_workspace_has_no_failures() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let results = runtime.doctor_workspace().expect("doctor");
 
-    // Fourteen infrastructure checks plus one definition-artifact row per kind
+    // Thirteen infrastructure checks plus one definition-artifact row per kind
     // (skills, jobs, activities, auto-tasks, routines).
-    assert_eq!(results.len(), 19, "one row per check: {results:?}");
+    assert_eq!(results.len(), 18, "one row per check: {results:?}");
     assert!(
         results
             .iter()
@@ -230,11 +230,6 @@ fn healthy_fresh_workspace_has_no_failures() {
     // Absent subsystems degrade to skip, not error.
     assert_eq!(
         status_of(&results, "semantic-index").status,
-        WorkspaceDoctorStatus::Skipped
-    );
-    // No docs roots configured yet → nothing to embed.
-    assert_eq!(
-        status_of(&results, "docs-index").status,
         WorkspaceDoctorStatus::Skipped
     );
     assert!(
@@ -323,36 +318,6 @@ printf '%s\n' '{"id":0,"result":{"model_id":"fake","dim":0,"max_input_tokens":0,
         Some(
             "Run `orbit semantic install` to install the matching companion, then rerun `orbit doctor`."
         )
-    );
-}
-
-/// [ORB-12259] A docs corpus that has never been embedded reads `ok` from
-/// `semantic-index` (it only counts rows, not sources); `docs-index` is the
-/// check that names the gap and its exact fix.
-#[test]
-fn unembedded_docs_corpus_warns_and_names_docs_index_repair() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let runtime = workspace_runtime(&temp);
-    let doc_path = temp.path().join("repo/docs/example.md");
-    fs::create_dir_all(doc_path.parent().expect("docs dir")).expect("create docs dir");
-    fs::write(
-        &doc_path,
-        "---\ntype: context\nsummary: example doc\n---\n\nbody\n",
-    )
-    .expect("write doc");
-
-    let results = runtime.doctor_workspace().expect("doctor");
-    let row = status_of(&results, "docs-index");
-    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
-    assert!(
-        row.message.contains("docs: 0 of 1 sources embedded"),
-        "{}",
-        row.message
-    );
-    assert!(row.message.contains("orbit docs index"), "{}", row.message);
-    assert_eq!(
-        row.remediation.as_deref(),
-        Some("Run `orbit docs index`, then rerun `orbit doctor`.")
     );
 }
 

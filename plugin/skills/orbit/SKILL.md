@@ -1,6 +1,6 @@
 ---
 name: orbit
-description: Creates, executes and reviews Orbit tasks; searches task history, the docs corpus and friction records; records evidence. Use for an assigned task or task ID, task authoring, `orbit.task`/`orbit.search` MCP tools, `orbit tool run`, task records under `.orbit/`, docs registration or friction. Use orbit-orchestrate for `orbit run` dispatch, drains and failed `jrun-*` runs, and orbit-setup for installing or configuring a machine.
+description: Creates, executes and reviews Orbit tasks; searches task history and friction records; records evidence. Use for an assigned task or task ID, task authoring, `orbit.task`/`orbit.search` MCP tools, `orbit tool run`, task records under `.orbit/`, or friction. Use orbit-orchestrate for `orbit run` dispatch, drains and failed `jrun-*` runs, and orbit-setup for installing or configuring a machine.
 ---
 
 # Orbit
@@ -39,8 +39,7 @@ checklist. An injected task snapshot is your starting context.
 | Set dependencies, relations or validation tools | [Task fields](references/task-fields.md) |
 | Create or revise a task | [Task authoring](references/task-authoring.md) |
 | Review a deliverable | [Task review](references/task-review.md) |
-| Find prior tasks, docs or frictions | [Search](references/search.md) |
-| Register or retrieve project documentation | [Docs corpus](references/docs-corpus.md) |
+| Find prior tasks or frictions | [Search](references/search.md) |
 | Record a concrete recurring obstacle | [Friction](references/friction.md) |
 | Resolve tool transport, permissions or workspace routing | [Tool surface](references/tool-surface.md) |
 | Understand Orbit nouns | [Concepts](references/concepts.md) |

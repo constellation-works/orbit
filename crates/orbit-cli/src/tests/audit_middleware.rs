@@ -257,19 +257,17 @@ fn tool_run_audit_meta_uses_agent_role_without_identity() {
 
 #[test]
 fn search_audit_meta_preserves_kind_discriminator() {
-    // ORB-00202: `orbit search --kind X` collapsed three per-domain
-    // `<command> search` rows into one. ORB-00205 then prefixed the
-    // subcommand with the search mode (`query` / `similar` / `path`),
-    // so a query-mode search of kind `task` emits `query:task`. The
+    // The subcommand includes the search mode (`query` / `similar`), so a
+    // query-mode search of kind `task` emits `query:task`. The
     // `--kind` value is still preserved on the right side of the colon
-    // so downstream audit queries can distinguish task and doc searches.
+    // so downstream audit queries can distinguish task and friction searches.
     let task = meta_for(&["orbit", "search", "foo", "--kind", "task"]);
     assert_eq!(task.command, "search");
     assert_eq!(task.subcommand.as_deref(), Some("query:task"));
     assert_eq!(task.target_type.as_deref(), Some("search"));
 
-    let doc = meta_for(&["orbit", "search", "foo", "--kind", "doc"]);
-    assert_eq!(doc.subcommand.as_deref(), Some("query:doc"));
+    let friction = meta_for(&["orbit", "search", "foo", "--kind", "friction"]);
+    assert_eq!(friction.subcommand.as_deref(), Some("query:friction"));
 
     // Default `--kind all` is captured explicitly rather than left blank.
     let all = meta_for(&["orbit", "search", "foo"]);

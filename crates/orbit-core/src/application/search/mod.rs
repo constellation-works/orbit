@@ -1,14 +1,12 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 
 use orbit_common::OrbitError;
 use orbit_search::{
-    DocSemanticHit, DocSemanticSearchParams, Embedder, SOURCE_KIND_TASK, SemanticRelatedParams,
-    SemanticSearchParams, bm25_top_k,
+    Embedder, SOURCE_KIND_TASK, SemanticRelatedParams, SemanticSearchParams, bm25_top_k,
 };
 use orbit_store::friction_store::FrictionListFilter;
 
 use crate::OrbitRuntime;
-use crate::application::docs::SearchResult;
 
 mod convert;
 mod federated;
@@ -27,45 +25,21 @@ pub use types::{
     HitWorkspace, WorkspaceSearchReport,
 };
 
-use self::convert::{
-    doc_result_to_global, fill_task_record_fields, lexical_task_hit, semantic_hit_to_global,
-};
-use self::filters::{
-    SearchStatusFilters, doc_has_all_tags, resolve_task_statuses, task_has_all_tags,
-};
-use self::hybrid::{
-    DocHybridCandidate, DocHybridCorpus, DocHybridRecord, blend_doc_hybrid_candidates,
-    compare_global_hits_by_score, doc_search_candidate_limit, fallback_reason, indexed_doc_result,
-    lexical_doc_hits, push_skip_note, warn_doc_hybrid_fallback,
-};
+use self::convert::{fill_task_record_fields, lexical_task_hit, semantic_hit_to_global};
+use self::filters::{SearchStatusFilters, resolve_task_statuses, task_has_all_tags};
+use self::hybrid::{fallback_reason, push_skip_note};
 
 const DEFAULT_LIMIT: usize = 10;
-const DOC_SEARCH_OVERFETCH: usize = 4;
-const DOC_HYBRID_FALLBACK_NOTE: &str = "falling back to lexical doc search";
 const TASK_HYBRID_FALLBACK_NOTE: &str = "falling back to lexical task search";
-const DOC_SEARCH_MIN_CANDIDATES: usize = DEFAULT_LIMIT * DOC_SEARCH_OVERFETCH;
 
 #[cfg(test)]
 thread_local! {
-    static DOC_SEMANTIC_SEARCH_OVERRIDE:
-        std::cell::RefCell<Option<Result<Vec<DocSemanticHit>, OrbitError>>> =
-        const { std::cell::RefCell::new(None) };
     static TASK_SEMANTIC_SEARCH_OVERRIDE:
         std::cell::RefCell<Option<Result<Vec<orbit_search::SemanticHit>, OrbitError>>> =
         const { std::cell::RefCell::new(None) };
 }
 
-#[derive(Clone, Copy)]
-struct HybridSearchScope<'a> {
-    tag_filter: &'a [String],
-    limit: usize,
-    /// See [`BranchContext::embedder`].
-    embedder: Option<&'a dyn Embedder>,
-}
-
-/// The read-only inputs shared by every kind branch, grouped so `task_branch`
-/// and `doc_branch` stay under the arg-count lint even with the `notes` /
-/// `vector_ran` out-params each also carries [ORB-12259].
+/// The read-only inputs shared by each search-kind branch.
 #[derive(Clone, Copy)]
 struct BranchContext<'a> {
     params: &'a GlobalSearchParams,
@@ -204,19 +178,6 @@ impl OrbitRuntime {
 
         if params.kind.includes_tasks() {
             branches.push(self.task_branch(branch_context, &mut notes, &mut vector_ran)?);
-        }
-
-        if params.kind.includes_docs() {
-            if has_path {
-                push_skip_note(
-                    &mut notes,
-                    "doc",
-                    "--path is set; docs are not path-filtered yet",
-                );
-                skipped_kinds.push("doc".to_string());
-            } else {
-                branches.push(self.doc_branch(branch_context, &mut notes, &mut vector_ran)?);
-            }
         }
 
         if params.kind.includes_frictions() {
@@ -479,256 +440,6 @@ impl OrbitRuntime {
             }
         };
         Ok(result.results)
-    }
-
-    fn doc_branch(
-        &self,
-        ctx: BranchContext<'_>,
-        notes: &mut Vec<String>,
-        vector_ran: &mut bool,
-    ) -> Result<Vec<GlobalSearchHit>, OrbitError> {
-        let BranchContext {
-            params,
-            status_filters,
-            query,
-            tag_filter,
-            limit,
-            embedder,
-        } = ctx;
-        let _doc_status_active = status_filters.doc_active.unwrap_or(true);
-        let Some(query) = query else {
-            if tag_filter.is_empty() {
-                // Without a query or tag filter, no doc results — docs are
-                // content-indexed, not applicability-indexed.
-                return Ok(Vec::new());
-            }
-            let mut out = Vec::new();
-            for record in self.list_docs(None, None)? {
-                if !doc_has_all_tags(&record.frontmatter.tags, tag_filter) {
-                    continue;
-                }
-                out.push(GlobalSearchHit {
-                    kind: "doc".to_string(),
-                    source: "lexical".to_string(),
-                    id: None,
-                    path: Some(record.path),
-                    title: None,
-                    summary: Some(record.frontmatter.summary),
-                    status: Some(record.frontmatter.doc_type.as_str().to_string()),
-                    best_field: None,
-                    snippet: None,
-                    score: None,
-                    score_breakdown: None,
-                    matched_by: Some(tag_filter.iter().map(|tag| format!("tag:{tag}")).collect()),
-                    workspace: None,
-                });
-            }
-            out.truncate(limit);
-            return Ok(out);
-        };
-
-        if params.hybrid {
-            // ADR-0180: doc vectors are opt-in and fall back to lexical rather than failing user search.
-            return self.hybrid_doc_hits(
-                query,
-                HybridSearchScope {
-                    tag_filter,
-                    limit,
-                    embedder,
-                },
-                notes,
-                vector_ran,
-            );
-        }
-
-        let docs_limit = doc_search_candidate_limit(limit);
-        let mut out = Vec::new();
-        for result in self.search_docs(query, Some(docs_limit), true)? {
-            let SearchResult::Doc(result) = result;
-            if !doc_has_all_tags(&result.record.tags, tag_filter) {
-                continue;
-            }
-            let score = result.score as f32;
-            out.push(doc_result_to_global(result, "lexical", Some(score)));
-        }
-        out.truncate(limit);
-        Ok(out)
-    }
-
-    /// The semantic index when it holds doc rows.
-    ///
-    /// `None` sends hybrid doc search to the docs roots instead: the index is
-    /// unavailable, on a layout this binary cannot read, or has no doc in it.
-    /// The semantic half reports the first two by name, so this only decides
-    /// where the lexical half and record completion read from [DANI-10369].
-    fn indexed_doc_store(&self) -> Option<&orbit_search::VectorStore> {
-        let store = self.stores().semantic_index().store().ok()?;
-        match store.has_sources(orbit_search::SOURCE_KIND_DOC) {
-            Ok(true) => Some(store),
-            Ok(false) => None,
-            Err(error) => {
-                orbit_common::tracing::debug!(
-                    target: "orbit.search.docs",
-                    %error,
-                    "doc index unreadable; hybrid doc search walks the docs roots"
-                );
-                None
-            }
-        }
-    }
-
-    /// Hybrid doc ranking over one read of the docs corpus.
-    ///
-    /// With doc rows in the index, both halves and the record completion come
-    /// from the index: BM25 over `corpus_fts` for the lexical hits, cosine
-    /// for the semantic ones, the stored `title`/`tags` for the rest. Without
-    /// them, a single walk of the docs roots scores the lexical half and is
-    /// the record source for whatever the semantic half returns [DANI-10369].
-    fn hybrid_doc_hits(
-        &self,
-        query: &str,
-        scope: HybridSearchScope<'_>,
-        notes: &mut Vec<String>,
-        vector_ran: &mut bool,
-    ) -> Result<Vec<GlobalSearchHit>, OrbitError> {
-        let docs_limit = doc_search_candidate_limit(scope.limit);
-        let (lexical_results, corpus) = match self.indexed_doc_store() {
-            Some(store) => {
-                let hits = orbit_search::doc_lexical_search(store, query, docs_limit)?;
-                let corpus = DocHybridCorpus::Index(store);
-                let paths = hits
-                    .iter()
-                    .map(|hit| hit.source_id.as_str())
-                    .collect::<Vec<_>>();
-                let records = corpus.records(&paths)?;
-                let total = hits.len();
-                let results = hits
-                    .into_iter()
-                    .filter_map(|hit| {
-                        records
-                            .get(&hit.source_id)
-                            .map(|record| indexed_doc_result(hit, record, total))
-                    })
-                    .collect::<Vec<_>>();
-                (results, corpus)
-            }
-            None => {
-                let walked = self.search_docs_walk(query, docs_limit)?;
-                (walked.results, DocHybridCorpus::Walk(walked.records))
-            }
-        };
-        let lexical_docs = lexical_results
-            .into_iter()
-            .filter(|result| doc_has_all_tags(&result.record.tags, scope.tag_filter))
-            .collect::<Vec<_>>();
-
-        let semantic = match self.doc_semantic_hits(query, docs_limit, scope.embedder) {
-            Ok(result) if result.is_empty() => {
-                warn_doc_hybrid_fallback(notes, "no doc embeddings found");
-                return Ok(lexical_doc_hits(lexical_docs, scope.limit));
-            }
-            Ok(result) => {
-                *vector_ran = true;
-                result
-            }
-            Err(error) => {
-                let reason = fallback_reason(&error);
-                warn_doc_hybrid_fallback(notes, &reason);
-                return Ok(lexical_doc_hits(lexical_docs, scope.limit));
-            }
-        };
-
-        let mut candidates = BTreeMap::<String, DocHybridCandidate>::new();
-        for result in lexical_docs {
-            candidates.insert(
-                result.record.path.clone(),
-                DocHybridCandidate {
-                    lexical_score: Some(result.score as f32),
-                    hit: doc_result_to_global(result, "hybrid", None),
-                    semantic_score: None,
-                    semantic: None,
-                },
-            );
-        }
-        // Only the semantic-only hits still need a record; the lexical ones
-        // carry theirs.
-        let semantic_only_paths = semantic
-            .iter()
-            .map(|hit| hit.source_id.as_str())
-            .filter(|path| !candidates.contains_key(*path))
-            .collect::<Vec<_>>();
-        let records = corpus.records(&semantic_only_paths)?;
-        for hit in semantic {
-            if let Some(candidate) = candidates.get_mut(&hit.source_id) {
-                candidate.semantic_score = Some(hit.score);
-                candidate.semantic = Some(hit);
-                continue;
-            }
-            let Some(record) = records.get(&hit.source_id) else {
-                continue;
-            };
-            if !doc_has_all_tags(&record.tags, scope.tag_filter) {
-                continue;
-            }
-            candidates.insert(hit.source_id.clone(), semantic_only_candidate(hit, record));
-        }
-
-        let weight = self.docs_search_config()?.semantic_weight;
-        let mut ranked = blend_doc_hybrid_candidates(candidates.into_values().collect(), weight);
-        ranked.sort_by(compare_global_hits_by_score);
-        ranked.truncate(scope.limit);
-        Ok(ranked)
-    }
-
-    fn doc_semantic_hits(
-        &self,
-        query: &str,
-        limit: usize,
-        embedder: Option<&dyn Embedder>,
-    ) -> Result<Vec<DocSemanticHit>, OrbitError> {
-        #[cfg(test)]
-        if let Some(result) = DOC_SEMANTIC_SEARCH_OVERRIDE.with(|cell| cell.borrow_mut().take()) {
-            return result;
-        }
-
-        let params = DocSemanticSearchParams {
-            query: query.to_string(),
-            limit,
-            model: None,
-        };
-        let store = self.stores().semantic_index().store()?;
-        let result = match embedder {
-            Some(embedder) => orbit_search::doc_semantic_search_with(store, embedder, params)?,
-            None => orbit_search::doc_semantic_search(
-                store,
-                self.stores().semantic_embedders(),
-                params,
-            )?,
-        };
-        Ok(result.results)
-    }
-}
-
-fn semantic_only_candidate(hit: DocSemanticHit, record: &DocHybridRecord) -> DocHybridCandidate {
-    DocHybridCandidate {
-        hit: GlobalSearchHit {
-            kind: "doc".to_string(),
-            source: "hybrid".to_string(),
-            id: None,
-            path: Some(hit.source_id.clone()),
-            title: None,
-            summary: Some(record.summary.clone()),
-            status: record.doc_type.clone(),
-            best_field: None,
-            snippet: None,
-            score: None,
-            score_breakdown: None,
-            matched_by: None,
-            workspace: None,
-        },
-        lexical_score: None,
-        semantic_score: Some(hit.score),
-        semantic: Some(hit),
     }
 }
 

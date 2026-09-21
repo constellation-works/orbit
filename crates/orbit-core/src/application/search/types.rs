@@ -12,7 +12,6 @@ use super::DEFAULT_LIMIT;
 #[serde(rename_all = "lowercase")]
 pub enum GlobalSearchKind {
     Task,
-    Doc,
     Friction,
     #[default]
     All,
@@ -22,7 +21,6 @@ impl GlobalSearchKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Task => "task",
-            Self::Doc => "doc",
             Self::Friction => "friction",
             Self::All => "all",
         }
@@ -30,10 +28,6 @@ impl GlobalSearchKind {
 
     pub(super) fn includes_tasks(self) -> bool {
         matches!(self, Self::Task | Self::All)
-    }
-
-    pub(super) fn includes_docs(self) -> bool {
-        matches!(self, Self::Doc | Self::All)
     }
 
     pub(super) fn includes_frictions(self) -> bool {
@@ -47,11 +41,10 @@ impl FromStr for GlobalSearchKind {
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "task" => Ok(Self::Task),
-            "doc" => Ok(Self::Doc),
             "friction" => Ok(Self::Friction),
             "all" => Ok(Self::All),
             other => Err(format!(
-                "invalid search kind `{other}`; expected one of: task, doc, friction, all"
+                "invalid search kind `{other}`; expected one of: task, friction, all"
             )),
         }
     }
@@ -74,7 +67,7 @@ pub struct GlobalSearchParams {
     pub kind: GlobalSearchKind,
     pub limit: usize,
     /// AND-filter by tag. Repeat for multi-tag AND semantics. Applies to
-    /// task, doc, and friction (and `all`).
+    /// task and friction (and `all`).
     pub tags: Vec<String>,
     /// Include normally-hidden statuses for the queried kind(s). Mutually
     /// overridden by `status`.
@@ -82,8 +75,7 @@ pub struct GlobalSearchParams {
     /// Explicit per-kind status override (set semantics). When non-empty,
     /// takes precedence over the `all` widener.
     pub status: Vec<String>,
-    /// Cross-kind applicability filter. Task: selector-mapping against
-    /// `context_files`. Doc: out of scope (returns empty).
+    /// Task applicability filter using selector-mapping against `context_files`.
     pub path: Option<String>,
     /// Which workspaces this query covers. Defaults to
     /// [`WorkspaceScope::Current`], the untouched single-workspace path
@@ -127,7 +119,7 @@ pub struct GlobalSearchResponse {
     pub kind: GlobalSearchKind,
     pub results: Vec<GlobalSearchHit>,
     pub notes: Vec<String>,
-    /// Kinds a `--path` query could not apply to (docs and frictions are not
+    /// Kinds a `--path` query could not apply to (frictions are not
     /// path-filtered). Mirrors the "branch skipped" note in `notes`, but as a
     /// structured field an agent can check without parsing prose, so an empty
     /// `results` from a path query is not misread as "nothing relevant"

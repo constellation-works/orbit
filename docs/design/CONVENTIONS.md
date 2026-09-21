@@ -75,7 +75,7 @@ Every numbered doc ends with a **Task References** section listing only the task
 
 ## 4. Decisions
 
-**`4_decisions.md` keeps the reasoning.** A decision is a titled section in its feature's `4_decisions.md`, reviewed in the same change as the code it describes and indexed with the ordinary docs corpus. Orbit tasks carry identity, lifecycle, ownership, and delivery provenance; the decision section carries only the reasoning that should outlive the task.
+**`4_decisions.md` keeps the reasoning.** A decision is a titled section in its feature's `4_decisions.md`, reviewed in the same change as the code it describes. Orbit tasks carry identity, lifecycle, ownership, and delivery provenance; the decision section carries only the reasoning that should outlive the task.
 
 ### 4a. What earns a decision entry
 
@@ -223,7 +223,6 @@ Retired features stay listed with their `_archive/` path as a historical record.
 | MCP Session Context | [docs/design/mcp-session-context/](./mcp-session-context/) | codex |
 | Operation Mode | [docs/design/operation-mode/](./operation-mode/) | codex |
 | Orbit Core | [docs/design/orbit-core/](./orbit-core/) | claude |
-| Orbit Docs | [docs/design/orbit-docs/](./orbit-docs/) | claude |
 | Orbit Graph | [docs/design/_archive/orbit-graph/](./_archive/orbit-graph/) | claude |
 | Orbit Search | [docs/design/orbit-search/](./orbit-search/) | claude |
 | Policy & Sandboxing | [docs/design/policy-sandbox/](./policy-sandbox/) | claude |

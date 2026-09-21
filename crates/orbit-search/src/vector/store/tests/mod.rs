@@ -5,7 +5,6 @@
 
 #![allow(missing_docs)]
 
-mod docs;
 mod queries;
 mod schema;
 mod tasks;

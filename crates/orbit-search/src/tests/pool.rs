@@ -10,10 +10,10 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 
-use crate::vector::{DocEmbeddingSource, VectorStore};
+use crate::vector::VectorStore;
 use crate::{
-    DocSemanticSearchParams, Embedder, EmbedderPool, NoopEmbedder, SemanticRelatedParams,
-    SemanticSearchParams, doc_semantic_search, semantic_related, semantic_search,
+    Embedder, EmbedderPool, NoopEmbedder, SemanticRelatedParams, SemanticSearchParams,
+    semantic_related, semantic_search,
 };
 
 /// A pool whose companions are `NoopEmbedder`s, plus the spawn counter.
@@ -57,29 +57,12 @@ fn task(id: &str, title: &str) -> Task {
     }
 }
 
-fn doc(path: &str, body: &str) -> DocEmbeddingSource {
-    DocEmbeddingSource {
-        path: path.to_string(),
-        title: path.to_string(),
-        tags: Vec::new(),
-        body: body.to_string(),
-    }
-}
-
-/// A store holding one indexed task and one indexed doc, both under the
-/// `noop` model the counting pool hands out.
+/// A store holding one indexed task under the `noop` model.
 fn indexed_store() -> VectorStore {
     let store = VectorStore::open_in_memory().unwrap();
     store
         .reindex_tasks(
             &[task("ORB-00001", "Reuse the companion")],
-            &NoopEmbedder::small(),
-            false,
-        )
-        .unwrap();
-    store
-        .reindex_docs(
-            &[doc("docs/reuse.md", "reuse the companion")],
             &NoopEmbedder::small(),
             false,
         )
@@ -109,31 +92,6 @@ fn two_consecutive_queries_reuse_one_embedder() {
         spawns.load(Ordering::SeqCst),
         1,
         "the second query must answer from the companion the first one started"
-    );
-}
-
-#[test]
-fn task_and_doc_branches_of_one_hybrid_query_share_an_embedder() {
-    let store = indexed_store();
-    let (pool, spawns) = counting_pool();
-
-    // `search --kind all` fans out into exactly these two branches.
-    semantic_search(&store, &pool, search_params("hybrid query")).unwrap();
-    doc_semantic_search(
-        &store,
-        &pool,
-        DocSemanticSearchParams {
-            query: "hybrid query".to_string(),
-            limit: 5,
-            model: None,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(
-        spawns.load(Ordering::SeqCst),
-        1,
-        "a hybrid query must not load the model once per branch"
     );
 }
 

@@ -19,7 +19,6 @@ use clap::{Command, CommandFactory, Parser, error::ErrorKind};
 
 use super::{
     Cli, Commands,
-    docs::DocsSubcommand,
     mcp::McpSubcommand,
     search::SearchSubcommand,
     semantic::{SemanticIndexKindArg, SemanticSubcommand},
@@ -446,12 +445,12 @@ fn cli_parses_semantic_stats() {
 
 #[test]
 fn cli_parses_semantic_index() {
-    let cli = Cli::parse_from(["orbit", "semantic", "index", "--force", "--kind", "docs"]);
+    let cli = Cli::parse_from(["orbit", "semantic", "index", "--force", "--kind", "all"]);
     match cli.command {
         Commands::Semantic(command) => match command.command {
             SemanticSubcommand::Index(args) => {
                 assert!(args.force);
-                assert_eq!(args.kind, SemanticIndexKindArg::Docs);
+                assert_eq!(args.kind, SemanticIndexKindArg::All);
             }
             _ => panic!("expected semantic index"),
         },
@@ -483,7 +482,6 @@ fn cli_semantic_index_rejects_singular_kinds_at_clap_layer() {
         let message = error.to_string();
         assert!(message.contains("possible values"), "{message}");
         assert!(message.contains("tasks"), "{message}");
-        assert!(message.contains("docs"), "{message}");
         assert!(message.contains("all"), "{message}");
     }
 }
@@ -496,34 +494,17 @@ fn cli_semantic_index_help_explains_kind_principle() {
     };
     let help = error.to_string();
     assert!(
-        help.contains(
-            "--kind selects corpus: tasks (default), docs (same as `orbit docs index`), all (rebuilds all indexed corpora)."
-        ),
+        help.contains("--kind selects corpus: tasks (default) or all (an alias for tasks)."),
         "{help}"
     );
 }
 
 #[test]
-fn cli_parses_docs_index() {
-    let cli = Cli::parse_from(["orbit", "docs", "index", "--force", "--model", "minilm-l6"]);
-    match cli.command {
-        Commands::Docs(command) => match command.command {
-            DocsSubcommand::Index(args) => {
-                assert!(args.force);
-                assert_eq!(args.model.as_deref(), Some("minilm-l6"));
-            }
-            _ => panic!("expected docs index"),
-        },
-        _ => panic!("expected top-level docs command"),
-    }
-}
-
-#[test]
-fn cli_rejects_docs_reindex() {
+fn cli_rejects_removed_docs_command() {
     assert_cli_rejects(
-        &["orbit", "docs", "reindex"],
+        &["orbit", "docs", "list"],
         ErrorKind::InvalidSubcommand,
-        "unrecognized subcommand 'reindex'",
+        "unrecognized subcommand 'docs'",
     );
 }
 
@@ -574,20 +555,12 @@ fn cli_parses_top_level_search_similar_neighbor() {
 }
 
 #[test]
-fn cli_parses_top_level_search_path_lookup() {
-    let cli = Cli::parse_from(["orbit", "search", "path", "crates/orbit-cli/"]);
-    match cli.command {
-        Commands::Search(args) => {
-            assert_eq!(args.query, None);
-            match args.command {
-                Some(SearchSubcommand::Path(path)) => {
-                    assert_eq!(path.path, "crates/orbit-cli/");
-                }
-                _ => panic!("expected search path"),
-            }
-        }
-        _ => panic!("expected top-level search command"),
-    }
+fn cli_rejects_removed_search_path_lookup() {
+    assert_cli_rejects(
+        &["orbit", "search", "path", "crates/orbit-cli/"],
+        ErrorKind::UnknownArgument,
+        "unexpected argument 'crates/orbit-cli/'",
+    );
 }
 
 #[test]
@@ -596,6 +569,15 @@ fn cli_rejects_retired_adr_search_kind() {
         &["orbit", "search", "perf", "--kind", "adr"],
         ErrorKind::InvalidValue,
         "invalid value 'adr'",
+    );
+}
+
+#[test]
+fn cli_rejects_removed_doc_search_kind() {
+    assert_cli_rejects(
+        &["orbit", "search", "perf", "--kind", "doc"],
+        ErrorKind::InvalidValue,
+        "invalid value 'doc'",
     );
 }
 
@@ -641,10 +623,6 @@ fn cli_rejects_retired_search_field_and_model_flags() {
         (
             &["orbit", "search", "similar", "ORB-1", "--field", "title"][..],
             "--field",
-        ),
-        (
-            &["orbit", "search", "path", "crates/", "--model", "bge-small"][..],
-            "--model",
         ),
     ] {
         assert_cli_rejects(

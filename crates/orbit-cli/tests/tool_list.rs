@@ -18,11 +18,6 @@ const INACTIVE_TOOL_NAMES: &[&str] = &[
     "orbit.auto_task.update",
     "orbit.friction.show",
     "orbit.friction.tags",
-    "orbit.docs.index",
-    "orbit.docs.migrate",
-    "orbit.docs.add",
-    "orbit.docs.list",
-    "orbit.docs.show",
     "orbit.task.locks",
     "orbit.task.locks.release",
     "orbit.task.locks.reserve",
@@ -118,6 +113,38 @@ fn tool_list_json_hides_inactive_tools_by_default() {
 }
 
 #[test]
+fn retired_docs_tools_are_absent_and_unknown_to_tool_run() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    std::fs::create_dir_all(&home).expect("create home");
+    std::fs::create_dir_all(&work).expect("create work");
+
+    let output = orbit_at_home(&work, &home)
+        .args(["tool", "list", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let tools: Vec<serde_json::Value> = serde_json::from_slice(&output).expect("tool list JSON");
+    assert!(
+        tools.iter().all(|tool| {
+            !tool["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("orbit.docs."))
+        }),
+        "retired orbit.docs tools must not be listed"
+    );
+
+    orbit_at_home(&work, &home)
+        .args(["tool", "run", "orbit.docs.list", "--input", "{}"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("tool not found: orbit.docs.list"));
+}
+
+#[test]
 fn tool_list_json_all_includes_inactive_tools_with_status() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
@@ -185,7 +212,7 @@ fn tool_list_json_all_includes_parameter_schema_for_inactive_tools() {
 }
 
 #[test]
-fn tool_list_json_includes_task_show_context_parameters() {
+fn tool_list_json_excludes_removed_task_show_context_parameters() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");
     let work = temp.path().join("work");
@@ -208,16 +235,11 @@ fn tool_list_json_includes_task_show_context_parameters() {
     let parameters = task_show["parameters"]
         .as_array()
         .expect("parameters array");
-    assert!(parameters.iter().any(|param| {
-        param["name"] == "with_context"
-            && param["param_type"] == "boolean"
-            && param["required"] == false
-    }));
-    assert!(parameters.iter().any(|param| {
-        param["name"] == "max_docs"
-            && param["param_type"] == "integer"
-            && param["required"] == false
-    }));
+    assert!(
+        parameters
+            .iter()
+            .all(|param| { !matches!(param["name"].as_str(), Some("with_context" | "max_docs")) })
+    );
     assert!(parameters.iter().any(|param| {
         param["name"] == "workspace"
             && param["param_type"] == "string"

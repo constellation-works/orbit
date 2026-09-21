@@ -13,8 +13,6 @@
 //! - [`query`] — brute-force cosine, FTS5 BM25, RRF, and task-result rollup.
 //! - [`task_fields`] — extracts the per-field rows that get embedded for a
 //!   `Task`.
-//! - [`doc_fields`] — extracts the per-field rows that get embedded for a
-//!   docs corpus record.
 //!
 //! This file holds the small data types (`EmbeddingField`, `UpsertReport`,
 //! `SemanticStats`, `SourceModelCount`) and stateless helpers
@@ -22,17 +20,15 @@
 //! `normalize_f32`) shared across those submodules.
 
 pub(crate) mod chunker;
-pub(crate) mod doc_fields;
 pub(crate) mod index;
 pub(crate) mod query;
 pub(crate) mod store;
 pub(crate) mod task_fields;
 pub(crate) mod worker;
 
-pub use doc_fields::DocEmbeddingSource;
 pub use index::SemanticIndex;
 pub use query::{Bm25Hit, bm25_top_k};
-pub use store::{IndexedDocFields, SOURCE_KIND_DOC, SOURCE_KIND_TASK, VectorStore};
+pub use store::{SOURCE_KIND_TASK, VectorStore};
 pub use worker::EmbedWorker;
 
 use orbit_common::OrbitError;

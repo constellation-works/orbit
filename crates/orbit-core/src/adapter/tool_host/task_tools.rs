@@ -182,13 +182,9 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     let id = required_string(&input, &["id"], "id")?;
     let task = runtime.get_task(&id)?;
     let fields = optional_csv_or_string_list_alias(&input, &["fields", "field"])?;
-    let with_context =
-        optional_bool_alias(&input, &["with_context", "withContext", "with-context"])?
-            .unwrap_or(false);
-    let max_docs = optional_usize_alias(&input, &["max_docs", "maxDocs", "max-docs"])?;
-    let mut value = if let Some(fields) = &fields {
+    let value = if let Some(fields) = &fields {
         let projected = task_fields_to_json(runtime, &task, fields)?;
-        if fields.len() == 1 && (with_context || fields[0] == "terminal") {
+        if fields.len() == 1 && fields[0] == "terminal" {
             json!({ fields[0].clone(): projected })
         } else {
             projected
@@ -196,45 +192,7 @@ pub(super) fn show(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitE
     } else {
         serialize_task(runtime, &task)?
     };
-    if with_context {
-        let object = value.as_object_mut().ok_or_else(|| {
-            OrbitError::Execution("task JSON projection did not produce an object".to_string())
-        })?;
-        object.insert(
-            "related_docs".to_string(),
-            serde_json::to_value(runtime.related_docs_for_task(&task, max_docs)?).map_err(
-                |error| OrbitError::Execution(format!("serialize related docs: {error}")),
-            )?,
-        );
-    }
     Ok(value)
-}
-
-fn optional_usize_alias(input: &Value, names: &[&str]) -> Result<Option<usize>, OrbitError> {
-    for name in names {
-        let Some(value) = input.get(*name) else {
-            continue;
-        };
-        return match value {
-            Value::Number(number) => number
-                .as_u64()
-                .ok_or_else(|| {
-                    OrbitError::InvalidInput(format!("`{name}` must be an unsigned integer"))
-                })
-                .and_then(|value| {
-                    usize::try_from(value)
-                        .map(Some)
-                        .map_err(|_| OrbitError::InvalidInput(format!("`{name}` is too large")))
-                }),
-            Value::String(raw) => raw.trim().parse::<usize>().map(Some).map_err(|error| {
-                OrbitError::InvalidInput(format!("`{name}` must be an unsigned integer: {error}"))
-            }),
-            _ => Err(OrbitError::InvalidInput(format!(
-                "`{name}` must be an unsigned integer"
-            ))),
-        };
-    }
-    Ok(None)
 }
 
 /// Read one stored artifact's bytes through the task's own artifact owner.

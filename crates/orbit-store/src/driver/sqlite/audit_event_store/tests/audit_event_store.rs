@@ -394,14 +394,16 @@ fn tool_call_counts_by_surface_and_role_extract_segment_after_orbit_prefix() {
         .insert_audit_event_record(&adr_show_failed)
         .expect("insert");
 
-    let mut docs_show = sample_params_with(
-        "exec-docs-show",
+    let mut config_show = sample_params_with(
+        "exec-config-show",
         TEST_CODEX_MODEL,
         AuditEventStatus::Success,
     );
-    docs_show.tool_name = Some("orbit.docs.show".to_string());
-    docs_show.target_id = Some("orbit.docs.show".to_string());
-    store.insert_audit_event_record(&docs_show).expect("insert");
+    config_show.tool_name = Some("orbit.config.show".to_string());
+    config_show.target_id = Some("orbit.config.show".to_string());
+    store
+        .insert_audit_event_record(&config_show)
+        .expect("insert");
 
     let mut task_update = sample_params_with(
         "exec-task-update",
@@ -449,7 +451,7 @@ fn tool_call_counts_by_surface_and_role_extract_segment_after_orbit_prefix() {
                 failed: 1,
             },
             AuditToolCallCountsBySurfaceAndRole {
-                surface: "docs".to_string(),
+                surface: "config".to_string(),
                 role: TEST_CODEX_MODEL.to_string(),
                 total: 1,
                 failed: 0,

@@ -64,7 +64,7 @@ pub struct SemanticIndexArgs {
         value_enum,
         default_value_t = SemanticIndexKindArg::Tasks,
         value_name = "KIND",
-        help = "--kind selects corpus: tasks (default), docs (same as `orbit docs index`), all (rebuilds all indexed corpora)."
+        help = "--kind selects corpus: tasks (default) or all (an alias for tasks)."
     )]
     pub kind: SemanticIndexKindArg,
     #[arg(long)]
@@ -74,7 +74,6 @@ pub struct SemanticIndexArgs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SemanticIndexKindArg {
     Tasks,
-    Docs,
     All,
 }
 
@@ -82,7 +81,6 @@ impl From<SemanticIndexKindArg> for IndexKind {
     fn from(value: SemanticIndexKindArg) -> Self {
         match value {
             SemanticIndexKindArg::Tasks => Self::Tasks,
-            SemanticIndexKindArg::Docs => Self::Docs,
             SemanticIndexKindArg::All => Self::All,
         }
     }
@@ -179,38 +177,6 @@ fn semantic_index_text(result: SemanticIndexResult) -> String {
                 report.skipped_fields,
                 source_list(&report.skipped_sources),
                 stale_sources.len()
-            )
-        }
-        SemanticIndexResult::Docs {
-            model_id,
-            report,
-            indexed_sources,
-            stale_sources,
-        } => {
-            format!(
-                "Indexed docs: model={} indexed_sources={} embedded_chunks={} skipped_fields={} skipped_sources={} stale_sources={}",
-                model_id,
-                indexed_sources,
-                report.embedded_chunks,
-                report.skipped_fields,
-                source_list(&report.skipped_sources),
-                stale_sources.len()
-            )
-        }
-        SemanticIndexResult::All { tasks, docs } => {
-            format!(
-                "Indexed semantic search: tasks_model={} tasks_embedded_chunks={} tasks_skipped_fields={} tasks_skipped_sources={} tasks_stale_sources={} docs_model={} docs_indexed_sources={} docs_embedded_chunks={} docs_skipped_fields={} docs_skipped_sources={} docs_stale_sources={}",
-                tasks.model_id,
-                tasks.report.embedded_chunks,
-                tasks.report.skipped_fields,
-                source_list(&tasks.report.skipped_sources),
-                tasks.stale_sources.len(),
-                docs.model_id,
-                docs.indexed_sources,
-                docs.report.embedded_chunks,
-                docs.report.skipped_fields,
-                source_list(&docs.report.skipped_sources),
-                docs.stale_sources.len()
             )
         }
     }

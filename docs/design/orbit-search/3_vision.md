@@ -142,7 +142,7 @@ Every published "hybrid retrieval" production system above runs as a service. Or
 
 ### 3.2 One vector store for multiple local corpora
 
-The schema's `source_kind` discriminator is not future-proofing for its own sake; it lets tasks and docs share one workspace-local vector store while retaining corpus-specific indexing and filters. ADRs participate as design docs. The brute-force implementation stays appropriate for the current corpus size, and the `sqlite-vec` upgrade path remains available if future local corpora make that necessary. Most orbit-search-on-tasks projects assume tasks are the whole story; this one explicitly does not.
+The schema's `source_kind` discriminator remains persisted-format flexibility rather than a promise of multiple active corpora. The active index contains tasks. The brute-force implementation stays appropriate for the current corpus size, and the `sqlite-vec` upgrade path remains available if future local corpora make that necessary.
 
 ### 3.3 Failure-mode honesty in the score breakdown
 

@@ -559,7 +559,7 @@
   {
     "active": true,
     "builtin": true,
-    "description": "Search tasks, docs, and frictions. Decision records are indexed as ordinary docs; hybrid vector ranking applies to indexed tasks and docs.",
+    "description": "Search tasks and frictions; hybrid vector ranking applies to indexed tasks.",
     "enabled": true,
     "name": "orbit.search",
     "parameters": [
@@ -570,7 +570,7 @@
         "required": false
       },
       {
-        "description": "Opt into hybrid lexical + cosine ranking for indexed task and doc vectors; frictions remain lexical.",
+        "description": "Opt into hybrid lexical + cosine ranking for indexed task vectors; frictions remain lexical.",
         "name": "hybrid",
         "param_type": "boolean",
         "required": false
@@ -582,7 +582,7 @@
         "required": false
       },
       {
-        "description": "Corpus kind: task, doc, friction, or all. Default: all.",
+        "description": "Corpus kind: task, friction, or all. Default: all.",
         "name": "kind",
         "param_type": "string",
         "required": false
@@ -594,27 +594,21 @@
         "required": false
       },
       {
-        "description": "AND-filter by tag. Repeat or pass an array. Applies to task, doc, and friction.",
+        "description": "AND-filter by tag. Repeat or pass an array. Applies to task and friction.",
         "name": "tag",
         "param_type": "string_list",
         "required": false
       },
       {
-        "description": "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved; doc is a no-op.",
+        "description": "Include normally-hidden statuses for the queried kind. Task adds done/rejected/archived; friction adds triaged/resolved.",
         "name": "all",
         "param_type": "boolean",
         "required": false
       },
       {
-        "description": "Explicit per-kind status override using kind:value tokens, such as task:open,doc:active,friction:open. Overrides `all` for the named kind.",
+        "description": "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. Overrides `all` for the named kind.",
         "name": "status",
         "param_type": "string_list",
-        "required": false
-      },
-      {
-        "description": "Filter to artifacts applicable to this filesystem path. Task uses selector containment; docs and frictions are skipped.",
-        "name": "path",
-        "param_type": "string",
         "required": false
       },
       {
@@ -897,7 +891,7 @@
   {
     "active": true,
     "builtin": true,
-    "description": "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. `with_context` composes with a projection by adding `related_docs` to the result. The `crew` field selects execution, while `orchestrator` records orchestration attribution.",
+    "description": "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. The `crew` field selects execution, while `orchestrator` records orchestration attribution.",
     "enabled": true,
     "name": "orbit.task.show",
     "parameters": [
@@ -920,7 +914,7 @@
         "required": false
       },
       {
-        "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. May be combined with `with_context`; then the projection is an object with `related_docs` added. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution.",
+        "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, orchestrator, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution.",
         "name": "fields",
         "param_type": "string_list",
         "required": false
@@ -929,18 +923,6 @@
         "description": "Compatibility alias for a single field projection. Example: `field: \"artifacts\"`.",
         "name": "field",
         "param_type": "string",
-        "required": false
-      },
-      {
-        "description": "Optional boolean. When true, include a `related_docs` array matched from task context selectors and feature tags. May be combined with `fields`; the requested projection and `related_docs` are returned in one object.",
-        "name": "with_context",
-        "param_type": "boolean",
-        "required": false
-      },
-      {
-        "description": "Optional cap for `related_docs` when `with_context` is true. Defaults to 5.",
-        "name": "max_docs",
-        "param_type": "integer",
         "required": false
       },
       {

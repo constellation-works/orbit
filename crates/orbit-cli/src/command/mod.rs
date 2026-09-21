@@ -3,7 +3,6 @@ pub mod audit;
 pub mod auto_task;
 pub mod clock;
 pub mod config;
-pub mod docs;
 pub mod doctor;
 pub mod executor;
 pub mod friction;
@@ -88,8 +87,7 @@ Environment:
 Knowledge:
   task        Create, update, and manage tasks
   friction    Report, list, and triage friction records
-  docs        Search and manage the indexed docs corpus
-  search      Search tasks, docs, and frictions
+  search      Search tasks and frictions
   semantic    Manage local orbit-search indexing
 
 Operate:
@@ -150,7 +148,6 @@ pub enum Commands {
     // ── Knowledge ──
     Task(Box<task::TaskCommand>),
     Friction(friction::FrictionCommand),
-    Docs(docs::DocsCommand),
     Search(search::SearchCommand),
     Semantic(semantic::SemanticCommand),
 

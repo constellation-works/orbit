@@ -1,6 +1,6 @@
 use clap::Args;
 use orbit_cmd::task_owner::{WorkspaceIdentity, bound_workspace_identity};
-use orbit_core::{OrbitError, OrbitRuntime, TaskRelatedDoc};
+use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::task::{TaskRelationType, is_task_show_projection_field};
 use serde_json::{Value, json};
 
@@ -28,17 +28,10 @@ pub struct TaskShowArgs {
             orbit_types::task_show_projection_fields_csv!(),
             ". Repeat the flag or use a comma-separated value list. Combined with --json, \
              a single field returns that field as JSON and multiple fields return a JSON object. \
-             The derived terminal field remains keyed as an object. \
-             With --with-context, the projection is an object with related_docs added."
+             The derived terminal field remains keyed as an object."
         )
     )]
     pub fields: Vec<String>,
-    /// Include matched docs; may be combined with --fields to add related_docs
-    #[arg(long)]
-    pub with_context: bool,
-    /// Maximum related docs to include with --with-context (default 5)
-    #[arg(long)]
-    pub max_docs: Option<usize>,
 }
 
 impl Execute for TaskShowArgs {
@@ -46,28 +39,11 @@ impl Execute for TaskShowArgs {
         let task = runtime.get_task(&self.id)?;
         let status_by_id = runtime.task_status_index()?;
         let fields = normalize_task_show_fields(&self.fields)?;
-        let related_docs = if self.with_context {
-            runtime.related_docs_for_task(&task, self.max_docs)?
-        } else {
-            Vec::new()
-        };
-
         if !fields.is_empty() {
             let mut doc = task_fields_to_json(runtime, &task, &fields, Some(&status_by_id))?;
             let text = format_task_fields(runtime, &task, &fields, Some(&status_by_id))?;
             if fields.as_slice() == ["terminal"] {
                 doc = json!({ "terminal": doc });
-            }
-            if self.with_context {
-                if fields.len() == 1 && fields[0] != "terminal" {
-                    doc = json!({ fields[0].clone(): doc });
-                }
-                insert_related_docs(&mut doc, related_docs.clone())?;
-                let mut blocks = vec![Block::text(text)];
-                if !related_docs.is_empty() {
-                    blocks.extend(related_docs_blocks(&related_docs));
-                }
-                return Ok(Payload::blocks(doc, blocks).into());
             }
             return Ok(Payload::detail(doc, text).into());
         }
@@ -79,9 +55,6 @@ impl Execute for TaskShowArgs {
         let mut doc = projection.doc;
         if let Some(owner) = &owner {
             insert_workspace_identity(&mut doc, owner)?;
-        }
-        if self.with_context {
-            insert_related_docs(&mut doc, related_docs.clone())?;
         }
 
         {
@@ -213,10 +186,6 @@ impl Execute for TaskShowArgs {
                     task.context_files.join(", ")
                 );
             }
-            if self.with_context && !related_docs.is_empty() {
-                blocks.push(Block::text(std::mem::take(&mut out)));
-                blocks.extend(related_docs_blocks(&related_docs));
-            }
             if let Some(ref created_by) = task.created_by {
                 let _ = writeln!(out, "{} {}", bold("Created By:"), created_by);
             }
@@ -338,51 +307,6 @@ fn insert_workspace_identity(
         json!({ "id": owner.id, "name": owner.name }),
     );
     Ok(())
-}
-
-fn insert_related_docs(
-    value: &mut Value,
-    related_docs: Vec<TaskRelatedDoc>,
-) -> Result<(), OrbitError> {
-    let object = value.as_object_mut().ok_or_else(|| {
-        OrbitError::Execution("task JSON projection did not produce an object".to_string())
-    })?;
-    object.insert(
-        "related_docs".to_string(),
-        serde_json::to_value(related_docs).map_err(|error| {
-            OrbitError::Execution(format!("serialize related docs output: {error}"))
-        })?,
-    );
-    Ok(())
-}
-
-fn related_docs_blocks(related_docs: &[TaskRelatedDoc]) -> Vec<Block> {
-    use crate::output::color::bold;
-    use comfy_table::Cell;
-
-    use crate::output::table::{Column, Table};
-    // Part of a detail view: keep every column, and point at `orbit docs show
-    // <path>` for the untruncated doc.
-    let mut table = Table::new(vec![
-        Column::new("PATH").path(),
-        Column::new("TYPE").fixed(),
-        Column::new("SUMMARY"),
-        Column::new("EXCERPT"),
-    ])
-    .keep_all_columns()
-    .empty_message("no related docs");
-    for doc in related_docs {
-        table.add_row(vec![
-            Cell::new(&doc.path),
-            Cell::new(doc.doc_type.to_string()),
-            Cell::new(&doc.summary),
-            Cell::new(&doc.excerpt),
-        ]);
-    }
-    vec![
-        Block::text(format!("\n{}", bold("Related Docs:"))),
-        Block::table(table),
-    ]
 }
 
 pub(crate) fn normalize_task_show_fields(fields: &[String]) -> Result<Vec<String>, OrbitError> {

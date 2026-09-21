@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct RawRuntimeConfig {
     // Deliberately no `deny_unknown_fields`: config.toml is also home to
-    // independently parsed surfaces such as `[docs]`. Runtime admission reads
-    // only its owned keys, while explicit migration guards below reject retired
+    // forward-compatible extension tables. Runtime admission reads only its
+    // owned keys, while explicit migration guards below reject retired
     // runtime keys whose continued acceptance would be unsafe or misleading.
     #[allow(dead_code)]
     pub(crate) identity: Option<toml::Value>,
@@ -31,6 +31,9 @@ pub(crate) struct RawRuntimeConfig {
     /// Retired in ORB-12236. Existing workspaces may still carry
     /// `[routines] role = "source"`; loaders warn and ignore it.
     pub(crate) routines: Option<toml::Value>,
+    /// Retired docs-corpus configuration. Kept for one release so existing
+    /// workspaces warn and continue loading while the table is ignored.
+    pub(crate) docs: Option<toml::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]

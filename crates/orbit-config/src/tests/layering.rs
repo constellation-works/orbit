@@ -10,7 +10,9 @@ use tracing_subscriber::fmt::MakeWriter;
 
 use super::{roots, write_config};
 use crate::load_effective_config;
-use crate::resolved::{REMOVED_CONFIG_KEY_WARNING, RETIRED_ROUTINES_CONFIG_WARNING};
+use crate::resolved::{
+    REMOVED_CONFIG_KEY_WARNING, RETIRED_DOCS_CONFIG_WARNING, RETIRED_ROUTINES_CONFIG_WARNING,
+};
 use crate::{ConfigRoots, ConfigSnapshot, ConfigValueSourceKind, ResolvedConfig};
 
 #[derive(Clone)]
@@ -111,6 +113,38 @@ fn removed_pilot_max_complexity_warns_once_for_the_layer_that_sets_it() {
             "workflow.pilot_max_complexity",
             workspace_path.to_str().expect("UTF-8 path")
         )]
+    );
+}
+
+#[test]
+fn retired_docs_table_warns_once_and_is_ignored() {
+    let global = tempdir().expect("global tempdir");
+    let workspace = tempdir().expect("workspace tempdir");
+    write_config(global.path(), "[scoring]\nenabled = false\n");
+    write_config(
+        workspace.path(),
+        "[docs]\nroots = [\"docs/\"]\n[docs.search]\nsemantic_weight = 0.9\n",
+    );
+
+    let (result, warnings) =
+        capture_warnings(|| ResolvedConfig::load(&roots(global.path(), workspace.path())));
+
+    let config = result.expect("a config carrying [docs] must load");
+    assert!(!config.scoring_enabled);
+    let docs_warnings = warnings
+        .iter()
+        .filter(|warning| {
+            warning["fields"]["RETIRED_DOCS_CONFIG_WARNING"] == RETIRED_DOCS_CONFIG_WARNING
+        })
+        .count();
+    assert_eq!(docs_warnings, 1, "warnings: {warnings:?}");
+    assert!(
+        config
+            .snapshot
+            .all_values()
+            .iter()
+            .all(|(key, _)| !key.starts_with("docs")),
+        "retired docs keys must not enter the effective config snapshot"
     );
 }
 

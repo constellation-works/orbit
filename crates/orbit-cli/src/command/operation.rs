@@ -635,28 +635,6 @@ impl Commands {
                 false,
                 runtime_dispatch!(Search),
             ),
-            Commands::Docs(command) => {
-                use super::docs::DocsSubcommand;
-                let (subcommand, target_id, json) = match &command.command {
-                    DocsSubcommand::List(args) => ("list", None, args.json),
-                    DocsSubcommand::Show(args) => ("show", Some(args.path.as_str()), args.json),
-                    DocsSubcommand::Add(args) => ("add", Some(args.path.as_str()), args.json),
-                    DocsSubcommand::Index(args) => ("index", None, args.json),
-                    DocsSubcommand::Migrate(args) => ("migrate", None, args.json),
-                };
-                CommandOperation::new(
-                    RuntimeNeed::Required,
-                    Some(admin_meta(
-                        "docs",
-                        Some(subcommand),
-                        Some("docs"),
-                        target_id,
-                    )),
-                    json.then_some(true),
-                    false,
-                    runtime_dispatch!(Docs),
-                )
-            }
             // ADR-0209 bearing 1 [ORB-10358]: friction is registry-driven, so
             // this arm reads the invocation instead of matching verb by verb.
             // A new friction verb needs no edit here.

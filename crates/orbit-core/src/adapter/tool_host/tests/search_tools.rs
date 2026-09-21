@@ -14,6 +14,15 @@ fn search_tool_rejects_legacy_related_param() {
 }
 
 #[test]
+fn search_tool_rejects_removed_document_path_param() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let error = search(&runtime, json!({ "path": "docs/guide.md" }))
+        .expect_err("removed document path search must be rejected");
+
+    assert!(error.to_string().contains("unknown parameter `path`"));
+}
+
+#[test]
 fn search_tool_rejects_boolean_semantic_param() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let mut input = serde_json::Map::new();
@@ -53,7 +62,7 @@ fn search_tool_splits_comma_delimited_status_tokens() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let error = search(
         &runtime,
-        json!({ "query": "anything", "status": "task:not-a-status,doc:active" }),
+        json!({ "query": "anything", "status": "task:not-a-status,friction:resolved" }),
     )
     .expect_err("invalid task status should be parsed out of CSV");
 

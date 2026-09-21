@@ -181,27 +181,21 @@ fn workspace_init_ignores_hostile_ancestor_git_and_orbit_directories() {
         "child config should reflect the child's own workspace identity: {child_config}"
     );
 
-    // Exercise roots=[] against the child's own config in this hostile-parent
-    // scenario: the empty override must be honored from the child's own
-    // .orbit/config.toml, never inherited or shadowed by ancestor state.
+    // Exercise the retired [docs] table against the child's own config in this
+    // hostile-parent scenario: it must be ignored locally rather than inherited
+    // or interpreted through ancestor state.
     fs::write(
         work.join(".orbit").join("config.toml"),
         "[docs]\nroots = []\n",
     )
-    .expect("seed child docs roots override");
-    fs::create_dir_all(work.join("docs")).expect("create child docs dir");
-    fs::write(
-        work.join("docs/cli.md"),
-        "---\ntype: design\nsummary: child doc\n---\n# Child Doc\n\nBody\n",
-    )
-    .expect("seed child doc");
-    let docs_output = run_orbit(&work, &home, &["docs", "list", "--json"], None);
-    assert_success("child docs list", &docs_output);
-    let docs: Value = serde_json::from_slice(&docs_output.stdout).expect("docs list JSON");
+    .expect("seed child retired docs table");
+    let config_output = run_orbit(&work, &home, &["config", "show", "--json"], None);
+    assert_success("child config show", &config_output);
+    let config: Value = serde_json::from_slice(&config_output.stdout).expect("config show JSON");
     assert_eq!(
-        docs,
-        json!([]),
-        "roots=[] must return no docs even with a hostile ancestor present: {docs}"
+        config.get("docs"),
+        None,
+        "retired docs keys must be absent even with a hostile ancestor present: {config}"
     );
 
     let parent_orbit_after = snapshot_tree(&parent_orbit);
