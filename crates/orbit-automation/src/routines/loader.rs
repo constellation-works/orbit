@@ -179,6 +179,14 @@ pub struct RoutineSource {
     pub orbit_dir: PathBuf,
 }
 
+/// Why a definition is skipped this pass without being an error.
+///
+/// The one caller is a definition a plugin seeded whose plugin is no longer
+/// active: its target job left the catalog with the plugin, so evaluating it
+/// would log the same load error on every clock tick. Reported as a skip so
+/// `routine list` shows it, names the plugin, and stays quiet otherwise.
+pub type RoutineSkipRule<'a> = dyn Fn(&Path, &RoutineDefinition) -> Option<String> + 'a;
+
 /// Load routines from every source workspace among `workspaces` (the same
 /// runtimes are later used for dispatch), from both origins. Cross-origin
 /// name collisions are load-time errors: every colliding definition is
@@ -187,10 +195,20 @@ pub fn collect_routines(
     workspaces: &[RoutineSource],
     catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
 ) -> RoutineCollection {
+    collect_routines_with_skips(workspaces, catalog, &|_, _| None)
+}
+
+/// [`collect_routines`] with a caller-supplied skip rule, checked before the
+/// target is resolved so a skipped definition never produces a load error.
+pub fn collect_routines_with_skips(
+    workspaces: &[RoutineSource],
+    catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
+    skip: &RoutineSkipRule<'_>,
+) -> RoutineCollection {
     let mut collection = RoutineCollection::default();
 
     for source in workspaces {
-        load_source_workspace(source, catalog, &mut collection);
+        load_source_workspace(source, catalog, skip, &mut collection);
     }
 
     drop_name_collisions(&mut collection);
@@ -200,6 +218,7 @@ pub fn collect_routines(
 fn load_source_workspace(
     source: &RoutineSource,
     catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
+    skip: &RoutineSkipRule<'_>,
     collection: &mut RoutineCollection,
 ) {
     let mut catalog_errors = std::collections::BTreeSet::new();
@@ -212,6 +231,7 @@ fn load_source_workspace(
             RoutineOrigin::Workspace,
             source,
             catalog,
+            skip,
             &mut catalog_errors,
             collection,
         ),
@@ -244,6 +264,7 @@ fn load_source_workspace(
                 RoutineOrigin::Local,
                 source,
                 catalog,
+                skip,
                 &mut catalog_errors,
                 collection,
             );
@@ -272,11 +293,12 @@ fn load_origin_files(
     origin: RoutineOrigin,
     source: &RoutineSource,
     catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
+    skip: &RoutineSkipRule<'_>,
     catalog_errors: &mut std::collections::BTreeSet<String>,
     collection: &mut RoutineCollection,
 ) {
     for path in paths {
-        match load_routine_file(&path, origin, source, catalog) {
+        match load_routine_file(&path, origin, source, catalog, skip) {
             Ok(RoutineLoadOutcome {
                 routine,
                 catalog_error,
@@ -481,9 +503,27 @@ fn load_routine_file(
     origin: RoutineOrigin,
     source: &RoutineSource,
     catalog: &dyn Fn(&Path, &str) -> RoutineCatalogLookup,
+    skip: &RoutineSkipRule<'_>,
 ) -> Result<RoutineLoadOutcome, String> {
     let raw = fs::read_to_string(path).map_err(|error| format!("read failed: {error}"))?;
     let definition = parse_routine_yaml(&raw).map_err(|error| error.to_string())?;
+
+    // A caller-supplied skip wins over target resolution: the definition of a
+    // plugin that is no longer active names a job that left with it, and the
+    // honest report is "skipped because the plugin is gone", not "no such job".
+    if let Some(reason) = skip(path, &definition) {
+        return Ok(RoutineLoadOutcome {
+            routine: RoutineLoad::Retired(RetiredRoutine {
+                name: definition.name,
+                origin,
+                source_workspace: source.workspace.clone(),
+                path: path.to_path_buf(),
+                job: definition.target.job_name().to_string(),
+                reason,
+            }),
+            catalog_error: None,
+        });
+    }
 
     let job_name = definition.target.job_name();
     let catalog_lookup = catalog(&source.orbit_dir, job_name);

@@ -38,6 +38,15 @@ pub trait AutoTaskDispatch {
 
     fn mint_task(&self, definition: &AutoTaskDefinition) -> Result<String, OrbitError>;
 
+    /// Why this definition is skipped this pass without being disabled or due.
+    ///
+    /// The one caller is a definition a plugin seeded whose plugin is no
+    /// longer active: it stays on disk, does not fire, and the reason names
+    /// the plugin. Hosts without plugins answer `None`.
+    fn skip_reason(&self, _definition: &AutoTaskDefinition) -> Option<String> {
+        None
+    }
+
     /// Evidence for a `skip_if_unchanged` precondition: the tip of the
     /// configured ref, the cursor the last completed sweep recorded, and
     /// whether the tip is already covered by it. Hosts that cannot answer
@@ -156,6 +165,18 @@ fn fire_definition(
     now: DateTime<Utc>,
     options: SchedulerOptions,
 ) -> Result<AutoTaskFireReport, OrbitError> {
+    // Checked before anything else, including the delivery evaluator: a
+    // definition whose source is gone must not mint, baseline, or consume a
+    // slot, and the reason has to reach `auto-task list` rather than a log.
+    if let Some(reason) = host.skip_reason(definition) {
+        tracing::warn!(
+            target: "orbit.automation.auto_tasks",
+            auto_task = %definition.name,
+            reason = %reason,
+            "skipping auto-task definition",
+        );
+        return Ok(skipped(definition, &reason));
+    }
     if matches!(
         definition.schedule,
         orbit_types::workflow::AutoTaskSchedule::Deliveries { .. }

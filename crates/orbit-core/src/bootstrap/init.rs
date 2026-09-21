@@ -586,7 +586,7 @@ fn ensure_global_dirs(paths: &WorkspacePaths) -> Result<(), OrbitError> {
 /// leftovers whose IDs left the current default set.
 /// `pub(super)` so `bootstrap/tests/init.rs` can exercise link reconciliation
 /// directly instead of inferring it from a full `init` run.
-pub(super) fn ensure_skill_links(
+pub(crate) fn ensure_skill_links(
     skills_root: &Path,
     skill_ids: &[&str],
     skills_links_dir: &Path,

@@ -202,6 +202,16 @@ impl EffectiveConfig {
         if let Some(entry) = self.values.iter().find(|entry| entry.key == key) {
             return Some(entry.value.clone());
         }
+        if let Ok(Some(parsed)) = crate::plugins::parse_plugin_field_key(key) {
+            let prefix = format!("plugins.{}.", parsed.namespace);
+            if self
+                .values
+                .iter()
+                .any(|entry| entry.key.starts_with(&prefix))
+            {
+                return Some(serde_json::Value::Null);
+            }
+        }
         if let Ok(Some(parsed)) = crate::registry::parse_crew_field_key(key) {
             let prefix = format!("crews.{}.", parsed.name);
             if self
@@ -513,6 +523,25 @@ fn effective_values(
                 source,
                 key,
                 value,
+            });
+        }
+    }
+    // `[plugins.<ns>]` rows layer like crews: one row per key actually present
+    // in a layer, with the file that supplied it. A key the plugin defaults
+    // but no file sets is reported by `orbit plugin show`, not here — this
+    // list is what the config files say.
+    for (namespace, section) in &resolved.plugins {
+        let Some(entries) = section.as_object() else {
+            continue;
+        };
+        for (field, value) in entries {
+            let key = format!("plugins.{namespace}.{field}");
+            let source = source_for_key(&key, global, workspace);
+            values.push(EffectiveConfigValue {
+                shadowed_by: shadowed_for_key(&key, &source, global, workspace),
+                source,
+                key,
+                value: value.clone(),
             });
         }
     }

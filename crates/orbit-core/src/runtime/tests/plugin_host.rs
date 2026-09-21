@@ -76,7 +76,13 @@ fn one_broken_plugin_does_not_disturb_the_builtins_or_a_healthy_plugin() {
 
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
-    let load = load_host_plugins(&global_root, &orbit_dir, &store, &mut registry);
+    let load = load_host_plugins(
+        &global_root,
+        &orbit_dir,
+        &store,
+        &mut registry,
+        &std::collections::BTreeMap::new(),
+    );
 
     assert!(
         registry.is_active("orbit.task.show"),
@@ -147,7 +153,13 @@ fn a_plugin_whose_install_tree_vanished_is_reported_rather_than_fatal() {
 
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
-    let load = load_host_plugins(&global_root, &orbit_dir, &store, &mut registry);
+    let load = load_host_plugins(
+        &global_root,
+        &orbit_dir,
+        &store,
+        &mut registry,
+        &std::collections::BTreeMap::new(),
+    );
 
     assert!(registry.is_active("orbit.task.show"));
     assert_eq!(load.diagnostics.len(), 1);

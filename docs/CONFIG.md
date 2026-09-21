@@ -1334,10 +1334,35 @@ Grants are enforced: a plugin that requests `fs`, `network`, `env_pass`,
 its tools inactive, and a call is refused with a diagnostic naming the grant.
 Backends run confined to the granted profile (Linux Landlock, macOS
 `sandbox-exec`); `backend.sandbox: none` needs the `unsandboxed` grant and is
-an `orbit plugin doctor` finding. `spec.definitions`, `spec.skills`,
-`spec.config` and `spec.web` parse and are accepted but contribute nothing in
-this release. `*.orbit-tool.yaml` sidecars and `orbit tool add` keep working
-unchanged.
+an `orbit plugin doctor` finding. `spec.web` parses and is accepted but
+contributes nothing in this release. `*.orbit-tool.yaml` sidecars and
+`orbit tool add` keep working unchanged.
+
+**What else a plugin contributes.** Beyond tools:
+
+- **Activities and jobs** (`spec.definitions.activities`, `.jobs`) load as a
+  `plugin:<ns>` catalog layer. A workspace file of the same name shadows the
+  plugin's, and a shipped default is never displaced; `orbit run show` prints
+  the layer that resolved each `job:` / `activity:` reference and what it
+  shadowed. A plugin activity is `agent_loop`, or `deterministic` with the one
+  action `plugin.tool_call { tool: <ns>.<verb>, input: {…} }`, which dispatches
+  through the ordinary audited path with the plugin's provenance on the row.
+- **Routines and auto-tasks** (`.routines`, `.auto_tasks`) are *seeded*, not
+  loaded: `orbit plugin enable` writes `.orbit/routines/<ns>-<name>.yaml` and
+  `.orbit/auto_tasks/<ns>-<name>.yaml` with `enabled: false` and a
+  `# provenance: plugin:<ns>@<version>` header. Switching one on is the same
+  reviewed edit as for a shipped default — a plugin may not ship `enabled:
+  true`, and a routine may target only a job its own plugin ships or a shipped
+  default. An upgrade re-seeds a file that still matches what the plugin wrote;
+  a file you edited is preserved with a warning until `orbit plugin enable <ns>
+  --force`. While the plugin is disabled or removed the seeded files stay put
+  and are skipped with a reason naming the plugin, which `orbit routine list`
+  and `orbit auto-task list` show. A task minted by a plugin auto-task carries
+  `plugin:<ns>` beside `auto-task:<name>`.
+- **Skills** (`spec.skills`) are linked from the install directory into
+  `~/.agents/skills` and `~/.claude/skills` on enable and unlinked on disable;
+  `orbit plugin doctor` reports a link whose target is gone.
+- **Config** (`spec.config`) claims the `[plugins.<ns>]` section below.
 
 ## Other sections (brief)
 
@@ -1350,6 +1375,7 @@ unchanged.
 | `[scoring]` | `enabled = true` records per-agent scoreboard counters under `.orbit/state/scoreboard/`. |
 | `[pr]` | PR creation defaults (template, labels, draft mode) for `orbit run ship --mode pr`. |
 | `[operation]` | Operation-mode preferences [ORB-11332]: `preset` (`supervised` default / `autonomous`) plus the preset-managed `preparation`, `preparation_due_seconds`, `leaf_ceiling`, `promotion`, `completion`, `recovery`, `recovery_episodes_per_task`, `recovery_minutes_per_task`, and the independent `review_policy` (`none` default), `review_crew`, `review_reviewer_starts` (2), `review_repair_cycles` (2), `review_minutes` (30), `delivery_cap` (`review` default). `before-pr` holds PR creation for a fresh reviewer from `review_crew` on the PR route [ORB-11333]; `review_crew` applies to that reviewer only, while `after-landing` review is minted by the `delivery-code-review` auto-task with that definition's own template crew. Resolve built-in → global → workspace → run; an explicit `preset` at a layer resets the preset-managed keys before that layer's own values apply, while the independent keys keep their own precedence. Unknown keys and out-of-range values fail load. **Preferences authorize nothing**: scoped automation needs `orbit operation enable`; `orbit operation explain` shows each effective value with its winning source. See [operation-mode operations](design/operation-mode/5_operations.md). |
+| `[plugins.<ns>]` | Settings owned by the installed plugin `<ns>`, validated against that plugin's own JSON Schema (`spec.config.schema`) with its `spec.config.defaults` applied underneath. Keys are dynamic like `[crews.<name>]`: `orbit config get`/`set plugins.<ns>.<key>` accepts only keys the plugin declares and suggests the ones that exist, values layer workspace-over-global with provenance in `orbit config show`, and `{{config.<key>}}` in the manifest resolves against the effective section. A value the schema rejects refuses **that plugin** at load, naming the key, and leaves every other plugin and all built-ins working. A section for a plugin this machine has not installed is warned about and ignored, so a workspace shared across machines still loads. See [`orbit plugin`](#orbit-plugin-and-orbitpluginsyaml--machine-installs-workspace-pins). |
 | `[runtime]` | **JSONL log rotation/retention** (`~/.orbit/state/logs/orbit.jsonl`): `log_retention_days` (default `7`) deletes archives older than N days; `log_max_total_mb` (default `500`) caps total archive size, pruning oldest first; `log_max_file_mb` (default `100`) rolls the active file to a dated archive once it exceeds N MiB. Full rotation (directory walk) runs from long-lived processes (`orbit mcp serve`, `orbit sweep` / `orbit clock tick`, `orbit web serve`). Short-lived commands rotate only when a single `metadata()` check on first JSONL write shows the active file is oversized; `orbit --help` does not open the log or walk the directory. Invalid values (`0`, or `log_max_file_mb > log_max_total_mb`) are rejected at config load. |
 
 ---

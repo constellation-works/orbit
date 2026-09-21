@@ -118,6 +118,22 @@ Use `orbit routine show <name>` for a complete installed example and effective
 state; `orbit routine --help` lists the management commands. Keep the schema
 version and field names from the installed definition when authoring one.
 
+## Routines a plugin seeds
+
+An installed plugin may ship routines. `orbit plugin enable <ns>` seeds each
+one as `.orbit/routines/<ns>-<name>.yaml` with `enabled: false` and a
+`# provenance: plugin:<ns>@<version>` header — the plugin never ships a
+schedule that is already on, and a routine it ships may target only a job the
+same plugin ships or a shipped default. Turning one on is the ordinary
+reviewed edit described above.
+
+An upgrade re-seeds a seeded file only while it still matches what the plugin
+wrote; a file you edited is preserved with a warning until
+`orbit plugin enable <ns> --force` overwrites it. Disabling or removing the
+plugin leaves the file where it is: the clock tick skips it with a reason
+naming the plugin, and `orbit routine list` shows it with that reason rather
+than as a load error.
+
 ## Tuning which tasks task-pilot prepares
 
 The seeded `task_pilot.yaml` carries an optional `eligibility` block under

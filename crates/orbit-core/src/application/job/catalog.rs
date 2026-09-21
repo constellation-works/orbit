@@ -29,76 +29,11 @@ pub(crate) fn v2_job_catalog_loads() -> usize {
     V2_JOB_CATALOG_LOADS.with(std::cell::Cell::get)
 }
 
-/// Shippable default workflow assets, seeded under
-/// `<orbit_root>/resources/jobs/<name>.yaml` on `orbit init`. The entries
-/// here are the admission-controlled task shipment workflows
-/// (auto / gate / local / pr) plus the two claimed distributed leaves
-/// (`task_claimed_local_pipeline`, `task_claimed_pr_pipeline`). The claimed
-/// pair is seeded because a pulled leaf run has to resolve its definition,
-/// not because it is dispatchable: every step in it reads the trusted worker
-/// binding, and a run with no matching claim refuses before it touches the
-/// repository. Example and smoke fixtures live
-/// under `crates/orbit-core/assets/jobs/examples/` and are NOT seeded —
-/// they exist for `crates/orbit-engine/examples/v2_job_runtime_smoke.rs`
-/// only.
-pub(crate) const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
-    (
-        "agent_invoke_pipeline",
-        include_str!("../../../assets/jobs/agent_invoke_pipeline.yaml"),
-    ),
-    (
-        "ci_failure_sweep_pipeline",
-        include_str!("../../../assets/jobs/ci_failure_sweep_pipeline.yaml"),
-    ),
-    (
-        "dependabot_alert_sweep_pipeline",
-        include_str!("../../../assets/jobs/dependabot_alert_sweep_pipeline.yaml"),
-    ),
-    (
-        "task_auto_pipeline",
-        include_str!("../../../assets/jobs/task_auto_pipeline.yaml"),
-    ),
-    (
-        "task_claimed_local_pipeline",
-        include_str!("../../../assets/jobs/task_claimed_local_pipeline.yaml"),
-    ),
-    (
-        "task_claimed_pr_pipeline",
-        include_str!("../../../assets/jobs/task_claimed_pr_pipeline.yaml"),
-    ),
-    (
-        "task_gate_pipeline",
-        include_str!("../../../assets/jobs/task_gate_pipeline.yaml"),
-    ),
-    (
-        "task_landing_pipeline",
-        include_str!("../../../assets/jobs/task_landing_pipeline.yaml"),
-    ),
-    (
-        "task_local_pipeline",
-        include_str!("../../../assets/jobs/task_local_pipeline.yaml"),
-    ),
-    (
-        "task_pilot_pipeline",
-        include_str!("../../../assets/jobs/task_pilot_pipeline.yaml"),
-    ),
-    (
-        "task_pr_pipeline",
-        include_str!("../../../assets/jobs/task_pr_pipeline.yaml"),
-    ),
-    (
-        "workspace_ship_pipeline",
-        include_str!("../../../assets/jobs/workspace_ship_pipeline.yaml"),
-    ),
-    (
-        "workspace_auto_pipeline",
-        include_str!("../../../assets/jobs/workspace_auto_pipeline.yaml"),
-    ),
-    (
-        "worktree_gc_pipeline",
-        include_str!("../../../assets/jobs/worktree_gc_pipeline.yaml"),
-    ),
-];
+/// Shippable default workflow assets. The list lives beside the shipped
+/// activities in `runtime::assets` so the runtime kernel can answer "is this a
+/// job Orbit ships" — a plugin routine may target one — without reaching up
+/// into the application layer.
+pub(crate) use crate::runtime::assets::DEFAULT_JOB_FILES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobCatalogFilter {
@@ -410,6 +345,13 @@ impl OrbitRuntime {
                 }
             }
         }
+        self.load_plugin_job_files(&mut catalog, &mut |error| {
+            diagnostics.push(V2JobCatalogDiagnostic {
+                directory_index: usize::MAX,
+                path: PathBuf::new(),
+                error,
+            });
+        });
         for diagnostic in &diagnostics {
             tracing::warn!(
                 target: "orbit.core.jobs",
@@ -439,7 +381,35 @@ impl OrbitRuntime {
                 }
             }
         }
+        self.load_plugin_job_files(&mut catalog, &mut |error| errors.push(error));
         (catalog, errors)
+    }
+
+    /// Load the `plugin:<ns>` job layer.
+    ///
+    /// It loads after every directory layer, so a workspace job and a shipped
+    /// default both keep their name against a plugin that ships the same one
+    /// (design §3: `workspace > plugin:<ns> > shipped`, with L-0060's rule that
+    /// a shipped default is never displaced). A plugin whose job files no
+    /// longer parse yields a diagnostic, never a failed catalog: every other
+    /// job must remain dispatchable.
+    fn load_plugin_job_files(
+        &self,
+        catalog: &mut V2JobCatalog,
+        report: &mut dyn FnMut(OrbitError),
+    ) {
+        for plugin in self.plugin_load().active() {
+            if plugin.definitions.jobs.is_empty() {
+                continue;
+            }
+            if let Err(error) = catalog.load_files_prefer_existing(&plugin.definitions.jobs) {
+                report(OrbitError::InvalidInput(format!(
+                    "plugin '{}' job catalog layer: {}",
+                    plugin.namespace(),
+                    catalog_error_to_orbit(error)
+                )));
+            }
+        }
     }
 
     fn v2_job_asset_dirs(&self) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {

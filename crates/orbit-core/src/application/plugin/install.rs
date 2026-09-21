@@ -97,11 +97,36 @@ pub fn install_plugin(
         ))
     })?;
 
+    // `--enable` is an enable: the plugin's schedules are seeded and its
+    // skills linked here too, so a one-step install leaves the same state as
+    // `add` followed by `enable`. A plugin whose definitions break the §4.5
+    // rules contributes nothing and is reported inactive — the refusal belongs
+    // to the load, which states it on every later command, so it is not raised
+    // as this command's error and the install record stands.
+    let contributions_refused = if enabled {
+        // `--force` on `add` replaces an install of the same version; it is
+        // deliberately not an answer about a definition the operator edited.
+        // Overwriting one of those stays `orbit plugin enable <ns> --force`.
+        match super::lifecycle::apply_enabled_contributions(runtime, &install_path, false) {
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.core.plugin",
+                    plugin = %name,
+                    "installed, but its definitions and skills were not applied: {error}",
+                );
+                Some(error.to_string())
+            }
+        }
+    } else {
+        None
+    };
+
     // Report the status the next runtime will register it with, so `add
     // --enable` on an incompatible host says so now rather than at first use.
     let status = if !enabled {
         PluginStatus::Disabled
-    } else if unmet_requirement(&plugin).is_some() {
+    } else if unmet_requirement(&plugin).is_some() || contributions_refused.is_some() {
         PluginStatus::Inactive
     } else {
         PluginStatus::Active
@@ -114,7 +139,9 @@ pub fn install_plugin(
     // Held until the copy above finished, so a fetched tree is not collected
     // out from under it.
     drop(resolved);
-    Ok(summary_for_installed(&stored, Some(&plugin), status))
+    let mut summary = summary_for_installed(&stored, Some(&plugin), status);
+    summary.diagnostic = contributions_refused;
+    Ok(summary)
 }
 
 /// Global install only (§3): a plugin tree inside the repository would be

@@ -25,6 +25,12 @@ pub(crate) struct RawRuntimeConfig {
     /// `[crews.<name>]` registry. Each table supplies one assignment Orbit
     /// resolves for activity dispatch at run start.
     pub(crate) crews: Option<BTreeMap<String, RawCrewEntry>>,
+    /// `[plugins.<ns>]` registry. Each table is owned by one installed plugin
+    /// and validated against that plugin's JSON Schema by the layer that knows
+    /// which plugins exist (`orbit-core`). A section for a plugin this host has
+    /// not installed is deliberately tolerated here: a workspace that pins a
+    /// plugin must still load on a machine that has not installed it yet.
+    pub(crate) plugins: Option<BTreeMap<String, toml::Value>>,
     /// Retired in ORB-10627. Existing workspaces may still carry the section
     /// written by older `orbit init`; loaders warn and ignore it.
     pub(crate) duel: Option<toml::Value>,

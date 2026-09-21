@@ -1,10 +1,12 @@
 # Installing plugins
 
 A plugin is one directory holding a `plugin.yaml` (`schemaVersion: 2`,
-`kind: Plugin`) that declares a namespace and a set of tools. Installing one
-adds `<ns>.<verb>` tools to `orbit tool list`, makes them runnable with
+`kind: Plugin`) that declares a namespace and what it contributes. Installing
+one adds `<ns>.<verb>` tools to `orbit tool list`, makes them runnable with
 `orbit tool run`, and — for a tool whose manifest gives it an `mcp_scope` —
-advertises them to MCP clients as `<ns>_<verb>`.
+advertises them to MCP clients as `<ns>_<verb>`. A plugin may also contribute
+activities and jobs, scheduled chores, skills and its own configuration
+section: see [What enabling installs](#what-enabling-installs).
 
 Nothing here is required for task tracking or agent execution. Add a plugin
 only when the user asks for the capability it provides.
@@ -51,20 +53,50 @@ orbit plugin sync --dry-run              # what this machine is missing
 orbit plugin sync                        # install it
 ```
 
+## What enabling installs
+
+Beyond tools, `orbit plugin enable <ns>` applies everything else the manifest
+declares:
+
+| Contribution | Where it lands |
+|---|---|
+| `spec.definitions.activities`, `.jobs` | A `plugin:<ns>` catalog layer. A workspace file of the same name shadows the plugin's, and a shipped default is never displaced. `orbit run show` names the layer that resolved each `job:` / `activity:` reference and what it shadowed. |
+| `spec.definitions.routines`, `.auto_tasks` | Seeded as `.orbit/routines/<ns>-<name>.yaml` and `.orbit/auto_tasks/<ns>-<name>.yaml` with `enabled: false` and a `# provenance: plugin:<ns>@<version>` header. |
+| `spec.skills` | Linked from the install directory into `~/.agents/skills` and `~/.claude/skills`; unlinked on disable. |
+| `spec.config` | The `[plugins.<ns>]` config section, validated by the plugin's own JSON Schema. |
+
+Seeded schedules are inert until a human reviews one and sets `enabled: true`
+— a plugin may not ship a schedule that is already on, and a routine it ships
+may target only a job the same plugin ships or a shipped default. Say this
+plainly when proposing a plugin: enabling it does not start anything.
+
+An upgrade re-seeds a file that still matches what the plugin wrote. A file
+edited since is preserved with a warning until `orbit plugin enable <ns>
+--force` takes the plugin's version. Disabling or removing the plugin leaves
+the files where they are and skips them with a reason naming the plugin, which
+`orbit routine list` and `orbit auto-task list` show; tasks minted from a
+plugin auto-task carry `plugin:<ns>`.
+
+Configure a plugin the ordinary way — `orbit config set plugins.<ns>.<key>
+<value>` accepts only keys the plugin declares, and `orbit config show` prints
+the value with its workspace/global provenance. A value the plugin's schema
+rejects refuses *that plugin* at load, naming the key.
+
 ## When a plugin is not serving its tools
 
 ```bash
 orbit plugin doctor
 ```
 
-One row per plugin, naming the step that would make it active. The four states:
+One row per plugin, naming the step that would make it active, plus a row for
+any skill link whose target has gone. The four states:
 
 | Status | What it means |
 |---|---|
 | `active` | Installed, enabled, and serving its tools. |
 | `disabled` | Installed but not enabled — run `orbit plugin enable <ns>`. |
 | `missing` | Pinned by the repository, not installed here — run `orbit plugin sync`. |
-| `inactive` | Enabled but refused at load: the manifest no longer loads, its `requires.orbit`/`requires.host_api` does not hold on this machine, or its namespace collides. `orbit plugin show <ns>` names the reason. |
+| `inactive` | Enabled but refused at load: the manifest no longer loads, its `requires.orbit`/`requires.host_api` does not hold on this machine, its namespace collides, a definition it ships breaks the rules above, or its `[plugins.<ns>]` config fails its own schema. `orbit plugin show <ns>` names the reason. |
 
 A plugin fails closed on its own: one broken plugin never takes down the
 built-in tools, the runtime, or another plugin.

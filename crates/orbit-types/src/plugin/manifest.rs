@@ -85,9 +85,9 @@ pub struct PluginSpec {
     pub permissions: PluginPermissions,
     #[serde(default)]
     pub tools: Vec<PluginToolSpec>,
-    /// Parsed for forward compatibility; consumed by later phases.
+    /// Definition files this plugin ships (§4.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub definitions: Option<PluginUnusedSections>,
+    pub definitions: Option<PluginDefinitions>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -243,10 +243,13 @@ pub struct PluginCliShape {
     pub positional: Vec<String>,
 }
 
-/// `spec.definitions`: glob lists consumed by phase 3.
+/// `spec.definitions`: glob lists of the definition files a plugin ships.
+///
+/// Activities and jobs become the `plugin:<ns>` catalog layer; routines and
+/// auto-tasks are seeded as `enabled: false` templates on enable (§3).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PluginUnusedSections {
+pub struct PluginDefinitions {
     #[serde(default)]
     pub activities: Vec<String>,
     #[serde(default)]
@@ -397,6 +400,44 @@ impl PluginManifest {
                 }
             }
         }
+        self.validate_definition_paths()?;
+        Ok(())
+    }
+
+    /// Every path the manifest names outside `spec.tools`: definition globs,
+    /// skill directories and the config schema. All are plugin-root relative.
+    fn validate_definition_paths(&self) -> Result<(), PluginManifestError> {
+        if let Some(definitions) = &self.spec.definitions {
+            for (patterns, key) in [
+                (&definitions.activities, "activities"),
+                (&definitions.jobs, "jobs"),
+                (&definitions.routines, "routines"),
+                (&definitions.auto_tasks, "auto_tasks"),
+            ] {
+                for (index, pattern) in patterns.iter().enumerate() {
+                    validate_plugin_relative_path(
+                        pattern,
+                        &format!("spec.definitions.{key}[{index}]"),
+                    )?;
+                }
+            }
+        }
+        for (index, skill) in self.spec.skills.iter().enumerate() {
+            validate_plugin_relative_path(skill, &format!("spec.skills[{index}]"))?;
+        }
+        if let Some(config) = &self.spec.config {
+            if let Some(schema) = &config.schema {
+                validate_plugin_relative_path(schema, "spec.config.schema")?;
+            }
+            if let Some(defaults) = &config.defaults
+                && !defaults.is_object()
+            {
+                return Err(PluginManifestError::new(
+                    "spec.config.defaults",
+                    "must be a table of `[plugins.<ns>]` keys",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -404,4 +445,43 @@ impl PluginManifest {
     pub fn claims_first_party_namespace(&self) -> bool {
         self.metadata.origin == Some(PluginOrigin::Orbit)
     }
+
+    /// `plugin:<ns>@<version>`: the provenance a seeded definition, a managed
+    /// skill and the catalog layer all carry (§4.4).
+    pub fn provenance(&self) -> String {
+        plugin_provenance_label(&self.metadata.name, &self.metadata.version)
+    }
+}
+
+/// The provenance label for a plugin at one version.
+pub fn plugin_provenance_label(namespace: &str, version: &str) -> String {
+    format!("plugin:{namespace}@{version}")
+}
+
+/// Reject a manifest path that would leave the plugin root before it is ever
+/// joined to it: an absolute path, a `..` component, or an empty one.
+///
+/// Containment is still re-checked after canonicalisation at load; this is the
+/// pure-data half so a manifest can be refused without touching a filesystem.
+pub fn validate_plugin_relative_path(value: &str, field: &str) -> Result<(), PluginManifestError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(PluginManifestError::new(field, "must not be empty"));
+    }
+    if trimmed.starts_with('/') || trimmed.contains('\\') {
+        return Err(PluginManifestError::new(
+            field,
+            format!("'{value}' must be a relative path inside the plugin root"),
+        ));
+    }
+    if trimmed
+        .split('/')
+        .any(|component| component == ".." || component.is_empty())
+    {
+        return Err(PluginManifestError::new(
+            field,
+            format!("'{value}' must not contain an empty or '..' path component"),
+        ));
+    }
+    Ok(())
 }

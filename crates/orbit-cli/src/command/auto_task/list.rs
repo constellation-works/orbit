@@ -29,7 +29,25 @@ impl Execute for AutoTaskListArgs {
             definitions.retain(|d| !d.enabled);
         }
 
-        let records: Vec<Value> = definitions.iter().map(definition_to_json).collect();
+        // A definition a plugin seeded stops firing when that plugin is
+        // disabled. It is still listed — the file is still there — with the
+        // reason, so the list never silently implies it is scheduled.
+        let skips: Vec<Option<String>> = definitions
+            .iter()
+            .map(|definition| runtime.auto_task_skip_reason(definition))
+            .collect();
+        let records: Vec<Value> = definitions
+            .iter()
+            .zip(&skips)
+            .map(|(definition, skipped)| {
+                let mut record = definition_to_json(definition);
+                record["skipped_reason"] = match skipped {
+                    Some(reason) => Value::String(reason.clone()),
+                    None => Value::Null,
+                };
+                record
+            })
+            .collect();
 
         use crate::output::table::{Column, Table};
         let mut table = Table::new(vec![
@@ -39,8 +57,10 @@ impl Execute for AutoTaskListArgs {
             Column::new("TITLE"),
         ])
         .empty_message("no auto-task definitions");
-        for definition in &definitions {
-            let state = if definition.enabled {
+        for (definition, skipped) in definitions.iter().zip(&skips) {
+            let state = if skipped.is_some() {
+                "skipped"
+            } else if definition.enabled {
                 "enabled"
             } else {
                 "disabled"
@@ -51,6 +71,11 @@ impl Execute for AutoTaskListArgs {
                 schedule_summary(definition),
                 definition.template.title.clone(),
             ]);
+        }
+        for (definition, skipped) in definitions.iter().zip(&skips) {
+            if let Some(reason) = skipped {
+                eprintln!("skipped [{}]: {reason}", definition.name);
+            }
         }
         Ok(Payload::list(records, table).into())
     }

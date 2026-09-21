@@ -23,9 +23,9 @@ mod tests;
 pub use backend::{PLUGIN_TIMEOUT_CEILING_MS, PluginBackendSpec, PluginSandboxProfile};
 pub use envelope::{PLUGIN_ENVELOPE_SCHEMA_VERSION, parse_response, validate_output};
 pub use loader::{
-    FIRST_PARTY_MANIFEST_DIGESTS, LoadedPlugin, PluginLoadError, PluginValidationPolicy,
-    ResolvedPluginTool, first_party_source, load_plugin_dir, manifest_digest, manifest_refusal,
-    validate_loaded_plugin,
+    FIRST_PARTY_MANIFEST_DIGESTS, LoadedPlugin, PluginDefinitionFiles, PluginLoadError,
+    PluginValidationPolicy, ResolvedPluginTool, first_party_source, load_plugin_dir,
+    manifest_digest, manifest_refusal, validate_loaded_plugin,
 };
 pub use mcp::{McpBackend, McpExpectedTool};
 pub use migrate::{SidecarManifest, load_sidecar_manifest, migrate_sidecars};

@@ -1,5 +1,6 @@
 pub(crate) mod agent_invoke;
 pub(crate) mod catalog;
+pub(crate) mod catalog_layers;
 pub(crate) mod claimed;
 pub(crate) mod crew_pools;
 mod exec;
@@ -16,6 +17,7 @@ pub use agent_invoke::{
 };
 pub(crate) use catalog::{DEFAULT_JOB_FILES, seed_default_jobs};
 pub use catalog::{JobCatalogEntry, JobCatalogFilter};
+pub use catalog_layers::CatalogReferenceLayer;
 pub use exec::V2JobRunResult;
 pub use pipeline::{
     PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWorkerLogSnapshot,

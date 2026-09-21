@@ -137,6 +137,10 @@ pub struct ResolvedConfig {
     pub tasks_id_start: Option<u32>,
     /// Optional crew tunables ignored at admission (warn-and-unset).
     pub ignored_crew_properties: Vec<IgnoredCrewProperty>,
+    /// `[plugins.<ns>]` sections, one JSON object per namespace. Admitted
+    /// structurally here; the plugin's own JSON Schema is applied by the layer
+    /// that knows which plugins are installed (design §1).
+    pub plugins: BTreeMap<String, serde_json::Value>,
 }
 
 impl ResolvedConfig {
@@ -168,6 +172,7 @@ impl ResolvedConfig {
             operation: OperationPolicy::built_in(),
             tasks_id_start: snapshot.tasks_id_start,
             ignored_crew_properties: Vec::new(),
+            plugins: BTreeMap::new(),
             snapshot,
         }
     }
@@ -303,9 +308,47 @@ impl ResolvedConfig {
             operation,
             tasks_id_start: snapshot.tasks_id_start,
             ignored_crew_properties,
+            plugins: plugin_sections_from_raw(parsed.plugins.as_ref(), config_path)?,
             snapshot,
         })
     }
+}
+
+/// Project every `[plugins.<ns>]` table as JSON.
+///
+/// Only the shape is checked here — a section must be a table, and the
+/// namespace must be one a manifest could declare. Which keys are legal is the
+/// plugin's own schema, applied where installed plugins are known.
+fn plugin_sections_from_raw(
+    raw: Option<&BTreeMap<String, toml::Value>>,
+    config_path: &Path,
+) -> Result<BTreeMap<String, serde_json::Value>, OrbitError> {
+    let Some(raw) = raw else {
+        return Ok(BTreeMap::new());
+    };
+    let mut sections = BTreeMap::new();
+    for (namespace, value) in raw {
+        if !orbit_types::plugin::is_valid_namespace(namespace) {
+            return Err(OrbitError::InvalidInput(format!(
+                "invalid runtime config '{}': '[plugins.{namespace}]' is not a plugin namespace:                  use lowercase letters, digits, '_' or '-', starting with a letter",
+                redact_home_dir(&config_path.display().to_string())
+            )));
+        }
+        let json = serde_json::to_value(value).map_err(|error| {
+            OrbitError::InvalidInput(format!(
+                "invalid runtime config '{}': '[plugins.{namespace}]' is not representable:                  {error}",
+                redact_home_dir(&config_path.display().to_string())
+            ))
+        })?;
+        if !json.is_object() {
+            return Err(OrbitError::InvalidInput(format!(
+                "invalid runtime config '{}': 'plugins.{namespace}' must be a table of that                  plugin's settings",
+                redact_home_dir(&config_path.display().to_string())
+            )));
+        }
+        sections.insert(namespace.clone(), json);
+    }
+    Ok(sections)
 }
 
 pub(crate) fn default_crews() -> BTreeMap<String, Crew> {

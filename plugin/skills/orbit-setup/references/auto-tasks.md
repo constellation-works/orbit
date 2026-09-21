@@ -137,6 +137,22 @@ structured `github.auth.status` answer may still report `available: false` or
 `authenticated: false` when the lane has no GitHub CLI or no credentials.
 That is unavailable evidence, not a clean CI result.
 
+## Definitions a plugin seeds
+
+An installed plugin may ship auto-task definitions. `orbit plugin enable <ns>`
+seeds each one as `.orbit/auto_tasks/<ns>-<name>.yaml` with `enabled: false`
+and a `# provenance: plugin:<ns>@<version>` header; a plugin may not ship a
+definition that is already enabled. Review it, then `orbit auto-task toggle
+<ns>-<name> on` like any other.
+
+An upgrade re-seeds a seeded file only while it still matches what the plugin
+wrote; a file you edited is preserved with a warning until
+`orbit plugin enable <ns> --force`. While the plugin is disabled or removed
+the definition stays on disk and is skipped: `orbit auto-task list` shows it
+as `skipped` with a reason naming the plugin. Tasks minted from one carry
+`plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
+plugin being removed.
+
 ## The six seeded definitions
 
 `orbit workspace init` seeds all six, disabled:

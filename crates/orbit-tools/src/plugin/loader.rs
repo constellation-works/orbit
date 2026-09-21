@@ -17,6 +17,7 @@ use orbit_types::plugin::{
 use orbit_types::tool::ToolParam;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 use super::schema::params_from_input_schema;
 use crate::{TIMEOUT_FAST_MS, ToolRegistry};
@@ -61,6 +62,26 @@ pub struct ResolvedPluginTool {
     pub parameters: Vec<ToolParam>,
 }
 
+/// The definition files one plugin ships, resolved to absolute paths inside
+/// the plugin root (§4.5). Activities and jobs become the `plugin:<ns>`
+/// catalog layer; routines and auto-tasks are seeded on enable.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginDefinitionFiles {
+    pub activities: Vec<PathBuf>,
+    pub jobs: Vec<PathBuf>,
+    pub routines: Vec<PathBuf>,
+    pub auto_tasks: Vec<PathBuf>,
+}
+
+impl PluginDefinitionFiles {
+    pub fn is_empty(&self) -> bool {
+        self.activities.is_empty()
+            && self.jobs.is_empty()
+            && self.routines.is_empty()
+            && self.auto_tasks.is_empty()
+    }
+}
+
 /// A plugin directory whose manifest parsed, whose `$ref`s resolved inside
 /// the root, and whose backend command exists.
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +91,14 @@ pub struct LoadedPlugin {
     pub manifest_digest: String,
     pub backend_command: PathBuf,
     pub tools: Vec<ResolvedPluginTool>,
+    /// `spec.definitions.*` resolved to files inside the root.
+    pub definitions: PluginDefinitionFiles,
+    /// `spec.skills[]` resolved to directories holding a `SKILL.md`.
+    pub skills: Vec<PathBuf>,
+    /// `spec.config.schema` resolved and read, when the manifest declares one.
+    pub config_schema: Option<Value>,
+    /// `spec.config.defaults`, flattened to one entry per declared key.
+    pub config_defaults: BTreeMap<String, Value>,
 }
 
 impl LoadedPlugin {
@@ -138,13 +167,229 @@ pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
         });
     }
 
+    let definitions = resolve_definitions(&root, &manifest)?;
+    let skills = resolve_skills(&root, &manifest)?;
+    let (config_schema, config_defaults) = resolve_config_section(&root, &manifest)?;
+
     Ok(LoadedPlugin {
         root,
         manifest,
         manifest_digest,
         backend_command,
         tools,
+        definitions,
+        skills,
+        config_schema,
+        config_defaults,
     })
+}
+
+/// Resolve every `spec.definitions` pattern against the plugin root.
+fn resolve_definitions(
+    root: &Path,
+    manifest: &PluginManifest,
+) -> Result<PluginDefinitionFiles, PluginLoadError> {
+    let Some(declared) = manifest.spec.definitions.as_ref() else {
+        return Ok(PluginDefinitionFiles::default());
+    };
+    Ok(PluginDefinitionFiles {
+        activities: resolve_patterns(root, &declared.activities, "spec.definitions.activities")?,
+        jobs: resolve_patterns(root, &declared.jobs, "spec.definitions.jobs")?,
+        routines: resolve_patterns(root, &declared.routines, "spec.definitions.routines")?,
+        auto_tasks: resolve_patterns(root, &declared.auto_tasks, "spec.definitions.auto_tasks")?,
+    })
+}
+
+/// Expand one list of manifest patterns into files inside the plugin root.
+///
+/// A pattern is either a literal path — which must exist — or a directory
+/// plus a `*` wildcard in its final component. A wildcard whose directory is
+/// absent matches nothing: a manifest may declare the conventional layout for
+/// a kind it ships none of.
+fn resolve_patterns(
+    root: &Path,
+    patterns: &[String],
+    field: &str,
+) -> Result<Vec<PathBuf>, PluginLoadError> {
+    let mut resolved = Vec::new();
+    for (index, pattern) in patterns.iter().enumerate() {
+        let field = format!("{field}[{index}]");
+        let pattern = pattern.trim();
+        let (directory, file_pattern) = match pattern.rsplit_once('/') {
+            Some((directory, file)) => (root.join(directory), file.to_string()),
+            None => (root.to_path_buf(), pattern.to_string()),
+        };
+        if !file_pattern.contains('*') {
+            let path = contained_path(root, &directory.join(&file_pattern), &field)?;
+            if !path.is_file() {
+                return Err(PluginManifestError::new(
+                    field,
+                    format!("'{pattern}' does not name a file inside the plugin root"),
+                )
+                .into());
+            }
+            resolved.push(path);
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        let mut matched = Vec::new();
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if !wildcard_matches(&file_pattern, name) {
+                continue;
+            }
+            let path = contained_path(root, &entry.path(), &field)?;
+            if path.is_file() {
+                matched.push(path);
+            }
+        }
+        matched.sort();
+        resolved.extend(matched);
+    }
+    resolved.dedup();
+    Ok(resolved)
+}
+
+/// Match one `*`-wildcard file pattern against a file name. `*` matches any
+/// run of characters, including none; every other character is literal.
+fn wildcard_matches(pattern: &str, name: &str) -> bool {
+    let mut segments = pattern.split('*');
+    let Some(first) = segments.next() else {
+        return false;
+    };
+    let Some(mut rest) = name.strip_prefix(first) else {
+        return false;
+    };
+    let segments: Vec<&str> = segments.collect();
+    let Some((last, middle)) = segments.split_last() else {
+        return rest.is_empty();
+    };
+    for segment in middle {
+        match rest.find(segment) {
+            Some(at) => rest = &rest[at + segment.len()..],
+            None => return false,
+        }
+    }
+    rest.len() >= last.len() && rest.ends_with(last)
+}
+
+/// Canonicalise `candidate` and refuse anything outside the plugin root.
+fn contained_path(root: &Path, candidate: &Path, field: &str) -> Result<PathBuf, PluginLoadError> {
+    let resolved = std::fs::canonicalize(candidate).map_err(|error| {
+        PluginManifestError::new(
+            field,
+            format!("'{}' cannot be read: {error}", candidate.display()),
+        )
+    })?;
+    if !resolved.starts_with(root) {
+        return Err(PluginManifestError::new(
+            field,
+            format!(
+                "'{}' escapes the plugin root {}",
+                resolved.display(),
+                root.display()
+            ),
+        )
+        .into());
+    }
+    Ok(resolved)
+}
+
+/// Resolve `spec.skills[]`: each entry is a directory holding a `SKILL.md`.
+fn resolve_skills(root: &Path, manifest: &PluginManifest) -> Result<Vec<PathBuf>, PluginLoadError> {
+    let mut skills = Vec::with_capacity(manifest.spec.skills.len());
+    for (index, declared) in manifest.spec.skills.iter().enumerate() {
+        let field = format!("spec.skills[{index}]");
+        let path = contained_path(root, &root.join(declared.trim()), &field)?;
+        if !path.join("SKILL.md").is_file() {
+            return Err(PluginManifestError::new(
+                field,
+                format!("'{declared}' must be a directory containing SKILL.md"),
+            )
+            .into());
+        }
+        skills.push(path);
+    }
+    Ok(skills)
+}
+
+/// Read `spec.config.schema` and flatten `spec.config.defaults`.
+///
+/// A schema that does not compile, or defaults the schema itself rejects, is
+/// a manifest error: the plugin would otherwise install a `[plugins.<ns>]`
+/// section no value can satisfy (§4.9).
+fn resolve_config_section(
+    root: &Path,
+    manifest: &PluginManifest,
+) -> Result<(Option<Value>, BTreeMap<String, Value>), PluginLoadError> {
+    let Some(config) = manifest.spec.config.as_ref() else {
+        return Ok((None, BTreeMap::new()));
+    };
+    let schema = match config.schema.as_deref() {
+        Some(relative) => {
+            let path = contained_path(root, &root.join(relative.trim()), "spec.config.schema")?;
+            let bytes = std::fs::read(&path).map_err(|error| {
+                PluginManifestError::new(
+                    "spec.config.schema",
+                    format!("'{relative}' cannot be read: {error}"),
+                )
+            })?;
+            let value: Value = serde_json::from_slice(&bytes).map_err(|error| {
+                PluginManifestError::new(
+                    "spec.config.schema",
+                    format!("'{relative}' is not valid JSON: {error}"),
+                )
+            })?;
+            if !value.is_object() {
+                return Err(PluginManifestError::new(
+                    "spec.config.schema",
+                    format!("'{relative}' must contain a JSON Schema object"),
+                )
+                .into());
+            }
+            Some(value)
+        }
+        None => None,
+    };
+    let defaults: BTreeMap<String, Value> = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.as_object())
+        .map(|defaults| {
+            defaults
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(schema) = &schema {
+        let compiled = jsonschema::JSONSchema::compile(schema).map_err(|error| {
+            PluginManifestError::new(
+                "spec.config.schema",
+                format!("is not a compilable JSON Schema: {error}"),
+            )
+        })?;
+        let rendered = Value::Object(
+            defaults
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        );
+        if let Err(errors) = compiled.validate(&rendered) {
+            let details = errors.map(|error| error.to_string()).collect::<Vec<_>>();
+            return Err(PluginManifestError::new(
+                "spec.config.defaults",
+                format!("are rejected by spec.config.schema: {}", details.join("; ")),
+            )
+            .into());
+        }
+    }
+    Ok((schema, defaults))
 }
 
 /// serde_yaml names an unknown key in its message; surface the closest

@@ -40,6 +40,7 @@ macro_rules! deterministic_action_catalog {
                 ListBacklogTasks => "list_backlog_tasks",
                 OrbitToolCall => "orbit_tool_call",
                 PipelineSuccessGuard => "pipeline_success_guard",
+                PluginToolCall => "plugin.tool_call",
                 PrepareTaskPilot => "prepare_task_pilot",
                 PromoteAgentMain => "promote_agent_main",
                 ReleaseLocks => "release_locks",

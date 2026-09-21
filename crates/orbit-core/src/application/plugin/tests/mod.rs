@@ -1,4 +1,9 @@
+mod definition_fixture;
+mod definitions;
 mod fixture;
 mod grants;
 mod install;
 mod lifecycle;
+mod plugin_config;
+mod seed;
+mod skills;

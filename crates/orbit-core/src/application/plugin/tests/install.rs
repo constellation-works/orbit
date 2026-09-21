@@ -60,7 +60,15 @@ fn add_then_enable_puts_the_tool_on_the_surface() {
         "{doctor:?}"
     );
 
-    super::super::enable_plugin(&runtime, "demo", &["fs".to_string()]).expect("enable");
+    super::super::enable_plugin(
+        &runtime,
+        "demo",
+        &super::super::PluginEnableOptions {
+            grants: vec!["fs".to_string()],
+            force: false,
+        },
+    )
+    .expect("enable");
 
     let runtime = fixture.reopen();
     let tool = runtime

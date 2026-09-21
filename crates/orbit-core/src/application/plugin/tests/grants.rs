@@ -5,7 +5,8 @@
 use orbit_types::plugin::{PluginGrant, PluginStatus};
 
 use super::super::{
-    PluginAddOptions, disable_plugin, enable_plugin, install_plugin, plugin_doctor, show_plugin,
+    PluginAddOptions, PluginEnableOptions, disable_plugin, enable_plugin, install_plugin,
+    plugin_doctor, show_plugin,
 };
 use super::fixture::{PluginFixture, PluginSpecFixture};
 
@@ -64,7 +65,7 @@ fn an_ungranted_request_registers_the_tool_inactive_until_it_is_granted() {
     assert_eq!(permission(&summary, PluginGrant::Network), (None, false));
     assert!(!summary.tools.is_empty() && summary.tools.iter().all(|tool| !tool.active));
 
-    enable_plugin(&runtime, "demo", &["fs".to_string()]).expect("grant fs");
+    enable_plugin(&runtime, "demo", &grant_options(&["fs"])).expect("grant fs");
 
     let runtime = fixture.reopen();
     fixture
@@ -85,7 +86,7 @@ fn an_unknown_grant_name_is_refused_rather_than_recorded() {
     let fixture = PluginFixture::new();
     install(&fixture, PluginSpecFixture::new("demo", "demo"));
     let runtime = fixture.reopen();
-    let error = enable_plugin(&runtime, "demo", &["wifi".to_string()])
+    let error = enable_plugin(&runtime, "demo", &grant_options(&["wifi"]))
         .unwrap_err()
         .to_string();
     assert!(
@@ -132,7 +133,7 @@ fn sandbox_none_refuses_without_the_grant_and_is_a_doctor_finding_with_it() {
         .expect("a doctor row");
     assert!(finding.message.contains("`unsandboxed`"), "{finding:?}");
 
-    enable_plugin(&runtime, "loose", &["unsandboxed".to_string()]).expect("grant");
+    enable_plugin(&runtime, "loose", &grant_options(&["unsandboxed"])).expect("grant");
 
     let runtime = fixture.reopen();
     fixture
@@ -161,4 +162,12 @@ fn sandbox_none_refuses_without_the_grant_and_is_a_doctor_finding_with_it() {
         .find(|result| result.plugin == "loose")
         .expect("a doctor row");
     assert!(!finding.message.contains("runs unsandboxed"), "{finding:?}");
+}
+
+/// `--grant a,b` as the lifecycle takes it.
+fn grant_options(grants: &[&str]) -> PluginEnableOptions {
+    PluginEnableOptions {
+        grants: grants.iter().map(|grant| (*grant).to_string()).collect(),
+        force: false,
+    }
 }
