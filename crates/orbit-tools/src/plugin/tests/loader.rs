@@ -1,8 +1,11 @@
 use std::path::Path;
+use std::process::Command;
 
 use orbit_types::plugin::MANIFEST_FILE_NAME;
 
-use super::super::loader::{fs_write_root_covers, load_plugin_dir, refuse_covering_fs_write_roots};
+use super::super::loader::{
+    first_party_source, fs_write_root_covers, load_plugin_dir, refuse_covering_fs_write_roots,
+};
 
 const MANIFEST: &str = "\
 schemaVersion: 2
@@ -117,5 +120,100 @@ fn load_refuses_a_manifest_whose_fs_write_covers_the_plugin_root() {
     assert!(
         error.contains("spec.permissions.fs.write[0]") && error.contains("plugin install root"),
         "{error}"
+    );
+}
+
+fn git(root: &Path, args: &[&str]) -> String {
+    let result = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .expect("run git");
+    assert!(
+        result.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    String::from_utf8(result.stdout)
+        .expect("git output")
+        .trim()
+        .into()
+}
+
+/// A marker planted in the *path* of an unrelated host must not verify: only
+/// a parsed host and organisation should, not a substring anywhere in the URL.
+#[test]
+fn first_party_source_parses_host_and_org_rather_than_matching_a_substring() {
+    let elsewhere = Path::new("/nonexistent");
+
+    assert!(
+        !first_party_source(
+            "git+https://evil.test/github.com/constellation-works/x.git",
+            elsewhere,
+        ),
+        "the marker sits in an unrelated host's path, not its authority, and must not verify"
+    );
+    assert!(
+        first_party_source("git+git@github.com:constellation-works/x.git", elsewhere),
+        "the SCP-like git@host:org/repo form must still verify"
+    );
+    assert!(
+        first_party_source(
+            "git+https://github.com/constellation-works/x.git",
+            elsewhere,
+        ),
+        "a genuine constellation-works GitHub URL must still verify"
+    );
+}
+
+/// The `git+<url>` branch and the local-checkout `git remote get-url origin`
+/// branch both resolve through [`first_party_source`] into the same parser,
+/// so they cannot drift: exercise the same three shapes against a real
+/// `origin` remote.
+#[test]
+fn first_party_source_checks_the_origin_remote_through_the_same_parser() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_root = temp.path();
+    git(repo_root, &["init", "--quiet"]);
+    git(
+        repo_root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://evil.test/github.com/constellation-works/x.git",
+        ],
+    );
+    assert!(
+        !first_party_source("local", repo_root),
+        "an origin remote whose path merely contains the marker must not verify"
+    );
+
+    git(
+        repo_root,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "git@github.com:constellation-works/x.git",
+        ],
+    );
+    assert!(
+        first_party_source("local", repo_root),
+        "an origin remote in the SCP-like form must verify"
+    );
+
+    git(
+        repo_root,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/constellation-works/x.git",
+        ],
+    );
+    assert!(
+        first_party_source("local", repo_root),
+        "a genuine constellation-works origin remote must verify"
     );
 }

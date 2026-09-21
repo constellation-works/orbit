@@ -835,7 +835,41 @@ pub fn first_party_source(source: &str, root: &Path) -> bool {
 }
 
 fn is_first_party_remote(url: &str) -> bool {
-    let url = url.trim().trim_end_matches(".git");
-    url.contains(&format!("github.com/{FIRST_PARTY_PUBLISHER}/"))
-        || url.contains(&format!("github.com:{FIRST_PARTY_PUBLISHER}/"))
+    match remote_host_and_org(url) {
+        Some((host, org)) => host == "github.com" && org == FIRST_PARTY_PUBLISHER,
+        None => false,
+    }
+}
+
+/// Parse a git remote URL's host and first path segment (its organisation),
+/// handling both `scheme://[user@]host[:port]/org/repo` and the SCP-like
+/// `[user@]host:org/repo` form `git@github.com:org/repo` uses. Returns `None`
+/// when `url` does not decompose into a host and a non-empty first segment,
+/// so an unrecognised shape fails closed rather than matching by substring.
+fn remote_host_and_org(url: &str) -> Option<(String, String)> {
+    let url = url.trim().trim_end_matches(".git").trim_end_matches('/');
+    if let Some((_scheme, rest)) = url.split_once("://") {
+        let (authority, path) = rest.split_once('/')?;
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        let host = host.split(':').next().unwrap_or(host);
+        let org = path
+            .split('/')
+            .next()
+            .filter(|segment| !segment.is_empty())?;
+        return Some((host.to_lowercase(), org.to_string()));
+    }
+    let (host_part, path) = url.split_once(':')?;
+    if host_part.is_empty() || host_part.contains('/') {
+        return None;
+    }
+    let host = host_part
+        .rsplit_once('@')
+        .map_or(host_part, |(_, host)| host);
+    let org = path
+        .split('/')
+        .next()
+        .filter(|segment| !segment.is_empty())?;
+    Some((host.to_lowercase(), org.to_string()))
 }
