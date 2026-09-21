@@ -1134,6 +1134,34 @@ fn dashboard_auto_drain_action_is_bounded_governed_and_guarded() {
     // Failure recovery: an error must surface, not silently no-op, and must
     // not leave the guard held.
     assert!(operations.contains("Auto-delivery window failed to start"));
+
+    // [ORB-12728] Stop admissions is the `orbit run auto --stop` counterpart:
+    // governed, confirmed, keyed against duplicate clicks, and enabled only
+    // for a live window that is not already stopped.
+    assert!(
+        operations.contains(r#"postJson("/api/workflows/auto/stop""#)
+            && operations.contains(r#"const key = "auto-drain:stop";"#),
+        "stopping admissions must post through the dashboard auto-drain stop endpoint under its own guard key"
+    );
+    assert!(
+        operations.contains("This is not cancellation.")
+            && operations.contains("window.confirm(`${AUTO_DRAIN_STOP_CONFIRM}"),
+        "the stop control must confirm and say admitted workers keep running"
+    );
+    assert!(
+        operations.contains("No auto-delivery window is live in this workspace.")
+            && operations.contains("Admissions are already stopped for ")
+            && operations.contains("Stopping admissions requires an authorized operator session."),
+        "the disabled stop control must name why it is disabled"
+    );
+    assert!(
+        operations.contains("autoDrainRunLink(live.runId, workspace)"),
+        "the live coordinator must be shown as a run link next to the stop control"
+    );
+    assert!(
+        css.contains("#routines-body, #clock-body, #auto-tasks-body, #auto-drain-body, #operation-mode-body { padding: 12px; background: var(--bg); }"),
+        "the Operation Mode body must share the padded operations-body rule"
+    );
 }
 
 /// The global `main` rule establishes the visible grid while this narrow

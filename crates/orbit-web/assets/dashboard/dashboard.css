@@ -5019,7 +5019,7 @@
       .operation-feedback.pending { color: var(--priority-medium); }
       .operation-feedback.success { color: var(--state-success); }
       .operation-feedback.error { color: var(--state-failed); }
-      #routines-body, #clock-body, #auto-tasks-body, #auto-drain-body { padding: 12px; background: var(--bg); }
+      #routines-body, #clock-body, #auto-tasks-body, #auto-drain-body, #operation-mode-body { padding: 12px; background: var(--bg); }
       .operation-card {
         padding: 10px 12px; margin-bottom: 6px; border: 1px solid var(--border);
         border-radius: 4px; background: var(--bg-elev);
@@ -5279,6 +5279,10 @@
         color: var(--fg-dim); font: 11px/1.5 var(--font-sans);
       }
       .auto-drain-last-run { display: block; margin: 10px 0 0; }
+      /* [ORB-12728] The live window's stop control sits under the Start
+         button with the coordinator run it would act on, so the operator
+         reads what they are stopping before confirming. */
+      .auto-drain-live-window { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; color: var(--fg-dim); font: 11px/1.6 var(--font-sans); }
       .auto-drain-slots { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
       .auto-drain-slots-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
       .auto-drain-slots-title { display: flex; align-items: baseline; gap: 10px; }

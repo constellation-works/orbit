@@ -1184,13 +1184,36 @@ function fetchAndRenderAutoTasks() {
 // not a per-row one, so it follows the mint/clock in-flight idiom (a single
 // fixed `pendingOperations` key, guard released in `finally`) rather than
 // tasks.js's per-task Ship guard.
+
+// [ORB-12728] The live coordinator readiness reports, if any. The server
+// nests it under `capacity` (where the slot picture comes from); an older
+// payload shape with the fields at the top level is read the same way so a
+// mixed-version dashboard never hides a running window.
+function autoDrainLiveWindow(payload) {
+  const source = payload.capacity && "drain_run_id" in payload.capacity ? payload.capacity : payload;
+  const runId = source?.drain_run_id ? String(source.drain_run_id) : "";
+  return {
+    runId,
+    admissionsStopped: source?.admissions_stopped === true,
+    stop: source?.admissions_stop && typeof source.admissions_stop === "object" ? source.admissions_stop : null,
+  };
+}
+
 function autoDrainReasons(payload) {
   const workspaceReason = workspaceReadOnlyReason();
+  const live = autoDrainLiveWindow(payload);
   return {
     submit: workspaceReason,
     complete: workspaceReason || (payload.controls_authorized === false
       ? "Automatic completion requires an authorized operator session; the window can still start with default review completion."
       : ""),
+    stop: workspaceReason || (!live.runId
+      ? "No auto-delivery window is live in this workspace."
+      : live.admissionsStopped
+        ? `Admissions are already stopped for ${live.runId}${live.stop?.actor ? ` (by ${live.stop.actor})` : ""}; admitted workers keep running.`
+        : payload.controls_authorized === false
+          ? "Stopping admissions requires an authorized operator session."
+          : ""),
   };
 }
 
@@ -1833,6 +1856,70 @@ function autoDrainStartButton(payload) {
   return button;
 }
 
+const AUTO_DRAIN_STOP_CONFIRM = "Stop new admissions for the active auto-delivery window? Already admitted workers keep running under their captured completion authority. This is not cancellation.";
+
+// [ORB-12728] Counterpart to `orbit run auto --stop`: stops new admissions on
+// the live coordinator without cancelling it or the workers it already
+// admitted. Enabled only while readiness reports a live, not-yet-stopped
+// window and the session may govern it; the title says which of those is
+// missing otherwise.
+function autoDrainStopButton(payload) {
+  const key = "auto-drain:stop";
+  const reasons = autoDrainReasons(payload);
+  const live = autoDrainLiveWindow(payload);
+  const pending = pendingOperations.has(key);
+  const button = el("button", {
+    class: "operation-button disable auto-drain-stop",
+    text: pending ? "Stopping…" : "Stop admissions",
+    title: reasons.stop || AUTO_DRAIN_STOP_CONFIRM,
+  });
+  button.type = "button";
+  button.disabled = Boolean(reasons.stop) || pending;
+  button.addEventListener("click", async () => {
+    if (pendingOperations.has(key)) return;
+    const workspace = selectedWorkspace();
+    if (!window.confirm(`${AUTO_DRAIN_STOP_CONFIRM}\n\nWindow: ${live.runId} in workspace "${workspace?.name || workspace?.id}"`)) return;
+    pendingOperations.add(key);
+    feedback("auto-drain-operation-feedback", "pending", `Stopping admissions for ${live.runId}…`);
+    renderAutoDrain(payload);
+    try {
+      const result = await postJson("/api/workflows/auto/stop", {});
+      const coordinators = Array.isArray(result?.coordinators) ? result.coordinators : [];
+      const remaining = coordinators.reduce((sum, change) => sum + (Array.isArray(change?.remaining_children) ? change.remaining_children.length : 0), 0);
+      const changes = coordinators.map((change) => `${change?.run_id ?? "(no run id)"}: ${change?.outcome ?? "?"}`).join(", ");
+      feedback("auto-drain-operation-feedback", "success", [
+        `Admissions ${result?.outcome ?? "stop requested"}`,
+        changes ? `(${changes})` : "",
+        remaining > 0 ? `· ${remaining} admitted worker${remaining === 1 ? "" : "s"} still running.` : ".",
+      ].filter(Boolean).join(" "));
+      await fetchAndRenderAutoDrain();
+    } catch (error) {
+      feedback("auto-drain-operation-feedback", "error", `Stopping admissions failed: ${error.message}`);
+    } finally {
+      pendingOperations.delete(key);
+      if (lastAutoDrain) renderAutoDrain(lastAutoDrain);
+    }
+  });
+  return button;
+}
+
+// The live window row names the coordinator the stop button acts on, so the
+// operator sees what they are stopping; it reads "stopped" once the flag is
+// set rather than hiding the run.
+function autoDrainLiveWindowRow(payload, workspace) {
+  const live = autoDrainLiveWindow(payload);
+  const row = el("div", { class: "auto-drain-live-window" });
+  if (!live.runId) {
+    row.appendChild(el("span", { text: "No live window." }));
+    return row;
+  }
+  row.append(
+    el("span", { text: live.admissionsStopped ? "Live window (admissions stopped):" : "Live window:" }),
+    workspace ? autoDrainRunLink(live.runId, workspace) : el("span", { class: "mono", text: live.runId }),
+  );
+  return row;
+}
+
 // The window controls sit above the readiness groups: the operator reads the
 // slot picture, then acts, instead of scrolling past every row to find the
 // button. The duration picker is a segmented control over the same bounded
@@ -1905,7 +1992,12 @@ function autoDrainControls(payload, counts) {
 
   controls.appendChild(el("div", { class: "auto-drain-controls-row" }, [
     el("div", { class: "auto-drain-controls-fields" }, [durationGroup, concurrencyGroup, completeGroup]),
-    el("div", { class: "auto-drain-controls-action" }, [autoDrainStartButton(payload), outcome]),
+    el("div", { class: "auto-drain-controls-action" }, [
+      autoDrainStartButton(payload),
+      outcome,
+      autoDrainStopButton(payload),
+      autoDrainLiveWindowRow(payload, selectedWorkspace()),
+    ]),
   ]));
   if (autoDrainComplete) {
     controls.appendChild(el("p", { class: "operation-control-note operation-mint-warning", text: AUTO_DRAIN_COMPLETE_WARNING }));

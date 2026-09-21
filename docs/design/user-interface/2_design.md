@@ -109,6 +109,8 @@ Routine toggles require one concrete workspace; clock controls also require the 
 
 The two-column desktop layout stacks below 900px, and routine/clock metadata collapses to one column below 600px so schedules, state labels, and controls remain scannable at 480–720px widths.
 
+The Auto-drain view (`#auto-drain`) projects `GET /api/workflows/auto/readiness` and hosts the Auto-drain and Operation Mode panels side by side with the same padded body. Its controls are the dashboard counterparts to `orbit run auto`: **Start** submits a bounded window through `POST /api/workflows/auto`, and **Stop admissions** posts `POST /api/workflows/auto/stop` (`orbit run auto --stop`) with an optional `reason` and `claim_token` [ORB-12728]. Stop is enabled only while readiness reports a live `drain_run_id` whose admissions are not already stopped and the session is authorized (`--operator`, governed as `auto_drain.stop`); otherwise the disabled title names which of those is missing. The live coordinator is shown as a run link next to the button, the click confirms first, and the response — `{ "workflow": "auto", "outcome": "idle" | "stopped" | "unchanged" | "cancelled_queued", "coordinators": [...] }` with each coordinator's outcome and still-running children — feeds the panel feedback before readiness is re-fetched. Stopping admissions is not cancellation: already admitted workers keep running under their captured completion authority, and cancelling one is the per-run cancel on its run detail page.
+
 ## 10. Concerns & Honest Limitations
 
 Accessibility still needs a real WCAG pass; responsive behavior remains optimized for wide desktop viewports; raw HTML, CSS variables, and dashboard JavaScript keep the runtime simple but leave duplication across project surfaces.
@@ -134,5 +136,6 @@ Accessibility still needs a real WCAG pass; responsive behavior remains optimize
 - [ORB-10873] added Scoreboard notable completions, honest coverage language, labeled abbreviations, and accessible window tabs.
 - [ORB-12235] made task complexity, description, tags, acceptance criteria, and context files editable in the expanded task detail.
 - [ORB-12645] rendered task comments as a full-width Markdown thread with per-comment collapse, an outline, and a previewing composer.
+- [ORB-12728] padded the Operation Mode panel body like its neighbours and added the governed **Stop admissions** control (`POST /api/workflows/auto/stop`) to the Auto-drain view.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

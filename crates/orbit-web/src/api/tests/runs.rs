@@ -962,6 +962,96 @@ async fn ship_endpoint_rejects_duplicate_task_ids() {
     );
 }
 
+// ─── auto-drain stop [ORB-12728] ──────────────────────────────────────────
+
+async fn request_auto_drain_stop(
+    state: crate::state::DashboardState,
+    body: Option<Value>,
+) -> Response {
+    let mut builder = Request::builder()
+        .method(Method::POST)
+        .uri("/workflows/auto/stop")
+        .header(header::ORIGIN, "http://localhost:3000")
+        .header(header::HOST, "localhost:3000");
+    let body = match body {
+        Some(json) => {
+            builder = builder.header(header::CONTENT_TYPE, "application/json");
+            Body::from(json.to_string())
+        }
+        None => Body::empty(),
+    };
+    router()
+        .with_state(state)
+        .oneshot(builder.body(body).expect("request"))
+        .await
+        .expect("response")
+}
+
+#[allow(clippy::await_holding_lock)]
+async fn with_caller_env<'a, T>(
+    vars: impl IntoIterator<Item = (&'a str, Option<&'a str>)>,
+    fut: impl std::future::Future<Output = T>,
+) -> T {
+    let _env = orbit_common::test_env::scoped(vars);
+    fut.await
+}
+
+/// The dashboard counterpart to `orbit run auto --stop`: with no live
+/// coordinator the operator session gets the runtime's `idle` outcome with an
+/// empty coordinator list, projected the same way the CLI prints it.
+#[tokio::test]
+async fn auto_drain_stop_reports_idle_when_no_window_is_live() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let state = crate::state::DashboardState::single(Arc::new(runtime));
+    state.set_operator_session(true);
+
+    let response = with_caller_env(
+        [
+            (
+                orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV,
+                None,
+            ),
+            ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
+            ("ORBIT_AGENT_MODEL", Some("orbit-web-test")),
+        ],
+        request_auto_drain_stop(state, Some(json!({ "reason": "test" }))),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(payload["workflow"], "auto");
+    assert_eq!(payload["outcome"], "idle");
+    assert_eq!(payload["coordinators"], json!([]));
+}
+
+/// Ending an unattended delivery window early is an operator decision: an
+/// agent caller without the `--operator` session gets the standard
+/// authorization denial before any runtime call.
+#[tokio::test]
+async fn auto_drain_stop_is_refused_without_an_operator_session() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let state = crate::state::DashboardState::single(Arc::new(runtime));
+
+    let response = with_caller_env(
+        [
+            (
+                orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV,
+                None,
+            ),
+            ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
+            ("ORBIT_AGENT_MODEL", Some("orbit-web-test")),
+        ],
+        request_auto_drain_stop(state, None),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let payload = body_json(response).await;
+    assert_eq!(payload["code"], "authorization_denied");
+    assert_eq!(payload["operation"], "auto_drain.stop");
+}
+
 // ─── child-dispatch lineage in run detail [ORB-10971] ─────────────────────
 
 use orbit_types::workflow::{ChildDispatch, ChildDispatchPhase, PipelineState};

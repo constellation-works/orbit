@@ -218,6 +218,15 @@ pub const DASHBOARD_AUTO_DRAIN_COMPLETE: GovernedOperation = GovernedOperation {
     rationale: "opting into automatic completion authorizes review -> done for every task the drain window ships, not only the ones visible at submission",
 };
 
+/// Stop new admissions for the workspace's live auto-drain window from the
+/// dashboard (the `--stop` equivalent of `orbit run auto`) [ORB-12728].
+pub const DASHBOARD_AUTO_DRAIN_STOP: GovernedOperation = GovernedOperation {
+    id: "auto_drain.stop",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "stopping admissions ends the workspace's unattended delivery window early; only an operator decides that",
+};
+
 /// Stop new admissions under an operation-mode grant from the dashboard
 /// [ORB-11332].
 pub const DASHBOARD_OPERATION_STOP: GovernedOperation = GovernedOperation {
@@ -465,6 +474,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_AUTO_TASK_TOGGLE,
     DASHBOARD_AUTO_TASK_MINT,
     DASHBOARD_AUTO_DRAIN_COMPLETE,
+    DASHBOARD_AUTO_DRAIN_STOP,
     DASHBOARD_OPERATION_STOP,
     DASHBOARD_OPERATION_REVOKE,
     DASHBOARD_HANDOFF_APPROVE,
