@@ -189,6 +189,14 @@ pub struct LandlockBoundary {
     /// not exist yet is created before spawn: the grant names it, and a rule
     /// cannot bind to an inode that is not there.
     pub write: Vec<PathBuf>,
+    /// Single files the child may modify, named one by one so the grant never
+    /// reaches their parent directory. Unlike [`Self::write`], an entry that
+    /// is absent — or that is anything other than a regular file — yields no
+    /// grant instead of being created: these name files another owner
+    /// maintains (a SQLite WAL file set, a lock file), and a symlink standing
+    /// where one is expected would otherwise hand the child a writable bind
+    /// on whatever it points at.
+    pub write_files: Vec<PathBuf>,
     /// Refuse TCP bind and connect. Requires Landlock ABI 4; an older kernel
     /// fails closed rather than spawning a child with network access.
     pub deny_tcp: bool,
@@ -245,6 +253,21 @@ pub fn linux_landlock_boundary_grants(
         } else {
             LandlockPathGrant::write_file(path)
         });
+    }
+    for file in &boundary.write_files {
+        let Some(path) = existing_canonical(file) else {
+            continue;
+        };
+        // `symlink_metadata` on the pre-canonical name, then the canonical
+        // path for the rule: an alias inside the boundary is resolved away,
+        // and one that stands for a directory or a device is dropped.
+        let Ok(metadata) = std::fs::symlink_metadata(file) else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        grants.push(LandlockPathGrant::write_file(path));
     }
     Ok(dedupe(grants))
 }
