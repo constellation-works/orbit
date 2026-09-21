@@ -5,6 +5,7 @@ use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::plugin::PluginProvenance;
 use crate::telemetry::audit_actor::{CanonicalActor, canonical_actor_for_role_label};
 use crate::tool::{McpCapability, McpTransport};
 
@@ -132,6 +133,12 @@ pub struct AuditEvent {
     /// [`crate::telemetry::normalize_self_reported_actor`].
     #[serde(default)]
     pub self_reported_actor: Option<String>,
+    /// The plugin that backed this tool call, when one did: name, version and
+    /// manifest digest, written together by plugin dispatch [design
+    /// `docs/design/plugins/1_scope.md` §4.4]. Absent for built-in tools and
+    /// for every row written before the plugin standard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<PluginProvenance>,
 }
 
 impl AuditEvent {

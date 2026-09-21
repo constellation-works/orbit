@@ -1563,6 +1563,44 @@ fn apply_execution_provenance(conn: &Connection) -> Result<(), OrbitError> {
     )
 }
 
+/// v24 `plugins_and_audit_plugin_provenance` migration: the host-local
+/// installed-plugin record beside `tools`, and the three audit columns that
+/// name the plugin behind a tool call (design `docs/design/plugins/1_scope.md`
+/// §3, §4.4). Additive: an older binary ignores the table and the columns.
+fn apply_plugins_and_audit_plugin_provenance(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS plugins (
+                name TEXT PRIMARY KEY,
+                version TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '',
+                install_path TEXT NOT NULL,
+                manifest_digest TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                grants_json TEXT NOT NULL DEFAULT '[]',
+                first_party INTEGER NOT NULL DEFAULT 0,
+                installed_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+        "#,
+    )
+    .map_err(|error| OrbitError::Store(error.to_string()))?;
+    ensure_audit_events_schema(conn)?;
+    for column in ["plugin_name", "plugin_version", "plugin_manifest_digest"] {
+        add_column_if_missing(
+            conn,
+            &format!("ALTER TABLE audit_events ADD COLUMN {column} TEXT"),
+        )?;
+    }
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_audit_events_plugin_name
+            ON audit_events(plugin_name);
+        "#,
+    )
+    .map_err(|error| OrbitError::Store(error.to_string()))
+}
+
 /// v23 `audit_machine_name_columns` migration (ORB-12725): *host* is reserved
 /// for the MCP-host/process sense, so the two audit columns that carry a
 /// machine's display name are renamed to say so. A rename rather than an

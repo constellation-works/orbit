@@ -17,7 +17,8 @@
 use std::collections::BTreeSet;
 
 use orbit_common::governance::authorization::{
-    GOVERNED_OPERATIONS, GovernedOperation, OperationSurface,
+    GOVERNED_OPERATIONS, GovernedOperation, OperationSurface, PLUGIN_TOOL_MUTATING,
+    PLUGIN_TOOL_READ_ONLY, governed_plugin_tool,
 };
 use orbit_types::tool::McpCapability;
 
@@ -112,10 +113,21 @@ fn builtin_registry() -> ToolRegistry {
     registry
 }
 
+/// The two generic plugin rows, which are keyed on a manifest's execution
+/// kind rather than on a tool name.
+///
+/// Every rule below is about a *named* tool — does the name still exist, is
+/// that name advertised — and neither question applies to a row that names no
+/// tool by design. `plugin_rows_are_keyed_on_execution_kind_not_on_a_name`
+/// asserts what does hold for them instead.
+const EXECUTION_KIND_KEYED_OPERATIONS: &[&str] =
+    &[PLUGIN_TOOL_READ_ONLY.id, PLUGIN_TOOL_MUTATING.id];
+
 fn governed_tool_operations() -> impl Iterator<Item = &'static GovernedOperation> {
-    GOVERNED_OPERATIONS
-        .iter()
-        .filter(|operation| operation.surface == OperationSurface::Tool)
+    GOVERNED_OPERATIONS.iter().filter(|operation| {
+        operation.surface == OperationSurface::Tool
+            && !EXECUTION_KIND_KEYED_OPERATIONS.contains(&operation.id)
+    })
 }
 
 /// Canonical names MCP advertises, from the same source the server enumerates.
@@ -128,14 +140,43 @@ fn advertised_tool_names(registry: &ToolRegistry) -> BTreeSet<String> {
         .collect()
 }
 
+/// The two plugin rows are the one governed-tool entry that is not a tool
+/// name, so the invariants that hold for them are stated here rather than
+/// left implicit in the exclusion above.
+#[test]
+fn plugin_rows_are_keyed_on_execution_kind_not_on_a_name() {
+    use orbit_common::governance::authorization::governed_tool;
+
+    for id in EXECUTION_KIND_KEYED_OPERATIONS {
+        assert!(
+            !builtin_registry().has(id),
+            "'{id}' must stay unreachable as a tool name; a real tool called that would be              authorized by a row meant for a whole class"
+        );
+        assert!(
+            governed_tool(id).is_some(),
+            "'{id}' is still resolvable by name, so a plugin could claim the class row by              naming itself after it"
+        );
+    }
+
+    assert_eq!(governed_plugin_tool(false).id, PLUGIN_TOOL_READ_ONLY.id);
+    assert_eq!(governed_plugin_tool(true).id, PLUGIN_TOOL_MUTATING.id);
+    assert!(
+        PLUGIN_TOOL_READ_ONLY
+            .allowed
+            .contains(&McpCapability::Agent),
+        "a read-only plugin tool is ordinary agent work"
+    );
+    assert!(
+        !PLUGIN_TOOL_MUTATING.allowed.contains(&McpCapability::Agent),
+        "a mutating plugin tool reaches an agent only through the activity allowlist, never          through this capability row"
+    );
+}
+
 #[test]
 fn every_governed_tool_operation_names_a_registered_tool() {
     let registry = builtin_registry();
 
-    for operation in GOVERNED_OPERATIONS
-        .iter()
-        .filter(|operation| operation.surface == OperationSurface::Tool)
-    {
+    for operation in governed_tool_operations() {
         assert!(
             registry.has(operation.id),
             "governed operation '{}' names no registered tool — a rename dropped its guard \
@@ -150,9 +191,7 @@ fn the_destructive_builtins_this_task_closed_are_still_governed() {
     // These are the tools ORB-10453 found reachable through `orbit tool run`
     // despite being hidden from the MCP surface. Pinning them by name keeps a
     // future refactor from quietly returning them to the ungoverned set.
-    let governed: Vec<&str> = GOVERNED_OPERATIONS
-        .iter()
-        .filter(|operation| operation.surface == OperationSurface::Tool)
+    let governed: Vec<&str> = governed_tool_operations()
         .map(|operation| operation.id)
         .collect();
 

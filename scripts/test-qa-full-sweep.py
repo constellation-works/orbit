@@ -664,6 +664,7 @@ spec:
             work, ["doctor-reports-isolated-workspace-health"], lambda evidence: parse_json(evidence, "doctor"))
 
     for command, assertion in ((["tool", "list", "--format", "json"], "tool-definitions-are-structured"),
+                               (["plugin", "list", "--format", "json"], "plugin-inventory-is-structured"),
                                (["policy", "list", "--json"], "policy-definitions-are-structured"),
                                (["operation", "explain", "--json"], "operation-authority-is-explained"),
                                (["executor", "list", "--format", "json"], "executor-definitions-are-structured"),

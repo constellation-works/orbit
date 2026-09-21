@@ -16,6 +16,7 @@ pub mod migrate;
 pub mod operation;
 pub mod operation_args;
 pub mod operation_mode;
+pub mod plugin;
 pub mod policy;
 pub mod routine;
 pub mod run;
@@ -102,6 +103,7 @@ Definitions:
   activity    View activity definitions
   job         View job definitions
   tool        View tool registry
+  plugin      Install and manage Orbit plugins
   policy      View filesystem policies
   executor    View executors
 
@@ -163,6 +165,7 @@ pub enum Commands {
     Activity(activity::ActivityCommand),
     Job(job::JobCommand),
     Tool(tool::ToolCommand),
+    Plugin(plugin::PluginCommand),
     Policy(policy::PolicyCommand),
     Executor(executor::ExecutorCommand),
 

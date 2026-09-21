@@ -2043,6 +2043,7 @@ name = "orbit-tools"
 version = "0.23.0"
 dependencies = [
  "chrono",
+ "flate2",
  "orbit-common",
  "orbit-exec",
  "orbit-policy",
@@ -2051,7 +2052,9 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sha2 0.10.9",
+ "tar",
  "tempfile",
  "thiserror",
  "tracing",

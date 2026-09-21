@@ -24,6 +24,7 @@ pub(crate) mod friction;
 #[cfg(target_os = "linux")]
 pub(crate) mod git_sandbox;
 pub mod mutation;
+pub mod plugin_host;
 pub(crate) mod recovery_authority;
 mod resolve;
 pub mod run_audit;
@@ -764,6 +765,12 @@ impl OrbitRuntime {
 
     pub(crate) fn stores(&self) -> &OrbitStores {
         self.context.stores()
+    }
+
+    /// What the host plugin load pass registered and refused when this
+    /// runtime was built.
+    pub(crate) fn plugin_load(&self) -> &crate::runtime::plugin_host::PluginHostLoad {
+        self.context.plugin_load()
     }
 
     pub(crate) fn skill_catalog(&self) -> &crate::skill_catalog::SkillCatalog {

@@ -17,7 +17,10 @@ use orbit_cmd::task_owner::{self, WorkspaceIdentity};
 use orbit_common::protocol::tool_input::required_string;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_core::OrbitRuntime;
-use orbit_core::adapter::command::{ToolEntryPoint, execute_global_in_process_tool_dispatch};
+use orbit_core::adapter::command::{
+    ToolEntryPoint, execute_global_in_process_tool_dispatch, execute_global_plugin_tool,
+    host_plugin_mcp_definitions,
+};
 use orbit_core::runtime::{HostLifetime, resolve_global_root};
 use orbit_mcp::federated;
 use orbit_mcp::{ListenerExposure, McpHost, McpListener, McpSessionAuthority};
@@ -369,11 +372,44 @@ impl ServerMcpHost {
     }
 
     fn definition(&self, name: &str) -> Result<McpToolDefinition, OrbitError> {
-        orbit_mcp::canonical_mcp_tool_definitions()
-            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?
+        self.advertised_definitions()?
             .into_iter()
             .find(|definition| definition.schema.name == name)
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))
+    }
+
+    /// The canonical built-in surface plus this host's active plugin tools.
+    ///
+    /// The built-in half is memoised process-wide because it is a function of
+    /// the binary alone. The plugin half is not: it changes with `orbit plugin
+    /// add|enable|disable|remove`, so it is read from the host's plugin
+    /// records on each call rather than frozen at first use.
+    fn advertised_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        let mut definitions = orbit_mcp::canonical_mcp_tool_definitions()
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        match host_plugin_mcp_definitions(&self.global_root) {
+            Ok(plugins) => definitions.extend(plugins),
+            // A plugin problem is that plugin's problem: the built-in surface
+            // must still be listable (design §4.9).
+            Err(error) => tracing::warn!(
+                target: "orbit.mcp.plugin",
+                error = %error,
+                "omitting plugin tools from tools/list"
+            ),
+        }
+        definitions.sort_by(|left, right| left.schema.name.cmp(&right.schema.name));
+        orbit_types::tool::validate_mcp_tool_definitions(&definitions)
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        Ok(definitions)
+    }
+
+    /// Whether `name` is one of this host's plugin tools.
+    fn is_plugin_tool(&self, name: &str) -> bool {
+        host_plugin_mcp_definitions(&self.global_root).is_ok_and(|definitions| {
+            definitions
+                .iter()
+                .any(|definition| definition.schema.name == name)
+        })
     }
 
     fn workspace_selector<'a>(
@@ -438,6 +474,17 @@ impl ServerMcpHost {
             },
         )
         .map(|outcome| outcome.value)
+    }
+
+    /// A `mcp_scope: global` plugin tool: no workspace to open, so it runs
+    /// against the host's plugin records inside Core's audited dispatch.
+    fn call_global_plugin_tool(
+        &self,
+        name: &str,
+        input: Value,
+        context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        execute_global_plugin_tool(&self.global_root, name, input, ToolEntryPoint::Mcp, context)
     }
 
     fn resolve_workspace_runtime(
@@ -634,8 +681,7 @@ impl ServerMcpHost {
 
 impl McpHost for ServerMcpHost {
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
-        orbit_mcp::canonical_mcp_tool_definitions()
-            .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+        self.advertised_definitions()
     }
 
     fn friction_tag_taxonomy(
@@ -675,6 +721,9 @@ impl McpHost for ServerMcpHost {
             Err(error) => return self.audit_global_failure(name, input, context, error),
         };
         if definition.scope == McpToolScope::Global {
+            if self.is_plugin_tool(name) {
+                return self.call_global_plugin_tool(name, input, context);
+            }
             return self.call_global_tool(name, input, context);
         }
         self.call_workspace_tool(name, input, context)

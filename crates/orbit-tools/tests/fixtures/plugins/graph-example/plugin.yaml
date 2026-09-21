@@ -1,0 +1,73 @@
+# plugin.yaml — the manifest example from docs/design/plugins/1_scope.md §2,
+# kept verbatim so `orbit plugin validate` is proven against the design.
+schemaVersion: 2
+kind: Plugin
+metadata:
+  name: graph                     # namespace: graph.recommend, `orbit graph recommend`, [plugins.graph]
+  version: 0.4.1
+  description: Leakage-safe file/symbol recommendations from verified change history.
+  publisher: constellation-works
+  homepage: https://github.com/constellation-works/orbit-graph
+spec:
+  requires:
+    orbit: ">=0.24.0 <1.0.0"        # semver range on the host binary
+    host_api: 1                     # protocol major; mismatch refuses enable
+    platforms: [linux, macos]
+    programs: [git]                 # host programs the backend spawns (proc allowlist)
+
+  backend:
+    type: exec                      # exec | mcp
+    command: bin/orbit-graph        # relative to plugin root, or absolute
+    args: [orbit-tool]              # exec: tool name arrives in the request envelope
+    timeout_ms: 30000
+    sandbox: default                # default | none  ('none' needs the `unsandboxed` grant)
+
+  permissions:                      # REQUESTED. Granted by the operator at `orbit plugin enable`.
+    fs:
+      read:  ["{{workspace}}"]
+      write: ["{{workspace}}/.orbit-graph", "{{plugin_state}}"]
+    network: none                   # none | loopback | any
+    env_pass: []                    # names copied from the parent env (never values)
+    orbit_tools: [orbit.task.show, orbit.search]   # callbacks the backend may make
+
+  tools:
+    - name: recommend               # canonical graph.recommend, MCP graph_recommend
+      description: Recommend files or symbols for a task or free-text query.
+      execution_kind: read_only     # read_only | mutating
+      mcp_scope: workspace          # workspace | global | none
+      input_schema:  { $ref: schemas/recommend.request.json }
+      output_schema: { $ref: schemas/recommend.response.json }
+      cli: { verb: recommend, positional: [query] }   # optional override of the derived clap shape
+    - name: status
+      execution_kind: read_only
+      mcp_scope: workspace
+      input_schema: { type: object, properties: { repository: { type: string } } }
+    - name: maintain
+      execution_kind: mutating
+      mcp_scope: workspace
+      input_schema: { $ref: schemas/maintain.request.json }
+
+  definitions:
+    activities: [definitions/activities/*.yaml]     # schemaVersion 2, kind: Activity (agent_loop or plugin.tool_call)
+    jobs:       [definitions/jobs/*.yaml]
+    routines:   [definitions/routines/*.yaml]       # seeded enabled:false
+    auto_tasks: [definitions/auto_tasks/*.yaml]     # seeded enabled:false
+
+  skills: [skills/graph]                            # dirs containing SKILL.md
+
+  config:
+    schema: schemas/config.json                     # validates [plugins.graph]
+    defaults: { index_dir: ".orbit-graph" }
+
+  web:
+    panels:
+      - id: status
+        title: Graph index
+        source: tool:status                          # read_only tools only
+        render: kv                                   # kv | table | markdown | json
+        group: diagnostics                           # diagnostics | operations | config
+    links:
+      - title: Graph explorer
+        url: "http://127.0.0.1:{{config.explorer_port}}"
+
+  tests: [tests/conformance/*.yaml]                  # request/response goldens run by `orbit plugin test`

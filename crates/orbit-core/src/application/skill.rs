@@ -18,7 +18,7 @@ use super::{ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_as
 /// References load on demand and may link across the bundled skill trees. The
 /// ordering below groups each skill's files under its router, in the order its
 /// reference table presents them.
-pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 30] = [
+pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 31] = [
     // Everyday task work: the router, then its references in table order.
     (
         "orbit/SKILL.md",
@@ -121,6 +121,10 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 30] = [
     (
         "orbit-setup/references/auto-tasks.md",
         include_str!("../../assets/skills/orbit-setup/references/auto-tasks.md"),
+    ),
+    (
+        "orbit-setup/references/plugins.md",
+        include_str!("../../assets/skills/orbit-setup/references/plugins.md"),
     ),
     (
         "orbit-setup/references/remote-access.md",

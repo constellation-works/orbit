@@ -16,6 +16,7 @@
 //! tracing work and does not depend on another Orbit crate.
 
 pub mod identity;
+pub mod plugin;
 pub mod policy;
 pub mod record;
 pub mod resource;

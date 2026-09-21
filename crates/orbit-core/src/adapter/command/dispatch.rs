@@ -15,6 +15,7 @@ use orbit_tools::{ReservationOwnerContext, ToolContext, ToolExecutionKind};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
 };
+use orbit_types::plugin::PluginProvenance;
 use orbit_types::policy::Role;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
@@ -111,6 +112,7 @@ where
         name,
         input,
         ToolExecutionKind::Mutating,
+        None,
         ToolDispatchAuditContext {
             agent_override: None,
             model_override: None,
@@ -125,6 +127,88 @@ where
         },
         dispatch,
     )
+}
+
+/// Execute one host-global plugin tool inside the audited dispatch boundary.
+///
+/// The workspace-scoped path goes through `OrbitRuntime`; a `mcp_scope:
+/// global` plugin tool has no workspace to open, so its execution context is
+/// this process's cwd and the registry the caller composed from the host's
+/// installed plugins.
+pub(super) fn execute_global_plugin_dispatch(
+    global_root: &Path,
+    name: &str,
+    input: Value,
+    entry_point: ToolEntryPoint,
+    session_context: ToolSessionContext,
+    registry: orbit_tools::ToolRegistry,
+) -> Result<Value, OrbitError> {
+    let binding = registry
+        .plugin_binding(name)
+        .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
+    let execution_kind = registry
+        .execution_kind(name)
+        .unwrap_or(ToolExecutionKind::Mutating);
+    let global_root = global_root.to_path_buf();
+    let tool_context = ToolContext {
+        cwd: std::env::current_dir()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned()),
+        session_context: session_context.clone(),
+        ..Default::default()
+    };
+    execute_tool_dispatch_with_audit_store(
+        name,
+        input,
+        execution_kind,
+        Some(binding.provenance.clone()),
+        ToolDispatchAuditContext {
+            agent_override: None,
+            model_override: None,
+            entry_point,
+            session_context: Some(session_context),
+        },
+        || {
+            let audit_db = orbit_config::resolved_audit_db_path(
+                &orbit_config::ConfigRoots::global_only(&global_root),
+            )?;
+            Store::open(&audit_db)
+        },
+        |input| {
+            // The workspace path authorizes inside `execute_registered_tool`;
+            // this one has no runtime, so the same generic plugin row is
+            // resolved here — inside the audited closure, so a refusal lands
+            // on the row for this call.
+            authorize_plugin_tool(
+                binding.execution_kind == orbit_types::plugin::PluginExecutionKind::Mutating,
+                entry_point,
+                &tool_context.session_context,
+            )?;
+            registry.execute(name, &tool_context, input)
+        },
+    )
+    .map(|outcome| outcome.value)
+}
+
+/// Decide a plugin tool call that has no workspace runtime behind it.
+fn authorize_plugin_tool(
+    mutating: bool,
+    entry_point: ToolEntryPoint,
+    session_context: &ToolSessionContext,
+) -> Result<(), OrbitError> {
+    use orbit_common::governance::authorization::{
+        CallerCapabilities, CallerEnvelope, authorize, governed_plugin_tool,
+    };
+
+    let envelope = match entry_point {
+        // An MCP session's authority is whatever its server was started with,
+        // never this process's environment.
+        ToolEntryPoint::Mcp => CallerEnvelope::mcp_session(session_context),
+        ToolEntryPoint::Cli => CallerEnvelope::from_process_env(session_context),
+    };
+    let caller = CallerCapabilities::resolve(&envelope);
+    authorize(governed_plugin_tool(mutating), &caller)
+        .map_err(|denial| OrbitError::CapabilityDenied(denial.to_string()))
 }
 
 /// Mark that the runtime has already persisted an audit row for the current
@@ -340,10 +424,18 @@ impl OrbitRuntime {
             .tool_registry()
             .execution_kind(name)
             .unwrap_or(ToolExecutionKind::Mutating);
+        // A plugin-backed entry stamps its identity on the audit row (design
+        // `docs/design/plugins/1_scope.md` §4.4). The registry is the only
+        // source: tool input never names a plugin.
+        let plugin = self
+            .tool_registry()
+            .plugin_binding(name)
+            .map(|binding| binding.provenance.clone());
         execute_tool_dispatch_with_audit_store(
             name,
             input,
             execution_kind,
+            plugin,
             audit,
             || self.sqlite_store(),
             dispatch,
@@ -355,6 +447,7 @@ fn execute_tool_dispatch_with_audit_store<F, S>(
     name: &str,
     input: Value,
     execution_kind: ToolExecutionKind,
+    plugin: Option<PluginProvenance>,
     audit: ToolDispatchAuditContext,
     open_audit_store: S,
     dispatch: F,
@@ -481,6 +574,7 @@ where
         self_reported_actor: session_context
             .as_ref()
             .and_then(|context| context.self_reported_actor.as_deref()),
+        plugin: plugin.as_ref(),
     };
     let audit_write = open_audit_store()
         .and_then(|store| store.insert_audit_event_record_with_invocation(&params, invocation));

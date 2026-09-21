@@ -1276,6 +1276,64 @@ agent subprocess to full inheritance. Inheritance is fixed off; a stale
 
 ---
 
+## `orbit plugin` and `.orbit/plugins.yaml` — machine installs, workspace pins
+
+A plugin is one directory holding a `plugin.yaml` (`schemaVersion: 2`,
+`kind: Plugin`) that declares a namespace and a set of tools. The tools a
+plugin contributes register as `<ns>.<verb>`, are runnable with
+`orbit tool run <ns>.<verb>`, and — when the manifest gives them an
+`mcp_scope` — are advertised over MCP as `<ns>_<verb>`. See
+[the plugin standard](design/plugins/1_scope.md) for the full manifest.
+
+**Installs are per machine; pins are per repository.** A plugin lives once
+under `~/.orbit/plugins/<ns>/<version>/` (with a `current` link) and every
+workspace on that machine shares it. Enable state, grants, install paths and
+manifest digests are host-local and never synced. A repository commits only
+the pin file, so a plugin tree is never vendored into a checkout — `orbit
+plugin add` refuses a source inside the current repository for that reason.
+
+```yaml
+# .orbit/plugins.yaml — committed
+schemaVersion: 1
+plugins:
+  - name: graph
+    version: "^0.4.1"                # optional: a version or a semver range
+    source: git+https://github.com/constellation-works/orbit-graph#v0.4.1
+    enabled: true
+```
+
+| Command | What it does |
+|---|---|
+| `orbit plugin add <dir\|git+url#ref\|archive>` | Install for this machine. `--enable` puts its tools on the surface immediately; `--grant` records requested permissions; `--force` replaces the same version. |
+| `orbit plugin enable <ns> [--grant …]` / `disable <ns>` | Turn the plugin's tools on or off for this machine. The change takes effect on the next Orbit command, which is when the tool registry is next built. |
+| `orbit plugin remove <ns>` | Uninstall. Data the plugin wrote elsewhere is retained. |
+| `orbit plugin list` / `show <ns>` | What is installed or pinned, its tools, and its **requested versus granted** permissions side by side. |
+| `orbit plugin doctor` | One row per plugin naming the step that would make it active. |
+| `orbit plugin validate <dir>` | Check a manifest without installing it. Every rejection names the offending field. |
+| `orbit plugin sync [--dry-run]` | Read `.orbit/plugins.yaml` and install what this machine is missing, or report it. |
+| `orbit plugin migrate <binary>` | Write a v2 manifest from a set of v1 `*.orbit-tool.yaml` sidecars. |
+
+Cloning a repository does not make its plugins available; `orbit plugin sync`
+is the step that does. A plugin a workspace pins but the machine has not
+installed, and one whose `requires.orbit` or `requires.host_api` no longer
+holds, is reported by `list`, `show` and `doctor` and leaves every built-in
+and every other plugin working.
+
+**The manifest declares placement, never permission.** `spec.permissions` is a
+*request*; the `--grant` flags at enable time are the only source of authority,
+and `orbit plugin show` prints both. Who may call a plugin tool comes from its
+`execution_kind`: a `read_only` tool is callable by any caller Orbit can
+identify (an agent envelope, an operator, or a sanctioned run), and a
+`mutating` tool by an operator or a run — an agent reaches one only when the
+task's `required_tools` or the activity's allowlist names it. A non-interactive
+caller with no identity at all is refused; set `ORBIT_OPERATOR=1` for a
+deliberate scripted operator call, exactly as for other governed operations.
+
+Grants are recorded but not yet enforced, and plugin backends are not yet
+sandboxed; `spec.definitions`, `spec.skills`, `spec.config` and `spec.web`
+parse and are accepted but contribute nothing in this release.
+`*.orbit-tool.yaml` sidecars and `orbit tool add` keep working unchanged.
+
 ## Other sections (brief)
 
 | Section | Purpose |

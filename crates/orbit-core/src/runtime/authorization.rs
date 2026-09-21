@@ -22,7 +22,7 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
     CallerCapabilities, CallerEnvelope, CallerProvenance, GovernedOperation, OperationSurface,
-    authorize, governed_command, governed_tool,
+    authorize, governed_command, governed_plugin_tool, governed_tool,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_store::contracts::AuditEventInsertParams;
@@ -62,8 +62,16 @@ impl OrbitRuntime {
         session_context: &ToolSessionContext,
         capability_enforcement: CapabilityEnforcement,
     ) -> Result<(), OrbitError> {
-        let Some(operation) = governed_tool(tool_name) else {
-            return Ok(());
+        // A plugin tool is authorized by the generic row for its manifest's
+        // execution kind; every other tool by its own row, if it has one.
+        let operation = match self.tool_registry().plugin_binding(tool_name) {
+            Some(binding) => governed_plugin_tool(
+                binding.execution_kind == orbit_types::plugin::PluginExecutionKind::Mutating,
+            ),
+            None => match governed_tool(tool_name) {
+                Some(operation) => operation,
+                None => return Ok(()),
+            },
         };
         let capability_enforcement = if session_context.worker_invocation.is_some() {
             CapabilityEnforcement::McpSessionOnly

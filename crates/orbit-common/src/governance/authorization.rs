@@ -278,6 +278,51 @@ pub const DASHBOARD_CLAIM_RECOVER: GovernedOperation = GovernedOperation {
     rationale: "recovery fences a live attempt on another host and moves its task; there is no heartbeat, so a human decides the attempt is over",
 };
 
+/// Generic row for a `read_only` plugin tool.
+///
+/// Plugin tools are not enumerable at compile time, so they enter the
+/// registry through one row per execution kind rather than one row per tool
+/// (design `docs/design/plugins/1_scope.md` §4.1). The manifest chooses the
+/// execution kind; it never chooses who may call.
+///
+/// Its `id` is not a tool name and is never matched by [`governed_tool`]: the
+/// tool chokepoint resolves a plugin call to one of these two rows through
+/// [`governed_plugin_tool`].
+pub const PLUGIN_TOOL_READ_ONLY: GovernedOperation = GovernedOperation {
+    id: "plugin.tool.read_only",
+    surface: OperationSurface::Tool,
+    allowed: &[
+        McpCapability::Agent,
+        McpCapability::Operator,
+        McpCapability::Runner,
+    ],
+    rationale: "a read-only plugin tool observes without changing anything, so every caller this                 process can name may run it",
+};
+
+/// Generic row for a `mutating` plugin tool.
+///
+/// An agent reaches one only through the ordinary activity/`required_tools`
+/// allowlist, which is applied separately at the same chokepoint: this row is
+/// the capability floor, not the allowlist.
+pub const PLUGIN_TOOL_MUTATING: GovernedOperation = GovernedOperation {
+    id: "plugin.tool.mutating",
+    surface: OperationSurface::Tool,
+    allowed: &[McpCapability::Operator, McpCapability::Runner],
+    rationale: "a mutating plugin tool runs an installed backend that changes state, so it is an                 operator or sanctioned-run operation unless the task's `required_tools` or the                 activity allowlist names it",
+};
+
+/// The generic row a plugin tool of this execution kind is authorized by.
+///
+/// `mutating: true` selects [`PLUGIN_TOOL_MUTATING`]; a read-only tool gets
+/// [`PLUGIN_TOOL_READ_ONLY`].
+pub fn governed_plugin_tool(mutating: bool) -> &'static GovernedOperation {
+    if mutating {
+        &PLUGIN_TOOL_MUTATING
+    } else {
+        &PLUGIN_TOOL_READ_ONLY
+    }
+}
+
 /// Every governed operation, declared exactly once.
 ///
 /// This is the single enumerable place the required capability lives. A call
@@ -469,9 +514,15 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_HANDOFF_REVOKE,
     DASHBOARD_CLAIM_RECOVER,
     DASHBOARD_CONFIG_SET,
+    PLUGIN_TOOL_READ_ONLY,
+    PLUGIN_TOOL_MUTATING,
 ];
 
 /// Look up the governed tool operation for `tool_name`, if any.
+///
+/// The two generic plugin rows are deliberately unreachable here: they are
+/// keyed on a manifest's execution kind, not on a tool name, and the
+/// chokepoint selects them with [`governed_plugin_tool`].
 pub fn governed_tool(tool_name: &str) -> Option<&'static GovernedOperation> {
     GOVERNED_OPERATIONS
         .iter()
