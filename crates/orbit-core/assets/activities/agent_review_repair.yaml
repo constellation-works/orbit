@@ -64,7 +64,8 @@ spec:
     - Do not change task status, acceptance criteria, plan, or description; do
       not approve, merge, dispatch, or invoke another agent. Adding a tightly
       coupled `context_files` selector through `orbit.task.update` is still
-      allowed when a repair needs it. Listing every repaired path on a finding
+      allowed when a repair needs it (pass `allow_missing_context: true` for a
+      file the repair creates). Listing every repaired path on a finding
       with disposition `repaired` is sufficient for an out-of-selector coupled
       repair; the gate widens `context_files` from that declaration.
     - Read broadly; write narrowly. Reading unrelated code does not authorize

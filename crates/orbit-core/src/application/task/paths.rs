@@ -105,8 +105,9 @@ impl OrbitRuntime {
     /// arrival. Existence is the filesystem anchor only: a `symbol:` name and
     /// kind are parsed and stored, but not looked up. Every surface exposes an
     /// explicit `allow_missing_context` escape for the deliberate
-    /// not-yet-created target. `add_task` and `update_task` themselves stay
-    /// permissive so internal callers are unaffected.
+    /// not-yet-created target, and the rejection names it. `add_task` and
+    /// `update_task` themselves stay permissive so internal callers are
+    /// unaffected.
     pub fn ensure_context_selectors_exist(&self, selectors: &[String]) -> Result<(), OrbitError> {
         if selectors.is_empty() {
             return Ok(());
@@ -114,9 +115,63 @@ impl OrbitRuntime {
 
         let roots = self.context_selector_roots()?;
 
-        selectors
-            .iter()
-            .try_for_each(|selector| ensure_selector_resolves(selector, &roots))
+        selectors.iter().try_for_each(|selector| {
+            ensure_selector_resolves(selector, &roots).map_err(SelectorRejection::into_error)
+        })
+    }
+
+    /// [`Self::ensure_context_selectors_exist`] for an `orbit.task.update`
+    /// write, relaxed for the worker that owns the task.
+    ///
+    /// A managed run's worker declares the files it is about to create before
+    /// they exist, and the audit behind [ORB-12731] showed that is the common
+    /// case behind this guard firing — not typos. When the caller is bound to
+    /// `owner_run_id`, runs inside a linked worktree of the workspace, and
+    /// that run admitted `task_id` (the task's `job_run_id` binding worktree
+    /// setup stamps and a resume re-stamps), a selector whose only fault is a
+    /// missing anchor is accepted for that task and returned so the write
+    /// response can report it as unverified. Malformed, unsupported,
+    /// out-of-workspace, and wrong-kind selectors are still rejected, and a
+    /// task the run does not own gets the strict check with its escape hint.
+    pub(crate) fn ensure_context_selectors_exist_for_task_write(
+        &self,
+        task_id: &str,
+        owner_run_id: Option<&str>,
+        selectors: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
+        if selectors.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let roots = self.context_selector_roots()?;
+        let relax_missing = roots.caller_worktree.is_some()
+            && match owner_run_id {
+                Some(run_id) => self.run_owns_task(run_id, task_id)?,
+                None => false,
+            };
+
+        let mut unverified = Vec::new();
+        for selector in selectors {
+            match ensure_selector_resolves(selector, &roots) {
+                Ok(()) => {}
+                Err(SelectorRejection::Missing { canonical, .. }) if relax_missing => {
+                    unverified.push(canonical);
+                }
+                Err(rejection) => return Err(rejection.into_error()),
+            }
+        }
+        Ok(unverified)
+    }
+
+    /// Whether the managed run `run_id` admitted `task_id`: the task carries
+    /// that run as its `job_run_id`. An unknown task is not owned; the write
+    /// that follows reports it as not found.
+    fn run_owns_task(&self, run_id: &str, task_id: &str) -> Result<bool, OrbitError> {
+        match self.get_task(task_id) {
+            Ok(task) => Ok(task.job_run_id.as_deref() == Some(run_id)),
+            Err(OrbitError::NotFound { .. }) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     /// Resolve the checkouts this call may validate selectors against.
@@ -184,6 +239,28 @@ struct ContextSelectorRoots {
     caller_worktree: Option<PathBuf>,
 }
 
+/// Why an operator-supplied selector was refused.
+enum SelectorRejection {
+    /// Well-formed and inside the workspace, but no anchor exists at the
+    /// target yet. The only class the owning worker's relaxation accepts;
+    /// `canonical` is the form the write would store.
+    Missing {
+        canonical: String,
+        error: OrbitError,
+    },
+    /// Malformed, unsupported kind, outside the workspace, or the wrong
+    /// target kind: never relaxed.
+    Invalid(OrbitError),
+}
+
+impl SelectorRejection {
+    fn into_error(self) -> OrbitError {
+        match self {
+            Self::Missing { error, .. } | Self::Invalid(error) => error,
+        }
+    }
+}
+
 /// Check one operator-supplied selector against the checkouts this call may
 /// use: it must be a supported kind, name an existing anchor, and match that
 /// target's file/directory kind.
@@ -192,23 +269,34 @@ struct ContextSelectorRoots {
 /// operator sees for a genuinely dead selector. The caller's worktree answers
 /// second: a file created there does not exist in the registered checkout yet,
 /// and declaring it must not require turning the guard off for the whole call.
-fn ensure_selector_resolves(entry: &str, roots: &ContextSelectorRoots) -> Result<(), OrbitError> {
+/// A worktree that finds the anchor with the wrong kind outranks a registered
+/// checkout that merely lacks it, so the relaxation cannot wave through a
+/// selector the caller's own checkout contradicts.
+fn ensure_selector_resolves(
+    entry: &str,
+    roots: &ContextSelectorRoots,
+) -> Result<(), SelectorRejection> {
     let trimmed = entry.trim();
     if trimmed.is_empty() {
-        return Err(OrbitError::InvalidInput(
+        return Err(SelectorRejection::Invalid(OrbitError::InvalidInput(
             "selector input must not be empty".to_string(),
-        ));
+        )));
     }
 
     if trimmed.starts_with("module:") || trimmed.starts_with("command:") {
-        return Err(unsupported_selector_kind(entry));
+        return Err(SelectorRejection::Invalid(unsupported_selector_kind(entry)));
     }
 
     match resolve_selector_in(entry, trimmed, &roots.workspace) {
         Ok(()) => Ok(()),
         Err(registered_failure) => match roots.caller_worktree.as_deref() {
             Some(worktree) => {
-                resolve_selector_in(entry, trimmed, worktree).map_err(|_| registered_failure)
+                resolve_selector_in(entry, trimmed, worktree).map_err(|worktree_failure| {
+                    match worktree_failure {
+                        SelectorRejection::Invalid(_) => worktree_failure,
+                        SelectorRejection::Missing { .. } => registered_failure,
+                    }
+                })
             }
             None => Err(registered_failure),
         },
@@ -221,27 +309,33 @@ fn resolve_selector_in(
     entry: &str,
     trimmed: &str,
     canonical_workspace: &Path,
-) -> Result<(), OrbitError> {
+) -> Result<(), SelectorRejection> {
     let canonical =
         canonical_selector_in_workspace(trimmed, canonical_workspace).map_err(|error| {
-            OrbitError::InvalidInput(format!("selector `{entry}` is invalid: {error}"))
+            SelectorRejection::Invalid(OrbitError::InvalidInput(format!(
+                "selector `{entry}` is invalid: {error}"
+            )))
         })?;
 
     if canonical.starts_with("module:") || canonical.starts_with("command:") {
-        return Err(unsupported_selector_kind(entry));
+        return Err(SelectorRejection::Invalid(unsupported_selector_kind(entry)));
     }
 
     if !exists_in_workspace(&canonical, canonical_workspace) {
-        return Err(OrbitError::InvalidInput(format!(
-            "selector `{entry}` does not resolve to an existing in-workspace target; \
-             only the filesystem anchor is verified, not a `symbol:` name or kind"
-        )));
+        return Err(SelectorRejection::Missing {
+            error: OrbitError::InvalidInput(format!(
+                "selector `{entry}` does not resolve to an existing in-workspace target; \
+                 only the filesystem anchor is verified, not a `symbol:` name or kind. \
+                 {MISSING_CONTEXT_ESCAPE_HINT}"
+            )),
+            canonical,
+        });
     }
 
     let anchor = anchor_path(&canonical).map_err(|error| {
-        OrbitError::InvalidInput(format!(
+        SelectorRejection::Invalid(OrbitError::InvalidInput(format!(
             "selector `{entry}` has no filesystem anchor: {error}"
-        ))
+        )))
     })?;
     let resolved = canonical_workspace.join(anchor);
     let matches_target_kind = if canonical.starts_with("dir:") {
@@ -251,13 +345,19 @@ fn resolve_selector_in(
     };
 
     if !matches_target_kind {
-        return Err(OrbitError::InvalidInput(format!(
-            "selector `{entry}` does not match the target's file/directory kind"
+        return Err(SelectorRejection::Invalid(OrbitError::InvalidInput(
+            format!("selector `{entry}` does not match the target's file/directory kind"),
         )));
     }
 
     Ok(())
 }
+
+/// Appended to a missing-target rejection so the caller learns the escape
+/// instead of retrying blind. Every operator surface spells it as
+/// `allow_missing_context`; the CLI flag is `--allow-missing-context`.
+const MISSING_CONTEXT_ESCAPE_HINT: &str = "If this task will create it, pass \
+     `allow_missing_context: true` (`--allow-missing-context` on the CLI)";
 
 fn unsupported_selector_kind(entry: &str) -> OrbitError {
     OrbitError::InvalidInput(format!(
