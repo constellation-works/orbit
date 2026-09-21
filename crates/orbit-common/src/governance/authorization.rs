@@ -227,23 +227,6 @@ pub const DASHBOARD_AUTO_DRAIN_STOP: GovernedOperation = GovernedOperation {
     rationale: "stopping admissions ends the workspace's unattended delivery window early; only an operator decides that",
 };
 
-/// Stop new admissions under an operation-mode grant from the dashboard
-/// [ORB-11332].
-pub const DASHBOARD_OPERATION_STOP: GovernedOperation = GovernedOperation {
-    id: "operation.stop",
-    surface: OperationSurface::Dashboard,
-    allowed: &[McpCapability::Operator],
-    rationale: "stopping a grant ends scoped automation for the workspace; only an operator decides that",
-};
-
-/// Hard-revoke an operation-mode grant from the dashboard [ORB-11332].
-pub const DASHBOARD_OPERATION_REVOKE: GovernedOperation = GovernedOperation {
-    id: "operation.revoke",
-    surface: OperationSurface::Dashboard,
-    allowed: &[McpCapability::Operator],
-    rationale: "revocation withdraws completion authority from admitted work; only an operator decides that",
-};
-
 /// Record completion authority for a distributed delivery handoff from the
 /// dashboard [ORB-12516].
 pub const DASHBOARD_HANDOFF_APPROVE: GovernedOperation = GovernedOperation {
@@ -490,8 +473,6 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_AUTO_TASK_MINT,
     DASHBOARD_AUTO_DRAIN_COMPLETE,
     DASHBOARD_AUTO_DRAIN_STOP,
-    DASHBOARD_OPERATION_STOP,
-    DASHBOARD_OPERATION_REVOKE,
     DASHBOARD_HANDOFF_APPROVE,
     DASHBOARD_HANDOFF_REVOKE,
     DASHBOARD_CLAIM_RECOVER,
