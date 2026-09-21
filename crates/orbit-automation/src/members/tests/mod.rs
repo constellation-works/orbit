@@ -210,7 +210,6 @@ fn execution_tick(
             enabled: true,
             dry_run: false,
             now: DateTime::from_timestamp(1_700_000_000, 0).unwrap() + Duration::minutes(minute),
-            constraints: MemberConstraints::default(),
         },
     )
     .unwrap()
@@ -247,7 +246,6 @@ fn preparation_tick(
             enabled: true,
             dry_run,
             now: DateTime::from_timestamp(1_700_000_000, 0).unwrap() + Duration::minutes(minute),
-            constraints: MemberConstraints::default(),
         },
     )
     .unwrap()
@@ -276,7 +274,6 @@ fn tick(store: &dyn AutomationStoreBackend, host: &Host, minute: i64) -> Automat
             enabled: true,
             dry_run: false,
             now: DateTime::from_timestamp(1_700_000_000, 0).unwrap() + Duration::minutes(minute),
-            constraints: MemberConstraints::default(),
         },
     )
     .unwrap()
@@ -444,7 +441,6 @@ fn crash_after_admission_recovers_key_before_new_authority_check() {
                 enabled: true,
                 dry_run: false,
                 now: DateTime::from_timestamp(1_700_000_000, 0).unwrap() + Duration::minutes(2),
-                constraints: MemberConstraints::default(),
             }
         )
         .is_err()
@@ -487,7 +483,6 @@ fn forged_member_output_never_advances_coverage() {
                 enabled: true,
                 dry_run: false,
                 now: Utc::now(),
-                constraints: MemberConstraints::default(),
             }
         )
         .is_err()
@@ -707,41 +702,6 @@ fn material_fingerprint_folds_in_a_non_default_eligibility() {
     };
     assert!(!preparation::eligible(&task, &excluding));
     assert_ne!(hash(&narrowed), hash(&excluding));
-}
-
-/// [ORB-11332] A grant's resolved due interval accelerates only the members it
-/// names; the operator's routine timing governs everything else.
-#[test]
-fn grant_scope_accelerates_only_in_scope_members() {
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
-    let host = Host::new();
-    let evaluate_with = |minute: i64, scope: &[&str]| {
-        evaluate(
-            store.as_ref(),
-            &host,
-            MemberEvaluation {
-                consumer: "host/ws/routine/pilot",
-                epoch: "epoch",
-                trigger: &trigger(),
-                enabled: true,
-                dry_run: true,
-                now: DateTime::from_timestamp(1_700_000_000, 0).unwrap()
-                    + Duration::minutes(minute),
-                constraints: MemberConstraints {
-                    scope: scope.iter().map(|id| id.to_string()).collect(),
-                    due_after_seconds: Some(0),
-                },
-            },
-        )
-        .unwrap()
-    };
-
-    // Seed the member without constraints: the two-minute debounce holds.
-    assert_eq!(tick(store.as_ref(), &host, 0).reason, "debouncing");
-    // Out of scope: still debouncing at the same minute.
-    assert_eq!(evaluate_with(0, &["other"]).reason, "debouncing");
-    // In scope with a zero-second due interval: due now.
-    assert_eq!(evaluate_with(0, &["task"]).reason, "would_fire");
 }
 
 /// [ORB-12746] A burst of due members is admitted as one attempt of up to
@@ -1099,7 +1059,6 @@ fn fired_state_after_failure(
             enabled: true,
             dry_run: false,
             now: DateTime::from_timestamp(1_700_000_000, 0).unwrap() + Duration::minutes(minute),
-            constraints: MemberConstraints::default(),
         },
     )
     .unwrap();

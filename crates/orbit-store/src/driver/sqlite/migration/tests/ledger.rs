@@ -297,8 +297,56 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0025".to_string(),
                 "audit_plugin_grants".to_string()
             ),
+            (
+                "migration.v0026".to_string(),
+                "remove_operation_mode".to_string()
+            ),
         ]
     );
+}
+
+/// A store that carried the retired `operation` feature tables opens cleanly
+/// and no longer has them afterwards (ORB-12772).
+#[test]
+fn remove_operation_mode_drops_the_grant_tables_from_an_upgraded_store() {
+    let conn = Connection::open_in_memory().expect("open in-memory connection");
+    apply_schema(&conn).expect("apply schema");
+    // Rewind to the last version that still shipped the feature, recreating
+    // exactly what its `operation` feature migration v1 wrote.
+    conn.execute_batch(
+        "DELETE FROM schema_meta WHERE key = 'migration.v0026';
+         CREATE TABLE operation_grants (workspace_id TEXT NOT NULL, grant_id TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, grant_json TEXT NOT NULL, PRIMARY KEY(workspace_id, grant_id));
+         CREATE INDEX operation_grants_workspace ON operation_grants(workspace_id, created_at);
+         CREATE TABLE operation_recovery (workspace_id TEXT NOT NULL, task_id TEXT NOT NULL, ledger_json TEXT NOT NULL, PRIMARY KEY(workspace_id, task_id));
+         INSERT INTO feature_schema_meta(feature, version, name, applied_at)
+         VALUES ('operation', 1, 'grants_and_recovery_ledgers', '2026-07-09T00:00:00Z');",
+    )
+    .expect("recreate the retired feature tables");
+    assert_eq!(current_schema_version(&conn).expect("version"), 25);
+
+    apply_schema(&conn).expect("reopen applies the removal");
+
+    assert_eq!(
+        current_schema_version(&conn).expect("version"),
+        SUPPORTED_SCHEMA_VERSION
+    );
+    let leftover: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'operation_%' ORDER BY name")
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert!(leftover.is_empty(), "retired tables remain: {leftover:?}");
+    // The feature ledger is immutable by design; the retired row stays.
+    let feature_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM feature_schema_meta WHERE feature = 'operation'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("feature rows");
+    assert_eq!(feature_rows, 1);
 }
 
 #[test]
@@ -538,7 +586,7 @@ fn store_reopens_database_at_shipped_schema_v4_and_applies_through_latest() {
     );
     assert_eq!(
         applied.last().map(|migration| migration.name.as_str()),
-        Some("audit_plugin_grants")
+        Some("remove_operation_mode")
     );
     let connection = store.connection();
     let conn = connection.lock().expect("connection");

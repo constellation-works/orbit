@@ -466,7 +466,6 @@ pub struct ClaimMutationResult {
 pub(crate) struct ClaimCommitEffects {
     pub replacements: Vec<(TaskCoordinationRow, TaskCoordinationRow)>,
     pub release_reservation: Option<String>,
-    pub completion_grant: Option<(String, String)>,
     pub friction: Option<(super::FrictionAddParams, String)>,
     pub execution_origin: Option<ExecutionLocation>,
     pub worker_update: Option<ClaimWorkerUpdate>,

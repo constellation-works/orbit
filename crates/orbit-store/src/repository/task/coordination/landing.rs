@@ -184,7 +184,7 @@ impl TaskCommitBoundary {
         }
         // Full recheck: operator context, current authorization, no revocation,
         // trusted candidate observation and digest-pinned validation evidence.
-        self.check_handoff_landing(auth, state, effects)?;
+        self.check_handoff_landing(auth, state)?;
         let (old, mut attempt) = self.live_attempt(auth, handoff_id)?;
         attempt.state = LandingAttemptState::Merged;
         attempt.evidence = Some(evidence.into());

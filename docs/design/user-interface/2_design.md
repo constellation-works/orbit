@@ -136,6 +136,6 @@ Accessibility still needs a real WCAG pass; responsive behavior remains optimize
 - [ORB-10873] added Scoreboard notable completions, honest coverage language, labeled abbreviations, and accessible window tabs.
 - [ORB-12235] made task complexity, description, tags, acceptance criteria, and context files editable in the expanded task detail.
 - [ORB-12645] rendered task comments as a full-width Markdown thread with per-comment collapse, an outline, and a previewing composer.
-- [ORB-12728] padded the Operation Mode panel body like its neighbours and added the governed **Stop admissions** control (`POST /api/workflows/auto/stop`) to the Auto-drain view.
+- [ORB-12728] added the governed **Stop admissions** control (`POST /api/workflows/auto/stop`) to the Auto-drain view. Its sibling change to the Operation Mode panel went with that panel when operation mode was removed on 2026-09-21 ([orbit-core decisions](../orbit-core/4_decisions.md)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

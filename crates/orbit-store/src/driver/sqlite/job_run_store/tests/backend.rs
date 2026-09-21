@@ -199,7 +199,6 @@ fn same_minute_siblings_and_children_get_role_marked_ids() {
             attempt: 1,
             scheduled_at: submitted_at,
             input: None,
-            authority: None,
         })
         .expect("admit child")
     {

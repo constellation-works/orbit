@@ -221,7 +221,6 @@ Retired features stay listed with their `_archive/` path as a historical record.
 | Knowledge graph | [docs/design/_archive/knowledge-graph/](./_archive/knowledge-graph/) | claude |
 | MCP Bridge | [docs/design/mcp-bridge/](./mcp-bridge/) | claude |
 | MCP Session Context | [docs/design/mcp-session-context/](./mcp-session-context/) | codex |
-| Operation Mode | [docs/design/operation-mode/](./operation-mode/) | codex |
 | Orbit Core | [docs/design/orbit-core/](./orbit-core/) | claude |
 | Orbit Graph | [docs/design/_archive/orbit-graph/](./_archive/orbit-graph/) | claude |
 | Orbit Search | [docs/design/orbit-search/](./orbit-search/) | claude |
@@ -229,6 +228,7 @@ Retired features stay listed with their `_archive/` path as a historical record.
 | Project Learnings | [docs/design/project-learnings/](./project-learnings/) | claude |
 | Remote Access | [docs/design/remote-access/](./remote-access/) | claude |
 | Resident Orchestrator (archived) | [docs/design/_archive/resident-orchestrator/](./_archive/resident-orchestrator/) | codex |
+| Review Gate | [docs/design/review-gate/](./review-gate/) | codex |
 | Routines | [docs/design/routines/](./routines/) | claude |
 | Task Artifacts | [docs/design/task-artifacts/](./task-artifacts/) | codex |
 | Task Publication | [docs/design/task-publication/](./task-publication/) | codex |

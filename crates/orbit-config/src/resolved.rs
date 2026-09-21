@@ -127,9 +127,8 @@ pub struct ResolvedConfig {
     /// deferred to dispatch so a bad system crew does not stop unrelated
     /// activity execution.
     pub system_crew: String,
-    /// Resolved operation-mode preferences with per-field provenance
-    /// (`[operation]`; built-in supervised). Preferences only: authority is
-    /// a separate grant [ORB-11332].
+    /// Resolved `[operation]` review preferences with per-field provenance
+    /// (built-in: no automatic review) [ORB-11333].
     pub operation: OperationPolicy,
     /// Optional floor for the local task-id allocator (`[tasks] id_start`).
     /// Applied forward-only on runtime build so machines can hold disjoint id

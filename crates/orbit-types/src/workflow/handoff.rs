@@ -96,7 +96,11 @@ pub struct AcceptedHandoff {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HandoffAuthorizationSource {
     Operator,
-    Grant { grant_id: String },
+    /// Retained only so rows written before operation mode was removed still
+    /// decode; completion under this source is always refused.
+    Grant {
+        grant_id: String,
+    },
 }
 
 /// Immutable. Revocation is a separate durable record, not an overwrite of approval.

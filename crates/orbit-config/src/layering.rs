@@ -16,12 +16,10 @@
 //!   re-identify the machine it happens to be checked out on;
 //! - a crew name containing `:` is refused per layer, before the merge, so the
 //!   error names the file that defines it — the only way back from a persisted
-//!   colon-named crew is editing that file;
-//! - an explicit workspace `operation.preset` resets the preset-managed
-//!   `operation.*` keys, so a global explicit value for one of them is not
-//!   inherited past a workspace preset selection [ORB-11332]. The typed
-//!   resolution in [`crate::operation`] is the authority; the merged document
-//!   mirrors it so `orbit config show` and the effective policy agree.
+//!   colon-named crew is editing that file.
+//!
+//! The `[operation]` review keys are resolved per layer by [`crate::operation`]
+//! rather than from the merged document, so their provenance is exact.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,9 +29,7 @@ use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
 use crate::crew_pools::reject_unpoolable_crew_names_in_document;
-use crate::operation::{
-    OperationLayer, OperationLayerSource, OperationPolicy, OperationPreset, PRESET_MANAGED_KEYS,
-};
+use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
 use crate::registry::{CONFIG_KEY_REGISTRY, GLOBAL_ONLY_KEY_PREFIX};
 use crate::resolved::{ResolvedConfig, warn_compatibility_keys};
@@ -100,9 +96,6 @@ pub enum ShadowReason {
     /// file must restate to keep: it never inherits from global once a
     /// distinct workspace file exists.
     NotInherited,
-    /// A workspace `operation.preset` selection reset this preset-managed
-    /// key, so the global explicit value did not survive the merge.
-    PresetReset,
 }
 
 impl ShadowReason {
@@ -111,7 +104,6 @@ impl ShadowReason {
         match self {
             Self::Overridden => "overridden",
             Self::NotInherited => "not-inherited",
-            Self::PresetReset => "preset-reset",
         }
     }
 }
@@ -306,13 +298,6 @@ pub(crate) fn load_layered_resolved(
                 remove_value_at_path(&mut merged, key);
             }
         }
-        if value_at_path(&workspace_document.value, OperationPreset::KEY).is_some() {
-            for key in PRESET_MANAGED_KEYS {
-                if value_at_path(&workspace_document.value, key).is_none() {
-                    remove_value_at_path(&mut merged, key);
-                }
-            }
-        }
     }
 
     let config_path = workspace
@@ -332,8 +317,8 @@ pub(crate) fn load_layered_resolved(
     })
 }
 
-/// Resolve operation-mode preferences from the exact layers rather than the
-/// merged document, so the preset-reset rule is applied per layer.
+/// Resolve the `[operation]` review preferences from the exact layers rather
+/// than the merged document, so each field records the layer that set it.
 fn resolve_operation_layers(
     global: Option<&ConfigDocument>,
     workspace: Option<&ConfigDocument>,
@@ -552,8 +537,8 @@ fn effective_values(
 /// Layers that define `key` without supplying the effective value.
 ///
 /// Only the global layer can be shadowed today: it is the one layer below a
-/// workspace file, and the two non-inheriting rules ([`WORKSPACE_REPLACE_ONLY_KEYS`]
-/// and the workspace preset reset) both drop a global value.
+/// workspace file, and the non-inheriting rule ([`WORKSPACE_REPLACE_ONLY_KEYS`])
+/// drops a global value.
 fn shadowed_for_key(
     key: &str,
     source: &ConfigValueSource,
@@ -575,8 +560,6 @@ fn shadowed_for_key(
         ShadowReason::Overridden
     } else if workspace.is_some() && WORKSPACE_REPLACE_ONLY_KEYS.contains(&key) {
         ShadowReason::NotInherited
-    } else if PRESET_MANAGED_KEYS.contains(&key) {
-        ShadowReason::PresetReset
     } else {
         ShadowReason::Overridden
     };
@@ -628,14 +611,6 @@ fn source_for_key(
         return file_source(ConfigValueSourceKind::Workspace, &document.path);
     }
     if workspace.is_some() && WORKSPACE_REPLACE_ONLY_KEYS.contains(&key) {
-        return built_in_source();
-    }
-    // A workspace preset selection resets the preset-managed keys: the global
-    // explicit value did not survive the merge, so it is not the source.
-    if PRESET_MANAGED_KEYS.contains(&key)
-        && workspace
-            .is_some_and(|document| value_at_path(&document.value, OperationPreset::KEY).is_some())
-    {
         return built_in_source();
     }
     if let Some(document) = global

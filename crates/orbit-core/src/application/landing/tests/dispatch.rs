@@ -248,42 +248,6 @@ impl Owner {
     }
 }
 
-/// An owner-side grant that authorizes completion for this task, the way an
-/// operator-authorized delivery run carries one.
-fn completion_grant(runtime: &OrbitRuntime, id: &str, task_id: &str) {
-    use chrono::Utc;
-    use orbit_types::workflow::{GrantLimits, GrantRights, GrantStatus, OperationGrant};
-    runtime
-        .sqlite_store()
-        .expect("store")
-        .operation_grant_insert(&OperationGrant {
-            id: id.into(),
-            workspace_id: runtime.workspace_id().expect("workspace"),
-            actor: "owner".into(),
-            source: "test".into(),
-            created_at: Utc::now(),
-            expires_at: Utc::now() + chrono::Duration::hours(1),
-            revision: 1,
-            task_ids: vec![task_id.to_string()],
-            rights: GrantRights {
-                complete: true,
-                ..Default::default()
-            },
-            limits: GrantLimits {
-                leaf_ceiling: 1,
-                preparation_due_seconds: 60,
-                recovery_episodes_per_task: 1,
-                recovery_minutes_per_task: 1,
-            },
-            policy: serde_json::json!({}),
-            policy_version: 1,
-            status: GrantStatus::Active,
-            stopped: None,
-            revoked: None,
-        })
-        .expect("grant");
-}
-
 #[test]
 fn an_approved_handoff_dispatches_exactly_one_owner_landing_job() {
     let owner = owner("review", None);
@@ -332,26 +296,33 @@ fn an_approved_handoff_dispatches_exactly_one_owner_landing_job() {
     );
 }
 
+/// Managed completion was bound to an operation-mode grant; with grants
+/// removed a `done` contract has no authority and the handoff is refused, so
+/// nothing is dispatched for it.
 #[test]
-fn accepting_a_completion_authorized_handoff_dispatches_without_a_drain_or_sweep() {
+fn a_done_completion_contract_is_refused_and_dispatches_nothing() {
     let owner = owner("done", Some("grant"));
-    completion_grant(&owner.runtime, "grant", &owner.task_id);
-    owner.accept();
-
-    assert_eq!(
+    let error = owner
+        .runtime
+        .accept_task_handoff(
+            &owner.worker,
+            "handoff",
+            owner.handoff.clone(),
+            owner.observation.clone(),
+        )
+        .expect_err("no grant can authorize completion");
+    assert!(
+        error.to_string().contains("managed completion unsupported"),
+        "{error}"
+    );
+    assert!(
         owner
             .runtime
             .landing_start_requests()
             .expect("outbox")
-            .len(),
-        1
+            .is_empty()
     );
-    assert_eq!(
-        owner.landing_runs().len(),
-        1,
-        "the authorized handoff dispatched its own landing job"
-    );
-    assert_eq!(owner.attempt().expect("attempt").attempt, 1);
+    assert!(owner.landing_runs().is_empty());
 }
 
 #[test]

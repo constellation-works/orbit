@@ -570,85 +570,22 @@ fn local_and_already_landed_require_the_same_evidence_and_approval() {
     }
 }
 
+/// Managed completion was bound to an operation-mode grant. With grants
+/// removed, a `done` ship contract has nothing to authorize it and the
+/// handoff is refused rather than silently downgraded to review.
 #[test]
-fn existing_completion_grant_is_scoped_and_rechecked_at_intent_commit() {
-    use orbit_types::workflow::{GrantLimits, GrantRights, GrantStatus, OperationGrant};
+fn done_completion_contract_is_refused_without_operation_grants() {
     let mut ship = request("first").ship;
     ship.completion = "done".into();
     ship.authorization_reference = Some("grant".into());
     let (_tmp, f, c, h) = fixture(ship);
+    let error = accept(&f, &c, &h).expect_err("no authority can bind a done contract");
     assert!(
-        accept(&f, &c, &h).is_err(),
-        "reference alone grants nothing"
-    );
-    let grant = OperationGrant {
-        id: "grant".into(),
-        workspace_id: PARTITION_ID.into(),
-        actor: "owner".into(),
-        source: "test".into(),
-        created_at: Utc::now(),
-        expires_at: Utc::now() + chrono::Duration::hours(1),
-        revision: 1,
-        task_ids: vec![c.task_id.clone()],
-        rights: GrantRights {
-            complete: true,
-            ..Default::default()
-        },
-        limits: GrantLimits {
-            leaf_ceiling: 1,
-            preparation_due_seconds: 60,
-            recovery_episodes_per_task: 1,
-            recovery_minutes_per_task: 1,
-        },
-        policy: serde_json::json!({}),
-        policy_version: 1,
-        status: GrantStatus::Active,
-        stopped: None,
-        revoked: None,
-    };
-    f.boundary()
-        .store
-        .operation_grant_insert(&grant)
-        .expect("grant");
-    accept(&f, &c, &h).expect("grant authorizes accepted handoff");
-    assert_eq!(starts(&f).len(), 1);
-    f.boundary()
-        .store
-        .operation_grant_transition(
-            PARTITION_ID,
-            "grant",
-            &GrantTransitionRequest {
-                kind: GrantTransitionKind::Revoke,
-                actor: "owner",
-                reason: Some("withdraw"),
-                expected_revision: Some(1),
-                now: Utc::now(),
-            },
-        )
-        .expect("revoke grant");
-    let auth = operator(&c).with_handoff_observation(observation(&h));
-    let error = f
-        .boundary()
-        .mutate_execution_claim(
-            Some(&auth),
-            "intent",
-            &ClaimMutation::MergeIntent {
-                intent_id: "must-not-send".into(),
-                resolved: false,
-                evidence: "observed exact candidate".into(),
-            },
-        )
-        .expect_err("SQL commit rechecks grant");
-    assert!(
-        error.to_string().contains("completion grant refused"),
+        error.to_string().contains("managed completion unsupported"),
         "{error}"
     );
-    assert!(
-        f.boundary().resolve_execution_claims().expect("claims")[0]
-            .unresolved_merge_intent
-            .is_none()
-    );
-    assert_eq!(f.task(&c.task_id).status, TaskStatus::Review);
+    assert!(starts(&f).is_empty());
+    assert_eq!(f.task(&c.task_id).status, TaskStatus::InProgress);
 }
 
 #[test]

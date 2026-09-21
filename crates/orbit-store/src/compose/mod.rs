@@ -300,11 +300,3 @@ pub fn review_store(
     crate::driver::sqlite::review::initialize(&store)?;
     Ok(Arc::new(store))
 }
-
-/// Open operation-mode grant/ledger contracts over the configured host store.
-pub fn operation_store(
-    store: Store,
-) -> Result<Arc<dyn crate::contracts::OperationStoreBackend>, orbit_common::OrbitError> {
-    crate::driver::sqlite::operation::initialize(&store)?;
-    Ok(Arc::new(store))
-}

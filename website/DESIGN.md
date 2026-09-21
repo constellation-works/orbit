@@ -133,7 +133,7 @@ one-sentence heading on the left, a short lede on the right — and in order:
    sentence under the grid points at Install and Set Up MCP, with First Task
    as the by-hand CLI route.
 2. **When you are not in the loop** — one table over `orbit run ship`,
-   `--mode local`, `orbit run auto`, a scoped `orbit operation` grant, and
+   `--mode local`, `orbit run auto`, and
    `orbit run ship-sweep`: the command, where the run stops, and that
    completing delivery is a separate explicit authorization, side by side so
    modes compare without clicking. Row headers link to each mode's guide.

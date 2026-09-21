@@ -7,7 +7,6 @@ mod error;
 mod executor_def;
 pub mod handoff;
 mod job;
-pub mod operation;
 mod review;
 mod routine;
 mod run_id;
@@ -56,11 +55,6 @@ pub use job::{
     JobRunState, JobRunStep, JobRunTrigger, JobRunTriggerKind, JobScheduleState, JobStep,
     JobTargetType, KnowledgeRunMetrics, RunEvent, RunStateUpdate, StepCondition,
     default_job_max_active_runs, default_max_iterations, default_retry_backoff_seconds,
-};
-pub use operation::{
-    GrantAdmission, GrantLimits, GrantRights, GrantStatus, GrantTransition, MAX_GRANT_SCOPE_TASKS,
-    MAX_GRANT_WINDOW_SECONDS, OPERATION_ADMISSION_KEY, OperationAdmission, OperationGrant,
-    RecoveryEpisode, RecoveryEpisodeKind, RecoveryLedger, RecoveryReservation,
 };
 pub use review::{
     CommitIdentity, DEFAULT_REVIEW_MINUTES, DEFAULT_REVIEW_REPAIR_CYCLES,

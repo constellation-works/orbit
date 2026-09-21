@@ -7,9 +7,9 @@ use orbit_store::Store;
 use orbit_store::compose::{
     CoordinatedWorkspaceBackends, audit_event_store_sqlite, automation_store,
     global_executor_def_store, global_policy_def_store, invocation_store_from_store,
-    layered_policy_def_store, operation_store, plugin_store_sqlite, review_store,
-    tool_store_sqlite, v2_audit_store_from_store, workspace_coordinated_backends,
-    workspace_job_run_store, workspace_observational_backends, workspace_policy_def_store,
+    layered_policy_def_store, plugin_store_sqlite, review_store, tool_store_sqlite,
+    v2_audit_store_from_store, workspace_coordinated_backends, workspace_job_run_store,
+    workspace_observational_backends, workspace_policy_def_store,
 };
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, WorkspaceConfig, read_workspace_config_optional,
@@ -140,7 +140,6 @@ pub(crate) fn build_context_from_roots(
             sqlite: store.clone(),
             automation: Arc::new(store.clone()),
             review: Arc::new(store.clone()),
-            operation: Arc::new(store.clone()),
             v2_audit: v2_audit_store_from_store(store.clone()),
             invocation: invocation_store_from_store(store.clone()),
         }
@@ -149,7 +148,6 @@ pub(crate) fn build_context_from_roots(
             sqlite: store.clone(),
             automation: automation_store(store.clone())?,
             review: review_store(store.clone())?,
-            operation: operation_store(store.clone())?,
             v2_audit: v2_audit_store_from_store(store.clone()),
             invocation: invocation_store_from_store(store.clone()),
         }

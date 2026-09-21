@@ -70,7 +70,7 @@ task is admitted. A finding never rejects a task; it names the repair.
 - **Allowlist.** A tool outside the implementation activity's baseline has to
   be in `required_tools`, or the criterion is unreachable from the lane.
 - **Operator capability.** Governed operations — workflow run observation and
-  resume, the operation grants, `orbit.command.exec`, `orbit.agent.invoke`,
+  resume, `orbit.command.exec`, `orbit.agent.invoke`,
   and the other destructive surfaces — are reserved for an operator.
   `required_tools` grants allowlist membership, not capability, and an
   implementing agent must never set an authority environment variable to get

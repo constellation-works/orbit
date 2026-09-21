@@ -532,13 +532,6 @@ impl OrbitRuntime {
         Ok(Arc::clone(&self.context.stores().host.review))
     }
 
-    /// Operation-mode grants and recovery ledgers in the host store [ORB-11332].
-    pub fn operation_store(
-        &self,
-    ) -> Result<Arc<dyn orbit_store::contracts::OperationStoreBackend>, OrbitError> {
-        Ok(Arc::clone(&self.context.stores().host.operation))
-    }
-
     pub fn sqlite_store(&self) -> Result<Store, OrbitError> {
         Ok(self.context.stores().host.sqlite.clone())
     }
@@ -635,9 +628,8 @@ impl OrbitRuntime {
         self.context.settings().workflow_auto_ship()
     }
 
-    /// The resolved operation-mode preferences (`[operation]` layered over
-    /// the built-in supervised defaults) with per-field provenance. These are
-    /// preferences: they authorize nothing by themselves [ORB-11332].
+    /// The resolved `[operation]` review preferences (layered over the
+    /// built-in no-review defaults) with per-field provenance [ORB-11333].
     pub fn operation_policy(&self) -> &orbit_config::OperationPolicy {
         self.context.settings().operation()
     }

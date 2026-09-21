@@ -153,16 +153,6 @@ These are the keys `orbit config set` accepts, as printed by `orbit config keys`
 | `runtime.log_max_file_mb` | integer | Roll the active JSONL log past this size. Must be ≥ 1 and ≤ `runtime.log_max_total_mb`. |
 | `runtime.log_max_total_mb` | integer | Total size budget across JSONL log archives; oldest pruned first. |
 | `runtime.log_retention_days` | integer | Delete JSONL log archives older than this. |
-| `operation.preset` | string | Operation-mode preset: `supervised` (default) or `autonomous`. Selecting a preset resets the preset-managed `operation.*` keys at that layer. Grants nothing by itself. |
-| `operation.preparation` | string | Preparation preference: `manual` or `automatic`. Preset-managed. |
-| `operation.preparation_due_seconds` | integer | Seconds after a material change before an in-grant task's preparation is due (1–86400). Preset-managed. |
-| `operation.promotion` | string | Promotion preference: `separate_approval` or `automatic`. Preset-managed; automatic promotion still needs a grant with the `promote` right. |
-| `operation.completion` | string | Completion preference: `review` or `done`. Preset-managed; bounded by `operation.delivery_cap` and the grant. |
-| `operation.delivery_cap` | string | Repository ceiling on managed delivery: `review` (default) or `done`. Independent of the preset. |
-| `operation.leaf_ceiling` | integer | Ceiling on concurrently live leaf runs (1–500). Preset-managed; the job's hard limit still applies. |
-| `operation.recovery` | string | Recovery preference: `existing` or `scheduled`. Preset-managed. |
-| `operation.recovery_episodes_per_task` | integer | Recovery episodes allowed per task inside a grant (0–10). Preset-managed. |
-| `operation.recovery_minutes_per_task` | integer | Recovery wall-time minutes allowed per task inside a grant (1–1440). Preset-managed. |
 | `operation.review_policy` | string | Automatic review timing: `none` (default), `before-pr`, or `after-landing`. `before-pr` holds PR creation for a fresh reviewer and is refused for local-only delivery. |
 | `operation.review_crew` | string | Crew for before-PR automatic review. After-landing review uses its delivery auto-task's template crew. |
 | `operation.review_reviewer_starts` | integer | Fresh reviewer invocations allowed per delivery candidate lineage (1–10, default 2). |

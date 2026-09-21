@@ -187,7 +187,6 @@ fn pipeline_state_json_writes_compact_and_pretty_rows_still_read() {
             attempt: 1,
             scheduled_at,
             input: None,
-            authority: None,
         })
         .expect("admit child")
     {

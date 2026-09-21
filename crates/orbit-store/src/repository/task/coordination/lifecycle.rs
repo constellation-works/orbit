@@ -395,13 +395,7 @@ impl TaskCommitBoundary {
             }
             ClaimMutation::Handoff(_) => return Err(invalid("typed handoff required")),
             ClaimMutation::AcceptHandoff(handoff) => {
-                self.accept_typed_handoff(
-                    auth,
-                    &state,
-                    handoff,
-                    &mut params,
-                    &mut handoff_effects,
-                )?;
+                self.accept_typed_handoff(auth, &state, handoff, &mut params)?;
                 evidence.summary = Some(handoff.execution_summary.clone());
                 state.claim.phase = ExecutionClaimPhase::HandedOff;
                 params.status = Some(TaskStatus::Review);
@@ -540,7 +534,7 @@ impl TaskCommitBoundary {
                     if state.unresolved_merge_intent.is_some() {
                         return Err(invalid("merge intent already unresolved"));
                     }
-                    self.check_handoff_landing(auth, &state, &mut handoff_effects)?;
+                    self.check_handoff_landing(auth, &state)?;
                     state.unresolved_merge_intent = Some(intent_id.clone());
                 }
                 params.status_note = Some(encode(&(intent_id, resolved, proof))?);
@@ -570,7 +564,6 @@ impl TaskCommitBoundary {
             worker_update: handoff_effects.worker_update,
             friction: handoff_effects.friction,
             replacements: handoff_effects.replacements,
-            completion_grant: handoff_effects.completion_grant,
             release_reservation: release.then_some(claim.reservation_id),
         };
         effects

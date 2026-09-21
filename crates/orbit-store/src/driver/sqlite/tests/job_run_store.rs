@@ -696,7 +696,6 @@ mod run_state_update {
             attempt: 1,
             scheduled_at: Utc::now(),
             input: Some(serde_json::json!({ "task_ids": ["ORB-1"] })),
-            authority: None,
         }
     }
 
@@ -949,8 +948,7 @@ mod run_state_update {
             .expect("admit child")
         {
             ChildJobRunAdmissionOutcome::Admitted(child) => child,
-            ChildJobRunAdmissionOutcome::AdmissionsStopped
-            | ChildJobRunAdmissionOutcome::Refused { .. } => panic!("parent was admitting"),
+            ChildJobRunAdmissionOutcome::AdmissionsStopped => panic!("parent was admitting"),
         };
         backend
             .update_run_state(&parent_run_id, &mut |_, state| {

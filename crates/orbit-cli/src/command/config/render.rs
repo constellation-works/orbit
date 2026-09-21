@@ -649,9 +649,6 @@ fn shadow_note(entry: &EffectiveConfigValue) -> Option<String> {
     Some(match shadow.reason {
         ShadowReason::Overridden => format!("(overrides {layer}: {value})"),
         ShadowReason::NotInherited => format!("({layer} sets {value} — not inherited)"),
-        ShadowReason::PresetReset => {
-            format!("({layer} sets {value} — reset by workspace operation.preset)")
-        }
     })
 }
 

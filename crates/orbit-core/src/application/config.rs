@@ -814,9 +814,6 @@ fn shadow_note(layer: ConfigValueSourceKind, value: &JsonValue, reason: ShadowRe
         ShadowReason::NotInherited => {
             format!("{layer} sets {rendered} — not inherited while a workspace file exists")
         }
-        ShadowReason::PresetReset => {
-            format!("{layer} sets {rendered} — reset by workspace operation.preset")
-        }
     }
 }
 

@@ -104,9 +104,9 @@ pub(crate) fn snapshot(policy: &OperationPolicy) -> ReviewAdmission {
         contract_version: REVIEW_CONTRACT_VERSION,
         policy_version: policy.version,
         timing: policy.review_policy.value.timing(),
-        timing_source: policy.review_policy.source.label(),
+        timing_source: policy.review_policy.source.label().to_string(),
         crew: policy.review_crew.value.clone(),
-        crew_source: policy.review_crew.source.label(),
+        crew_source: policy.review_crew.source.label().to_string(),
         budget: policy.review_budget(),
         captured_at: Utc::now(),
     }

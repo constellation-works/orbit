@@ -76,7 +76,6 @@ a conservative title/status fallback.
 | [Host Registry](./design/host-registry/1_overview.md) | The live host-registry feature is a machine-local identity and workspace catalog. | Accepted | codex |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | One authoritative Orbit MCP server, reached by local stdio, a byte-transparent direct SSH stdio proxy, or a loopback-default TCP listener. | Draft | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Accepted | codex |
-| [Operation Mode](./design/operation-mode/1_overview.md) | Operation-mode presets, scoped grants and bounded recovery (shipped in ORB-11332) plus the before-PR review gate, reviewer repairs, lineage budgets and exact-tree delivery coverage (shipped in ORB-11333). | Accepted | codex |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Declaring each verb of a noun once as data so CLI, MCP, dashboard, and runtime handlers are derived adapters instead of four hand-copied layers. | Accepted | claude |
 | [Orbit Core](./design/orbit-core/1_overview.md) | Directional application, runtime, adapter, bootstrap, and composition boundaries inside orbit-core. | Accepted | codex |
 | [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Accepted | codex |
@@ -84,6 +83,7 @@ a conservative title/status fallback.
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | Policy & Sandboxing is Orbit's safety surface for filesystem access and process execution. | Draft | claude |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Project Learnings — Decisions | Superseded | claude |
 | [Remote Access](./design/remote-access/1_overview.md) | Multi-workspace Orbit Web serving and loopback-safe remote access over an SSH local forward. | Accepted | codex |
+| [Review Gate](./design/review-gate/1_overview.md) | Independent automatic code review — before-PR gating with a fresh reviewer and scoped repairs, after-landing scheduling, lineage budgets, and exact-tree delivery coverage. | Accepted | codex |
 | [Routines](./design/routines/1_overview.md) | Durable per-user scheduler primitive that fires catalog jobs/activities on cron triggers, per host, with local state. | Accepted | claude |
 | [State Compatibility](./design/state-compatibility/1_overview.md) | How an Orbit binary decides whether it may open workspace state written by a newer Orbit, instead of refusing every command on a version number. | Draft | claude |
 | [Task Artifacts](./design/task-artifacts/1_overview.md) | Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. | Draft | codex |
