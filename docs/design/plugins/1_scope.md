@@ -225,6 +225,18 @@ upgrading past this change re-runs `orbit plugin enable <ns> --grant …` once p
 plugin; the records are deliberately not back-filled from existing rows, which would
 authorize a row that may already have been written by a plugin.
 
+**The row's install path is held to the install root.** The witness covers `name`,
+`enabled` and the grant set, and nothing else on the row — binding the version or the
+manifest digest would refuse every legitimate upgrade. That leaves `install_path`: a row
+that keeps its authorized grant names and repoints them at a tree the backend wrote under
+one of its own write roots passes the witness unchanged, and the `manifest_digest` check
+then compares the attacker's tree against the attacker's digest. So every enabled row's
+`install_path` must resolve strictly beneath `~/.orbit/plugins/<ns>/` before anything is
+read from it — a `denied` audit row and one diagnostic naming the recorded and the expected
+path otherwise, and the same check on every `orbit_tools` callback, because a backend
+already running can rewrite its row without a reload [ORB-12785]. Resolution is physical
+where the path exists, so a `..` or a symlink cannot name a tree it does not live in.
+
 **Seeding follows the managed-asset rule.** Routines, auto-tasks and skills are written once
 with `provenance: plugin:<ns>@<version>` and a digest in `.orbit-managed-assets.json`. A
 plugin upgrade re-seeds only files whose digest still matches the previously shipped
@@ -258,7 +270,10 @@ Every load hashes the bytes on disk and compares them to that `manifest_digest`.
 registers the plugin inactive with a diagnostic that names both digests and the re-consent
 commands (`orbit plugin add --force` and `orbit plugin enable`); the profile compiled for a
 call is the one the operator granted, never a later rewrite of the requested paths, env names,
-tools, or backend. Independently of that digest check, `permissions.fs.write` roots that
+tools, or backend. That comparison means something only because the row's `install_path` is
+checked against `~/.orbit/plugins/<ns>/` first (§3): both sides of the digest comparison come
+off a row a backend can write, so what makes the stored digest evidence is that the bytes it
+is compared against sit at a path the backend cannot populate [ORB-12785]. Independently of that digest check, `permissions.fs.write` roots that
 contain the plugin install root (`{{plugin_root}}` or any parent) or Orbit's global root are
 refused at `orbit plugin validate` and at registration — a plugin may write `{{plugin_state}}`,
 not its own manifest and not `~/.orbit`.

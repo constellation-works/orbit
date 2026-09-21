@@ -778,7 +778,11 @@ pub fn fs_write_root_covers(
     }
 }
 
-fn physical_or_lexical(path: &Path) -> PathBuf {
+/// The path as the kernel would resolve it when it exists (symlinks and `..`
+/// followed), and as a lexical `..`-collapse when it does not. Both sides of a
+/// containment check go through this so a `..` or a link cannot place a path
+/// beneath a root it does not physically live under.
+pub fn physical_or_lexical(path: &Path) -> PathBuf {
     path.canonicalize()
         .unwrap_or_else(|_| lexical_normalize(path))
 }
