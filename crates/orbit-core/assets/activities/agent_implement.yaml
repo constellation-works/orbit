@@ -121,9 +121,20 @@ spec:
        uncertainty. Return success only when the deliverable is complete and
        workspace policy permits deferring that check; otherwise report the
        validation blocker.
+       Run the gates the workspace policy names, not broader suites on your
+       own initiative. A failing check is a blocker only when your changes
+       cause it: when a gate fails on something outside the delivery scope,
+       reproduce it once against the unmodified baseline (the same command at
+       the base commit, or with your diff temporarily reverted). A failure
+       that reproduces there is pre-existing: record the exact command, the
+       failing case, and the baseline reproduction in the execution summary,
+       keep every check your changes touch green, and hand off as success.
     8. For a real blocker (missing dependency, contradictory requirements, or
        unresolvable conflict), use `orbit.task.update` to set `blocked` with a
-       reason.
+       reason. An acceptance criterion that contradicts the workspace's own
+       rules (AGENTS.md or its equivalent) is not one: the workspace rule
+       wins, skip that criterion, and record the deviation and its source in
+       the execution summary.
     9. File `orbit.friction.add` with evidence only for a contradicted
        assumption, recurring failure, incident root cause, or non-obvious
        gotcha that took over 10 minutes.
