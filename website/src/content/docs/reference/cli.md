@@ -42,7 +42,6 @@ before the subcommand.
 | `orbit run ship [task_id ...]` | Ship selected tasks, or the ready backlog, through the gated pipeline. Returns a run ID immediately. |
 | `orbit run ship --mode local` | Deliver in place instead of opening a pull request. |
 | `orbit run auto [--for <duration>]` | Drain the backlog for a window. `--concurrency`, `--allow-crew`, `--low-complexity-crews` / `--medium-complexity-crews` / `--hard-complexity-crews` / `--xhard-complexity-crews` (crew pools for unassigned tasks, `crew` or `crew:weight`; override the `[workflow]` pools), `--claim-token` when another operator holds the workspace claim. |
-| `orbit run auto --grant <ID>` | Bind the drain to an operation-mode grant from `orbit operation enable`: window, task set, and completion authority come from the grant, and `--complete` is not accepted alongside it. |
 | `orbit run auto --stop` | Stop new admissions for this workspace's active auto coordinator. Already admitted workers keep running — this is not cancellation. |
 | `orbit run ship --complete` / `orbit run auto --complete` | Additionally authorize that run to finish delivery and move the tasks it ships from `review` to `done`. Off by default. |
 | `orbit run readiness [task_id ...]` | Read-only explanation of why backlog tasks can or cannot start. `--concurrency`, `--allow-crew`, `--limit`. |
@@ -52,17 +51,6 @@ before the subcommand.
 | `orbit run agent <prompt>` | Operator-only: invoke an agent on the host to investigate and report. It runs outside the filesystem sandbox, changes no task, and dispatches nothing. `--cwd`, `--crew`, `--timeout` (default 1800 s, max 7200), `--idempotency-key`, `--provider-sandbox`. Returns a run ID; read it with `orbit run show` / `logs`. |
 
 See [Delivery Workflows](../../getting-started/workflows/).
-
-### Operation grants
-
-| Command | Purpose |
-|---|---|
-| `orbit operation explain` | Show the effective operation policy and authority, with the winning source per value. Run-layer overrides (`--preset`, `--completion`, `--leaf-ceiling`, `--recovery-episodes`, `--recovery-minutes`, `--review-policy`) preview their effect. |
-| `orbit operation enable` | Record a bounded grant: `--task <ID>` (repeatable, at most 50), `--for <window>` (at most 24h), `--right prepare\|promote\|complete` (repeatable). Accepts the same run-layer overrides as `explain`. `[operation]` preferences in `config.toml` authorize nothing without a grant. |
-| `orbit operation list` \| `show <ID>` | Inspect recent grants. `list --limit`. |
-| `orbit operation stop` \| `revoke` | `stop` ends new admissions while admitted work keeps its bounds; `revoke` also withdraws completion from admitted work. Neither cancels running children. `--id` (defaults to the active grant), `--reason`, `--if-revision`. |
-
-Start a drain under a grant with `orbit run auto --grant <ID>`.
 
 ### Tasks
 

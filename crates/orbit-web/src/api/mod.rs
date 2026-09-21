@@ -34,7 +34,6 @@ mod incidents;
 mod jobs;
 mod log;
 mod metrics;
-mod operation;
 mod pagination;
 mod reliability;
 mod routines;
@@ -614,12 +613,6 @@ pub(super) fn router() -> Router<crate::state::DashboardState> {
         .route(
             "/distributed/claims/:id/recover",
             post(distributed::recover_claim_action),
-        )
-        .route("/operation/explain", get(operation::explain_operation))
-        .route("/operation/stop", post(operation::stop_operation_action))
-        .route(
-            "/operation/revoke",
-            post(operation::revoke_operation_action),
         )
         .route("/runs/:id", get(runs::get_run))
         .route("/runs/:id/cancel", post(runs::cancel_run_action))

@@ -193,16 +193,13 @@ fire, so `recovery: scheduled` always reports that limiting reason.
   reasons (`outside_grant_scope`, `grant_*`) reflect a live grant-bound drain,
   and `orbit run task-pilot` for on-demand preparation (it neither promotes
   nor dispatches). Operation mode is an
-  operator control on the CLI and dashboard; agents read grant state from
+  operator control on the CLI; agents read grant state from
   readiness rather than MCP tools.
-- Dashboard: the Auto-drain view has an **Operation Mode** panel
-  showing every field with its source, the grant, caps, limiting reasons,
-  and governed Stop/Revoke controls with compare-and-set. When a grant is
-  active the panel shows the captured grant policy separately from current
-  preferences (future grants). Enablement is deliberately CLI only. The
-  neighbouring Auto-drain panel's governed **Stop admissions** control
-  (`POST /api/workflows/auto/stop`) is the `orbit run auto --stop`
-  counterpart for the live window itself, grant-bound or not [ORB-12728].
+- Dashboard: none. The Operation Mode panel and `/api/operation/*` were
+  removed (ORB-12769); the Auto-drain panel's governed **Stop admissions**
+  control (`POST /api/workflows/auto/stop`) remains the
+  `orbit run auto --stop` counterpart for the live window itself
+  [ORB-12728].
 - Audit: `operation.grant` (enabled/stopped/revoked/rejected),
   `operation.promotion`, `operation.recovery`, `operation.completion`,
   plus the existing `pipeline.invoke` and admissions-stop rows. Run inputs

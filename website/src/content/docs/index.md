@@ -118,7 +118,7 @@ next: false
       <p class="orbit-section-eyebrow">When you are not in the loop</p>
       <h2 class="orbit-section-heading">Same pipeline, running unattended. You choose where it stops and who authorizes the last step.</h2>
     </div>
-    <p class="orbit-section-lede">Agents and auto-tasks keep filing work; these are the ways it gets shipped without you at the keyboard. Every <code>orbit run</code> command is asynchronous: it prints a durable run ID and returns before the outcome is known. Finishing delivery is always a separate, explicit authorization: <code>--complete</code> on the command, or the <code>complete</code> right on a grant.</p>
+    <p class="orbit-section-lede">Agents and auto-tasks keep filing work; these are the ways it gets shipped without you at the keyboard. Every <code>orbit run</code> command is asynchronous: it prints a durable run ID and returns before the outcome is known. Finishing delivery is always a separate, explicit authorization: <code>--complete</code> on the command.</p>
   </div>
 
   <div class="orbit-modes">
@@ -149,12 +149,6 @@ next: false
           <td><code>orbit run auto --for 4h --concurrency 8</code></td>
           <td>When the window closes. <code>--for</code> only stops new work from starting; a task already being shipped still finishes. Concurrency defaults to 5. Check first with <code>orbit run readiness</code>, which reserves and submits nothing.</td>
           <td><code>--complete</code> covers every task the drain admits during the window, not just the backlog visible when you started it.</td>
-        </tr>
-        <tr>
-          <th scope="row"><a href="/how-to/continuous-delivery/#running-under-an-operation-mode-grant">A scoped grant</a><span class="orbit-modes-sub">a finite task set</span></th>
-          <td><code>orbit operation enable --task "$IDS" \</code><br><code>&nbsp;&nbsp;--for 2h --right prepare,promote</code><br><code>orbit run auto --grant "$GRANT_ID"</code></td>
-          <td>When the grant's window closes or its tasks run out, whichever is first. At most 50 tasks and 24 hours. <code>stop</code> halts new admissions; <code>revoke</code> also strips admitted work of privileged actions.</td>
-          <td>Only when the grant carries the <code>complete</code> right. <code>--complete</code> is refused alongside <code>--grant</code>; the grant is the authorization.</td>
         </tr>
         <tr>
           <th scope="row"><a href="/how-to/recurring-work/">Unattended sweep</a><span class="orbit-modes-sub">for a scheduler</span></th>

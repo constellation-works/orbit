@@ -159,28 +159,6 @@ one run:
 - **Only affects what this run starts.** Work another invocation already has in
   flight keeps running; nothing is cancelled.
 
-### Running under an operation-mode grant
-
-`--complete` is per-invocation authority. For a finite task set with separately
-granted rights, record a grant first and bind the drain to it:
-
-```bash
-orbit operation explain                                   # effective policy and any active grant
-orbit operation enable --task TASK-123,TASK-456 --for 2h --right prepare,promote,complete
-orbit run auto --grant "$GRANT_ID"                        # window capped at the grant's remaining time
-orbit operation list
-orbit operation show "$GRANT_ID"
-orbit operation stop --reason 'enough for today'          # no new admissions; admitted work keeps its bounds
-orbit operation revoke --reason 'bad build'               # admitted work also loses completion
-```
-
-`enable` prints the grant ID. `--task` takes at most 50 IDs, `--for` at most
-`24h`, and `--right` any of `prepare`, `promote`, `complete`. A drain bound
-with `--grant` admits only the grant's tasks and takes completion from the
-grant, so `--complete` is refused alongside it. `stop` and `revoke` default to
-the workspace's active grant; neither cancels running children. Preferences
-under `[operation]` in `config.toml` authorize nothing by themselves.
-
 ## 5. Retune a running drain
 
 To change how many tasks a live drain keeps in flight, retune it rather than

@@ -86,13 +86,6 @@ globalThis.fetch = async (path, options = {}) => {
     },
     tasks: readinessTasks,
   });
-  if (url.pathname === '/api/operation/explain') return response({
-    controls_authorized: true,
-    policy: { preset: { value: 'balanced', source: 'config' } },
-    authority: { grant_id: null, admission: 'none', rights: [], task_ids: [] },
-    delivery: { effective_completion: 'review' },
-    limiting_reasons: [],
-  });
   return response({});
 };
 setWorkspace('one');
