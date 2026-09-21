@@ -180,7 +180,7 @@ fn automatic_readiness_requires_selectors_and_no_deferring_finding() {
 }
 
 #[test]
-fn automatic_discovery_admits_only_provenance_tagged_no_diff_expected_auto_tasks() {
+fn automatic_discovery_excludes_no_diff_tasks_regardless_of_mint_provenance() {
     let (_root, runtime, repo_root) = runtime_with_workspace_layout();
     write_workspace_file(&repo_root, "src/existing.rs");
     let mut eligible = Vec::new();
@@ -246,7 +246,7 @@ fn automatic_discovery_admits_only_provenance_tagged_no_diff_expected_auto_tasks
     .expect("automatic discovery");
 
     assert_eq!(output["mode"], "automatic");
-    assert_eq!(output["task_count"], 8);
+    assert_eq!(output["task_count"], 7);
     assert_eq!(output["partition_count"], 2);
     assert_eq!(
         output["partitions"][0]["task_ids"]
@@ -260,7 +260,7 @@ fn automatic_discovery_admits_only_provenance_tagged_no_diff_expected_auto_tasks
             .as_array()
             .unwrap()
             .len(),
-        3
+        2
     );
     let selected = output["task_ids"].as_array().expect("selected task ids");
     for task in eligible {
@@ -272,18 +272,13 @@ fn automatic_discovery_admits_only_provenance_tagged_no_diff_expected_auto_tasks
             entry["task_id"] == task.id && entry["reason"] == "status_not_eligible"
         }));
     }
-    for task in [no_diff_needed, no_diff_expected] {
+    for task in [no_diff_needed, no_diff_expected, no_diff_auto_task] {
         assert!(
             excluded
                 .iter()
                 .any(|entry| { entry["task_id"] == task.id && entry["reason"] == "no_diff_task" })
         );
     }
-    assert!(
-        selected
-            .iter()
-            .any(|value| value == &json!(no_diff_auto_task.id))
-    );
     assert!(excluded.iter().any(|entry| {
         entry["task_id"] == scoped.id && entry["reason"] == "context_files_not_empty"
     }));
