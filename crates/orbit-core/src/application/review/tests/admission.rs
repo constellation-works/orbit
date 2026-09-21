@@ -34,6 +34,31 @@ fn delivery_submissions_capture_the_effective_policy_with_its_sources() {
     assert!(other.get(REVIEW_ADMISSION_KEY).is_none());
 }
 
+/// [ORB-12771] The after-landing policy live on ws_orbit resolves from
+/// workspace configuration now that no grant can supply a captured one.
+/// Admission must still produce a snapshot, with that timing and its crew.
+#[test]
+fn after_landing_delivery_is_still_admitted_from_workspace_configuration() {
+    let fixture =
+        fixture("[operation]\nreview_policy = \"after-landing\"\nreview_crew = \"luna\"\n");
+    let runtime = &fixture.runtime;
+    let mut input = json!({ "task_ids": ["ORB-1"] });
+
+    install_review_admission(runtime, "task_pr_pipeline", &mut input, None, false)
+        .expect("after-landing delivery is admitted");
+    let admission = ReviewAdmission::from_run_input(&input)
+        .expect("readable")
+        .expect("present");
+    assert_eq!(admission.timing, ReviewTiming::AfterLanding);
+    assert_eq!(admission.timing_source, "workspace");
+    assert_eq!(admission.crew.as_deref(), Some("luna"));
+    assert_eq!(admission.crew_source, "workspace");
+    assert_eq!(
+        admission.policy_version,
+        orbit_config::OPERATION_POLICY_VERSION
+    );
+}
+
 #[test]
 fn ordinary_input_cannot_supply_or_widen_the_review_admission() {
     let fixture = fixture("[operation]\nreview_policy = \"none\"\n");

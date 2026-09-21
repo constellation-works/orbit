@@ -64,11 +64,6 @@ pub(crate) fn evaluate(
     let mut effective = trigger.clone();
     effective.retries = effective.retries.min(definition.policy.retries.max);
 
-    // [ORB-11332] Operation mode supplies constraints to this evaluation; it
-    // never owns a cadence of its own. Empty constraints are the pre-existing
-    // behavior.
-    let constraints = crate::application::operation::member_constraints(runtime, &effective)?;
-
     members::evaluate(
         runtime.automation_store()?.as_ref(),
         &Host::new(runtime, &effective),
@@ -79,7 +74,7 @@ pub(crate) fn evaluate(
             enabled: definition.enabled && owned,
             dry_run,
             now,
-            constraints,
+            constraints: Default::default(),
         },
     )
     .map_err(automation_error_to_orbit)

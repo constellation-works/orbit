@@ -239,23 +239,6 @@ impl RuntimeHost for OrbitRuntime {
         OrbitRuntime::update_task_from_activity(self, task_id, update)
     }
 
-    fn authorize_step_recovery(
-        &self,
-        run_id: &str,
-        step_id: &str,
-    ) -> Result<orbit_engine::StepRecoveryAdmission, OrbitError> {
-        OrbitRuntime::authorize_step_recovery(self, run_id, step_id)
-    }
-
-    fn settle_step_recovery(
-        &self,
-        run_id: &str,
-        step_id: &str,
-        elapsed_seconds: u64,
-    ) -> Result<(), OrbitError> {
-        OrbitRuntime::settle_step_recovery(self, run_id, step_id, elapsed_seconds)
-    }
-
     fn validate_step_recovery_mutation(
         &self,
         run_id: &str,
@@ -270,14 +253,6 @@ impl RuntimeHost for OrbitRuntime {
             task_ids,
             workspace_path,
         )
-    }
-
-    fn authorize_task_completion(
-        &self,
-        run_id: &str,
-        task_ids: &[String],
-    ) -> Result<(), OrbitError> {
-        OrbitRuntime::authorize_task_completion(self, run_id, task_ids)
     }
 
     fn record_review_landing(

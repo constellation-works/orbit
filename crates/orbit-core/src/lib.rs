@@ -72,10 +72,6 @@ pub use application::job::{
     DrainAdmissionsStopRequest, DrainAdmissionsStopResult, DrainWorkerLimitChange,
     DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry, RemainingDrainChild,
 };
-pub use application::operation::{
-    OperationDrainRequest, OperationDrainResult, OperationGrantControlRequest,
-    OperationGrantControlResult,
-};
 pub use application::routine::{
     RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
 };

@@ -18,10 +18,6 @@ pub(crate) struct PipelineSubmission<'a> {
     /// [ORB-11354]. Only it may carry [`TRUSTED_HOST_ADMISSION_KEY`] in its
     /// input; every other submission is refused for supplying it.
     pub(crate) trusted_host: bool,
-    /// Whether this submission is the grant-bound drain coordinator
-    /// [ORB-11332]. Only it (and the parent-authorized child path, which
-    /// copies the parent's snapshot) may carry [`OPERATION_ADMISSION_KEY`].
-    pub(crate) operation_bound: bool,
     /// How this run was submitted [ORB-12255].
     pub(crate) trigger: JobRunTrigger,
 }
@@ -31,7 +27,7 @@ pub(crate) struct PipelineSubmission<'a> {
 pub(crate) enum ChildSubmission {
     Submitted(PipelineInvokeResult),
     /// The atomic admission refused the child; `reason` is
-    /// `admissions_stopped` or one of the grant-bound refusals.
+    /// `admissions_stopped`.
     Skipped(String),
 }
 
@@ -56,7 +52,6 @@ impl<'a> PipelineSubmission<'a> {
             actor,
             action_key: None,
             trusted_host: false,
-            operation_bound: false,
             trigger: JobRunTrigger::cli(),
         }
     }
@@ -367,22 +362,6 @@ impl OrbitRuntime {
             ..PipelineSubmission::catalog(job_name, input.clone(), Some("automation"))
         });
         self.record_submission_audit(job_name, &input, Some("automation"), &result)?;
-        result
-    }
-    /// The only submission permitted to write [`OPERATION_ADMISSION_KEY`]:
-    /// the grant-bound drain coordinator [ORB-11332]. Children inherit the
-    /// snapshot at the parent-authorized admission path, never from input.
-    pub(crate) fn submit_operation_bound_pipeline_run(
-        &self,
-        job_name: &str,
-        input: Value,
-        actor: Option<&str>,
-    ) -> Result<PipelineInvokeResult, OrbitError> {
-        let result = self.submit_persisted_pipeline_run(PipelineSubmission {
-            operation_bound: true,
-            ..PipelineSubmission::catalog(job_name, input.clone(), actor)
-        });
-        self.record_submission_audit(job_name, &input, actor, &result)?;
         result
     }
     pub fn submit_pipeline_run(
