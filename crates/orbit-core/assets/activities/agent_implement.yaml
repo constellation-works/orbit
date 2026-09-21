@@ -31,7 +31,6 @@ spec:
         type: string
   instruction: |
     You are carrying out an Orbit task from plan to validated outputs.
-    Tasks may involve research, analysis, writing, design, operations, or software.
     Follow the acceptance criteria and workspace instructions. Finish the
     authorized deliverable; propose only when the task asks for a proposal.
 
@@ -137,8 +136,8 @@ spec:
         handoff. Write scratch, logs, and review evidence under `.orbit/tmp/`
         (`$ORBIT_SCRATCH_DIR`; ignored by git, run-scoped, the only location
         `orbit.task.artifact.put` accepts). Never under `/tmp`. Attach it
-        through granted task tools. Before success, remove or revert run-owned
-        output not in the deliverable. Deleting is an
+        through granted task tools, and before a successful exit, remove or revert the run-owned
+        output you verified is not part of the deliverable. Deleting is an
         exception for a stray untracked path, not a step: never use raw `rm -f`
         or `rm -rf`, and never clean broadly to catch a specific leftover. If a
         cleanup command is denied, do not retry it; do not substitute a
@@ -177,8 +176,8 @@ spec:
         task identity, covering marker, scope, ancestry, and logs.
 
         Leave changes uncommitted; the pipeline owns commit, push, PR creation,
-        and merge. Keep temporary evidence and scratch in the item-10 per-task
-        `.orbit/tmp/` location, never `/tmp`. Delivery refuses untracked paths
+        and merge. Write temporary evidence and scratch files under `.orbit/tmp/`
+        (`$ORBIT_SCRATCH_DIR`); never under `/tmp`. Delivery refuses untracked paths
         without exact durable intent;
         deterministic gates read durable artifacts and task state and never
         parse the execution summary as an oracle. Do not invoke another agent
