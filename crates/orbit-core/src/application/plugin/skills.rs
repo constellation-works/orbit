@@ -3,23 +3,25 @@
 //!
 //! A plugin's skills stay in its install directory: Orbit links them into the
 //! same `skill_link_roots` (`~/.agents/skills`, `~/.claude/skills`) the
-//! shipped skills use, so Claude and Codex discover them without a copy that
-//! could drift from the installed version. Disable removes exactly the links
-//! that point into that plugin's root, and `orbit plugin doctor` reports a
-//! link whose target is gone.
+//! shipped skills use, under the namespaced id `<plugin>-<skill>`. The
+//! namespace keeps plugin links disjoint from shipped skills, and linking
+//! refuses to replace a same-named link owned outside the plugin's install
+//! family. Disable removes exactly the links that point into that plugin's
+//! root, and `orbit plugin doctor` reports a link whose target is gone.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::io::remove_path_if_exists;
+use orbit_common::fs::io::{create_dir_symlink, remove_path_if_exists};
 use orbit_tools::plugin::LoadedPlugin;
 
-use crate::bootstrap::init::{ensure_skill_links, skill_link_roots};
+use crate::bootstrap::init::skill_link_roots;
 
 /// What linking did for one skill.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginSkillLink {
-    /// Skill id, the directory name under the plugin root.
+    /// Namespaced discovery id (`<plugin>-<skill-directory>`).
     pub skill_id: String,
     /// The link Orbit maintains.
     pub link: PathBuf,
@@ -56,17 +58,14 @@ pub fn link_plugin_skills_into(
     let mut linked = Vec::new();
     let mut warnings = Vec::new();
     for skill_dir in &plugin.skills {
-        let Some(skill_id) = skill_dir.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        let Some(parent) = skill_dir.parent() else {
+        let Some(skill_id) = plugin_skill_link_id(plugin.namespace(), skill_dir) else {
             continue;
         };
         for root in roots {
-            match ensure_skill_links(parent, &[skill_id], root, false) {
+            match ensure_plugin_skill_link(root, &skill_id, skill_dir, &plugin.root) {
                 Ok(_) => linked.push(PluginSkillLink {
-                    skill_id: skill_id.to_string(),
-                    link: root.join(skill_id),
+                    skill_id: skill_id.clone(),
+                    link: root.join(&skill_id),
                     target: skill_dir.clone(),
                 }),
                 Err(error) => warnings.push(format!(
@@ -78,6 +77,88 @@ pub fn link_plugin_skills_into(
         }
     }
     (linked, warnings)
+}
+
+/// The provider-discovery id for a plugin skill.
+///
+/// The plugin namespace is already a validated manifest identifier, and the
+/// source id is the final component of a contained `spec.skills[]` path.
+pub(crate) fn plugin_skill_link_id(namespace: &str, skill_dir: &Path) -> Option<String> {
+    let source_id = skill_dir.file_name()?.to_str()?;
+    Some(format!("{namespace}-{source_id}"))
+}
+
+fn ensure_plugin_skill_link(
+    root: &Path,
+    skill_id: &str,
+    target: &Path,
+    plugin_root: &Path,
+) -> Result<(), OrbitError> {
+    if let Ok(metadata) = fs::symlink_metadata(root)
+        && !metadata.file_type().is_dir()
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "expected '{}' to be a directory for skill links; found non-directory path",
+            root.display()
+        )));
+    }
+    fs::create_dir_all(root).map_err(|error| OrbitError::Io(error.to_string()))?;
+
+    let link = root.join(skill_id);
+    let Ok(metadata) = fs::symlink_metadata(&link) else {
+        create_dir_symlink(target, &link).map_err(|error| OrbitError::Io(error.to_string()))?;
+        return Ok(());
+    };
+    if !metadata.file_type().is_symlink() {
+        return Err(OrbitError::InvalidInput(format!(
+            "refusing to replace non-symlink discovery path '{}'",
+            link.display()
+        )));
+    }
+
+    let existing = resolve_link_target(&link)?;
+    let expected = target
+        .canonicalize()
+        .map_err(|error| OrbitError::Io(error.to_string()))?;
+    if existing
+        .canonicalize()
+        .is_ok_and(|resolved| resolved == expected)
+    {
+        return Ok(());
+    }
+
+    // A version upgrade may leave this namespace's discovery link pointing
+    // at the previous installed version. That target is safe to replace; a
+    // link into shipped skills, another plugin, or user content is not.
+    let install_family = plugin_root.parent().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "plugin root '{}' has no install-family directory",
+            plugin_root.display()
+        ))
+    })?;
+    let existing_is_plugin_owned = existing
+        .canonicalize()
+        .is_ok_and(|resolved| resolved.starts_with(install_family));
+    if !existing_is_plugin_owned {
+        return Err(OrbitError::InvalidInput(format!(
+            "refusing to replace discovery link '{}' because it points outside plugin '{}'",
+            link.display(),
+            plugin_root.display()
+        )));
+    }
+
+    fs::remove_file(&link).map_err(|error| OrbitError::Io(error.to_string()))?;
+    create_dir_symlink(target, &link).map_err(|error| OrbitError::Io(error.to_string()))?;
+    Ok(())
+}
+
+fn resolve_link_target(link: &Path) -> Result<PathBuf, OrbitError> {
+    let target = fs::read_link(link).map_err(|error| OrbitError::Io(error.to_string()))?;
+    if target.is_absolute() {
+        Ok(target)
+    } else {
+        Ok(link.parent().unwrap_or(Path::new(".")).join(target))
+    }
 }
 
 /// Remove the links that point into `install_path`, whatever they are named.

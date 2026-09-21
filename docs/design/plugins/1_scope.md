@@ -62,7 +62,7 @@ is **data plus one backend executable**: no Rust, no dashboard JavaScript.
 | Activities / jobs | `spec.definitions.activities`, `.jobs` | catalog layer `plugin:<ns>` (below workspace, above shipped) | `job:<name>` routine targets, `orbit run job` |
 | Routines | `spec.definitions.routines` | seeded to `.orbit/routines/<ns>-<name>.yaml`, `enabled: false` | clock tick |
 | Auto-tasks | `spec.definitions.auto_tasks` | seeded to `.orbit/auto_tasks/<ns>-<name>.yaml`, `enabled: false` | clock tick, `orbit auto-task` |
-| Skills | `spec.skills[]` | managed asset → `skill_link_roots` | Claude/Codex skill discovery |
+| Skills | `spec.skills[]` | install directory → `skill_link_roots` as `<ns>-<directory-name>` | Claude/Codex skill discovery |
 | Config | `spec.config` | `[plugins.<ns>]` in `config.toml`, validated by the plugin's JSON Schema | `orbit config`, Config tab provenance |
 | Dashboard | `spec.web.panels[]`, `.links[]` | generic panel renderer; link tiles | `/api/plugins/<ns>/…`, one `plugins` tab group |
 
@@ -70,6 +70,12 @@ The **namespace** `<ns>` is `metadata.name`. It owns: tool names `<ns>.*`, the C
 `orbit <ns>`, config `[plugins.<ns>]`, the provenance tag `plugin:<ns>` on seeded
 definitions and minted tasks, and the catalog layer. Every built-in `Commands` variant is
 reserved; a collision fails the load of that plugin only.
+
+Plugin skill discovery IDs follow the same ownership rule: a declared `skills/graph` directory
+from namespace `acme` is linked as `acme-graph`, never as `graph`. `orbit plugin validate`
+reports every derived discovery ID before installation. Linking may repair an older-version
+target from the same plugin install family, but refuses to replace a same-named path or link
+owned by shipped skills, another plugin, or the user.
 
 **`orbit.<ns>.*` is reserved for Orbit-originated plugins.** A manifest with
 `metadata.publisher: constellation-works` and `metadata.origin: orbit` claims tool names
@@ -171,6 +177,10 @@ orbit plugin disable <ns>                     →  installed   (tools Inactive; 
 orbit plugin remove <ns>                      →  gone        (derived data such as .orbit-graph/ is retained)
 orbit plugin list | show <ns> | doctor | validate <dir> | test <dir> | scaffold <ns> | sync | migrate
 ```
+
+Enable creates only the namespaced skill links reported by `plugin validate`. Disable removes
+only discovery links whose targets are inside that plugin's recorded install path; shipped,
+user-owned and other plugins' links remain untouched.
 
 **Workspace declares, host installs.** A committed `.orbit/plugins.yaml` pins what a
 workspace uses:

@@ -6,6 +6,7 @@ use super::super::{
     PluginAddOptions, PluginMigrateRequest, disable_plugin, install_plugin, list_plugins,
     migrate_plugin_sidecars, remove_plugin, sync_plugins, validate_plugin_dir,
 };
+use super::definition_fixture::DefinitionPlugin;
 use super::fixture::{PluginFixture, PluginSpecFixture};
 
 #[test]
@@ -97,6 +98,22 @@ fn validate_reports_an_unsatisfiable_requirement_as_a_warning() {
             .iter()
             .any(|warning| warning.contains("requires orbit >=99.0.0")),
         "{report:?}"
+    );
+}
+
+#[test]
+fn validate_reports_the_namespaced_skill_discovery_id() {
+    let fixture = PluginFixture::new();
+    let source = DefinitionPlugin::new("graph").write(&fixture);
+
+    let report = validate_plugin_dir(&fixture.runtime, &source, false).expect("validate");
+
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("provider discovery as 'graph-graph'")),
+        "validation must expose the skill id before install: {report:?}"
     );
 }
 

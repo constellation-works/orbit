@@ -238,6 +238,14 @@ pub fn validate_plugin_dir(
     .map_err(manifest_refusal)?;
 
     let mut warnings = Vec::new();
+    for skill_dir in &plugin.skills {
+        if let Some(skill_id) = super::skills::plugin_skill_link_id(plugin.namespace(), skill_dir) {
+            warnings.push(format!(
+                "skill '{}' will be linked into provider discovery as '{skill_id}' when enabled",
+                skill_dir.display()
+            ));
+        }
+    }
     if let Some(message) = unmet_requirement(&plugin) {
         warnings.push(message);
     }
