@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use orbit_types::plugin::PluginExecutionKind;
+use orbit_types::plugin::{PluginExecutionKind, PluginGrant, PluginPermissions};
 use serde_json::{Value, json};
 
 use super::super::loader::load_plugin_dir;
@@ -36,9 +36,33 @@ struct Fixture {
 
 impl Fixture {
     fn new(env: &[(&str, &str)], timeout_ms: u64) -> Self {
+        Self::build(env, timeout_ms, None, Vec::new())
+    }
+
+    /// A backend granted `orbit_tools`, so `ORBIT_ALLOWED_TOOLS` is the
+    /// caller's intersection rather than always empty.
+    fn with_orbit_tools(orbit_tools: &[&str], timeout_ms: u64) -> Self {
+        let permissions = PluginPermissions {
+            orbit_tools: orbit_tools.iter().map(|tool| (*tool).to_string()).collect(),
+            ..PluginPermissions::default()
+        };
+        Self::build(
+            &[],
+            timeout_ms,
+            Some(permissions),
+            vec![PluginGrant::OrbitTools],
+        )
+    }
+
+    fn build(
+        env: &[(&str, &str)],
+        timeout_ms: u64,
+        permissions: Option<PluginPermissions>,
+        grants: Vec<PluginGrant>,
+    ) -> Self {
         let plugin = load_plugin_dir(&fixture_root()).expect("fixture loads");
         let spec = Arc::new(super::super::backend::PluginBackendSpec {
-            provenance: provenance(&[]),
+            provenance: provenance(&grants),
             plugin_root: plugin.root.clone(),
             state_dir: plugin.root.join("state"),
             global_root: plugin.root.join("global"),
@@ -46,10 +70,10 @@ impl Fixture {
             args: Vec::new(),
             timeout_ms: Some(timeout_ms),
             sandbox: plugin.manifest.spec.backend.sandbox,
-            permissions: plugin.manifest.spec.permissions.clone(),
+            permissions: permissions.unwrap_or_else(|| plugin.manifest.spec.permissions.clone()),
             programs: Vec::new(),
             config_defaults: Default::default(),
-            grants: Vec::new(),
+            grants,
         });
         let expected = plugin
             .tools
@@ -100,6 +124,12 @@ impl Fixture {
             ..context(&self.root)
         }
     }
+
+    fn context_with_allowed(&self, allowed: &[&str]) -> ToolContext {
+        let mut ctx = self.context(&[]);
+        ctx.allowed_tools = allowed.iter().map(|tool| (*tool).to_string()).collect();
+        ctx
+    }
 }
 
 #[cfg(unix)]
@@ -133,7 +163,10 @@ fn the_server_is_spawned_once_and_serves_every_call() {
     let second = echo
         .execute(&ctx, json!({ "message": "two" }))
         .expect("second call");
-    assert_eq!(second["pid"], first["pid"], "one server per runtime");
+    assert_eq!(
+        second["pid"], first["pid"],
+        "one server per allowed-tools intersection"
+    );
     assert_eq!(fixture.backend.child_pid(), Some(pid));
 
     // The proxied output is still held to `output_schema`.
@@ -260,6 +293,57 @@ fn a_dead_or_stuck_child_is_a_timely_tool_error_and_is_respawned() {
         "the timeout is the bound, not a hang: {elapsed:?}"
     );
     assert!(!fixture.backend.is_running(), "the stuck child was killed");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_narrower_caller_does_not_inherit_the_wider_session() {
+    if sandbox_unavailable() || python3_missing() {
+        return;
+    }
+    // Wide first is the ordering that used to leak: the first caller's
+    // intersection became the ceiling for everyone who followed.
+    let fixture = Fixture::with_orbit_tools(&["orbit.task.show", "orbit.search"], 5_000);
+    let wide = fixture.context_with_allowed(&["orbit.task.show", "orbit.search"]);
+    let also_wide = fixture.context_with_allowed(&["orbit.search", "orbit.task.show"]);
+    let narrow = fixture.context_with_allowed(&["orbit.task.show"]);
+    let echo = fixture.tool("echo", None);
+
+    let first = echo.execute(&wide, json!({})).expect("wide caller");
+    assert_eq!(
+        first["allowed"], "orbit.task.show,orbit.search",
+        "the first session is spawned with the less-restricted intersection"
+    );
+    let wide_pid = first["pid"].clone();
+
+    let second = echo.execute(&narrow, json!({})).expect("narrow caller");
+    assert_ne!(
+        second["pid"], wide_pid,
+        "a narrower caller must not inherit the wider session"
+    );
+    assert_eq!(
+        second["allowed"], "orbit.task.show",
+        "the narrower session is spawned with its own intersection"
+    );
+
+    let third = echo
+        .execute(
+            &fixture.context_with_allowed(&["orbit.task.show"]),
+            json!({}),
+        )
+        .expect("identical narrow intersection");
+    assert_eq!(
+        third["pid"], second["pid"],
+        "two callers with the same intersection share a session"
+    );
+
+    let fourth = echo
+        .execute(&also_wide, json!({}))
+        .expect("same wide intersection");
+    assert_eq!(
+        fourth["pid"], wide_pid,
+        "the original wide session is still reused for the same intersection"
+    );
 }
 
 /// `kill -9 <pid>` through the shell, so the test crate needs no libc.

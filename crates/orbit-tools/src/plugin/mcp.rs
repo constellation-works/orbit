@@ -1,13 +1,17 @@
-//! The `mcp` backend: one stdio MCP server per plugin per runtime process,
-//! spawned on first use under the plugin's sandbox, verified against the
-//! manifest, and proxied for every `<ns>.<verb>` call (design §4.2).
+//! The `mcp` backend: one stdio MCP server per plugin per allowed-tools
+//! intersection per runtime process, spawned on first use under the plugin's
+//! sandbox, verified against the manifest, and proxied for every
+//! `<ns>.<verb>` call (design §4.2).
 //!
-//! Orbit is the only client. The child is kept for the life of this
+//! Orbit is the only client. Each child is kept for the life of this
 //! [`McpBackend`], which the runtime holds for its own lifetime; a crashed
 //! or unresponsive child ends the current call with an error, is killed, and
-//! is respawned by the next call. There is no code path that waits without
-//! a deadline.
+//! is respawned by the next call with the same intersection. A caller whose
+//! intersection differs from a live session's gets its own child rather than
+//! inheriting another caller's `ORBIT_ALLOWED_TOOLS`. There is no code path
+//! that waits without a deadline.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -44,14 +48,18 @@ pub struct McpBackend {
     spec: Arc<PluginBackendSpec>,
     expected: Vec<McpExpectedTool>,
     state: Mutex<McpState>,
-    /// The live child's pid, readable while a call holds `state`; zero when
-    /// no child is running.
+    /// The last-used child's pid, readable while a call holds `state`; zero
+    /// when that child is gone.
     pid: AtomicU32,
 }
 
 enum McpState {
-    Idle,
-    Running(McpSession),
+    Ready {
+        /// Live children keyed by the sorted `allowed_tools` intersection the
+        /// session was spawned with. Callers with the same intersection share
+        /// a child; a different intersection never reuses one.
+        sessions: BTreeMap<Vec<String>, McpSession>,
+    },
     /// The server disagreed with the manifest; nothing restarts it.
     Refused(String),
 }
@@ -68,7 +76,9 @@ impl McpBackend {
         Self {
             spec,
             expected,
-            state: Mutex::new(McpState::Idle),
+            state: Mutex::new(McpState::Ready {
+                sessions: BTreeMap::new(),
+            }),
             pid: AtomicU32::new(0),
         }
     }
@@ -87,18 +97,31 @@ impl McpBackend {
     }
 
     fn end_session(&self, session: &mut McpSession) {
+        let pid = session.child.id();
         session.kill();
-        self.pid.store(0, Ordering::Release);
+        let _ = self
+            .pid
+            .compare_exchange(pid, 0, Ordering::AcqRel, Ordering::Relaxed);
     }
 
-    /// Whether the server has been started by this runtime and is still
-    /// alive.
+    /// Whether any server started by this runtime is still alive.
     pub fn is_running(&self) -> bool {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         match &mut *state {
-            McpState::Running(session) => matches!(session.child.try_wait(), Ok(None)),
-            McpState::Idle | McpState::Refused(_) => false,
+            McpState::Ready { sessions } => sessions
+                .values_mut()
+                .any(|session| matches!(session.child.try_wait(), Ok(None))),
+            McpState::Refused(_) => false,
         }
+    }
+
+    fn refuse(&self, state: &mut McpState, diagnostic: String) {
+        if let McpState::Ready { sessions } = state {
+            for session in sessions.values_mut() {
+                self.end_session(session);
+            }
+        }
+        *state = McpState::Refused(diagnostic);
     }
 
     /// Proxy one `<ns>.<verb>` call as `tools/call`.
@@ -112,24 +135,35 @@ impl McpBackend {
         let timeout = Duration::from_millis(self.spec.timeout_ms());
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.ensure_running(&mut state, ctx, tool_name, timeout)?;
-        let McpState::Running(session) = &mut *state else {
+        let key = allowed_tools_key(&self.spec.allowed_tools(ctx));
+        let McpState::Ready { sessions } = &mut *state else {
             return Err(OrbitError::Execution(format!(
                 "plugin tool '{tool_name}': the mcp backend is not running"
             )));
         };
-        let outcome = session.request(
-            "tools/call",
-            json!({ "name": verb, "arguments": input }),
-            Instant::now() + timeout,
-        );
+        let outcome = {
+            let session = sessions.get_mut(&key).ok_or_else(|| {
+                OrbitError::Execution(format!(
+                    "plugin tool '{tool_name}': the mcp backend is not running"
+                ))
+            })?;
+            session.request(
+                "tools/call",
+                json!({ "name": verb, "arguments": input }),
+                Instant::now() + timeout,
+            )
+        };
         match outcome {
             Ok(response) => tool_result(tool_name, &response),
             Err(error) => {
                 // Whatever happened, the wire is no longer in a known state:
                 // an unanswered request would otherwise be matched by a
-                // later call's id. Kill and let the next call respawn.
-                self.end_session(session);
-                *state = McpState::Idle;
+                // later call's id. Kill this intersection's child and let
+                // the next matching call respawn it.
+                if let Some(session) = sessions.get_mut(&key) {
+                    self.end_session(session);
+                }
+                sessions.remove(&key);
                 Err(OrbitError::Execution(format!(
                     "plugin tool '{tool_name}': the plugin's mcp server {error}; it will be \
                      restarted on the next call"
@@ -145,19 +179,22 @@ impl McpBackend {
         tool_name: &str,
         timeout: Duration,
     ) -> Result<(), OrbitError> {
+        let key = allowed_tools_key(&self.spec.allowed_tools(ctx));
         match state {
             McpState::Refused(diagnostic) => {
                 return Err(OrbitError::Execution(diagnostic.clone()));
             }
-            McpState::Running(session) => {
-                if matches!(session.child.try_wait(), Ok(None)) {
-                    return Ok(());
+            McpState::Ready { sessions } => {
+                if let Some(session) = sessions.get_mut(&key) {
+                    if matches!(session.child.try_wait(), Ok(None)) {
+                        self.pid.store(session.child.id(), Ordering::Release);
+                        return Ok(());
+                    }
+                    // Exited on its own between calls: reap and respawn.
+                    self.end_session(session);
                 }
-                // Exited on its own between calls: reap and respawn.
-                self.end_session(session);
-                *state = McpState::Idle;
+                sessions.remove(&key);
             }
-            McpState::Idle => {}
         }
         let mut session = self.spawn(ctx, tool_name)?;
         self.pid.store(session.child.id(), Ordering::Release);
@@ -184,10 +221,18 @@ impl McpBackend {
                  manifest: {mismatch}",
                 self.spec.provenance.name
             );
-            *state = McpState::Refused(diagnostic.clone());
+            self.refuse(state, diagnostic.clone());
             return Err(OrbitError::Execution(diagnostic));
         }
-        *state = McpState::Running(session);
+        match state {
+            McpState::Ready { sessions } => {
+                sessions.insert(key, session);
+            }
+            McpState::Refused(diagnostic) => {
+                self.end_session(&mut session);
+                return Err(OrbitError::Execution(diagnostic.clone()));
+            }
+        }
         Ok(())
     }
 
@@ -222,12 +267,24 @@ impl McpBackend {
 
 impl Drop for McpBackend {
     fn drop(&mut self) {
-        if let McpState::Running(session) =
+        if let McpState::Ready { sessions } =
             self.state.get_mut().unwrap_or_else(PoisonError::into_inner)
         {
-            session.kill();
+            for session in sessions.values_mut() {
+                session.kill();
+            }
         }
     }
+}
+
+/// Stable map key for one caller's `permissions.orbit_tools` ∩ grant ∩
+/// `ctx.allowed_tools` intersection. Order in the caller's own list must not
+/// split sessions that carry the same tools.
+fn allowed_tools_key(tools: &[String]) -> Vec<String> {
+    let mut key = tools.to_vec();
+    key.sort();
+    key.dedup();
+    key
 }
 
 /// The first disagreement between the manifest and the server, naming the

@@ -4,8 +4,10 @@
 Speaks just enough of MCP (JSON-RPC 2.0, one message per line) for Orbit to
 handshake, list tools, and call them. Tools:
 
-- `echo`   — returns its arguments plus this process's pid, so a test can
-             prove one server serves many calls.
+- `echo`   — returns its arguments plus this process's pid and
+             `ORBIT_ALLOWED_TOOLS`, so a test can prove one server serves
+             many calls and that a narrower caller did not inherit a wider
+             session.
 - `slow`   — sleeps `seconds` before answering, for timeout tests.
 - `crash`  — exits without answering, for dead-child tests.
 
@@ -52,7 +54,12 @@ def call(request_id, params):
     name = params.get("name")
     arguments = params.get("arguments") or {}
     if name == "echo":
-        payload = {"echo": arguments, "pid": os.getpid(), "plugin": os.environ.get("ORBIT_PLUGIN")}
+        payload = {
+            "echo": arguments,
+            "pid": os.getpid(),
+            "plugin": os.environ.get("ORBIT_PLUGIN"),
+            "allowed": os.environ.get("ORBIT_ALLOWED_TOOLS", ""),
+        }
         reply(request_id, {"content": [{"type": "text", "text": json.dumps(payload)}],
                            "structuredContent": payload})
     elif name == "slow":
