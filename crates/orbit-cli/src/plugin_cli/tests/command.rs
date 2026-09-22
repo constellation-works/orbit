@@ -45,6 +45,36 @@ fn group() -> PluginCliGroup {
                 mutating: true,
             },
             PluginCliVerb {
+                // Mirrors the scaffolded `status` tool in
+                // `assets/plugin_templates/plugin.yaml.tmpl`, whose comment
+                // promises the promoted `subject` stays reachable as
+                // `--subject` too.
+                verb: "status".to_string(),
+                tool_name: "demo.status".to_string(),
+                description: "Report this plugin's own status.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "subject": { "type": "string", "description": "Who the greeting is addressed to." }
+                    }
+                }),
+                positional: vec!["subject".to_string()],
+                mutating: false,
+            },
+            PluginCliVerb {
+                verb: "settings".to_string(),
+                tool_name: "demo.settings".to_string(),
+                description: "Exercise a boolean property named json.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "json": { "type": "boolean" }
+                    }
+                }),
+                positional: Vec::new(),
+                mutating: false,
+            },
+            PluginCliVerb {
                 verb: "collisions".to_string(),
                 tool_name: "demo.collisions".to_string(),
                 description: "Exercise host-owned argument names.".to_string(),
@@ -313,6 +343,33 @@ fn dry_run_reaches_the_tool_run_arguments() {
         parse(&["orbit", "demo", "maintain", "--dry-run"]).expect("a plugin group invocation");
     assert!(invocation.tool_run.dry_run);
     assert_eq!(invocation.tool_run.name, "demo.maintain");
+}
+
+#[test]
+fn the_scaffolded_status_verb_parses_both_the_positional_and_the_flag_form() {
+    let positional =
+        parse(&["orbit", "demo", "status", "operator"]).expect("the positional form parses");
+    assert_eq!(input(&positional), json!({ "subject": "operator" }));
+
+    let flag = parse(&["orbit", "demo", "status", "--subject", "operator"])
+        .expect("the --subject flag still works alongside the positional");
+    assert_eq!(input(&flag), json!({ "subject": "operator" }));
+}
+
+#[test]
+fn a_boolean_property_named_json_does_not_flip_the_output_mode() {
+    let groups = vec![group()];
+    let matches = parser(&groups)
+        .try_get_matches_from(["orbit", "demo", "settings", "--json"])
+        .expect("a boolean property named json parses");
+
+    assert!(
+        !crate::legacy_json(&matches),
+        "a plugin-defined --json must not be read as the host's legacy --json/--ops flag"
+    );
+
+    let invocation = invocation_from_matches(&groups, &matches).expect("a plugin invocation");
+    assert_eq!(input(&invocation), json!({ "json": true }));
 }
 
 #[test]

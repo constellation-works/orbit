@@ -7,10 +7,10 @@
 //! |---|---|
 //! | `string` (with or without `enum`) | `--kebab-case <VALUE>`; an `enum` becomes clap's possible values |
 //! | `integer` / `number` | `--kebab-case <N>`, parsed and sent as a JSON number |
-//! | `boolean` | `--kebab-case` (true), or `--kebab-case <true\|false>` |
+//! | `boolean` | `--kebab-case` (true), or `--kebab-case=<true\|false>` |
 //! | `array` of scalars | `--kebab-case <VALUE>`, repeat once per element |
 //! | `object`, `array` of objects, or an untyped property | `--kebab-case-json '<JSON>'` |
-//! | named in `cli.positional` | the same value as a positional argument, in manifest order |
+//! | named in `cli.positional` | the same value as a positional argument, in manifest order, alongside its ordinary `--kebab-case` flag |
 //!
 //! `--input` / `--input-file` are always accepted and always win: a call
 //! that passes either sends exactly that payload, so the long tail a flag
@@ -18,6 +18,11 @@
 //! the clap level — the tool's own `input_schema` is the authority on what a
 //! call must contain, and a flag marked required would make `--input` alone
 //! unusable.
+//!
+//! A boolean's optional value must use `=` (`--kebab-case=false`); a bare
+//! `--kebab-case value` never consumes `value` as the flag's own, so a
+//! boolean followed by an unrelated positional parses both instead of the
+//! positional being swallowed as the flag's value.
 
 use clap::{Arg, ArgAction, ArgMatches, builder::PossibleValuesParser};
 use orbit_core::OrbitError;
@@ -71,13 +76,22 @@ pub(super) struct DerivedArg {
 ///
 /// The raw property remains the key written to tool input, while this prefix
 /// prevents properties such as `input` and `root` from colliding with host
-/// arguments whose long names differ after JSON-shape derivation.
+/// arguments whose long names differ after JSON-shape derivation. A property
+/// promoted by `cli.positional` gets its own suffix, distinct from its
+/// ordinary flag's id, because it keeps both forms.
 fn clap_id(derived: &DerivedArg) -> String {
-    format!("plugin-input:{}", derived.property)
+    if derived.positional {
+        format!("plugin-input:{}:positional", derived.property)
+    } else {
+        format!("plugin-input:{}", derived.property)
+    }
 }
 
 /// Derive every argument of one tool, positional ones first and in the order
-/// `cli.positional` names them.
+/// `cli.positional` names them. A promoted property keeps its ordinary
+/// `--kebab-case` flag too — the scaffold template and design §4.6 promise
+/// both forms stay reachable, so a caller need not learn a different spelling
+/// once a manifest author promotes a property.
 pub(super) fn derive_args(input_schema: &Value, positional: &[String]) -> Vec<DerivedArg> {
     let Some(properties) = input_schema.get("properties").and_then(Value::as_object) else {
         return Vec::new();
@@ -87,27 +101,35 @@ pub(super) fn derive_args(input_schema: &Value, positional: &[String]) -> Vec<De
         if let Some(property) = properties.get(name) {
             let mut arg = derive_one(name, property);
             // A nested shape has no readable positional form, so a manifest
-            // that promotes one still gets the `--<name>-json` flag.
-            arg.positional = arg.kind != FlagKind::Json;
-            args.push(arg);
+            // that promotes one keeps only the `--<name>-json` flag, added
+            // below with every other property.
+            if arg.kind != FlagKind::Json {
+                arg.positional = true;
+                args.push(arg);
+            }
         }
     }
     for (name, property) in properties {
-        if positional.iter().any(|promoted| promoted == name) {
-            continue;
-        }
         args.push(derive_one(name, property));
     }
-    let mut long_counts = std::collections::BTreeMap::new();
+    // A promoted property intentionally appears twice (its positional entry
+    // above, its flag entry here) sharing one `long`; that pair is not the
+    // ambiguity this guards against. Only a `long` claimed by more than one
+    // *property* is ambiguous.
+    let mut long_owners: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        std::collections::BTreeMap::new();
     for arg in &args {
-        *long_counts.entry(arg.long.clone()).or_insert(0_usize) += 1;
+        long_owners
+            .entry(arg.long.clone())
+            .or_default()
+            .insert(arg.property.clone());
     }
     // Loading validates this shape, but an already-registered plugin from an
     // older host must never make clap reject every built-in command. Omit all
     // ambiguous or empty shortcuts; `--input` remains the lossless fallback.
     args.retain(|arg| {
         !arg.long.is_empty()
-            && long_counts.get(&arg.long) == Some(&1)
+            && long_owners.get(&arg.long).map(|owners| owners.len()) == Some(1)
             && !RESERVED_FLAGS.contains(&arg.long.as_str())
     });
     args
@@ -191,10 +213,14 @@ pub(super) fn clap_arg(derived: &DerivedArg) -> Arg {
     }
     match derived.kind {
         FlagKind::Bool if !derived.positional => {
-            // `--flag` means true; `--flag false` is still available for a
-            // property whose schema default is true.
+            // `--flag` means true; `--flag=<true|false>` sets it explicitly.
+            // `require_equals` keeps the optional value from ever consuming
+            // an unrelated token that happens to follow — a bare positional
+            // included — so `--loud leakage` parses as `--loud` (true) plus
+            // positional `leakage`, not `--loud leakage` as one flag value.
             arg.num_args(0..=1)
                 .default_missing_value("true")
+                .require_equals(true)
                 .value_parser(clap::value_parser!(bool))
         }
         FlagKind::Bool => arg.value_parser(clap::value_parser!(bool)),
@@ -285,7 +311,10 @@ pub(super) fn input_from_matches(
             },
         };
         if let Some(value) = value {
-            object.insert(arg.property.clone(), value);
+            // A promoted property has two entries (positional, then its
+            // ordinary flag) sharing one key; the positional wins when both
+            // were somehow given, matching argument order in `derive_args`.
+            object.entry(arg.property.clone()).or_insert(value);
         }
     }
     Ok(Value::Object(object))

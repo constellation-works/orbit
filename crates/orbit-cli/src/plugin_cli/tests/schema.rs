@@ -109,6 +109,35 @@ fn cli_positional_promotes_named_properties_in_order() {
 }
 
 #[test]
+fn a_promoted_property_keeps_its_ordinary_flag_too() {
+    // The scaffold template promises a promoted property "is still available
+    // as `--<name>`"; a manifest author who reads that must get both forms.
+    let args = derive_args(&schema(), &["query".to_string()]);
+    let flag_entries: Vec<&super::super::schema::DerivedArg> = args
+        .iter()
+        .filter(|arg| arg.property == "query" && !arg.positional)
+        .collect();
+    assert_eq!(
+        flag_entries.len(),
+        1,
+        "query keeps exactly one non-positional --query entry: {args:?}"
+    );
+    assert_eq!(flag_entries[0].long, "query");
+
+    let mut command = Command::new("recommend").no_binary_name(true);
+    for arg in &args {
+        command = command.arg(clap_arg(arg));
+    }
+    let matches = command
+        .try_get_matches_from(["--query", "leakage"])
+        .expect("the promoted property still parses through its --query flag");
+    assert_eq!(
+        input_from_matches(&args, &matches).expect("assemble tool input"),
+        json!({ "query": "leakage" })
+    );
+}
+
+#[test]
 fn parsed_flags_become_the_tool_input() {
     let args = derive_args(&schema(), &["query".to_string()]);
     let mut command = Command::new("recommend").no_binary_name(true);
@@ -145,6 +174,43 @@ fn parsed_flags_become_the_tool_input() {
             "tags": ["one", "two"],
             "filters": { "since": "2026-01-01" }
         })
+    );
+}
+
+#[test]
+fn a_boolean_flag_does_not_swallow_the_positional_that_follows_it() {
+    // Regression: `orbit shapes recommend --loud leakage` used to fail with
+    // "invalid value 'leakage' for '--loud [<BOOL>]'" because the optional
+    // value consumed the next bare token, positional or not.
+    let args = derive_args(&schema(), &["query".to_string()]);
+    let mut command = Command::new("recommend").no_binary_name(true);
+    for arg in &args {
+        command = command.arg(clap_arg(arg));
+    }
+    let matches = command
+        .try_get_matches_from(["--loud", "leakage"])
+        .expect("a boolean flag with no explicit value leaves the next positional alone");
+
+    assert_eq!(
+        input_from_matches(&args, &matches).expect("assemble tool input"),
+        json!({ "query": "leakage", "loud": true })
+    );
+}
+
+#[test]
+fn a_boolean_flag_still_accepts_an_explicit_value_with_equals() {
+    let args = derive_args(&schema(), &[]);
+    let mut command = Command::new("recommend").no_binary_name(true);
+    for arg in &args {
+        command = command.arg(clap_arg(arg));
+    }
+    let matches = command
+        .try_get_matches_from(["--query", "only", "--loud=false"])
+        .expect("an explicit boolean value using = still parses");
+
+    assert_eq!(
+        input_from_matches(&args, &matches).expect("assemble tool input"),
+        json!({ "query": "only", "loud": false })
     );
 }
 
