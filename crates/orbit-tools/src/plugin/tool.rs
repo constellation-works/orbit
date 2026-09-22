@@ -18,6 +18,7 @@ use super::backend::PluginBackendSpec;
 use super::callback::PluginCallbackSession;
 use super::envelope::{PLUGIN_ENVELOPE_SCHEMA_VERSION, parse_response, validate_output};
 use super::mcp::McpBackend;
+use super::schema::CompiledSchema;
 use crate::{Tool, ToolContext, ToolExecutionKind};
 
 /// What the registry knows about a plugin-backed entry beyond its schema.
@@ -57,7 +58,8 @@ pub struct PluginTool {
     pub description: String,
     pub parameters: Vec<ToolParam>,
     pub execution_kind: PluginExecutionKind,
-    pub output_schema: Option<Value>,
+    /// The tool's `output_schema`, compiled once when the plugin loaded.
+    pub output_schema: Option<CompiledSchema>,
     pub binding: Arc<PluginToolBinding>,
     pub backend: PluginBackend,
 }

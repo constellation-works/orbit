@@ -98,6 +98,45 @@ pub fn validate_plugin_cli_flags(
     Ok(())
 }
 
+/// Refuse a `cli.positional` list that the CLI adapter would silently drop:
+/// a repeated entry, or one that does not name a top-level property of the
+/// tool's `input_schema`.
+///
+/// The adapter fills a positional from the property of the same name, so an
+/// entry naming nothing gets no argument at all and the documented
+/// `orbit <ns> <verb> <value>` form simply never appears. `input_schema` is
+/// `None` for a tool that declares none, which has no properties to name.
+pub fn validate_plugin_cli_positionals(
+    verb: &str,
+    input_schema: Option<&Value>,
+    positional: &[String],
+    field: &str,
+) -> Result<(), PluginManifestError> {
+    let properties = input_schema
+        .and_then(|schema| schema.get("properties"))
+        .and_then(Value::as_object);
+    let mut seen = std::collections::BTreeSet::new();
+    for (index, name) in positional.iter().enumerate() {
+        let entry_field = format!("{field}[{index}]");
+        if !seen.insert(name.as_str()) {
+            return Err(PluginManifestError::new(
+                entry_field,
+                format!("tool '{verb}' promotes '{name}' to a positional argument twice"),
+            ));
+        }
+        if !properties.is_some_and(|properties| properties.contains_key(name)) {
+            return Err(PluginManifestError::new(
+                entry_field,
+                format!(
+                    "tool '{verb}' promotes '{name}' to a positional argument, but its \
+                     input_schema declares no top-level property of that name"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// A manifest rejection. `field` is the dotted path of the offending key so
 /// every diagnostic names what to fix.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -474,7 +513,8 @@ pub struct PluginWebLink {
 
 impl PluginManifest {
     /// Structural validation that needs no filesystem: versions, kinds,
-    /// namespace and verb spelling, duplicate tools, backend type.
+    /// namespace and verb spelling, duplicate tools, backend type, and the
+    /// `cli` overrides each tool derives its `orbit <ns> <verb>` shape from.
     pub fn validate_structure(&self) -> Result<(), PluginManifestError> {
         if self.schema_version != MANIFEST_SCHEMA_VERSION {
             return Err(PluginManifestError::new(
@@ -558,6 +598,12 @@ impl PluginManifest {
             ));
         }
         let mut seen = std::collections::BTreeSet::new();
+        // The subcommand each tool claims under `orbit <ns>`, which is its
+        // `cli.verb` override when it declares one. Two tools claiming one
+        // subcommand would register the same `orbit <ns> <verb>` twice, which
+        // breaks every `orbit` invocation on the host, not just this plugin.
+        let mut cli_verbs: std::collections::BTreeMap<&str, &str> =
+            std::collections::BTreeMap::new();
         for (index, tool) in self.spec.tools.iter().enumerate() {
             let field = format!("spec.tools[{index}].name");
             if !is_valid_verb(&tool.name) {
@@ -593,6 +639,49 @@ impl PluginManifest {
                     input_schema,
                     &format!("spec.tools[{index}].input_schema"),
                 )?;
+            }
+            let (cli_verb, verb_field) = match tool.cli.as_ref().and_then(|cli| cli.verb.as_deref())
+            {
+                Some(verb) => {
+                    if !is_valid_verb(verb) {
+                        return Err(PluginManifestError::new(
+                            format!("spec.tools[{index}].cli.verb"),
+                            format!(
+                                "tool '{}' overrides its CLI verb to '{verb}', which is not a \
+                                 valid subcommand: use lowercase letters, digits, '_' or '-'",
+                                tool.name
+                            ),
+                        ));
+                    }
+                    (verb, format!("spec.tools[{index}].cli.verb"))
+                }
+                None => (tool.name.as_str(), format!("spec.tools[{index}].name")),
+            };
+            if let Some(previous) = cli_verbs.insert(cli_verb, tool.name.as_str()) {
+                return Err(PluginManifestError::new(
+                    verb_field,
+                    format!(
+                        "tools '{previous}' and '{}' both claim the CLI subcommand \
+                         '{cli_verb}'; one `orbit <ns> {cli_verb}` cannot dispatch to two tools",
+                        tool.name
+                    ),
+                ));
+            }
+            if let Some(cli) = &tool.cli {
+                // A `{ $ref }` schema is a path this crate cannot read; the
+                // loader repeats this check against the resolved document.
+                let resolved_here = tool
+                    .input_schema
+                    .as_ref()
+                    .is_none_or(|schema| schema.get("$ref").is_none());
+                if resolved_here {
+                    validate_plugin_cli_positionals(
+                        &tool.name,
+                        tool.input_schema.as_ref(),
+                        &cli.positional,
+                        &format!("spec.tools[{index}].cli.positional"),
+                    )?;
+                }
             }
         }
         self.validate_definition_paths()?;

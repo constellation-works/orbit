@@ -61,6 +61,109 @@ fn load_refuses_resolved_schema_properties_with_colliding_cli_flags() {
     );
 }
 
+/// Write `MANIFEST` with `body` spliced into its single tool.
+fn write_plugin_with_tool_keys(root: &Path, keys: &str) {
+    write_plugin(root);
+    let manifest = root.join(MANIFEST_FILE_NAME);
+    let body = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(
+        &manifest,
+        body.replace(
+            "      execution_kind: read_only\n",
+            &format!("      execution_kind: read_only\n{keys}"),
+        ),
+    )
+    .expect("write manifest");
+}
+
+/// A `$ref` schema is only properties once it is read from the plugin root,
+/// so the CLI checks run there too: otherwise the adapter silently drops both
+/// colliding flags and the tool loses them with no diagnostic anywhere.
+#[test]
+fn a_ref_schema_is_held_to_the_cli_flag_and_positional_rules() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_plugin_with_tool_keys(
+        temp.path(),
+        "      input_schema: { $ref: schemas/hello.json }\n",
+    );
+    std::fs::create_dir_all(temp.path().join("schemas")).expect("mkdir");
+    let schema = temp.path().join("schemas/hello.json");
+    std::fs::write(
+        &schema,
+        r#"{"type":"object","properties":{"task_id":{"type":"string"},"taskId":{"type":"string"}}}"#,
+    )
+    .expect("schema");
+
+    let error = load_plugin_dir(temp.path())
+        .expect_err("colliding flags behind a $ref refuse load")
+        .to_string();
+    assert!(
+        error.contains("task_id") && error.contains("taskId"),
+        "the load diagnostic names both colliding properties: {error}"
+    );
+
+    std::fs::write(
+        &schema,
+        r#"{"type":"object","properties":{"query":{"type":"string"}}}"#,
+    )
+    .expect("schema");
+    load_plugin_dir(temp.path()).expect("a $ref schema with distinct flags loads");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_plugin_with_tool_keys(
+        temp.path(),
+        "      input_schema: { $ref: schemas/hello.json }\n      cli: { positional: [subject] }\n",
+    );
+    std::fs::create_dir_all(temp.path().join("schemas")).expect("mkdir");
+    std::fs::write(
+        temp.path().join("schemas/hello.json"),
+        r#"{"type":"object","properties":{"query":{"type":"string"}}}"#,
+    )
+    .expect("schema");
+    let error = load_plugin_dir(temp.path())
+        .expect_err("a positional outside the resolved schema refuses load")
+        .to_string();
+    assert!(
+        error.contains("hello") && error.contains("subject"),
+        "the refusal names the tool and the positional: {error}"
+    );
+}
+
+/// §4.9: an unresolvable `$ref` refuses the plugin at load. A nested one is
+/// found by compiling the schema, which is also where an invalid keyword is
+/// found — neither may be left to fail every call instead.
+#[test]
+fn a_schema_that_cannot_compile_refuses_the_plugin_at_load() {
+    for (keys, needle) in [
+        (
+            "      input_schema:\n        type: object\n        properties:\n          query: { $ref: '#/definitions/missing' }\n",
+            "input_schema",
+        ),
+        (
+            "      output_schema:\n        type: object\n        properties:\n          count: { type: whatever }\n",
+            "output_schema",
+        ),
+    ] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_plugin_with_tool_keys(temp.path(), keys);
+        let error = load_plugin_dir(temp.path())
+            .expect_err("a schema that does not compile refuses load")
+            .to_string();
+        assert!(
+            error.contains(needle) && error.contains("hello"),
+            "the refusal names the field and the tool: {error}"
+        );
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_plugin_with_tool_keys(
+        temp.path(),
+        "      input_schema:\n        type: object\n        properties:\n          query: { $ref: '#/definitions/term' }\n        definitions:\n          term: { type: string }\n      output_schema:\n        type: object\n        properties:\n          count: { type: integer }\n",
+    );
+    let plugin = load_plugin_dir(temp.path()).expect("resolvable schemas load");
+    assert!(plugin.tools[0].output_schema.is_some());
+}
+
 #[cfg(unix)]
 #[test]
 fn load_plugin_dir_refuses_an_installed_tree_that_contains_a_symlink() {

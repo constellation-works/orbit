@@ -503,7 +503,12 @@ applied to the **top level** of the schema and nowhere deeper:
 | `object`, `array` of objects, or an untyped property | `--kebab-case-json '<JSON>'` |
 | named in `cli.positional` | the same value as a positional argument, in manifest order |
 
-`cli.verb` renames the subcommand. Nothing is marked required at the clap level: the tool's
+`cli.verb` renames the subcommand: it is spelled like a tool verb, and two tools of one
+plugin may not claim the same subcommand — `orbit <ns> <verb>` dispatches to exactly one
+tool. Each `cli.positional` entry names a top-level `input_schema` property, once; an entry
+that names nothing would be dropped without a word, so it refuses the plugin instead. Both
+are checked against the schema the tool actually loads with, so a `{ $ref: <path> }` schema
+is held to them too. Nothing is marked required at the clap level: the tool's
 own `input_schema` is the authority on what a call must contain, and a required flag would
 make `--input` alone unusable. A property whose flag would collide with one the CLI owns
 (`--input`, `--input-file`, `--dry-run`, `--format`, `--root`, `--workspace`) gets no flag
@@ -568,7 +573,11 @@ fed from `/api/plugins`, so new plugins need zero frontend edits and ship no Jav
 
 An invalid manifest, an unresolvable `$ref`, a schema that rejects its own `defaults`, a
 missing binary or a collision refuses **that plugin** at load, records one diagnostic, and
-leaves every other plugin and all built-ins untouched.
+leaves every other plugin and all built-ins untouched. Every tool schema is compiled while
+the plugin is read — naming the tool when it fails — so an invalid keyword or a `$ref` to
+something the document does not contain is one refusal at load rather than a call that
+fails every time it is made. A tool schema may only reference itself, with a `#/…` pointer;
+the manifest's own `{ $ref: <path> }` form is the way to keep a schema in its own file.
 
 ## 5. Conformance
 

@@ -20,7 +20,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-use super::schema::params_from_input_schema;
+use super::schema::{CompiledSchema, params_from_input_schema};
 use crate::ToolRegistry;
 
 /// Manifest digests of first-party plugins that may claim `orbit.<ns>.*`
@@ -59,7 +59,9 @@ pub struct ResolvedPluginTool {
     /// empty-object default). An `mcp` backend's server is held to a
     /// declared schema only.
     pub input_schema_declared: bool,
-    pub output_schema: Option<Value>,
+    /// The declared `output_schema`, compiled at load: every call validates
+    /// its backend's output against this validator without recompiling.
+    pub output_schema: Option<CompiledSchema>,
     pub parameters: Vec<ToolParam>,
 }
 
@@ -205,11 +207,30 @@ pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
             None => serde_json::json!({ "type": "object", "properties": {} }),
         };
         orbit_types::plugin::validate_plugin_cli_flags(&input_schema, &input_schema_field)?;
+        // Re-checked here rather than only on the manifest: a `{ $ref }`
+        // schema has no properties until it is read from the plugin root.
+        if let Some(cli) = tool.cli.as_ref() {
+            orbit_types::plugin::validate_plugin_cli_positionals(
+                &tool.name,
+                Some(&input_schema),
+                &cli.positional,
+                &format!("spec.tools[{index}].cli.positional"),
+            )?;
+        }
+        // The input schema is compiled for its diagnostic only: nothing
+        // validates a call's input against it, but a schema that cannot
+        // compile is one the plugin's own backend is promised and no call
+        // could ever satisfy, so it refuses the plugin here.
+        if tool.input_schema.is_some() {
+            compile_tool_schema(&tool.name, input_schema.clone(), &input_schema_field)?;
+        }
         let output_schema = tool
             .output_schema
             .as_ref()
             .map(|schema| {
-                resolve_schema(&root, schema, &format!("spec.tools[{index}].output_schema"))
+                let field = format!("spec.tools[{index}].output_schema");
+                let resolved = resolve_schema(&root, schema, &field)?;
+                compile_tool_schema(&tool.name, resolved, &field)
             })
             .transpose()?;
         tools.push(ResolvedPluginTool {
@@ -606,6 +627,20 @@ fn resolve_schema(root: &Path, schema: &Value, field: &str) -> Result<Value, Plu
         .into());
     }
     Ok(value)
+}
+
+/// Compile one resolved tool schema, naming the tool in the refusal.
+///
+/// A nested `$ref` that resolves to nothing and an invalid keyword are both
+/// found here: §4.9 refuses the plugin for either, at load, rather than
+/// letting every call fail.
+fn compile_tool_schema(
+    verb: &str,
+    schema: Value,
+    field: &str,
+) -> Result<CompiledSchema, PluginLoadError> {
+    CompiledSchema::compile(schema)
+        .map_err(|error| PluginManifestError::new(field, format!("tool '{verb}': {error}")).into())
 }
 
 /// What the host knows when it decides whether a loaded plugin may register.

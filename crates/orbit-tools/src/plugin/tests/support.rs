@@ -11,6 +11,7 @@ use orbit_types::plugin::{
 use serde_json::Value;
 
 use super::super::backend::PluginBackendSpec;
+use super::super::schema::CompiledSchema;
 use super::super::tool::{PluginBackend, PluginTool, PluginToolBinding};
 use crate::ToolContext;
 
@@ -66,7 +67,8 @@ pub(super) fn tool(spec: Arc<PluginBackendSpec>, output_schema: Option<Value>) -
         description: "demo".into(),
         parameters: vec![],
         execution_kind: PluginExecutionKind::ReadOnly,
-        output_schema,
+        output_schema: output_schema
+            .map(|schema| CompiledSchema::compile(schema).expect("compile output_schema")),
         binding: Arc::new(PluginToolBinding {
             provenance: spec.provenance.clone(),
             execution_kind: PluginExecutionKind::ReadOnly,
