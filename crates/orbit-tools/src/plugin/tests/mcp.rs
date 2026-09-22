@@ -77,7 +77,9 @@ impl Fixture {
             sandbox: plugin.manifest.spec.backend.sandbox,
             permissions: permissions.unwrap_or_else(|| plugin.manifest.spec.permissions.clone()),
             programs: Vec::new(),
-            config_values: Default::default(),
+            config: super::super::backend::PluginConfigSection::new(
+                json!({ "index_dir": "/srv/graph", "max_nodes": 500 }),
+            ),
             grants,
         });
         let expected = plugin
@@ -488,10 +490,12 @@ fn tools_call_carries_this_call_s_context_not_the_session_s() {
             "workspace_root": workspace.path().to_string_lossy(),
             "agent": "claude",
             "model": "opus-5",
+            "config": { "index_dir": "/srv/graph", "max_nodes": 500 },
             "tool": "mcpdemo.echo",
         }),
-        "`tools/call` carries the context the exec envelope carries, plus the \
-         tool name the shared child has no `ORBIT_TOOL_NAME` for"
+        "`tools/call` carries the context the exec envelope carries — including \
+         the plugin's effective config section — plus the tool name the shared \
+         child has no `ORBIT_TOOL_NAME` for"
     );
 
     // The point of sending it per call: one child serves every caller that

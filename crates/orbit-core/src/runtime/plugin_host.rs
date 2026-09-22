@@ -20,9 +20,9 @@ use orbit_store::Store;
 use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_tools::ToolRegistry;
 use orbit_tools::plugin::{
-    LoadedPlugin, McpBackend, McpExpectedTool, PluginBackend, PluginBackendSpec, PluginLoadError,
-    PluginTool, PluginToolBinding, PluginValidationPolicy, load_plugin_dir, manifest_digest,
-    refuse_covering_fs_write_roots, validate_loaded_plugin,
+    LoadedPlugin, McpBackend, McpExpectedTool, PluginBackend, PluginBackendSpec,
+    PluginConfigSection, PluginLoadError, PluginTool, PluginToolBinding, PluginValidationPolicy,
+    load_plugin_dir, manifest_digest, refuse_covering_fs_write_roots, validate_loaded_plugin,
 };
 use orbit_types::plugin::{
     InstalledPlugin, MANIFEST_FILE_NAME, PLUGIN_HOST_API, PluginBackendType, PluginGrant,
@@ -858,7 +858,7 @@ fn register_installed_plugin(
         tools,
         diagnostic: None,
         grants_authorized: true,
-        config_values: backend.spec().config_values.clone(),
+        config_values: backend.spec().config_values(),
         loaded: Some(plugin),
     }
 }
@@ -1056,7 +1056,7 @@ pub(crate) fn plugin_backend(
     // `{{config.<key>}}` resolves against the effective section: what the
     // operator configured in `[plugins.<ns>]`, over what the manifest
     // defaults (§1).
-    let config_values = super::plugin_config::plugin_config_values(plugin, plugin_config);
+    let config = super::plugin_config::plugin_config_section(plugin, plugin_config);
     build_plugin_backend(
         plugin,
         PluginProvenance {
@@ -1071,7 +1071,7 @@ pub(crate) fn plugin_backend(
         &plugin_state_dir(global_root, &installed.name),
         global_root,
         grants,
-        config_values,
+        config,
     )
 }
 
@@ -1082,7 +1082,7 @@ pub(crate) fn build_plugin_backend(
     state_dir: &Path,
     global_root: &Path,
     grants: Vec<PluginGrant>,
-    config_values: BTreeMap<String, String>,
+    config: PluginConfigSection,
 ) -> PluginBackend {
     let spec = Arc::new(PluginBackendSpec {
         provenance,
@@ -1095,7 +1095,7 @@ pub(crate) fn build_plugin_backend(
         sandbox: plugin.manifest.spec.backend.sandbox,
         permissions: plugin.manifest.spec.permissions.clone(),
         programs: plugin.manifest.spec.requires.programs.clone(),
-        config_values,
+        config,
         grants,
     });
     match plugin.manifest.spec.backend.backend_type {

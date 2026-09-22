@@ -2,6 +2,7 @@ use orbit_types::plugin::{PluginGrant, PluginPermissions};
 use serde_json::json;
 use std::time::{Duration, Instant};
 
+use super::super::backend::PluginConfigSection;
 use super::support::{context, require_sandbox, spec, stub_backend, tool};
 use crate::{Tool, ToolContext, ToolExecutionKind};
 
@@ -21,15 +22,18 @@ fn exec_backend_receives_the_envelope_and_returns_output() {
     require_sandbox();
     let temp = tempfile::tempdir().expect("tempdir");
     let command = stub_backend(temp.path(), ECHO_BACKEND);
-    let tool = tool(
-        spec(
-            command,
-            temp.path(),
-            orbit_tools_permissions(),
-            &[PluginGrant::OrbitTools],
-        ),
-        None,
-    );
+    let mut backend = (*spec(
+        command,
+        temp.path(),
+        orbit_tools_permissions(),
+        &[PluginGrant::OrbitTools],
+    ))
+    .clone();
+    backend.config = PluginConfigSection::new(json!({
+        "index_dir": "/srv/graph",
+        "max_nodes": 500,
+    }));
+    let tool = tool(std::sync::Arc::new(backend), None);
     assert_eq!(tool.execution_kind(), ToolExecutionKind::ReadOnly);
     let ctx = ToolContext {
         allowed_tools: vec!["orbit.task.show".into(), "demo.hello".into()],
@@ -45,6 +49,12 @@ fn exec_backend_receives_the_envelope_and_returns_output() {
     assert_eq!(output["envelope"]["schema_version"], 1);
     assert_eq!(output["envelope"]["tool"], "demo.hello");
     assert_eq!(output["envelope"]["input"]["name"], "world");
+    // What the plugin is configured with reaches the process itself, typed,
+    // rather than only the `{{config.<key>}}` slots the manifest declared.
+    assert_eq!(
+        output["envelope"]["context"]["config"],
+        json!({ "index_dir": "/srv/graph", "max_nodes": 500 })
+    );
 }
 
 #[cfg(unix)]

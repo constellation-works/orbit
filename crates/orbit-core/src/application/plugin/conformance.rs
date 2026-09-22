@@ -35,7 +35,7 @@ use orbit_types::plugin::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin_config::plugin_config_values;
+use crate::runtime::plugin_config::plugin_config_section;
 use crate::runtime::plugin_host::{build_plugin_backend, host_version, unmet_requirement};
 
 /// One golden's outcome.
@@ -160,7 +160,7 @@ pub fn test_plugin_dir(
         &state_dir,
         &global_root,
         grants,
-        plugin_config_values(&plugin, &config.plugins),
+        plugin_config_section(&plugin, &config.plugins),
     );
     refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
     let mut results = Vec::with_capacity(cases.len());

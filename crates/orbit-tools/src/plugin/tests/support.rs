@@ -2,7 +2,6 @@
 //! spec with chosen grants, and the availability assertion for tests that
 //! exercise a live sandbox.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -57,7 +56,7 @@ pub(super) fn spec(
         sandbox: PluginSandbox::Default,
         permissions,
         programs: Vec::new(),
-        config_values: BTreeMap::new(),
+        config: Default::default(),
         grants: grants.to_vec(),
     })
 }

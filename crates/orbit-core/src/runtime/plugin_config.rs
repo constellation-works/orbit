@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use orbit_config::{PluginConfigSchema, register_plugin_config_schemas};
-use orbit_tools::plugin::LoadedPlugin;
+use orbit_tools::plugin::{LoadedPlugin, PluginConfigSection};
 use serde_json::Value;
 
 /// The config contract one loaded plugin declares.
@@ -36,29 +36,25 @@ pub fn validate_plugin_config(
     schema.validate_section(&schema.with_defaults(configured))
 }
 
-/// The values a plugin's templates and backend see: configured over declared
-/// defaults, rendered as strings for `{{config.<key>}}`.
-pub fn plugin_config_values(
+/// The effective section a plugin's backend and templates see: what the
+/// operator configured in `[plugins.<ns>]` over what the manifest declares as
+/// defaults, with every JSON type intact.
+///
+/// This is the host's single resolution of the section. The backend spec
+/// carries it to both dispatch surfaces, and the string form the manifest's
+/// `{{config.<key>}}` templates need is derived from the same object
+/// ([`PluginConfigSection::rendered_values`]), so a template and the backend
+/// process can never read different configuration.
+///
+/// `validate_plugin_config` has already refused the plugin at load if this
+/// section violates the declared schema (§4.9), so what a backend receives is
+/// the validated section.
+pub fn plugin_config_section(
     plugin: &LoadedPlugin,
     sections: &BTreeMap<String, Value>,
-) -> BTreeMap<String, String> {
+) -> PluginConfigSection {
     let schema = plugin_config_schema(plugin);
-    schema
-        .with_defaults(sections.get(plugin.namespace()))
-        .as_object()
-        .map(|values| {
-            values
-                .iter()
-                .map(|(key, value)| {
-                    let rendered = match value {
-                        Value::String(text) => text.clone(),
-                        other => other.to_string(),
-                    };
-                    (key.clone(), rendered)
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+    PluginConfigSection::new(schema.with_defaults(sections.get(plugin.namespace())))
 }
 
 /// Publish the loaded plugins' contracts so `orbit config get`/`set` can tell
