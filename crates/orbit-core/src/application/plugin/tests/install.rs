@@ -584,6 +584,22 @@ fn a_pinned_but_uninstalled_plugin_is_reported_without_breaking_the_runtime() {
     );
 }
 
+#[test]
+fn doctor_reports_an_unparseable_pin_file() {
+    let fixture = PluginFixture::new();
+    fixture.write_pin_file("schemaVersion: 1\nplugins:\n  - name: graph\n    version: invalid\n");
+
+    let findings = plugin_doctor(&fixture.reopen()).expect("doctor");
+    assert!(
+        findings.iter().any(|finding| {
+            finding.plugin == "pin file"
+                && finding.status == PluginStatus::Inactive
+                && finding.message.contains("invalid")
+        }),
+        "doctor must report the invalid pin file: {findings:?}"
+    );
+}
+
 fn relative_inventory(root: &Path) -> BTreeSet<String> {
     fn walk(root: &Path, dir: &Path, out: &mut BTreeSet<String>) {
         for entry in std::fs::read_dir(dir).expect("read inventory") {

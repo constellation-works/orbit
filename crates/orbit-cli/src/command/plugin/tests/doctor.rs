@@ -33,3 +33,32 @@ fn doctor_reports_stale_plugin_callback_records() {
         "{finding}"
     );
 }
+
+#[test]
+fn doctor_reports_an_unparseable_pin_file_and_exits_nonzero() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    std::fs::write(
+        runtime.paths().local_dir.join("plugins.yaml"),
+        "schemaVersion: 1\nplugins:\n  - name: graph\n    version: invalid\n",
+    )
+    .expect("write pin file");
+
+    let CommandOutput::Payload(payload) = execute_doctor(&runtime).expect("run plugin doctor")
+    else {
+        panic!("plugin doctor must return a payload");
+    };
+    assert_eq!(payload.exit_code(), 1);
+    let (document, _) = payload.into_view();
+    let finding = document
+        .as_array()
+        .expect("doctor records")
+        .iter()
+        .find(|record| record["plugin"] == "pin file")
+        .expect("invalid pin file finding");
+    assert!(
+        finding["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("invalid")),
+        "{finding}"
+    );
+}

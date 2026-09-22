@@ -158,6 +158,13 @@ pub fn show_plugin(runtime: &OrbitRuntime, name: &str) -> Result<PluginSummary, 
 /// finding an active plugin carries (an unsandboxed backend).
 pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, OrbitError> {
     let summaries = list_plugins(runtime)?;
+    let invalid_pin_file = read_pin_file(&runtime.paths().local_dir)
+        .err()
+        .map(|error| PluginDoctorResult {
+            plugin: "pin file".to_string(),
+            status: PluginStatus::Inactive,
+            message: error.to_string(),
+        });
     let stale_seeded = stale_seeded_definition_rows(runtime, &summaries)?;
     // A skill link whose target is gone is invisible to the skill catalog's
     // own doctor — it only walks seeded trees — and to the plugin record,
@@ -220,6 +227,9 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
         .collect();
     rows.extend(dangling);
     rows.extend(stale_seeded);
+    if let Some(finding) = invalid_pin_file {
+        rows.push(finding);
+    }
     Ok(rows)
 }
 
