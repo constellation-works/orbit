@@ -402,6 +402,125 @@ fn call_time_fs_write_refuses_protected_global_paths_but_allows_plugin_state() {
     assert_eq!(profile.write, vec![state_dir]);
 }
 
+/// A declared write root whose tail does not exist yet is judged where its
+/// existing ancestors physically live, so an alias a backend planted inside
+/// its own writable state cannot present the plugin's protected install
+/// namespace as plugin state. The refusal lands on `sandbox_profile`, which
+/// is what both platforms compile their write rules from, and it lands
+/// before anything is created or any rule is bound [ORB-12799].
+#[cfg(unix)]
+#[test]
+fn a_call_time_write_tail_below_a_state_symlink_is_refused_before_creation() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let install_root = global_root.join("plugins/demo");
+    let root = install_root.join("1.0.0");
+    let state_dir = global_root.join("state/plugins/demo");
+    std::fs::create_dir_all(&root).expect("plugin root");
+    std::fs::create_dir_all(&state_dir).expect("plugin state");
+    symlink(&install_root, state_dir.join("alias")).expect("state alias");
+
+    let mut permissions = PluginPermissions::default();
+    permissions.fs.write = vec!["{{plugin_state}}/alias/9.0.0".into()];
+    let mut aliased = (*spec(root.join("bin"), &root, permissions, &[PluginGrant::Fs])).clone();
+    aliased.global_root.clone_from(&global_root);
+    aliased.state_dir.clone_from(&state_dir);
+
+    let error = aliased
+        .sandbox_profile(None)
+        .expect_err("an alias into the install namespace must be refused")
+        .to_string();
+    assert!(
+        error.contains("spec.permissions.fs.write[0]")
+            && error.contains("protected path beneath Orbit global root"),
+        "{error}"
+    );
+    assert!(
+        !install_root.join("9.0.0").exists(),
+        "no version tree is materialised inside the protected install namespace"
+    );
+
+    // An absent directory inside the real state tree still compiles.
+    let mut allowed_permissions = PluginPermissions::default();
+    allowed_permissions.fs.write = vec!["{{plugin_state}}/cache/runs".into()];
+    let mut allowed = (*spec(
+        root.join("bin"),
+        &root,
+        allowed_permissions,
+        &[PluginGrant::Fs],
+    ))
+    .clone();
+    allowed.global_root.clone_from(&global_root);
+    allowed.state_dir.clone_from(&state_dir);
+    let profile = allowed
+        .sandbox_profile(None)
+        .expect("an absent directory inside plugin state stays writable");
+    assert_eq!(profile.write, vec![state_dir.join("cache/runs")]);
+}
+
+/// The other half of that boundary: compiling the grant cannot reach a path
+/// the check did not judge. The kernel rule is bound to the directory the
+/// same resolution names, so a root the guard refuses is exactly the root a
+/// rule would have carried — the check cannot be outflanked by resolving the
+/// path differently at call time [ORB-12799].
+#[cfg(all(unix, target_os = "linux"))]
+#[test]
+fn a_compiled_write_grant_binds_the_path_the_guard_judges() {
+    use orbit_exec::{EnvironmentMode, ExecRequest, LandlockBoundary, StdinMode};
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let install_root = global_root.join("plugins/demo");
+    let plugin_root = install_root.join("1.0.0");
+    let state_dir = global_root.join("state/plugins/demo");
+    std::fs::create_dir_all(&plugin_root).expect("plugin root");
+    std::fs::create_dir_all(&state_dir).expect("plugin state");
+    symlink(&install_root, state_dir.join("alias")).expect("state alias");
+    let declared = state_dir.join("alias/9.0.0");
+
+    let request = ExecRequest {
+        program: "/bin/sh".to_string(),
+        args: vec!["-c".to_string(), "true".to_string()],
+        current_dir: None,
+        timeout_ms: Some(1_000),
+        stdin_mode: StdinMode::Null,
+        environment_mode: EnvironmentMode::ClearAndSet(vec![(
+            "PATH".to_string(),
+            "/usr/bin:/bin".to_string(),
+        )]),
+        debug: false,
+    };
+    let boundary = LandlockBoundary {
+        write: vec![declared.clone()],
+        ..LandlockBoundary::default()
+    };
+    let grants =
+        orbit_exec::linux_landlock_boundary_grants(&request, &boundary).expect("compile grants");
+
+    let resolved = install_root
+        .canonicalize()
+        .expect("canonicalize install root")
+        .join("9.0.0");
+    assert!(
+        grants.iter().any(|grant| grant.writes(&resolved)),
+        "the rule binds the resolved install directory, not the alias spelling"
+    );
+    assert_eq!(
+        super::super::loader::fs_write_root_covers(
+            &resolved,
+            &plugin_root,
+            &global_root,
+            &state_dir,
+            None,
+        ),
+        Some("protected path beneath Orbit global root"),
+        "the guard refuses the very path the compiled grant would carry"
+    );
+}
+
 #[test]
 fn declared_programs_are_bounded_by_a_restricted_caller() {
     let temp = tempfile::tempdir().expect("tempdir");

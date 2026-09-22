@@ -308,6 +308,13 @@ checked against `~/.orbit/plugins/<ns>/` first (§3): both sides of the digest c
 off a row a backend can write, so what makes the stored digest evidence is that the bytes it
 is compared against sit at a path the backend cannot populate [ORB-12785]. Independently of
 that digest check, every rendered `permissions.fs.write` root is normalized before admission.
+Normalization is physical: the longest existing prefix is resolved by the kernel and the names
+that do not exist yet are appended to it, so a root whose tail is absent is still judged where
+its existing ancestors live. A backend with a writable `{{plugin_state}}` can plant a symbolic
+link there between two calls, and reading such a root by name would let
+`{{plugin_state}}/alias/9.0.0` pass as plugin state while it materialises a new version tree
+inside the plugin's own protected install namespace — which the `install_path` check above then
+accepts, because the row would point at a tree beneath `~/.orbit/plugins/<ns>/` [ORB-12799].
 A root that contains the plugin install tree or Orbit's global root is refused, and any root
 *beneath* the global root is also refused unless it is inside that plugin's own
 `{{plugin_state}}` tree. The same rule runs at `orbit plugin validate`, registration and call
@@ -411,7 +418,13 @@ Granted write *directories* are created before the child starts only when their 
 is contained by the selected workspace or the plugin's own `{{plugin_state}}`. Creation checks
 every existing component without following symbolic links; an escaping `..` root is left absent
 and a symlinked prefix is refused. A Landlock rule binds to an inode, so a safe grant naming a
-directory that does not exist yet would otherwise grant nothing.
+directory that does not exist yet would otherwise grant nothing. Compiling the boundary resolves
+a root exactly as the refusal above did — the same existing-prefix resolution — and creates a
+missing tail one component at a time, refusing a link that appears between the two and refusing
+a created path that no longer resolves to the identity that was checked. Validation and the
+compiled rule therefore always name one directory: a root the check refuses is precisely the
+root a rule would have carried, so call-time path construction cannot widen what was granted
+[ORB-12799].
 Named write *files* are the exception — they belong to SQLite and to the generation protocol,
 and a host that materialised one would break the store rather than confine it, so an absent
 file simply yields no grant. The host process spawning the backend has already opened the

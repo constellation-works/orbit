@@ -35,7 +35,7 @@ pub use envelope::{PLUGIN_ENVELOPE_SCHEMA_VERSION, parse_response, validate_outp
 pub use loader::{
     FIRST_PARTY_MANIFEST_DIGESTS, LoadedPlugin, PluginDefinitionFiles, PluginLoadError,
     PluginValidationPolicy, ResolvedPluginTool, first_party_source, fs_write_root_covers,
-    load_plugin_dir, manifest_digest, manifest_refusal, physical_or_lexical,
+    load_plugin_dir, manifest_digest, manifest_refusal, physical_with_missing_tail,
     plugin_symlink_refusal, refuse_covering_fs_write_roots, refuse_plugin_tree_symlinks,
     validate_loaded_plugin,
 };
