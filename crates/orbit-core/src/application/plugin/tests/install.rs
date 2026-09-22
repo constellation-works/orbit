@@ -1,12 +1,12 @@
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use orbit_types::plugin::PluginStatus;
 use orbit_types::telemetry::AuditEventStatus;
 
 use super::super::{
-    PluginAddOptions, PluginUpgradeOptions, install_plugin, list_plugins, plugin_doctor,
-    show_plugin, upgrade_plugin, validate_plugin_dir,
+    PluginAddOptions, PluginRemoveOptions, PluginUpgradeOptions, install_plugin, list_plugins,
+    plugin_doctor, remove_plugin, show_plugin, upgrade_plugin, validate_plugin_dir,
 };
 use super::fixture::{PluginFixture, PluginSpecFixture, write_plugin_at};
 
@@ -859,5 +859,319 @@ fn a_hand_edited_install_with_a_symlink_cannot_become_active() {
     assert!(
         runtime.show_tool("demo.hello").is_err(),
         "a tree with a planted symlink must not register tools"
+    );
+}
+
+/// Everything sitting in `~/.orbit/plugins/<ns>/`, by name.
+fn namespace_entries(namespace_dir: &Path) -> BTreeSet<String> {
+    std::fs::read_dir(namespace_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Two plugin sources at the same version, distinguishable by their backend,
+/// each padded with enough files that a file-by-file copy into a live install
+/// directory would be wide open to the observer in the test below.
+#[cfg(unix)]
+fn same_version_sources(fixture: &PluginFixture, first: &str, second: &str) -> (PathBuf, PathBuf) {
+    let write = |dir: &str, backend: &str| {
+        let root = fixture.write_plugin(PluginSpecFixture::new(dir, "demo").with_backend(backend));
+        // Padding beside the backend, so one `read_dir` of `bin/` tells the
+        // observer whether the whole tree is there.
+        for index in 0..COPY_PADDING_FILES {
+            std::fs::write(root.join(format!("bin/pad-{index}")), "x".repeat(4096))
+                .expect("write padding file");
+        }
+        root
+    };
+    (write("first", first), write("second", second))
+}
+
+#[cfg(unix)]
+const COPY_PADDING_FILES: usize = 300;
+
+/// A forced same-version replace used to delete the live `<version>/` and copy
+/// the new tree back into it file by file, so a concurrent `orbit` — a clock
+/// tick, an MCP server, a dashboard panel — could load a `plugin.yaml` that was
+/// already in place while `bin/backend.sh` was still being written, and execute
+/// truncated bytes. The copy now lands in a staging directory and is published
+/// with one rename, so a reader sees the whole old tree, the whole new one, or
+/// — between renaming the old tree aside and renaming the new one in — no
+/// install directory at all [ORB-12823].
+///
+/// The observer discards any sample that straddles the swap by bracketing it
+/// with the install directory's inode, so what it reports is a tree that was
+/// genuinely torn rather than one that was replaced mid-read.
+#[cfg(unix)]
+#[test]
+fn a_forced_reinstall_never_exposes_a_half_copied_tree() {
+    use std::os::unix::fs::MetadataExt;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    const FIRST: &str = "#!/bin/sh\nprintf 'first\\n'\n";
+    const SECOND: &str = "#!/bin/sh\nprintf 'second\\n'\n";
+    // `bin/` holds the backend plus the padding files.
+    let complete_bin_entries = COPY_PADDING_FILES + 1;
+
+    let fixture = PluginFixture::new();
+    let (first, second) = same_version_sources(&fixture, FIRST, SECOND);
+    install_plugin(
+        &fixture.runtime,
+        first.to_str().expect("utf8 path"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install the first tree");
+
+    let install_path = fixture.global_root.join("plugins/demo/1.0.0");
+    let stop = Arc::new(AtomicBool::new(false));
+    let observer = std::thread::spawn({
+        let install_path = install_path.clone();
+        let stop = Arc::clone(&stop);
+        move || {
+            let inode = |path: &Path| std::fs::metadata(path).ok().map(|meta| meta.ino());
+            let mut sampled = 0_u64;
+            // A torn tree stays torn for as long as the copy runs, so a
+            // handful of observations says everything the failure needs to.
+            let mut torn: Vec<String> = Vec::new();
+            let mut report = |what: String| {
+                if torn.len() < 8 && !torn.contains(&what) {
+                    torn.push(what);
+                }
+            };
+            while !stop.load(Ordering::Relaxed) {
+                // No install directory is a clean "not installed", not a tree
+                // a reader could load half of.
+                let Some(before) = inode(&install_path) else {
+                    continue;
+                };
+                let manifest = install_path.join("plugin.yaml").exists();
+                let backend = std::fs::read_to_string(install_path.join("bin/backend.sh"));
+                let entries = std::fs::read_dir(install_path.join("bin"))
+                    .map(|entries| entries.count())
+                    .unwrap_or_default();
+                if inode(&install_path) != Some(before) {
+                    continue;
+                }
+                sampled += 1;
+                if !manifest {
+                    continue;
+                }
+                match backend {
+                    Ok(bytes) if bytes == FIRST || bytes == SECOND => {}
+                    Ok(bytes) => report(format!(
+                        "a manifest beside a backend of {} bytes",
+                        bytes.len()
+                    )),
+                    Err(error) => report(format!("a manifest with no readable backend: {error}")),
+                }
+                if entries != complete_bin_entries {
+                    report(format!(
+                        "a manifest beside {entries} of {complete_bin_entries} backend files"
+                    ));
+                }
+            }
+            (sampled, torn)
+        }
+    });
+
+    install_plugin(
+        &fixture.runtime,
+        second.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            force: true,
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("replace the installed tree with the same version");
+    stop.store(true, Ordering::Relaxed);
+    let (sampled, torn) = observer.join().expect("observer thread");
+
+    assert!(sampled > 0, "the observer never read the install directory");
+    assert!(
+        torn.is_empty(),
+        "a concurrent reader saw a partly copied install tree: {torn:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(install_path.join("bin/backend.sh")).expect("read the backend"),
+        SECOND,
+        "the forced install replaced the tree"
+    );
+    assert_eq!(
+        namespace_entries(&fixture.global_root.join("plugins/demo")),
+        BTreeSet::from(["1.0.0".to_string()]),
+        "neither the staged nor the replaced directory survives the swap"
+    );
+}
+
+/// Each upgrade used to leave `plugins/<ns>/<oldversion>/` behind: readable to
+/// every plugin backend, and enough to make a later `add` of that version
+/// demand `--force`. `remove` then deleted only the recorded version and its
+/// `remove_dir(parent)` silently failed, so the namespace family outlived the
+/// plugin [ORB-12823].
+#[test]
+fn upgrades_prune_the_namespace_and_remove_takes_the_whole_family() {
+    let fixture = PluginFixture::new();
+    let namespace_dir = fixture.global_root.join("plugins/demo");
+    for (dir, version) in [("v1", "1.0.0"), ("v2", "2.0.0"), ("v3", "3.0.0")] {
+        let mut spec = PluginSpecFixture::new(dir, "demo");
+        spec.version = version;
+        let source = fixture.write_plugin(spec);
+        install_plugin(
+            &fixture.runtime,
+            source.to_str().expect("utf8 path"),
+            &PluginAddOptions::default(),
+        )
+        .expect("install");
+        assert_eq!(
+            namespace_entries(&namespace_dir),
+            BTreeSet::from([version.to_string()]),
+            "only the version the row names stays installed"
+        );
+    }
+
+    // The version two upgrades ago is installable again without `--force`,
+    // because nothing of it was left behind.
+    let mut spec = PluginSpecFixture::new("v1-again", "demo");
+    spec.version = "1.0.0";
+    let source = fixture.write_plugin(spec);
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions::default(),
+    )
+    .expect("a version an upgrade replaced installs again without --force");
+
+    remove_plugin(&fixture.runtime, "demo", &PluginRemoveOptions::default()).expect("remove");
+    assert!(
+        !namespace_dir.exists(),
+        "remove takes the namespace family, not just the recorded version"
+    );
+}
+
+/// `current` was a second name for the install that nothing ever read, so it is
+/// gone from the design: the `plugins` row's `install_path` is the only
+/// authority (§3). A link an Orbit that still wrote one left behind is pruned
+/// by the next `add` [ORB-12823].
+#[cfg(unix)]
+#[test]
+fn add_writes_no_current_link_and_prunes_one_an_earlier_orbit_left() {
+    let fixture = PluginFixture::new();
+    let namespace_dir = fixture.global_root.join("plugins/demo");
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install");
+    assert_eq!(
+        namespace_entries(&namespace_dir),
+        BTreeSet::from(["1.0.0".to_string()]),
+        "the install writes the version directory and nothing beside it"
+    );
+
+    std::os::unix::fs::symlink(Path::new("1.0.0"), namespace_dir.join("current"))
+        .expect("write the link an earlier Orbit kept");
+    let mut spec = PluginSpecFixture::new("demo-next", "demo");
+    spec.version = "1.1.0";
+    let source = fixture.write_plugin(spec);
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions::default(),
+    )
+    .expect("upgrade");
+    assert_eq!(
+        namespace_entries(&namespace_dir),
+        BTreeSet::from(["1.1.0".to_string()]),
+        "the stale link is pruned with the version it named"
+    );
+}
+
+/// An install that failed after the copy used to leave the tree at
+/// `<version>/` with no `plugins` row, so the next `add` of that version
+/// demanded `--force` for a plugin this host never recorded [ORB-12823].
+#[test]
+fn an_install_that_fails_after_the_copy_leaves_no_tree_and_no_row() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    // Refused where it is refused today: after the tree is staged and
+    // published, and before the row is written.
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            grants: vec!["not-a-grant".to_string()],
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect_err("an unparseable grant refuses the install");
+
+    assert!(
+        list_plugins(&fixture.runtime).expect("list").is_empty(),
+        "the refusal recorded no plugin"
+    );
+    assert!(
+        namespace_entries(&fixture.global_root.join("plugins/demo")).is_empty(),
+        "the refusal left neither a tree nor staging behind"
+    );
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions::default(),
+    )
+    .expect("a plain `add` still installs, with no --force to clear first");
+}
+
+/// The same rollback under `--force`: the tree the operator still has a row
+/// for has to survive an install that does not land [ORB-12823].
+#[cfg(unix)]
+#[test]
+fn a_forced_replace_that_fails_puts_the_previous_tree_back() {
+    const FIRST: &str = "#!/bin/sh\nprintf 'first\\n'\n";
+    const SECOND: &str = "#!/bin/sh\nprintf 'second\\n'\n";
+
+    let fixture = PluginFixture::new();
+    let (first, second) = same_version_sources(&fixture, FIRST, SECOND);
+    let installed = install_plugin(
+        &fixture.runtime,
+        first.to_str().expect("utf8 path"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install the first tree");
+
+    install_plugin(
+        &fixture.runtime,
+        second.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            force: true,
+            enable: true,
+            grants: vec!["not-a-grant".to_string()],
+        },
+    )
+    .expect_err("an unparseable grant refuses the forced replace");
+
+    let install_path = Path::new(&installed.install_path);
+    assert_eq!(
+        std::fs::read_to_string(install_path.join("bin/backend.sh")).expect("read the backend"),
+        FIRST,
+        "the tree the row still names is the one the operator installed"
+    );
+    assert_eq!(
+        std::fs::read_dir(install_path.join("bin"))
+            .expect("read the backend directory")
+            .count(),
+        COPY_PADDING_FILES + 1,
+        "the restored tree is whole"
+    );
+    assert_eq!(
+        namespace_entries(&fixture.global_root.join("plugins/demo")),
+        BTreeSet::from(["1.0.0".to_string()]),
+        "the rolled-back install left no staging or replaced directory"
     );
 }

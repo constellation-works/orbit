@@ -1287,8 +1287,8 @@ plugin contributes register as `<ns>.<verb>`, are runnable with
 [the plugin standard](design/plugins/1_scope.md) for the full manifest.
 
 **Installs are per machine; pins are per repository.** A plugin lives once
-under `~/.orbit/plugins/<ns>/<version>/` (with a `current` link) and every
-workspace on that machine shares it. Enable state, grants, install paths and
+under `~/.orbit/plugins/<ns>/<version>/` and every workspace on that machine
+shares it. Enable state, grants, install paths and
 manifest digests are host-local and never synced. A repository commits only
 the pin file, so a plugin tree is never vendored into a checkout — `orbit
 plugin add` refuses a source inside the current repository for that reason.

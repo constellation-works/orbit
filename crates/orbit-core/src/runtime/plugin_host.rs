@@ -150,11 +150,6 @@ pub fn plugin_install_path(global_root: &Path, name: &str, version: &str) -> Pat
     plugin_namespace_dir(global_root, name).join(version)
 }
 
-/// The `current` link a host keeps beside the versioned install directories.
-pub fn plugin_current_link(global_root: &Path, name: &str) -> PathBuf {
-    plugin_namespace_dir(global_root, name).join("current")
-}
-
 /// Per-plugin state directory handed to the backend as `ORBIT_PLUGIN_STATE`.
 pub fn plugin_state_dir(global_root: &Path, name: &str) -> PathBuf {
     global_root.join("state").join("plugins").join(name)

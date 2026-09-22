@@ -163,10 +163,14 @@ fn an_install_path_is_accepted_only_strictly_beneath_the_namespace_install_dir()
 
     #[cfg(unix)]
     {
-        let current = super::super::plugin_host::plugin_current_link(global_root, "demo");
-        std::os::unix::fs::symlink(&versioned, &current).expect("link current");
-        verify_install_path(global_root, &record_at("demo", &current))
-            .expect("the host's own `current` link resolves into the install root");
+        // A link left inside the namespace directory — by an operator, or by
+        // the `current` entry an Orbit before ORB-12823 wrote there — is
+        // resolved physically, so its target is what decides.
+        let alias =
+            super::super::plugin_host::plugin_namespace_dir(global_root, "demo").join("previous");
+        std::os::unix::fs::symlink(&versioned, &alias).expect("link alias");
+        verify_install_path(global_root, &record_at("demo", &alias))
+            .expect("a link onto a version directory resolves into the install root");
     }
 
     let elsewhere = global_root.join("state/logs/evil");
