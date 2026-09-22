@@ -52,7 +52,10 @@ const TOKEN_HEX_LEN: usize = TOKEN_BYTES * 2;
 /// record without one states no ceiling, so it is not parsed at all rather
 /// than read as an unbounded session: these files live only as long as the
 /// child they identify, and refusing a leftover from an older host is the
-/// fail-closed half of the choice.
+/// fail-closed half of the choice. The other half is the janitor's: a record
+/// this host cannot read is counted stale by `orbit plugin doctor` and swept
+/// when the next backend starts, so refusing it never leaves an orphan no
+/// surface mentions [ORB-12879].
 const SESSION_SCHEMA_VERSION: u32 = 2;
 
 /// Live callback session the host minted for one backend child.
@@ -461,11 +464,13 @@ fn scan_ancestry_session(dir: &Path, caller: &CallerProcess) -> AncestryScan {
     AncestryScan::None
 }
 
-/// Count callback session records whose recorded process no longer exists.
+/// Count callback session records that no live child can still be using:
+/// those whose recorded process is gone, and those this host's schema cannot
+/// read at all.
 ///
-/// Corrupt or partially-written entries do not prevent inspecting other
-/// records. They are not classified as stale because their ownership cannot
-/// be established safely.
+/// Partially-written entries do not prevent inspecting other records, and are
+/// not classified as stale because their ownership cannot be established
+/// safely — see [`SessionScan`].
 pub fn stale_plugin_callback_session_count(global_root: &Path) -> Result<usize, OrbitError> {
     Ok(stale_session_paths(&callback_dir(global_root))?.len())
 }
@@ -503,14 +508,50 @@ fn stale_session_paths(dir: &Path) -> Result<Vec<PathBuf>, OrbitError> {
         let Ok(bytes) = fs::read(&path) else {
             continue;
         };
-        let Some(record) = parse_session(&bytes) else {
-            continue;
-        };
-        if record.pid != 0 && !session_process_is_live(&record) {
-            stale.push(path);
+        match scan_session_file(&bytes) {
+            SessionScan::Current(record) => {
+                if record.pid != 0 && !session_process_is_live(&record) {
+                    stale.push(path);
+                }
+            }
+            // A record this host's schema cannot read identifies nothing and
+            // will never be honoured, whatever pid it names. The auth path
+            // refusing it is right; leaving it here as well would strand a
+            // mode-0600 file under the session directory that no surface
+            // reports and no sweep removes [ORB-12879].
+            SessionScan::Foreign => stale.push(path),
+            SessionScan::Unreadable => {}
         }
     }
     Ok(stale)
+}
+
+/// What one file in the session directory turned out to hold.
+enum SessionScan {
+    /// A record this host's schema reads.
+    Current(SessionRecord),
+    /// A complete JSON value that is not a current-schema session record: a
+    /// leftover minted by a host whose record schema differs from this one.
+    /// Every byte of it was written, so it is a finished record rather than a
+    /// mint caught in progress.
+    Foreign,
+    /// Bytes that are not a complete JSON value: corruption, or a record read
+    /// between the `create_new`/`truncate` that opened it and the single
+    /// `write` that fills it. Both mint and `bind_pid` pass through that
+    /// window, so a concurrent sweep must not reap what it finds there —
+    /// unlinking a live session's file would also break the Landlock grant
+    /// its child reads the record through.
+    Unreadable,
+}
+
+fn scan_session_file(bytes: &[u8]) -> SessionScan {
+    match parse_session(bytes) {
+        Some(record) => SessionScan::Current(record),
+        None => match serde_json::from_slice::<serde_json::Value>(bytes) {
+            Ok(_) => SessionScan::Foreign,
+            Err(_) => SessionScan::Unreadable,
+        },
+    }
 }
 
 fn session_process_is_live(record: &SessionRecord) -> bool {

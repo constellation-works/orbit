@@ -56,10 +56,16 @@ impl PluginChildFixture {
         std::fs::write(
             sessions.join(&token),
             serde_json::json!({
-                "schema_version": 1,
+                "schema_version": 2,
                 "plugin": "graph",
                 "version": "0.4.1",
                 "manifest_digest": "0".repeat(64),
+                // The ceiling the host would have minted for this child. The
+                // surface guard fires before any ceiling is consulted, but a
+                // record without one is not a session at all [ORB-12801], and
+                // the refusal under test is the guard's, not the credential
+                // check's.
+                "effective_tools": ["orbit.search", "orbit.task.list"],
                 "pid": pid,
                 "starttime": starttime,
             })

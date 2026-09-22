@@ -3,6 +3,7 @@ use orbit_types::plugin::PluginProvenance;
 
 use super::super::callback::{
     ORBIT_PLUGIN_CALLBACK_ENV, PluginCallbackSession, resolve_plugin_callback,
+    stale_plugin_callback_session_count,
 };
 
 fn provenance(name: &str) -> PluginProvenance {
@@ -402,5 +403,80 @@ fn a_record_without_a_ceiling_is_not_a_session() {
             .to_string()
             .contains("credential is missing or invalid"),
         "{error}"
+    );
+}
+
+/// The janitor's half of refusing a pre-ceiling record. The leftover here
+/// names a *live* process with its real start time, so the only thing that
+/// makes it not a session is its schema version: it is never honoured, it is
+/// counted stale, and the next backend start sweeps it. Skipping it in the
+/// janitor's view instead would strand a mode-0600 file under the session
+/// directory that no surface reports and no sweep removes [ORB-12879].
+#[test]
+fn a_pre_ceiling_record_is_never_honoured_but_is_counted_stale_and_swept() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let dir = root.path().join("state/plugin-callbacks");
+    std::fs::create_dir_all(&dir).expect("create callback directory");
+    let key = orbit_common::process::ancestry::process_start_key(std::process::id())
+        .expect("current process start key");
+    let leftover = dir.join("ab".repeat(32));
+    std::fs::write(
+        &leftover,
+        format!(
+            r#"{{"schema_version":1,"plugin":"demo","version":"1.0.0","manifest_digest":"abc","pid":{},"starttime":{}}}"#,
+            key.pid, key.starttime
+        ),
+    )
+    .expect("write a pre-ceiling record");
+
+    {
+        // Ancestry would name this very process if the record parsed at all.
+        let _env = clear_token();
+        assert_eq!(
+            resolve_plugin_callback(root.path()).expect("resolve"),
+            None,
+            "a pre-ceiling record must never identify a caller"
+        );
+    }
+    assert_eq!(
+        stale_plugin_callback_session_count(root.path()).expect("count stale"),
+        1,
+        "a record this host cannot read is stale, not invisible"
+    );
+
+    // Minting is what a backend start does: it sweeps before it writes.
+    let _session = mint(root.path(), "demo");
+
+    assert!(
+        !leftover.exists(),
+        "the backend-start sweep must remove a pre-ceiling record"
+    );
+    assert_eq!(
+        stale_plugin_callback_session_count(root.path()).expect("count stale"),
+        0,
+        "the freshly minted session is not itself stale"
+    );
+}
+
+/// The sweep must not reap a record it caught mid-write. Both `mint` and
+/// `bind_pid` leave the file empty between opening it and the single write
+/// that fills it, and unlinking one there would destroy a live session —
+/// along with the Landlock grant its child reads the record through.
+#[test]
+fn a_partially_written_record_is_not_counted_stale() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let dir = root.path().join("state/plugin-callbacks");
+    std::fs::create_dir_all(&dir).expect("create callback directory");
+    for (name, bytes) in [
+        ("just-created", &b""[..]),
+        ("half-written", &br#"{"schema_version":2,"plugin":"de"#[..]),
+    ] {
+        std::fs::write(dir.join(name), bytes).expect("write a partial record");
+    }
+
+    assert_eq!(
+        stale_plugin_callback_session_count(root.path()).expect("count stale"),
+        0,
+        "ownership of a partial record cannot be established, so it is left alone"
     );
 }

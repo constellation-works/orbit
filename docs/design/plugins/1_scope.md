@@ -447,7 +447,14 @@ life of a session:
 The record states the ceiling from `schema_version: 2` on. A record that states none is
 refused rather than read as unbounded: these files live only as long as the child they
 identify, so the only way to meet one is a leftover from an older host, and a leftover is not
-consent.
+consent. Refusing it is only half the answer, though — a record this host's schema cannot
+read is also *counted stale*: `orbit plugin doctor` reports it and the sweep that runs when
+the next backend mints a session removes it. Skipping it in the janitor's view instead would
+strand a mode-0600 file under `state/plugin-callbacks/` that no surface names and no sweep
+reaches [ORB-12879]. Only bytes that are not a complete JSON value are left alone, because
+both the mint and the pid binding leave the file empty between opening it and the single
+write that fills it, and reaping what a concurrent scan finds in that window would destroy a
+live session — along with the Landlock grant its child reads the record through.
 
 **Every other CLI command is refused.** "Only through `orbit tool run` or MCP `tools/call`"
 is a rule about the whole CLI, not about those two commands: `orbit workspace list --format
