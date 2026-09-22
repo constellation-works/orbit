@@ -96,6 +96,7 @@ pub(super) fn spawn_restricted(
     req: &ExecRequest,
     grants: &[LandlockPathGrant],
     scope: RulesetScope,
+    inherited_fds: &[crate::process::InheritedFd],
 ) -> Result<Child, OrbitError> {
     let ruleset = Ruleset::create(scope, abi_version())?;
     for grant in grants {
@@ -103,6 +104,10 @@ pub(super) fn spawn_restricted(
     }
 
     let mut command = crate::process::command(req);
+    // Before the ruleset, so a credential descriptor is in place whatever the
+    // restriction does. `dup2` is not a filesystem access, so the order is a
+    // readability choice rather than a requirement.
+    crate::process::attach_inherited_fds(&mut command, inherited_fds);
     restrict_child(&mut command, ruleset.as_raw_fd());
     command.spawn().map_err(|error| {
         OrbitError::Execution(format!("failed to spawn `{}`: {error}", req.program))

@@ -74,6 +74,65 @@ fn doctor_reports_a_pre_ceiling_callback_record_as_stale() {
     );
 }
 
+/// The deprecation has to be visible while it is on: a host that still
+/// honours the environment token and process ancestry is running one release
+/// of compatibility for the credential `setsid` escaped [ORB-12841].
+#[test]
+fn doctor_reports_the_legacy_callback_identity_deprecation() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let config = runtime.global_root().join("config.toml");
+    let mut document = std::fs::read_to_string(&config).unwrap_or_default();
+    document.push_str("\n[plugin]\nlegacy_callback_identity = true\n");
+    std::fs::write(&config, document).expect("write the host config");
+
+    let CommandOutput::Payload(payload) = execute_doctor(&runtime).expect("run plugin doctor")
+    else {
+        panic!("plugin doctor must return a payload");
+    };
+    assert_eq!(payload.exit_code(), 1, "the deprecation needs attention");
+    let (document, _) = payload.into_view();
+    let finding = document
+        .as_array()
+        .expect("doctor records")
+        .iter()
+        .find(|record| {
+            record["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("plugin.legacy_callback_identity"))
+        })
+        .expect("legacy callback identity finding");
+    assert_eq!(finding["plugin"], "plugin callbacks");
+    assert!(
+        finding["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("removed in the next release")),
+        "{finding}"
+    );
+}
+
+/// With the key absent, the deprecation is off and doctor stays quiet about
+/// it: the default host has nothing to report.
+#[test]
+fn doctor_is_quiet_about_callback_identity_by_default() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+
+    let CommandOutput::Payload(payload) = execute_doctor(&runtime).expect("run plugin doctor")
+    else {
+        panic!("plugin doctor must return a payload");
+    };
+    let (document, _) = payload.into_view();
+    assert!(
+        !document
+            .as_array()
+            .expect("doctor records")
+            .iter()
+            .any(|record| record["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("plugin.legacy_callback_identity"))),
+        "{document}"
+    );
+}
+
 #[test]
 fn doctor_reports_an_unparseable_pin_file_and_exits_nonzero() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");

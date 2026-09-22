@@ -18,6 +18,11 @@ pub struct MacosSandboxSpawnRequest<'a> {
     pub stdin: Stdio,
     pub stdout: Stdio,
     pub stderr: Stdio,
+    /// Descriptors the child must see at fixed numbers. `sandbox-exec` execs
+    /// the confined program in its own process, so an inherited descriptor
+    /// survives the wrapper — this is how a plugin backend receives its
+    /// callback credential on macOS.
+    pub inherited_fds: &'a [crate::process::InheritedFd],
 }
 
 pub fn spawn_under_macos_sandbox(
@@ -32,6 +37,7 @@ pub fn spawn_under_macos_sandbox(
         stdin,
         stdout,
         stderr,
+        inherited_fds,
     } = request;
 
     let profile_file = cached_profile_tempfile(profile_text)?;
@@ -62,6 +68,7 @@ pub fn spawn_under_macos_sandbox(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
+    crate::process::attach_inherited_fds(&mut command, inherited_fds);
 
     let child = command.spawn().map_err(|err| {
         OrbitError::Execution(format!(

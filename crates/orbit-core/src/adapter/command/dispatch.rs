@@ -806,8 +806,8 @@ pub(crate) use orbit_tools::plugin::ORBIT_PLUGIN_ENV;
 /// A process launched as a plugin backend reaches Orbit only through
 /// `orbit tool run` or MCP `tools/call`, and only for tools in that plugin's
 /// recorded `permissions.orbit_tools` once the host has granted `orbit_tools`.
-/// Identity is the host-issued session — the token, bound to the process
-/// presenting it — not `ORBIT_PLUGIN`, and a confined descendant carrying no
+/// Identity is the host-issued session record the backend inherits as an open
+/// descriptor — not `ORBIT_PLUGIN` — and a confined descendant carrying no
 /// session is refused rather than dispatched as a local caller. Anything else
 /// is refused before the tool runs; a missing install, missing grant,
 /// unloadable manifest, or a row whose install path is not one this host
@@ -818,7 +818,9 @@ fn enforce_plugin_callback_allowlist(
     name: &str,
 ) -> Result<(), OrbitError> {
     apply_callback_resolution(
-        resolve_plugin_callback_session(global_root)?,
+        resolve_plugin_callback_session(global_root, || {
+            legacy_callback_identity_enabled(global_root)
+        })?,
         global_root,
         |plugin| plugins.get_plugin(plugin),
         name,
@@ -829,7 +831,9 @@ fn enforce_plugin_callback_allowlist_from_root(
     global_root: &Path,
     name: &str,
 ) -> Result<(), OrbitError> {
-    let resolution = resolve_plugin_callback_session(global_root)?;
+    let resolution = resolve_plugin_callback_session(global_root, || {
+        legacy_callback_identity_enabled(global_root)
+    })?;
     if matches!(resolution, CallbackResolution::None) {
         return Ok(());
     }
@@ -871,7 +875,9 @@ pub fn refuse_plugin_child_cli_command(
     global_root: &Path,
     invocation: Option<&str>,
 ) -> Result<(), OrbitError> {
-    match resolve_plugin_callback_session(global_root)? {
+    match resolve_plugin_callback_session(global_root, || {
+        legacy_callback_identity_enabled(global_root)
+    })? {
         CallbackResolution::None => Ok(()),
         CallbackResolution::Identified(identity) => Err(plugin_cli_surface_refused(
             Some(&identity.provenance.name),
@@ -888,10 +894,31 @@ pub fn refuse_plugin_child_cli_command(
         CallbackResolution::Mismatched { token, ancestry } => Err(
             orbit_tools::plugin::mismatched_callback_credential(&token, ancestry.as_deref()),
         ),
+        CallbackResolution::RetiredCredential(identity) => {
+            Err(orbit_tools::plugin::retired_callback_credential(
+                identity.as_ref().map(|id| id.provenance.name.as_str()),
+            ))
+        }
         CallbackResolution::UnidentifiedPluginChild => {
             Err(orbit_tools::plugin::unidentified_plugin_child())
         }
     }
+}
+
+/// Whether this host still honours the retired plugin callback credential —
+/// the environment token plus process ancestry — as well as the descriptor a
+/// backend inherits [ORB-12841].
+///
+/// Read from the *global* `config.toml` only: a plugin backend runs under one
+/// host, and a per-workspace answer would mean the same backend were
+/// identified differently depending on which workspace its caller stood in.
+/// Loaded on demand rather than per call, because the question only arises for
+/// a caller that presented legacy evidence.
+pub(crate) fn legacy_callback_identity_enabled(global_root: &Path) -> Result<bool, OrbitError> {
+    let roots = orbit_config::ConfigRoots::global_only(global_root);
+    Ok(orbit_config::ResolvedConfig::load(&roots)?
+        .snapshot
+        .plugin_legacy_callback_identity)
 }
 
 fn plugin_cli_surface_refused(plugin: Option<&str>, invocation: Option<&str>) -> OrbitError {
@@ -935,6 +962,18 @@ fn apply_callback_resolution(
         CallbackResolution::Mismatched { token, ancestry } => Err(
             orbit_tools::plugin::mismatched_callback_credential(&token, ancestry.as_deref()),
         ),
+        // A backend that held only the retired credential while this host has
+        // stopped honouring it. Stamped like an invalid one so the refusal
+        // lands on the plugin's own audit row.
+        CallbackResolution::RetiredCredential(identity) => {
+            if let Some(identity) = identity.as_ref() {
+                let installed = get_plugin(&identity.provenance.name).ok().flatten();
+                stamp_callback_plugin_provenance(identity, installed.as_ref());
+            }
+            Err(orbit_tools::plugin::retired_callback_credential(
+                identity.as_ref().map(|id| id.provenance.name.as_str()),
+            ))
+        }
         // A confined backend descendant with no credential. It is not an
         // ordinary caller: `setsid` sheds ancestry, not the sandbox, and the
         // sandbox is what refused it the host-issued session directory.

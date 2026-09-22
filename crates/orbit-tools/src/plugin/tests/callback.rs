@@ -2,9 +2,20 @@ use orbit_common::OrbitError;
 use orbit_types::plugin::PluginProvenance;
 
 use super::super::callback::{
-    ORBIT_PLUGIN_CALLBACK_ENV, PluginCallbackSession, resolve_plugin_callback,
-    stale_plugin_callback_session_count,
+    ORBIT_PLUGIN_CALLBACK_ENV, ORBIT_PLUGIN_CALLBACK_FD_ENV, PluginCallbackSession,
+    resolve_plugin_callback, stale_plugin_callback_session_count,
 };
+
+/// The host answer for a release that still honours the retired environment
+/// token and process ancestry.
+fn legacy_on() -> Result<bool, OrbitError> {
+    Ok(true)
+}
+
+/// The default: the inherited descriptor is the only credential.
+fn legacy_off() -> Result<bool, OrbitError> {
+    Ok(false)
+}
 
 fn provenance(name: &str) -> PluginProvenance {
     PluginProvenance {
@@ -23,11 +34,46 @@ fn mint(root: &std::path::Path, name: &str) -> PluginCallbackSession {
 }
 
 fn present_token(token: &str) -> orbit_common::test_env::ScopedEnv {
-    orbit_common::test_env::scoped([(ORBIT_PLUGIN_CALLBACK_ENV, Some(token))])
+    orbit_common::test_env::scoped([
+        (ORBIT_PLUGIN_CALLBACK_ENV, Some(token)),
+        (ORBIT_PLUGIN_CALLBACK_FD_ENV, None),
+    ])
 }
 
 fn clear_token() -> orbit_common::test_env::ScopedEnv {
-    orbit_common::test_env::scoped([(ORBIT_PLUGIN_CALLBACK_ENV, None)])
+    orbit_common::test_env::scoped([
+        (ORBIT_PLUGIN_CALLBACK_ENV, None),
+        (ORBIT_PLUGIN_CALLBACK_FD_ENV, None),
+    ])
+}
+
+/// Present one open descriptor on a file the way a spawned backend holds its
+/// credential, with every legacy credential cleared. The returned file must
+/// stay alive for as long as the descriptor is presented.
+#[cfg(unix)]
+fn present_descriptor(
+    path: &std::path::Path,
+) -> (std::fs::File, orbit_common::test_env::ScopedEnv) {
+    use std::os::fd::AsRawFd;
+
+    let file = std::fs::File::open(path).expect("open the credential");
+    let number = file.as_raw_fd().to_string();
+    let env = orbit_common::test_env::scoped([
+        (ORBIT_PLUGIN_CALLBACK_ENV, None),
+        (ORBIT_PLUGIN_CALLBACK_FD_ENV, Some(number.as_str())),
+    ]);
+    (file, env)
+}
+
+/// A file name the session directory would really use: 64 lowercase hex
+/// characters, derived from a readable label so a failure names the record.
+fn token_for(label: &str) -> String {
+    let mut token: String = label.bytes().map(|byte| format!("{byte:02x}")).collect();
+    token.truncate(64);
+    while token.len() < 64 {
+        token.push('0');
+    }
+    token
 }
 
 fn write_record(
@@ -38,11 +84,12 @@ fn write_record(
 ) -> std::path::PathBuf {
     let dir = root.join("state/plugin-callbacks");
     std::fs::create_dir_all(&dir).expect("create callback directory");
-    let path = dir.join(name);
+    let token = token_for(name);
+    let path = dir.join(&token);
     std::fs::write(
         &path,
         format!(
-            r#"{{"schema_version":2,"plugin":"stale","version":"1.0.0","manifest_digest":"abc","effective_tools":[],"pid":{pid},"starttime":{starttime}}}"#
+            r#"{{"schema_version":3,"plugin":"stale","version":"1.0.0","manifest_digest":"abc","effective_tools":[],"token":"{token}","pid":{pid},"starttime":{starttime}}}"#
         ),
     )
     .expect("write callback record");
@@ -54,7 +101,7 @@ fn token_identifies_the_minted_plugin() {
     let root = tempfile::tempdir().expect("tempdir");
     let session = mint(root.path(), "demo");
     let _env = present_token(session.token());
-    let identity = resolve_plugin_callback(root.path())
+    let identity = resolve_plugin_callback(root.path(), legacy_on)
         .expect("resolve")
         .expect("identified");
     assert_eq!(identity.provenance.name, "demo");
@@ -69,7 +116,7 @@ fn ancestry_identifies_the_plugin_after_the_token_is_cleared() {
         .bind_pid(std::process::id())
         .expect("bind this process");
     let _env = clear_token();
-    let identity = resolve_plugin_callback(root.path())
+    let identity = resolve_plugin_callback(root.path(), legacy_on)
         .expect("resolve")
         .expect("identified by ancestry");
     assert_eq!(identity.provenance.name, "demo");
@@ -84,7 +131,7 @@ fn a_real_child_resolves_the_plugin_through_its_parent_pid() {
     const CHILD_ENV: &str = "ORBIT_TEST_CALLBACK_ANCESTRY_CHILD";
     if let Some(root) = std::env::var_os(CHILD_ENV) {
         let _token = clear_token();
-        let identity = resolve_plugin_callback(std::path::Path::new(&root))
+        let identity = resolve_plugin_callback(std::path::Path::new(&root), legacy_on)
             .expect("resolve in child")
             .expect("the parent session identifies the child");
         assert_eq!(identity.provenance.name, "demo");
@@ -127,7 +174,10 @@ fn ancestry_ignores_a_live_pid_with_a_different_starttime() {
     );
     let _env = clear_token();
 
-    assert_eq!(resolve_plugin_callback(root.path()).expect("resolve"), None);
+    assert_eq!(
+        resolve_plugin_callback(root.path(), legacy_on).expect("resolve"),
+        None
+    );
 }
 
 #[test]
@@ -142,7 +192,7 @@ fn corrupt_record_does_not_hide_a_valid_ancestry_session() {
     let _env = clear_token();
 
     assert_eq!(
-        resolve_plugin_callback(root.path())
+        resolve_plugin_callback(root.path(), legacy_on)
             .expect("resolve")
             .expect("identified")
             .provenance
@@ -168,14 +218,17 @@ fn mint_removes_dead_callback_records() {
 fn ordinary_callers_are_not_identified() {
     let root = tempfile::tempdir().expect("tempdir");
     let _env = clear_token();
-    assert_eq!(resolve_plugin_callback(root.path()).expect("resolve"), None);
+    assert_eq!(
+        resolve_plugin_callback(root.path(), legacy_on).expect("resolve"),
+        None
+    );
 }
 
 #[test]
 fn a_presented_unknown_token_is_a_missing_credential() {
     let root = tempfile::tempdir().expect("tempdir");
     let _env = present_token(&"ab".repeat(32));
-    let error = resolve_plugin_callback(root.path()).expect_err("forged token");
+    let error = resolve_plugin_callback(root.path(), legacy_on).expect_err("forged token");
     assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
     assert!(
         error
@@ -224,7 +277,8 @@ fn a_token_bound_to_another_process_is_a_mismatch() {
     theirs.bind_pid(1).expect("bind pid 1");
     let _env = present_token(theirs.token());
 
-    let error = resolve_plugin_callback(root.path()).expect_err("A's token from B's process");
+    let error =
+        resolve_plugin_callback(root.path(), legacy_on).expect_err("A's token from B's process");
     assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
     let message = error.to_string();
     assert!(
@@ -242,7 +296,8 @@ fn a_token_whose_record_is_not_ours_is_refused_without_ancestry() {
     session.bind_pid(1).expect("bind pid 1");
     let _env = present_token(session.token());
 
-    let error = resolve_plugin_callback(root.path()).expect_err("someone else's session");
+    let error =
+        resolve_plugin_callback(root.path(), legacy_on).expect_err("someone else's session");
     assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
     assert!(
         error
@@ -266,7 +321,7 @@ fn a_token_bound_to_this_process_group_is_identified() {
     let _env = present_token(session.token());
 
     assert_eq!(
-        resolve_plugin_callback(root.path())
+        resolve_plugin_callback(root.path(), legacy_on)
             .expect("resolve")
             .expect("identified")
             .provenance
@@ -298,7 +353,8 @@ fn an_unreadable_session_directory_with_no_credential_is_refused() {
     }
     let _env = clear_token();
 
-    let error = resolve_plugin_callback(root.path()).expect_err("confined child with no session");
+    let error = resolve_plugin_callback(root.path(), legacy_on)
+        .expect_err("confined child with no session");
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("restore");
     assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
     assert!(
@@ -333,7 +389,7 @@ fn the_session_carries_the_callers_effective_tool_ceiling() {
     );
     let _env = present_token(session.token());
 
-    let identity = resolve_plugin_callback(root.path())
+    let identity = resolve_plugin_callback(root.path(), legacy_on)
         .expect("resolve")
         .expect("identified");
     assert_eq!(
@@ -370,7 +426,7 @@ fn each_token_resolves_to_its_own_ceiling() {
 
     let ceiling_for = |session: &PluginCallbackSession| {
         let _env = present_token(session.token());
-        resolve_plugin_callback(root.path())
+        resolve_plugin_callback(root.path(), legacy_on)
             .expect("resolve")
             .expect("identified")
             .effective_tools
@@ -398,7 +454,8 @@ fn a_record_without_a_ceiling_is_not_a_session() {
     .expect("write a pre-ceiling record");
     let _env = present_token(&token);
 
-    let error = resolve_plugin_callback(root.path()).expect_err("a record with no ceiling");
+    let error =
+        resolve_plugin_callback(root.path(), legacy_on).expect_err("a record with no ceiling");
     assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
     assert!(
         error
@@ -435,7 +492,7 @@ fn a_pre_ceiling_record_is_never_honoured_but_is_counted_stale_and_swept() {
         // Ancestry would name this very process if the record parsed at all.
         let _env = clear_token();
         assert_eq!(
-            resolve_plugin_callback(root.path()).expect("resolve"),
+            resolve_plugin_callback(root.path(), legacy_on).expect("resolve"),
             None,
             "a pre-ceiling record must never identify a caller"
         );
@@ -460,10 +517,10 @@ fn a_pre_ceiling_record_is_never_honoured_but_is_counted_stale_and_swept() {
     );
 }
 
-/// The sweep must not reap a record it caught mid-write. Both `mint` and
-/// `bind_pid` leave the file empty between opening it and the single write
-/// that fills it, and unlinking one there would destroy a live session —
-/// along with the Landlock grant its child reads the record through.
+/// The sweep must not reap a record it caught mid-write. `mint` leaves the
+/// file empty between opening it and the single write that fills it, and
+/// unlinking one there would destroy a live session — along with the Landlock
+/// grant its child reads the record through.
 #[test]
 fn a_partially_written_record_is_not_counted_stale() {
     let root = tempfile::tempdir().expect("tempdir");
@@ -481,4 +538,135 @@ fn a_partially_written_record_is_not_counted_stale() {
         0,
         "ownership of a partial record cannot be established, so it is left alone"
     );
+}
+
+/// The credential the host actually issues: the record open on a descriptor.
+/// Nothing in the environment and nothing in the process tree names the
+/// session, which is the state a backend descendant reaches after `setsid` and
+/// a cleared environment [ORB-12841].
+#[cfg(unix)]
+#[test]
+fn the_inherited_descriptor_identifies_the_plugin_with_no_token_and_no_ancestry() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let mut session = PluginCallbackSession::mint(
+        root.path(),
+        &provenance("demo"),
+        &["orbit.task.list".to_string(), "orbit.search".to_string()],
+    )
+    .expect("mint");
+    // Bound to a live process this one is no part of, so ancestry cannot be
+    // what answers: pid 1 is never this process, its parent, or its group.
+    session.bind_pid(1).expect("bind pid 1");
+    let (_credential, _env) = present_descriptor(session.path());
+
+    let identity = resolve_plugin_callback(root.path(), legacy_off)
+        .expect("resolve")
+        .expect("identified by the descriptor");
+    assert_eq!(identity.provenance.name, "demo");
+    assert_eq!(
+        identity.effective_tools,
+        ["orbit.search".to_string(), "orbit.task.list".to_string()],
+        "the descriptor carries the caller's ceiling, not just the plugin name"
+    );
+}
+
+/// A backend can put any file it likes on the number, so the record has to
+/// prove the host wrote it: its own token must name the very inode the caller
+/// holds, and only the host may write that directory.
+#[cfg(unix)]
+#[test]
+fn a_forged_record_on_the_callback_descriptor_is_not_a_credential() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let real = mint(root.path(), "demo");
+    // Byte-for-byte the live record, including its token — but somewhere the
+    // plugin could have written it.
+    let forged = root.path().join("forged-session");
+    std::fs::copy(real.path(), &forged).expect("copy the record");
+    let (_credential, _env) = present_descriptor(&forged);
+
+    assert_eq!(
+        resolve_plugin_callback(root.path(), legacy_off).expect("resolve"),
+        None,
+        "a record the host did not write must not identify anyone"
+    );
+}
+
+/// An ordinary caller may have anything at all on the number. That is not a
+/// claim to be a plugin, and it must not refuse the call: what refuses a
+/// backend that dropped its credential is the unreadable session directory.
+#[cfg(unix)]
+#[test]
+fn an_unrelated_file_on_the_callback_descriptor_is_an_ordinary_caller() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let unrelated = root.path().join("notes.txt");
+    std::fs::write(&unrelated, b"not a session record").expect("write an unrelated file");
+    let (_credential, _env) = present_descriptor(&unrelated);
+
+    assert_eq!(
+        resolve_plugin_callback(root.path(), legacy_off).expect("resolve"),
+        None
+    );
+}
+
+/// With the deprecation off, a caller holding only the retired credential is
+/// refused rather than identified — and rather than admitted as an ordinary
+/// caller, which is the escape the descriptor exists to close.
+#[test]
+fn the_retired_token_is_refused_while_the_deprecation_is_off() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let session = mint(root.path(), "demo");
+    let _env = present_token(session.token());
+
+    let error = resolve_plugin_callback(root.path(), legacy_off).expect_err("a retired credential");
+    assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
+    assert!(
+        error.to_string().contains("retired callback credential"),
+        "{error}"
+    );
+}
+
+/// The ancestry half of the same rule, and the reason the flag exists: a live
+/// session that names this process identifies it only while the deprecation is
+/// on.
+#[test]
+fn ancestry_identifies_only_while_the_deprecation_is_on() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let mut session = mint(root.path(), "demo");
+    session
+        .bind_pid(std::process::id())
+        .expect("bind this process");
+    let _env = clear_token();
+
+    assert_eq!(
+        resolve_plugin_callback(root.path(), legacy_on)
+            .expect("resolve")
+            .expect("identified")
+            .provenance
+            .name,
+        "demo"
+    );
+    let error = resolve_plugin_callback(root.path(), legacy_off).expect_err("retired ancestry");
+    assert!(
+        error.to_string().contains("plugin 'demo' presented"),
+        "the refusal still names the backend for the audit row: {error}"
+    );
+}
+
+/// The host holds its own read handle on every live record while it resolves
+/// callbacks of its own. One sitting on the number the resolver inspects would
+/// identify `orbit mcp serve` as the plugin it just spawned.
+#[cfg(unix)]
+#[test]
+fn the_hosts_own_handle_never_lands_on_the_callback_number() {
+    use super::super::callback::PLUGIN_CALLBACK_FD;
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let sessions: Vec<_> = (0..4).map(|_| mint(root.path(), "demo")).collect();
+    for session in &sessions {
+        assert!(
+            session.credential_fd() > PLUGIN_CALLBACK_FD,
+            "the host's handle is {} and the child reads {PLUGIN_CALLBACK_FD}",
+            session.credential_fd()
+        );
+    }
 }

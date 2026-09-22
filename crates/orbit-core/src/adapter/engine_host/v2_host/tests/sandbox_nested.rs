@@ -477,6 +477,7 @@ fn run_sandboxed_orbit(
         stdin: Stdio::null(),
         stdout: Stdio::piped(),
         stderr: Stdio::piped(),
+        inherited_fds: &[],
     })
     .expect("spawn nested Orbit command");
     child.wait_with_output().expect("wait nested Orbit")

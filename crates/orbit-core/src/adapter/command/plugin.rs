@@ -107,6 +107,14 @@ impl OrbitRuntime {
         stale_plugin_callback_session_count(&self.global_root())
     }
 
+    /// Whether this host still accepts the retired plugin callback credential
+    /// — the environment token plus process ancestry — alongside the
+    /// descriptor a backend inherits. Reported by `orbit plugin doctor` for as
+    /// long as it is on [ORB-12841].
+    pub fn legacy_plugin_callback_identity(&self) -> Result<bool, OrbitError> {
+        crate::adapter::command::dispatch::legacy_callback_identity_enabled(&self.global_root())
+    }
+
     /// Validate a plugin directory without installing it. `first_party` is
     /// the caller's statement that the source is a constellation-works
     /// checkout; it is only ever needed to validate an `origin: orbit`

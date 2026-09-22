@@ -7,6 +7,7 @@ use crate::output::color::{Domain, Role};
 pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
     let results = runtime.plugin_doctor()?;
     let stale_callbacks = runtime.stale_plugin_callback_session_count()?;
+    let legacy_callback_identity = runtime.legacy_plugin_callback_identity()?;
 
     use crate::output::table::{Column, Table};
     use comfy_table::Cell;
@@ -42,6 +43,29 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
         let message = format!(
             "{stale_callbacks} stale plugin callback session record(s); they will be removed when a plugin backend starts"
         );
+        table.add_row(vec![
+            Cell::new("plugin callbacks"),
+            crate::output::color::cell("inactive", Domain::JobState),
+            Cell::new(&message),
+        ]);
+        records.push(json!({
+            "plugin": "plugin callbacks",
+            "status": "inactive",
+            "message": message,
+        }));
+    }
+
+    // A host that still honours the retired credential is running one release
+    // of compatibility, not a supported configuration: the environment token
+    // and process ancestry are what `setsid` escaped, and they are removed in
+    // the next release [ORB-12841].
+    if legacy_callback_identity {
+        issues += 1;
+        let message = "plugin.legacy_callback_identity is on: the retired environment token and \
+                       process ancestry still identify a plugin callback. It is removed in the \
+                       next release — clear the key and make sure every backend keeps file \
+                       descriptor 3 open across `setsid`, `exec` and any wrapper script"
+            .to_string();
         table.add_row(vec![
             Cell::new("plugin callbacks"),
             crate::output::color::cell("inactive", Domain::JobState),

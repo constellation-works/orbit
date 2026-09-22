@@ -673,7 +673,7 @@ fn spawn_bounded(fixture: &Fixture, boundary: &LandlockBoundary, script: &str) -
         debug: false,
     };
     Output::of(
-        spawn_under_linux_landlock_boundary(&request, boundary).expect("spawn bounded child"),
+        spawn_under_linux_landlock_boundary(&request, boundary, &[]).expect("spawn bounded child"),
     )
 }
 
@@ -770,7 +770,7 @@ fn a_bounded_child_with_deny_tcp_cannot_connect() {
             environment_mode: EnvironmentMode::ClearAndSet(fixture.environment.clone()),
             debug: false,
         };
-        let error = spawn_under_linux_landlock_boundary(&request, &boundary)
+        let error = spawn_under_linux_landlock_boundary(&request, &boundary, &[])
             .expect_err("an older ABI fails closed instead of spawning");
         assert!(error.to_string().contains("Landlock ABI"), "{error}");
         return;

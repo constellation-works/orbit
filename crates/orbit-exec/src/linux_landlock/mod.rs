@@ -278,9 +278,14 @@ pub fn linux_landlock_boundary_grants(
 /// Fails closed like [`spawn_under_linux_landlock`]: no Landlock, or a
 /// `deny_tcp` the kernel cannot hold, is a capability error and never an
 /// unconfined child.
+///
+/// `inherited_fds` are descriptors the parent hands the child at fixed
+/// numbers — the plugin callback credential — mapped between `fork` and
+/// `exec` alongside the ruleset.
 pub fn spawn_under_linux_landlock_boundary(
     req: &ExecRequest,
     boundary: &LandlockBoundary,
+    inherited_fds: &[crate::process::InheritedFd],
 ) -> Result<Child, OrbitError> {
     let probe = probe_landlock();
     if !probe.available {
@@ -297,6 +302,7 @@ pub fn spawn_under_linux_landlock_boundary(
             confine_writes: true,
             deny_tcp: boundary.deny_tcp,
         },
+        inherited_fds,
     )
 }
 
@@ -419,7 +425,7 @@ pub fn spawn_under_linux_landlock(
 
     let mut grants = boundary.grants;
     grants.extend(host::program_grants(&req.program, &environment));
-    spawn_restricted(req, &dedupe(grants), RulesetScope::default())
+    spawn_restricted(req, &dedupe(grants), RulesetScope::default(), &[])
 }
 
 /// Record the part of the profile the kernel is not holding for this child.
@@ -493,8 +499,9 @@ fn spawn_restricted(
     req: &ExecRequest,
     grants: &[LandlockPathGrant],
     scope: RulesetScope,
+    inherited_fds: &[crate::process::InheritedFd],
 ) -> Result<Child, OrbitError> {
-    ruleset::spawn_restricted(req, grants, scope)
+    ruleset::spawn_restricted(req, grants, scope, inherited_fds)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -502,6 +509,7 @@ fn spawn_restricted(
     _req: &ExecRequest,
     _grants: &[LandlockPathGrant],
     _scope: RulesetScope,
+    _inherited_fds: &[crate::process::InheritedFd],
 ) -> Result<Child, OrbitError> {
     Err(OrbitError::PolicyDenied(landlock_unavailable_message(
         &probe_landlock(),

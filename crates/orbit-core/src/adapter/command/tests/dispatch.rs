@@ -894,6 +894,37 @@ fn bind_live_callback_session_with_ceiling(
     session
 }
 
+/// Hold a live session's record open on the descriptor a spawned backend
+/// inherits, and name that descriptor to the resolver.
+///
+/// This is the credential in production: the host opens the record and maps it
+/// onto file descriptor 3 in the child. Tests cannot dictate a process-wide
+/// descriptor number, so they name the one they got — the same seam the
+/// environment variable exists for. Dropping the returned file is what a
+/// descendant that sheds the credential does.
+fn present_callback_descriptor(session: &PluginCallbackSession) -> std::fs::File {
+    use std::os::fd::AsRawFd;
+
+    let file = std::fs::File::open(session.path()).expect("open the session record");
+    // SAFETY: callers hold `env_guard()` while changing process environment.
+    unsafe {
+        std::env::set_var(
+            orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_FD_ENV,
+            file.as_raw_fd().to_string(),
+        );
+    }
+    file
+}
+
+/// Turn the deprecation on for this host, so the retired environment token and
+/// process ancestry identify a callback for one more release [ORB-12841].
+fn enable_legacy_callback_identity(runtime: &OrbitRuntime) {
+    let path = runtime.global_root().join("config.toml");
+    let mut document = std::fs::read_to_string(&path).unwrap_or_default();
+    document.push_str("\n[plugin]\nlegacy_callback_identity = true\n");
+    std::fs::write(&path, document).expect("write the host config");
+}
+
 /// What the recorded manifest asks for under `permissions.orbit_tools`.
 fn recorded_orbit_tools_request(runtime: &OrbitRuntime) -> Vec<String> {
     let installed = runtime
@@ -951,7 +982,8 @@ fn plugin_callback_allowlist_ignores_forged_or_unset_env() {
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list"]);
-    let _session = bind_live_callback_session(&runtime);
+    let session = bind_live_callback_session(&runtime);
+    let _credential = present_callback_descriptor(&session);
 
     let run = |allowed_tools: Option<&str>, tool: &str| {
         set_plugin_callback_env("callback", allowed_tools);
@@ -982,7 +1014,8 @@ fn plugin_callback_allowlist_refuses_a_row_repointed_outside_the_install_root() 
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list"]);
-    let _session = bind_live_callback_session(&runtime);
+    let session = bind_live_callback_session(&runtime);
+    let _credential = present_callback_descriptor(&session);
     set_plugin_callback_env("callback", None);
     dispatch_cli(&runtime, "orbit.task.list").expect("the recorded install admits its own tool");
 
@@ -1038,7 +1071,8 @@ fn plugin_callback_allowlist_holds_after_orbit_plugin_is_cleared() {
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list"]);
-    let _session = bind_live_callback_session(&runtime);
+    let session = bind_live_callback_session(&runtime);
+    let _credential = present_callback_descriptor(&session);
     // SAFETY: callers hold `env_guard()` while changing process environment.
     unsafe {
         std::env::remove_var(ORBIT_PLUGIN_ENV);
@@ -1060,7 +1094,8 @@ fn plugin_callback_allowlist_applies_on_mcp_entry_point() {
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list"]);
-    let _session = bind_live_callback_session(&runtime);
+    let session = bind_live_callback_session(&runtime);
+    let _credential = present_callback_descriptor(&session);
     // SAFETY: callers hold `env_guard()` while changing process environment.
     unsafe {
         std::env::remove_var(ORBIT_PLUGIN_ENV);
@@ -1081,7 +1116,8 @@ fn plugin_callback_refusal_is_audited_with_plugin_identity() {
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list"]);
-    let _session = bind_live_callback_session(&runtime);
+    let session = bind_live_callback_session(&runtime);
+    let _credential = present_callback_descriptor(&session);
     // SAFETY: callers hold `env_guard()` while changing process environment.
     unsafe {
         std::env::remove_var(ORBIT_PLUGIN_ENV);
@@ -1164,6 +1200,7 @@ fn plugin_callback_refuses_a_token_bound_to_another_process() {
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list"]);
+    enable_legacy_callback_identity(&runtime);
     let installed = runtime
         .stores()
         .plugins()
@@ -1238,8 +1275,9 @@ fn plugin_callback_cannot_exceed_the_spawning_callers_ceiling() {
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list", "orbit.search"]);
-    let _session =
+    let session =
         bind_live_callback_session_with_ceiling(&runtime, &["orbit.task.list".to_string()]);
+    let _credential = present_callback_descriptor(&session);
     shed_child_restrictions();
 
     for entry_point in [ToolEntryPoint::Cli, ToolEntryPoint::Mcp] {
@@ -1268,13 +1306,7 @@ fn separate_callback_sessions_keep_their_own_ceilings() {
     shed_child_restrictions();
 
     let as_session = |session: &PluginCallbackSession, tool: &str| {
-        // SAFETY: callers hold `env_guard()` while changing process environment.
-        unsafe {
-            std::env::set_var(
-                orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV,
-                session.token(),
-            );
-        }
+        let _credential = present_callback_descriptor(session);
         dispatch_cli(&runtime, tool)
     };
 
@@ -1301,8 +1333,9 @@ fn a_live_callback_session_does_not_widen_when_the_recorded_manifest_does() {
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list"]);
-    let _session =
+    let session =
         bind_live_callback_session_with_ceiling(&runtime, &["orbit.task.list".to_string()]);
+    let _credential = present_callback_descriptor(&session);
     shed_child_restrictions();
     dispatch_cli(&runtime, "orbit.task.list").expect("the recorded install admits its own tool");
 
@@ -1331,8 +1364,9 @@ fn revoking_the_grant_stops_a_live_callback_session() {
     let _g = env_guard();
     let runtime = fresh_runtime();
     record_callback_plugin(&runtime, &["orbit.task.list"]);
-    let _session =
+    let session =
         bind_live_callback_session_with_ceiling(&runtime, &["orbit.task.list".to_string()]);
+    let _credential = present_callback_descriptor(&session);
     shed_child_restrictions();
     dispatch_cli(&runtime, "orbit.task.list").expect("the granted callback runs");
 
