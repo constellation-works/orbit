@@ -1,0 +1,54 @@
+# Positive instruction contracts shared by the packaged-activity and prompt-budget suites.
+# Keep one whitespace-normalized, lowercase phrase per line.
+task.terminal
+before the first edit
+before validation
+pwd -p
+git rev-parse --show-toplevel
+worktree_mismatch
+context_files
+not as a perfect inventory
+eperm
+orbit.friction.add
+orbit.task.update
+move the task to `review`
+execution_summary
+each `file:` target with the provider-native file-read tool
+each `dir:` selector
+do not call the file-read tool on the directory
+resolves beneath the workspace root
+`rg --files <directory>`
+take a final inventory with `git status --short` and `git diff --check`
+staged, unstaged, and untracked
+both sides of every rename
+account for every entry against the item 3 baseline
+re-read the durable `context_files` after any authorized update
+confirm a selector covers each intended delivery path
+append its exact `file:` selector
+a containing directory selector is not new-file intent
+before a successful exit, remove or revert the run-owned output
+write scratch, logs, and review evidence under `.orbit/tmp/`
+preserve pre-existing contents, another actor's edits, and legitimate task outputs
+run-owned non-deliverable output is only what `git status --short` adds to the item 3 baseline
+ignored build output, caches, and sandbox-owned paths like `<worktree>/target` are not yours to remove and never block handoff
+deleting is an exception for a stray untracked path, not a step
+if a cleanup command is denied, do not retry it
+name the exact leftover paths
+record the blocker with `orbit.task.update` (`comment`)
+do not hand off as success
+record the item 11 reconciliation
+never parse the execution summary as an oracle
+declaring a path never converts an accidental or unintended edit into scoped work
+revert that edit instead of widening the boundary
+the only location `orbit.task.artifact.put` accepts
+write temporary evidence and scratch files under `.orbit/tmp/`
+never under `/tmp`
+record the starting head and a full starting inventory
+preserve pre-existing edits
+run-owned output you verified is not part of the deliverable
+sandbox-owned paths like `<worktree>/target` are not yours to remove and never block handoff
+never use raw `rm -f` or `rm -rf`
+never clean broadly to catch a specific leftover
+do not substitute a destructive one
+separately from cleanup so a denied cleanup cannot skip these reads
+repeat the inventory after any cleanup
