@@ -347,36 +347,45 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
 #[test]
 fn scaffold_validate_test_and_install_run_end_to_end() {
     let fixture = Fixture::new();
-    let root = fixture.home.join("scaffolded/demo");
+    let root = fixture.home.join(".orbit/scaffold/demo");
     let root_arg = root.to_str().expect("utf8 path").to_string();
 
-    fixture
+    let scaffold = fixture
         .orbit()
-        .args(["plugin", "scaffold", "demo", "--dir", &root_arg])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("plugin.yaml"));
+        .args(["plugin", "scaffold", "demo"])
+        .output()
+        .expect("scaffold plugin");
+    assert!(scaffold.status.success(), "{scaffold:?}");
+    let scaffold_stdout = String::from_utf8_lossy(&scaffold.stdout);
+    assert!(scaffold_stdout.contains("plugin.yaml"), "{scaffold_stdout}");
+    assert!(
+        !root.starts_with(&fixture.work),
+        "the default scaffold source must be outside the workspace repository"
+    );
 
-    fixture
-        .orbit()
-        .args(["plugin", "validate", &root_arg])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("demo.status"));
-
-    fixture
-        .orbit()
-        .args(["plugin", "add", &root_arg, "--enable"])
-        .assert()
-        .success();
-
-    fixture
-        .orbit()
-        .args(["plugin", "test", &root_arg])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("status_reports_ready"))
-        .stdout(predicate::str::contains("passed"));
+    // Run every command that scaffold printed, word-for-word, while remaining
+    // in the repository root. This makes the advertised `add` command an e2e
+    // contract instead of a hand-maintained variant of it.
+    let printed_steps: Vec<_> = scaffold_stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("  orbit "))
+        .collect();
+    assert_eq!(printed_steps.len(), 4, "{scaffold_stdout}");
+    for step in printed_steps {
+        if step.starts_with("demo status") {
+            fixture
+                .orbit_as_operator()
+                .args(step.split_whitespace())
+                .assert()
+                .success();
+        } else {
+            fixture
+                .orbit()
+                .args(step.split_whitespace())
+                .assert()
+                .success();
+        }
+    }
 
     // The certification the passing run recorded is what `plugin show`
     // prints back.

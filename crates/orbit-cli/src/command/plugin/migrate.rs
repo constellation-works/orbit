@@ -36,7 +36,7 @@ impl Execute for PluginMigrateArgs {
         })?;
         let text = match &path {
             Some(path) => format!(
-                "Wrote {}\n\nNext steps:\n  orbit plugin validate {}\n  orbit plugin add {}",
+                "Wrote {}\n\nNext steps:\n  orbit plugin validate {}\n  orbit plugin add {}\n\nWarning: migration omits `origin: orbit`; add it only for a source that satisfies the first-party rule.",
                 path.display(),
                 path.parent().unwrap_or(path).display(),
                 path.parent().unwrap_or(path).display()

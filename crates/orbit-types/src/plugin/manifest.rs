@@ -137,14 +137,14 @@ pub struct PluginMetadata {
     /// The namespace: `graph` owns `graph.*`, `orbit graph`, `[plugins.graph]`.
     pub name: String,
     pub version: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publisher: Option<String>,
     /// `orbit` claims `orbit.<ns>.*`; honoured only for a verified first-party source.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<PluginOrigin>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
 }
 
@@ -157,11 +157,11 @@ pub enum PluginOrigin {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginSpec {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "PluginRequires::is_empty")]
     pub requires: PluginRequires,
     pub backend: PluginBackend,
     /// Requested, never granted here (§4.1).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "PluginPermissions::is_empty")]
     pub permissions: PluginPermissions,
     #[serde(default)]
     pub tools: Vec<PluginToolSpec>,
@@ -182,16 +182,25 @@ pub struct PluginSpec {
 #[serde(deny_unknown_fields)]
 pub struct PluginRequires {
     /// Semver range on the host binary.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orbit: Option<String>,
     /// Protocol major; a mismatch refuses enable.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_api: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub platforms: Vec<String>,
     /// Host programs the backend spawns.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub programs: Vec<String>,
+}
+
+impl PluginRequires {
+    fn is_empty(&self) -> bool {
+        self.orbit.is_none()
+            && self.host_api.is_none()
+            && self.platforms.is_empty()
+            && self.programs.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,9 +210,9 @@ pub struct PluginBackend {
     pub backend_type: PluginBackendType,
     /// Relative to the plugin root, or absolute.
     pub command: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     #[serde(default)]
     pub sandbox: PluginSandbox,
@@ -243,20 +252,35 @@ pub struct PluginPermissions {
     pub fs: PluginFsPermissions,
     #[serde(default)]
     pub network: PluginNetworkPermission,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_pass: Vec<String>,
     /// Orbit tools the backend may call back into.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub orbit_tools: Vec<String>,
+}
+
+impl PluginPermissions {
+    fn is_empty(&self) -> bool {
+        self.fs.is_empty()
+            && self.network == PluginNetworkPermission::None
+            && self.env_pass.is_empty()
+            && self.orbit_tools.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginFsPermissions {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub write: Vec<String>,
+}
+
+impl PluginFsPermissions {
+    fn is_empty(&self) -> bool {
+        self.read.is_empty() && self.write.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -273,18 +297,18 @@ pub enum PluginNetworkPermission {
 pub struct PluginToolSpec {
     /// The verb: canonical `<ns>.<verb>`, MCP `<ns>_<verb>`.
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     pub execution_kind: PluginExecutionKind,
     #[serde(default)]
     pub mcp_scope: PluginMcpScope,
     /// JSON Schema object, or `{ $ref: <path inside the plugin root> }`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<Value>,
     /// Optional override of the derived `orbit <ns> <verb>` clap shape (§4.6).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cli: Option<PluginCliShape>,
 }
 

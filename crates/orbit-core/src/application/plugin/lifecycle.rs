@@ -630,9 +630,24 @@ pub fn migrate_plugin_sidecars(
     for path in &sidecar_paths {
         sidecars.push(load_sidecar_manifest(path)?);
     }
+    let migrated_command = request.out_dir.as_ref().map_or_else(
+        || Ok(request.backend_command.clone()),
+        |_| {
+            backend
+                .file_name()
+                .filter(|name| !name.is_empty())
+                .map(|name| Path::new("bin").join(name).to_string_lossy().into_owned())
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(format!(
+                        "cannot copy backend '{}': it has no file name",
+                        backend.display()
+                    ))
+                })
+        },
+    )?;
     let manifest = migrate_sidecars(
         &sidecars,
-        &request.backend_command,
+        &migrated_command,
         &request.version,
         request.namespace.as_deref(),
     )?;
@@ -650,6 +665,33 @@ pub fn migrate_plugin_sidecars(
             path.display()
         )));
     }
+    let backend_target = out_dir.join("bin").join(backend.file_name().ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "cannot copy backend '{}': it has no file name",
+            backend.display()
+        ))
+    })?);
+    if backend_target.exists() {
+        return Err(OrbitError::InvalidInput(format!(
+            "refusing to overwrite copied backend {}",
+            backend_target.display()
+        )));
+    }
+    let backend_parent = backend_target.parent().ok_or_else(|| {
+        OrbitError::Execution(format!(
+            "backend target {} has no parent",
+            backend_target.display()
+        ))
+    })?;
+    std::fs::create_dir_all(backend_parent)
+        .map_err(|error| OrbitError::Io(format!("create {}: {error}", backend_parent.display())))?;
+    std::fs::copy(backend, &backend_target).map_err(|error| {
+        OrbitError::Io(format!(
+            "copy backend {} to {}: {error}",
+            backend.display(),
+            backend_target.display()
+        ))
+    })?;
     std::fs::write(&path, &yaml)
         .map_err(|error| OrbitError::Io(format!("write {}: {error}", path.display())))?;
     Ok((yaml, Some(path)))
