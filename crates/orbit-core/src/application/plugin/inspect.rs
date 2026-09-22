@@ -20,7 +20,7 @@ use super::panels::{PluginLinkSummary, PluginPanelSummary, web_summaries};
 use crate::OrbitRuntime;
 use crate::runtime::plugin_config::plugin_config_values;
 use crate::runtime::plugin_host::{
-    build_plugin_backend, plugin_state_dir, read_pin_file, unmet_requirement,
+    build_plugin_backend, load_installed_plugin, plugin_state_dir, read_pin_file, unmet_requirement,
 };
 
 /// One plugin tool as the CLI reports it.
@@ -466,8 +466,18 @@ fn summary_from_runtime(runtime: &OrbitRuntime, installed: &InstalledPlugin) -> 
         },
         |entry| entry.status,
     );
-    let loaded = load_plugin_dir(Path::new(&installed.install_path)).ok();
-    let mut summary = summary_for_installed(installed, loaded.as_ref(), status);
+    // Disabled rows are deliberately not loaded during ordinary runtime
+    // construction. `plugin list` still reports their manifest details, but
+    // only this command pays that one cached load.
+    let disabled = if installed.enabled {
+        None
+    } else {
+        load_installed_plugin(installed).ok()
+    };
+    let loaded = registered
+        .and_then(|entry| entry.loaded.as_deref())
+        .or(disabled.as_deref());
+    let mut summary = summary_for_installed(installed, loaded, status);
     // Panels and links are the *active* surface, so they are projected from
     // the load pass that built it — including the effective `[plugins.<ns>]`
     // values a link template reads — rather than from the manifest alone.

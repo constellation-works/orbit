@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use orbit_store::Store;
 use orbit_tools::ToolRegistry;
@@ -13,10 +14,13 @@ use orbit_types::plugin::{
 };
 use orbit_types::telemetry::AuditEventStatus;
 
+use crate::OrbitRuntime;
+use crate::application::plugin::list_plugins;
+
 use super::super::plugin_grants::{plugin_grant_witness_path, record_authorized_grants};
 use super::super::plugin_host::{
     build_plugin_backend, host_plugin_cli_groups, host_plugin_registry, load_host_plugins,
-    plugin_backend, plugin_install_path, plugin_state_dir,
+    plugin_backend, plugin_dir_load_count, plugin_install_path, plugin_state_dir,
 };
 
 fn write_plugin(root: &Path, name: &str, requires: &str) {
@@ -159,6 +163,50 @@ fn record(global_root: &Path, name: &str) -> InstalledPlugin {
         installed_at: String::new(),
         updated_at: String::new(),
     }
+}
+
+fn capture_errors<F, T>(f: F) -> (T, String)
+where
+    F: FnOnce() -> T,
+{
+    use std::io::{self, Write};
+    use tracing_subscriber::filter::LevelFilter;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone)]
+    struct CaptureMakeWriter(Arc<Mutex<Vec<u8>>>);
+    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl<'a> MakeWriter<'a> for CaptureMakeWriter {
+        type Writer = CaptureWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            CaptureWriter(Arc::clone(&self.0))
+        }
+    }
+
+    impl Write for CaptureWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().expect("capture lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(CaptureMakeWriter(Arc::clone(&buffer)))
+        .with_max_level(LevelFilter::ERROR)
+        .with_ansi(false)
+        .without_time()
+        .finish();
+    let result = tracing::subscriber::with_default(subscriber, f);
+    let logs =
+        String::from_utf8(buffer.lock().expect("capture buffer lock").clone()).expect("utf8 logs");
+    (result, logs)
 }
 
 #[test]
@@ -461,11 +509,18 @@ fn read_only_host_discovery_reports_a_refused_row_without_attempting_its_audit()
         })
         .expect("write the unauthorized grants");
 
-    let groups = host_plugin_cli_groups(&global_root, &audit_db, &BTreeMap::new())
-        .expect("read-only CLI discovery completes");
+    let (groups, errors) = capture_errors(|| {
+        host_plugin_cli_groups(&global_root, &audit_db, &BTreeMap::new())
+            .expect("read-only CLI discovery completes")
+    });
     assert!(
         groups.is_empty(),
         "a refused plugin has no CLI group: {groups:?}"
+    );
+    assert!(
+        errors.is_empty(),
+        "read-only CLI discovery must not emit an error for the intentionally skipped audit: \
+         {errors}"
     );
 
     let (_, load) = host_plugin_registry(&global_root, &audit_db, &BTreeMap::new())
@@ -521,6 +576,85 @@ fn read_only_host_discovery_reports_a_refused_row_without_attempting_its_audit()
             .len(),
         1,
         "the writable load records the refusal"
+    );
+}
+
+#[test]
+fn plugin_list_reuses_the_cli_tree_load_once_per_plugin() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let workspace_root = temp.path().join("repo/.orbit");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+
+    let plugin_roots = ["alpha", "beta", "disabled"].map(|name| {
+        let root = plugin_install_path(&global_root, name, "1.0.0");
+        write_plugin(&root, name, "");
+        root
+    });
+    let audit_db = global_root.join("orbit.db");
+    {
+        let store = Store::open(&audit_db).expect("open store");
+        for name in ["alpha", "beta"] {
+            store
+                .with_transaction(|tx| tx.upsert_plugin(&record(&global_root, name)))
+                .expect("record the install");
+        }
+        let mut disabled = record(&global_root, "disabled");
+        disabled.enabled = false;
+        store
+            .with_transaction(|tx| tx.upsert_plugin(&disabled))
+            .expect("record the disabled install");
+    }
+
+    let groups = host_plugin_cli_groups(&global_root, &audit_db, &BTreeMap::new())
+        .expect("build the pre-clap plugin tree");
+    assert_eq!(groups.len(), 2, "both plugins contribute a CLI group");
+
+    let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root)
+        .expect("build the runtime for plugin list");
+    let summaries = list_plugins(&runtime).expect("run plugin list");
+    assert_eq!(
+        summaries.len(),
+        3,
+        "enabled and disabled plugins are listed"
+    );
+    assert_eq!(
+        summaries
+            .iter()
+            .find(|summary| summary.name == "disabled")
+            .expect("disabled summary")
+            .tools
+            .len(),
+        1,
+        "the disabled row keeps its manifest details"
+    );
+
+    for root in &plugin_roots {
+        assert_eq!(
+            plugin_dir_load_count(root),
+            1,
+            "one `orbit plugin list` invocation must load each plugin directory once: {}",
+            root.display()
+        );
+    }
+
+    let manifest = plugin_roots[0].join("plugin.yaml");
+    let mut edited = std::fs::read_to_string(&manifest).expect("read cached manifest");
+    edited.push_str("# changed after the first load\n");
+    std::fs::write(&manifest, edited).expect("edit cached manifest");
+    let groups = host_plugin_cli_groups(&global_root, &audit_db, &BTreeMap::new())
+        .expect("rebuild after a manifest edit");
+    assert_eq!(groups.len(), 1, "the edited plugin is refused by digest");
+    assert_eq!(plugin_dir_load_count(&plugin_roots[0]), 2);
+    assert_eq!(
+        plugin_dir_load_count(&plugin_roots[1]),
+        1,
+        "an unchanged sibling remains cached"
+    );
+    assert_eq!(
+        plugin_dir_load_count(&plugin_roots[2]),
+        1,
+        "the disabled plugin is loaded only by the list projection"
     );
 }
 

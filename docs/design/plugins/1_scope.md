@@ -719,7 +719,12 @@ unknown `orbit <word>` — including a disabled plugin's namespace — is clap's
 unknown-subcommand error, and plugin CLI never bypasses dispatch, dry-run or audit.
 `orbit --help` lists the groups under a `Plugins:` heading, and `orbit <ns> --help` lists its
 verbs with the manifest's descriptions. The tree is built at startup from the host's
-installed manifests; a host with no `~/.orbit/plugins/` directory pays one `stat` for it.
+installed manifests. A host with no `~/.orbit/plugins/` directory pays one `stat` for it. Once
+that directory exists, startup resolves the global config, opens SQLite read-only and queries the
+`plugins` rows; with no enabled row it reads no manifest. Loaded manifests are cached for the
+process and shared by CLI-tree discovery, runtime construction and host-global MCP discovery. An
+unchanged `plugin.yaml` stamp reuses the resolved manifest immediately; if only the stamp changed,
+its digest is checked before Orbit repeats the install-tree symlink walk and schema resolution.
 
 ### 4.7 Dashboard
 
