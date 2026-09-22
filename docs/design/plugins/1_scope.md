@@ -174,7 +174,7 @@ orbit plugin add <path|git+url#ref|archive>   →  installed   (~/.orbit/plugins
 orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed] [--workspace]
                                               →  active      (tools Active; definitions seeded; skills linked)
 orbit plugin disable <ns>                     →  installed   (tools Inactive; seeded definitions skipped with a warning)
-orbit plugin remove <ns>                      →  gone        (derived data such as .orbit-graph/ is retained)
+orbit plugin remove <ns> --yes                →  gone        (derived data such as .orbit-graph/ is retained)
 orbit plugin list | show <ns> | doctor | validate <dir> | test <dir> | scaffold <ns> | sync | migrate
 ```
 

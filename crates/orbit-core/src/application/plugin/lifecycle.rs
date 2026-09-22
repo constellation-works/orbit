@@ -214,6 +214,14 @@ pub fn remove_plugin(runtime: &OrbitRuntime, name: &str) -> Result<(), OrbitErro
         .plugins()
         .get_plugin(name)?
         .ok_or_else(|| missing_install(runtime, name))?;
+
+    // Disable first while the install path still exists. Besides taking the
+    // tools and seeded definitions off the active surface, this removes every
+    // discovery link that points into the recorded install tree. Deleting the
+    // tree first would leave those links dangling with no plugin row left for
+    // doctor to inspect.
+    disable_plugin(runtime, name)?;
+
     runtime.with_mutation(|| {
         runtime.stores().plugins().delete_plugin(name)?;
         Ok((

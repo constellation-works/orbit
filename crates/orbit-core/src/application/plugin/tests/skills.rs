@@ -123,6 +123,41 @@ fn linking_refuses_to_replace_a_namespaced_link_owned_elsewhere() {
 }
 
 #[test]
+fn linking_replaces_a_dangling_link_into_the_plugin_install_family() {
+    let fixture = PluginFixture::new();
+    let source = DefinitionPlugin::new("graph").write(&fixture);
+    let plugin = load_plugin_dir(&source).expect("load plugin");
+    let roots = roots(&fixture);
+    let previous_skill = plugin
+        .root
+        .parent()
+        .expect("plugin install family")
+        .join("previous-version/skills/graph");
+
+    for root in &roots {
+        std::fs::create_dir_all(root).expect("create discovery root");
+        create_dir_symlink(&previous_skill, &root.join("graph-graph"))
+            .expect("link dangling previous plugin skill");
+    }
+
+    let (linked, warnings) = link_plugin_skills_into(&roots, &plugin);
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(linked.len(), roots.len());
+    for root in &roots {
+        assert_eq!(
+            root.join("graph-graph")
+                .canonicalize()
+                .expect("replacement link resolves"),
+            plugin.skills[0]
+                .canonicalize()
+                .expect("installed plugin skill resolves"),
+            "a dangling link owned by an earlier install must not block re-enable"
+        );
+    }
+}
+
+#[test]
 fn doctor_reports_a_link_whose_plugin_directory_is_gone() {
     let fixture = PluginFixture::new();
     let source = DefinitionPlugin::new("graph").write(&fixture);
