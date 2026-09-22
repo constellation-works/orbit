@@ -241,7 +241,7 @@ fn call_time_refuses_workspace_metadata_but_allows_a_similar_directory() {
 }
 
 #[test]
-fn spawn_does_not_materialize_a_write_root_escaping_the_workspace() {
+fn spawn_refuses_an_absent_write_root_escaping_the_workspace() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("plugin");
     let workspace = temp.path().join("workspace/nested");
@@ -269,8 +269,15 @@ fn spawn_does_not_materialize_a_write_root_escaping_the_workspace() {
         ..context(&workspace)
     };
 
-    let output = backend.execute(&ctx, json!({})).expect("backend runs");
-    assert_eq!(output["result"], "ok");
+    let error = backend
+        .execute(&ctx, json!({}))
+        .expect_err("an absent host path outside materialization roots must be refused")
+        .to_string();
+    assert!(error.contains("does not exist"), "{error}");
+    assert!(
+        error.contains("create this consented directory before running the plugin"),
+        "{error}"
+    );
     assert!(
         !temp.path().join("escaped").exists(),
         "the host must not create a normalized write root outside the workspace"

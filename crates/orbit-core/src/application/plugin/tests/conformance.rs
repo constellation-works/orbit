@@ -579,6 +579,38 @@ fn grant_names_that_cover_the_request_run_the_requested_profile() {
         ),
     );
 
+    let refused = run_with(
+        &fixture.runtime,
+        &root,
+        PluginTestOptions {
+            first_party: false,
+            grants: vec![
+                "fs".to_string(),
+                "network".to_string(),
+                "env_pass".to_string(),
+                "unsandboxed".to_string(),
+            ],
+            accept_requested: false,
+        },
+    )
+    .expect("the suite reports a refused call");
+    assert!(!refused.passed(), "an absent host write root must fail");
+    let message = &refused.results[0].detail;
+    assert!(
+        message.contains(&write_root.display().to_string()),
+        "{message}"
+    );
+    assert!(message.contains("does not exist"), "{message}");
+    assert!(
+        message.contains("create this consented directory before running the plugin"),
+        "{message}"
+    );
+    assert!(
+        !write_root.exists(),
+        "the host must not create a manifest-named absolute write root"
+    );
+
+    std::fs::create_dir_all(&write_root).expect("create the consented write root");
     let report = run_with(
         &fixture.runtime,
         &root,

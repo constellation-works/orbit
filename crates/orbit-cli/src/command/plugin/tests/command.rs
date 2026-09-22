@@ -10,7 +10,7 @@ use orbit_types::plugin::{PluginGrant, RESERVED_CLI_COMMANDS};
 use super::super::PluginSubcommand;
 use super::super::scaffold::PluginScaffoldArgs;
 use super::super::test::PluginTestArgs;
-use crate::command::{Cli, Commands, Execute};
+use crate::command::{Cli, CommandOutput, Commands, Execute};
 
 #[test]
 fn reserved_cli_commands_match_the_shipped_command_tree() {
@@ -309,14 +309,40 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
     }
 
     // The refusal above names `/Users/daniel` and never starts the backend.
-    // Consent has to use a directory this test owns: a granted absolute write
-    // root is created before the child runs.
+    // Consent has to use a directory this test owns. Absolute write roots
+    // outside Orbit's materialization roots must already exist.
     let consented_write = fixture.root.join("consented-write");
-    std::fs::create_dir_all(&consented_write).expect("create the consented write root");
     let manifest = std::fs::read_to_string(&manifest_path).expect("read patched manifest");
     let consented = manifest.replace("/Users/daniel", &consented_write.display().to_string());
     std::fs::write(&manifest_path, consented).expect("point the write root at the fixture");
 
+    let missing = PluginTestArgs {
+        dir: plugin_dir.clone(),
+        first_party: false,
+        grants: Vec::new(),
+        accept_requested: true,
+    }
+    .execute(&fixture.runtime)
+    .expect("the suite reports the missing consented directory");
+    assert_eq!(missing.exit_code(), 1);
+    let CommandOutput::Payload(payload) = missing else {
+        panic!("plugin test must return a report payload");
+    };
+    let (document, _) = payload.into_view();
+    let detail = document["results"][0]["detail"]
+        .as_str()
+        .expect("the failed call has a diagnostic");
+    assert!(detail.contains("does not exist"), "{detail}");
+    assert!(
+        detail.contains("create this consented directory before running the plugin"),
+        "{detail}"
+    );
+    assert!(
+        !consented_write.exists(),
+        "the host must not create the manifest-named absolute write root"
+    );
+
+    std::fs::create_dir_all(&consented_write).expect("create the consented write root");
     let accepted = PluginTestArgs {
         dir: plugin_dir,
         first_party: false,
