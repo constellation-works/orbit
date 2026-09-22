@@ -844,6 +844,71 @@ fn enforce_plugin_callback_allowlist_from_root(
     )
 }
 
+/// Refuse a plain CLI command invoked by a plugin backend [ORB-12876].
+///
+/// [`enforce_plugin_callback_allowlist`] gates the two entry points a backend
+/// is allowed — `orbit tool run` and MCP `tools/call` — against
+/// `permissions.orbit_tools`. Every *other* CLI command reads governed data
+/// without ever consulting that allowlist, so a plugin granted nothing but
+/// `orbit.task.list` could still run `orbit workspace list --format json` or
+/// `orbit run show <id>` and read whatever the CLI exposes.
+///
+/// The repair is the rule the design already states
+/// (`docs/design/plugins/1_scope.md` §4.2): a backend reaches Orbit only
+/// through a tool call, so the CLI refuses it everything else. Scoring each
+/// command against the allowlist instead would need a command-to-tool mapping
+/// that does not exist and would leave every unmapped — and every newly
+/// added — command open by default, which is the structural hole being
+/// closed.
+///
+/// `invocation` names the refused command for the operator (`workspace
+/// list`); it is `None` for a command that declares no audit identity.
+///
+/// Called from the CLI's single pre-dispatch chokepoint, before generation
+/// pinning and runtime bootstrap, so a refused plugin child performs no part
+/// of the command it asked for.
+pub fn refuse_plugin_child_cli_command(
+    global_root: &Path,
+    invocation: Option<&str>,
+) -> Result<(), OrbitError> {
+    match resolve_plugin_callback_session(global_root)? {
+        CallbackResolution::None => Ok(()),
+        CallbackResolution::Identified(identity) => {
+            Err(plugin_cli_surface_refused(Some(&identity.name), invocation))
+        }
+        // A credential fault is refused on its own terms here, exactly as
+        // both tool entry points refuse it, so a broken or borrowed session
+        // never reads as an ordinary caller on this surface either.
+        CallbackResolution::InvalidCredential(identity) => {
+            Err(orbit_tools::plugin::invalid_callback_credential(
+                identity.as_ref().map(|id| id.name.as_str()),
+            ))
+        }
+        CallbackResolution::Mismatched { token, ancestry } => Err(
+            orbit_tools::plugin::mismatched_callback_credential(&token, ancestry.as_deref()),
+        ),
+        CallbackResolution::UnidentifiedPluginChild => {
+            Err(orbit_tools::plugin::unidentified_plugin_child())
+        }
+    }
+}
+
+fn plugin_cli_surface_refused(plugin: Option<&str>, invocation: Option<&str>) -> OrbitError {
+    let who = match plugin {
+        Some(plugin) => format!("plugin '{plugin}'"),
+        None => "a plugin backend".to_string(),
+    };
+    let what = match invocation {
+        Some(invocation) => format!("run `orbit {invocation}`"),
+        None => "run this command".to_string(),
+    };
+    OrbitError::PolicyDenied(format!(
+        "{who} may not {what}; a plugin backend reaches Orbit only through `orbit tool run \
+         <tool>` (or its `orbit <ns> <verb>` spelling) and MCP `tools/call` over `orbit mcp \
+         serve`, and only for tools in its granted `permissions.orbit_tools` allowlist"
+    ))
+}
+
 fn apply_callback_resolution(
     resolution: CallbackResolution,
     global_root: &Path,
@@ -862,18 +927,9 @@ fn apply_callback_resolution(
                 let installed = get_plugin(&identity.name).ok().flatten();
                 stamp_callback_plugin_provenance(identity, installed.as_ref());
             }
-            Err(OrbitError::PolicyDenied(match identity {
-                Some(identity) => format!(
-                    "plugin '{}' callback credential is missing or invalid; a backend the host \
-                     launched cannot reach Orbit without the host-issued session",
-                    identity.name
-                ),
-                None => {
-                    "plugin callback credential is missing or invalid; a backend the host launched \
-                     cannot reach Orbit without the host-issued session"
-                        .to_string()
-                }
-            }))
+            Err(orbit_tools::plugin::invalid_callback_credential(
+                identity.as_ref().map(|id| id.name.as_str()),
+            ))
         }
         CallbackResolution::Mismatched { token, ancestry } => Err(
             orbit_tools::plugin::mismatched_callback_credential(&token, ancestry.as_deref()),

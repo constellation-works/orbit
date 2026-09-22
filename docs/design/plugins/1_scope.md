@@ -414,6 +414,34 @@ session and enforce the recorded install. `ORBIT_PLUGIN` names the plugin for th
 is not the gate, and neither is the inherited `ORBIT_ALLOWED_TOOLS` value. The backend's
 restraint is not the boundary.
 
+**Every other CLI command is refused.** "Only through `orbit tool run` or MCP `tools/call`"
+is a rule about the whole CLI, not about those two commands: `orbit workspace list --format
+json` and `orbit run show <id>` read governed data and never consult
+`permissions.orbit_tools`, so a plugin granted one tool could read whatever the CLI exposes
+[ORB-12876]. The CLI therefore resolves the callback session once, before it pins a
+generation or opens a runtime, and a recognized plugin child may run only the commands that
+*are* a tool call: `orbit tool run <tool>`, its `orbit <ns> <verb>` spelling (§4.6), and
+`orbit mcp serve`, whose every `tools/call` lands on the same allowlist. Everything else —
+including `orbit update`, which would replace the host binary — is `policy_denied` before any
+part of the command runs. Refusal is the default a new command inherits, rather than a
+command-to-tool mapping that would leave each unmapped command open.
+
+**Asking for a read instead.** A backend that needs what a refused command showed requests
+the tool that serves it under `permissions.orbit_tools`, and reaches it on whichever entry
+point that tool lives on. Two the first plugins want:
+
+| read | tool | entry point | also needs |
+| --- | --- | --- | --- |
+| `orbit workspace list` | `orbit.workspace.list` | MCP `tools/call` only — workspace discovery is owned by the MCP server ([federated-mcp](../federated-mcp/1_overview.md)), not the generic tool registry | — |
+| `orbit run show <id>` | `orbit.workflow.run.show` | `orbit tool run` or MCP | the `operator` capability, which that operation has always required |
+
+The last column is the point of the repair, not a gap in it: `orbit.workflow.run.show` is a
+governed operator surface while `orbit run show` was an ungated read, so the CLI spelling
+*was* the way around its own governed-operation row. Closing the CLI surface means a plugin
+that wants workflow observation holds `operator` like every other caller of it. Reaching
+another *machine* through a federated destination is unchanged and still costs a `network`
+grant and `ssh` in `requires.programs`, neither of which the default sandbox gives.
+
 **What the credential is bound to.** The token names a record, and that record names a
 process. A presented token is accepted only when the recorded pid is the calling process, its
 parent, or its process group — the three the kernel still answers for a confined child, and

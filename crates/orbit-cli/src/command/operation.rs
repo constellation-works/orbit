@@ -112,6 +112,16 @@ pub struct CommandOperation {
     /// Commands whose destruction is flag-gated (`--confirm`) set it only for
     /// the destructive invocation, so the read-only report stays reachable.
     pub governed: Option<GovernedCommand>,
+    /// Whether this invocation is one of the paths a plugin backend may reach
+    /// Orbit through (plugins design §4.2) [ORB-12876].
+    ///
+    /// Those paths end in a tool call, which the callback allowlist gates
+    /// against the plugin's `permissions.orbit_tools`. Every other command
+    /// reads governed data without consulting that allowlist, so `main`
+    /// refuses the whole rest of the CLI to a recognized plugin child. An arm
+    /// opts in here; the default is refusal, which is what keeps a newly
+    /// added command closed rather than silently open.
+    pub plugin_callback_entry_point: bool,
 }
 
 /// A `<command> <subcommand>` pair to authorize before dispatch.
@@ -137,6 +147,7 @@ impl CommandOperation {
             suppress_errors,
             dispatch,
             governed: None,
+            plugin_callback_entry_point: false,
         }
     }
 
@@ -161,6 +172,15 @@ impl CommandOperation {
                 subcommand,
             });
         }
+        self
+    }
+
+    /// Mark this invocation as a path a plugin backend may use.
+    ///
+    /// `when` is the subcommand predicate: `orbit tool run` is a callback,
+    /// the rest of `orbit tool` is not.
+    fn plugin_callback_entry_point(mut self, when: bool) -> Self {
+        self.plugin_callback_entry_point = when;
         self
     }
 
@@ -857,6 +877,7 @@ impl Commands {
                     false,
                     runtime_dispatch!(Tool),
                 )
+                .plugin_callback_entry_point(matches!(&command.command, ToolSubcommand::Run(_)))
             }
             // `orbit <ns> <verb>` is `orbit tool run <ns>.<verb>` in another
             // spelling (§4.6), so it declares the same operation: the same
@@ -890,6 +911,7 @@ impl Commands {
                         _ => dispatch_mismatch("PluginGroup"),
                     },
                 )
+                .plugin_callback_entry_point(true)
             }
             Commands::Plugin(command) => {
                 use super::plugin::PluginSubcommand;
@@ -992,6 +1014,11 @@ impl Commands {
                     false,
                     dispatch_mcp,
                 )
+                // Only `serve`: a stdio server a backend starts for itself
+                // answers `tools/call` through the same callback allowlist.
+                // `init`/`remove` rewrite client configs and `listen` opens a
+                // TCP port, neither of which is a callback.
+                .plugin_callback_entry_point(matches!(&command.command, McpSubcommand::Serve(_)))
             }
             Commands::Web(command) => {
                 use super::web::WebSubcommand;

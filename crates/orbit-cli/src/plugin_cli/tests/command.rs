@@ -80,6 +80,19 @@ fn parse(argv: &[&str]) -> Option<super::super::PluginGroupInvocation> {
     invocation_from_matches(&groups, &matches)
 }
 
+/// `orbit <ns> <verb>` declares the same operation as `orbit tool run`, so it
+/// is the same callback entry point [ORB-12876]. A plugin backend refused
+/// this spelling while the identical `orbit tool run <ns>.<verb>` worked
+/// would be the drift the two spellings must not have.
+#[test]
+fn a_plugin_group_invocation_is_a_plugin_callback_entry_point() {
+    let invocation =
+        parse(&["orbit", "demo", "recommend", "files"]).expect("the group reduces to a tool call");
+    let operation = crate::command::Commands::PluginGroup(Box::new(invocation)).operation();
+
+    assert!(operation.plugin_callback_entry_point);
+}
+
 #[test]
 fn object_properties_named_after_host_arguments_parse_in_the_complete_command() {
     let groups = vec![group()];
