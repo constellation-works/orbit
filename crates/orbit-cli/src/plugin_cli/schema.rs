@@ -58,13 +58,22 @@ pub(super) enum FlagKind {
 pub(super) struct DerivedArg {
     /// The schema property this fills.
     pub(super) property: String,
-    /// Clap id and long name (`--<long>`), or the positional value name.
+    /// Long name (`--<long>`), or the positional value name.
     pub(super) long: String,
     pub(super) kind: FlagKind,
     pub(super) description: String,
     pub(super) enum_values: Vec<String>,
     /// Promoted by `cli.positional`.
     pub(super) positional: bool,
+}
+
+/// A clap-internal id outside the namespace used by host-owned arguments.
+///
+/// The raw property remains the key written to tool input, while this prefix
+/// prevents properties such as `input` and `root` from colliding with host
+/// arguments whose long names differ after JSON-shape derivation.
+fn clap_id(derived: &DerivedArg) -> String {
+    format!("plugin-input:{}", derived.property)
 }
 
 /// Derive every argument of one tool, positional ones first and in the order
@@ -152,7 +161,7 @@ fn flag_kind(property: &Value) -> FlagKind {
 
 /// The clap argument for one derived property.
 pub(super) fn clap_arg(derived: &DerivedArg) -> Arg {
-    let mut arg = Arg::new(derived.property.clone());
+    let mut arg = Arg::new(clap_id(derived));
     if derived.positional {
         arg = arg.value_name(derived.long.to_uppercase()).required(false);
     } else {
@@ -217,44 +226,46 @@ pub(super) fn input_from_matches(
 ) -> Result<Value, OrbitError> {
     let mut object = Map::new();
     for arg in args {
-        let id = arg.property.as_str();
+        let id = clap_id(arg);
         let value = match arg.kind {
             FlagKind::Str => matches
-                .try_get_one::<String>(id)
+                .try_get_one::<String>(&id)
                 .ok()
                 .flatten()
                 .map(|value| Value::String(value.clone())),
             FlagKind::Bool => matches
-                .try_get_one::<bool>(id)
+                .try_get_one::<bool>(&id)
                 .ok()
                 .flatten()
                 .map(|value| Value::Bool(*value)),
             FlagKind::Integer => matches
-                .try_get_one::<i64>(id)
+                .try_get_one::<i64>(&id)
                 .ok()
                 .flatten()
                 .map(|value| Value::Number((*value).into())),
             FlagKind::Number => matches
-                .try_get_one::<f64>(id)
+                .try_get_one::<f64>(&id)
                 .ok()
                 .flatten()
                 .and_then(|value| serde_json::Number::from_f64(*value).map(Value::Number)),
             FlagKind::StrList => matches
-                .try_get_many::<String>(id)
+                .try_get_many::<String>(&id)
                 .ok()
                 .flatten()
                 .map(|values| {
                     Value::Array(values.map(|value| Value::String(value.clone())).collect())
                 }),
-            FlagKind::IntegerList => matches
-                .try_get_many::<i64>(id)
-                .ok()
-                .flatten()
-                .map(|values| {
-                    Value::Array(values.map(|value| Value::Number((*value).into())).collect())
-                }),
+            FlagKind::IntegerList => {
+                matches
+                    .try_get_many::<i64>(&id)
+                    .ok()
+                    .flatten()
+                    .map(|values| {
+                        Value::Array(values.map(|value| Value::Number((*value).into())).collect())
+                    })
+            }
             FlagKind::NumberList => matches
-                .try_get_many::<f64>(id)
+                .try_get_many::<f64>(&id)
                 .ok()
                 .flatten()
                 .map(|values| {
@@ -266,7 +277,7 @@ pub(super) fn input_from_matches(
                             .collect(),
                     )
                 }),
-            FlagKind::Json => match matches.try_get_one::<String>(id).ok().flatten() {
+            FlagKind::Json => match matches.try_get_one::<String>(&id).ok().flatten() {
                 Some(raw) => Some(serde_json::from_str(raw).map_err(|error| {
                     OrbitError::InvalidInput(format!("--{} is not valid JSON: {error}", arg.long))
                 })?),
