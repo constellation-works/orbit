@@ -262,7 +262,8 @@ pub struct PluginBackend {
 pub enum PluginBackendType {
     /// One process per call with the JSON envelope on stdin/stdout (§4.2).
     Exec,
-    /// A stdio MCP server Orbit spawns once per runtime and proxies
+    /// A stdio MCP server Orbit spawns once per caller context per runtime
+    /// (workspace and allowed-tools intersection) and proxies
     /// `<ns>.<verb>` to as `tools/call` (§4.2).
     Mcp,
 }

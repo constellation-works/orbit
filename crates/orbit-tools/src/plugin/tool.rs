@@ -2,9 +2,10 @@
 //!
 //! `exec` runs one confined process per call with the versioned JSON
 //! envelope on stdin and `{"ok": …}` on stdout; `mcp` proxies the call to
-//! the plugin's long-lived stdio server for that caller's allowed-tools
-//! intersection (§4.2). Both validate the output against `output_schema`
-//! before the caller sees it.
+//! the plugin's long-lived stdio server for that caller's context — its
+//! workspace and allowed-tools intersection — carrying the same `context`
+//! object as `params._meta.orbit` (§4.2). Both validate the output against
+//! `output_schema` before the caller sees it.
 
 use std::sync::Arc;
 
@@ -36,8 +37,8 @@ pub struct PluginToolBinding {
 pub enum PluginBackend {
     /// One process per call.
     Exec(Arc<PluginBackendSpec>),
-    /// One stdio MCP server per allowed-tools intersection per runtime,
-    /// shared by every tool of the plugin.
+    /// One stdio MCP server per caller context — workspace and allowed-tools
+    /// intersection — per runtime, shared by every tool of the plugin.
     Mcp(Arc<McpBackend>),
 }
 

@@ -1,5 +1,6 @@
-# A plugin that already ships an MCP server: Orbit spawns it once per runtime
-# and proxies `mcpdemo.<verb>` to `tools/call` (docs/design/plugins/1_scope.md §4.2).
+# A plugin that already ships an MCP server: Orbit spawns one per caller context
+# per runtime and proxies `mcpdemo.<verb>` to `tools/call`
+# (docs/design/plugins/1_scope.md §4.2).
 schemaVersion: 2
 kind: Plugin
 metadata:
