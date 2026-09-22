@@ -13,9 +13,10 @@ only when the user asks for the capability it provides.
 
 ## Two halves: the machine installs, the repository pins
 
-A plugin lives once per machine under `~/.orbit/plugins/<ns>/<version>/`. Enable
-state, grants, install paths and manifest digests are host-local and are never
-synced. A repository commits only the pin file:
+A plugin lives once per machine under `~/.orbit/plugins/<ns>/<version>/`.
+Enable state, grants, install paths and manifest digests are host-local and are
+never copied into the repository. Sync treats the pin's `enabled:` field as an
+instruction for that shared host state. A repository commits only the pin file:
 
 ```yaml
 # .orbit/plugins.yaml — committed to the repository
@@ -68,7 +69,14 @@ On a machine that is joining a repository someone else configured:
 ```bash
 orbit plugin sync --dry-run              # what this machine is missing
 orbit plugin sync                        # install it
+orbit plugin sync --grant fs,network     # consent to requested grants while enabling
 ```
+
+Sync also applies each pin's `enabled:` state and reconciles an enabled
+plugin's seeded definitions into the current workspace. Enable state is shared
+by every workspace on the host, so a later workspace sync can change it. A pin
+whose manifest requests grants remains disabled unless this invocation supplies
+the complete reviewed set with `--grant`; repository content is never consent.
 
 ## What enabling installs
 
@@ -187,7 +195,7 @@ built-in tools, the runtime, or another plugin.
 ## Permissions and grants
 
 The manifest's `spec.permissions` block is a **request**, never a grant.
-`--grant` on an enabling add, enable or upgrade is the only source of authority, and
+`--grant` on an enabling add, enable, upgrade or sync is the only source of authority, and
 `orbit plugin show` prints requested and granted side by side. Record only the
 grants the user authorizes.
 

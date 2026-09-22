@@ -88,8 +88,12 @@ impl OrbitRuntime {
         plugin::validate_plugin_dir(self, dir, first_party)
     }
 
-    pub fn sync_plugins(&self, dry_run: bool) -> Result<Vec<PluginSyncOutcome>, OrbitError> {
-        plugin::sync_plugins(self, dry_run)
+    pub fn sync_plugins(
+        &self,
+        dry_run: bool,
+        grants: &[String],
+    ) -> Result<Vec<PluginSyncOutcome>, OrbitError> {
+        plugin::sync_plugins(self, dry_run, grants)
     }
 
     /// Run a plugin directory's `spec.tests` goldens through the real

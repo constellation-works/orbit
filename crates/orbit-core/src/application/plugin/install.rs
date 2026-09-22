@@ -73,6 +73,19 @@ pub fn install_plugin(
     install_plugin_inner(runtime, source, options, None).map(|outcome| outcome.summary)
 }
 
+/// Install a workspace pin only when its declared name matches the source
+/// manifest. The check happens before the install tree or host row is written,
+/// so a malformed pin is refused the same way on every sync attempt.
+pub(super) fn install_pinned_plugin(
+    runtime: &OrbitRuntime,
+    expected_name: &str,
+    source: &str,
+    options: &PluginAddOptions,
+) -> Result<PluginSummary, OrbitError> {
+    install_plugin_inner(runtime, source, options, Some(expected_name))
+        .map(|outcome| outcome.summary)
+}
+
 /// Replace an installed namespace, using its recorded source when the caller
 /// does not provide one. An explicit grant list is re-consent for the new
 /// manifest and enables it; otherwise the same widening rules as plain `add`
@@ -137,7 +150,8 @@ fn install_plugin_inner(
         && name != expected
     {
         return Err(OrbitError::InvalidInput(format!(
-            "upgrade source declares plugin '{name}', but '{expected}' was requested"
+            "source manifest declares plugin namespace '{name}', but the requested name is \
+             '{expected}'"
         )));
     }
     let version = plugin.manifest.metadata.version.clone();

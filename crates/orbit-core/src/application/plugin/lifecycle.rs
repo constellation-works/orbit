@@ -331,12 +331,19 @@ pub struct PluginSyncOutcome {
     pub message: String,
 }
 
-/// Read `.orbit/plugins.yaml` and install what the host is missing, or report
-/// it when the pin names no source.
+/// Read `.orbit/plugins.yaml` and converge the host enable state plus the
+/// current workspace's enabled contributions. A grant-requesting plugin is
+/// enabled only when this invocation supplies explicit grant consent.
 pub fn sync_plugins(
     runtime: &OrbitRuntime,
     dry_run: bool,
+    grants: &[String],
 ) -> Result<Vec<PluginSyncOutcome>, OrbitError> {
+    let grants = parse_grants(grants)
+        .map_err(OrbitError::InvalidInput)?
+        .into_iter()
+        .map(|grant| grant.as_str().to_string())
+        .collect::<Vec<_>>();
     let Some(pins) = read_pin_file(&runtime.shared_root())? else {
         return Ok(Vec::new());
     };
@@ -349,7 +356,7 @@ pub fn sync_plugins(
                     .version
                     .as_deref()
                     .is_none_or(|requirement| version_satisfies(requirement, &installed.version));
-                let message = if !satisfied {
+                let version_message = (!satisfied).then(|| {
                     format!(
                         "installed v{} does not satisfy the pinned '{}'; reinstall with `orbit \
                          plugin add {}`",
@@ -357,21 +364,87 @@ pub fn sync_plugins(
                         pin.version.clone().unwrap_or_default(),
                         pin.source.clone().unwrap_or_else(|| "<source>".to_string())
                     )
-                } else if pin.enabled && !installed.enabled {
-                    format!(
-                        "installed but disabled; run `orbit plugin enable {}`",
-                        pin.name
+                });
+                let (status, action_message) = if dry_run {
+                    let message = match (pin.enabled, installed.enabled) {
+                        (false, true) => "would disable".to_string(),
+                        (true, false) => "would enable after grant review".to_string(),
+                        (true, true) => "would reconcile workspace contributions".to_string(),
+                        (false, false) => format!("installed v{}", installed.version),
+                    };
+                    (
+                        if installed.enabled {
+                            PluginStatus::Active
+                        } else {
+                            PluginStatus::Disabled
+                        },
+                        message,
                     )
+                } else if !pin.enabled && installed.enabled {
+                    match disable_plugin(runtime, &pin.name) {
+                        Ok(_) => (
+                            PluginStatus::Disabled,
+                            "disabled by workspace pin".to_string(),
+                        ),
+                        Err(error) => (
+                            PluginStatus::Active,
+                            format!("cannot disable to match workspace pin: {error}"),
+                        ),
+                    }
+                } else if !pin.enabled {
+                    (
+                        PluginStatus::Disabled,
+                        format!("installed v{} (disabled)", installed.version),
+                    )
+                } else if !installed.enabled {
+                    match enable_for_sync(runtime, &pin.name, &grants) {
+                        Ok(SyncEnable::Enabled(result)) => (
+                            result.summary.status,
+                            describe_seeded(
+                                format!("enabled installed v{}", installed.version),
+                                &result.seeded,
+                            ),
+                        ),
+                        Ok(SyncEnable::NeedsGrant(names)) => (
+                            PluginStatus::Disabled,
+                            format!(
+                                "installed but disabled; {}",
+                                grant_review_message(&pin.name, &names)
+                            ),
+                        ),
+                        Err(error) => (
+                            PluginStatus::Disabled,
+                            format!("installed but could not be enabled: {error}"),
+                        ),
+                    }
                 } else {
-                    format!("installed v{}", installed.version)
+                    match verified_install_path(runtime, &installed).and_then(|install_path| {
+                        apply_enabled_contributions(runtime, &install_path, false)
+                    }) {
+                        Ok(contributions) => (
+                            PluginStatus::Active,
+                            describe_seeded(
+                                format!("installed v{}", installed.version),
+                                &contributions.seeded,
+                            ),
+                        ),
+                        Err(error) => (
+                            PluginStatus::Inactive,
+                            format!(
+                                "installed v{}, but workspace contributions could not be \
+                                 reconciled: {error}",
+                                installed.version
+                            ),
+                        ),
+                    }
+                };
+                let message = match version_message {
+                    Some(version) => format!("{version}; {action_message}"),
+                    None => action_message,
                 };
                 outcomes.push(PluginSyncOutcome {
                     name: pin.name.clone(),
-                    status: if installed.enabled {
-                        PluginStatus::Active
-                    } else {
-                        PluginStatus::Disabled
-                    },
+                    status,
                     message,
                 });
             }
@@ -396,14 +469,51 @@ pub fn sync_plugins(
                 }
                 let options = super::install::PluginAddOptions {
                     force: false,
-                    enable: pin.enabled,
+                    // A committed pin is not grant consent. Install disabled,
+                    // then take the same reviewed enable path used above.
+                    enable: false,
                     grants: Vec::new(),
                 };
-                match super::install::install_plugin(runtime, &source, &options) {
+                match super::install::install_pinned_plugin(runtime, &pin.name, &source, &options) {
+                    Ok(summary) if pin.enabled => {
+                        let (status, message) = match enable_for_sync(runtime, &pin.name, &grants) {
+                            Ok(SyncEnable::Enabled(result)) => (
+                                result.summary.status,
+                                describe_seeded(
+                                    format!("installed v{} from {source}", summary.version),
+                                    &result.seeded,
+                                ),
+                            ),
+                            Ok(SyncEnable::NeedsGrant(names)) => (
+                                PluginStatus::Disabled,
+                                format!(
+                                    "installed v{} from {source}, but left disabled; {}",
+                                    summary.version,
+                                    grant_review_message(&pin.name, &names)
+                                ),
+                            ),
+                            Err(error) => (
+                                PluginStatus::Disabled,
+                                format!(
+                                    "installed v{} from {source}, but could not be enabled: \
+                                     {error}",
+                                    summary.version
+                                ),
+                            ),
+                        };
+                        outcomes.push(PluginSyncOutcome {
+                            name: pin.name.clone(),
+                            status,
+                            message,
+                        });
+                    }
                     Ok(summary) => outcomes.push(PluginSyncOutcome {
                         name: pin.name.clone(),
-                        status: summary.status,
-                        message: format!("installed v{} from {source}", summary.version),
+                        status: PluginStatus::Disabled,
+                        message: format!(
+                            "installed v{} from {source} (disabled by workspace pin)",
+                            summary.version
+                        ),
                     }),
                     // One pin's failure must not stop the rest: a host that
                     // cannot reach one source still converges on the others.
@@ -417,6 +527,66 @@ pub fn sync_plugins(
         }
     }
     Ok(outcomes)
+}
+
+enum SyncEnable {
+    Enabled(Box<PluginEnableResult>),
+    NeedsGrant(Vec<String>),
+}
+
+fn enable_for_sync(
+    runtime: &OrbitRuntime,
+    name: &str,
+    grants: &[String],
+) -> Result<SyncEnable, OrbitError> {
+    let summary = show_plugin(runtime, name)?;
+    let requested = summary
+        .permissions
+        .iter()
+        .filter(|permission| permission.requested.is_some())
+        .map(|permission| permission.grant.as_str().to_string())
+        .collect::<Vec<_>>();
+    if requested
+        .iter()
+        .any(|requested| !grants.contains(requested))
+    {
+        return Ok(SyncEnable::NeedsGrant(requested));
+    }
+    // One sync can consent to the union needed by several pins. Each plugin
+    // records only the grants its own manifest requested, never the union.
+    let plugin_grants = requested;
+    enable_plugin(
+        runtime,
+        name,
+        &PluginEnableOptions {
+            grants: plugin_grants,
+            force: false,
+        },
+    )
+    .map(Box::new)
+    .map(SyncEnable::Enabled)
+}
+
+fn grant_review_message(name: &str, grants: &[String]) -> String {
+    format!(
+        "plugin '{name}' requests {}; review the requests, then re-run with the complete set \
+         `orbit plugin sync --grant {}` to consent and enable it",
+        grants.join(", "),
+        grants.join(",")
+    )
+}
+
+fn describe_seeded(mut message: String, seeded: &[PluginSeedOutcome]) -> String {
+    for outcome in seeded {
+        message.push_str(&format!(
+            "; {} {} {} ({})",
+            outcome.kind,
+            outcome.name,
+            outcome.action.as_str(),
+            outcome.path.display()
+        ));
+    }
+    message
 }
 
 fn version_satisfies(requirement: &str, version: &str) -> bool {

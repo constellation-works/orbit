@@ -102,10 +102,13 @@ fn cli_parses_the_plugin_lifecycle() {
         _ => panic!("expected the plugin command"),
     }
 
-    let cli = Cli::parse_from(["orbit", "plugin", "sync", "--dry-run"]);
+    let cli = Cli::parse_from(["orbit", "plugin", "sync", "--grant", "fs,orbit_tools"]);
     match cli.command {
         Commands::Plugin(command) => match command.command {
-            PluginSubcommand::Sync(args) => assert!(args.dry_run),
+            PluginSubcommand::Sync(args) => {
+                assert!(!args.dry_run);
+                assert_eq!(args.grants, ["fs", "orbit_tools"]);
+            }
             _ => panic!("expected plugin sync"),
         },
         _ => panic!("expected the plugin command"),
