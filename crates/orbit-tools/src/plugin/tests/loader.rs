@@ -499,8 +499,14 @@ fn first_party_source_parses_host_and_org_rather_than_matching_a_substring() {
 #[test]
 fn first_party_source_refuses_directory_sources() {
     let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(temp.path().join(".git")).expect("git metadata directory");
+    std::fs::write(
+        temp.path().join(".git/config"),
+        "[remote \"origin\"]\n\turl = https://github.com/constellation-works/orbit-graph.git\n",
+    )
+    .expect("candidate-owned origin remote");
     assert!(
         !first_party_source(temp.path().to_str().expect("utf8 directory source")),
-        "a directory source is never first-party"
+        "a directory source is never first-party, even when its own Git config names a trusted remote"
     );
 }

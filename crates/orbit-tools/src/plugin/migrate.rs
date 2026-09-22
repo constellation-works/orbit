@@ -66,11 +66,11 @@ pub fn load_sidecar_manifest(path: &Path) -> Result<SidecarManifest, OrbitError>
     Ok(manifest)
 }
 
-/// Build a v2 manifest from v1 sidecars sharing one namespace. Tool names are
-/// preserved: `orbit.graph.recommend` becomes namespace `graph` and verb
-/// `recommend`. Migration never asserts first-party provenance: operators may
-/// add `origin: orbit` only when the plugin satisfies the first-party source
-/// rule.
+/// Build a v2 manifest from v1 sidecars sharing one namespace.
+/// `orbit.graph.recommend` becomes namespace `graph` and verb `recommend`, but
+/// migration never copies the unverified `orbit.` claim: the generated tool is
+/// `graph.recommend`. Operators may add `origin: orbit` only when the plugin
+/// satisfies the first-party source rule.
 pub fn migrate_sidecars(
     sidecars: &[SidecarManifest],
     backend_command: &str,

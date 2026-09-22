@@ -257,3 +257,12 @@ orbit plugin validate ./my-plugin
 
 Review the generated manifest before installing it: migration cannot know
 which tools are read-only, so every migrated tool is marked `mutating`.
+Migration also cannot prove first-party provenance. An old
+`orbit.graph.recommend` sidecar therefore produces a manifest with namespace
+`graph`, no `publisher` or `origin`, and a `graph.recommend` tool. A local
+directory's own Git remote is never proof of origin. The author can use the
+reserved `orbit.graph.*` namespace only by adding
+`publisher: constellation-works` and `origin: orbit` and then distributing the
+plugin through a verified `git+https://github.com/constellation-works/...`
+source; a manifest digest bundled into an Orbit release is the other trusted
+path.
