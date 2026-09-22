@@ -37,8 +37,16 @@ pub(in crate::executor::automation::vcs) fn verify<H: RuntimeHost + ?Sized>(
 ) -> Result<Value, OrbitError> {
     let artifacts = host.get_task_artifacts(&task.id)?;
     let report = artifact(&artifacts, ARTIFACT)?;
-    let evidence: Evidence = serde_json::from_slice(&report.content)
-        .map_err(|error| refused(format!("invalid {ARTIFACT}: {error}")))?;
+    let evidence: Evidence = serde_json::from_slice(&report.content).map_err(|error| {
+        let diagnostic = error.to_string();
+        let shape_hint = diagnostic.contains("missing field `command`").then_some(
+            "; each validation[] element must flatten command, outcome, role, and log_artifact as sibling fields",
+        );
+        refused(format!(
+            "invalid {ARTIFACT}: {diagnostic}{}",
+            shape_hint.unwrap_or_default()
+        ))
+    })?;
     if evidence.schema_version != 1
         || evidence.task_id != task.id
         || evidence.covering_task_id.trim().is_empty()

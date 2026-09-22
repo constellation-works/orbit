@@ -169,8 +169,11 @@ spec:
         a sibling whose commit already covers this HEAD), scope (title,
         description, acceptance_criteria, plan, context_files, tags,
         relations, required_tools, type, comments), required_commands,
-        criteria_evidence, and validation. Attach each validation log as JSON
-        with run_id, tested_head, command, exit_code, and captured output.
+        criteria_evidence, and validation. Each validation[] element is one
+        flattened object with command, outcome, role, and log_artifact as
+        sibling fields; do not nest those fields under a validation wrapper.
+        Separately, attach the referenced validation log as JSON with run_id,
+        tested_head, command, exit_code, and captured output.
         Never relabel old checks; missing, failed, or unavailable checks
         cannot use this path. The pipeline verifies exact HEAD, clean state,
         task identity, covering marker, scope, ancestry, and logs.
