@@ -257,12 +257,17 @@ jobs:
       # the same crates. The nextest filterset below selects them out of the
       # exact `--workspace --lib --bins --tests` artifacts the guardrails step
       # already built and ran, so the gate costs a re-run and no compile.
+      # [ORB-12881] The ignored leg also carries orbit-exec's ruleset
+      # descriptor-contract tests, which need a host that enforces Landlock
+      # for the same reason the plugin-sandbox tests do. It runs over the same
+      # artifact set as the line above it so neither leg triggers a rebuild.
       - name: Linux sandbox/policy enforcement gate
         run: |
           cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests \
             -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)'
-          cargo nextest run --no-fail-fast --locked -p orbit-tools --lib --run-ignored only \
-            -E 'test(/plugin::tests::(backend|mcp|tool)::/)'
+          cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests \
+            --run-ignored only \
+            -E 'test(/plugin::tests::(backend|mcp|tool)::/) | test(/linux_landlock::ruleset::tests::/)'
 
       # [ORB-10126] Confirm disk headroom survived the workspace build/test.
       - name: Report disk usage
