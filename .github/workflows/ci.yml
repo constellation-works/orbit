@@ -248,17 +248,21 @@ jobs:
       # ORB-00418 symlink-resolution tests), orbit-tools' runtime
       # fs-enforcement integration tests (the only enforcement layer on Linux
       # — there is no kernel sandbox), and orbit-exec's Linux fail-closed
-      # contract tests. Tests that need host capabilities self-skip at runtime
-      # (skip-with-message) rather than relying on compile-time cfg alone.
+      # contract tests. Live plugin-sandbox tests are ignored in the portable
+      # suite, then selected explicitly here: an ubuntu-latest runner without
+      # the required Landlock support fails this named gate instead of
+      # reporting those tests as passed after an early return.
       # [DANI-10428] This used to be a separate job that compiled the three
       # crates under `cargo test -p` feature resolution — a second build of
       # the same crates. The nextest filterset below selects them out of the
       # exact `--workspace --lib --bins --tests` artifacts the guardrails step
       # already built and ran, so the gate costs a re-run and no compile.
       - name: Linux sandbox/policy enforcement gate
-        run: >-
-          cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests
-          -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)'
+        run: |
+          cargo nextest run --no-fail-fast --locked --workspace --lib --bins --tests \
+            -E 'package(orbit-exec) | package(orbit-policy) | package(orbit-tools)'
+          cargo nextest run --no-fail-fast --locked -p orbit-tools --lib --run-ignored only \
+            -E 'test(/plugin::tests::(backend|mcp|tool)::/)'
 
       # [ORB-10126] Confirm disk headroom survived the workspace build/test.
       - name: Report disk usage

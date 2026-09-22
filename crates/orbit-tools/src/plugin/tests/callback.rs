@@ -67,6 +67,45 @@ fn ancestry_identifies_the_plugin_after_the_token_is_cleared() {
     assert_eq!(identity.name, "demo");
 }
 
+/// Exercise the process relationship the callback gate sees in production:
+/// the Orbit process owns the session and a separately spawned backend child
+/// has only its parent pid after the token is cleared.
+#[cfg(unix)]
+#[test]
+fn a_real_child_resolves_the_plugin_through_its_parent_pid() {
+    const CHILD_ENV: &str = "ORBIT_TEST_CALLBACK_ANCESTRY_CHILD";
+    if let Some(root) = std::env::var_os(CHILD_ENV) {
+        let _token = clear_token();
+        let identity = resolve_plugin_callback(std::path::Path::new(&root))
+            .expect("resolve in child")
+            .expect("the parent session identifies the child");
+        assert_eq!(identity.name, "demo");
+        return;
+    }
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let mut session = PluginCallbackSession::mint(root.path(), &provenance("demo")).expect("mint");
+    session
+        .bind_pid(std::process::id())
+        .expect("bind the parent process");
+    let module = module_path!()
+        .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+        .unwrap_or(module_path!());
+    let test = format!("{module}::a_real_child_resolves_the_plugin_through_its_parent_pid");
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", &test, "--nocapture"])
+        .env(CHILD_ENV, root.path())
+        .env_remove(ORBIT_PLUGIN_CALLBACK_ENV)
+        .output()
+        .expect("spawn callback child");
+    assert!(
+        output.status.success(),
+        "callback child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn ancestry_ignores_a_live_pid_with_a_different_starttime() {
     let root = tempfile::tempdir().expect("tempdir");

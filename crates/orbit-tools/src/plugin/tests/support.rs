@@ -1,5 +1,6 @@
 //! Shared fixtures for the plugin backend tests: a stub `exec` backend, a
-//! spec with chosen grants, and the skip rule for hosts without a sandbox.
+//! spec with chosen grants, and the availability assertion for tests that
+//! exercise a live sandbox.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -44,11 +45,12 @@ pub(super) fn spec(
     permissions: PluginPermissions,
     grants: &[PluginGrant],
 ) -> Arc<PluginBackendSpec> {
+    let global_root = root.join("global");
     Arc::new(PluginBackendSpec {
         provenance: provenance(grants),
         plugin_root: root.to_path_buf(),
         state_dir: root.join("state"),
-        global_root: root.join("global"),
+        global_root,
         command,
         args: vec!["--serve".into()],
         timeout_ms: Some(5_000),
@@ -85,37 +87,29 @@ pub(super) fn context(cwd: &Path) -> ToolContext {
     }
 }
 
-/// The plugin sandbox is enforced by the kernel; a host that cannot hold it
-/// refuses to spawn, which is its own test. Tests that need a *running*
-/// confined child report a skip here.
-///
-/// The crate denies `print_stderr` so no shipped code writes to the terminal
-/// behind `tracing`; a test reporting why it did nothing is the exception the
-/// lint is not aimed at.
-#[allow(clippy::print_stderr)]
-pub(super) fn sandbox_unavailable() -> bool {
+/// Live-sandbox tests are `#[ignore]` in the portable suite and selected by
+/// the Linux CI sandbox gate. Once selected, an unavailable sandbox is a test
+/// failure rather than a green early return.
+pub(super) fn require_sandbox() {
     #[cfg(target_os = "linux")]
     {
         let probe = orbit_exec::probe_landlock();
-        if !probe.available {
-            eprintln!("skipping: {}", probe.detail);
-        }
-        !probe.available
+        assert!(
+            probe.available,
+            "plugin sandbox unavailable: {}",
+            probe.detail
+        );
     }
     #[cfg(target_os = "macos")]
     {
-        let available = orbit_exec::sandbox_exec_available();
-        if !available {
-            eprintln!(
-                "skipping: {}",
-                orbit_exec::sandbox_exec_unavailable_message()
-            );
-        }
-        !available
+        assert!(
+            orbit_exec::sandbox_exec_available(),
+            "plugin sandbox unavailable: {}",
+            orbit_exec::sandbox_exec_unavailable_message()
+        );
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        eprintln!("skipping: no plugin sandbox on {}", std::env::consts::OS);
-        true
+        panic!("plugin sandbox unavailable on {}", std::env::consts::OS);
     }
 }

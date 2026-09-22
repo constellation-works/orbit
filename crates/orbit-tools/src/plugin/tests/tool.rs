@@ -1,7 +1,8 @@
 use orbit_types::plugin::{PluginGrant, PluginPermissions};
 use serde_json::json;
+use std::time::{Duration, Instant};
 
-use super::support::{context, sandbox_unavailable, spec, stub_backend, tool};
+use super::support::{context, require_sandbox, spec, stub_backend, tool};
 use crate::{Tool, ToolContext, ToolExecutionKind};
 
 const ECHO_BACKEND: &str = "#!/bin/sh\ninput=$(cat)\nprintf '{\"ok\":true,\"output\":{\"arg\":\"%s\",\"plugin\":\"%s\",\"allowed\":\"%s\",\"programs\":\"%s\",\"envelope\":%s}}\\n' \"$1\" \"$ORBIT_PLUGIN\" \"$ORBIT_ALLOWED_TOOLS\" \"$ORBIT_PROC_ALLOWED_PROGRAMS\" \"$input\"\n";
@@ -13,13 +14,20 @@ fn orbit_tools_permissions() -> PluginPermissions {
     }
 }
 
+fn prepare_orbit_tools_global(root: &std::path::Path) {
+    for relative in ["state/logs", "state/audit", "tasks"] {
+        std::fs::create_dir_all(root.join("global").join(relative))
+            .expect("create callback-writable global fixture directory");
+    }
+}
+
 #[cfg(unix)]
 #[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
 fn exec_backend_receives_the_envelope_and_returns_output() {
-    if sandbox_unavailable() {
-        return;
-    }
+    require_sandbox();
     let temp = tempfile::tempdir().expect("tempdir");
+    prepare_orbit_tools_global(temp.path());
     let command = stub_backend(temp.path(), ECHO_BACKEND);
     let tool = tool(
         spec(
@@ -49,11 +57,11 @@ fn exec_backend_receives_the_envelope_and_returns_output() {
 
 #[cfg(unix)]
 #[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
 fn the_callback_allowlist_is_exactly_the_granted_orbit_tools() {
-    if sandbox_unavailable() {
-        return;
-    }
+    require_sandbox();
     let temp = tempfile::tempdir().expect("tempdir");
+    prepare_orbit_tools_global(temp.path());
     let command = stub_backend(temp.path(), ECHO_BACKEND);
 
     // Granted, no caller allowlist: every requested tool.
@@ -85,10 +93,9 @@ fn the_callback_allowlist_is_exactly_the_granted_orbit_tools() {
 
 #[cfg(unix)]
 #[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
 fn exec_backend_failures_are_tool_errors_with_no_partial_output() {
-    if sandbox_unavailable() {
-        return;
-    }
+    require_sandbox();
     let temp = tempfile::tempdir().expect("tempdir");
     let permissions = PluginPermissions::default();
 
@@ -155,4 +162,27 @@ fn exec_backend_failures_are_tool_errors_with_no_partial_output() {
         .execute(&context(temp.path()), json!({}))
         .expect("valid output passes the schema");
     assert_eq!(output["count"], 3);
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn an_exec_backend_that_does_not_answer_is_killed_at_its_timeout() {
+    require_sandbox();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let command = stub_backend(temp.path(), "#!/bin/sh\ncat >/dev/null\nsleep 30\n");
+    let mut backend = (*spec(command, temp.path(), PluginPermissions::default(), &[])).clone();
+    backend.timeout_ms = Some(100);
+    let started = Instant::now();
+    let error = tool(std::sync::Arc::new(backend), None)
+        .execute(&context(temp.path()), json!({}))
+        .expect_err("the backend must time out")
+        .to_string();
+    let elapsed = started.elapsed();
+
+    assert!(error.contains("timed out after 100 ms"), "{error}");
+    assert!(
+        elapsed >= Duration::from_millis(100) && elapsed < Duration::from_secs(3),
+        "the configured timeout is the execution bound: {elapsed:?}"
+    );
 }

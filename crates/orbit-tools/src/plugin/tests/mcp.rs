@@ -12,27 +12,24 @@ use super::super::loader::load_plugin_dir;
 use super::super::mcp::{McpBackend, McpExpectedTool};
 use super::super::schema::CompiledSchema;
 use super::super::tool::{PluginBackend, PluginTool, PluginToolBinding};
-use super::support::{context, provenance, sandbox_unavailable};
+use super::support::{context, provenance, require_sandbox};
 use crate::{Tool, ToolContext};
 
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/plugins/mcp-example")
 }
 
-#[allow(clippy::print_stderr)]
-fn python3_missing() -> bool {
+fn require_python3() {
     let found = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .any(|dir| dir.join("python3").is_file());
-    if !found {
-        eprintln!("skipping: python3 is not on PATH");
-    }
-    !found
+    assert!(found, "python3 is required by the MCP sandbox fixture");
 }
 
 struct Fixture {
     backend: Arc<McpBackend>,
     root: PathBuf,
     timeout_ms: u64,
+    _host_root: tempfile::TempDir,
 }
 
 impl Fixture {
@@ -62,11 +59,20 @@ impl Fixture {
         grants: Vec<PluginGrant>,
     ) -> Self {
         let plugin = load_plugin_dir(&fixture_root()).expect("fixture loads");
+        let host_root = tempfile::tempdir().expect("temporary plugin host root");
+        let global_root = host_root.path().join("global");
+        let state_dir = global_root.join("state/plugins/mcpdemo");
+        if grants.contains(&PluginGrant::OrbitTools) {
+            for relative in ["state/logs", "state/audit", "tasks"] {
+                std::fs::create_dir_all(global_root.join(relative))
+                    .expect("create callback-writable global fixture directory");
+            }
+        }
         let spec = Arc::new(super::super::backend::PluginBackendSpec {
             provenance: provenance(&grants),
             plugin_root: plugin.root.clone(),
-            state_dir: plugin.root.join("state"),
-            global_root: plugin.root.join("global"),
+            state_dir,
+            global_root,
             command: plugin.backend_command.clone(),
             args: Vec::new(),
             timeout_ms: Some(timeout_ms),
@@ -91,6 +97,7 @@ impl Fixture {
             backend: Arc::new(McpBackend::new(spec, expected)),
             root: plugin.root,
             timeout_ms,
+            _host_root: host_root,
         }
     }
 
@@ -136,10 +143,10 @@ impl Fixture {
 
 #[cfg(unix)]
 #[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
 fn the_server_is_spawned_once_and_serves_every_call() {
-    if sandbox_unavailable() || python3_missing() {
-        return;
-    }
+    require_sandbox();
+    require_python3();
     let fixture = Fixture::new(&[], 5_000);
     let ctx = fixture.context(&[]);
     assert!(
@@ -182,10 +189,10 @@ fn the_server_is_spawned_once_and_serves_every_call() {
 
 #[cfg(unix)]
 #[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
 fn a_manifest_mismatch_refuses_startup_naming_the_tool() {
-    if sandbox_unavailable() || python3_missing() {
-        return;
-    }
+    require_sandbox();
+    require_python3();
     let fixture = Fixture::new(&[], 5_000);
     let ctx = fixture.context(&[("MCP_FIXTURE_EXTRA_TOOL", "surprise")]);
     let error = fixture
@@ -227,10 +234,10 @@ fn a_manifest_mismatch_refuses_startup_naming_the_tool() {
 
 #[cfg(unix)]
 #[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
 fn a_dead_or_stuck_child_is_a_timely_tool_error_and_is_respawned() {
-    if sandbox_unavailable() || python3_missing() {
-        return;
-    }
+    require_sandbox();
+    require_python3();
     let fixture = Fixture::new(&[], 2_000);
     let ctx = fixture.context(&[]);
     let echo = fixture.tool("echo", None);
@@ -299,10 +306,10 @@ fn a_dead_or_stuck_child_is_a_timely_tool_error_and_is_respawned() {
 
 #[cfg(unix)]
 #[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
 fn a_narrower_caller_does_not_inherit_the_wider_session() {
-    if sandbox_unavailable() || python3_missing() {
-        return;
-    }
+    require_sandbox();
+    require_python3();
     // Wide first is the ordering that used to leak: the first caller's
     // intersection became the ceiling for everyone who followed.
     let fixture = Fixture::with_orbit_tools(&["orbit.task.show", "orbit.search"], 5_000);

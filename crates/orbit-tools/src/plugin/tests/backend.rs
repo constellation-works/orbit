@@ -9,8 +9,8 @@ use orbit_types::plugin::{
 };
 use serde_json::json;
 
-use super::super::backend::PluginBackendSpec;
-use super::support::{context, sandbox_unavailable, spec, stub_backend, tool};
+use super::super::backend::{PLUGIN_TIMEOUT_CEILING_MS, PluginBackendSpec};
+use super::support::{context, require_sandbox, spec, stub_backend, tool};
 use crate::{Tool, ToolContext};
 
 /// Writes `$1`-style paths handed in via the envelope input: `inside` under
@@ -32,12 +32,26 @@ fn fs_state_permissions() -> PluginPermissions {
     }
 }
 
+#[test]
+fn a_manifest_timeout_cannot_exceed_the_host_ceiling() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut backend = (*spec(
+        temp.path().join("backend"),
+        temp.path(),
+        PluginPermissions::default(),
+        &[],
+    ))
+    .clone();
+    backend.timeout_ms = Some(PLUGIN_TIMEOUT_CEILING_MS.saturating_add(1));
+
+    assert_eq!(backend.timeout_ms(), PLUGIN_TIMEOUT_CEILING_MS);
+}
+
 #[cfg(unix)]
 #[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
 fn a_write_outside_the_granted_fs_profile_is_denied_under_the_sandbox() {
-    if sandbox_unavailable() {
-        return;
-    }
+    require_sandbox();
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("plugin");
     std::fs::create_dir_all(&root).expect("plugin root");
@@ -74,10 +88,9 @@ fn a_write_outside_the_granted_fs_profile_is_denied_under_the_sandbox() {
 
 #[cfg(unix)]
 #[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
 fn a_workspace_subdirectory_grant_cannot_write_orbit_or_git_metadata() {
-    if sandbox_unavailable() {
-        return;
-    }
+    require_sandbox();
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("plugin");
     let workspace = temp.path().join("workspace");
@@ -111,10 +124,9 @@ fn a_workspace_subdirectory_grant_cannot_write_orbit_or_git_metadata() {
 
 #[cfg(unix)]
 #[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
 fn unsandboxed_needs_the_grant_and_then_confines_nothing() {
-    if sandbox_unavailable() {
-        return;
-    }
+    require_sandbox();
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("plugin");
     std::fs::create_dir_all(&root).expect("plugin root");

@@ -90,7 +90,7 @@ fn enter_fake_git_child(test: &str) -> bool {
     let quote =
         |value: &std::path::Path| format!("'{}'", value.to_string_lossy().replace('\'', "'\"'\"'"));
     let script = format!(
-        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > {args}\nenv | sort > {env}\ncheckout=''\nfor arg in \"$@\"; do checkout=$arg; done\nmkdir -p \"$checkout\"\nprintf 'schemaVersion: 2\\nkind: Plugin\\n' > \"$checkout/plugin.yaml\"\n",
+        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > {args}\nenv | sort > {env}\ncheckout=''\nfor arg in \"$@\"; do checkout=$arg; done\nmkdir -p \"$checkout/.git\"\nprintf 'schemaVersion: 2\\nkind: Plugin\\n' > \"$checkout/plugin.yaml\"\nprintf 'url=https://user:secret@example.com/demo.git\\n' > \"$checkout/.git/config\"\n",
         args = quote(&args_capture),
         env = quote(&env_capture),
     );
@@ -262,5 +262,31 @@ fn tagged_https_git_source_uses_hardened_argv_and_environment() {
             .lines()
             .any(|line| line == "GIT_TERMINAL_PROMPT=0"),
         "Git must not prompt for credentials: {environment}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_untagged_git_source_clones_the_default_branch_and_scrubs_git_metadata() {
+    if !enter_fake_git_child(
+        "an_untagged_git_source_clones_the_default_branch_and_scrubs_git_metadata",
+    ) {
+        return;
+    }
+    let resolved = resolve_plugin_source("git+https://example.com/demo.git")
+        .expect("untagged HTTPS source resolves");
+    assert!(resolved.root.join(MANIFEST_FILE_NAME).is_file());
+    assert!(
+        !resolved.root.join(".git").exists(),
+        "clone metadata can contain source credentials and must not enter the plugin tree"
+    );
+
+    let args = std::fs::read_to_string(
+        std::env::var_os("ORBIT_TEST_PLUGIN_GIT_ARGS").expect("args capture path"),
+    )
+    .expect("read Git argv");
+    assert!(
+        !args.lines().any(|arg| arg == "--branch"),
+        "an untagged source must use the repository's default branch: {args}"
     );
 }
