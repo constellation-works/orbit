@@ -1315,17 +1315,19 @@ plugins:
 | `orbit plugin list` / `show <ns>` | What is installed or pinned, its tools, and its **requested versus granted** permissions side by side. |
 | `orbit plugin doctor` | One row per plugin naming the step that would make it active. |
 | `orbit plugin validate <dir>` | Check a manifest without installing it. Every rejection names the offending field. |
-| `orbit plugin sync [--dry-run]` | Read `.orbit/plugins.yaml` and install what this machine is missing, or report it. |
+| `orbit plugin sync [--dry-run] [--grant …]` | Converge `.orbit/plugins.yaml`: install missing plugins, apply its enabled/disabled state, and seed enabled contributions into this workspace. A grant-requesting plugin stays disabled until `--grant` supplies the complete reviewed set. |
 | `orbit plugin migrate <binary>` | Write a v2 manifest from a set of v1 `*.orbit-tool.yaml` sidecars. |
 
 Cloning a repository does not make its plugins available; `orbit plugin sync`
-is the step that does. A plugin a workspace pins but the machine has not
-installed, and one whose `requires.orbit` or `requires.host_api` no longer
-holds, is reported by `list`, `show` and `doctor` and leaves every built-in
-and every other plugin working.
+is the step that does. Because enable state is host-global, syncing another
+workspace may change that shared toggle; the committed pin never authorizes
+manifest permission requests. A plugin a workspace pins but the machine has
+not installed, and one whose `requires.orbit` or `requires.host_api` no longer
+holds, is reported by `list`, `show` and `doctor` and leaves every built-in and
+every other plugin working.
 
 **The manifest declares placement, never permission.** `spec.permissions` is a
-*request*; `--grant` on an enabling add, enable or upgrade is the only source of authority,
+*request*; `--grant` on an enabling add, enable, upgrade or sync is the only source of authority,
 and `orbit plugin show` prints both. Who may call a plugin tool comes from its
 `execution_kind`: a `read_only` tool is callable by any caller Orbit can
 identify (an agent envelope, an operator, or a sanctioned run), and a

@@ -6,7 +6,7 @@ use orbit_types::plugin::PluginStatus;
 use super::super::{
     PluginAddOptions, PluginEnableOptions, PluginMigrateRequest, PluginRemoveOptions,
     disable_plugin, enable_plugin, install_plugin, list_plugins, migrate_plugin_sidecars,
-    remove_plugin, sync_plugins, validate_plugin_dir,
+    plugin_doctor, remove_plugin, sync_plugins, validate_plugin_dir,
 };
 use super::definition_fixture::DefinitionPlugin;
 use super::fixture::{PluginFixture, PluginSpecFixture};
@@ -20,14 +20,14 @@ fn sync_installs_what_the_pin_file_names_and_reports_what_it_cannot() {
         source.display()
     ));
 
-    let planned = sync_plugins(&fixture.runtime, true).expect("dry run");
+    let planned = sync_plugins(&fixture.runtime, true, &[]).expect("dry run");
     assert_eq!(planned.len(), 2);
     assert!(
         planned[0].message.starts_with("would install"),
         "{planned:?}"
     );
 
-    let outcomes = sync_plugins(&fixture.runtime, false).expect("sync");
+    let outcomes = sync_plugins(&fixture.runtime, false, &[]).expect("sync");
     assert_eq!(outcomes[0].status, PluginStatus::Active);
     assert!(
         outcomes[0].message.contains("installed v1.0.0"),
@@ -43,6 +43,181 @@ fn sync_installs_what_the_pin_file_names_and_reports_what_it_cannot() {
     runtime
         .show_tool("demo.hello")
         .expect("synced plugin registers its tool");
+}
+
+#[test]
+fn sync_disables_an_enabled_plugin_when_the_workspace_pin_is_disabled() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("install enabled plugin");
+    fixture.write_pin_file(&format!(
+        "schemaVersion: 1\nplugins:\n  - name: demo\n    source: {}\n    enabled: false\n",
+        source.display()
+    ));
+
+    let outcomes = sync_plugins(&fixture.runtime, false, &[]).expect("sync");
+    assert_eq!(outcomes[0].status, PluginStatus::Disabled);
+    assert!(outcomes[0].message.contains("disabled by workspace pin"));
+    assert!(
+        fixture.reopen().show_tool("demo.hello").is_err(),
+        "the disabled pin must take the plugin off the next runtime's surface"
+    );
+}
+
+#[test]
+fn sync_refuses_a_source_namespace_that_differs_from_the_pin_on_every_run() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("source", "actual"));
+    fixture.write_pin_file(&format!(
+        "schemaVersion: 1\nplugins:\n  - name: pinned\n    source: {}\n    enabled: true\n",
+        source.display()
+    ));
+
+    for attempt in 1..=2 {
+        let outcomes = sync_plugins(&fixture.runtime, false, &[]).expect("sync continues");
+        let message = &outcomes[0].message;
+        assert!(
+            outcomes[0].status == PluginStatus::Missing
+                && message.contains("namespace 'actual'")
+                && message.contains("requested name is 'pinned'"),
+            "attempt {attempt} must refuse with both names: {outcomes:?}"
+        );
+        assert!(
+            fixture
+                .runtime
+                .stores()
+                .plugins()
+                .get_plugin("actual")
+                .expect("read actual row")
+                .is_none(),
+            "a namespace mismatch must not install under the manifest name"
+        );
+    }
+}
+
+#[test]
+fn sync_reconciles_enabled_contributions_into_each_workspace() {
+    let fixture = PluginFixture::new();
+    let source = DefinitionPlugin::new("graph").write(&fixture);
+    fixture.write_pin_file(&format!(
+        "schemaVersion: 1\nplugins:\n  - name: graph\n    source: {}\n    enabled: true\n",
+        source.display()
+    ));
+    sync_plugins(&fixture.runtime, false, &[]).expect("sync workspace A");
+
+    let workspace_b = fixture.repo_root.join("workspace-b/.orbit");
+    std::fs::create_dir_all(&workspace_b).expect("create workspace B");
+    std::fs::write(
+        workspace_b.join("plugins.yaml"),
+        format!(
+            "schemaVersion: 1\nplugins:\n  - name: graph\n    source: {}\n    enabled: true\n",
+            source.display()
+        ),
+    )
+    .expect("pin plugin in workspace B");
+    let runtime_b = crate::OrbitRuntime::from_roots(&fixture.global_root, &workspace_b)
+        .expect("build workspace B runtime");
+
+    let first = sync_plugins(&runtime_b, false, &[]).expect("sync workspace B");
+    assert!(
+        workspace_b.join("routines/graph-refresh.yaml").is_file()
+            && workspace_b.join("auto_tasks/graph-reindex.yaml").is_file(),
+        "an already-enabled host plugin must seed the current workspace"
+    );
+    assert!(first[0].message.contains("created"), "{first:?}");
+
+    let second = sync_plugins(&runtime_b, false, &[]).expect("repeat workspace B sync");
+    assert!(
+        second[0]
+            .message
+            .contains("routine graph-refresh unchanged")
+            && second[0]
+                .message
+                .contains("auto_task graph-reindex unchanged"),
+        "unchanged contributions must remain visible: {second:?}"
+    );
+}
+
+#[test]
+fn sync_does_not_enable_a_grant_requesting_plugin_without_consent() {
+    let fixture = PluginFixture::new();
+    let source =
+        fixture.write_plugin(PluginSpecFixture::new("guarded", "guarded").requesting_fs_write());
+    fixture.write_pin_file(&format!(
+        "schemaVersion: 1\nplugins:\n  - name: guarded\n    source: {}\n    enabled: true\n",
+        source.display()
+    ));
+
+    let outcomes = sync_plugins(&fixture.runtime, false, &[]).expect("sync");
+    assert_eq!(outcomes[0].status, PluginStatus::Disabled);
+    assert!(
+        outcomes[0].message.contains("requests fs")
+            && outcomes[0].message.contains("plugin sync --grant fs"),
+        "the refusal must name the requested consent: {outcomes:?}"
+    );
+    let installed = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("guarded")
+        .expect("read plugin row")
+        .expect("plugin was installed");
+    assert!(!installed.enabled, "the committed pin is not grant consent");
+
+    let consented = sync_plugins(&fixture.runtime, false, &["fs".to_string()])
+        .expect("sync with explicit consent");
+    assert_eq!(consented[0].status, PluginStatus::Active);
+    let installed = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("guarded")
+        .expect("read enabled row")
+        .expect("plugin remains installed");
+    assert!(installed.enabled);
+    assert_eq!(installed.grants, ["fs"]);
+}
+
+#[test]
+fn doctor_reports_seeded_definitions_older_than_the_installed_plugin() {
+    let fixture = PluginFixture::new();
+    let source = DefinitionPlugin::new("graph").write(&fixture);
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("install and seed");
+    let routine = fixture.workspace_root.join("routines/graph-refresh.yaml");
+    let raw = std::fs::read_to_string(&routine).expect("read seeded routine");
+    std::fs::write(
+        &routine,
+        raw.replace("plugin:graph@1.0.0", "plugin:graph@0.9.0"),
+    )
+    .expect("make provenance stale");
+
+    let findings = plugin_doctor(&fixture.reopen()).expect("doctor");
+    assert!(
+        findings.iter().any(|finding| {
+            finding.plugin == "graph"
+                && finding
+                    .message
+                    .contains("lag installed plugin 'graph' v1.0.0")
+                && finding.message.contains("graph-refresh.yaml (v0.9.0)")
+        }),
+        "doctor must report stale workspace provenance: {findings:?}"
+    );
 }
 
 #[test]

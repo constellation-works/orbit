@@ -1,17 +1,19 @@
 //! Read-only plugin surfaces: `list`, `show`, `doctor` and `validate`.
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
+use orbit_automation::auto_tasks::loader::AUTO_TASKS_DIR;
+use orbit_automation::routines::loader::ROUTINES_DIR;
 use orbit_common::OrbitError;
 use orbit_tools::plugin::{
     LoadedPlugin, PluginValidationPolicy, load_plugin_dir, manifest_refusal,
     refuse_covering_fs_write_roots, validate_loaded_plugin,
 };
 use orbit_types::plugin::{
-    InstalledPlugin, PluginExecutionKind, PluginGrant, PluginSandbox, PluginStatus,
-    plugin_tool_name,
+    InstalledPlugin, PluginExecutionKind, PluginGrant, PluginSandbox, PluginStatus, SemverRange,
+    Version, plugin_tool_name,
 };
-use std::collections::BTreeMap;
 
 use super::panels::{PluginLinkSummary, PluginPanelSummary, web_summaries};
 
@@ -156,6 +158,7 @@ pub fn show_plugin(runtime: &OrbitRuntime, name: &str) -> Result<PluginSummary, 
 /// finding an active plugin carries (an unsandboxed backend).
 pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, OrbitError> {
     let summaries = list_plugins(runtime)?;
+    let stale_seeded = stale_seeded_definition_rows(runtime, &summaries)?;
     // A skill link whose target is gone is invisible to the skill catalog's
     // own doctor — it only walks seeded trees — and to the plugin record,
     // which says nothing about the provider discovery roots (§3).
@@ -216,7 +219,95 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
         })
         .collect();
     rows.extend(dangling);
+    rows.extend(stale_seeded);
     Ok(rows)
+}
+
+/// Findings for workspace files seeded by an older installed plugin version.
+/// A customised file is deliberately preserved by sync, so doctor names both
+/// the ordinary refresh and the reviewed `--force` recovery.
+fn stale_seeded_definition_rows(
+    runtime: &OrbitRuntime,
+    summaries: &[PluginSummary],
+) -> Result<Vec<PluginDoctorResult>, OrbitError> {
+    let installed = summaries
+        .iter()
+        .filter(|summary| !summary.version.is_empty())
+        .map(|summary| (summary.name.as_str(), summary))
+        .collect::<BTreeMap<_, _>>();
+    let mut stale: BTreeMap<&str, Vec<(PathBuf, String)>> = BTreeMap::new();
+
+    for dir in [
+        runtime.shared_root().join(ROUTINES_DIR),
+        runtime.paths().local_dir.join(AUTO_TASKS_DIR),
+    ] {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "read seeded plugin definitions '{}': {error}",
+                    dir.display()
+                )));
+            }
+        };
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                OrbitError::Io(format!(
+                    "read seeded plugin definitions '{}': {error}",
+                    dir.display()
+                ))
+            })?;
+            let path = entry.path();
+            if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+                continue;
+            }
+            let Some((namespace, seeded_version)) =
+                crate::runtime::plugin_definitions::read_definition_provenance(&path)
+            else {
+                continue;
+            };
+            let Some(summary) = installed.get(namespace.as_str()) else {
+                continue;
+            };
+            if seeded_version_lags(&seeded_version, &summary.version) {
+                stale
+                    .entry(summary.name.as_str())
+                    .or_default()
+                    .push((path, seeded_version));
+            }
+        }
+    }
+
+    Ok(stale
+        .into_iter()
+        .filter_map(|(name, mut definitions)| {
+            let summary = installed.get(name)?;
+            definitions.sort_by(|left, right| left.0.cmp(&right.0));
+            let details = definitions
+                .iter()
+                .map(|(path, version)| format!("{} (v{version})", path.display()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(PluginDoctorResult {
+                plugin: name.to_string(),
+                status: summary.status,
+                message: format!(
+                    "workspace has seeded definitions that lag installed plugin '{name}' \
+                     v{}: {details}; run `orbit plugin sync` to refresh unchanged files, or \
+                     review customised files and run `orbit plugin enable {name} --force`",
+                    summary.version
+                ),
+            })
+        })
+        .collect())
+}
+
+fn seeded_version_lags(seeded: &str, installed: &str) -> bool {
+    let Ok(installed) = installed.parse::<Version>() else {
+        return false;
+    };
+    SemverRange::parse(&format!(">{seeded}")).is_ok_and(|range| range.matches(&installed))
 }
 
 /// Validate a plugin directory without installing it.

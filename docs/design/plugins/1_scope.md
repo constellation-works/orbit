@@ -214,14 +214,19 @@ tree is copied into the install root, naming the entry; `load_plugin_dir` applie
 walk so a hand-edited install cannot become active. Following a link at copy time would
 materialise the target's bytes inside the install root, which every backend may read.
 Cloning a repo therefore does not make its plugins available; `orbit plugin sync` reads the
-pin file and installs or reports whatever the host is missing.
+pin file and converges this host and workspace. It installs missing plugins, applies
+`enabled: false` by disabling an enabled host row, and applies `enabled: true` only after
+permission review when the manifest requests grants. Pass the complete reviewed set with
+`--grant`; a committed pin is never grant consent. For an already-enabled host plugin, sync
+also seeds or refreshes that plugin's routines and auto-tasks in the current workspace.
 
 Grants, install paths, digests and enable state are **host-local** (SQLite `plugin_store`,
-next to `tool_store`), never synced — the same split routines already make between the
-versioned `enabled:` and host-local pauses. A workspace that pins a plugin the host has not
-installed, or has installed without the requested grants, gets the plugin's tools registered
-via `register_inactive` and one deduped diagnostic naming the missing step. Nothing else
-degrades.
+next to `tool_store`), never copied into the repository. The pin's versioned `enabled:` value
+is a convergence instruction, so syncing a different workspace may change that shared host
+toggle; grants still require explicit host consent. A workspace that pins a plugin the host
+has not installed, or has installed without the requested grants, gets the plugin's tools
+registered via `register_inactive` and one deduped diagnostic naming the missing step.
+Nothing else degrades.
 
 **The recorded grant set is tamper-evident.** `orbit plugin enable` and an upgrading
 `--grant` also write an integrity value over the set they authorized to
@@ -271,14 +276,15 @@ can never say *who* may call it. Plugin tools enter `GOVERNED_OPERATIONS` throug
 generic row per execution kind: `read_only` plugin tools are callable by `Agent | Operator |
 Runner`; `mutating` plugin tools by `Operator | Runner` and by `Agent` only when the task's
 `required_tools` or the activity's allowlist names them. The `permissions:` block is a
-*request*; `--grant` on an enabling add, enable or upgrade is the only source of authority, and
+*request*; `--grant` on an enabling add, enable, upgrade or sync is the only source of authority, and
 `orbit plugin show` prints requested vs granted side by side. A stored grant set the host cannot
 verify against its authorization record is not authority either: the plugin is refused and
 every surface reports it as granting nothing (§3).
 
 An explicit grant list is the complete set the operator authorizes, not an addition to the
-stored row: both `orbit plugin add --enable --grant …` and `orbit plugin enable --grant …`
-replace the recorded set. Omitting `--grant` on `plugin enable` preserves the recorded grants,
+stored row: `orbit plugin add --enable --grant …`, `orbit plugin enable --grant …` and a
+grant-consenting `orbit plugin sync --grant …` replace the recorded set. Omitting `--grant` on
+`plugin enable` preserves the recorded grants,
 so disable followed by an ordinary re-enable does not require restating them. Supplying a
 narrower list is the supported way to revoke grants and replaces the authorization witness
 with one covering only that narrower set.

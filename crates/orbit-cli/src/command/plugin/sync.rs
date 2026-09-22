@@ -10,6 +10,10 @@ pub struct PluginSyncArgs {
     /// Report what would be installed without installing it
     #[arg(long)]
     pub dry_run: bool,
+    /// Complete permission grant set consenting to enable pinned plugins whose
+    /// manifests request grants (repeatable, comma-separated)
+    #[arg(long = "grant", value_delimiter = ',', conflicts_with = "dry_run")]
+    pub grants: Vec<String>,
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
@@ -17,7 +21,7 @@ pub struct PluginSyncArgs {
 
 impl Execute for PluginSyncArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let outcomes = runtime.sync_plugins(self.dry_run)?;
+        let outcomes = runtime.sync_plugins(self.dry_run, &self.grants)?;
         let records = outcomes
             .iter()
             .map(|outcome| {
