@@ -209,6 +209,11 @@ plugins:
 Install is global only: the plugin lives once per host under `~/.orbit/plugins/` and every
 workspace on that host shares it. The repository commits only the pin file; plugin trees are
 never vendored under `.orbit/`, so a `source:` pointing inside the repository is refused.
+Git sources accept only `git+https://…`, `git+ssh://…`, and SCP-style
+`git+git@host:path` repository URLs. Other Git transports, URL-shaped options, and refs
+beginning with `-` are refused with the complete source entry before Git is spawned. Clones
+disable user-selected protocols and terminal prompts, permit only HTTPS and SSH transports,
+and terminate Git option parsing before the repository URL.
 A directory, `git+` clone, or archive that contains a symbolic link is refused before the
 tree is copied into the install root, naming the entry; `load_plugin_dir` applies the same
 walk so a hand-edited install cannot become active. Following a link at copy time would

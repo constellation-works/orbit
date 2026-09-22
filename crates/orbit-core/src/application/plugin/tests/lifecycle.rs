@@ -12,6 +12,29 @@ use super::definition_fixture::DefinitionPlugin;
 use super::fixture::{PluginFixture, PluginSpecFixture};
 
 #[test]
+fn sync_refuses_unsafe_git_pin_entries() {
+    for source in [
+        "git+ext::sh -c 'exit 0' %S",
+        "git+file:///tmp/plugin",
+        "git+-uplugin",
+        "git+https://example.com/demo.git#-upload-pack=payload",
+    ] {
+        let fixture = PluginFixture::new();
+        fixture.write_pin_file(&format!(
+            "schemaVersion: 1\nplugins:\n  - name: demo\n    source: {source:?}\n    enabled: true\n"
+        ));
+
+        let outcomes = sync_plugins(&fixture.runtime, false, &[]).expect("sync continues");
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, PluginStatus::Missing);
+        assert!(
+            outcomes[0].message.contains(source),
+            "sync refusal must name pin entry {source:?}: {outcomes:?}"
+        );
+    }
+}
+
+#[test]
 fn sync_installs_what_the_pin_file_names_and_reports_what_it_cannot() {
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
