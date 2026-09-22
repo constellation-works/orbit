@@ -7,10 +7,11 @@ last_validated: 2026-09-22
 
 # Scope: Orbit plugin standard
 
-Status: phases 1-3 landed (2026-09-21); phases 4-5 remain proposal.
+Status: phases 1-4 landed; phase 5 remains proposal.
 Namespace, dashboard-feature, install and mirror questions resolved 2026-09-20.
 Bearing: [Operations as data, not inherent methods](../orbit-core/4_decisions.md) (orbit-core ADR).
-Precedents: `*.orbit-tool.yaml` sidecar manifests (orbit-graph ships three); the shelved
+Precedents: `*.orbit-tool.yaml` sidecar manifests (orbit-graph still ships three; its migration
+to `plugin.yaml` remains pending); the shelved
 [docs + search pluginization](../orbit-docs-plugin/1_scope.md); orbit-research's
 version/capability allowlist against the Orbit binary.
 
@@ -356,9 +357,11 @@ its own `--grant …` is explicit re-consent and enables the upgraded manifest.
 Those grants are bound to the install-time `plugin.yaml` digest stored on the `plugins` row.
 Every load hashes the bytes on disk and compares them to that `manifest_digest`. A mismatch
 registers the plugin inactive with a diagnostic that names both digests and the re-consent
-commands (`orbit plugin add --force` and `orbit plugin enable`); the profile compiled for a
-call is the one the operator granted, never a later rewrite of the requested paths, env names,
-tools, or backend. That comparison means something only because the row's `install_path` is
+commands. Recovery first reinstalls the original source with `orbit plugin add <source> --force`,
+then records consent with `orbit plugin enable <ns> --grant …`; `--force` alone cannot recover a
+tree when that source is no longer available. The profile compiled for a call is the one the
+operator granted, never a later rewrite of the requested paths, env names, tools, or backend.
+That comparison means something only because the row's `install_path` is
 checked against `~/.orbit/plugins/<ns>/` first (§3): both sides of the digest comparison come
 off a row a backend can write, so what makes the stored digest evidence is that the bytes it
 is compared against sit at a path the backend cannot populate [ORB-12785]. Independently of
@@ -719,9 +722,9 @@ unknown `orbit <word>` — including a disabled plugin's namespace — is clap's
 unknown-subcommand error, and plugin CLI never bypasses dispatch, dry-run or audit.
 `orbit --help` lists the groups under a `Plugins:` heading, and `orbit <ns> --help` lists its
 verbs with the manifest's descriptions. The tree is built at startup from the host's
-installed manifests. A host with no `~/.orbit/plugins/` directory pays one `stat` for it. Once
-that directory exists, startup resolves the global config, opens SQLite read-only and queries the
-`plugins` rows; with no enabled row it reads no manifest. Loaded manifests are cached for the
+installed manifests. Startup resolves the global config, opens SQLite read-only and queries the
+`plugins` rows even when `~/.orbit/plugins/` does not exist; with no enabled row it reads no
+manifest. Loaded manifests are cached for the
 process and shared by CLI-tree discovery, runtime construction and host-global MCP discovery. An
 unchanged `plugin.yaml` stamp reuses the resolved manifest immediately; if only the stamp changed,
 its digest is checked before Orbit repeats the install-tree symlink walk and schema resolution.
@@ -765,9 +768,11 @@ runtime on its next request. `GET /api/plugins` and panel routes therefore refle
 changes without restarting `orbit web serve`.
 
 `links` are plain tiles to plugin-hosted UIs (loopback by default), with `{{config.<key>}}`
-rendered against the plugin's effective `[plugins.<ns>]` section; any unresolved allowed
-reference (`workspace`, `plugin_state`, or `config`) is left visible rather than rendered as an
-empty string or a half-resolved URL. A tile's URL must be `http://` or `https://` —
+rendered against the plugin's effective `[plugins.<ns>]` section. A dashboard summary has no
+workspace or plugin-state invocation context, so a link containing `{{workspace}}` or
+`{{plugin_state}}` remains wholly visible; an unknown `{{config.<key>}}` does too. No unresolved
+reference is rendered as an empty string or a half-resolved URL. A tile's URL must be `http://`
+or `https://` —
 `validate_structure` refuses any other scheme, and the renderer draws no tile for one, so a
 `javascript:` URL can never become an anchor in the operator's session. Plugins cannot introduce tabs or switch built-in
 dashboard features on; that idea is deferred past v1. `router.js` gains one `plugins` entry
@@ -841,8 +846,9 @@ writes the v1 sidecar pair for one release and prints a deprecation naming its r
 
 1. **Manifest + lifecycle over the existing tool path.** *Landed [ORB-12735].* `plugin.yaml`
    v2, `orbit plugin add|enable|disable|remove|list|show|validate|migrate`, `plugin_store`,
-   tools registered with MCP scope and reaching `tools/list`. orbit-graph migrates from three
-   sidecars to one manifest. Goldens for `orbit tool run` unchanged.
+   tools registered with MCP scope and reaching `tools/list`. orbit-graph's migration from three
+   sidecars to one manifest remains pending in that repository. Goldens for `orbit tool run`
+   unchanged.
 2. **Grants + sandboxed execution + `mcp` backend.** *Landed [ORB-12736].* `permissions`/
    `--grant` enforced at load and at the call, envelope v1, output-schema validation,
    Landlock/sandbox-exec profile (§4.3), callback allowlist, MCP proxy. orbit-research can

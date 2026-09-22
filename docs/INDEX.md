@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Entry point for Orbit feature designs, operational runbooks, and incident root cause analyses.
-last_validated: 2026-09-06
+last_validated: 2026-09-22
 tags: [docs, index, design, operations, runbooks, incidents]
 related_features: [orbit-docs, activity-job, auditability, routines]
 related_artifacts: [ORB-10014, ORB-11416]
