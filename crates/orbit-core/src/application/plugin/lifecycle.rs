@@ -519,7 +519,13 @@ pub fn sync_plugins(
                     enable: false,
                     grants: Vec::new(),
                 };
-                match super::install::install_pinned_plugin(runtime, &pin.name, &source, &options) {
+                match super::install::install_pinned_plugin(
+                    runtime,
+                    &pin.name,
+                    pin.version.as_deref(),
+                    &source,
+                    &options,
+                ) {
                     Ok(summary) if pin.enabled => {
                         let (status, message) = match enable_for_sync(runtime, &pin.name, &grants) {
                             Ok(SyncEnable::Enabled(result)) => (

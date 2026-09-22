@@ -12,6 +12,7 @@ use orbit_tools::plugin::{
 };
 use orbit_types::plugin::{
     InstalledPlugin, PluginGrant, PluginManifest, PluginNetworkPermission, PluginStatus,
+    SemverRange, Version,
 };
 use orbit_types::record::OrbitEvent;
 
@@ -73,17 +74,31 @@ pub fn install_plugin(
     install_plugin_inner(runtime, source, options, None).map(|outcome| outcome.summary)
 }
 
-/// Install a workspace pin only when its declared name matches the source
-/// manifest. The check happens before the install tree or host row is written,
-/// so a malformed pin is refused the same way on every sync attempt.
+struct ExpectedPluginIdentity<'a> {
+    name: &'a str,
+    version: Option<&'a str>,
+}
+
+/// Install a workspace pin only when its declared identity matches the source
+/// manifest. The checks happen before the install tree or host row is written,
+/// so a mismatching pin is refused the same way on every sync attempt.
 pub(super) fn install_pinned_plugin(
     runtime: &OrbitRuntime,
     expected_name: &str,
+    expected_version: Option<&str>,
     source: &str,
     options: &PluginAddOptions,
 ) -> Result<PluginSummary, OrbitError> {
-    install_plugin_inner(runtime, source, options, Some(expected_name))
-        .map(|outcome| outcome.summary)
+    install_plugin_inner(
+        runtime,
+        source,
+        options,
+        Some(ExpectedPluginIdentity {
+            name: expected_name,
+            version: expected_version,
+        }),
+    )
+    .map(|outcome| outcome.summary)
 }
 
 /// Replace an installed namespace, using its recorded source when the caller
@@ -116,7 +131,15 @@ pub fn upgrade_plugin(
         enable: !options.grants.is_empty(),
         grants: options.grants.clone(),
     };
-    let outcome = install_plugin_inner(runtime, source, &add_options, Some(name))?;
+    let outcome = install_plugin_inner(
+        runtime,
+        source,
+        &add_options,
+        Some(ExpectedPluginIdentity {
+            name,
+            version: None,
+        }),
+    )?;
     Ok(PluginUpgradeResult {
         summary: outcome.summary,
         permission_changes: outcome.permission_changes,
@@ -128,7 +151,7 @@ fn install_plugin_inner(
     runtime: &OrbitRuntime,
     source: &str,
     options: &PluginAddOptions,
-    expected_name: Option<&str>,
+    expected_identity: Option<ExpectedPluginIdentity<'_>>,
 ) -> Result<PluginInstallOutcome, OrbitError> {
     if !options.enable && !options.grants.is_empty() {
         return Err(OrbitError::InvalidInput(
@@ -146,15 +169,34 @@ fn install_plugin_inner(
     validate_loaded_plugin(&plugin, &policy).map_err(manifest_refusal)?;
 
     let name = plugin.namespace().to_string();
-    if let Some(expected) = expected_name
-        && name != expected
-    {
-        return Err(OrbitError::InvalidInput(format!(
-            "source manifest declares plugin namespace '{name}', but the requested name is \
-             '{expected}'"
-        )));
-    }
     let version = plugin.manifest.metadata.version.clone();
+    if let Some(expected) = expected_identity {
+        if name != expected.name {
+            return Err(OrbitError::InvalidInput(format!(
+                "source manifest declares plugin namespace '{name}', but the requested name is \
+                 '{}'",
+                expected.name
+            )));
+        }
+        if let Some(requirement) = expected.version {
+            let range = SemverRange::parse(requirement).map_err(|error| {
+                OrbitError::InvalidInput(format!(
+                    "invalid pinned version requirement '{requirement}': {error}"
+                ))
+            })?;
+            let parsed_version = version.parse::<Version>().map_err(|error| {
+                OrbitError::InvalidInput(format!(
+                    "source manifest declares invalid plugin version '{version}': {error}"
+                ))
+            })?;
+            if !range.matches(&parsed_version) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "source manifest declares plugin '{name}' v{version}, which does not satisfy \
+                     the pinned version requirement '{requirement}'"
+                )));
+            }
+        }
+    }
     let global_root = runtime.global_root();
     let existing = runtime.stores().plugins().get_plugin(&name)?;
     let manifest_changed = existing

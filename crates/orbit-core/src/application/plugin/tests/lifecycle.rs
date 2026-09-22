@@ -39,7 +39,7 @@ fn sync_installs_what_the_pin_file_names_and_reports_what_it_cannot() {
     let fixture = PluginFixture::new();
     let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
     fixture.write_pin_file(&format!(
-        "schemaVersion: 1\nplugins:\n  - name: demo\n    source: {}\n    enabled: true\n  - name: absent\n    enabled: true\n",
+        "schemaVersion: 1\nplugins:\n  - name: demo\n    version: 1.x\n    source: {}\n    enabled: true\n  - name: absent\n    enabled: true\n",
         source.display()
     ));
 
@@ -124,6 +124,62 @@ fn sync_refuses_a_source_namespace_that_differs_from_the_pin_on_every_run() {
             "a namespace mismatch must not install under the manifest name"
         );
     }
+}
+
+#[test]
+fn sync_refuses_an_out_of_range_source_without_side_effects_and_continues() {
+    let fixture = PluginFixture::new();
+    let mismatching = DefinitionPlugin::new("graph")
+        .with_version("2.0.0")
+        .write(&fixture);
+    let matching = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    fixture.write_pin_file(&format!(
+        "schemaVersion: 1\nplugins:\n  - name: graph\n    version: 1.x\n    source: {}\n    enabled: true\n  - name: demo\n    version: ^1.0.0\n    source: {}\n    enabled: true\n",
+        mismatching.display(),
+        matching.display()
+    ));
+
+    let outcomes = sync_plugins(&fixture.runtime, false, &[]).expect("sync continues");
+    assert_eq!(outcomes.len(), 2);
+    assert_eq!(outcomes[0].status, PluginStatus::Missing);
+    assert!(
+        outcomes[0].message.contains("plugin 'graph' v2.0.0")
+            && outcomes[0]
+                .message
+                .contains("pinned version requirement '1.x'"),
+        "version refusal must name the source and requirement: {outcomes:?}"
+    );
+    assert_eq!(outcomes[1].status, PluginStatus::Active);
+
+    assert!(
+        fixture
+            .runtime
+            .stores()
+            .plugins()
+            .get_plugin("graph")
+            .expect("read graph row")
+            .is_none(),
+        "a version mismatch must not create a host row"
+    );
+    assert!(
+        !fixture.global_root.join("plugins/graph").exists(),
+        "a version mismatch must not create an install tree"
+    );
+    assert!(
+        !fixture
+            .workspace_root
+            .join("routines/graph-refresh.yaml")
+            .exists()
+            && !fixture
+                .workspace_root
+                .join("auto_tasks/graph-reindex.yaml")
+                .exists(),
+        "a version mismatch must not seed workspace definitions"
+    );
+    fixture
+        .reopen()
+        .show_tool("demo.hello")
+        .expect("an unrelated matching pin still syncs");
 }
 
 #[test]
