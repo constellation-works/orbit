@@ -117,15 +117,6 @@ pub fn seed_plugin_definitions(
             ),
         ));
     }
-    outcomes.extend(write_seeded_files(
-        "routine",
-        routines_dir,
-        &routines,
-        &namespace,
-        &version,
-        force,
-    )?);
-
     let mut auto_tasks: Vec<(String, String)> = Vec::new();
     for auto_task in &definitions.auto_tasks {
         let name = seeded_definition_name(&namespace, &auto_task.name);
@@ -144,6 +135,22 @@ pub fn seed_plugin_definitions(
             ),
         ));
     }
+
+    // Check both definition directories before writing either one. A plugin
+    // can otherwise seed its routines successfully and only then discover
+    // that one of its auto-task filenames is already owned by another
+    // plugin, leaving a partially applied enable behind.
+    refuse_cross_plugin_ownership("routine", routines_dir, &routines, &namespace)?;
+    refuse_cross_plugin_ownership("auto_task", auto_tasks_dir, &auto_tasks, &namespace)?;
+
+    outcomes.extend(write_seeded_files(
+        "routine",
+        routines_dir,
+        &routines,
+        &namespace,
+        &version,
+        force,
+    )?);
     outcomes.extend(write_seeded_files(
         "auto_task",
         auto_tasks_dir,
@@ -154,6 +161,29 @@ pub fn seed_plugin_definitions(
     )?);
 
     Ok(outcomes)
+}
+
+fn refuse_cross_plugin_ownership(
+    kind: &'static str,
+    dir: &Path,
+    files: &[(String, String)],
+    namespace: &str,
+) -> Result<(), OrbitError> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    let manifest_path = dir.join(PLUGIN_ASSET_MANIFEST_FILE);
+    let manifest = read_manifest(&manifest_path)?;
+    for (name, _) in files {
+        let file_name = format!("{name}.yaml");
+        refuse_recorded_owner(
+            kind,
+            &dir.join(&file_name),
+            manifest.assets.get(&file_name),
+            namespace,
+        )?;
+    }
+    Ok(())
 }
 
 fn write_seeded_files(
@@ -176,6 +206,7 @@ fn write_seeded_files(
         let path = dir.join(&file_name);
         let rendered_digest = sha256_hex(rendered.as_bytes());
         let recorded = manifest.assets.get(&file_name).cloned();
+        refuse_recorded_owner(kind, &path, recorded.as_ref(), namespace)?;
 
         let action = if !path.exists() {
             write_text_with_parent(&path, rendered)?;
@@ -185,9 +216,9 @@ fn write_seeded_files(
                 OrbitError::Io(format!("read seeded {kind} '{}': {error}", path.display()))
             })?;
             let existing_digest = sha256_hex(existing.as_bytes());
-            let orbit_written = recorded
-                .as_ref()
-                .is_some_and(|record| record.digest == existing_digest);
+            let orbit_written = recorded.as_ref().is_some_and(|record| {
+                record.plugin == namespace && record.digest == existing_digest
+            });
             if existing_digest == rendered_digest {
                 PluginSeedAction::Unchanged
             } else if orbit_written || force {
@@ -229,6 +260,26 @@ fn write_seeded_files(
 
     write_manifest(&manifest_path, &manifest)?;
     Ok(outcomes)
+}
+
+fn refuse_recorded_owner(
+    kind: &'static str,
+    path: &Path,
+    recorded: Option<&PluginAssetRecord>,
+    namespace: &str,
+) -> Result<(), OrbitError> {
+    let Some(recorded) = recorded else {
+        return Ok(());
+    };
+    if recorded.plugin == namespace {
+        return Ok(());
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "plugin '{namespace}' cannot seed {kind} '{}': the managed file is owned by plugin '{}'; \
+         rename one definition so its seeded filename is unique",
+        path.display(),
+        recorded.plugin
+    )))
 }
 
 fn read_manifest(path: &Path) -> Result<PluginAssetManifest, OrbitError> {

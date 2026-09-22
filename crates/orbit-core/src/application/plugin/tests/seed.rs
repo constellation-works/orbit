@@ -34,6 +34,13 @@ fn auto_task_path(fixture: &PluginFixture) -> PathBuf {
     fixture.workspace_root.join("auto_tasks/graph-reindex.yaml")
 }
 
+fn managed_manifest_path(fixture: &PluginFixture, directory: &str) -> PathBuf {
+    fixture
+        .workspace_root
+        .join(directory)
+        .join(".orbit-managed-plugin-assets.json")
+}
+
 #[test]
 fn enable_seeds_each_definition_disabled_and_stamped_with_its_plugin() {
     let fixture = PluginFixture::new();
@@ -130,6 +137,93 @@ fn an_upgrade_reseeds_an_untouched_file_and_preserves_a_customised_one() {
     let reseeded = std::fs::read_to_string(auto_task_path(&fixture)).expect("auto-task");
     assert!(reseeded.contains("enabled: false"), "{reseeded}");
     assert!(reseeded.contains("plugin:graph@1.1.0"), "{reseeded}");
+}
+
+#[test]
+fn ambiguous_routine_filename_is_refused_without_changing_the_first_owner() {
+    let fixture = PluginFixture::new();
+    let mut first = DefinitionPlugin::new("a");
+    first.routine = "b-c";
+    install(&fixture, &first);
+    let runtime = fixture.reopen();
+    enable_plugin(&runtime, "a", &PluginEnableOptions::default()).expect("enable first owner");
+
+    let path = fixture.workspace_root.join("routines/a-b-c.yaml");
+    let manifest_path = managed_manifest_path(&fixture, "routines");
+    let first_contents = std::fs::read_to_string(&path).expect("first owner's routine");
+    let first_manifest = std::fs::read_to_string(&manifest_path).expect("first manifest");
+
+    let mut colliding = DefinitionPlugin::new("a-b");
+    colliding.routine = "c";
+    install(&fixture, &colliding);
+    let runtime = fixture.reopen();
+    let error = enable_plugin(
+        &runtime,
+        "a-b",
+        &PluginEnableOptions {
+            force: true,
+            ..PluginEnableOptions::default()
+        },
+    )
+    .expect_err("force must not take another plugin's managed routine");
+    let message = error.to_string();
+    assert!(
+        message.contains("plugin 'a-b'")
+            && message.contains("plugin 'a'")
+            && message.contains("a-b-c.yaml")
+            && message.contains("owned"),
+        "the refusal names both plugins, the file and the ownership rule: {message}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("preserved routine"),
+        first_contents,
+        "the a/b-c vs a-b/c collision must not overwrite the first file"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&manifest_path).expect("preserved manifest"),
+        first_manifest,
+        "the collision must not relabel the first plugin's manifest record"
+    );
+}
+
+#[test]
+fn ambiguous_auto_task_filename_is_refused_even_without_force() {
+    let fixture = PluginFixture::new();
+    let mut first = DefinitionPlugin::new("alpha-beta");
+    first.auto_task = "gamma";
+    install(&fixture, &first);
+    let runtime = fixture.reopen();
+    enable_plugin(&runtime, "alpha-beta", &PluginEnableOptions::default())
+        .expect("enable first owner");
+
+    let path = fixture
+        .workspace_root
+        .join("auto_tasks/alpha-beta-gamma.yaml");
+    let manifest_path = managed_manifest_path(&fixture, "auto_tasks");
+    let first_contents = std::fs::read_to_string(&path).expect("first owner's auto-task");
+    let first_manifest = std::fs::read_to_string(&manifest_path).expect("first manifest");
+
+    let mut colliding = DefinitionPlugin::new("alpha");
+    colliding.auto_task = "beta-gamma";
+    install(&fixture, &colliding);
+    let runtime = fixture.reopen();
+    let error = enable_plugin(&runtime, "alpha", &PluginEnableOptions::default())
+        .expect_err("a later plugin must not take the managed auto-task");
+    let message = error.to_string();
+    assert!(
+        message.contains("plugin 'alpha'")
+            && message.contains("plugin 'alpha-beta'")
+            && message.contains("alpha-beta-gamma.yaml"),
+        "the refusal names both plugins and the colliding file: {message}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("preserved auto-task"),
+        first_contents
+    );
+    assert_eq!(
+        std::fs::read_to_string(&manifest_path).expect("preserved manifest"),
+        first_manifest
+    );
 }
 
 #[test]

@@ -56,6 +56,63 @@ fn a_plugins_activities_and_jobs_resolve_from_its_own_catalog_layer() {
 }
 
 #[test]
+fn a_later_plugin_with_the_same_activity_name_is_refused_and_the_first_still_serves() {
+    let fixture = PluginFixture::new();
+    let mut first = DefinitionPlugin::new("alpha");
+    first.activity = "shared_index".to_string();
+    install(&fixture, &first);
+    let mut colliding = DefinitionPlugin::new("beta");
+    colliding.activity = "shared_index".to_string();
+    install(&fixture, &colliding);
+
+    let runtime = fixture.reopen();
+    assert_eq!(
+        show_plugin(&runtime, "alpha").expect("show alpha").status,
+        PluginStatus::Active
+    );
+    let refused = show_plugin(&runtime, "beta").expect("show beta");
+    assert_eq!(refused.status, PluginStatus::Inactive);
+    let diagnostic = refused.diagnostic.expect("collision diagnostic");
+    assert!(
+        diagnostic.contains("activity 'shared_index'")
+            && diagnostic.contains("plugin 'alpha'")
+            && diagnostic.contains("plugin 'beta'"),
+        "the diagnostic names the colliding activity and both plugins: {diagnostic}"
+    );
+    assert_eq!(
+        layer_of(&runtime, "alpha_refresh_pipeline", "activity:shared_index").0,
+        "plugin:alpha",
+        "the first valid plugin keeps serving its catalog definitions"
+    );
+}
+
+#[test]
+fn a_later_plugin_with_the_same_job_name_is_refused() {
+    let fixture = PluginFixture::new();
+    let mut first = DefinitionPlugin::new("alpha");
+    first.job = "shared_pipeline".to_string();
+    install(&fixture, &first);
+    let mut colliding = DefinitionPlugin::new("beta");
+    colliding.job = "shared_pipeline".to_string();
+    install(&fixture, &colliding);
+
+    let runtime = fixture.reopen();
+    assert_eq!(
+        show_plugin(&runtime, "alpha").expect("show alpha").status,
+        PluginStatus::Active
+    );
+    let refused = show_plugin(&runtime, "beta").expect("show beta");
+    assert_eq!(refused.status, PluginStatus::Inactive);
+    let diagnostic = refused.diagnostic.expect("collision diagnostic");
+    assert!(
+        diagnostic.contains("job 'shared_pipeline'")
+            && diagnostic.contains("plugin 'alpha'")
+            && diagnostic.contains("plugin 'beta'"),
+        "the diagnostic names the colliding job and both plugins: {diagnostic}"
+    );
+}
+
+#[test]
 fn a_workspace_activity_shadows_the_plugins_and_the_layer_output_says_so() {
     let fixture = PluginFixture::new();
     install(&fixture, &DefinitionPlugin::new("graph"));
@@ -99,6 +156,46 @@ fn a_cross_plugin_routine_target_refuses_that_plugin_and_leaves_the_others_loadi
         show_plugin(&runtime, "graph").expect("show graph").status,
         PluginStatus::Active,
         "one plugin's refusal leaves the others untouched"
+    );
+}
+
+#[test]
+fn a_plugin_job_may_not_reference_another_plugins_activity() {
+    let fixture = PluginFixture::new();
+    install(&fixture, &DefinitionPlugin::new("alpha"));
+
+    let source = DefinitionPlugin::new("beta").write(&fixture);
+    std::fs::write(
+        source.join("definitions/jobs/pipeline.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: beta_refresh_pipeline\nspec:\n  \
+         state: enabled\n  kind: workflow\n  max_active_runs: 1\n  steps:\n    - id: \
+         refresh\n      target: activity:alpha_refresh\n",
+    )
+    .expect("point beta's job at alpha's activity");
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("install refused plugin for diagnostics");
+
+    let runtime = fixture.reopen();
+    let refused = show_plugin(&runtime, "beta").expect("show beta");
+    assert_eq!(refused.status, PluginStatus::Inactive);
+    let diagnostic = refused.diagnostic.expect("a diagnostic");
+    assert!(
+        diagnostic.contains("pipeline.yaml")
+            && diagnostic.contains("alpha_refresh")
+            && diagnostic.contains("only its own activity or a shipped default"),
+        "the diagnostic names the job file, reference, and ownership rule: {diagnostic}"
+    );
+    assert_eq!(
+        show_plugin(&runtime, "alpha").expect("show alpha").status,
+        PluginStatus::Active,
+        "the referenced plugin remains available"
     );
 }
 

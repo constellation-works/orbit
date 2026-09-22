@@ -117,6 +117,51 @@ impl PluginHostLoad {
     }
 }
 
+#[derive(Debug, Default)]
+struct ActiveDefinitionOwners {
+    activities: BTreeMap<String, String>,
+    jobs: BTreeMap<String, String>,
+}
+
+impl ActiveDefinitionOwners {
+    fn refuse_collision(
+        &self,
+        namespace: &str,
+        definitions: &super::plugin_definitions::PluginDefinitionSet,
+    ) -> Result<(), String> {
+        for (name, _) in &definitions.activities {
+            if let Some(owner) = self.activities.get(name) {
+                return Err(format!(
+                    "plugin '{namespace}' is refused: activity '{name}' collides with active \
+                     plugin '{owner}'; activity names must be unique across active plugins"
+                ));
+            }
+        }
+        for (name, _) in &definitions.jobs {
+            if let Some(owner) = self.jobs.get(name) {
+                return Err(format!(
+                    "plugin '{namespace}' is refused: job '{name}' collides with active plugin \
+                     '{owner}'; job names must be unique across active plugins"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn record(
+        &mut self,
+        namespace: &str,
+        definitions: &super::plugin_definitions::PluginDefinitionSet,
+    ) {
+        for (name, _) in &definitions.activities {
+            self.activities.insert(name.clone(), namespace.to_string());
+        }
+        for (name, _) in &definitions.jobs {
+            self.jobs.insert(name.clone(), namespace.to_string());
+        }
+    }
+}
+
 /// Check everything a plugin contributes beyond its tools: the definition
 /// rules of §4.5 and its own `[plugins.<ns>]` schema.
 ///
@@ -392,6 +437,7 @@ fn load_host_plugins_with_audit(
     };
 
     let mut load = PluginHostLoad::default();
+    let mut active_definition_owners = ActiveDefinitionOwners::default();
     for plugin in &installed {
         // The grant set a row records is only authority when `orbit plugin
         // enable` wrote it. A backend that can write `orbit.db` can write its
@@ -428,7 +474,13 @@ fn load_host_plugins_with_audit(
             });
             continue;
         }
-        let registered = register_installed_plugin(global_root, plugin, registry, plugin_config);
+        let registered = register_installed_plugin(
+            global_root,
+            plugin,
+            registry,
+            plugin_config,
+            &mut active_definition_owners,
+        );
         if let Some(message) = &registered.diagnostic {
             load.diagnostics.push(PluginDiagnostic {
                 plugin: plugin.name.clone(),
@@ -575,6 +627,7 @@ fn register_installed_plugin(
     installed: &InstalledPlugin,
     registry: &mut ToolRegistry,
     plugin_config: &BTreeMap<String, Value>,
+    active_definition_owners: &mut ActiveDefinitionOwners,
 ) -> RegisteredPlugin {
     let refused = |status: PluginStatus, message: String| RegisteredPlugin {
         name: installed.name.clone(),
@@ -624,6 +677,29 @@ fn register_installed_plugin(
         return refused(PluginStatus::Inactive, message);
     }
 
+    // Per-plugin validation above establishes that every definition parses
+    // and follows §4.5. This host-level pass enforces the part no plugin can
+    // decide alone: two active plugins may not contribute the same catalog
+    // name. The store is ordered by namespace, so the first valid owner keeps
+    // serving and only the later plugin is refused.
+    let definitions = match super::plugin_definitions::load_plugin_definitions(
+        &plugin,
+        &super::plugin_definitions::shipped_job_names(),
+    ) {
+        Ok(definitions) => definitions,
+        Err(message) => {
+            return refused(
+                PluginStatus::Inactive,
+                format!("plugin '{}' is refused: {message}", installed.name),
+            );
+        }
+    };
+    if let Err(message) =
+        active_definition_owners.refuse_collision(plugin.namespace(), &definitions)
+    {
+        return refused(PluginStatus::Inactive, message);
+    }
+
     let backend = plugin_backend(global_root, installed, &plugin, plugin_config);
     let provenance = backend.spec().provenance.clone();
     let mut tools = Vec::with_capacity(plugin.tools.len());
@@ -646,6 +722,7 @@ fn register_installed_plugin(
         );
         tools.push(name);
     }
+    active_definition_owners.record(plugin.namespace(), &definitions);
     RegisteredPlugin {
         name: installed.name.clone(),
         version: installed.version.clone(),
