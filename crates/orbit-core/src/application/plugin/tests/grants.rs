@@ -103,6 +103,58 @@ fn an_unknown_grant_name_is_refused_rather_than_recorded() {
 }
 
 #[test]
+fn add_enable_and_show_share_the_missing_grant_projection() {
+    let fixture = PluginFixture::new();
+    let source =
+        fixture.write_plugin(PluginSpecFixture::new("guarded", "guarded").requesting_fs_write());
+    let added = install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("add enabled plugin");
+    assert_eq!(added.status, PluginStatus::Inactive, "{added:?}");
+    let added_diagnostic = added.diagnostic.clone().expect("add diagnostic");
+
+    let enabled = enable_plugin(&fixture.runtime, "guarded", &PluginEnableOptions::default())
+        .expect("re-enable without the missing grant")
+        .summary;
+    assert_eq!(enabled.status, PluginStatus::Inactive, "{enabled:?}");
+    assert_eq!(
+        enabled.diagnostic.as_deref(),
+        Some(added_diagnostic.as_str())
+    );
+
+    let shown = show_plugin(&fixture.reopen(), "guarded").expect("show");
+    assert_eq!(shown.status, PluginStatus::Inactive, "{shown:?}");
+    assert_eq!(shown.diagnostic.as_deref(), Some(added_diagnostic.as_str()));
+}
+
+#[test]
+fn enable_warns_for_each_grant_the_manifest_does_not_request() {
+    let fixture = PluginFixture::new();
+    install(&fixture, PluginSpecFixture::new("demo", "demo"));
+
+    let result = enable_plugin(&fixture.runtime, "demo", &grant_options(&["fs", "network"]))
+        .expect("valid but unrequested grants remain explicit operator consent");
+    assert_eq!(result.summary.status, PluginStatus::Active);
+    assert_eq!(result.warnings.len(), 2, "{:?}", result.warnings);
+    for grant in ["fs", "network"] {
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|warning| warning.contains(grant) && warning.contains("does not request")),
+            "the warning must name unrequested grant {grant}: {:?}",
+            result.warnings
+        );
+    }
+}
+
+#[test]
 fn sandbox_none_refuses_without_the_grant_and_is_a_doctor_finding_with_it() {
     let fixture = PluginFixture::new();
     install(
