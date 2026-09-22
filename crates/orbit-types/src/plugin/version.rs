@@ -2,8 +2,8 @@
 //!
 //! Orbit does not take a semver dependency for one comparison, so this is the
 //! subset plugin manifests need: comparators `>=`, `>`, `<=`, `<`, `=`, `^`,
-//! `~`, a bare version (caret), `*` (any), space-separated AND, and `||` OR.
-//! Pre-release tags are compared lexically after the numeric triple.
+//! `~`, a bare version (caret), x-ranges, `*` (any), space-separated AND,
+//! and `||` OR. Pre-release tags follow SemVer precedence.
 
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -23,7 +23,7 @@ pub enum VersionError {
 }
 
 /// A `MAJOR.MINOR.PATCH[-pre]` version.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Version {
     pub major: u64,
@@ -46,12 +46,19 @@ impl Version {
     fn cmp_release(&self, other: &Self) -> std::cmp::Ordering {
         (self.major, self.minor, self.patch)
             .cmp(&(other.major, other.minor, other.patch))
-            .then_with(|| match (self.pre.is_empty(), other.pre.is_empty()) {
-                (true, true) => std::cmp::Ordering::Equal,
-                (true, false) => std::cmp::Ordering::Greater,
-                (false, true) => std::cmp::Ordering::Less,
-                (false, false) => self.pre.cmp(&other.pre),
-            })
+            .then_with(|| compare_prerelease(&self.pre, &other.pre))
+    }
+}
+
+impl Ord for Version {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.cmp_release(other)
+    }
+}
+
+impl PartialOrd for Version {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -59,17 +66,27 @@ impl FromStr for Version {
     type Err = VersionError;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let trimmed = raw.trim().trim_start_matches('v');
+        let trimmed = raw.trim().strip_prefix('v').unwrap_or(raw.trim());
         // Build metadata never participates in ordering.
-        let trimmed = trimmed.split_once('+').map_or(trimmed, |(kept, _)| kept);
+        let trimmed = match trimmed.split_once('+') {
+            Some((kept, build)) if valid_identifiers(build, false) => kept,
+            Some(_) => return Err(VersionError::InvalidVersion(raw.to_string())),
+            None => trimmed,
+        };
         let (numeric, pre) = match trimmed.split_once('-') {
-            Some((numeric, pre)) => (numeric, pre.to_string()),
+            Some((numeric, pre)) if valid_identifiers(pre, true) => (numeric, pre.to_string()),
+            Some(_) => return Err(VersionError::InvalidVersion(raw.to_string())),
             None => (trimmed, String::new()),
         };
         let mut parts = numeric.split('.');
         let mut next = || {
             parts
                 .next()
+                .filter(|part| {
+                    !part.is_empty()
+                        && part.bytes().all(|byte| byte.is_ascii_digit())
+                        && (part.len() == 1 || !part.starts_with('0'))
+                })
                 .and_then(|part| part.parse::<u64>().ok())
                 .ok_or_else(|| VersionError::InvalidVersion(raw.to_string()))
         };
@@ -85,6 +102,46 @@ impl FromStr for Version {
             patch,
             pre,
         })
+    }
+}
+
+fn valid_identifiers(value: &str, reject_numeric_leading_zeroes: bool) -> bool {
+    !value.is_empty()
+        && value.split('.').all(|identifier| {
+            !identifier.is_empty()
+                && identifier
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && (!reject_numeric_leading_zeroes
+                    || !identifier.bytes().all(|byte| byte.is_ascii_digit())
+                    || identifier.len() == 1
+                    || !identifier.starts_with('0'))
+        })
+}
+
+fn compare_prerelease(left: &str, right: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    match (left.is_empty(), right.is_empty()) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => left
+            .split('.')
+            .zip(right.split('.'))
+            .map(|(left, right)| {
+                match (
+                    left.bytes().all(|byte| byte.is_ascii_digit()),
+                    right.bytes().all(|byte| byte.is_ascii_digit()),
+                ) {
+                    (true, true) => left.len().cmp(&right.len()).then_with(|| left.cmp(right)),
+                    (true, false) => Ordering::Less,
+                    (false, true) => Ordering::Greater,
+                    (false, false) => left.cmp(right),
+                }
+            })
+            .find(|ordering| *ordering != Ordering::Equal)
+            .unwrap_or_else(|| left.split('.').count().cmp(&right.split('.').count())),
     }
 }
 
@@ -153,6 +210,19 @@ impl Comparator {
             }
         }
     }
+
+    fn prerelease_bound(&self) -> Option<&Version> {
+        match self {
+            Self::Any => None,
+            Self::Exact(version)
+            | Self::Greater(version)
+            | Self::GreaterEq(version)
+            | Self::Less(version)
+            | Self::LessEq(version)
+            | Self::Caret(version)
+            | Self::Tilde(version) => Some(version),
+        }
+    }
 }
 
 /// A version range: alternatives separated by `||`, each an AND of
@@ -173,6 +243,10 @@ impl SemverRange {
             for token in alternative.split(|c: char| c.is_whitespace() || c == ',') {
                 let token = token.trim();
                 if token.is_empty() {
+                    continue;
+                }
+                if let Some(wildcard_range) = parse_x_range(token)? {
+                    comparators.extend(wildcard_range);
                     continue;
                 }
                 let comparator = if token == "*" {
@@ -212,7 +286,56 @@ impl SemverRange {
             comparators
                 .iter()
                 .all(|comparator| comparator.matches(version))
+                && (version.pre.is_empty()
+                    || comparators.iter().any(|comparator| {
+                        comparator.prerelease_bound().is_some_and(|bound| {
+                            !bound.pre.is_empty()
+                                && (bound.major, bound.minor, bound.patch)
+                                    == (version.major, version.minor, version.patch)
+                        })
+                    }))
         })
+    }
+}
+
+fn parse_x_range(token: &str) -> Result<Option<Vec<Comparator>>, VersionError> {
+    let parts = token.split('.').collect::<Vec<_>>();
+    let wildcard = |part: &str| part.eq_ignore_ascii_case("x") || part == "*";
+    if !parts.iter().any(|part| wildcard(part)) {
+        return Ok(None);
+    }
+    let invalid = || {
+        VersionError::InvalidRange(
+            token.to_string(),
+            "x-ranges must use numeric components followed only by x or *".to_string(),
+        )
+    };
+    if !(1..=3).contains(&parts.len()) {
+        return Err(invalid());
+    }
+    let first_wildcard = parts
+        .iter()
+        .position(|part| wildcard(part))
+        .ok_or_else(invalid)?;
+    if parts[first_wildcard..].iter().any(|part| !wildcard(part)) {
+        return Err(invalid());
+    }
+    match first_wildcard {
+        0 => Ok(Some(vec![Comparator::Any])),
+        1 => {
+            let major: u64 = parts[0].parse().map_err(|_| invalid())?;
+            let upper = major.checked_add(1).ok_or_else(invalid)?;
+            Ok(Some(vec![
+                Comparator::GreaterEq(Version::new(major, 0, 0)),
+                Comparator::Less(Version::new(upper, 0, 0)),
+            ]))
+        }
+        2 => {
+            let major: u64 = parts[0].parse().map_err(|_| invalid())?;
+            let minor: u64 = parts[1].parse().map_err(|_| invalid())?;
+            Ok(Some(vec![Comparator::Tilde(Version::new(major, minor, 0))]))
+        }
+        _ => Err(invalid()),
     }
 }
 

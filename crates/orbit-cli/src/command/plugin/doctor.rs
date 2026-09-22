@@ -63,5 +63,7 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
     } else {
         eprintln!("\n{issues} plugin(s) need attention.");
     }
-    Ok(Payload::blocks(serde_json::Value::Array(records), blocks).into())
+    Ok(Payload::blocks(serde_json::Value::Array(records), blocks)
+        .with_exit_code(i32::from(issues > 0))
+        .into())
 }
