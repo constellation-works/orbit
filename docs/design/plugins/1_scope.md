@@ -224,6 +224,11 @@ pin file and converges this host and workspace. It installs missing plugins, app
 permission review when the manifest requests grants. Pass the complete reviewed set with
 `--grant`; a committed pin is never grant consent. For an already-enabled host plugin, sync
 also seeds or refreshes that plugin's routines and auto-tasks in the current workspace.
+Before installing a missing pin, sync validates that the resolved source manifest declares the
+pinned namespace and, when the pin includes a version requirement, that its version satisfies
+the requirement. A mismatch is reported as unsatisfied without writing an install tree or host
+row, enabling the plugin, linking its skills, or seeding its definitions; sync still continues
+with unrelated pins.
 
 Grants, install paths, digests and enable state are **host-local** (SQLite `plugin_store`,
 next to `tool_store`), never copied into the repository. The pin's versioned `enabled:` value
