@@ -1641,6 +1641,18 @@ fn apply_plugin_certified_orbit_version(conn: &Connection) -> Result<(), OrbitEr
     )
 }
 
+/// v28 `plugin_archive_digest` migration: the SHA-256 of the archive a
+/// digest-pinned `https://` plugin source was fetched from and verified
+/// against at install time. Additive: an older binary ignores the column, and
+/// every plugin installed from a directory, a `git+` clone, or a local
+/// archive reads NULL because Orbit downloaded nothing for it.
+fn apply_plugin_archive_digest(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "plugins")? {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "ALTER TABLE plugins ADD COLUMN archive_digest TEXT")
+}
+
 /// v23 `audit_machine_name_columns` migration (ORB-12725): *host* is reserved
 /// for the MCP-host/process sense, so the two audit columns that carry a
 /// machine's display name are renamed to say so. A rename rather than an

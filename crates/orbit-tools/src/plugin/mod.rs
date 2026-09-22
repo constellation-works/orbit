@@ -42,5 +42,5 @@ pub use loader::{
 pub use mcp::{McpBackend, McpExpectedTool};
 pub use migrate::{SidecarManifest, load_sidecar_manifest, migrate_sidecars};
 pub use schema::{CompiledSchema, input_schema_from_params, params_from_input_schema};
-pub use source::{ResolvedSource, resolve_plugin_source};
+pub use source::{PluginSourceRequest, ResolvedSource, resolve_plugin_source};
 pub use tool::{PluginBackend, PluginTool, PluginToolBinding};

@@ -15,6 +15,12 @@ pub struct InstalledPlugin {
     pub install_path: String,
     /// SHA-256 of the manifest bytes at install time, hex encoded.
     pub manifest_digest: String,
+    /// SHA-256 of the archive this was installed from, hex encoded, when
+    /// `source` was an `https://` archive Orbit fetched and verified against
+    /// a pinned digest. `None` for a directory, a `git+` clone, or a local
+    /// archive, none of which Orbit downloads.
+    #[serde(default)]
+    pub archive_digest: Option<String>,
     pub enabled: bool,
     /// Grants recorded at `orbit plugin enable --grant …`; the loader refuses
     /// a tool whose plugin lacks one it requires (design §4.1).

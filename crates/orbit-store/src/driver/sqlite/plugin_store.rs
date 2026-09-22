@@ -7,7 +7,7 @@ use rusqlite::{OptionalExtension, Row, params};
 use crate::{Store, StoreTx, now_string};
 
 const PLUGIN_COLUMNS: &str = "name, version, source, install_path, manifest_digest, enabled, \
-     grants_json, first_party, installed_at, updated_at, certified_orbit_version";
+     grants_json, first_party, installed_at, updated_at, certified_orbit_version, archive_digest";
 
 fn plugin_from_row(row: &Row<'_>) -> rusqlite::Result<InstalledPlugin> {
     let grants_json: String = row.get(6)?;
@@ -26,6 +26,7 @@ fn plugin_from_row(row: &Row<'_>) -> rusqlite::Result<InstalledPlugin> {
         installed_at: row.get(8)?,
         updated_at: row.get(9)?,
         certified_orbit_version: row.get(10)?,
+        archive_digest: row.get(11)?,
     })
 }
 
@@ -67,14 +68,16 @@ impl StoreTx<'_> {
         self.tx
             .execute(
                 "INSERT INTO plugins(name, version, source, install_path, manifest_digest, enabled, \
-                 grants_json, first_party, installed_at, updated_at, certified_orbit_version) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10) \
+                 grants_json, first_party, installed_at, updated_at, certified_orbit_version, \
+                 archive_digest) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11) \
                  ON CONFLICT(name) DO UPDATE SET version = excluded.version, \
                  source = excluded.source, install_path = excluded.install_path, \
                  manifest_digest = excluded.manifest_digest, enabled = excluded.enabled, \
                  grants_json = excluded.grants_json, first_party = excluded.first_party, \
                  updated_at = excluded.updated_at, \
-                 certified_orbit_version = excluded.certified_orbit_version",
+                 certified_orbit_version = excluded.certified_orbit_version, \
+                 archive_digest = excluded.archive_digest",
                 params![
                     plugin.name,
                     plugin.version,
@@ -86,6 +89,7 @@ impl StoreTx<'_> {
                     plugin.first_party as i32,
                     now,
                     plugin.certified_orbit_version,
+                    plugin.archive_digest,
                 ],
             )
             .map_err(|e| OrbitError::Store(e.to_string()))?;

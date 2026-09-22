@@ -305,6 +305,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0027".to_string(),
                 "plugin_certified_orbit_version".to_string()
             ),
+            (
+                "migration.v0028".to_string(),
+                "plugin_archive_digest".to_string()
+            ),
         ]
     );
 }
@@ -318,7 +322,9 @@ fn remove_operation_mode_drops_the_grant_tables_from_an_upgraded_store() {
     // Rewind to the last version that still shipped the feature, recreating
     // exactly what its `operation` feature migration v1 wrote.
     conn.execute_batch(
-        "DELETE FROM schema_meta WHERE key IN ('migration.v0026', 'migration.v0027');
+        // Every ledger key above v25, by range rather than by name, so adding
+        // the next migration does not red this fixture.
+        "DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key > 'migration.v0025';
          CREATE TABLE operation_grants (workspace_id TEXT NOT NULL, grant_id TEXT NOT NULL, status TEXT NOT NULL, revision INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, grant_json TEXT NOT NULL, PRIMARY KEY(workspace_id, grant_id));
          CREATE INDEX operation_grants_workspace ON operation_grants(workspace_id, created_at);
          CREATE TABLE operation_recovery (workspace_id TEXT NOT NULL, task_id TEXT NOT NULL, ledger_json TEXT NOT NULL, PRIMARY KEY(workspace_id, task_id));
@@ -590,7 +596,7 @@ fn store_reopens_database_at_shipped_schema_v4_and_applies_through_latest() {
     );
     assert_eq!(
         applied.last().map(|migration| migration.name.as_str()),
-        Some("plugin_certified_orbit_version")
+        Some("plugin_archive_digest")
     );
     let connection = store.connection();
     let conn = connection.lock().expect("connection");

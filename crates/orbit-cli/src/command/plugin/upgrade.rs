@@ -14,6 +14,11 @@ pub struct PluginUpgradeArgs {
     pub name: String,
     /// Replacement source; defaults to the source recorded at install time
     pub source: Option<String>,
+    /// `sha256:<hex>` the archive at an `https://` source must hash to.
+    /// Required for such a source, including one recorded at install time:
+    /// the replacement archive is a new download and needs its own pin.
+    #[arg(long)]
+    pub digest: Option<String>,
     /// Complete permission grant set authorizing and enabling the new manifest
     /// (repeatable, comma-separated): fs, network, env_pass, orbit_tools,
     /// unsandboxed. Without it, widened requests disable the plugin and clear
@@ -28,6 +33,7 @@ impl Execute for PluginUpgradeArgs {
             &self.name,
             self.source.as_deref(),
             &PluginUpgradeOptions {
+                digest: self.digest,
                 grants: self.grants,
             },
         )?;

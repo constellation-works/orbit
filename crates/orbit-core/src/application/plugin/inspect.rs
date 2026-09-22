@@ -12,7 +12,8 @@ use orbit_tools::plugin::{
 };
 use orbit_types::plugin::{
     InstalledPlugin, PluginExecutionKind, PluginGrant, PluginProvenance, PluginSandbox,
-    PluginStatus, SemverRange, Version, plugin_tool_name,
+    PluginStatus, SemverRange, Version, parse_archive_digest, plugin_tool_name,
+    remote_archive_source,
 };
 
 use super::panels::{PluginLinkSummary, PluginPanelSummary, web_summaries};
@@ -169,6 +170,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
             message: error.to_string(),
         });
     let stale_seeded = stale_seeded_definition_rows(runtime, &summaries)?;
+    let archive_drift = archive_digest_drift_rows(runtime, &summaries)?;
     // A skill link whose target is gone is invisible to the skill catalog's
     // own doctor — it only walks seeded trees — and to the plugin record,
     // which says nothing about the provider discovery roots (§3).
@@ -231,8 +233,74 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
         .collect();
     rows.extend(dangling);
     rows.extend(stale_seeded);
+    rows.extend(archive_drift);
     if let Some(finding) = invalid_pin_file {
         rows.push(finding);
+    }
+    Ok(rows)
+}
+
+/// Findings for a pinned `https://` archive whose digest no longer describes
+/// what this host installed.
+///
+/// The comparison is between the pin file and the digest recorded at install
+/// time, so it is offline and deterministic: doctor reports that the two
+/// disagree, it does not go back to the network to re-hash the URL. That
+/// covers the case that matters — a pin bumped to a new release, or edited to
+/// a digest nobody has installed — without turning a diagnostic command into
+/// a download.
+fn archive_digest_drift_rows(
+    runtime: &OrbitRuntime,
+    summaries: &[PluginSummary],
+) -> Result<Vec<PluginDoctorResult>, OrbitError> {
+    // A pin file that does not parse is already its own doctor row; this
+    // check has nothing to add about it.
+    let Ok(Some(pins)) = read_pin_file(&runtime.shared_root()) else {
+        return Ok(Vec::new());
+    };
+    let status_of = summaries
+        .iter()
+        .map(|summary| (summary.name.as_str(), summary.status))
+        .collect::<BTreeMap<_, _>>();
+    let mut rows = Vec::new();
+    for pin in &pins.plugins {
+        let Some(url) = pin.source.as_deref().and_then(remote_archive_source) else {
+            continue;
+        };
+        // A malformed digest is already a pin-file finding of its own; this
+        // row is only about two well-formed digests disagreeing.
+        let Some(expected) = pin
+            .digest
+            .as_deref()
+            .and_then(|digest| parse_archive_digest(digest).ok())
+        else {
+            continue;
+        };
+        let Some(installed) = runtime.stores().plugins().get_plugin(&pin.name)? else {
+            continue;
+        };
+        let name = &pin.name;
+        let message = match installed.archive_digest.as_deref() {
+            Some(actual) if actual == expected => continue,
+            Some(actual) => format!(
+                "plugin '{name}' was installed from an archive hashing to sha256:{actual}, but \
+                 the workspace pin for '{name}' now names sha256:{expected}; run `orbit plugin \
+                 upgrade {name} {url} --digest sha256:{expected}` to install the pinned archive"
+            ),
+            None => format!(
+                "plugin '{name}' is pinned to the archive {url} at sha256:{expected}, but this \
+                 host's install records no archive digest and so was never checked against it; \
+                 reinstall it with `orbit plugin upgrade {name} {url} --digest sha256:{expected}`"
+            ),
+        };
+        rows.push(PluginDoctorResult {
+            plugin: name.clone(),
+            status: status_of
+                .get(name.as_str())
+                .copied()
+                .unwrap_or(PluginStatus::Missing),
+            message,
+        });
     }
     Ok(rows)
 }

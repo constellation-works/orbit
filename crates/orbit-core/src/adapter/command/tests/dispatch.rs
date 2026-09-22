@@ -806,6 +806,7 @@ fn record_callback_plugin(runtime: &OrbitRuntime, orbit_tools: &[&str]) {
             version: "1.0.0".to_string(),
             source: "fixture".to_string(),
             install_path: root.to_string_lossy().into_owned(),
+            archive_digest: None,
             manifest_digest: "0".repeat(64),
             enabled: true,
             grants: vec!["orbit_tools".to_string()],
