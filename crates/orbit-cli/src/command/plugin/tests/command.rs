@@ -117,6 +117,10 @@ fn cli_parses_the_plugin_lifecycle() {
             PluginSubcommand::Remove(args) => {
                 assert_eq!(args.name, "demo");
                 assert!(args.yes);
+                assert!(
+                    !args.record_only,
+                    "ordinary removal deletes the install it recorded"
+                );
             }
             _ => panic!("expected plugin remove"),
         },

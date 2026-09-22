@@ -538,3 +538,101 @@ fn tool_scaffold_still_works_and_points_at_plugin_scaffold() {
         "the v1 sidecar is still written"
     );
 }
+
+/// A backend that can write `orbit.db` can point its own row anywhere, and the
+/// loader's refusal used to recommend `orbit plugin remove`, which deleted
+/// whatever the row named. Run against the real binary and a real home: the
+/// three verbs that touch the recorded tree refuse, the unrelated directory
+/// survives, and the record-only removal the refusal recommends clears the row
+/// without touching it [ORB-12800].
+#[cfg(unix)]
+#[test]
+fn lifecycle_verbs_refuse_a_relocated_row_and_record_only_clears_it() {
+    let fixture = Fixture::new();
+    let source = fixture.source("demo");
+    let source_arg = source.to_str().expect("utf8 source").to_string();
+    fixture
+        .orbit()
+        .args(["plugin", "scaffold", "demo", "--dir", &source_arg])
+        .assert()
+        .success();
+    fixture
+        .orbit()
+        .args(["plugin", "add", &source_arg, "--enable"])
+        .assert()
+        .success();
+
+    // An operator directory Orbit never installed into, with a file that has
+    // to be there afterwards.
+    let sentinel = fixture.home.join("notes");
+    std::fs::create_dir_all(&sentinel).expect("create the sentinel tree");
+    let keep = sentinel.join("keep.txt");
+    std::fs::write(&keep, "operator data").expect("write the sentinel file");
+    let sentinel_arg = sentinel.to_str().expect("utf8 sentinel").to_string();
+
+    let connection =
+        Connection::open(fixture.home.join(".orbit/orbit.db")).expect("open the store");
+    connection
+        .execute(
+            "UPDATE plugins SET install_path = ?1 WHERE name = 'demo'",
+            [&sentinel_arg],
+        )
+        .expect("the row write succeeds; the commands are what refuse it");
+    drop(connection);
+
+    let expected = fixture
+        .home
+        .join(".orbit/plugins/demo")
+        .to_str()
+        .expect("utf8 install root")
+        .to_string();
+    for args in [
+        vec!["plugin", "remove", "demo", "--yes"],
+        vec!["plugin", "enable", "demo"],
+        vec!["plugin", "disable", "demo"],
+    ] {
+        fixture
+            .orbit()
+            .args(&args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(sentinel_arg.clone()))
+            .stderr(predicate::str::contains(expected.clone()))
+            .stderr(predicate::str::contains("--record-only"));
+        assert_eq!(
+            std::fs::read_to_string(&keep).expect("the sentinel file survives"),
+            "operator data",
+            "`orbit {}` deleted a tree this host never installed",
+            args.join(" ")
+        );
+    }
+
+    // The refusals left the row, so the command they recommend still has
+    // something to clear.
+    let removed = fixture
+        .orbit()
+        .args([
+            "plugin",
+            "remove",
+            "demo",
+            "--yes",
+            "--record-only",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("record-only removal");
+    assert!(removed.status.success(), "{removed:?}");
+    let removed = stdout_json(&removed);
+    assert_eq!(removed["record_only"], true);
+    assert_eq!(removed["install_removed"], false);
+    assert_eq!(
+        std::fs::read_to_string(&keep).expect("the sentinel file survives the recovery"),
+        "operator data"
+    );
+    fixture
+        .orbit()
+        .args(["plugin", "show", "demo"])
+        .assert()
+        .failure();
+}

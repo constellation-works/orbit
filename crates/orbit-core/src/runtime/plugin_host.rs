@@ -107,13 +107,22 @@ pub fn plugin_install_root(global_root: &Path) -> PathBuf {
     global_root.join("plugins")
 }
 
+/// The one directory this host installs every version of `name` into.
+///
+/// Trusted layout: it is derived from the namespace and the global root, never
+/// from the `plugins` row, so a lifecycle verb can clean up after a row whose
+/// recorded `install_path` it refuses to touch [ORB-12800].
+pub fn plugin_namespace_dir(global_root: &Path, name: &str) -> PathBuf {
+    plugin_install_root(global_root).join(name)
+}
+
 pub fn plugin_install_path(global_root: &Path, name: &str, version: &str) -> PathBuf {
-    plugin_install_root(global_root).join(name).join(version)
+    plugin_namespace_dir(global_root, name).join(version)
 }
 
 /// The `current` link a host keeps beside the versioned install directories.
 pub fn plugin_current_link(global_root: &Path, name: &str) -> PathBuf {
-    plugin_install_root(global_root).join(name).join("current")
+    plugin_namespace_dir(global_root, name).join("current")
 }
 
 /// Per-plugin state directory handed to the backend as `ORBIT_PLUGIN_STATE`.
