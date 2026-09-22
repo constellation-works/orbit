@@ -19,7 +19,7 @@ pub struct PluginAddArgs {
     /// Complete permission grant set to record when enabling (repeatable,
     /// comma-separated): fs, network, env_pass, orbit_tools, unsandboxed.
     /// Replaces any recorded set.
-    #[arg(long = "grant", value_delimiter = ',')]
+    #[arg(long = "grant", value_delimiter = ',', requires = "enable")]
     pub grants: Vec<String>,
 }
 
@@ -45,7 +45,9 @@ impl Execute for PluginAddArgs {
                 text.push_str(&format!("\n  {}", tool.name));
             }
         }
-        if !self.enable {
+        if let Some(diagnostic) = &summary.diagnostic {
+            text.push_str(&format!("\n\n{diagnostic}"));
+        } else if summary.status == orbit_types::plugin::PluginStatus::Disabled {
             text.push_str(&format!(
                 "\n\nNext step:\n  orbit plugin enable {}",
                 summary.name

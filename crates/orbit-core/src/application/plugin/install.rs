@@ -1,15 +1,18 @@
 //! `orbit plugin add`: resolve a source, refuse an in-repository one, copy the
 //! tree into the host install root, and record it.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_tools::plugin::{
-    PluginValidationPolicy, first_party_source, load_plugin_dir, manifest_refusal,
+    LoadedPlugin, PluginValidationPolicy, first_party_source, load_plugin_dir, manifest_refusal,
     plugin_symlink_refusal, refuse_plugin_tree_symlinks, resolve_plugin_source,
     validate_loaded_plugin,
 };
-use orbit_types::plugin::{InstalledPlugin, PluginStatus};
+use orbit_types::plugin::{
+    InstalledPlugin, PluginGrant, PluginManifest, PluginNetworkPermission, PluginStatus,
+};
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
@@ -28,6 +31,38 @@ pub struct PluginAddOptions {
     pub grants: Vec<String>,
 }
 
+/// One requested-permission change between the installed and candidate
+/// manifests. `widened` means carrying the old grant would authorize
+/// something the operator did not previously review.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginPermissionChange {
+    pub grant: PluginGrant,
+    pub previous: Option<String>,
+    pub requested: Option<String>,
+    pub widened: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PluginUpgradeOptions {
+    /// Complete grant set authorizing and enabling the upgraded manifest.
+    /// Without it, a safe upgrade preserves the existing row; a widening
+    /// disables the plugin and clears its grants.
+    pub grants: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginUpgradeResult {
+    pub summary: PluginSummary,
+    pub permission_changes: Vec<PluginPermissionChange>,
+    pub grants_reset: bool,
+}
+
+struct PluginInstallOutcome {
+    summary: PluginSummary,
+    permission_changes: Vec<PluginPermissionChange>,
+    grants_reset: bool,
+}
+
 /// Install `source` for this host: a local directory, a `git+<url>#<ref>`
 /// reference, or a tar archive.
 pub fn install_plugin(
@@ -35,6 +70,59 @@ pub fn install_plugin(
     source: &str,
     options: &PluginAddOptions,
 ) -> Result<PluginSummary, OrbitError> {
+    install_plugin_inner(runtime, source, options, None).map(|outcome| outcome.summary)
+}
+
+/// Replace an installed namespace, using its recorded source when the caller
+/// does not provide one. An explicit grant list is re-consent for the new
+/// manifest and enables it; otherwise the same widening rules as plain `add`
+/// apply.
+pub fn upgrade_plugin(
+    runtime: &OrbitRuntime,
+    name: &str,
+    source: Option<&str>,
+    options: &PluginUpgradeOptions,
+) -> Result<PluginUpgradeResult, OrbitError> {
+    let existing = runtime
+        .stores()
+        .plugins()
+        .get_plugin(name)?
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "plugin '{name}' is not installed on this host; run `orbit plugin add <source>` first"
+            ))
+        })?;
+    let source = source.unwrap_or(&existing.source);
+    if source.trim().is_empty() {
+        return Err(OrbitError::InvalidInput(format!(
+            "plugin '{name}' has no recorded source; pass one as `orbit plugin upgrade {name} <source>`"
+        )));
+    }
+    let add_options = PluginAddOptions {
+        force: true,
+        enable: !options.grants.is_empty(),
+        grants: options.grants.clone(),
+    };
+    let outcome = install_plugin_inner(runtime, source, &add_options, Some(name))?;
+    Ok(PluginUpgradeResult {
+        summary: outcome.summary,
+        permission_changes: outcome.permission_changes,
+        grants_reset: outcome.grants_reset,
+    })
+}
+
+fn install_plugin_inner(
+    runtime: &OrbitRuntime,
+    source: &str,
+    options: &PluginAddOptions,
+    expected_name: Option<&str>,
+) -> Result<PluginInstallOutcome, OrbitError> {
+    if !options.enable && !options.grants.is_empty() {
+        return Err(OrbitError::InvalidInput(
+            "--grant requires --enable; grants are recorded only when the plugin is enabled"
+                .to_string(),
+        ));
+    }
     let resolved = resolve_plugin_source(source)?;
     let source_root = resolved.root.clone();
     refuse_in_repository_source(runtime, &source_root)?;
@@ -46,8 +134,38 @@ pub fn install_plugin(
     validate_loaded_plugin(&plugin, &policy).map_err(manifest_refusal)?;
 
     let name = plugin.namespace().to_string();
+    if let Some(expected) = expected_name
+        && name != expected
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "upgrade source declares plugin '{name}', but '{expected}' was requested"
+        )));
+    }
     let version = plugin.manifest.metadata.version.clone();
     let global_root = runtime.global_root();
+    let existing = runtime.stores().plugins().get_plugin(&name)?;
+    let manifest_changed = existing
+        .as_ref()
+        .is_some_and(|installed| installed.manifest_digest != plugin.manifest_digest);
+    let (permission_changes, previous_manifest_error) = if manifest_changed {
+        match existing.as_ref().map(|installed| {
+            load_plugin_dir(Path::new(&installed.install_path))
+                .map(|previous| permission_diff(&previous, &plugin))
+        }) {
+            Some(Ok(changes)) => (changes, None),
+            Some(Err(error)) => (Vec::new(), Some(error.to_string())),
+            None => (Vec::new(), None),
+        }
+    } else {
+        (Vec::new(), None)
+    };
+    let grants_reset = existing.as_ref().is_some_and(|installed| {
+        !options.enable
+            && !installed.grants.is_empty()
+            && manifest_changed
+            && (previous_manifest_error.is_some()
+                || permission_changes.iter().any(|change| change.widened))
+    });
     let install_path = plugin_install_path(&global_root, &name, &version);
     if install_path.exists() {
         if !options.force {
@@ -63,14 +181,16 @@ pub fn install_plugin(
     copy_tree(&source_root, &install_path)?;
     link_current(&global_root, &name, &version)?;
 
-    let existing = runtime.stores().plugins().get_plugin(&name)?;
-    let enabled = options.enable || existing.as_ref().is_some_and(|plugin| plugin.enabled);
+    let enabled =
+        !grants_reset && (options.enable || existing.as_ref().is_some_and(|plugin| plugin.enabled));
     let grants = if options.enable {
         orbit_types::plugin::parse_grants(&options.grants)
             .map_err(OrbitError::InvalidInput)?
             .into_iter()
             .map(|grant| grant.as_str().to_string())
             .collect()
+    } else if grants_reset {
+        Vec::new()
     } else {
         existing
             .as_ref()
@@ -100,6 +220,13 @@ pub fn install_plugin(
         installed_at: String::new(),
         updated_at: String::new(),
     };
+    // Revoke the old authorization witness before replacing the row. If the
+    // database write then fails, the old enabled row fails closed rather than
+    // leaving a witness that a database writer could replay onto the new
+    // manifest and its wider request.
+    if grants_reset {
+        record_authorized_grants(&global_root, &name, false, &[])?;
+    }
     runtime.with_mutation(|| {
         runtime.stores().plugins().upsert_plugin(&record)?;
         Ok((
@@ -110,11 +237,12 @@ pub fn install_plugin(
             },
         ))
     })?;
-    // `--enable` is the operator authorizing this grant set, so it records the
-    // integrity value the loader checks the row back against. A plain `add`
-    // deliberately does not: the grants it carries forward came from the
-    // existing row, and writing a witness over them would authorize a set an
-    // `orbit.db` writer could have put there [ORB-12778].
+    // `--enable` (including upgrade re-consent) is the operator authorizing
+    // this grant set, so it records the integrity value the loader checks the
+    // row back against. An ordinary plain `add` deliberately does not rewrite
+    // a witness for carried grants: doing so would authorize a set an
+    // `orbit.db` writer could have put there. The widening branch above writes
+    // only the disabled/empty revocation witness [ORB-12778].
     if options.enable {
         record_authorized_grants(&global_root, &name, enabled, &record.grants)?;
     }
@@ -162,8 +290,130 @@ pub fn install_plugin(
     // out from under it.
     drop(resolved);
     let mut summary = summary_for_installed(&stored, Some(&plugin), status);
-    summary.diagnostic = contributions_refused;
-    Ok(summary)
+    summary.diagnostic = if grants_reset {
+        Some(permission_widening_message(
+            &name,
+            &plugin.manifest,
+            &permission_changes,
+            previous_manifest_error.as_deref(),
+        ))
+    } else {
+        contributions_refused
+    };
+    Ok(PluginInstallOutcome {
+        summary,
+        permission_changes,
+        grants_reset,
+    })
+}
+
+fn permission_diff(
+    previous: &LoadedPlugin,
+    requested: &LoadedPlugin,
+) -> Vec<PluginPermissionChange> {
+    previous
+        .manifest
+        .grant_requests()
+        .into_iter()
+        .zip(requested.manifest.grant_requests())
+        .filter_map(|(before, after)| {
+            (before.requested != after.requested).then(|| PluginPermissionChange {
+                grant: before.grant,
+                previous: before.requested,
+                requested: after.requested,
+                widened: request_widened(before.grant, &previous.manifest, &requested.manifest),
+            })
+        })
+        .collect()
+}
+
+fn request_widened(
+    grant: PluginGrant,
+    previous: &PluginManifest,
+    requested: &PluginManifest,
+) -> bool {
+    let before = &previous.spec.permissions;
+    let after = &requested.spec.permissions;
+    match grant {
+        PluginGrant::Fs => {
+            contains_added(&before.fs.read, &after.fs.read)
+                || contains_added(&before.fs.write, &after.fs.write)
+        }
+        PluginGrant::Network => network_rank(after.network) > network_rank(before.network),
+        PluginGrant::EnvPass => contains_added(&before.env_pass, &after.env_pass),
+        PluginGrant::OrbitTools => contains_added(&before.orbit_tools, &after.orbit_tools),
+        PluginGrant::Unsandboxed => {
+            previous.spec.backend.sandbox != requested.spec.backend.sandbox
+                && requested.spec.backend.sandbox == orbit_types::plugin::PluginSandbox::None
+        }
+    }
+}
+
+fn contains_added(previous: &[String], requested: &[String]) -> bool {
+    let previous: BTreeSet<&str> = previous.iter().map(String::as_str).collect();
+    requested
+        .iter()
+        .map(String::as_str)
+        .any(|value| !previous.contains(value))
+}
+
+fn network_rank(permission: PluginNetworkPermission) -> u8 {
+    match permission {
+        PluginNetworkPermission::None => 0,
+        PluginNetworkPermission::Loopback => 1,
+        PluginNetworkPermission::Any => 2,
+    }
+}
+
+fn permission_widening_message(
+    name: &str,
+    manifest: &PluginManifest,
+    changes: &[PluginPermissionChange],
+    previous_manifest_error: Option<&str>,
+) -> String {
+    let mut message = String::from(
+        "Requested permissions widened; the plugin was disabled and its grants were cleared:\n",
+    );
+    if let Some(error) = previous_manifest_error {
+        message.push_str(&format!(
+            "  previous manifest could not be compared safely: {error}\n"
+        ));
+        for request in manifest
+            .grant_requests()
+            .into_iter()
+            .filter(|request| request.requested.is_some())
+        {
+            message.push_str(&format!(
+                "  {}: (unavailable) -> {}\n",
+                request.grant,
+                request.requested.as_deref().unwrap_or("(not requested)")
+            ));
+        }
+    } else {
+        for change in changes.iter().filter(|change| change.widened) {
+            message.push_str(&format!(
+                "  {}: {} -> {}\n",
+                change.grant,
+                change.previous.as_deref().unwrap_or("(not requested)"),
+                change.requested.as_deref().unwrap_or("(not requested)")
+            ));
+        }
+    }
+    let grants = manifest
+        .required_grants()
+        .into_iter()
+        .map(|grant| grant.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    let enable_command = if grants.is_empty() {
+        format!("orbit plugin enable {name}")
+    } else {
+        format!("orbit plugin enable {name} --grant {grants}")
+    };
+    message.push_str(&format!(
+        "Review the new requests, then re-consent with `{enable_command}`."
+    ));
+    message
 }
 
 /// Global install only (§3): a plugin tree inside the repository would be

@@ -30,9 +30,10 @@ pub use dispatch::{
 pub use plugin::{
     PluginAddOptions, PluginCliGroup, PluginCliVerb, PluginDoctorResult, PluginEnableOptions,
     PluginEnableResult, PluginLinkSummary, PluginMigrateRequest, PluginPanelSummary,
-    PluginPermissionSummary, PluginSeedAction, PluginSeedOutcome, PluginSummary, PluginSyncOutcome,
-    PluginTestOptions, PluginTestOutcome, PluginTestReport, PluginToolSummary,
-    PluginValidationReport, execute_global_plugin_tool, host_plugin_cli_groups,
-    host_plugin_mcp_definitions, migrate_plugin_sidecars,
+    PluginPermissionChange, PluginPermissionSummary, PluginSeedAction, PluginSeedOutcome,
+    PluginSummary, PluginSyncOutcome, PluginTestOptions, PluginTestOutcome, PluginTestReport,
+    PluginToolSummary, PluginUpgradeOptions, PluginUpgradeResult, PluginValidationReport,
+    execute_global_plugin_tool, host_plugin_cli_groups, host_plugin_mcp_definitions,
+    migrate_plugin_sidecars,
 };
 pub use registry::{DoctorResult, DoctorStatus, ToolInfo};

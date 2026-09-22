@@ -95,6 +95,25 @@ fn assert_help_matches_golden(args: &[&str], relative: &str, expected: &str) {
 }
 
 #[test]
+fn plugin_help_matches_the_shipped_surface() {
+    let cases: &[(&[&str], &str, &str)] = &[
+        (
+            &["orbit", "plugin"],
+            "plugin_help/root.txt",
+            include_str!("plugin_help/root.txt"),
+        ),
+        (
+            &["orbit", "plugin", "upgrade"],
+            "plugin_help/upgrade.txt",
+            include_str!("plugin_help/upgrade.txt"),
+        ),
+    ];
+    for (args, relative, expected) in cases {
+        assert_help_matches_golden(args, relative, expected);
+    }
+}
+
+#[test]
 fn recursive_cli_help_uses_only_placeholder_artifact_ids() {
     assert_help_tree_has_no_concrete_artifact_ids(&Cli::command());
 }

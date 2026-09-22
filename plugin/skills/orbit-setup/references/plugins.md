@@ -39,6 +39,7 @@ copy would follow it and place the target's bytes inside the plugin root.
 orbit plugin scaffold demo               # start a new plugin from a working example
 orbit plugin validate ./my-plugin        # check the manifest before installing
 orbit plugin add ./my-plugin             # install for this machine (disabled)
+orbit plugin upgrade my-plugin           # update and review permission changes
 orbit plugin enable my-plugin            # put its tools on the surface
 orbit plugin list                        # what is installed or pinned here
 orbit plugin show my-plugin              # tools, panels, and requested versus granted
@@ -53,6 +54,14 @@ of running them. See [Certifying a plugin](#certifying-a-plugin-for-this-orbit).
 installs and enables in one step. The tool registry is built when an Orbit
 command starts, so an enable takes effect on the next command — restart a
 long-lived `orbit mcp serve` to pick it up in that session.
+
+`add --grant …` requires `--enable`. For an installed namespace, `plugin
+upgrade <ns> [source]` uses the recorded source by default and prints the old
+and new permission requests. If filesystem roots, network mode, environment
+names, Orbit-tool callbacks or the sandbox widened, Orbit disables the plugin,
+clears its grants and prints the `plugin enable --grant …` re-consent command.
+An unchanged or narrower request keeps the existing state. Supplying
+`upgrade --grant …` is explicit re-consent and enables the new manifest.
 
 On a machine that is joining a repository someone else configured:
 
@@ -177,8 +186,8 @@ built-in tools, the runtime, or another plugin.
 
 ## Permissions and grants
 
-The manifest's `spec.permissions` block is a **request**, never a grant. The
-`--grant` flags at `orbit plugin enable` are the only source of authority, and
+The manifest's `spec.permissions` block is a **request**, never a grant.
+`--grant` on an enabling add, enable or upgrade is the only source of authority, and
 `orbit plugin show` prints requested and granted side by side. Record only the
 grants the user authorizes.
 

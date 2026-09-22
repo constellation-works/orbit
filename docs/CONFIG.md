@@ -1309,6 +1309,7 @@ plugins:
 | Command | What it does |
 |---|---|
 | `orbit plugin add <dir\|git+url#ref\|archive>` | Install for this machine. `--enable` puts its tools on the surface immediately; `--grant` records requested permissions; `--force` replaces the same version. |
+| `orbit plugin upgrade <ns> [source]` | Replace an installed plugin (using its recorded source by default) and print its requested-permission diff. A widening disables it and clears carried grants unless `--grant` explicitly re-consents. |
 | `orbit plugin enable <ns> [--grant …]` / `disable <ns>` | Turn the plugin's tools on or off for this machine. The change takes effect on the next Orbit command, which is when the tool registry is next built. |
 | `orbit plugin remove <ns> --yes` | Uninstall after explicit confirmation. Data the plugin wrote elsewhere is retained. |
 | `orbit plugin list` / `show <ns>` | What is installed or pinned, its tools, and its **requested versus granted** permissions side by side. |
@@ -1324,7 +1325,7 @@ holds, is reported by `list`, `show` and `doctor` and leaves every built-in
 and every other plugin working.
 
 **The manifest declares placement, never permission.** `spec.permissions` is a
-*request*; the `--grant` flags at enable time are the only source of authority,
+*request*; `--grant` on an enabling add, enable or upgrade is the only source of authority,
 and `orbit plugin show` prints both. Who may call a plugin tool comes from its
 `execution_kind`: a `read_only` tool is callable by any caller Orbit can
 identify (an agent envelope, an operator, or a sanctioned run), and a
@@ -1341,6 +1342,16 @@ Backends run confined to the granted profile (Linux Landlock, macOS
 an `orbit plugin doctor` finding. `spec.web` parses and is accepted but
 contributes nothing in this release. `*.orbit-tool.yaml` sidecars and
 `orbit tool add` keep working unchanged.
+
+`plugin add --grant …` requires `--enable`; grants are never silently dropped.
+When `add` or `upgrade` changes a manifest, Orbit compares filesystem roots,
+network mode, environment names, Orbit-tool callbacks and sandbox mode. It
+preserves an existing enabled/granted row only when the request is unchanged or
+narrower. A widening disables the plugin, clears the grants and prints both the
+diff and the `plugin enable --grant …` command needed for explicit re-consent.
+`plugin upgrade <ns> [source]` uses the recorded source when omitted and prints
+the diff even when no request widened; its own `--grant …` explicitly
+authorizes and enables the replacement.
 
 **What else a plugin contributes.** Beyond tools:
 

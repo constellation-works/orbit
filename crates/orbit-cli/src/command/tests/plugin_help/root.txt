@@ -1,0 +1,33 @@
+Install and manage Orbit plugins (`plugin.yaml` v2)
+
+Usage: orbit plugin [OPTIONS] <COMMAND>
+
+Commands:
+  add       Install a plugin for this machine
+  upgrade   Upgrade an installed plugin and review requested-permission changes
+  enable    Put an installed plugin's tools on the tool surface
+  disable   Take a plugin's tools off the tool surface
+  remove    Uninstall a plugin from this machine
+  list      List installed and pinned plugins
+  show      Show one plugin, its tools, and its requested versus granted permissions
+  doctor    Report what each plugin needs before it can serve its tools
+  validate  Check a plugin directory without installing it
+  test      Run a plugin's conformance goldens against this Orbit
+  scaffold  Generate a starter plugin: backend, tool, panel, skill and goldens
+  sync      Install what this workspace pins but the machine is missing
+  migrate   Write a v2 manifest from v1 `*.orbit-tool.yaml` sidecars
+
+Options:
+      --root <ROOT>           Override the Orbit root directory (highest precedence)
+      --workspace <SELECTOR>  Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
+  -h, --help                  Print help
+
+Examples:
+  orbit plugin scaffold demo
+  orbit plugin validate ./demo
+  orbit plugin test ./demo
+  orbit plugin add ./demo --enable
+  orbit plugin list
+
+Plugins install once per machine under the Orbit global root; a repository
+commits only the `.orbit/plugins.yaml` pin file, never a plugin tree.

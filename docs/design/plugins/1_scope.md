@@ -171,6 +171,8 @@ stay inside the plugin root or the granted fs profile.
 
 ```
 orbit plugin add <path|git+url#ref|archive>   →  installed   (~/.orbit/plugins/<ns>/<version>/, `current` link)
+orbit plugin upgrade <ns> [source] [--grant …]
+                                              →  upgraded    (permission diff printed; widening requires re-consent)
 orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed] [--workspace]
                                               →  active      (tools Active; definitions seeded; skills linked)
 orbit plugin disable <ns>                     →  installed   (tools Inactive; seeded definitions skipped with a warning)
@@ -211,8 +213,9 @@ installed, or has installed without the requested grants, gets the plugin's tool
 via `register_inactive` and one deduped diagnostic naming the missing step. Nothing else
 degrades.
 
-**The recorded grant set is tamper-evident.** `orbit plugin enable` also writes an integrity
-value over the set it authorized to `~/.orbit/plugins/.grants/<ns>.json`, and the loader
+**The recorded grant set is tamper-evident.** `orbit plugin enable` and an upgrading
+`--grant` also write an integrity value over the set they authorized to
+`~/.orbit/plugins/.grants/<ns>.json`, and the loader
 refuses a `plugins` row whose grants do not match it — no tools, a `doctor` finding, and a
 `denied` audit row per load pass. The two halves sit on opposite sides of boundaries the
 sandbox enforces: a backend holding `orbit_tools` can write `orbit.db`, because `orbit tool
@@ -226,6 +229,9 @@ reads the whole global root. What bounds an attacker is the write boundary, not 
 upgrading past this change re-runs `orbit plugin enable <ns> --grant …` once per granted
 plugin; the records are deliberately not back-filled from existing rows, which would
 authorize a row that may already have been written by a plugin.
+When a manifest's request widens without re-consent, the installer overwrites this with a
+disabled, empty-grant witness before replacing the row, so the old enabled witness cannot be
+replayed against the new manifest through a database rewrite.
 
 **The row's install path is held to the install root.** The witness covers `name`,
 `enabled` and the grant set, and nothing else on the row — binding the version or the
@@ -255,7 +261,7 @@ can never say *who* may call it. Plugin tools enter `GOVERNED_OPERATIONS` throug
 generic row per execution kind: `read_only` plugin tools are callable by `Agent | Operator |
 Runner`; `mutating` plugin tools by `Operator | Runner` and by `Agent` only when the task's
 `required_tools` or the activity's allowlist names them. The `permissions:` block is a
-*request*; the `--grant` flags at enable time are the only source of authority, and
+*request*; `--grant` on an enabling add, enable or upgrade is the only source of authority, and
 `orbit plugin show` prints requested vs granted side by side. A stored grant set the host cannot
 verify against its authorization record is not authority either: the plugin is refused and
 every surface reports it as granting nothing (§3).
@@ -266,6 +272,15 @@ replace the recorded set. Omitting `--grant` on `plugin enable` preserves the re
 so disable followed by an ordinary re-enable does not require restating them. Supplying a
 narrower list is the supported way to revoke grants and replaces the authorization witness
 with one covering only that narrower set.
+
+`orbit plugin add --grant …` is rejected unless `--enable` is also present. On a manifest
+digest change, `add` and `upgrade` compare the old and new filesystem roots, network mode,
+environment names, Orbit-tool allowlist and sandbox mode. An unchanged or narrower request
+keeps the existing enable/grant state. Any addition or stronger network/sandbox request disables
+the plugin, clears its grants and its old authorization witness, prints the widened requests,
+and names the complete `orbit plugin enable <ns> --grant …` re-consent command. `plugin upgrade
+<ns> [source]` defaults to the recorded source and always prints the permission diff; supplying
+its own `--grant …` is explicit re-consent and enables the upgraded manifest.
 
 Those grants are bound to the install-time `plugin.yaml` digest stored on the `plugins` row.
 Every load hashes the bytes on disk and compares them to that `manifest_digest`. A mismatch

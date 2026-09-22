@@ -11,6 +11,7 @@ mod show;
 mod support;
 mod sync;
 mod test;
+mod upgrade;
 mod validate;
 
 pub use command::{PluginCommand, PluginSubcommand};

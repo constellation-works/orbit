@@ -3,9 +3,9 @@
 
 use std::path::PathBuf;
 
-use clap::{CommandFactory, Parser};
-use orbit_core::OrbitRuntime;
-use orbit_types::plugin::RESERVED_CLI_COMMANDS;
+use clap::{CommandFactory, Parser, error::ErrorKind};
+use orbit_core::{OrbitRuntime, adapter::command::PluginPermissionChange};
+use orbit_types::plugin::{PluginGrant, RESERVED_CLI_COMMANDS};
 
 use super::super::PluginSubcommand;
 use super::super::scaffold::PluginScaffoldArgs;
@@ -55,6 +55,30 @@ fn cli_parses_the_plugin_lifecycle() {
                 assert_eq!(args.grants, ["fs", "network"]);
             }
             _ => panic!("expected plugin add"),
+        },
+        _ => panic!("expected the plugin command"),
+    }
+
+    let cli = Cli::parse_from([
+        "orbit",
+        "plugin",
+        "upgrade",
+        "demo",
+        "git+https://example.test/demo#v2",
+        "--grant",
+        "fs,orbit_tools",
+    ]);
+    match cli.command {
+        Commands::Plugin(command) => match command.command {
+            PluginSubcommand::Upgrade(args) => {
+                assert_eq!(args.name, "demo");
+                assert_eq!(
+                    args.source.as_deref(),
+                    Some("git+https://example.test/demo#v2")
+                );
+                assert_eq!(args.grants, ["fs", "orbit_tools"]);
+            }
+            _ => panic!("expected plugin upgrade"),
         },
         _ => panic!("expected the plugin command"),
     }
@@ -118,6 +142,32 @@ fn cli_parses_the_plugin_lifecycle() {
         },
         _ => panic!("expected the plugin command"),
     }
+}
+
+#[test]
+fn plugin_add_rejects_grants_without_enable() {
+    let error = match Cli::try_parse_from(["orbit", "plugin", "add", "./demo", "--grant", "fs"]) {
+        Ok(_) => panic!("--grant without --enable must fail in clap"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    assert!(error.to_string().contains("--enable"), "{error}");
+}
+
+#[test]
+fn plugin_upgrade_human_output_prints_the_requested_permission_diff() {
+    let change = PluginPermissionChange {
+        grant: PluginGrant::Fs,
+        previous: Some("write={{plugin_state}}".to_string()),
+        requested: Some("write={{workspace}}".to_string()),
+        widened: true,
+    };
+
+    let text = super::super::upgrade::format_permission_change(&change);
+    assert!(
+        text.contains("fs: write={{plugin_state}} -> write={{workspace}} (widened)"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -251,6 +301,7 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
     // Consent has to use a directory this test owns: a granted absolute write
     // root is created before the child runs.
     let consented_write = fixture.root.join("consented-write");
+    std::fs::create_dir_all(&consented_write).expect("create the consented write root");
     let manifest = std::fs::read_to_string(&manifest_path).expect("read patched manifest");
     let consented = manifest.replace("/Users/daniel", &consented_write.display().to_string());
     std::fs::write(&manifest_path, consented).expect("point the write root at the fixture");

@@ -5,7 +5,8 @@ use orbit_types::plugin::PluginStatus;
 use orbit_types::telemetry::AuditEventStatus;
 
 use super::super::{
-    PluginAddOptions, install_plugin, list_plugins, plugin_doctor, show_plugin, validate_plugin_dir,
+    PluginAddOptions, PluginUpgradeOptions, install_plugin, list_plugins, plugin_doctor,
+    show_plugin, upgrade_plugin, validate_plugin_dir,
 };
 use super::fixture::{PluginFixture, PluginSpecFixture, write_plugin_at};
 
@@ -108,6 +109,171 @@ fn add_then_enable_puts_the_tool_on_the_surface() {
             .message
             .is_empty()
     );
+}
+
+#[test]
+fn adding_a_version_with_wider_requests_revokes_carried_grants() {
+    let fixture = PluginFixture::new();
+    let mut v1 = PluginSpecFixture::new("demo-v1", "demo");
+    v1.permissions = Some("  permissions:\n    fs:\n      write: [\"{{plugin_state}}\"]\n");
+    let v1 = fixture.write_plugin(v1);
+    install_plugin(
+        &fixture.runtime,
+        v1.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            grants: vec!["fs".to_string()],
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("install v1 with fs authorized");
+
+    let mut v2 = PluginSpecFixture::new("demo-v2", "demo");
+    v2.version = "2.0.0";
+    v2.permissions = Some(
+        "  permissions:\n    fs:\n      write: [\"{{workspace}}\"]\n    orbit_tools: [orbit.task.list]\n",
+    );
+    let v2 = fixture.write_plugin(v2);
+    let summary = install_plugin(
+        &fixture.runtime,
+        v2.to_str().expect("utf8 path"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install widened v2");
+
+    assert_eq!(summary.status, PluginStatus::Disabled);
+    assert!(summary.granted.is_empty(), "{summary:?}");
+    let output = summary.diagnostic.as_deref().unwrap_or_default();
+    assert!(
+        output.contains("fs")
+            && output.contains("write={{workspace}}")
+            && output.contains("orbit_tools")
+            && output.contains("orbit plugin enable demo --grant fs,orbit_tools"),
+        "the output must name each widened request and the re-consent command: {output}"
+    );
+    let stored = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read plugin row")
+        .expect("installed plugin");
+    assert!(!stored.enabled);
+    assert!(stored.grants.is_empty());
+
+    // The old witness must be revoked as well as the row. Otherwise a backend
+    // able to rewrite orbit.db could restore the old grant names and make them
+    // authorize the new manifest's wider paths.
+    fixture
+        .runtime
+        .stores()
+        .plugins()
+        .set_plugin_enabled("demo", true, &["fs".to_string()])
+        .expect("attempt to replay the old row authority");
+    let replayed = show_plugin(&fixture.reopen(), "demo").expect("show replayed row");
+    assert_eq!(replayed.status, PluginStatus::Inactive);
+    assert!(replayed.granted.is_empty(), "{replayed:?}");
+    assert!(
+        replayed
+            .diagnostic
+            .as_deref()
+            .is_some_and(|message| message.contains("do not match")),
+        "the revoked witness must refuse the replayed old grant: {replayed:?}"
+    );
+}
+
+#[test]
+fn adding_a_version_without_wider_requests_preserves_authority() {
+    let fixture = PluginFixture::new();
+    let v1 = fixture.write_plugin(PluginSpecFixture::new("demo-v1", "demo").requesting_fs_write());
+    install_plugin(
+        &fixture.runtime,
+        v1.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            grants: vec!["fs".to_string()],
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("install v1 with fs authorized");
+
+    let mut v2 = PluginSpecFixture::new("demo-v2", "demo").requesting_fs_write();
+    v2.version = "2.0.0";
+    let v2 = fixture.write_plugin(v2);
+    let summary = install_plugin(
+        &fixture.runtime,
+        v2.to_str().expect("utf8 path"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install equivalent v2");
+
+    assert_eq!(summary.status, PluginStatus::Active, "{summary:?}");
+    assert_eq!(summary.granted, ["fs"]);
+    let stored = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read plugin row")
+        .expect("installed plugin");
+    assert!(stored.enabled);
+    assert_eq!(stored.grants, ["fs"]);
+}
+
+#[test]
+fn upgrade_reports_the_permission_diff_and_accepts_explicit_reconsent() {
+    let fixture = PluginFixture::new();
+    let v1 = fixture.write_plugin(PluginSpecFixture::new("demo-v1", "demo").requesting_fs_write());
+    install_plugin(
+        &fixture.runtime,
+        v1.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            enable: true,
+            grants: vec!["fs".to_string()],
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect("install v1");
+
+    let mut v2 = PluginSpecFixture::new("demo-v2", "demo");
+    v2.version = "2.0.0";
+    v2.permissions = Some("  permissions:\n    fs:\n      write: [\"{{workspace}}\"]\n");
+    let v2 = fixture.write_plugin(v2);
+    let result = upgrade_plugin(
+        &fixture.runtime,
+        "demo",
+        Some(v2.to_str().expect("utf8 path")),
+        &PluginUpgradeOptions {
+            grants: vec!["fs".to_string()],
+        },
+    )
+    .expect("upgrade with explicit re-consent");
+
+    assert!(!result.grants_reset);
+    assert_eq!(result.summary.status, PluginStatus::Active);
+    assert_eq!(result.summary.granted, ["fs"]);
+    assert_eq!(result.permission_changes.len(), 1);
+    let change = &result.permission_changes[0];
+    assert_eq!(change.grant.as_str(), "fs");
+    assert_eq!(change.requested.as_deref(), Some("write={{workspace}}"));
+    assert!(change.widened);
+}
+
+#[test]
+fn add_rejects_grants_without_enable() {
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let error = install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions {
+            grants: vec!["fs".to_string()],
+            ..PluginAddOptions::default()
+        },
+    )
+    .expect_err("grant without enable must be rejected")
+    .to_string();
+    assert!(error.contains("--grant requires --enable"), "{error}");
 }
 
 #[cfg(unix)]

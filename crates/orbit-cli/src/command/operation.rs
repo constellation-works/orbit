@@ -895,6 +895,7 @@ impl Commands {
                 use super::plugin::PluginSubcommand;
                 let (subcommand, target_id) = match &command.command {
                     PluginSubcommand::Add(args) => ("add", Some(args.source.clone())),
+                    PluginSubcommand::Upgrade(args) => ("upgrade", Some(args.name.clone())),
                     PluginSubcommand::Enable(args) => ("enable", Some(args.name.clone())),
                     PluginSubcommand::Disable(args) => ("disable", Some(args.name.clone())),
                     PluginSubcommand::Remove(args) => ("remove", Some(args.name.clone())),

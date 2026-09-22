@@ -14,6 +14,7 @@ use super::scaffold::PluginScaffoldArgs;
 use super::show::PluginShowArgs;
 use super::sync::PluginSyncArgs;
 use super::test::PluginTestArgs;
+use super::upgrade::PluginUpgradeArgs;
 use super::validate::PluginValidateArgs;
 
 const PLUGIN_COMMAND_AFTER_HELP: &str = "\
@@ -48,6 +49,8 @@ impl Execute for PluginCommand {
 pub enum PluginSubcommand {
     /// Install a plugin for this machine
     Add(PluginAddArgs),
+    /// Upgrade an installed plugin and review requested-permission changes
+    Upgrade(PluginUpgradeArgs),
     /// Put an installed plugin's tools on the tool surface
     Enable(PluginEnableArgs),
     /// Take a plugin's tools off the tool surface
@@ -76,6 +79,7 @@ impl Execute for PluginSubcommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         match self {
             PluginSubcommand::Add(args) => args.execute(runtime),
+            PluginSubcommand::Upgrade(args) => args.execute(runtime),
             PluginSubcommand::Enable(args) => args.execute(runtime),
             PluginSubcommand::Disable(args) => args.execute(runtime),
             PluginSubcommand::Remove(args) => args.execute(runtime),
