@@ -174,10 +174,13 @@ fn every_fleet_model_string_is_priced() {
         output: 1_000,
         ..TokenUsage::default()
     };
-    // 2026-09-03: must be on/after the newest effective_from in the table
-    // (gpt-6-astra and gemini-3.8-flash) while still covering every other
-    // open-ended row.
-    let at = dt("2026-09-03T00:00:00Z");
+    // Probe at the latest effective_from in the shipped table so newly added
+    // fleet models, including grok-4.7, cannot fall after this coverage date.
+    let at = shipped_price_table()
+        .iter()
+        .map(|row| row.effective_from)
+        .max()
+        .expect("shipped price table is non-empty");
     for model in FLEET_MODELS {
         assert!(
             derive_cost_usd(model, at, &usage).is_some(),
