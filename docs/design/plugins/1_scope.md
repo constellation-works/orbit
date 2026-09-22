@@ -614,12 +614,24 @@ carry the provenance header. Removing a plugin never rewrites task history.
 
 - Routines target `job:<name>` only, as today; a plugin routine may only target a job the same
   plugin ships or a shipped default. Cross-plugin targets are a load error.
-- Plugin jobs may reference shipped activities and their own activities.
+- Plugin jobs may reference shipped activities and their own activities. A reference to an
+  activity supplied only by another plugin refuses the job's plugin at load; plugins do not gain
+  an implicit dependency through catalog order.
+- Activity names and job names are unique across active plugins. Host loading is deterministic:
+  the first valid plugin keeps the name, while a later plugin with the same activity or job name
+  is refused with a diagnostic naming both plugins. Workspace and shipped layers retain their
+  documented precedence over the surviving plugin layer.
 - Plugin activities are `agent_loop`, or `deterministic` with the one new action
   `plugin.tool_call { tool: <ns>.<verb>, input: {…} }`. This is the only addition to the
   closed action enums and it is what lets a routine drive a plugin without Rust.
 - Seeded routines and auto-tasks are `enabled: false`. Turning one on is the same reviewed,
   versioned edit as for a shipped default. A plugin cannot enable its own schedule.
+- Seeded filenames remain `<namespace>-<definition>.yaml`, but that spelling is not assumed to be
+  injective when either component contains `-`. The managed-asset manifest's plugin owner is
+  authoritative: if another namespace already owns the resulting filename, enabling is refused
+  before any routine or auto-task is written and neither the file nor its manifest record changes.
+  `--force` may replace an operator-customised file owned by the same plugin; it never transfers a
+  file from one plugin owner to another.
 - When a plugin is disabled, its seeded definitions are skipped through the retired-routine
   reconciliation path with a warning naming the plugin, not treated as load errors.
 
