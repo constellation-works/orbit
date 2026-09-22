@@ -258,6 +258,10 @@ impl PluginBackendSpec {
                 .into_iter()
                 .map(Path::to_path_buf)
                 .chain(std::iter::once(self.state_dir.clone()))
+                .chain(
+                    self.granted(PluginGrant::OrbitTools)
+                        .then(|| self.global_root.join("state")),
+                )
                 .collect(),
             network,
             unsandboxed: self.sandbox == PluginSandbox::None
@@ -474,12 +478,13 @@ impl Sandbox for PluginSandboxProfile {
     /// `sandbox-exec` on macOS. Anywhere else the only way to run is the
     /// `unsandboxed` grant; there is no unconfined fallback (§4.9).
     fn spawn(&self, req: &ExecRequest) -> Result<Child, OrbitError> {
-        // A granted write directory inside the workspace or plugin state is
-        // materialised before the child exists: the grant names it, and
-        // neither a kernel rule nor an unconfined backend can create a
-        // directory the grant's parent never allowed. Host paths outside
-        // those roots are never created here and must already exist; every
-        // component we do create is checked without following symbolic links.
+        // A granted write directory inside the workspace, plugin state, or
+        // Orbit's own global state tree is materialised before the child
+        // exists: the grant names it, and neither a kernel rule nor an
+        // unconfined backend can create a directory the grant's parent never
+        // allowed. Host paths outside those roots are never created here and
+        // must already exist; every component we do create is checked without
+        // following symbolic links.
         // `write_files` is deliberately absent here — those name store files
         // SQLite and the generation protocol own, and creating one as an
         // empty directory would break the store rather than confine it.
@@ -513,8 +518,9 @@ fn materialize_write_directory(root: &Path, allowed_roots: &[PathBuf]) -> Result
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 Err(OrbitError::InvalidInput(format!(
                     "granted write directory `{}` does not exist; Orbit creates absent plugin \
-                     write directories only inside the selected workspace or the plugin state \
-                     directory; create this consented directory before running the plugin",
+                     write directories only inside the selected workspace, the plugin state \
+                     directory, or Orbit's global state directory; create this consented \
+                     directory before running the plugin",
                     root.display()
                 )))
             }
