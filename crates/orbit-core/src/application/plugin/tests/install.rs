@@ -35,7 +35,8 @@ fn enter_fake_git_install_child(test: &str) -> bool {
 set -eu
 checkout=''
 for arg in "$@"; do checkout=$arg; done
-mkdir -p "$checkout/bin"
+mkdir -p "$checkout/.git" "$checkout/bin"
+printf '[remote "origin"]\n\turl = https://example.test/demo.git\n' > "$checkout/.git/config"
 cat > "$checkout/plugin.yaml" <<'EOF'
 schemaVersion: 2
 kind: Plugin
@@ -730,48 +731,24 @@ fn relative_inventory(root: &Path) -> BTreeSet<String> {
     out
 }
 
-/// A local git checkout, so `git+<url>` install exercises the real clone
-/// path without a network fetch.
-fn run_git(repo: &Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
-        .current_dir(repo)
-        .args(args)
-        .env("GIT_AUTHOR_NAME", "orbit-test")
-        .env("GIT_AUTHOR_EMAIL", "orbit-test@example.test")
-        .env("GIT_COMMITTER_NAME", "orbit-test")
-        .env("GIT_COMMITTER_EMAIL", "orbit-test@example.test")
-        .output()
-        .unwrap_or_else(|error| panic!("git {args:?}: {error}"));
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 /// [ORB-12794] `git clone` writes the source URL (credentials included, when
 /// present) into `.git/config`, and that root is the first entry in the
 /// plugin backend's unconditional read set. The install must not carry the
 /// clone's VCS metadata into the tree the backend can always read.
+#[cfg(unix)]
 #[test]
 fn add_from_a_git_source_excludes_the_clone_metadata() {
+    if !enter_fake_git_install_child("add_from_a_git_source_excludes_the_clone_metadata") {
+        return;
+    }
     let fixture = PluginFixture::new();
-    let repo = fixture.sources.join("git-origin");
-    write_plugin_at(&repo, PluginSpecFixture::new("demo", "demo"));
-    run_git(&repo, &["init", "-q"]);
-    run_git(&repo, &["add", "-A"]);
-    run_git(&repo, &["commit", "-q", "-m", "fixture plugin"]);
-    assert!(
-        repo.join(".git").is_dir(),
-        "fixture source must itself be a git checkout"
-    );
 
     let summary = install_plugin(
         &fixture.runtime,
-        &format!("git+{}", repo.display()),
+        "git+https://example.test/demo.git",
         &PluginAddOptions::default(),
     )
-    .expect("install from a local git source");
+    .expect("install from an HTTPS Git source");
 
     let installed = Path::new(&summary.install_path);
     assert!(
