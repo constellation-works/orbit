@@ -101,18 +101,38 @@ impl ToolRegistry {
             (
                 existing.mcp_scope.is_some() || mcp_scope.is_some(),
                 existing.plugin.is_none() && existing.tool.schema().builtin,
+                existing.availability.is_active(),
+                existing
+                    .plugin
+                    .as_ref()
+                    .map(|binding| binding.provenance.name.clone()),
             )
         });
-        if let Some((mcp_collision, hold_builtin)) = collision {
+        if let Some((mcp_collision, hold_builtin, existing_active, existing_owner)) = collision {
             if mcp_collision {
                 self.record_mcp_error(McpToolDefinitionError::DuplicateCanonicalName(
                     schema.name.clone(),
                 ));
             }
-            // Built-ins register first. A later insert must not replace one:
-            // a plugin that collides would otherwise take the name.
+            // Built-ins register first, active or held inactive behind a
+            // subcommand gate. A later insert must not replace one: a plugin
+            // that collides would otherwise take the name.
             if hold_builtin {
                 return;
+            }
+            // An active entry already answers for this name — another
+            // plugin's, or a host-registered external tool's. A later
+            // registration under the same name (e.g. a tampered manifest
+            // re-claiming it) is refused rather than swapped in: §4.9 fails
+            // closed per plugin, so one plugin's collision must not touch
+            // another plugin's or an external tool's active entry.
+            if existing_active {
+                let new_owner = plugin
+                    .as_ref()
+                    .map(|binding| binding.provenance.name.clone());
+                if existing_owner != new_owner {
+                    return;
+                }
             }
         }
         if mcp_scope.is_some() {

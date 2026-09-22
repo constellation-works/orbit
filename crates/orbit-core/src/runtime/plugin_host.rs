@@ -557,15 +557,9 @@ fn register_installed_plugin(
     if let Some(message) = first_party_row_mismatch(installed, &plugin) {
         return refused(PluginStatus::Inactive, message);
     }
-    if plugin.manifest_digest != installed.manifest_digest {
-        return register_inactive_tools(
-            global_root,
-            installed,
-            &plugin,
-            registry,
-            digest_mismatch_diagnostic(installed, &plugin),
-        );
-    }
+    // Validate the manifest actually on disk before deciding what a digest
+    // mismatch means: an on-disk edit that also breaks the namespace rules
+    // (§4.9) is a plain refusal, not tool names inserted as inactive first.
     let policy = policy
         .clone()
         .with_first_party_verified(installed.first_party);
@@ -573,6 +567,15 @@ fn register_installed_plugin(
         return refused(
             PluginStatus::Inactive,
             format!("plugin '{}' is refused: {error}", installed.name),
+        );
+    }
+    if plugin.manifest_digest != installed.manifest_digest {
+        return register_inactive_tools(
+            global_root,
+            installed,
+            &plugin,
+            registry,
+            digest_mismatch_diagnostic(installed, &plugin),
         );
     }
     if let Err(error) = refuse_covering_fs_write_roots(
