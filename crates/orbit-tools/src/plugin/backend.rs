@@ -124,11 +124,53 @@ pub struct PluginBackendSpec {
     pub permissions: PluginPermissions,
     /// `spec.requires.programs`: what the backend declares it spawns.
     pub programs: Vec<String>,
-    /// `spec.config.defaults`, the only source of `{{config.<key>}}` until
-    /// `[plugins.<ns>]` admission lands (phase 3).
-    pub config_defaults: BTreeMap<String, String>,
+    /// Effective `{{config.<key>}}` values: operator configuration over the
+    /// manifest's defaults, with every JSON scalar rendered as text.
+    pub config_values: BTreeMap<String, String>,
     /// The grants recorded at enable time.
     pub grants: Vec<PluginGrant>,
+}
+
+/// Manifest-declared filesystem roots after template rendering and resolution
+/// against the plugin install directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedFsRoots {
+    pub read: Vec<PathBuf>,
+    pub write: Vec<PathBuf>,
+}
+
+/// Render both filesystem permission lists through one path-resolution rule.
+///
+/// Relative roots belong to the plugin that declared them, so every phase
+/// resolves them against `plugin_root`; they must never inherit the host
+/// process's current working directory.
+pub fn render_fs_roots(
+    spec: &PluginBackendSpec,
+    vars: &PluginTemplateVars,
+) -> Result<RenderedFsRoots, PluginManifestError> {
+    let render = |paths: &[String], key: &str| -> Result<Vec<PathBuf>, PluginManifestError> {
+        paths
+            .iter()
+            .enumerate()
+            .map(|(index, declared)| {
+                let rendered = render_template(
+                    declared,
+                    vars,
+                    &format!("spec.permissions.fs.{key}[{index}]"),
+                )?;
+                let path = PathBuf::from(rendered);
+                Ok(if path.is_absolute() {
+                    path
+                } else {
+                    spec.plugin_root.join(path)
+                })
+            })
+            .collect()
+    };
+    Ok(RenderedFsRoots {
+        read: render(&spec.permissions.fs.read, "read")?,
+        write: render(&spec.permissions.fs.write, "write")?,
+    })
 }
 
 impl PluginBackendSpec {
@@ -143,12 +185,12 @@ impl PluginBackendSpec {
             .min(PLUGIN_TIMEOUT_CEILING_MS)
     }
 
-    fn template_vars(&self, workspace_root: Option<&Path>) -> PluginTemplateVars {
+    pub(crate) fn template_vars(&self, workspace_root: Option<&Path>) -> PluginTemplateVars {
         PluginTemplateVars {
             workspace: workspace_root.map(|path| path.to_string_lossy().into_owned()),
             plugin_root: self.plugin_root.to_string_lossy().into_owned(),
             plugin_state: self.state_dir.to_string_lossy().into_owned(),
-            config: self.config_defaults.clone(),
+            config: self.config_values.clone(),
         }
     }
 
@@ -160,23 +202,13 @@ impl PluginBackendSpec {
         workspace_root: Option<&Path>,
     ) -> Result<PluginSandboxProfile, OrbitError> {
         let vars = self.template_vars(workspace_root);
-        let render = |paths: &[String], key: &str| -> Result<Vec<PathBuf>, OrbitError> {
-            paths
-                .iter()
-                .enumerate()
-                .map(|(index, path)| {
-                    render_template(path, &vars, &format!("spec.permissions.fs.{key}[{index}]"))
-                        .map(PathBuf::from)
-                        .map_err(plugin_refusal)
-                })
-                .collect()
-        };
+        let roots = render_fs_roots(self, &vars).map_err(plugin_refusal)?;
         let mut read = vec![self.plugin_root.clone()];
         if self.granted(PluginGrant::Fs) {
-            read.extend(render(&self.permissions.fs.read, "read")?);
+            read.extend(roots.read);
         }
         let mut write = if self.granted(PluginGrant::Fs) {
-            render(&self.permissions.fs.write, "write")?
+            roots.write
         } else {
             Vec::new()
         };

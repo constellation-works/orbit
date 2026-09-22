@@ -11,14 +11,17 @@ use orbit_tools::plugin::{
     refuse_covering_fs_write_roots, validate_loaded_plugin,
 };
 use orbit_types::plugin::{
-    InstalledPlugin, PluginExecutionKind, PluginGrant, PluginSandbox, PluginStatus, SemverRange,
-    Version, plugin_tool_name,
+    InstalledPlugin, PluginExecutionKind, PluginGrant, PluginProvenance, PluginSandbox,
+    PluginStatus, SemverRange, Version, plugin_tool_name,
 };
 
 use super::panels::{PluginLinkSummary, PluginPanelSummary, web_summaries};
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin_host::{plugin_state_dir, read_pin_file, unmet_requirement};
+use crate::runtime::plugin_config::plugin_config_values;
+use crate::runtime::plugin_host::{
+    build_plugin_backend, plugin_state_dir, read_pin_file, unmet_requirement,
+};
 
 /// One plugin tool as the CLI reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,12 +335,28 @@ pub fn validate_plugin_dir(
         PluginValidationPolicy::host_default().with_first_party_verified(first_party_verified);
     validate_loaded_plugin(&plugin, &policy).map_err(manifest_refusal)?;
     let global_root = runtime.global_root();
-    refuse_covering_fs_write_roots(
-        &plugin,
+    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
         &global_root,
+        runtime.shared_root(),
+    ))?;
+    let grants = plugin.manifest.required_grants();
+    let backend = build_plugin_backend(
+        &plugin,
+        PluginProvenance {
+            name: plugin.namespace().to_string(),
+            version: plugin.manifest.metadata.version.clone(),
+            manifest_digest: plugin.manifest_digest.clone(),
+            grants: grants
+                .iter()
+                .map(|grant| grant.as_str().to_string())
+                .collect(),
+        },
         &plugin_state_dir(&global_root, plugin.namespace()),
-    )
-    .map_err(manifest_refusal)?;
+        &global_root,
+        grants,
+        plugin_config_values(&plugin, &config.plugins),
+    );
+    refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
 
     let mut warnings = Vec::new();
     for skill_dir in &plugin.skills {

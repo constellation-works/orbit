@@ -12,14 +12,15 @@ use orbit_common::OrbitError;
 pub use orbit_exec::physical_with_missing_tail;
 use orbit_types::plugin::{
     FIRST_PARTY_PUBLISHER, MANIFEST_FILE_NAME, PluginExecutionKind, PluginManifest,
-    PluginManifestError, PluginMcpScope, PluginTemplateVars, PluginTestFile, RESERVED_CLI_COMMANDS,
-    namespace_collides_with_tool, plugin_tool_name, render_template,
+    PluginManifestError, PluginMcpScope, PluginTestFile, RESERVED_CLI_COMMANDS,
+    namespace_collides_with_tool, plugin_tool_name,
 };
 use orbit_types::tool::ToolParam;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+use super::backend::{PluginBackendSpec, render_fs_roots};
 use super::schema::{CompiledSchema, params_from_input_schema};
 use crate::ToolRegistry;
 
@@ -758,46 +759,37 @@ pub fn validate_loaded_plugin(
 /// workspace-relative rule before a concrete workspace is selected. Call time
 /// repeats the check against the real workspace root.
 pub fn refuse_covering_fs_write_roots(
-    plugin: &LoadedPlugin,
-    global_root: &Path,
-    plugin_state: &Path,
+    spec: &PluginBackendSpec,
+    workspace_root: Option<&Path>,
 ) -> Result<(), PluginManifestError> {
     // Validation and registration do not have a selected workspace. A stable
     // absolute sentinel preserves every path relationship beneath
     // `{{workspace}}` without borrowing any real host path.
     let validation_workspace = Path::new("/__orbit_plugin_workspace__");
-    let vars = PluginTemplateVars {
-        workspace: Some(validation_workspace.to_string_lossy().into_owned()),
-        plugin_root: plugin.root.to_string_lossy().into_owned(),
-        plugin_state: plugin_state.to_string_lossy().into_owned(),
-        config: plugin
-            .config_defaults
-            .iter()
-            .filter_map(|(key, value)| value.as_str().map(|text| (key.clone(), text.to_string())))
-            .collect(),
-    };
-    for (index, declared) in plugin.manifest.spec.permissions.fs.write.iter().enumerate() {
+    let workspace_root = workspace_root.unwrap_or(validation_workspace);
+    let vars = spec.template_vars(Some(workspace_root));
+    let roots = render_fs_roots(spec, &vars)?;
+    for (index, absolute) in roots.write.iter().enumerate() {
         let field = format!("spec.permissions.fs.write[{index}]");
-        let rendered = render_template(declared, &vars, &field)?;
-        let path = PathBuf::from(&rendered);
-        let absolute = if path.is_absolute() {
-            path
-        } else {
-            plugin.root.join(path)
-        };
         if let Some(protected) = fs_write_root_covers(
-            &absolute,
-            &plugin.root,
-            global_root,
-            plugin_state,
-            Some(validation_workspace),
+            absolute,
+            &spec.plugin_root,
+            &spec.global_root,
+            &spec.state_dir,
+            Some(workspace_root),
         ) {
             return Err(PluginManifestError::new(
                 field,
                 format!(
-                    "'{declared}' grants write access to the {protected}; a plugin cannot request \
+                    "'{}' grants write access to the {protected}; a plugin cannot request \
                      writes to its own install tree or anywhere beneath Orbit's global root \
-                     except its own plugin state tree, or to workspace metadata `.orbit` / `.git`"
+                     except its own plugin state tree, or to workspace metadata `.orbit` / `.git`",
+                    spec.permissions
+                        .fs
+                        .write
+                        .get(index)
+                        .map(String::as_str)
+                        .unwrap_or("")
                 ),
             ));
         }

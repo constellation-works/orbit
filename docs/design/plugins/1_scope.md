@@ -166,7 +166,11 @@ spec:
 Rules: `deny_unknown_fields` everywhere (same posture as `RoutineDefinition`); `$ref` resolves
 only inside the plugin root; templates may use `{{workspace}}`, `{{plugin_root}}`,
 `{{plugin_state}}`, `{{config.<key>}}` and nothing else; every path is canonicalised and must
-stay inside the plugin root or the granted fs profile.
+stay inside the plugin root or the granted fs profile. Filesystem permission templates render
+against the effective `[plugins.<ns>]` values (workspace configuration over global configuration
+over manifest defaults), stringifying non-string JSON scalars. A rendered relative filesystem
+root is relative to the plugin root in validation, registration, conformance and call-time
+sandboxing; it never inherits Orbit's process working directory.
 
 ## 3. Lifecycle and state
 

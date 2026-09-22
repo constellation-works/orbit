@@ -616,7 +616,7 @@ fn register_installed_plugin(
         tools,
         diagnostic: None,
         grants_authorized: true,
-        config_values: backend.spec().config_defaults.clone(),
+        config_values: backend.spec().config_values.clone(),
         loaded: Some(Arc::new(plugin)),
     }
 }
@@ -649,11 +649,8 @@ pub(crate) fn projected_status(
             true,
         );
     }
-    if let Err(error) = refuse_covering_fs_write_roots(
-        plugin,
-        global_root,
-        &plugin_state_dir(global_root, &installed.name),
-    ) {
+    let backend = plugin_backend(global_root, installed, plugin, plugin_config);
+    if let Err(error) = refuse_covering_fs_write_roots(backend.spec(), None) {
         return ProjectedPluginStatus::inactive(
             format!("plugin '{}' is refused: {error}", installed.name),
             true,
@@ -783,7 +780,7 @@ pub fn missing_grant_diagnostic(
 
 /// The backend every tool of this plugin shares: the spec for `exec`, or one
 /// long-lived server proxy for `mcp` (design §4.2).
-fn plugin_backend(
+pub(crate) fn plugin_backend(
     global_root: &Path,
     installed: &InstalledPlugin,
     plugin: &LoadedPlugin,
@@ -797,9 +794,10 @@ fn plugin_backend(
     // `{{config.<key>}}` resolves against the effective section: what the
     // operator configured in `[plugins.<ns>]`, over what the manifest
     // defaults (§1).
-    let config_defaults = super::plugin_config::plugin_config_values(plugin, plugin_config);
-    let spec = Arc::new(PluginBackendSpec {
-        provenance: PluginProvenance {
+    let config_values = super::plugin_config::plugin_config_values(plugin, plugin_config);
+    build_plugin_backend(
+        plugin,
+        PluginProvenance {
             name: installed.name.clone(),
             version: installed.version.clone(),
             manifest_digest: plugin.manifest_digest.clone(),
@@ -808,8 +806,26 @@ fn plugin_backend(
                 .map(|grant| grant.as_str().to_string())
                 .collect(),
         },
+        &plugin_state_dir(global_root, &installed.name),
+        global_root,
+        grants,
+        config_values,
+    )
+}
+
+/// Construct the backend shared by runtime registration and conformance.
+pub(crate) fn build_plugin_backend(
+    plugin: &LoadedPlugin,
+    provenance: PluginProvenance,
+    state_dir: &Path,
+    global_root: &Path,
+    grants: Vec<PluginGrant>,
+    config_values: BTreeMap<String, String>,
+) -> PluginBackend {
+    let spec = Arc::new(PluginBackendSpec {
+        provenance,
         plugin_root: plugin.root.clone(),
-        state_dir: plugin_state_dir(global_root, &installed.name),
+        state_dir: state_dir.to_path_buf(),
         global_root: global_root.to_path_buf(),
         command: plugin.backend_command.clone(),
         args: plugin.manifest.spec.backend.args.clone(),
@@ -817,7 +833,7 @@ fn plugin_backend(
         sandbox: plugin.manifest.spec.backend.sandbox,
         permissions: plugin.manifest.spec.permissions.clone(),
         programs: plugin.manifest.spec.requires.programs.clone(),
-        config_defaults,
+        config_values,
         grants,
     });
     match plugin.manifest.spec.backend.backend_type {
