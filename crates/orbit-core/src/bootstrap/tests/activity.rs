@@ -21,6 +21,9 @@ use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 use super::super::activity::seed_default_activities;
 
+const AGENT_IMPLEMENT_CONTRACT_PHRASES: &str =
+    include_str!("../../../assets/activities/agent_implement_contract_phrases.txt");
+
 #[test]
 fn shipped_agent_catalog_preserves_provider_and_model_routing() {
     let root = tempdir().expect("create tempdir");
@@ -150,6 +153,7 @@ fn agent_implement_guidance_allows_bounded_scope_expansion() {
                 .collect::<Vec<_>>()
                 .join(" ")
                 .to_lowercase();
+            assert_agent_implement_shared_contracts(&instruction);
             assert!(!yaml.contains("\n  role:"));
             assert!(
                 instruction.contains("git rev-parse --show-toplevel"),
@@ -176,6 +180,33 @@ fn agent_implement_guidance_allows_bounded_scope_expansion() {
             }
         }
         _ => panic!("expected agent_loop activity"),
+    }
+}
+
+#[test]
+fn agent_implement_shared_contract_detects_former_suite_only_deletions() {
+    let (_, yaml) = DEFAULT_ACTIVITY_FILES
+        .iter()
+        .find(|(name, _)| *name == "agent_implement")
+        .expect("agent implement activity is seeded");
+    let instruction = agent_implement_instruction(yaml);
+
+    for (phrase, former_suite) in [
+        (
+            "a containing directory selector is not new-file intent",
+            "bootstrap::tests::activity",
+        ),
+        ("before validation", "prompt-budget"),
+    ] {
+        let mutated = instruction.replacen(phrase, "", 1);
+        assert_ne!(
+            mutated, instruction,
+            "representative phrase formerly pinned only by {former_suite} must exist in the activity"
+        );
+        assert!(
+            missing_agent_implement_contract_phrases(&mutated).contains(&phrase),
+            "shared guard must detect deletion of `{phrase}`, formerly pinned only by {former_suite}"
+        );
     }
 }
 
@@ -402,6 +433,28 @@ fn agent_implement_instruction(yaml: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
+}
+
+fn assert_agent_implement_shared_contracts(instruction: &str) {
+    let missing = missing_agent_implement_contract_phrases(instruction);
+    assert!(
+        missing.is_empty(),
+        "agent_implement lost shared contract phrases: {missing:?}"
+    );
+}
+
+fn missing_agent_implement_contract_phrases(instruction: &str) -> Vec<&'static str> {
+    let normalized = instruction
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    AGENT_IMPLEMENT_CONTRACT_PHRASES
+        .lines()
+        .map(str::trim)
+        .filter(|phrase| !phrase.is_empty() && !phrase.starts_with('#'))
+        .filter(|phrase| !normalized.contains(phrase))
+        .collect()
 }
 
 #[test]

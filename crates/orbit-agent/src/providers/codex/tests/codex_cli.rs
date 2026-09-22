@@ -7,6 +7,9 @@ use super::super::codex_cli::CodexCliTransport;
 
 const IMPLEMENT_ACTIVITY: &str =
     include_str!("../../../../../orbit-core/assets/activities/agent_implement.yaml");
+const AGENT_IMPLEMENT_CONTRACT_PHRASES: &str = include_str!(
+    "../../../../../orbit-core/assets/activities/agent_implement_contract_phrases.txt"
+);
 const RESPONSE_SCHEMA: &str =
     r#"{"schemaVersion":1,"status":"success|failed|timeout","result":{...},"error":null}"#;
 const BASELINE_IMPLEMENT_BYTES: usize = 11_760;
@@ -76,6 +79,7 @@ fn representative_activity_prompts_fit_budget_and_preserve_contracts() {
     );
     assert!(implement.len() < BASELINE_IMPLEMENT_BYTES);
     let implement_text = std::str::from_utf8(&implement).expect("utf-8 implement prompt");
+    assert_agent_implement_shared_contracts(&activity_instruction(IMPLEMENT_ACTIVITY));
     assert_eq!(
         implement_text.matches(RESPONSE_SCHEMA).count(),
         1,
@@ -101,6 +105,62 @@ fn representative_activity_prompts_fit_budget_and_preserve_contracts() {
             "implementation contract disappeared: {contract}"
         );
     }
+}
+
+#[test]
+fn representative_activity_prompts_fit_budget_shared_contract_detects_former_suite_only_deletions()
+{
+    let instruction = activity_instruction(IMPLEMENT_ACTIVITY)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    for (phrase, former_suite) in [
+        (
+            "a containing directory selector is not new-file intent",
+            "bootstrap::tests::activity",
+        ),
+        ("before validation", "prompt-budget"),
+    ] {
+        let mutated = instruction.replacen(phrase, "", 1);
+        assert_ne!(
+            mutated, instruction,
+            "representative phrase formerly pinned only by {former_suite} must exist in the activity"
+        );
+        assert!(
+            missing_agent_implement_contract_phrases(&mutated).contains(&phrase),
+            "shared guard must detect deletion of `{phrase}`, formerly pinned only by {former_suite}"
+        );
+    }
+}
+
+fn activity_instruction(activity_yaml: &str) -> String {
+    serde_yaml::from_str::<ActivityAsset>(activity_yaml)
+        .expect("parse activity asset")
+        .spec
+        .instruction
+}
+
+fn assert_agent_implement_shared_contracts(instruction: &str) {
+    let missing = missing_agent_implement_contract_phrases(instruction);
+    assert!(
+        missing.is_empty(),
+        "agent_implement lost shared contract phrases: {missing:?}"
+    );
+}
+
+fn missing_agent_implement_contract_phrases(instruction: &str) -> Vec<&'static str> {
+    let normalized = instruction
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    AGENT_IMPLEMENT_CONTRACT_PHRASES
+        .lines()
+        .map(str::trim)
+        .filter(|phrase| !phrase.is_empty() && !phrase.starts_with('#'))
+        .filter(|phrase| !normalized.contains(phrase))
+        .collect()
 }
 
 mod args {
