@@ -114,8 +114,14 @@ impl ReasoningEffort {
     fn validate_grok_model_effort(self, model: Option<&str>) -> Result<(), String> {
         let model = model.map(str::trim).filter(|model| !model.is_empty());
         match (model, self) {
+            // https://docs.x.ai/developers/models/grok-4.7 documents exactly
+            // low, medium, high, and xhigh (default: high).
+            (Some("grok-4.7"), Self::Low | Self::Medium | Self::High | Self::Xhigh) => Ok(()),
             (Some("grok-4.6"), Self::Low | Self::Medium | Self::High | Self::Xhigh) => Ok(()),
             (Some("grok-4.5"), Self::Low | Self::Medium | Self::High) => Ok(()),
+            (Some("grok-4.7"), effort) => Err(format!(
+                "Grok model 'grok-4.7' supports effort values low, medium, high, xhigh; '{effort}' is unsupported"
+            )),
             (Some("grok-4.6"), effort) => Err(format!(
                 "Grok model 'grok-4.6' supports effort values low, medium, high, xhigh; '{effort}' is unsupported"
             )),
@@ -123,10 +129,10 @@ impl ReasoningEffort {
                 "Grok model 'grok-4.5' supports effort values low, medium, high; '{effort}' is unsupported"
             )),
             (Some(model), _) => Err(format!(
-                "Grok effort support is verified only for models 'grok-4.5' and 'grok-4.6'; model '{model}' is unsupported"
+                "Grok effort support is verified only for models 'grok-4.5', 'grok-4.6', and 'grok-4.7'; model '{model}' is unsupported"
             )),
             (None, _) => Err(
-                "Grok effort requires an explicit model; supported models are 'grok-4.5' and 'grok-4.6'"
+                "Grok effort requires an explicit model; supported models are 'grok-4.5', 'grok-4.6', and 'grok-4.7'"
                     .to_string(),
             ),
         }

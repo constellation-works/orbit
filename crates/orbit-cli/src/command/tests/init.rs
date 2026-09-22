@@ -122,7 +122,7 @@ fn non_interactive_init_against_non_global_root_leaves_home_skill_links_untouche
         ("terra", "codex", "gpt-5.6-terra"),
         ("luna", "codex", "gpt-5.6-luna"),
         ("gemini", "gemini", "gemini-3.7-flash"),
-        ("grok", "grok", "grok-4.6"),
+        ("grok", "grok", "grok-4.7"),
         ("system", "", ""),
     ];
     if let Some(crews) = crews {
@@ -144,7 +144,7 @@ fn non_interactive_init_against_non_global_root_leaves_home_skill_links_untouche
                 } else if crews.contains_key("sonnet") {
                     ("claude", "sonnet")
                 } else if crews.contains_key("grok") {
-                    ("grok", "grok-4.6")
+                    ("grok", "grok-4.7")
                 } else {
                     ("gemini", "gemini-3.7-flash")
                 };

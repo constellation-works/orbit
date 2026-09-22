@@ -81,7 +81,7 @@ pub const GEMINI_PAIR_STRONG: &str = "gemini-3.1-pro";
 pub const GEMINI_PAIR_WEAK: &str = "gemini-3.8-flash";
 
 /// Default Grok Build model (the canonical model listed by `grok models`).
-pub const GROK_DEFAULT_MODEL: &str = "grok-4.6";
+pub const GROK_DEFAULT_MODEL: &str = "grok-4.7";
 
 /// Default model for the GitHub Copilot CLI lane.
 ///

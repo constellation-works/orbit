@@ -165,6 +165,7 @@ fn every_fleet_model_string_is_priced() {
         "grok-build",
         "grok-4.5",
         "grok-4.6",
+        "grok-4.7",
     ];
     // A nonzero split so a zero-rate row would still yield Some (we assert
     // coverage, not a specific figure).
@@ -456,6 +457,24 @@ fn ground_truth_grok_4_6_uses_official_short_context_rates() {
     };
     let cost = derive_cost_usd("grok-4.6", dt("2026-08-14T00:00:00Z"), &usage)
         .expect("grok-4.6 is priced in the shipped table");
+    assert!((cost - 8.5).abs() < f64::EPSILON, "cost was {cost}");
+}
+
+#[test]
+fn ground_truth_grok_4_7_uses_official_short_context_rates() {
+    // Official short-context rates retrieved 2026-09-22T07:35:05Z from
+    // https://docs.x.ai/developers/models/grok-4.7 and
+    // https://docs.x.ai/developers/pricing: $2.00 input / $0.50 cached /
+    // $6.00 output per 1M. 1M of each split → 2.0 + 0.5 + 6.0 = 8.5.
+    let usage = TokenUsage {
+        input: 1_000_000,
+        cache_read: 1_000_000,
+        cache_create: 0,
+        cache_create_1h: 0,
+        output: 1_000_000,
+    };
+    let cost = derive_cost_usd("grok-4.7", dt("2026-09-22T00:00:00Z"), &usage)
+        .expect("grok-4.7 is priced in the shipped table");
     assert!((cost - 8.5).abs() < f64::EPSILON, "cost was {cost}");
 }
 

@@ -68,7 +68,7 @@ fn built_in_crews_use_standard_model_specific_names() {
         ("astra", "codex", "gpt-6-astra"),
         ("gemini", "gemini", "gemini-3.8-flash"),
         ("antigravity", "antigravity", "gemini-3.8-flash-high"),
-        ("grok", "grok", "grok-4.6"),
+        ("grok", "grok", "grok-4.7"),
         ("copilot", "copilot", "claude-sonnet-5"),
         ("cursor", "cursor", "gpt-5"),
         ("pi", "pi", "sonnet"),
@@ -412,14 +412,23 @@ fn claude_crew_effort_accepts_every_supported_value() {
 
 #[test]
 fn grok_crew_effort_enforces_the_verified_model_contract() {
-    for raw in ["low", "medium", "high", "xhigh"] {
+    for model in ["grok-4.7", "grok-4.6"] {
+        for raw in ["low", "medium", "high", "xhigh"] {
+            load_config(&format!(
+                "[crews.grok]\nmodel = \"{model}\"\nprovider = \"grok\"\neffort = \"{raw}\"\n\n[workflow]\ndefault_crew = \"grok\"\n"
+            ))
+            .unwrap_or_else(|error| panic!("{model} effort {raw} should load: {error}"));
+        }
+    }
+    for raw in ["low", "medium", "high"] {
         load_config(&format!(
-            "[crews.grok]\nmodel = \"grok-4.6\"\nprovider = \"grok\"\neffort = \"{raw}\"\n\n[workflow]\ndefault_crew = \"grok\"\n"
+            "[crews.grok]\nmodel = \"grok-4.5\"\nprovider = \"grok\"\neffort = \"{raw}\"\n\n[workflow]\ndefault_crew = \"grok\"\n"
         ))
-        .unwrap_or_else(|error| panic!("Grok 4.6 effort {raw} should load: {error}"));
+        .unwrap_or_else(|error| panic!("grok-4.5 effort {raw} should load: {error}"));
     }
 
     for (model, effort, expected) in [
+        ("grok-4.7", "max", "low, medium, high, xhigh"),
         ("grok-4.6", "max", "low, medium, high, xhigh"),
         ("grok-4.5", "xhigh", "low, medium, high"),
         ("grok-unknown", "high", "verified only"),

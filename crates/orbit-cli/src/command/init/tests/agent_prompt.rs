@@ -120,7 +120,7 @@ fn system_crew_prompt_offers_only_detected_cheap_tier_crews_by_name() {
     assert_eq!(system, "sonnet");
     let transcript = prompter.transcript();
     assert!(transcript.contains(
-        "   1. luna         codex        gpt-5.6-luna\n   2. sonnet       claude       sonnet\n   3. grok         grok         grok-4.6\n   4. gemini       gemini       gemini-3.8-flash"
+        "   1. luna         codex        gpt-5.6-luna\n   2. sonnet       claude       sonnet\n   3. grok         grok         grok-4.7\n   4. gemini       gemini       gemini-3.8-flash"
     ), "{transcript}");
     assert!(transcript.contains("System crew [1]: "));
     assert!(!transcript.contains("Custom"));
