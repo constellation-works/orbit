@@ -79,6 +79,7 @@ impl PluginCallbackSession {
                 dir.display()
             ))
         })?;
+        remove_stale_sessions(&dir)?;
         for _ in 0..8 {
             let token = random_token()?;
             let path = dir.join(&token);
@@ -272,9 +273,16 @@ fn find_ancestry_session(dir: &Path) -> Option<SessionRecord> {
     let pgid = current_process_group();
     let entries = fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
-        let bytes = fs::read(entry.path()).ok()?;
-        let record = parse_session(&bytes)?;
+        let Ok(bytes) = fs::read(entry.path()) else {
+            continue;
+        };
+        let Some(record) = parse_session(&bytes) else {
+            continue;
+        };
         if record.pid == 0 {
+            continue;
+        }
+        if !session_process_is_live(&record) {
             continue;
         }
         if record.pid == self_pid || parent_pid == Some(record.pid) || pgid == Some(record.pid) {
@@ -284,22 +292,76 @@ fn find_ancestry_session(dir: &Path) -> Option<SessionRecord> {
     None
 }
 
+/// Count callback session records whose recorded process no longer exists.
+///
+/// Corrupt or partially-written entries do not prevent inspecting other
+/// records. They are not classified as stale because their ownership cannot
+/// be established safely.
+pub fn stale_plugin_callback_session_count(global_root: &Path) -> Result<usize, OrbitError> {
+    Ok(stale_session_paths(&callback_dir(global_root))?.len())
+}
+
+fn remove_stale_sessions(dir: &Path) -> Result<(), OrbitError> {
+    for path in stale_session_paths(dir)? {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "remove stale plugin callback session `{}`: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn stale_session_paths(dir: &Path) -> Result<Vec<PathBuf>, OrbitError> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(OrbitError::Io(format!(
+                "read plugin callback session directory `{}`: {error}",
+                dir.display()
+            )));
+        }
+    };
+    let mut stale = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let Some(record) = parse_session(&bytes) else {
+            continue;
+        };
+        if record.pid != 0 && !session_process_is_live(&record) {
+            stale.push(path);
+        }
+    }
+    Ok(stale)
+}
+
+fn session_process_is_live(record: &SessionRecord) -> bool {
+    process_start_key(record.pid).is_some_and(|key| key.starttime == record.starttime)
+}
+
 fn parse_session(bytes: &[u8]) -> Option<SessionRecord> {
     let record: SessionRecord = serde_json::from_slice(bytes).ok()?;
     (record.schema_version == 1 && !record.plugin.trim().is_empty()).then_some(record)
 }
 
 fn write_session_exclusive(path: &Path, record: &SessionRecord) -> std::io::Result<()> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+    if path.try_exists()? {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "plugin callback session already exists",
+        ));
     }
-    let mut file = options.open(path)?;
-    file.write_all(&session_bytes(record)?)?;
-    file.sync_all()
+    let bytes = session_bytes(record)?;
+    write_session_atomically(path, &bytes).map_err(|error| std::io::Error::other(error.to_string()))
 }
 
 fn rewrite_session(path: &Path, record: &SessionRecord) -> Result<(), OrbitError> {
@@ -309,7 +371,31 @@ fn rewrite_session(path: &Path, record: &SessionRecord) -> Result<(), OrbitError
             path.display()
         ))
     })?;
-    fs::write(path, bytes).map_err(|error| {
+    write_session_atomically(path, &bytes)
+}
+
+fn write_session_atomically(path: &Path, bytes: &[u8]) -> Result<(), OrbitError> {
+    let temp = path.with_extension(format!("tmp-{}", random_token()?));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let write_result = (|| -> std::io::Result<()> {
+        let mut file = options.open(&temp)?;
+        file.write_all(bytes)?;
+        file.sync_all()
+    })();
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temp);
+        return Err(OrbitError::Io(format!(
+            "update plugin callback session `{}`: {error}",
+            path.display()
+        )));
+    }
+    fs::rename(&temp, path).map_err(|error| {
         OrbitError::Io(format!(
             "update plugin callback session `{}`: {error}",
             path.display()

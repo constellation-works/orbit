@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_tools::plugin::stale_plugin_callback_session_count;
 use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
 use serde_json::Value;
 
@@ -64,6 +65,11 @@ impl OrbitRuntime {
 
     pub fn plugin_doctor(&self) -> Result<Vec<PluginDoctorResult>, OrbitError> {
         plugin::plugin_doctor(self)
+    }
+
+    /// Count callback records that no longer name a live plugin backend.
+    pub fn stale_plugin_callback_session_count(&self) -> Result<usize, OrbitError> {
+        stale_plugin_callback_session_count(&self.global_root())
     }
 
     /// Validate a plugin directory without installing it. `first_party` is
