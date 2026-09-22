@@ -2,7 +2,7 @@
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_validated: 2026-09-21
+last_validated: 2026-09-22
 ---
 
 # Scope: Orbit plugin standard
@@ -84,7 +84,13 @@ every other publisher gets bare `<ns>.*`. `origin: orbit` is only honoured when 
 the source from a `git+` URL under `github.com/constellation-works`, or when its manifest digest
 is in the bundled first-party list; a local directory's Git remotes are never provenance
 evidence. Any other manifest claiming it is refused at load. orbit-graph and orbit-research are
-first-party, so `orbit.graph.*` keeps its current names with no alias table.
+first-party when installed from a verified source (or when a release bundles their manifest
+digest), so they may use `orbit.graph.*` and `orbit.research.*` without an alias table. Migrating
+local orbit-graph sidecars does not establish that provenance: migration emits no `publisher` or
+`origin`, and the generated manifest therefore registers the bare `graph.*` namespace. To reclaim
+`orbit.graph.*`, its author must add `publisher: constellation-works` and `origin: orbit`, publish
+the tree under that GitHub organisation, and install it through the corresponding `git+` URL (or
+ship a manifest digest in Orbit's bundled first-party list).
 
 ## 2. Manifest
 

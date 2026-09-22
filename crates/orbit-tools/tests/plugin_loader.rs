@@ -226,7 +226,12 @@ fn migrate_folds_the_orbit_graph_sidecars_into_one_v2_manifest() {
     }
     let manifest = migrate_sidecars(&sidecars, "bin/orbit-graph", "0.4.1", None).expect("migrate");
     assert_eq!(manifest.metadata.name, "graph");
-    assert!(manifest.claims_first_party_namespace());
+    assert_eq!(manifest.metadata.publisher, None);
+    assert_eq!(manifest.metadata.origin, None);
+    assert!(
+        !manifest.claims_first_party_namespace(),
+        "migration cannot carry a v1 name's unverified first-party claim into v2"
+    );
     manifest.validate_structure().expect("structure");
 
     // Write it out and load it through the same path `orbit plugin validate` uses.
@@ -239,25 +244,18 @@ fn migrate_folds_the_orbit_graph_sidecars_into_one_v2_manifest() {
     )
     .expect("write manifest");
     let loaded = load_plugin_dir(temp.path()).expect("migrated manifest loads");
-    validate_loaded_plugin(
-        &loaded,
-        &PluginValidationPolicy::host_default().with_first_party_verified(true),
-    )
-    .expect("migrated manifest validates as first-party");
+    validate_loaded_plugin(&loaded, &PluginValidationPolicy::host_default())
+        .expect("migrated manifest validates without first-party provenance");
 
     let names: Vec<String> = loaded
         .tools
         .iter()
-        .map(|tool| loaded.tool_name(&tool.verb, true))
+        .map(|tool| loaded.tool_name(&tool.verb, false))
         .collect();
     assert_eq!(
         names,
-        [
-            "orbit.graph.recommend",
-            "orbit.graph.status",
-            "orbit.graph.maintain"
-        ],
-        "tool names equal the v1 sidecar names"
+        ["graph.recommend", "graph.status", "graph.maintain"],
+        "the migrated local tree gets the unreserved graph.* namespace"
     );
     let recommend = &loaded.tools[0];
     let v1 = &sidecars[0].parameters;
