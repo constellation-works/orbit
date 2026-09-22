@@ -964,7 +964,8 @@ fn doctor_check_job_runs(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
 }
 
 /// Delivery automation consumers that cannot make progress: evaluation
-/// suspended by a stall, or an enabled definition whose branch does not exist.
+/// suspended by a stall, an enabled definition whose branch does not exist, or
+/// an enabled definition this host may never admit work for.
 ///
 /// A stalled consumer is silent by design — it stops reporting a per-tick
 /// error precisely so the debt is visible here instead of scrolling past in a
@@ -974,6 +975,12 @@ fn doctor_check_job_runs(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
 /// A definition whose configured branch git cannot resolve never baselines,
 /// so no stall marker ever exists for it; every sweep would defer with the
 /// same reason forever. Doctor names the branch, git's text and the fix.
+///
+/// An enabled definition whose resolved owner is another machine — or whose
+/// ownership resolves to nobody — is refused at every tick and accumulates
+/// coverage debt it can never discharge [ORB-12867]. It carries no stall
+/// marker and its branch may resolve perfectly, so nothing else here would
+/// notice. A disabled definition stays quiet: `disabled` already says why.
 fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let stalled = match orbit_core::application::automation::stalled_consumers(runtime) {
         Ok(stalled) => stalled,
@@ -997,7 +1004,19 @@ fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> WorkspaceDoctorRes
             }
         };
 
-    if stalled.is_empty() && unresolvable.is_empty() {
+    let unadmittable =
+        match orbit_core::application::automation::unadmittable_delivery_definitions(runtime) {
+            Ok(unadmittable) => unadmittable,
+            Err(error) => {
+                return check(
+                    "automation-consumers",
+                    WorkspaceDoctorStatus::Warning,
+                    format!("cannot resolve delivery automation ownership: {error}"),
+                );
+            }
+        };
+
+    if stalled.is_empty() && unresolvable.is_empty() && unadmittable.is_empty() {
         return check(
             "automation-consumers",
             WorkspaceDoctorStatus::Ok,
@@ -1058,6 +1077,32 @@ fn doctor_check_stalled_automation(runtime: &OrbitRuntime) -> WorkspaceDoctorRes
              or pass `--deliveries-landed` to `orbit auto-task update <name>`), or create \
              the branch it names; then rerun `orbit doctor`."
         ));
+    }
+
+    if !unadmittable.is_empty() {
+        let detail = unadmittable
+            .iter()
+            .map(|definition| format!("{} ({})", definition.definition, definition.mismatch()))
+            .collect::<Vec<_>>()
+            .join("; ");
+        segments.push(format!(
+            "{} enabled delivery definition(s) this host can never admit work for, so their \
+             coverage debt only grows: {detail}",
+            unadmittable.len()
+        ));
+        if let Some(first) = unadmittable.first() {
+            remediation.push(format!(
+                "`{}` is refused because {}; `orbit auto-task show {} --preview` reports the \
+                 coverage debt it is holding. For each named definition either make this host \
+                 the resolved owner (set `schedule.deliveries_landed.owner_machine`, or \
+                 register this workspace's owner machine when none resolves) or disable it \
+                 here with `orbit auto-task toggle {} off`.",
+                first.definition,
+                first.mismatch(),
+                first.definition,
+                first.definition,
+            ));
+        }
     }
 
     actionable_check(

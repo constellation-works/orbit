@@ -1907,6 +1907,143 @@ fn automation_consumer_check_warns_about_an_unresolvable_branch() {
     );
 }
 
+/// An enabled delivery definition whose resolved owner is not this host is
+/// refused at every tick and accumulates debt nothing here can discharge
+/// [ORB-12867]. It carries no stall marker and its branch resolves fine, so
+/// before this check `orbit doctor` reported `ok` while the definition was
+/// silently dead. A definition this host owns, and one the operator disabled,
+/// stay quiet.
+#[test]
+fn automation_consumer_check_warns_about_a_definition_this_host_cannot_admit() {
+    use orbit_core::application::auto_tasks::AutoTaskAddParams;
+    use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
+    use orbit_types::workflow::automation::{CoverageClass, DeliveryTrigger};
+    use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
+
+    let temp = tempfile::tempdir().expect("temp dir");
+    let runtime =
+        workspace_runtime(&temp).with_automation_machine_identity(Some("fixture-machine".into()));
+
+    // Every definition here names a branch that resolves, so the only debt
+    // this check can report is the ownership one.
+    let repo = temp.path().join("repo");
+    for args in [
+        vec!["init", "--initial-branch=main"],
+        vec![
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+    ] {
+        let output = std::process::Command::new("git")
+            .args(&args)
+            .current_dir(&repo)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let template = AutoTaskTemplate {
+        title: "Review a frozen delivery batch".into(),
+        description: "Inspect captured input".into(),
+        acceptance_criteria: vec!["All obligations examined".into()],
+        task_type: TaskType::Chore,
+        tags: vec![],
+        required_tools: vec![],
+        priority: TaskPriority::Medium,
+        complexity: None,
+        crew: None,
+        status: TaskStatus::Backlog,
+    };
+    let add = |name: &str, owner: Option<&str>| {
+        runtime
+            .auto_task_add(AutoTaskAddParams {
+                name: name.into(),
+                description: "fixture".into(),
+                schedule: AutoTaskSchedule::Deliveries {
+                    deliveries_landed: DeliveryTrigger {
+                        owner_machine: owner.map(ToOwned::to_owned),
+                        branch: "main".into(),
+                        threshold: 1,
+                        max_wait_minutes: 60,
+                        coverage: CoverageClass::LandedCodeReviewV1,
+                        max_items: 20,
+                        retries: 0,
+                    },
+                },
+                template: template.clone(),
+                dedupe: DedupePolicy::SkipIfOpen,
+            })
+            .expect("add delivery definition");
+        runtime.auto_task_toggle(name, true).expect("enable");
+    };
+    add("delivery-here", Some("fixture-machine"));
+    add("delivery-elsewhere", Some("another-machine"));
+    add("delivery-unresolved", None);
+
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "automation-consumers");
+
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning);
+    assert!(
+        row.message.contains(
+            "2 enabled delivery definition(s) this host can never admit work for, so their \
+             coverage debt only grows: delivery-elsewhere (owned_elsewhere: the definition's \
+             `owner_machine` names machine `another-machine`, and this host is \
+             `fixture-machine`)"
+        ),
+        "{}",
+        row.message
+    );
+    assert!(
+        row.message.contains(
+            "delivery-unresolved (ownership_unresolved: no owner machine \
+             resolves: the definition sets no `owner_machine` and this workspace has no \
+             registered owner machine, and this host is `fixture-machine`)"
+        ),
+        "unresolved ownership is reported as distinctly as owned_elsewhere: {}",
+        row.message
+    );
+    assert!(
+        !row.message.contains("delivery-here"),
+        "a definition this host owns is not a debt: {}",
+        row.message
+    );
+
+    let remediation = row.remediation.as_deref().expect("warning carries the fix");
+    assert!(
+        remediation.contains("names machine `another-machine`, and this host is `fixture-machine`"),
+        "the remediation names the ownership mismatch: {remediation}"
+    );
+    assert!(
+        remediation.contains("orbit auto-task show delivery-elsewhere --preview"),
+        "the remediation names the surface that shows the debt: {remediation}"
+    );
+    assert!(
+        remediation.contains("orbit auto-task toggle delivery-elsewhere off"),
+        "{remediation}"
+    );
+
+    // Disabling them takes them out of this host's obligations: `disabled`
+    // already says why nothing fires.
+    for name in ["delivery-elsewhere", "delivery-unresolved"] {
+        runtime.auto_task_toggle(name, false).expect("disable");
+    }
+    let results = runtime.doctor_workspace().expect("doctor");
+    let row = status_of(&results, "automation-consumers");
+    assert_eq!(row.status, WorkspaceDoctorStatus::Ok);
+    assert_eq!(row.remediation, None);
+}
+
 /// A workspace with no delivery automation state is healthy, not skipped: the
 /// check reads persisted stall markers, and having none is the answer.
 #[test]

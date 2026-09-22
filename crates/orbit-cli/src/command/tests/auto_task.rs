@@ -589,3 +589,118 @@ fn auto_task_reset_needs_a_delivery_definition_that_exists() {
             .contains("no such auto-task 'ghost'")
     );
 }
+
+/// A delivery definition this host can never admit work for is `skipped`, not
+/// `enabled`, in both the table and the JSON — with the owner mismatch in the
+/// reason [ORB-12867]. `enabled` on this list has always meant "scheduled
+/// here"; for an unadmittable definition that was a lie an operator could only
+/// catch from `auto-task show`.
+#[test]
+fn delivery_list_reports_an_ownership_refusal_as_skipped() {
+    let runtime = OrbitRuntime::in_memory()
+        .expect("build runtime")
+        .with_automation_machine_identity(Some("fixture-machine".into()));
+
+    let add = |name: &str, owner: Option<&str>| {
+        runtime
+            .auto_task_add(AutoTaskAddParams {
+                name: name.to_string(),
+                description: "Delivery ownership fixture.".to_string(),
+                schedule: AutoTaskSchedule::Deliveries {
+                    deliveries_landed: DeliveryTrigger {
+                        owner_machine: owner.map(ToOwned::to_owned),
+                        branch: "agent-main".to_string(),
+                        threshold: 3,
+                        max_wait_minutes: 60,
+                        coverage: CoverageClass::LandedCodeReviewV1,
+                        max_items: 20,
+                        retries: 0,
+                    },
+                },
+                template: AutoTaskTemplate {
+                    title: "Review a frozen delivery batch".to_string(),
+                    description: "Inspect delivery coverage.".to_string(),
+                    acceptance_criteria: vec!["Coverage is recorded.".to_string()],
+                    task_type: TaskType::Chore,
+                    tags: vec![],
+                    required_tools: vec![],
+                    priority: TaskPriority::Medium,
+                    complexity: None,
+                    crew: None,
+                    status: TaskStatus::Backlog,
+                },
+                dedupe: DedupePolicy::SkipIfOpen,
+            })
+            .expect("add delivery auto-task");
+        runtime.auto_task_toggle(name, true).expect("enable");
+    };
+    add("delivery-here", Some("fixture-machine"));
+    add("delivery-elsewhere", Some("another-machine"));
+    add("delivery-unresolved", None);
+
+    let cli = Cli::try_parse_from(["orbit", "auto-task", "list"]).expect("parse auto-task list");
+    let Commands::AutoTask(auto_task) = cli.command else {
+        panic!("expected auto-task command");
+    };
+    let AutoTaskSubcommand::List(args) = auto_task.command else {
+        panic!("expected auto-task list command");
+    };
+    let CommandOutput::Payload(payload) = args.execute(&runtime).expect("auto-task list") else {
+        panic!("auto-task list should return a payload");
+    };
+    let (document, view) = payload.into_view();
+
+    let record = |name: &str| {
+        document
+            .as_array()
+            .expect("list renders an array")
+            .iter()
+            .find(|entry| entry["name"] == name)
+            .unwrap_or_else(|| panic!("{name} is listed"))
+            .clone()
+    };
+    assert_eq!(
+        record("delivery-here")["skipped_reason"],
+        serde_json::Value::Null,
+        "the definition this host owns is scheduled, so it carries no skip reason"
+    );
+
+    let elsewhere = record("delivery-elsewhere");
+    let reason = elsewhere["skipped_reason"]
+        .as_str()
+        .expect("an unadmittable definition carries a skip reason");
+    assert!(reason.starts_with("owned_elsewhere: "), "{reason}");
+    assert!(
+        reason.contains("`another-machine`") && reason.contains("`fixture-machine`"),
+        "the reason names the definition's owner and this host: {reason}"
+    );
+
+    let unresolved = record("delivery-unresolved")["skipped_reason"]
+        .as_str()
+        .expect("unresolved ownership carries a skip reason")
+        .to_string();
+    assert!(
+        unresolved.starts_with("ownership_unresolved: "),
+        "missing authority is reported as distinctly as owned_elsewhere: {unresolved}"
+    );
+
+    let View::Blocks(blocks) = view else {
+        panic!("expected block view");
+    };
+    let Block::Table(table) = &blocks[0] else {
+        panic!("list renders a table");
+    };
+    let rendered = table.render_at(None, false, false).body;
+    for row in rendered.lines() {
+        let state = match row.split_whitespace().next() {
+            Some("delivery-here") => "enabled",
+            Some("delivery-elsewhere") | Some("delivery-unresolved") => "skipped",
+            _ => continue,
+        };
+        assert!(
+            row.split_whitespace().nth(1) == Some(state),
+            "expected state {state}: {row}"
+        );
+    }
+    assert!(rendered.contains("skipped"), "{rendered}");
+}
