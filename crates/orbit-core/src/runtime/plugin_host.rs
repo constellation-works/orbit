@@ -150,11 +150,17 @@ pub fn read_pin_file(orbit_dir: &Path) -> Result<Option<PluginPinFile>, OrbitErr
 /// Host-global by construction: plugin installs are per host, so this answers
 /// without a workspace runtime and is what lets the MCP surface advertise
 /// plugin tools to a session that has not named a workspace yet.
+///
+/// `plugin_config` is the caller's resolved global-only `[plugins.<ns>]`
+/// sections (config layered over itself, no workspace); without it a plugin
+/// whose config schema requires a key only `config.toml` sets is refused
+/// here even though the workspace runtime loads it fine.
 pub fn host_plugin_mcp_definitions(
     global_root: &Path,
     audit_db: &Path,
+    plugin_config: &BTreeMap<String, Value>,
 ) -> Result<Vec<McpToolDefinition>, OrbitError> {
-    let registry = host_plugin_registry(global_root, audit_db)?.0;
+    let registry = host_plugin_registry(global_root, audit_db, plugin_config)?.0;
     registry
         .mcp_tool_definitions()
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))
@@ -195,9 +201,15 @@ pub struct PluginCliVerb {
 /// Read host-globally and without a workspace runtime, because the CLI
 /// builds its clap tree before it bootstraps one. A host with no enabled
 /// plugin answers without touching a manifest.
+///
+/// `plugin_config` is the caller's resolved global-only `[plugins.<ns>]`
+/// sections (config layered over itself, no workspace); without it a plugin
+/// whose config schema requires a key only `config.toml` sets is refused
+/// here even though the workspace runtime loads it fine.
 pub fn host_plugin_cli_groups(
     global_root: &Path,
     audit_db: &Path,
+    plugin_config: &BTreeMap<String, Value>,
 ) -> Result<Vec<PluginCliGroup>, OrbitError> {
     let store = Store::open_read_only(audit_db)?;
     if !store
@@ -213,7 +225,7 @@ pub fn host_plugin_cli_groups(
         global_root,
         &store,
         &mut registry,
-        &BTreeMap::new(),
+        plugin_config,
     );
     Ok(plugin_cli_groups(&load))
 }
@@ -269,9 +281,17 @@ pub fn plugin_cli_groups(load: &PluginHostLoad) -> Vec<PluginCliGroup> {
 ///
 /// Namespace validation still runs against the real built-in names, so a
 /// colliding plugin is refused here exactly as it is in a workspace runtime.
+///
+/// `plugin_config` is the caller's resolved global-only `[plugins.<ns>]`
+/// sections (config layered over itself, no workspace); without it a plugin
+/// whose config schema requires a key only `config.toml` sets is refused
+/// here even though the workspace runtime loads it fine, and any
+/// `mcp_scope: global` tool this registry executes renders
+/// `{{config.<key>}}` from manifest defaults only.
 pub fn host_plugin_registry(
     global_root: &Path,
     audit_db: &Path,
+    plugin_config: &BTreeMap<String, Value>,
 ) -> Result<(ToolRegistry, PluginHostLoad), OrbitError> {
     let store = Store::open_read_only(audit_db)?;
     let mut registry = ToolRegistry::new();
@@ -282,7 +302,7 @@ pub fn host_plugin_registry(
         global_root,
         &store,
         &mut registry,
-        &BTreeMap::new(),
+        plugin_config,
     );
     Ok((registry, load))
 }
