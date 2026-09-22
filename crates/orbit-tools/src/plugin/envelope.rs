@@ -7,6 +7,8 @@
 use orbit_common::OrbitError;
 use serde_json::Value;
 
+use super::schema::CompiledSchema;
+
 /// The stdin envelope version the backend receives.
 pub const PLUGIN_ENVELOPE_SCHEMA_VERSION: u32 = 1;
 
@@ -40,31 +42,18 @@ pub fn parse_response(tool_name: &str, stdout: &str) -> Result<Value, OrbitError
 }
 
 /// Check `output` against the tool's `output_schema`, when it declares one.
+///
+/// The validator was compiled when the plugin was loaded, so a schema that
+/// cannot compile never reaches a call (§4.9).
 pub fn validate_output(
     tool_name: &str,
-    output_schema: Option<&Value>,
+    output_schema: Option<&CompiledSchema>,
     output: &Value,
 ) -> Result<(), OrbitError> {
     let Some(schema) = output_schema else {
         return Ok(());
     };
-    let validator = jsonschema::JSONSchema::compile(schema).map_err(|error| {
-        OrbitError::Execution(format!(
-            "plugin tool '{tool_name}' declares an output_schema that does not compile: {error}"
-        ))
-    })?;
-    if let Err(errors) = validator.validate(output) {
-        let details = errors
-            .map(|error| {
-                let path = error.instance_path.to_string();
-                if path.is_empty() {
-                    error.to_string()
-                } else {
-                    format!("{path}: {error}")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
+    if let Some(details) = schema.violations(output) {
         return Err(OrbitError::Execution(format!(
             "plugin tool '{tool_name}' returned output that violates its output_schema: {details}"
         )));

@@ -1,7 +1,8 @@
 use super::super::manifest::{
-    PluginBackend, PluginBackendType, PluginExecutionKind, PluginManifest, PluginMcpScope,
-    PluginMetadata, PluginPanelGroup, PluginPanelRender, PluginPermissions, PluginRequires,
-    PluginSandbox, PluginSpec, PluginToolSpec, PluginWebLink, PluginWebPanel, PluginWebSection,
+    PluginBackend, PluginBackendType, PluginCliShape, PluginExecutionKind, PluginManifest,
+    PluginMcpScope, PluginMetadata, PluginPanelGroup, PluginPanelRender, PluginPermissions,
+    PluginRequires, PluginSandbox, PluginSpec, PluginToolSpec, PluginWebLink, PluginWebPanel,
+    PluginWebSection,
 };
 
 fn minimal() -> PluginManifest {
@@ -139,6 +140,130 @@ fn schema_properties_with_colliding_or_empty_cli_flags_are_refused() {
     manifest
         .validate_structure()
         .expect("a well-formed schema remains valid");
+}
+
+/// §4.6: one `orbit <ns> <verb>` dispatches to one tool. Two tools claiming
+/// the same subcommand would register it twice on the host's clap tree, so
+/// the manifest is refused naming both tools.
+#[test]
+fn colliding_or_invalid_cli_verbs_are_refused_by_name() {
+    let mut manifest = minimal();
+    manifest.spec.tools.push(PluginToolSpec {
+        name: "search".into(),
+        description: String::new(),
+        execution_kind: PluginExecutionKind::ReadOnly,
+        mcp_scope: PluginMcpScope::Workspace,
+        input_schema: None,
+        output_schema: None,
+        cli: Some(PluginCliShape {
+            verb: Some("hello".into()),
+            positional: vec![],
+        }),
+    });
+    let error = manifest
+        .validate_structure()
+        .expect_err("an override colliding with another tool refuses the manifest");
+    assert_eq!(error.field, "spec.tools[1].cli.verb");
+    assert!(
+        error.message.contains("hello") && error.message.contains("search"),
+        "the refusal names both tools: {}",
+        error.message
+    );
+
+    manifest.spec.tools[0].cli = Some(PluginCliShape {
+        verb: Some("run".into()),
+        positional: vec![],
+    });
+    manifest.spec.tools[1].cli = Some(PluginCliShape {
+        verb: Some("run".into()),
+        positional: vec![],
+    });
+    let error = manifest
+        .validate_structure()
+        .expect_err("two overrides claiming one subcommand refuse the manifest");
+    assert_eq!(error.field, "spec.tools[1].cli.verb");
+    assert!(error.message.contains("run"), "{}", error.message);
+
+    manifest.spec.tools[1].cli = Some(PluginCliShape {
+        verb: Some("Run Fast".into()),
+        positional: vec![],
+    });
+    let error = manifest
+        .validate_structure()
+        .expect_err("an unusable subcommand spelling refuses the manifest");
+    assert_eq!(error.field, "spec.tools[1].cli.verb");
+    assert!(
+        error.message.contains("search") && error.message.contains("Run Fast"),
+        "the refusal names the tool and the verb: {}",
+        error.message
+    );
+
+    manifest.spec.tools[1].cli = Some(PluginCliShape {
+        verb: Some("run-fast".into()),
+        positional: vec![],
+    });
+    manifest
+        .validate_structure()
+        .expect("distinct, well-spelled overrides are valid");
+}
+
+/// A `cli.positional` entry the CLI adapter cannot fill is silently dropped,
+/// so the manifest is refused instead, naming the tool and the entry.
+#[test]
+fn a_positional_must_name_a_top_level_input_property_once() {
+    let mut manifest = minimal();
+    manifest.spec.tools[0].cli = Some(PluginCliShape {
+        verb: None,
+        positional: vec!["query".into()],
+    });
+    let error = manifest
+        .validate_structure()
+        .expect_err("a positional with no input_schema refuses the manifest");
+    assert_eq!(error.field, "spec.tools[0].cli.positional[0]");
+    assert!(
+        error.message.contains("hello") && error.message.contains("query"),
+        "the refusal names the tool and the property: {}",
+        error.message
+    );
+
+    manifest.spec.tools[0].input_schema = Some(serde_json::json!({
+        "type": "object",
+        "properties": { "query": { "type": "string" } }
+    }));
+    manifest
+        .validate_structure()
+        .expect("a positional naming a declared property is valid");
+
+    manifest.spec.tools[0].cli = Some(PluginCliShape {
+        verb: None,
+        positional: vec!["query".into(), "depth".into()],
+    });
+    let error = manifest
+        .validate_structure()
+        .expect_err("a positional outside `properties` refuses the manifest");
+    assert_eq!(error.field, "spec.tools[0].cli.positional[1]");
+    assert!(error.message.contains("depth"), "{}", error.message);
+
+    manifest.spec.tools[0].cli = Some(PluginCliShape {
+        verb: None,
+        positional: vec!["query".into(), "query".into()],
+    });
+    let error = manifest
+        .validate_structure()
+        .expect_err("a repeated positional refuses the manifest");
+    assert_eq!(error.field, "spec.tools[0].cli.positional[1]");
+    assert!(error.message.contains("twice"), "{}", error.message);
+
+    // A `{ $ref }` schema is read at load; the manifest cannot resolve it and
+    // must not reject a positional it simply cannot see yet.
+    manifest.spec.tools[0].input_schema = Some(serde_json::json!({ "$ref": "schemas/hello.json" }));
+    manifest.spec.tools[0].cli = Some(PluginCliShape {
+        verb: None,
+        positional: vec!["query".into()],
+    });
+    manifest
+        .validate_structure()
+        .expect("a $ref schema defers the positional check to load");
 }
 
 #[test]

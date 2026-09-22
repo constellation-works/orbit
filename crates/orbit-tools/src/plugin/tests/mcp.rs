@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 
 use super::super::loader::load_plugin_dir;
 use super::super::mcp::{McpBackend, McpExpectedTool};
+use super::super::schema::CompiledSchema;
 use super::super::tool::{PluginBackend, PluginTool, PluginToolBinding};
 use super::support::{context, provenance, sandbox_unavailable};
 use crate::{Tool, ToolContext};
@@ -100,7 +101,8 @@ impl Fixture {
             description: String::new(),
             parameters: Vec::new(),
             execution_kind: PluginExecutionKind::ReadOnly,
-            output_schema,
+            output_schema: output_schema
+                .map(|schema| CompiledSchema::compile(schema).expect("compile output_schema")),
             binding: Arc::new(PluginToolBinding {
                 provenance: provenance(&[]),
                 execution_kind: PluginExecutionKind::ReadOnly,
