@@ -102,6 +102,26 @@ pub(super) fn spawn_restricted(
     for grant in grants {
         ruleset.add_path(grant)?;
     }
+    spawn_with_ruleset(req, ruleset, inherited_fds)
+}
+
+/// Register both `pre_exec` hooks and start the child.
+///
+/// Split from [`spawn_restricted`] so the descriptor contract between the two
+/// hooks can be exercised against a ruleset whose number is known to collide.
+fn spawn_with_ruleset(
+    req: &ExecRequest,
+    ruleset: Ruleset,
+    inherited_fds: &[crate::process::InheritedFd],
+) -> Result<Child, OrbitError> {
+    // The child remaps every inherited target with `dup2` before this ruleset
+    // is applied, so a ruleset sitting on one of those numbers is replaced by
+    // the credential and `landlock_restrict_self` refuses it with `EBADFD`.
+    // The number is not arbitrary: minting a callback credential frees the
+    // target, and the ruleset opened afterwards drops straight into the gap.
+    // Moving the ruleset above every target settles it before either hook
+    // exists, rather than depending on which descriptors happen to be free.
+    let ruleset = ruleset.clear_of_targets(inherited_fds)?;
 
     let mut command = crate::process::command(req);
     // Before the ruleset, so a credential descriptor is in place whatever the
@@ -197,6 +217,21 @@ impl Ruleset {
         self.fd.as_raw_fd()
     }
 
+    /// Lift the ruleset above every descriptor number the child overwrites on
+    /// its way to `exec`. A no-op when the spawn inherits nothing.
+    fn clear_of_targets(
+        self,
+        inherited_fds: &[crate::process::InheritedFd],
+    ) -> Result<Self, OrbitError> {
+        let Self { fd, handled_fs } = self;
+        let fd = crate::process::relocate_clear_of_targets(fd, inherited_fds).map_err(|error| {
+            OrbitError::Io(format!(
+                "move the landlock ruleset clear of the child's inherited descriptors: {error}"
+            ))
+        })?;
+        Ok(Self { fd, handled_fs })
+    }
+
     fn add_path(&self, grant: &LandlockPathGrant) -> Result<(), OrbitError> {
         use std::os::unix::ffi::OsStrExt;
 
@@ -279,3 +314,7 @@ fn set_cloexec(fd: i32) -> Result<(), OrbitError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "tests/ruleset.rs"]
+mod tests;

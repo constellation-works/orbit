@@ -61,6 +61,47 @@ pub(crate) fn attach_inherited_fds(command: &mut Command, fds: &[InheritedFd]) {
 #[cfg(not(unix))]
 pub(crate) fn attach_inherited_fds(_command: &mut Command, _fds: &[InheritedFd]) {}
 
+/// Move `fd` above every number [`attach_inherited_fds`] overwrites.
+///
+/// A descriptor the parent opened for its *own* use in the child — the
+/// Landlock ruleset is the only one today — is read after the remap has
+/// already run, because `std` invokes `pre_exec` hooks in registration order.
+/// Sitting on a target number therefore means the hook reads the credential
+/// instead of what it opened, and the syscall refuses a descriptor of the
+/// wrong kind: `landlock_restrict_self` answers `EBADFD`.
+///
+/// The collision is not a remote possibility, it is the likely case. A
+/// callback session lifts its credential clear of the target number and drops
+/// the low duplicates it made getting there, which leaves the target free;
+/// the ruleset the host opens next takes the lowest free number and lands in
+/// exactly that hole. Relocating once, before either hook is registered,
+/// removes the overlap for good rather than leaving it to descriptor luck.
+#[cfg(unix)]
+pub(crate) fn relocate_clear_of_targets(
+    fd: std::os::fd::OwnedFd,
+    fds: &[InheritedFd],
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    let Some(ceiling) = fds.iter().map(|fd| fd.target).max() else {
+        return Ok(fd);
+    };
+    if fd.as_raw_fd() > ceiling {
+        return Ok(fd);
+    }
+    // SAFETY: `fd` is an open descriptor this scope owns. `F_DUPFD_CLOEXEC`
+    // returns the lowest free number at or above `ceiling + 1`, close-on-exec
+    // already set, so the duplicate keeps the flag the original was created
+    // with and never leaks into an unrelated child.
+    let moved = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, ceiling + 1) };
+    if moved < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `moved` is a freshly duplicated descriptor owned by this scope;
+    // the original closes when `fd` drops at the end of the call.
+    Ok(unsafe { OwnedFd::from_raw_fd(moved) })
+}
+
 /// Build the child process description shared by every spawn path, so a
 /// sandbox that confines the child cannot drift from the unconfined one.
 pub(crate) fn command(req: &ExecRequest) -> Command {
@@ -122,3 +163,7 @@ pub fn spawn_with_inherited_fds(
         .spawn()
         .map_err(|e| OrbitError::Execution(format!("failed to spawn `{}`: {e}", req.program)))
 }
+
+#[cfg(all(test, unix))]
+#[path = "tests/process.rs"]
+mod tests;
