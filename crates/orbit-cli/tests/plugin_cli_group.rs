@@ -457,6 +457,54 @@ fn enable_warns_when_a_grant_was_not_requested() {
     );
 }
 
+/// `orbit plugin scaffold` tells operators to run `add <dir> --enable`; that
+/// one-step path used to report only the install summary and drop the seeded
+/// auto-task, skill link and warnings `orbit plugin enable` reports for the
+/// identical enable [ORB-12807].
+#[cfg(unix)]
+#[test]
+fn add_enable_renders_the_seeded_skill_and_warning_report_like_enable() {
+    let fixture = Fixture::new();
+    let source = fixture.source("demo");
+    let source_arg = source.to_str().expect("utf8 source");
+
+    fixture
+        .orbit()
+        .args(["plugin", "scaffold", "demo", "--dir", source_arg])
+        .assert()
+        .success();
+
+    fixture
+        .orbit()
+        .args(["plugin", "add", source_arg, "--enable"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("auto_task demo-review created"))
+        .stdout(predicate::str::contains(
+            "Seeded schedules are disabled; review one, then set `enabled: true` to run it.",
+        ))
+        .stdout(predicate::str::contains("skill demo-demo linked at"));
+
+    let json = fixture
+        .orbit()
+        .args([
+            "plugin", "add", source_arg, "--enable", "--force", "--format", "json",
+        ])
+        .output()
+        .expect("re-add enabled plugin with json output");
+    assert!(json.status.success(), "{json:?}");
+    let json = stdout_json(&json);
+    assert_eq!(json["seeded"][0]["name"], "demo-review", "{json}");
+    assert_eq!(json["seeded"][0]["kind"], "auto_task", "{json}");
+    assert!(
+        json["skills"]
+            .as_array()
+            .is_some_and(|skills| skills.iter().any(|skill| skill["skill_id"] == "demo-demo")),
+        "{json}"
+    );
+    assert_eq!(json["warnings"], serde_json::json!([]), "{json}");
+}
+
 #[cfg(unix)]
 #[test]
 fn scaffold_validate_test_and_install_run_end_to_end() {

@@ -12,6 +12,8 @@ use crate::OrbitRuntime;
 use crate::application::plugin;
 use crate::runtime::plugin_host;
 
+pub use crate::application::plugin::skills::PluginSkillLink;
+
 pub use crate::application::plugin::{
     PluginAddOptions, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
     PluginLinkSummary, PluginMigrateRequest, PluginPanelSummary, PluginPermissionChange,
@@ -21,13 +23,32 @@ pub use crate::application::plugin::{
 };
 pub use crate::runtime::plugin_host::{PluginCliGroup, PluginCliVerb};
 
+/// What `orbit plugin add --enable` produced, kept alongside the install
+/// summary rather than collapsed into it, so the CLI can render seeded
+/// schedules, linked skills and warnings the same way `orbit plugin enable`
+/// does. `seeded`, `skills` and `warnings` are empty when `--enable` was not
+/// set.
+#[derive(Debug, Clone)]
+pub struct PluginAddResult {
+    pub summary: PluginSummary,
+    pub seeded: Vec<PluginSeedOutcome>,
+    pub skills: Vec<PluginSkillLink>,
+    pub warnings: Vec<String>,
+}
+
 impl OrbitRuntime {
     pub fn add_plugin(
         &self,
         source: &str,
         options: &PluginAddOptions,
-    ) -> Result<PluginSummary, OrbitError> {
-        plugin::install_plugin(self, source, options)
+    ) -> Result<PluginAddResult, OrbitError> {
+        let outcome = plugin::install_plugin_reporting_enable(self, source, options)?;
+        Ok(PluginAddResult {
+            summary: outcome.summary,
+            seeded: outcome.seeded,
+            skills: outcome.skills,
+            warnings: outcome.warnings,
+        })
     }
 
     pub fn upgrade_plugin(

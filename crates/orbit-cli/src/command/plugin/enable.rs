@@ -4,7 +4,7 @@ use orbit_core::adapter::command::PluginEnableOptions;
 
 use crate::command::{CommandOut, Execute, Payload};
 
-use super::support::plugin_record;
+use super::support::{append_enable_report_text, enable_report_json, plugin_record};
 
 #[derive(Args)]
 pub struct PluginEnableArgs {
@@ -37,61 +37,10 @@ impl Execute for PluginEnableArgs {
         if let Some(diagnostic) = &summary.diagnostic {
             text.push_str(&format!("\n\nPlugin is inactive: {diagnostic}"));
         }
-        for seeded in &result.seeded {
-            text.push_str(&format!(
-                "\n  {} {} {} ({})",
-                seeded.kind,
-                seeded.name,
-                seeded.action.as_str(),
-                seeded.path.display()
-            ));
-        }
-        if !result.seeded.is_empty() {
-            text.push_str(
-                "\n  Seeded schedules are disabled; review one, then set `enabled: true` to run it.",
-            );
-        }
-        for link in &result.skills {
-            text.push_str(&format!(
-                "\n  skill {} linked at {}",
-                link.skill_id,
-                link.link.display()
-            ));
-        }
-        for warning in &result.warnings {
-            text.push_str(&format!("\n  warning: {warning}"));
-        }
+        append_enable_report_text(&mut text, &result.seeded, &result.skills, &result.warnings);
 
         let mut doc = plugin_record(summary);
-        doc["seeded"] = serde_json::Value::Array(
-            result
-                .seeded
-                .iter()
-                .map(|seeded| {
-                    serde_json::json!({
-                        "kind": seeded.kind,
-                        "name": seeded.name,
-                        "path": seeded.path.display().to_string(),
-                        "action": seeded.action.as_str(),
-                        "warning": seeded.warning,
-                    })
-                })
-                .collect(),
-        );
-        doc["skills"] = serde_json::Value::Array(
-            result
-                .skills
-                .iter()
-                .map(|link| {
-                    serde_json::json!({
-                        "skill_id": link.skill_id,
-                        "link": link.link.display().to_string(),
-                        "target": link.target.display().to_string(),
-                    })
-                })
-                .collect(),
-        );
-        doc["warnings"] = serde_json::json!(result.warnings);
+        enable_report_json(&mut doc, &result.seeded, &result.skills, &result.warnings);
         Ok(Payload::detail(doc, text).into())
     }
 }
