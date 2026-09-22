@@ -13,9 +13,10 @@ use crate::runtime::plugin_host;
 
 pub use crate::application::plugin::{
     PluginAddOptions, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
-    PluginLinkSummary, PluginMigrateRequest, PluginPanelSummary, PluginPermissionSummary,
-    PluginSeedAction, PluginSeedOutcome, PluginSummary, PluginSyncOutcome, PluginTestOptions,
-    PluginTestOutcome, PluginTestReport, PluginToolSummary, PluginValidationReport,
+    PluginLinkSummary, PluginMigrateRequest, PluginPanelSummary, PluginPermissionChange,
+    PluginPermissionSummary, PluginSeedAction, PluginSeedOutcome, PluginSummary, PluginSyncOutcome,
+    PluginTestOptions, PluginTestOutcome, PluginTestReport, PluginToolSummary,
+    PluginUpgradeOptions, PluginUpgradeResult, PluginValidationReport,
 };
 pub use crate::runtime::plugin_host::{PluginCliGroup, PluginCliVerb};
 
@@ -26,6 +27,15 @@ impl OrbitRuntime {
         options: &PluginAddOptions,
     ) -> Result<PluginSummary, OrbitError> {
         plugin::install_plugin(self, source, options)
+    }
+
+    pub fn upgrade_plugin(
+        &self,
+        name: &str,
+        source: Option<&str>,
+        options: &PluginUpgradeOptions,
+    ) -> Result<PluginUpgradeResult, OrbitError> {
+        plugin::upgrade_plugin(self, name, source, options)
     }
 
     pub fn enable_plugin(

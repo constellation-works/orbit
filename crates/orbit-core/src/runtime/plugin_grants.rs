@@ -36,8 +36,10 @@
 //!   and point them at a tree the backend wrote under one of its own write
 //!   roots, and the witness would still match.
 //! - `manifest_digest` — **not** in the witness, deliberately: grants survive
-//!   `orbit plugin add` of a newer version, and binding the digest would refuse
-//!   every upgrade. It is only meaningful *because* `install_path` is bound:
+//!   `orbit plugin add` of a newer version only when its permission requests
+//!   did not widen; a widening revokes the witness and requires re-consent.
+//!   Binding the digest here would refuse every safe upgrade. The digest is
+//!   only meaningful *because* `install_path` is bound:
 //!   the loader compares it against the bytes at a path the attacker cannot
 //!   populate, so agreeing with it proves the tree is the one `orbit plugin
 //!   add` copied there (§4.1).
@@ -92,8 +94,9 @@ pub fn plugin_grant_witness_path(global_root: &Path, name: &str) -> PathBuf {
 /// Keyed on the namespace and the enable flag as well as the grants, so a
 /// witness cannot be replayed onto another plugin or used to flip a disabled
 /// plugin back on. Deliberately *not* keyed on the version or the manifest
-/// digest: grants legitimately survive `orbit plugin add` of a newer version,
-/// and binding either would refuse every upgraded plugin.
+/// digest: grants legitimately survive a safe `orbit plugin add` of a newer
+/// version whose permission requests did not widen, and binding either would
+/// refuse every upgraded plugin.
 ///
 /// Grants are sorted and deduplicated first, so the value states which grants
 /// were authorized and nothing about the order they were recorded in.

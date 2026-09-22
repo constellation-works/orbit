@@ -37,7 +37,10 @@ pub use inspect::{
     PluginDoctorResult, PluginPermissionSummary, PluginSummary, PluginToolSummary,
     PluginValidationReport, list_plugins, plugin_doctor, show_plugin, validate_plugin_dir,
 };
-pub use install::{PluginAddOptions, install_plugin};
+pub use install::{
+    PluginAddOptions, PluginPermissionChange, PluginUpgradeOptions, PluginUpgradeResult,
+    install_plugin, upgrade_plugin,
+};
 pub use lifecycle::{
     PluginEnableOptions, PluginEnableResult, PluginMigrateRequest, PluginSyncOutcome,
     disable_plugin, enable_plugin, migrate_plugin_sidecars, remove_plugin, sync_plugins,
