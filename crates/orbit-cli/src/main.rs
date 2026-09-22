@@ -332,7 +332,19 @@ fn main() {
         suppress_errors,
         dispatch,
         governed,
+        plugin_callback_entry_point,
     } = cli.command.operation().attribute_to(&actor);
+    // ORB-12876: a recognized plugin backend reaches Orbit only through a tool
+    // call, which the callback allowlist gates against the plugin's
+    // `permissions.orbit_tools`. Refuse it the rest of the CLI here — before
+    // generation pinning, runtime bootstrap and dispatch — so no plain command
+    // reads governed data around that allowlist.
+    if !plugin_callback_entry_point
+        && let Err(error) = refuse_plugin_child_cli(&audit_meta, root_override.as_deref())
+    {
+        print_error(&error, &sink, json_error_preference);
+        std::process::exit(1);
+    }
     let _generation = if matches!(&cli.command, command::Commands::Update(_)) || inspection {
         None
     } else {
@@ -434,6 +446,31 @@ fn main() {
     };
 
     finish_command(result, &sink, suppress_errors, json_error_preference);
+}
+
+/// Refuse this invocation if a plugin backend is the caller [ORB-12876].
+///
+/// The root is the one the command itself will use, so `--root` cannot pick a
+/// different Orbit to be judged against than the one about to be read. A root
+/// that does not resolve is not skipping the gate: the command has no Orbit
+/// state to read either, and `main` fails it a few lines below.
+///
+/// The decision is `orbit_core`'s, taken from the host-issued callback session
+/// rather than from anything the child controls.
+fn refuse_plugin_child_cli(
+    audit_meta: &Option<command::operation::CommandMeta>,
+    root_override: Option<&std::path::Path>,
+) -> Result<(), orbit_core::OrbitError> {
+    let Ok(root) = orbit_core::runtime::resolve_generation_root(root_override) else {
+        return Ok(());
+    };
+    let invocation = audit_meta
+        .as_ref()
+        .map(|meta| match meta.subcommand.as_deref() {
+            Some(subcommand) => format!("{} {subcommand}", meta.command),
+            None => meta.command.clone(),
+        });
+    orbit_core::adapter::command::refuse_plugin_child_cli_command(&root, invocation.as_deref())
 }
 
 /// Render what the command returned, or report why it failed.

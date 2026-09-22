@@ -544,7 +544,9 @@ fn is_token_hex(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn invalid_callback_credential(plugin: Option<&str>) -> OrbitError {
+/// A credential that names no live session, or a session the sandbox keeps
+/// out of this caller's reach.
+pub fn invalid_callback_credential(plugin: Option<&str>) -> OrbitError {
     OrbitError::PolicyDenied(match plugin {
         Some(plugin) => format!(
             "plugin '{plugin}' callback credential is missing or invalid; a backend the host \
