@@ -5,7 +5,7 @@ use std::path::Path;
 
 use orbit_store::Store;
 use orbit_tools::ToolRegistry;
-use orbit_types::plugin::{InstalledPlugin, PluginStatus};
+use orbit_types::plugin::{InstalledPlugin, PLUGIN_HOST_API, PluginStatus};
 use orbit_types::telemetry::AuditEventStatus;
 
 use super::super::plugin_grants::{plugin_grant_witness_path, record_authorized_grants};
@@ -213,6 +213,64 @@ fn one_broken_plugin_does_not_disturb_the_builtins_or_a_healthy_plugin() {
         !advertised.iter().any(|name| name == "broken.hello"),
         "an inactive plugin tool is not advertised"
     );
+}
+
+#[test]
+fn host_api_and_platform_mismatches_register_their_tools_inactive() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let orbit_dir = temp.path().join("repo/.orbit");
+    std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
+
+    write_plugin(
+        &plugin_install_path(&global_root, "wrongapi", "1.0.0"),
+        "wrongapi",
+        &format!(
+            "  requires:\n    host_api: {}\n",
+            PLUGIN_HOST_API.saturating_add(1)
+        ),
+    );
+    write_plugin(
+        &plugin_install_path(&global_root, "wrongplatform", "1.0.0"),
+        "wrongplatform",
+        "  requires:\n    platforms: [orbit-test-never]\n",
+    );
+
+    let store = Store::open(&global_root.join("orbit.db")).expect("open store");
+    for name in ["wrongapi", "wrongplatform"] {
+        store
+            .with_transaction(|tx| tx.upsert_plugin(&record(&global_root, name)))
+            .expect("record the install");
+    }
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let load = load_host_plugins(
+        &global_root,
+        &orbit_dir,
+        &store,
+        &mut registry,
+        &std::collections::BTreeMap::new(),
+    );
+
+    for (name, reason) in [("wrongapi", "host_api"), ("wrongplatform", "supports")] {
+        let tool = format!("{name}.hello");
+        assert!(
+            registry.has(&tool) && !registry.is_active(&tool),
+            "a requirement mismatch keeps {tool} addressable but inactive"
+        );
+        assert!(
+            registry
+                .inactive_diagnostic(&tool)
+                .is_some_and(|diagnostic| diagnostic.contains(reason)),
+            "the inactive tool explains its {reason} mismatch"
+        );
+        assert!(
+            load.registered
+                .iter()
+                .any(|entry| entry.name == name && entry.status == PluginStatus::Inactive),
+            "the host load reports {name} inactive"
+        );
+    }
 }
 
 #[test]

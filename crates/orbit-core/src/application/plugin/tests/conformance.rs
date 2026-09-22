@@ -97,6 +97,33 @@ fn a_passing_suite_certifies_the_installed_plugin_for_this_orbit() {
 
 #[cfg(unix)]
 #[test]
+fn omitted_golden_input_is_an_empty_object_for_an_object_schema() {
+    let fixture = PluginFixture::new();
+    let root = write_tested_plugin(&fixture, "defaultinput", "world");
+    let manifest = root.join("plugin.yaml");
+    let contents = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(
+        &manifest,
+        contents.replace(
+            "      mcp_scope: workspace\n",
+            "      mcp_scope: workspace\n      input_schema: { type: object }\n",
+        ),
+    )
+    .expect("add object input schema");
+    let golden = root.join("tests/conformance/greet.yaml");
+    let contents = std::fs::read_to_string(&golden).expect("read golden");
+    std::fs::write(&golden, contents.replace("    input: {}\n", "")).expect("omit golden input");
+
+    let report = run(&fixture.runtime, &root).expect("run conformance suite");
+    assert!(
+        report.passed(),
+        "serde's null default is normalized before object-schema validation: {:?}",
+        report.results
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn a_directory_with_a_first_party_origin_remote_is_refused() {
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "firstparty", "world");

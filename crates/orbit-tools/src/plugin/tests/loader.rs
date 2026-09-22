@@ -164,6 +164,50 @@ fn a_schema_that_cannot_compile_refuses_the_plugin_at_load() {
     assert!(plugin.tools[0].output_schema.is_some());
 }
 
+#[test]
+fn a_nested_unresolvable_ref_in_an_output_schema_refuses_load() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_plugin_with_tool_keys(
+        temp.path(),
+        "      output_schema:\n        type: object\n        properties:\n          result:\n            type: object\n            properties:\n              value: { $ref: '#/$defs/missing' }\n",
+    );
+
+    let error = load_plugin_dir(temp.path())
+        .expect_err("a nested unresolved output ref must refuse load")
+        .to_string();
+    assert!(
+        error.contains("output_schema") && error.contains("hello"),
+        "the refusal names the schema field and tool: {error}"
+    );
+}
+
+#[test]
+fn a_conformance_case_for_an_undeclared_tool_refuses_load() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    write_plugin(temp.path());
+    let manifest = temp.path().join(MANIFEST_FILE_NAME);
+    let body = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(
+        &manifest,
+        body.replace("  tools:\n", "  tests: [tests/*.yaml]\n  tools:\n"),
+    )
+    .expect("declare conformance tests");
+    std::fs::create_dir_all(temp.path().join("tests")).expect("create tests directory");
+    std::fs::write(
+        temp.path().join("tests/undeclared.yaml"),
+        "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: typo\n    tool: missing\n    expect:\n      output: {}\n",
+    )
+    .expect("write conformance case");
+
+    let error = load_plugin_dir(temp.path())
+        .expect_err("an undeclared conformance tool must refuse the plugin directory")
+        .to_string();
+    assert!(
+        error.contains("missing") && error.contains("does not declare"),
+        "the refusal names the undeclared tool: {error}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn load_plugin_dir_refuses_an_installed_tree_that_contains_a_symlink() {
