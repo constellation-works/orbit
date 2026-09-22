@@ -97,33 +97,22 @@ fn a_passing_suite_certifies_the_installed_plugin_for_this_orbit() {
 
 #[cfg(unix)]
 #[test]
-fn an_installed_first_party_suite_runs_and_is_certified() {
+fn a_directory_with_a_first_party_origin_remote_is_refused() {
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "firstparty", "world");
     mark_first_party_source(&root);
-    install_plugin(
+    let refused = install_plugin(
         &fixture.runtime,
         root.to_str().expect("utf8 source"),
         &PluginAddOptions::default(),
     )
-    .expect("install the verified first-party fixture");
-
-    let runtime = fixture.reopen();
-    let report = run(&runtime, &root).expect("run the first-party conformance suite");
-
-    assert!(report.passed(), "{:?}", report.results);
-    assert_eq!(report.results[0].tool, "orbit.firstparty.greet");
-    assert!(report.certified, "{}", report.certification_note);
-    assert_eq!(
-        runtime
-            .stores()
-            .plugins()
-            .get_plugin("firstparty")
-            .expect("read the plugin record")
-            .expect("the plugin is installed")
-            .certified_orbit_version
-            .as_deref(),
-        Some(host_version().to_string().as_str())
+    .expect_err("a directory origin remote cannot verify a first-party claim");
+    let diagnostic = refused.to_string();
+    assert!(
+        diagnostic.contains("metadata.origin")
+            && diagnostic.contains("claims the reserved `orbit.firstparty.*` namespace")
+            && diagnostic.contains("plugin source is not a constellation-works repository"),
+        "the existing first-party diagnostic remains visible: {diagnostic}"
     );
 }
 
