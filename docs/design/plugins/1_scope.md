@@ -686,21 +686,27 @@ applied to the **top level** of the schema and nowhere deeper:
 |---|---|
 | `string` | `--kebab-case <VALUE>`; an `enum` becomes clap's possible values, so an unknown one is refused with the list |
 | `integer` / `number` | `--kebab-case <N>`, sent as a JSON number |
-| `boolean` | `--kebab-case` for true, or `--kebab-case <true\|false>` for a property whose schema default is true |
+| `boolean` | `--kebab-case` for true, or `--kebab-case=<true\|false>` to set it explicitly |
 | `array` of scalars | `--kebab-case <VALUE>`, repeated once per element |
 | `object`, `array` of objects, or an untyped property | `--kebab-case-json '<JSON>'` |
-| named in `cli.positional` | the same value as a positional argument, in manifest order |
+| named in `cli.positional` | the same value as a positional argument, in manifest order, alongside its ordinary `--kebab-case` flag |
+
+A boolean's optional value requires `=` (`--kebab-case=false`); a bare `--kebab-case value`
+never consumes `value` as the flag's own, so a boolean flag can sit directly in front of a
+positional argument without swallowing it.
 
 `cli.verb` renames the subcommand: it is spelled like a tool verb, and two tools of one
 plugin may not claim the same subcommand — `orbit <ns> <verb>` dispatches to exactly one
 tool. Each `cli.positional` entry names a top-level `input_schema` property, once; an entry
 that names nothing would be dropped without a word, so it refuses the plugin instead. Both
 are checked against the schema the tool actually loads with, so a `{ $ref: <path> }` schema
-is held to them too. Nothing is marked required at the clap level: the tool's
-own `input_schema` is the authority on what a call must contain, and a required flag would
-make `--input` alone unusable. A property whose flag would collide with one the CLI owns
-(`--input`, `--input-file`, `--dry-run`, `--format`, `--root`, `--workspace`) gets no flag
-and stays reachable through `--input`.
+is held to them too. Promoting a property to a positional argument does not remove its
+ordinary flag — both spellings reach the same property, so a caller who already knows the
+flag form is never forced to learn the positional one. Nothing is marked required at the
+clap level: the tool's own `input_schema` is the authority on what a call must contain, and
+a required flag would make `--input` alone unusable. A property whose flag would collide
+with one the CLI owns (`--input`, `--input-file`, `--dry-run`, `--format`, `--root`,
+`--workspace`) gets no flag and stays reachable through `--input`.
 
 `--input '<json>'` and `--input-file` are always accepted and always win, so
 `orbit graph recommend --query …` and `orbit tool run graph.recommend --input …` are the

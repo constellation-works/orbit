@@ -118,15 +118,19 @@ from the top level of the schema and nowhere deeper:
 |---|---|
 | `string` | `--kebab-case <VALUE>`; a schema `enum` is offered as the allowed values |
 | `integer` / `number` | `--kebab-case <N>` |
-| `boolean` | `--kebab-case`, or `--kebab-case false` |
+| `boolean` | `--kebab-case`, or `--kebab-case=false` to set it explicitly |
 | `array` of scalars | `--kebab-case <VALUE>`, repeated |
 | `object` or an array of objects | `--kebab-case-json '<JSON>'` |
-| named in the manifest's `cli.positional` | a positional argument, in that order |
+| named in the manifest's `cli.positional` | a positional argument, in that order, alongside its ordinary `--kebab-case` flag |
 
 `--input '<json>'`, `--input-file` and `--dry-run` are always accepted, and `--input`
 overrides every flag — that is the escape hatch for a shape no flag expresses. A property
 whose flag would collide with one Orbit owns keeps its place in the schema and is reached
 through `--input`.
+
+A boolean's explicit value must use `=`: `--kebab-case value` never treats `value` as the
+flag's own, so a boolean flag can sit directly in front of a positional argument without
+swallowing it.
 
 Only an enabled, loading plugin has a group. `orbit <ns>` for a disabled one is an unknown
 command, not a silent no-op, and `orbit --help` lists the groups a machine actually has
