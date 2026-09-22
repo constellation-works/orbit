@@ -62,12 +62,10 @@ impl Fixture {
         let host_root = tempfile::tempdir().expect("temporary plugin host root");
         let global_root = host_root.path().join("global");
         let state_dir = global_root.join("state/plugins/mcpdemo");
-        if grants.contains(&PluginGrant::OrbitTools) {
-            for relative in ["state/logs", "state/audit", "tasks"] {
-                std::fs::create_dir_all(global_root.join(relative))
-                    .expect("create callback-writable global fixture directory");
-            }
-        }
+        // The `orbit_tools` store directories under this temporary global root
+        // are host-owned: Orbit materializes them at spawn. A fixture that
+        // copies that inventory here goes stale the next time it changes,
+        // which is how this path reddened CI four times [ORB-12872].
         let spec = Arc::new(super::super::backend::PluginBackendSpec {
             provenance: provenance(&grants),
             plugin_root: plugin.root.clone(),

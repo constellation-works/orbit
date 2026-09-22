@@ -252,6 +252,94 @@ fn call_time_refuses_workspace_metadata_but_allows_a_similar_directory() {
     assert_eq!(profile.write, vec![workspace.join(".orbit-graph")]);
 }
 
+/// The settled materialization rule, exercised through a real spawn
+/// [ORB-12872]. Orbit creates the write directories *it* named — the
+/// `orbit_tools` stores under the global root and the workspace's `.orbit/`,
+/// and the plugin's own state tree — and creates nothing else. A path the
+/// *manifest* named outside those prefixes is refused with a diagnostic
+/// naming the root and is never brought into existence, which is the
+/// security property four repairs of this path have had to preserve.
+#[cfg(unix)]
+#[test]
+fn the_host_materializes_its_own_write_roots_and_never_a_manifest_path_outside_them() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("plugin");
+    let workspace = temp.path().join("workspace");
+    let global_root = root.join("global");
+    std::fs::create_dir_all(&root).expect("plugin root");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let command = stub_backend(&root, NOOP_BACKEND);
+
+    let unsandboxed = |permissions: PluginPermissions, grants: &[PluginGrant]| {
+        let mut backend_spec = (*spec(command.clone(), &root, permissions, grants)).clone();
+        backend_spec.sandbox = PluginSandbox::None;
+        tool(std::sync::Arc::new(backend_spec), None)
+    };
+    let ctx = ToolContext {
+        workspace_root: Some(workspace.clone()),
+        ..context(&workspace)
+    };
+
+    // None of the host-owned store directories exist yet: the grant names
+    // them, so the host creates them rather than refusing the call. This is
+    // the half that has been hand-patched into fixtures four times. The
+    // manifest's own `{{plugin_state}}` tail rides the same rule, because
+    // the plugin state tree is a host-materialized prefix too.
+    let mut state_permissions = PluginPermissions::default();
+    state_permissions.fs.write = vec!["{{plugin_state}}/cache".into()];
+    let host_owned = unsandboxed(
+        state_permissions,
+        &[
+            PluginGrant::Fs,
+            PluginGrant::OrbitTools,
+            PluginGrant::Unsandboxed,
+        ],
+    );
+    host_owned
+        .execute(&ctx, json!({}))
+        .expect("the host materializes the write roots it named itself");
+    for relative in ["state/logs", "state/audit", "tasks"] {
+        assert!(
+            global_root.join(relative).is_dir(),
+            "{relative} under the global root was not materialized"
+        );
+    }
+    for relative in [
+        "tasks",
+        "frictions",
+        "state/audit",
+        "state/logs",
+        "state/job-runs",
+    ] {
+        assert!(
+            workspace.join(".orbit").join(relative).is_dir(),
+            "{relative} under the workspace `.orbit` was not materialized"
+        );
+    }
+    assert!(
+        root.join("state/cache").is_dir(),
+        "an absent tail inside the plugin's own state tree was not materialized"
+    );
+
+    // A manifest-named path outside every host-materialized prefix: absent,
+    // consented, and still never created.
+    let outside = temp.path().join("consented-but-absent/tasks");
+    let mut permissions = PluginPermissions::default();
+    permissions.fs.write = vec![outside.to_string_lossy().into_owned()];
+    let error = unsandboxed(permissions, &[PluginGrant::Fs, PluginGrant::Unsandboxed])
+        .execute(&ctx, json!({}))
+        .expect_err("a manifest path outside the host-owned prefixes must be refused")
+        .to_string();
+    assert!(
+        error.contains(&outside.display().to_string()) && error.contains("does not exist"),
+        "the diagnostic must name the root: {error}"
+    );
+    assert!(
+        !temp.path().join("consented-but-absent").exists(),
+        "Orbit created a manifest-named path outside its own prefixes"
+    );
+}
+
 #[test]
 fn spawn_refuses_an_absent_write_root_escaping_the_workspace() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -702,15 +790,49 @@ fn orbit_tools_writes_named_stores_and_never_the_roots() {
             workspace_orbit.join("state/semantic.db-shm"),
         ],
     );
+    // Every host-added write root is a materialization root, and nothing
+    // wider: the global root's `state/` is not a prefix here, only the two
+    // named stores beneath it. The tail of this list is the same inventory
+    // the write assertion above pins, which is the property that keeps the
+    // two from drifting apart [ORB-12872].
     assert_eq!(
         profile.materialization_roots,
         vec![
             workspace_root.to_path_buf(),
             PathBuf::from("/srv/plugins/demo/state"),
-            global_root.join("state"),
+            global_root.join("state/logs"),
+            global_root.join("state/audit"),
+            global_root.join("tasks"),
+            workspace_orbit.join("tasks"),
+            workspace_orbit.join("frictions"),
+            workspace_orbit.join("state/audit"),
+            workspace_orbit.join("state/logs"),
+            workspace_orbit.join("state/job-runs"),
         ],
-        "only the workspace and host-owned state trees may be materialized"
+        "the workspace, the plugin state tree and every host-added write root"
     );
+    assert!(
+        !profile
+            .materialization_roots
+            .contains(&global_root.join("state")),
+        "the global state tree is not a materialization prefix: {:?}",
+        profile.materialization_roots
+    );
+    // The rule, mechanised. This spec declares no `fs.write`, so every
+    // granted write root is one the host added — and a host-added root Orbit
+    // cannot create is exactly the "does not exist" refusal this path has
+    // produced four times. Asserting containment rather than a third copy of
+    // the inventory means a new entry cannot reintroduce it.
+    for granted in &profile.write {
+        assert!(
+            profile
+                .materialization_roots
+                .iter()
+                .any(|root| granted == root || granted.starts_with(root)),
+            "host-added write root {} is not materializable",
+            granted.display()
+        );
+    }
 
     // No granted write path is an ancestor of anything on the denied list.
     for (root, relative) in DENIED_RELATIVE_PATHS {
