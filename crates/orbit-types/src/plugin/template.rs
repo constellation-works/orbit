@@ -16,6 +16,21 @@ pub struct PluginTemplateVars {
     pub config: BTreeMap<String, String>,
 }
 
+/// Whether `text` contains a `{{` with no matching `}}`. `render_template`
+/// would otherwise splice the literal, unclosed tail into its output — a
+/// typo'd `{{workspace` becomes a real path component instead of a refusal.
+fn has_unterminated_reference(text: &str) -> bool {
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        let after = &rest[start + 2..];
+        match after.find("}}") {
+            Some(end) => rest = &after[end + 2..],
+            None => return true,
+        }
+    }
+    false
+}
+
 /// Every `{{…}}` reference in `text`, in order.
 pub fn template_references(text: &str) -> Vec<String> {
     let mut references = Vec::new();
@@ -42,6 +57,15 @@ pub fn is_allowed_template_reference(reference: &str) -> bool {
 /// Reject any reference outside the allowed set; `field` names the manifest
 /// key for the diagnostic.
 pub fn validate_template(text: &str, field: &str) -> Result<(), PluginManifestError> {
+    if has_unterminated_reference(text) {
+        return Err(PluginManifestError::new(
+            field,
+            format!(
+                "'{text}' has an unterminated '{{{{' template reference; every '{{{{' must be \
+                 closed with '}}}}'"
+            ),
+        ));
+    }
     for reference in template_references(text) {
         if !is_allowed_template_reference(&reference) {
             return Err(PluginManifestError::new(

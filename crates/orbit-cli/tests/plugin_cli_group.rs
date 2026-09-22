@@ -457,6 +457,38 @@ fn enable_warns_when_a_grant_was_not_requested() {
     );
 }
 
+#[test]
+fn doctor_exits_non_zero_when_a_plugin_needs_attention() {
+    let fixture = Fixture::new();
+    fixture
+        .orbit()
+        .args(["plugin", "doctor"])
+        .assert()
+        .success()
+        .code(0);
+
+    let source = fixture.source("future");
+    write_status_plugin(&source, "future", "  requires:\n    orbit: \">=99.0.0\"\n");
+    fixture
+        .orbit()
+        .args(["plugin", "add", source.to_str().expect("utf8 source")])
+        .assert()
+        .success();
+    fixture
+        .orbit()
+        .args(["plugin", "enable", "future"])
+        .assert()
+        .success();
+
+    fixture
+        .orbit()
+        .args(["plugin", "doctor"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("plugin(s) need attention"));
+}
+
 /// `orbit plugin scaffold` tells operators to run `add <dir> --enable`; that
 /// one-step path used to report only the install summary and drop the seeded
 /// auto-task, skill link and warnings `orbit plugin enable` reports for the

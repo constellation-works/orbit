@@ -224,18 +224,3 @@ pub fn admit_plugin_field_key(parsed: PluginFieldKey<'_>) -> Result<(), OrbitErr
             .collect(),
     ))
 }
-
-/// Check every `[plugins.<ns>]` section in a loaded document against the
-/// registered contracts. Sections for a namespace this host has not installed
-/// are left alone: the runtime must still build (§3).
-pub fn validate_plugin_sections(sections: &BTreeMap<String, JsonValue>) -> Result<(), OrbitError> {
-    for (namespace, section) in sections {
-        let Some(schema) = plugin_config_schema(namespace) else {
-            continue;
-        };
-        schema
-            .validate_section(&schema.with_defaults(Some(section)))
-            .map_err(OrbitError::InvalidInput)?;
-    }
-    Ok(())
-}

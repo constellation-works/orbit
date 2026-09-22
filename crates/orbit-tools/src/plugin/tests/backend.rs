@@ -571,7 +571,16 @@ fn call_time_fs_write_refuses_protected_global_paths_but_allows_plugin_state() {
     let mut covering_spec = (*spec(root.join("bin"), &root, covering, &[PluginGrant::Fs])).clone();
     covering_spec.global_root.clone_from(&global_root);
     covering_spec.state_dir.clone_from(&state_dir);
-    let error = covering_spec.sandbox_profile(None).unwrap_err().to_string();
+    let error = covering_spec.sandbox_profile(None).unwrap_err();
+    // The sandbox boundary refusing a covering write is a policy refusal —
+    // it must reach a caller as `PolicyDenied`, not `InvalidInput`, so an
+    // agent can tell "your call was refused by policy" from "you sent
+    // malformed input" [ORB-12837].
+    assert!(
+        matches!(error, orbit_common::OrbitError::PolicyDenied(_)),
+        "{error:?}"
+    );
+    let error = error.to_string();
     assert!(
         error.contains("spec.permissions.fs.write[0]") && error.contains("plugin install root"),
         "{error}"

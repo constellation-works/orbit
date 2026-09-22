@@ -1,8 +1,8 @@
 use super::super::manifest::{
-    PluginBackend, PluginBackendType, PluginCliShape, PluginExecutionKind, PluginManifest,
-    PluginMcpScope, PluginMetadata, PluginPanelGroup, PluginPanelRender, PluginPermissions,
-    PluginRequires, PluginSandbox, PluginSpec, PluginToolSpec, PluginWebLink, PluginWebPanel,
-    PluginWebSection,
+    PluginBackend, PluginBackendType, PluginCliShape, PluginDefinitions, PluginExecutionKind,
+    PluginManifest, PluginMcpScope, PluginMetadata, PluginPanelGroup, PluginPanelRender,
+    PluginPermissions, PluginRequires, PluginSandbox, PluginSpec, PluginToolSpec, PluginWebLink,
+    PluginWebPanel, PluginWebSection, validate_plugin_relative_path,
 };
 
 fn minimal() -> PluginManifest {
@@ -140,6 +140,31 @@ fn schema_properties_with_colliding_or_empty_cli_flags_are_refused() {
     manifest
         .validate_structure()
         .expect("a well-formed schema remains valid");
+}
+
+/// A `*` outside the final path component is not a directory glob:
+/// `resolve_patterns` looks up a literal directory named `*`, finds none,
+/// and the pattern would otherwise silently match nothing.
+#[test]
+fn a_wildcard_outside_the_final_component_is_refused() {
+    let error = validate_plugin_relative_path("definitions/*/x.yaml", "spec.definitions.jobs[0]")
+        .expect_err("a directory-component wildcard must be refused");
+    assert!(error.message.contains('*'), "{}", error.message);
+
+    validate_plugin_relative_path("definitions/*.yaml", "spec.definitions.jobs[0]")
+        .expect("a wildcard in the final component is a legitimate glob");
+    validate_plugin_relative_path("definitions/job.yaml", "spec.definitions.jobs[0]")
+        .expect("a literal path has no wildcard to refuse");
+
+    let mut manifest = minimal();
+    manifest.spec.definitions = Some(PluginDefinitions {
+        activities: vec!["definitions/*/x.yaml".to_string()],
+        ..PluginDefinitions::default()
+    });
+    assert_eq!(
+        manifest.validate_structure().unwrap_err().field,
+        "spec.definitions.activities[0]"
+    );
 }
 
 /// §4.6: one `orbit <ns> <verb>` dispatches to one tool. Two tools claiming

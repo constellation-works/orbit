@@ -57,8 +57,8 @@ fn token_identifies_the_minted_plugin() {
     let identity = resolve_plugin_callback(root.path())
         .expect("resolve")
         .expect("identified");
-    assert_eq!(identity.name, "demo");
-    assert_eq!(identity.version, "1.0.0");
+    assert_eq!(identity.provenance.name, "demo");
+    assert_eq!(identity.provenance.version, "1.0.0");
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn ancestry_identifies_the_plugin_after_the_token_is_cleared() {
     let identity = resolve_plugin_callback(root.path())
         .expect("resolve")
         .expect("identified by ancestry");
-    assert_eq!(identity.name, "demo");
+    assert_eq!(identity.provenance.name, "demo");
 }
 
 /// Exercise the process relationship the callback gate sees in production:
@@ -87,7 +87,7 @@ fn a_real_child_resolves_the_plugin_through_its_parent_pid() {
         let identity = resolve_plugin_callback(std::path::Path::new(&root))
             .expect("resolve in child")
             .expect("the parent session identifies the child");
-        assert_eq!(identity.name, "demo");
+        assert_eq!(identity.provenance.name, "demo");
         return;
     }
 
@@ -145,6 +145,7 @@ fn corrupt_record_does_not_hide_a_valid_ancestry_session() {
         resolve_plugin_callback(root.path())
             .expect("resolve")
             .expect("identified")
+            .provenance
             .name,
         "demo"
     );
@@ -268,6 +269,7 @@ fn a_token_bound_to_this_process_group_is_identified() {
         resolve_plugin_callback(root.path())
             .expect("resolve")
             .expect("identified")
+            .provenance
             .name,
         "demo"
     );

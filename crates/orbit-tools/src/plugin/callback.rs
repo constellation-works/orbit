@@ -34,6 +34,8 @@ use orbit_common::process::ancestry::{
 use orbit_types::plugin::PluginProvenance;
 use serde::{Deserialize, Serialize};
 
+use crate::upsert_env;
+
 /// Informational namespace the backend already carries. Not the gate.
 pub const ORBIT_PLUGIN_ENV: &str = "ORBIT_PLUGIN";
 
@@ -69,9 +71,13 @@ pub struct PluginCallbackSession {
 /// The plugin a resolved callback belongs to, and what that session may do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginCallbackIdentity {
-    pub name: String,
-    pub version: String,
-    pub manifest_digest: String,
+    /// This session's plugin identity, exactly like the identity behind a
+    /// call the plugin made directly — except `grants` is always empty: a
+    /// callback's authority is `effective_tools`, minted from the spawning
+    /// caller's ceiling, never the install row's recorded grants. A caller
+    /// that also needs the row's grants (`stamp_callback_plugin_provenance`)
+    /// merges them in itself.
+    pub provenance: PluginProvenance,
     /// The tool ceiling the host minted this session with: the spawning
     /// caller's own `permissions.orbit_tools` ∩ grant ∩ `allowed_tools`
     /// intersection, sorted and deduped. A callback may never reach past it,
@@ -80,15 +86,6 @@ pub struct PluginCallbackIdentity {
 }
 
 impl PluginCallbackIdentity {
-    pub fn provenance(&self) -> PluginProvenance {
-        PluginProvenance {
-            name: self.name.clone(),
-            version: self.version.clone(),
-            manifest_digest: self.manifest_digest.clone(),
-            grants: Vec::new(),
-        }
-    }
-
     /// Whether this session's ceiling still names `tool`.
     pub fn ceiling_admits(&self, tool: &str) -> bool {
         self.effective_tools.iter().any(|allowed| allowed == tool)
@@ -228,7 +225,7 @@ pub fn resolve_plugin_callback(
         CallbackResolution::None => Ok(None),
         CallbackResolution::Identified(identity) => Ok(Some(identity)),
         CallbackResolution::InvalidCredential(identity) => Err(invalid_callback_credential(
-            identity.as_ref().map(|id| id.name.as_str()),
+            identity.as_ref().map(|id| id.provenance.name.as_str()),
         )),
         CallbackResolution::Mismatched { token, ancestry } => {
             Err(mismatched_callback_credential(&token, ancestry.as_deref()))
@@ -390,9 +387,12 @@ fn callback_dir(global_root: &Path) -> PathBuf {
 
 fn identity_from(record: &SessionRecord) -> PluginCallbackIdentity {
     PluginCallbackIdentity {
-        name: record.plugin.clone(),
-        version: record.version.clone(),
-        manifest_digest: record.manifest_digest.clone(),
+        provenance: PluginProvenance {
+            name: record.plugin.clone(),
+            version: record.version.clone(),
+            manifest_digest: record.manifest_digest.clone(),
+            grants: Vec::new(),
+        },
         effective_tools: record.effective_tools.clone(),
     }
 }
@@ -675,12 +675,4 @@ pub fn unidentified_plugin_child() -> OrbitError {
          and the credential must be carried through to every process that calls back"
             .to_string(),
     )
-}
-
-fn upsert_env(env: &mut Vec<(String, String)>, key: &str, value: String) {
-    if let Some(existing) = env.iter_mut().find(|(name, _)| name == key) {
-        existing.1 = value;
-    } else {
-        env.push((key.to_string(), value));
-    }
 }

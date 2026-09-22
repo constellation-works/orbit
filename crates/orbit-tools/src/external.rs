@@ -7,7 +7,7 @@ use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
 use crate::builtin::proc::spawn::enforce_program_allowlist;
-use crate::{TIMEOUT_DEFAULT_MS, Tool, ToolContext};
+use crate::{TIMEOUT_DEFAULT_MS, Tool, ToolContext, upsert_env};
 
 const EXTERNAL_TOOL_TIMEOUT_OVERRIDE_ENV: &str = "ORBIT_EXTERNAL_TOOL_TIMEOUT_MS";
 const ORBIT_TOOL_NAME_ENV: &str = "ORBIT_TOOL_NAME";
@@ -159,12 +159,4 @@ fn runtime_environment(ctx: &ToolContext, tool_name: &str, cwd: &str) -> Vec<(St
         );
     }
     env_pairs
-}
-
-fn upsert_env(env_pairs: &mut Vec<(String, String)>, key: &str, value: String) {
-    if let Some(existing) = env_pairs.iter_mut().find(|(name, _)| name == key) {
-        existing.1 = value;
-    } else {
-        env_pairs.push((key.to_string(), value));
-    }
 }

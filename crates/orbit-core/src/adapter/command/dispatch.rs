@@ -873,15 +873,16 @@ pub fn refuse_plugin_child_cli_command(
 ) -> Result<(), OrbitError> {
     match resolve_plugin_callback_session(global_root)? {
         CallbackResolution::None => Ok(()),
-        CallbackResolution::Identified(identity) => {
-            Err(plugin_cli_surface_refused(Some(&identity.name), invocation))
-        }
+        CallbackResolution::Identified(identity) => Err(plugin_cli_surface_refused(
+            Some(&identity.provenance.name),
+            invocation,
+        )),
         // A credential fault is refused on its own terms here, exactly as
         // both tool entry points refuse it, so a broken or borrowed session
         // never reads as an ordinary caller on this surface either.
         CallbackResolution::InvalidCredential(identity) => {
             Err(orbit_tools::plugin::invalid_callback_credential(
-                identity.as_ref().map(|id| id.name.as_str()),
+                identity.as_ref().map(|id| id.provenance.name.as_str()),
             ))
         }
         CallbackResolution::Mismatched { token, ancestry } => Err(
@@ -918,17 +919,17 @@ fn apply_callback_resolution(
     match resolution {
         CallbackResolution::None => Ok(()),
         CallbackResolution::Identified(identity) => {
-            let installed = get_plugin(&identity.name)?;
+            let installed = get_plugin(&identity.provenance.name)?;
             stamp_callback_plugin_provenance(&identity, installed.as_ref());
             refuse_unless_recorded(global_root, installed.as_ref(), &identity, name)
         }
         CallbackResolution::InvalidCredential(identity) => {
             if let Some(identity) = identity.as_ref() {
-                let installed = get_plugin(&identity.name).ok().flatten();
+                let installed = get_plugin(&identity.provenance.name).ok().flatten();
                 stamp_callback_plugin_provenance(identity, installed.as_ref());
             }
             Err(orbit_tools::plugin::invalid_callback_credential(
-                identity.as_ref().map(|id| id.name.as_str()),
+                identity.as_ref().map(|id| id.provenance.name.as_str()),
             ))
         }
         CallbackResolution::Mismatched { token, ancestry } => Err(
@@ -973,7 +974,7 @@ fn refuse_unless_recorded(
     if allowed.iter().any(|tool| *tool == name) {
         return Ok(());
     }
-    let plugin = &identity.name;
+    let plugin = &identity.provenance.name;
     let mut message = format!(
         "tool '{name}' is not in plugin '{plugin}''s granted orbit_tools allowlist [{}]; the \
          manifest must request it under `permissions.orbit_tools` and the host must grant \
@@ -1000,7 +1001,7 @@ fn stamp_callback_plugin_provenance(
     identity: &PluginCallbackIdentity,
     installed: Option<&InstalledPlugin>,
 ) {
-    let mut provenance = identity.provenance();
+    let mut provenance = identity.provenance.clone();
     if let Some(installed) = installed {
         provenance.grants = installed.grants.clone();
     }

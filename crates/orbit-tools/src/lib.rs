@@ -70,6 +70,18 @@ pub const TIMEOUT_LONG_MS: u64 = 60_000;
 
 pub use registry::{ToolRegistry, canonical_builtin_mcp_tool_definitions};
 
+/// Set `key` to `value` in a child's cleared-and-set environment pair list,
+/// replacing an existing entry rather than appending a second one. Shared by
+/// every surface that stamps `ORBIT_*` variables into a spawned child:
+/// external tools, plugin backends, and the plugin callback session.
+pub(crate) fn upsert_env(env_pairs: &mut Vec<(String, String)>, key: &str, value: String) {
+    if let Some(existing) = env_pairs.iter_mut().find(|(name, _)| name == key) {
+        existing.1 = value;
+    } else {
+        env_pairs.push((key.to_string(), value));
+    }
+}
+
 /// Owner transport injected by composition. Implementations verify the
 /// destination identity and never substitute an execution-host store.
 pub trait OwnerCoordinator: Send + Sync {

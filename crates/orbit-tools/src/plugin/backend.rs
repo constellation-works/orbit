@@ -25,7 +25,7 @@ use serde_json::Value;
 use super::callback::PluginCallbackSession;
 use super::loader::physical_with_missing_tail;
 use crate::builtin::proc::spawn::enforce_program_allowlist;
-use crate::{TIMEOUT_SLOW_MS, ToolContext};
+use crate::{TIMEOUT_SLOW_MS, ToolContext, upsert_env};
 
 /// Host ceiling on `spec.backend.timeout_ms`.
 pub const PLUGIN_TIMEOUT_CEILING_MS: u64 = 300_000;
@@ -690,17 +690,12 @@ impl PluginBackendSpec {
     }
 }
 
-fn upsert_env(env_pairs: &mut Vec<(String, String)>, key: &str, value: String) {
-    if let Some(existing) = env_pairs.iter_mut().find(|(name, _)| name == key) {
-        existing.1 = value;
-    } else {
-        env_pairs.push((key.to_string(), value));
-    }
-}
-
-/// A manifest problem discovered at call time is still the manifest's fault.
+/// A manifest problem discovered while building the call-time sandbox
+/// boundary — a template that cannot render, or a requested root that covers
+/// a path a plugin may never write — is the host's security boundary
+/// refusing the call, not malformed caller input.
 fn plugin_refusal(error: PluginManifestError) -> OrbitError {
-    OrbitError::InvalidInput(error.to_string())
+    OrbitError::PolicyDenied(error.to_string())
 }
 
 /// The granted boundary one plugin backend runs under.

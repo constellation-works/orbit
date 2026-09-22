@@ -888,5 +888,23 @@ pub fn validate_plugin_relative_path(value: &str, field: &str) -> Result<(), Plu
             format!("'{value}' must not contain an empty or '..' path component"),
         ));
     }
+    // A `*` wildcard is only meaningful in the final component, where
+    // `resolve_patterns` expands it against a directory listing. `*` in an
+    // earlier component (`definitions/*/x.yaml`) is not a directory glob —
+    // the loader looks up a literal directory named `*`, finds none, and the
+    // pattern silently matches nothing.
+    if let Some((directories, _file)) = trimmed.rsplit_once('/')
+        && directories
+            .split('/')
+            .any(|component| component.contains('*'))
+    {
+        return Err(PluginManifestError::new(
+            field,
+            format!(
+                "'{value}' uses '*' outside its final path component; a wildcard may only \
+                 replace the file name, not a directory"
+            ),
+        ));
+    }
     Ok(())
 }

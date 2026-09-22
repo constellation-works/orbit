@@ -48,16 +48,22 @@ pub const RESERVED_CLI_COMMANDS: &[&str] = &[
     "help",
 ];
 
+// `_` is deliberately not allowed: the MCP surface flattens the canonical
+// `<namespace>.<verb>` name to `<namespace>_<verb>` (§4.6), and an
+// underscore in either half would let two different plugins produce the
+// same flattened name (`a_b` + `c` and `a` + `b_c` both flatten to
+// `a_b_c`). `-` has no such ambiguity because it never appears where `.` is
+// inserted.
 fn is_valid_segment(value: &str) -> bool {
     let mut bytes = value.bytes();
     bytes.next().is_some_and(|first| first.is_ascii_lowercase())
-        && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
-/// Whether `name` is an acceptable `metadata.name`: lowercase, digits, `_`,
-/// `-`, no dots, and not the reserved `orbit` prefix itself.
+/// Whether `name` is an acceptable `metadata.name`: lowercase, digits, `-`,
+/// no dots or underscores, and not the reserved `orbit` prefix itself.
 pub fn is_valid_namespace(name: &str) -> bool {
     is_valid_segment(name) && name != ORBIT_NAMESPACE_PREFIX
 }
@@ -76,9 +82,11 @@ pub fn plugin_tool_name(namespace: &str, verb: &str, first_party: bool) -> Strin
     }
 }
 
-/// Whether a plugin namespace claims a name a built-in tool already owns:
-/// the namespace is a built-in tool's leading segment(s), or a built-in tool
-/// is exactly one of the plugin's tool names.
+/// Whether a plugin namespace claims a built-in tool's leading segment(s):
+/// `builtin_tool` starts with the namespace's owned `<ns>.` prefix (or
+/// `orbit.<ns>.` for a verified first-party plugin). Checking one of the
+/// plugin's own tool names against a built-in name exactly is a separate,
+/// per-tool check the caller makes alongside this one.
 pub fn namespace_collides_with_tool(
     namespace: &str,
     first_party: bool,

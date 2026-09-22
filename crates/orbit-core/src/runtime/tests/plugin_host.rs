@@ -19,8 +19,9 @@ use crate::application::plugin::list_plugins;
 
 use super::super::plugin_grants::{plugin_grant_witness_path, record_authorized_grants};
 use super::super::plugin_host::{
-    build_plugin_backend, host_plugin_cli_groups, host_plugin_registry, load_host_plugins,
-    plugin_backend, plugin_dir_load_count, plugin_install_path, plugin_state_dir,
+    build_plugin_backend, host_api_deprecation, host_plugin_cli_groups, host_plugin_registry,
+    load_host_plugins, plugin_backend, plugin_dir_load_count, plugin_install_path,
+    plugin_state_dir, unmet_requirement,
 };
 
 fn write_plugin(root: &Path, name: &str, requires: &str) {
@@ -355,6 +356,42 @@ fn host_api_and_platform_mismatches_register_their_tools_inactive() {
             "the host load reports {name} inactive"
         );
     }
+}
+
+/// §4.8: the previous `host_api` major keeps working rather than refusing
+/// outright, but `orbit plugin doctor` still has something to say about it.
+#[test]
+fn host_api_one_major_behind_registers_active_with_a_deprecation_nudge() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("plugin");
+    write_plugin(
+        &root,
+        "previous",
+        &format!(
+            "  requires:\n    host_api: {}\n",
+            PLUGIN_HOST_API.saturating_sub(1)
+        ),
+    );
+    let plugin = load_plugin_dir(&root).expect("loads");
+
+    assert!(
+        unmet_requirement(&plugin).is_none(),
+        "the previous host_api major still meets the requirement"
+    );
+    let deprecation =
+        host_api_deprecation(&plugin).expect("the previous major is flagged for doctor");
+    assert!(deprecation.contains("host_api"), "{deprecation}");
+
+    // The current major has nothing to report.
+    let root = temp.path().join("current");
+    write_plugin(
+        &root,
+        "current",
+        &format!("  requires:\n    host_api: {PLUGIN_HOST_API}\n"),
+    );
+    let plugin = load_plugin_dir(&root).expect("loads");
+    assert!(unmet_requirement(&plugin).is_none());
+    assert!(host_api_deprecation(&plugin).is_none());
 }
 
 #[test]
