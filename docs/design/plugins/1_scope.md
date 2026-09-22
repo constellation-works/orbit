@@ -396,13 +396,47 @@ stdout: `{"ok":true,"output":{…}}` or `{"ok":false,"error":{"code":"…","mess
 Non-zero exit, non-JSON stdout, or output failing `output_schema` is a tool error; there is no
 partial success. Timeout is `backend.timeout_ms`, capped by a host ceiling.
 
-`mcp` backend — Orbit spawns the plugin's stdio MCP server once per allowed-tools
-intersection per runtime, keeps it alive, proxies each `<ns>.<verb>` call as `tools/call`,
-and refuses to start if the server's `tools/list` disagrees with the manifest's `tools:`
-(names and schemas). A caller whose intersection differs from a live session's gets its
-own child rather than inheriting another caller's `ORBIT_ALLOWED_TOOLS`. Orbit is the only
-client; the plugin never listens on a socket. This is how orbit-research plugs in without a
-rewrite.
+`mcp` backend — Orbit spawns the plugin's stdio MCP server once per *caller context* per
+runtime, keeps it alive, proxies each `<ns>.<verb>` call as `tools/call`, and refuses to
+start if the server's `tools/list` disagrees with the manifest's `tools:` (names and
+schemas). Orbit is the only client; the plugin never listens on a socket. This is how
+orbit-research plugs in without a rewrite.
+
+**The caller context is the workspace *and* the allowed-tools intersection.** A child is
+bound to a workspace three times over — its working directory, its `ORBIT_WORKSPACE_ROOT`,
+and the write roots its sandbox profile renders from `{{workspace}}` (§4.3) — and all three
+come from whichever caller spawned it. A runtime process serves several workspaces (`orbit
+clock tick`, `orbit mcp serve`), so a session keyed by the intersection alone proxies
+workspace B's call to a child confined to A: the plugin mutates A's state for a request
+about B, or fails `EACCES` [ORB-12820]. Both halves of the context are therefore part of the
+key, and a caller that differs in either gets its own child rather than inheriting another
+caller's workspace or `ORBIT_ALLOWED_TOOLS`.
+
+**Per-call context travels on the request.** A shared child cannot be told in its
+environment which caller each call is for, so `tools/call` carries what the `exec`
+envelope's `context` carries, under `params._meta.orbit`:
+
+```
+{"name":"recommend","arguments":{…},
+ "_meta":{"orbit":{"workspace_root":…,"agent":…,"model":…,"tool":"graph.recommend"}}}
+```
+
+`tool` is there because one `mcp` child serves every tool of its plugin and so has no
+`ORBIT_TOOL_NAME`; `workspace_root` is there because the child's own variable names the
+workspace its *session* is bound to, which the backend should not have to infer is also
+this call's.
+
+**Orbit answers the server's own requests.** MCP is bidirectional: a server may send `ping`
+or `roots/list` with an id of its own, including before it answers the `tools/call` it is
+working on. A client that skips every message that is not its own response never replies,
+and a server waiting on that reply is read as unresponsive — killed at the deadline and
+respawned on the next call [ORB-12820]. Orbit answers `ping` with `{}` and every other
+server-initiated request with JSON-RPC `-32601`, which is honest: it declares no
+capabilities in `initialize`. An answer, including a refusal, is what keeps the call moving.
+
+**One lock per session, not one per plugin.** The backend's own lock covers only the map of
+sessions; each session has its own. A 300 s call from one workspace therefore does not hold
+up another workspace's call, or a liveness check, on the same plugin.
 
 Callbacks: the backend reaches Orbit only through `orbit tool run` or MCP `tools/call`, and
 only for tools listed in `permissions.orbit_tools` *and* granted *and* reachable by the
@@ -512,7 +546,8 @@ never reads another process's `environ`.
 
 As implemented, the child also carries `ORBIT_PLUGIN_VERSION`, `ORBIT_TOOL_CWD` and
 `ORBIT_PROC_ALLOWED_PROGRAMS` (`requires.programs`). `ORBIT_TOOL_NAME` is absent for an `mcp`
-child, which serves every tool of its plugin.
+child, which serves every tool of its plugin; each call names its tool in `_meta.orbit`
+instead.
 
 ### 4.3 Sandboxing
 
@@ -815,9 +850,13 @@ writes the v1 sidecar pair for one release and prints a deprecation naming its r
   `--input` cover the long tail. Do not attempt full clap parity.
 - **Catalog shadowing surprises.** Workspace-over-plugin precedence is right, but `orbit run
   show` must print which layer resolved each `activity:` ref.
-- **`mcp` backend lifetime.** One long-lived child per allowed-tools intersection per
-  runtime process means `orbit mcp serve`, `clock tick` and the CLI each spawn their own;
-  acceptable in v1, pool later.
+- **`mcp` backend lifetime.** One long-lived child per caller context — workspace ×
+  allowed-tools intersection — per runtime process means `orbit mcp serve`, `clock tick` and
+  the CLI each spawn their own, and a process serving several workspaces spawns one per
+  workspace. That multiplication is the price of not proxying one workspace's call to
+  another's child (§4.2); acceptable in v1, pool later. Sessions are never reclaimed before
+  the runtime ends, so an `orbit mcp serve` that visits many workspaces holds a child for
+  each: idle-eviction is the first thing to add if that bites.
 - **Compat table drift.** orbit-research keeps its own Orbit allowlist today; after Phase 2 the
   single source is `requires.orbit` plus the conformance run, and its table should be retired.
 

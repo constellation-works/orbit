@@ -132,6 +132,16 @@ impl Fixture {
         }
     }
 
+    /// A caller working in `workspace`: the child's working directory, its
+    /// `ORBIT_WORKSPACE_ROOT`, and what the sandbox profile renders
+    /// `{{workspace}}` from all follow it.
+    fn workspace_context(&self, workspace: &Path) -> ToolContext {
+        ToolContext {
+            workspace_root: Some(workspace.to_path_buf()),
+            ..self.context(&[])
+        }
+    }
+
     fn context_with_allowed(&self, allowed: &[&str]) -> ToolContext {
         let mut ctx = self.context(&[]);
         ctx.allowed_tools = allowed.iter().map(|tool| (*tool).to_string()).collect();
@@ -185,7 +195,7 @@ fn the_server_is_spawned_once_and_serves_every_call() {
     assert_eq!(first["plugin"], "demo", "the child carries the plugin env");
     let pid = fixture
         .backend
-        .child_pid()
+        .child_pid(&ctx)
         .expect("running after the first call");
     assert_eq!(first["pid"].as_u64(), Some(u64::from(pid)));
 
@@ -196,7 +206,7 @@ fn the_server_is_spawned_once_and_serves_every_call() {
         second["pid"], first["pid"],
         "one server per allowed-tools intersection"
     );
-    assert_eq!(fixture.backend.child_pid(), Some(pid));
+    assert_eq!(fixture.backend.child_pid(&ctx), Some(pid));
 
     // The proxied output is still held to `output_schema`.
     let strict = fixture.tool(
@@ -262,7 +272,7 @@ fn a_dead_or_stuck_child_is_a_timely_tool_error_and_is_respawned() {
     let ctx = fixture.context(&[]);
     let echo = fixture.tool("echo", None);
     echo.execute(&ctx, json!({})).expect("warm up");
-    let first_pid = fixture.backend.child_pid().expect("running");
+    let first_pid = fixture.backend.child_pid(&ctx).expect("running");
 
     // The child exits mid-call: the error names it and arrives at once.
     let started = Instant::now();
@@ -281,17 +291,19 @@ fn a_dead_or_stuck_child_is_a_timely_tool_error_and_is_respawned() {
 
     // The next call respawns a fresh server.
     let output = echo.execute(&ctx, json!({})).expect("respawned");
-    let second_pid = fixture.backend.child_pid().expect("running again");
+    let second_pid = fixture.backend.child_pid(&ctx).expect("running again");
     assert_ne!(first_pid, second_pid);
     assert_eq!(output["pid"].as_u64(), Some(u64::from(second_pid)));
 
     // Killed from outside mid-call: same outcome.
-    let backend = Arc::clone(&fixture.backend);
+    let doomed = fixture
+        .backend
+        .child_pid(&ctx)
+        .expect("running before the slow call");
     let killer = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(300));
-        let pid = backend.child_pid().expect("running during the slow call");
-        // SAFETY: `pid` is the fixture server this test spawned.
-        unsafe { libc_kill(pid) };
+        // SAFETY: `doomed` is the fixture server this test spawned.
+        unsafe { libc_kill(doomed) };
     });
     let started = Instant::now();
     let error = fixture
@@ -385,6 +397,192 @@ fn a_narrower_caller_does_not_inherit_the_wider_session() {
             vec!["orbit.task.show".to_string()],
         ],
         "each live mcp session carries its own caller's ceiling"
+    );
+}
+
+/// The child's working directory as the child itself reports it: a temporary
+/// root can sit behind a symbolic link (`/var` on macOS), and the kernel
+/// answers `getcwd` with the resolved path.
+fn resolved(path: &Path) -> String {
+    std::fs::canonicalize(path)
+        .expect("workspace root exists")
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn a_second_workspace_gets_its_own_child_rather_than_the_first_one_s() {
+    require_sandbox();
+    require_python3();
+    // One backend, two workspaces — what `orbit clock tick` and `orbit mcp
+    // serve` are. Keyed by the allowed-tools intersection alone, both
+    // workspaces shared one child confined to whichever called first, so the
+    // plugin mutated workspace A for a request made about B [ORB-12820].
+    let fixture = Fixture::new(&[], 5_000);
+    let first_root = tempfile::tempdir().expect("first workspace");
+    let second_root = tempfile::tempdir().expect("second workspace");
+    let first = fixture.workspace_context(first_root.path());
+    let second = fixture.workspace_context(second_root.path());
+    let echo = fixture.tool("echo", None);
+
+    let from_first = echo.execute(&first, json!({})).expect("first workspace");
+    let from_second = echo.execute(&second, json!({})).expect("second workspace");
+
+    assert_ne!(
+        from_first["pid"], from_second["pid"],
+        "a second workspace must not be proxied to the first workspace's child"
+    );
+    assert_eq!(
+        from_first["workspace"],
+        json!(first_root.path().to_string_lossy()),
+        "each child is told the workspace it was spawned for"
+    );
+    assert_eq!(
+        from_second["workspace"],
+        json!(second_root.path().to_string_lossy())
+    );
+    assert_eq!(
+        from_first["cwd"],
+        json!(resolved(first_root.path())),
+        "and is confined to it by its working directory too"
+    );
+    assert_eq!(from_second["cwd"], json!(resolved(second_root.path())));
+
+    // Both sessions are live at once, and each context still finds its own.
+    assert_eq!(
+        fixture.backend.child_pid(&first).map(u64::from),
+        from_first["pid"].as_u64()
+    );
+    assert_eq!(
+        fixture.backend.child_pid(&second).map(u64::from),
+        from_second["pid"].as_u64()
+    );
+    let again = echo
+        .execute(&first, json!({}))
+        .expect("the first workspace calls again");
+    assert_eq!(
+        again["pid"], from_first["pid"],
+        "the same workspace still shares one child"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn tools_call_carries_this_call_s_context_not_the_session_s() {
+    require_sandbox();
+    require_python3();
+    let fixture = Fixture::new(&[], 5_000);
+    let workspace = tempfile::tempdir().expect("workspace");
+    let mut ctx = fixture.workspace_context(workspace.path());
+    ctx.agent_name = Some("claude".to_string());
+    ctx.model_name = Some("opus-5".to_string());
+    let echo = fixture.tool("echo", None);
+
+    let first = echo.execute(&ctx, json!({})).expect("first call");
+    assert_eq!(
+        first["meta"]["orbit"],
+        json!({
+            "workspace_root": workspace.path().to_string_lossy(),
+            "agent": "claude",
+            "model": "opus-5",
+            "tool": "mcpdemo.echo",
+        }),
+        "`tools/call` carries the context the exec envelope carries, plus the \
+         tool name the shared child has no `ORBIT_TOOL_NAME` for"
+    );
+
+    // The point of sending it per call: one child serves every caller that
+    // shares its key, so the environment cannot say who this call is for.
+    let mut other = ctx.clone();
+    other.agent_name = Some("codex".to_string());
+    other.model_name = Some("gpt-5".to_string());
+    let second = echo.execute(&other, json!({})).expect("second caller");
+    assert_eq!(
+        second["pid"], first["pid"],
+        "the two callers share one session"
+    );
+    assert_eq!(second["meta"]["orbit"]["agent"], "codex");
+    assert_eq!(second["meta"]["orbit"]["model"], "gpt-5");
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn a_server_request_before_the_reply_is_answered_rather_than_dropped() {
+    require_sandbox();
+    require_python3();
+    // The fixture asks the host something mid-`tools/call` and blocks on the
+    // answer. A client that skips every message that is not its own response
+    // never sends one, and the call it was about to receive dies at the
+    // deadline with the child killed as unresponsive [ORB-12820].
+    let fixture = Fixture::new(&[], 3_000);
+    let ctx = fixture.context(&[("MCP_FIXTURE_SERVER_REQUEST", "ping")]);
+    let started = Instant::now();
+    let output = fixture
+        .tool("echo", None)
+        .execute(&ctx, json!({}))
+        .expect("a server ping is answered, so the call completes");
+    assert!(
+        started.elapsed() < Duration::from_millis(fixture.timeout_ms),
+        "answering the ping must not cost the timeout: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(output["answer"]["id"], "fixture-server-1");
+    assert_eq!(output["answer"]["result"], json!({}));
+    assert!(fixture.backend.is_running(), "and the child is kept");
+
+    // Orbit declares no capabilities, so anything else is method-not-found —
+    // an answer, which is what keeps the call moving.
+    let fixture = Fixture::new(&[], 3_000);
+    let ctx = fixture.context(&[("MCP_FIXTURE_SERVER_REQUEST", "roots/list")]);
+    let output = fixture
+        .tool("echo", None)
+        .execute(&ctx, json!({}))
+        .expect("an unsupported server request still completes");
+    assert_eq!(output["answer"]["error"]["code"], -32601);
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn one_session_s_slow_call_does_not_hold_up_another_session() {
+    require_sandbox();
+    require_python3();
+    /// Long enough that serialising two of them is unmistakable, short
+    /// enough to stay well inside the backend timeout below.
+    const SLEEP_SECONDS: u64 = 2;
+    let fixture = Fixture::new(&[], 30_000);
+    let first_root = tempfile::tempdir().expect("first workspace");
+    let second_root = tempfile::tempdir().expect("second workspace");
+    let first = fixture.workspace_context(first_root.path());
+    let second = fixture.workspace_context(second_root.path());
+
+    // Warm both sessions, so what is being timed is the proxied call and not
+    // two handshakes.
+    let echo = fixture.tool("echo", None);
+    echo.execute(&first, json!({})).expect("warm the first");
+    echo.execute(&second, json!({})).expect("warm the second");
+
+    let started = Instant::now();
+    let fixture = &fixture;
+    std::thread::scope(|scope| {
+        for ctx in [&first, &second] {
+            scope.spawn(move || {
+                fixture
+                    .tool("slow", None)
+                    .execute(ctx, json!({ "seconds": SLEEP_SECONDS }))
+                    .expect("slow call");
+            });
+        }
+    });
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(SLEEP_SECONDS * 1_000 + 1_500),
+        "two sessions of one backend must overlap, not queue behind a single \
+         state lock: {elapsed:?} for two {SLEEP_SECONDS}s calls"
     );
 }
 

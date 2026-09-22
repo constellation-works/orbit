@@ -1,22 +1,32 @@
-//! The `mcp` backend: one stdio MCP server per plugin per allowed-tools
-//! intersection per runtime process, spawned on first use under the plugin's
-//! sandbox, verified against the manifest, and proxied for every
-//! `<ns>.<verb>` call (design §4.2).
+//! The `mcp` backend: one stdio MCP server per plugin per *caller context* —
+//! the workspace the call is made from and the allowed-tools intersection —
+//! per runtime process, spawned on first use under the plugin's sandbox,
+//! verified against the manifest, and proxied for every `<ns>.<verb>` call
+//! (design §4.2).
 //!
 //! Orbit is the only client. Each child is kept for the life of this
 //! [`McpBackend`], which the runtime holds for its own lifetime; a crashed
 //! or unresponsive child ends the current call with an error, is killed, and
-//! is respawned by the next call with the same intersection. A caller whose
-//! intersection differs from a live session's gets its own child rather than
-//! inheriting another caller's `ORBIT_ALLOWED_TOOLS`. There is no code path
+//! is respawned by the next call with the same key. A caller whose context
+//! differs from a live session's gets its own child rather than inheriting
+//! another caller's workspace or `ORBIT_ALLOWED_TOOLS`. There is no code path
 //! that waits without a deadline.
+//!
+//! One process serves several workspaces (`orbit clock tick`, `orbit mcp
+//! serve`), and a child is bound to a workspace three times over: its working
+//! directory, its `ORBIT_WORKSPACE_ROOT`, and the sandbox profile's rendered
+//! `{{workspace}}` write roots. So the workspace is part of the session key,
+//! and the per-call context the `exec` envelope carries travels on
+//! `tools/call` instead of only in the child's environment.
+//!
+//! Only the map of sessions is behind the backend's own lock; each session
+//! has its own, so one caller's slow call does not hold up another session.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
@@ -49,20 +59,45 @@ pub struct McpBackend {
     spec: Arc<PluginBackendSpec>,
     expected: Vec<McpExpectedTool>,
     state: Mutex<McpState>,
-    /// The last-used child's pid, readable while a call holds `state`; zero
-    /// when that child is gone.
-    pid: AtomicU32,
 }
 
 enum McpState {
     Ready {
-        /// Live children keyed by the sorted `allowed_tools` intersection the
-        /// session was spawned with. Callers with the same intersection share
-        /// a child; a different intersection never reuses one.
-        sessions: BTreeMap<Vec<String>, McpSession>,
+        /// Live children keyed by the caller context they were spawned for.
+        /// Callers that share a key share a child; a different key never
+        /// reuses one.
+        sessions: BTreeMap<SessionKey, Arc<McpSessionHandle>>,
     },
     /// The server disagreed with the manifest; nothing restarts it.
     Refused(String),
+}
+
+/// What a child is bound to, and therefore what two callers must agree on
+/// before they may share one. The workspace decides the child's working
+/// directory, its `ORBIT_WORKSPACE_ROOT` and the write roots its sandbox
+/// profile renders from `{{workspace}}`, so a session keyed by the
+/// allowed-tools intersection alone would proxy workspace B's call to a
+/// child confined to workspace A [ORB-12820].
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct SessionKey {
+    /// The child's working directory: the caller's workspace root when it
+    /// has one, else its cwd.
+    cwd: String,
+    /// The caller's workspace root, which is not always its cwd and is what
+    /// the sandbox profile is rendered from.
+    workspace_root: Option<String>,
+    /// The sorted `permissions.orbit_tools` ∩ grant ∩ `ctx.allowed_tools`
+    /// intersection. Order in the caller's own list must not split sessions
+    /// that carry the same tools.
+    allowed_tools: Vec<String>,
+}
+
+/// One live child, plus the pid a supervisor or a test can read *while* a
+/// call holds the session. The pid is fixed for the session's life, so
+/// reading it never waits on the call in flight.
+struct McpSessionHandle {
+    pid: u32,
+    session: Mutex<McpSession>,
 }
 
 struct McpSession {
@@ -83,7 +118,6 @@ impl McpBackend {
             state: Mutex::new(McpState::Ready {
                 sessions: BTreeMap::new(),
             }),
-            pid: AtomicU32::new(0),
         }
     }
 
@@ -91,42 +125,49 @@ impl McpBackend {
         &self.spec
     }
 
-    /// The running server's pid, for a supervisor or a test that kills it.
-    /// Answers during a call, which holds the session itself.
-    pub fn child_pid(&self) -> Option<u32> {
-        match self.pid.load(Ordering::Acquire) {
-            0 => None,
-            pid => Some(pid),
+    /// The pid of the server serving `ctx`, for a supervisor or a test that
+    /// kills it. There is one child per caller context, so the question only
+    /// has an answer once a context is named. Answers during that context's
+    /// call, which holds the session but not the pid.
+    pub fn child_pid(&self, ctx: &ToolContext) -> Option<u32> {
+        let key = self.session_key(ctx, "").ok()?;
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        match &*state {
+            McpState::Ready { sessions } => sessions.get(&key).map(|handle| handle.pid),
+            McpState::Refused(_) => None,
         }
-    }
-
-    fn end_session(&self, session: &mut McpSession) {
-        let pid = session.child.id();
-        session.callback.take();
-        session.kill();
-        let _ = self
-            .pid
-            .compare_exchange(pid, 0, Ordering::AcqRel, Ordering::Relaxed);
     }
 
     /// Whether any server started by this runtime is still alive.
     pub fn is_running(&self) -> bool {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        match &mut *state {
-            McpState::Ready { sessions } => sessions
-                .values_mut()
-                .any(|session| matches!(session.child.try_wait(), Ok(None))),
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        match &*state {
+            McpState::Ready { sessions } => sessions.values().any(|handle| handle.is_live()),
             McpState::Refused(_) => false,
         }
     }
 
+    /// The server disagreed with the manifest: nothing restarts it, and the
+    /// sessions are dropped. A session another caller is mid-call on ends
+    /// when that call releases its last reference, rather than having its
+    /// wire cut underneath it.
     fn refuse(&self, state: &mut McpState, diagnostic: String) {
-        if let McpState::Ready { sessions } = state {
-            for session in sessions.values_mut() {
-                self.end_session(session);
-            }
-        }
         *state = McpState::Refused(diagnostic);
+    }
+
+    /// The caller context this call's child must be bound to.
+    fn session_key(&self, ctx: &ToolContext, tool_name: &str) -> Result<SessionKey, OrbitError> {
+        let mut allowed_tools = self.spec.allowed_tools(ctx);
+        allowed_tools.sort();
+        allowed_tools.dedup();
+        Ok(SessionKey {
+            cwd: child_cwd(ctx, tool_name)?,
+            workspace_root: ctx
+                .workspace_root
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            allowed_tools,
+        })
     }
 
     /// Proxy one `<ns>.<verb>` call as `tools/call`.
@@ -138,122 +179,163 @@ impl McpBackend {
         input: Value,
     ) -> Result<Value, OrbitError> {
         let timeout = Duration::from_millis(self.spec.timeout_ms());
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        self.ensure_running(&mut state, ctx, tool_name, timeout)?;
-        let key = allowed_tools_key(&self.spec.allowed_tools(ctx));
-        let McpState::Ready { sessions } = &mut *state else {
-            return Err(OrbitError::Execution(format!(
-                "plugin tool '{tool_name}': the mcp backend is not running"
-            )));
-        };
-        let outcome = {
-            let session = sessions.get_mut(&key).ok_or_else(|| {
-                OrbitError::Execution(format!(
-                    "plugin tool '{tool_name}': the mcp backend is not running"
-                ))
-            })?;
-            session.request(
-                "tools/call",
-                json!({ "name": verb, "arguments": input }),
-                Instant::now() + timeout,
-            )
-        };
-        match outcome {
-            Ok(response) => tool_result(tool_name, &response),
-            Err(error) => {
-                // Whatever happened, the wire is no longer in a known state:
-                // an unanswered request would otherwise be matched by a
-                // later call's id. Kill this intersection's child and let
-                // the next matching call respawn it.
-                if let Some(session) = sessions.get_mut(&key) {
-                    self.end_session(session);
+        let key = self.session_key(ctx, tool_name)?;
+        // A shared child cannot be told in its environment which caller the
+        // call is for, so the context an `exec` backend reads from its stdin
+        // envelope rides the request (§4.2).
+        let params = json!({
+            "name": verb,
+            "arguments": input,
+            "_meta": { "orbit": call_context(ctx, tool_name) },
+        });
+        // At most one retry: the session this call found may have been ended
+        // by another caller's failure between the lookup and the lock, and
+        // that caller's broken wire is not this one's error.
+        let mut retried = false;
+        loop {
+            let handle = self.ensure_running(&key, ctx, tool_name, timeout)?;
+            let outcome = {
+                let mut session = handle
+                    .session
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                if !matches!(session.child.try_wait(), Ok(None)) && !retried {
+                    retried = true;
+                    drop(session);
+                    self.retire(&key, &handle);
+                    continue;
                 }
-                sessions.remove(&key);
-                Err(OrbitError::Execution(format!(
-                    "plugin tool '{tool_name}': the plugin's mcp server {error}; it will be \
-                     restarted on the next call"
-                )))
-            }
+                session.request("tools/call", params.clone(), Instant::now() + timeout)
+            };
+            return match outcome {
+                Ok(response) => tool_result(tool_name, &response),
+                Err(error) => {
+                    // Whatever happened, the wire is no longer in a known
+                    // state: an unanswered request would otherwise be matched
+                    // by a later call's id. Kill this context's child and let
+                    // the next matching call respawn it.
+                    self.retire(&key, &handle);
+                    Err(OrbitError::Execution(format!(
+                        "plugin tool '{tool_name}': the plugin's mcp server {error}; it will be \
+                         restarted on the next call"
+                    )))
+                }
+            };
         }
     }
 
+    /// The session for `key`, spawning and verifying one when there is none.
+    ///
+    /// The map lock is taken only to look a session up and to publish one:
+    /// the handshake happens on a session no other caller can reach yet, so
+    /// a slow start no more blocks another workspace's call than a slow call
+    /// does.
     fn ensure_running(
         &self,
-        state: &mut McpState,
+        key: &SessionKey,
         ctx: &ToolContext,
         tool_name: &str,
         timeout: Duration,
-    ) -> Result<(), OrbitError> {
-        let key = allowed_tools_key(&self.spec.allowed_tools(ctx));
-        match state {
-            McpState::Refused(diagnostic) => {
-                return Err(OrbitError::Execution(diagnostic.clone()));
-            }
-            McpState::Ready { sessions } => {
-                if let Some(session) = sessions.get_mut(&key) {
-                    if matches!(session.child.try_wait(), Ok(None)) {
-                        self.pid.store(session.child.id(), Ordering::Release);
-                        return Ok(());
-                    }
-                    // Exited on its own between calls: reap and respawn.
-                    self.end_session(session);
-                }
-                sessions.remove(&key);
-            }
+    ) -> Result<Arc<McpSessionHandle>, OrbitError> {
+        if let Some(handle) = self.live_session(key)? {
+            return Ok(handle);
         }
-        let mut session = self.spawn(ctx, tool_name)?;
-        self.pid.store(session.child.id(), Ordering::Release);
+        let mut session = self.spawn(ctx, &key.cwd)?;
+        let pid = session.child.id();
         let deadline = Instant::now() + timeout;
         if let Err(error) = session.handshake(deadline) {
-            self.end_session(&mut session);
             return Err(OrbitError::Execution(format!(
                 "plugin tool '{tool_name}': the plugin's mcp server {error}"
             )));
         }
-        let advertised = match session.list_tools(deadline) {
-            Ok(advertised) => advertised,
-            Err(error) => {
-                self.end_session(&mut session);
-                return Err(OrbitError::Execution(format!(
-                    "plugin tool '{tool_name}': the plugin's mcp server {error}"
-                )));
-            }
-        };
-        if let Some(mismatch) = manifest_mismatch(&self.expected, &advertised) {
-            self.end_session(&mut session);
+        let advertised = session.list_tools(deadline).map_err(|error| {
+            OrbitError::Execution(format!(
+                "plugin tool '{tool_name}': the plugin's mcp server {error}"
+            ))
+        })?;
+        let mismatch = manifest_mismatch(&self.expected, &advertised);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(mismatch) = mismatch {
             let diagnostic = format!(
                 "plugin '{}' refused to start: its mcp server's tools/list disagrees with the \
                  manifest: {mismatch}",
                 self.spec.provenance.name
             );
-            self.refuse(state, diagnostic.clone());
+            self.refuse(&mut state, diagnostic.clone());
             return Err(OrbitError::Execution(diagnostic));
         }
-        match state {
-            McpState::Ready { sessions } => {
-                sessions.insert(key, session);
-            }
+        let sessions = match &mut *state {
+            // Refused while this one was handshaking: another session of the
+            // same plugin disagreed with the manifest, and nothing restarts
+            // any of them. This child is dropped — and killed — unpublished.
             McpState::Refused(diagnostic) => {
-                self.end_session(&mut session);
                 return Err(OrbitError::Execution(diagnostic.clone()));
             }
+            McpState::Ready { sessions } => sessions,
+        };
+        // Another caller with the same key may have won the race while this
+        // one was handshaking. Theirs is already published, so this child is
+        // dropped — and killed — rather than replacing a session other calls
+        // already hold.
+        if let Some(live) = sessions.get(key).filter(|live| live.is_live()) {
+            return Ok(Arc::clone(live));
         }
-        Ok(())
+        let handle = Arc::new(McpSessionHandle {
+            pid,
+            session: Mutex::new(session),
+        });
+        sessions.insert(key.clone(), Arc::clone(&handle));
+        Ok(handle)
     }
 
-    fn spawn(&self, ctx: &ToolContext, tool_name: &str) -> Result<McpSession, OrbitError> {
-        let cwd = ctx
-            .workspace_root
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned())
-            .or_else(|| ctx.cwd.clone())
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(format!(
-                    "plugin tool '{tool_name}' requires ToolContext.cwd"
-                ))
-            })?;
+    /// The published session for `key` when it is still alive, reaping a
+    /// child that exited on its own between calls.
+    fn live_session(&self, key: &SessionKey) -> Result<Option<Arc<McpSessionHandle>>, OrbitError> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        match &mut *state {
+            McpState::Refused(diagnostic) => Err(OrbitError::Execution(diagnostic.clone())),
+            McpState::Ready { sessions } => match sessions.get(key) {
+                Some(handle) if handle.is_live() => Ok(Some(Arc::clone(handle))),
+                Some(_) => {
+                    sessions.remove(key);
+                    Ok(None)
+                }
+                None => Ok(None),
+            },
+        }
+    }
+
+    /// End one session and unpublish it, so the next call with this key
+    /// spawns a fresh child. The entry is removed only while it is still
+    /// *this* session: another caller may already have published a
+    /// replacement under the same key.
+    fn retire(&self, key: &SessionKey, handle: &Arc<McpSessionHandle>) {
+        {
+            let mut session = handle
+                .session
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            session.end();
+        }
+        // The session lock is released first: `live_session` holds the map
+        // lock while it looks at a session, so taking them in the other
+        // order here would be the inversion that deadlocks.
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if let McpState::Ready { sessions } = &mut *state
+            && sessions
+                .get(key)
+                .is_some_and(|live| Arc::ptr_eq(live, handle))
+        {
+            sessions.remove(key);
+        }
+    }
+
+    /// Spawn one confined child for `cwd`, the working directory the
+    /// session key resolved for this caller's context.
+    fn spawn(&self, ctx: &ToolContext, cwd: &str) -> Result<McpSession, OrbitError> {
+        let cwd = cwd.to_string();
         let mut environment = self.spec.child_environment(ctx, &cwd, None);
-        // The same intersection the session is keyed by, recorded as the
+        // The same intersection the session key carries, recorded as the
         // child's callback ceiling: a session is shared only by callers who
         // agree on it, so one ceiling describes every caller it serves
         // [ORB-12801].
@@ -290,26 +372,53 @@ impl McpBackend {
     }
 }
 
-impl Drop for McpBackend {
-    fn drop(&mut self) {
-        if let McpState::Ready { sessions } =
-            self.state.get_mut().unwrap_or_else(PoisonError::into_inner)
-        {
-            for session in sessions.values_mut() {
-                session.kill();
+impl McpSessionHandle {
+    /// Whether this session's child is still running, without ever waiting
+    /// on the call that may be holding it: a session another caller is
+    /// mid-request on is by construction alive, and blocking here would put
+    /// every lookup behind the slowest call again.
+    fn is_live(&self) -> bool {
+        match self.session.try_lock() {
+            Ok(mut session) => matches!(session.child.try_wait(), Ok(None)),
+            Err(TryLockError::WouldBlock) => true,
+            Err(TryLockError::Poisoned(poisoned)) => {
+                matches!(poisoned.into_inner().child.try_wait(), Ok(None))
             }
         }
     }
 }
 
-/// Stable map key for one caller's `permissions.orbit_tools` ∩ grant ∩
-/// `ctx.allowed_tools` intersection. Order in the caller's own list must not
-/// split sessions that carry the same tools.
-fn allowed_tools_key(tools: &[String]) -> Vec<String> {
-    let mut key = tools.to_vec();
-    key.sort();
-    key.dedup();
-    key
+/// The working directory the child is spawned in: the caller's workspace
+/// root when it has one, else its cwd.
+fn child_cwd(ctx: &ToolContext, tool_name: &str) -> Result<String, OrbitError> {
+    ctx.workspace_root
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned())
+        .or_else(|| ctx.cwd.clone())
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "plugin tool '{tool_name}' requires ToolContext.cwd"
+            ))
+        })
+}
+
+/// The per-call context, sent as `params._meta.orbit` on `tools/call`.
+///
+/// This is the `context` object an `exec` backend reads from its stdin
+/// envelope (`tool.rs`), plus the tool name: one `mcp` child serves every
+/// tool of its plugin and every caller sharing its key, so `ORBIT_TOOL_NAME`
+/// is absent from its environment (§4.2) and `ORBIT_WORKSPACE_ROOT` names
+/// the workspace the session is bound to rather than this call's.
+fn call_context(ctx: &ToolContext, tool_name: &str) -> Value {
+    json!({
+        "workspace_root": ctx
+            .workspace_root
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        "agent": ctx.agent_name,
+        "model": ctx.model_name,
+        "tool": tool_name,
+    })
 }
 
 /// The first disagreement between the manifest and the server, naming the
@@ -470,8 +579,17 @@ impl McpSession {
             }
             let message: Value = serde_json::from_str(line.trim())
                 .map_err(|error| format!("emitted invalid JSON: {error}"))?;
-            if message.get("id").and_then(Value::as_i64) != Some(id) {
-                // A notification or another id: not this request's answer.
+            let message_id = message.get("id").filter(|value| !value.is_null());
+            if message_id.and_then(Value::as_i64) != Some(id) {
+                // Not this request's answer. A message that names a method
+                // is the server calling *us*, and a request of its own
+                // carries an id that must be answered; anything else is a
+                // notification or a stale response and is skipped.
+                if let Some(method) = message.get("method").and_then(Value::as_str)
+                    && let Some(server_id) = message_id.cloned()
+                {
+                    self.answer(&server_id, method)?;
+                }
                 continue;
             }
             if let Some(error) = message.get("error") {
@@ -489,6 +607,28 @@ impl McpSession {
         }
     }
 
+    /// Answer one server-initiated request. A client that never answers is
+    /// not a quiet client: a server that pings (or asks for `roots/list`)
+    /// before finishing the `tools/call` it is answering waits for a reply
+    /// that never comes, and the call dies at the deadline with the child
+    /// killed as unresponsive [ORB-12820]. Orbit declares no capabilities in
+    /// `initialize`, so `ping` — which every MCP client owes — is the one
+    /// method it serves and the rest are method-not-found.
+    fn answer(&mut self, id: &Value, method: &str) -> Result<(), String> {
+        let response = match method {
+            "ping" => json!({ "jsonrpc": "2.0", "id": id, "result": {} }),
+            _ => json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32601,
+                    "message": format!("orbit's plugin host does not serve '{method}'"),
+                },
+            }),
+        };
+        self.send(&response)
+    }
+
     fn send(&mut self, message: &Value) -> Result<(), String> {
         let mut line = serde_json::to_string(message)
             .map_err(|error| format!("could not be sent a request: {error}"))?;
@@ -499,8 +639,21 @@ impl McpSession {
             .map_err(|error| format!("closed its stdin: {error}"))
     }
 
-    fn kill(&mut self) {
+    /// End this session: drop the host-issued callback record so ancestry no
+    /// longer treats the pid as a plugin, then kill and reap the child.
+    /// Idempotent, because [`Drop`] runs it again.
+    fn end(&mut self) {
+        self.callback.take();
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// Unpublishing a session is what ends it: the last holder — the map, or the
+/// call that was still using it — drops the child here, so no path leaves a
+/// server running past the backend that spawned it.
+impl Drop for McpSession {
+    fn drop(&mut self) {
+        self.end();
     }
 }

@@ -242,7 +242,7 @@ does not vouch for what the backend does inside those bounds.
 | `backend.type` | How Orbit runs it |
 |---|---|
 | `exec` | One process per call. Orbit writes `{"schema_version":1,"tool":…,"input":…,"context":{…}}` on stdin and reads `{"ok":true,"output":…}` or `{"ok":false,"error":{…}}` on stdout. A non-zero exit, non-JSON stdout, or output failing the tool's `output_schema` is a tool error — never a partial result. |
-| `mcp` | The plugin ships a stdio MCP server. Orbit spawns it once per runtime process, checks its `tools/list` against the manifest (a disagreement refuses startup, naming the tool), and proxies each `<ns>.<verb>` call as `tools/call`. A crashed or unresponsive server is a tool error within `backend.timeout_ms`, and the next call respawns it. |
+| `mcp` | The plugin ships a stdio MCP server. Orbit spawns one per caller context per runtime process — a caller in another workspace, or with a different allowed-tools intersection, gets its own child rather than one confined to the first caller's workspace — checks its `tools/list` against the manifest (a disagreement refuses startup, naming the tool), and proxies each `<ns>.<verb>` call as `tools/call`. A crashed or unresponsive server is a tool error within `backend.timeout_ms`, and the next call respawns it. |
 
 ## Migrating an existing external tool
 
