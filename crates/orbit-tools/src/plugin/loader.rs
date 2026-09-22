@@ -7,8 +7,6 @@
 use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::security::child_env::allowlisted_child_env;
-use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use orbit_types::plugin::{
     FIRST_PARTY_PUBLISHER, MANIFEST_FILE_NAME, PluginExecutionKind, PluginManifest,
     PluginManifestError, PluginMcpScope, PluginTemplateVars, PluginTestFile, RESERVED_CLI_COMMANDS,
@@ -20,7 +18,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 use super::schema::params_from_input_schema;
-use crate::{TIMEOUT_FAST_MS, ToolRegistry};
+use crate::ToolRegistry;
 
 /// Manifest digests of first-party plugins that may claim `orbit.<ns>.*`
 /// without a constellation-works source. Empty until a release bundles one.
@@ -836,35 +834,15 @@ fn is_path_prefix(prefix: &Path, path: &Path) -> bool {
     path == prefix || path.starts_with(prefix)
 }
 
-/// Whether `source` (the `orbit plugin add` argument) resolves to a
-/// constellation-works repository: a `git+` URL under that organisation, or a
-/// local checkout whose `origin` remote is.
-pub fn first_party_source(source: &str, root: &Path) -> bool {
-    if let Some(url) = source.strip_prefix("git+") {
-        return is_first_party_remote(url);
-    }
-    let output = run_process(
-        &ExecRequest {
-            program: "git".to_string(),
-            args: vec![
-                "-C".to_string(),
-                root.to_string_lossy().into_owned(),
-                "remote".to_string(),
-                "get-url".to_string(),
-                "origin".to_string(),
-            ],
-            current_dir: None,
-            timeout_ms: Some(TIMEOUT_FAST_MS),
-            stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::ClearAndSet(allowlisted_child_env(&[], &[])),
-            debug: false,
-        },
-        &NoSandbox,
-    );
-    match output {
-        Ok(result) if result.success => is_first_party_remote(result.stdout.trim()),
-        _ => false,
-    }
+/// Whether `source` (the `orbit plugin add` argument) is a
+/// constellation-works repository fetched through a `git+` URL.
+///
+/// A directory's Git configuration belongs to the plugin author, so it is
+/// never evidence of a first-party source.
+pub fn first_party_source(source: &str) -> bool {
+    source
+        .strip_prefix("git+")
+        .is_some_and(is_first_party_remote)
 }
 
 fn is_first_party_remote(url: &str) -> bool {

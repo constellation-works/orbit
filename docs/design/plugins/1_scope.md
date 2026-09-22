@@ -80,10 +80,11 @@ owned by shipped skills, another plugin, or the user.
 **`orbit.<ns>.*` is reserved for Orbit-originated plugins.** A manifest with
 `metadata.publisher: constellation-works` and `metadata.origin: orbit` claims tool names
 `orbit.<ns>.<verb>` (MCP `orbit_<ns>_<verb>`) while keeping `orbit <ns>` as its CLI group;
-every other publisher gets bare `<ns>.*`. `origin: orbit` is only honoured for plugins whose
-source resolves to a constellation-works repository or whose manifest digest is in the
-bundled first-party list; any other manifest claiming it is refused at load. orbit-graph and
-orbit-research are first-party, so `orbit.graph.*` keeps its current names with no alias table.
+every other publisher gets bare `<ns>.*`. `origin: orbit` is only honoured when Orbit fetched
+the source from a `git+` URL under `github.com/constellation-works`, or when its manifest digest
+is in the bundled first-party list; a local directory's Git remotes are never provenance
+evidence. Any other manifest claiming it is refused at load. orbit-graph and orbit-research are
+first-party, so `orbit.graph.*` keeps its current names with no alias table.
 
 ## 2. Manifest
 

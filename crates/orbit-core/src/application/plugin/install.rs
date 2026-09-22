@@ -128,8 +128,7 @@ fn install_plugin_inner(
     refuse_in_repository_source(runtime, &source_root)?;
 
     let plugin = load_plugin_dir(&source_root)?;
-    let first_party =
-        plugin.manifest.claims_first_party_namespace() && first_party_source(source, &source_root);
+    let first_party = plugin.manifest.claims_first_party_namespace() && first_party_source(source);
     let policy = PluginValidationPolicy::host_default().with_first_party_verified(first_party);
     validate_loaded_plugin(&plugin, &policy).map_err(manifest_refusal)?;
 
