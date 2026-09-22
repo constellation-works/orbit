@@ -123,7 +123,8 @@ impl OrbitRuntime {
 /// The `orbit <ns>` groups this host serves, read without a workspace
 /// runtime (design §4.6).
 pub fn host_plugin_cli_groups(global_root: &Path) -> Result<Vec<PluginCliGroup>, OrbitError> {
-    plugin_host::host_plugin_cli_groups(global_root, &audit_db_path(global_root)?)
+    let config = global_only_config(global_root)?;
+    plugin_host::host_plugin_cli_groups(global_root, &config.persistence.audit_db, &config.plugins)
 }
 
 /// Write a v2 manifest from a set of v1 `*.orbit-tool.yaml` sidecars. No
@@ -142,7 +143,12 @@ pub fn migrate_plugin_sidecars(
 pub fn host_plugin_mcp_definitions(
     global_root: &Path,
 ) -> Result<Vec<McpToolDefinition>, OrbitError> {
-    plugin_host::host_plugin_mcp_definitions(global_root, &audit_db_path(global_root)?)
+    let config = global_only_config(global_root)?;
+    plugin_host::host_plugin_mcp_definitions(
+        global_root,
+        &config.persistence.audit_db,
+        &config.plugins,
+    )
 }
 
 /// Execute a `mcp_scope: global` plugin tool without a workspace runtime,
@@ -155,8 +161,12 @@ pub fn execute_global_plugin_tool(
     entry_point: super::ToolEntryPoint,
     session_context: ToolSessionContext,
 ) -> Result<Value, OrbitError> {
-    let (registry, _load) =
-        plugin_host::host_plugin_registry(global_root, &audit_db_path(global_root)?)?;
+    let config = global_only_config(global_root)?;
+    let (registry, _load) = plugin_host::host_plugin_registry(
+        global_root,
+        &config.persistence.audit_db,
+        &config.plugins,
+    )?;
     super::dispatch::execute_global_plugin_dispatch(
         global_root,
         name,
@@ -167,6 +177,13 @@ pub fn execute_global_plugin_tool(
     )
 }
 
-fn audit_db_path(global_root: &Path) -> Result<PathBuf, OrbitError> {
-    orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))
+/// This host's config with no workspace layered over it: `~/.orbit/config.toml`
+/// alone, read via `ConfigRoots::global_only`. Every host-global plugin
+/// surface (CLI groups, MCP `tools/list`, global tool execution) resolves its
+/// `[plugins.<ns>]` sections and audit db path from this, never a bare
+/// `BTreeMap::new()`, so a schema-required key set only in `config.toml`
+/// still lets the plugin load here exactly as it does under a workspace
+/// runtime (design §1, §4.7).
+fn global_only_config(global_root: &Path) -> Result<orbit_config::ResolvedConfig, OrbitError> {
+    orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(global_root))
 }
