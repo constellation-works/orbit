@@ -129,7 +129,7 @@ pub(super) fn apply_enabled_contributions(
         &runtime.paths().local_dir.join(AUTO_TASKS_DIR),
         force,
     )?;
-    let (skills, mut warnings) = link_plugin_skills(&plugin);
+    let (skills, mut warnings) = link_plugin_skills(&runtime.global_root(), &plugin);
     warnings.extend(seeded.iter().filter_map(|outcome| outcome.warning.clone()));
     Ok(PluginContributions {
         seeded,
@@ -173,7 +173,8 @@ pub fn disable_plugin(runtime: &OrbitRuntime, name: &str) -> Result<PluginSummar
 /// [ORB-12800]. The namespace directory also covers links left pointing at a
 /// previously installed version.
 fn unlink_namespace_skills(runtime: &OrbitRuntime, name: &str) -> Result<(), OrbitError> {
-    unlink_plugin_skills(&plugin_namespace_dir(&runtime.global_root(), name))?;
+    let global_root = runtime.global_root();
+    unlink_plugin_skills(&global_root, &plugin_namespace_dir(&global_root, name))?;
     Ok(())
 }
 

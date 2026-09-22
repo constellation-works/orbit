@@ -1376,9 +1376,12 @@ authorizes and enables the replacement.
   and are skipped with a reason naming the plugin, which `orbit routine list`
   and `orbit auto-task list` show. A task minted by a plugin auto-task carries
   `plugin:<ns>` beside `auto-task:<name>`.
-- **Skills** (`spec.skills`) are linked from the install directory into
-  `~/.agents/skills` and `~/.claude/skills` on enable under the discovery ID
-  `<plugin-namespace>-<skill-directory>` and unlinked on disable. The
+- **Skills** (`spec.skills`) are linked from the install directory into the
+  provider discovery roots beside the active global root on enable, under the
+  discovery ID `<plugin-namespace>-<skill-directory>`, and unlinked on disable.
+  The default `~/.orbit` root uses `~/.agents/skills` and
+  `~/.claude/skills`; `--root /path/to/root` or the equivalent `ORBIT_ROOT`
+  instead uses `/path/to/.agents/skills` and `/path/to/.claude/skills`. The
   `orbit plugin validate` command reports those IDs before installation, and
   linking never replaces a shipped, user-owned or other plugin's link. The
   `orbit plugin doctor` command reports a link whose target is gone.

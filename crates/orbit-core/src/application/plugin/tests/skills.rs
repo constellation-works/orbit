@@ -2,9 +2,9 @@
 //! disable unlinks them, and `doctor` reports a link whose target is gone
 //! (design §1, §3).
 //!
-//! The discovery roots are supplied explicitly here. Production resolves them
-//! from the home directory, and a test that wrote there would edit the
-//! developer's real `~/.claude/skills`.
+//! The low-level discovery roots are supplied explicitly here. Lifecycle
+//! coverage also proves that production derives them from the runtime's
+//! global root, keeping a temporary runtime inside its fixture directory.
 
 use std::path::PathBuf;
 
@@ -16,12 +16,77 @@ use super::fixture::PluginFixture;
 use crate::application::plugin::skills::{
     dangling_plugin_skill_links_in, link_plugin_skills_into, unlink_plugin_skills_from,
 };
+use crate::application::plugin::{
+    PluginAddOptions, PluginEnableOptions, disable_plugin, enable_plugin, install_plugin,
+    plugin_doctor,
+};
 
 fn roots(fixture: &PluginFixture) -> Vec<PathBuf> {
     [".agents", ".claude"]
         .into_iter()
         .map(|dir| fixture.repo_root.join(dir).join("skills"))
         .collect()
+}
+
+#[test]
+fn lifecycle_links_beside_the_runtime_global_root() {
+    let fixture = PluginFixture::new();
+    let source = DefinitionPlugin::new("graph").write(&fixture);
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 plugin source"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install disabled plugin");
+    let runtime = fixture.reopen();
+
+    let result =
+        enable_plugin(&runtime, "graph", &PluginEnableOptions::default()).expect("enable plugin");
+    let discovery_base = fixture
+        .global_root
+        .parent()
+        .expect("fixture global root has a parent");
+    let expected_roots = [".agents", ".claude"].map(|dir| discovery_base.join(dir).join("skills"));
+    assert_eq!(result.skills.len(), expected_roots.len());
+    for root in &expected_roots {
+        let link = root.join("graph-graph");
+        assert!(
+            result.skills.iter().any(|skill| skill.link == link),
+            "enable must report the runtime-scoped link at {}: {:?}",
+            link.display(),
+            result.skills
+        );
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .expect("runtime-scoped skill link")
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    std::fs::remove_dir_all(PathBuf::from(&result.summary.install_path).join("skills"))
+        .expect("remove installed skill tree");
+    let doctor = plugin_doctor(&runtime).expect("inspect runtime-scoped discovery roots");
+    for root in &expected_roots {
+        let link = root.join("graph-graph");
+        assert!(
+            doctor.iter().any(|finding| finding
+                .message
+                .contains(link.to_str().expect("fixture discovery path is utf8"))),
+            "doctor must report the runtime-scoped dangling link at {}: {:?}",
+            link.display(),
+            doctor
+        );
+    }
+
+    disable_plugin(&runtime, "graph").expect("disable plugin");
+    for root in &expected_roots {
+        assert!(
+            std::fs::symlink_metadata(root.join("graph-graph")).is_err(),
+            "disable must remove the runtime-scoped link from {}",
+            root.display()
+        );
+    }
 }
 
 #[test]
