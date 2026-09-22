@@ -690,6 +690,15 @@ fn orbit_tools_writes_named_stores_and_never_the_roots() {
             workspace_orbit.join("state/semantic.db-shm"),
         ],
     );
+    assert_eq!(
+        profile.materialization_roots,
+        vec![
+            workspace_root.to_path_buf(),
+            PathBuf::from("/srv/plugins/demo/state"),
+            global_root.join("state"),
+        ],
+        "only the workspace and host-owned state trees may be materialized"
+    );
 
     // No granted write path is an ancestor of anything on the denied list.
     for (root, relative) in DENIED_RELATIVE_PATHS {
