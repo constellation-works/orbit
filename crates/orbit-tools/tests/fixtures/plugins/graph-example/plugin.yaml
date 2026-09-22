@@ -10,7 +10,7 @@ metadata:
   homepage: https://github.com/constellation-works/orbit-graph
 spec:
   requires:
-    orbit: ">=0.24.0 <1.0.0"        # semver range on the host binary
+    orbit: ">=0.23.0 <1.0.0"        # semver range on the host binary
     host_api: 1                     # protocol major; mismatch refuses enable
     platforms: [linux, macos]
     programs: [git]                 # host programs the backend spawns (proc allowlist)
