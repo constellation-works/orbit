@@ -97,6 +97,7 @@ references still fail closed.
 | `pi` | `low`, `medium`, `high`, `xhigh`, `max` | `--thinking` |
 | `antigravity` | `low`, `medium`, `high` | `--effort` |
 | `opencode` | `high`, `max` | `--variant` |
+| `grok` with `grok-4.7` | `low`, `medium`, `high`, `xhigh` | `--reasoning-effort` |
 | `grok` with `grok-4.6` | `low`, `medium`, `high`, `xhigh` | `--reasoning-effort` |
 | `grok` with `grok-4.5` | `low`, `medium`, `high` | `--reasoning-effort` |
 | others | Not supported — configuring `effort` is ignored with a warning. | — |
@@ -106,7 +107,7 @@ because `agy --effort` does not define them; `opencode` omits everything but
 `high`/`max` because `--variant` is forwarded verbatim to whichever model
 provider `--model` selected and OpenCode publishes no provider-independent
 vocabulary. Grok is the only model-specific case, and effort is verified only
-for `grok-4.5` and `grok-4.6` — any other Grok model with `effort` set is
+for `grok-4.5`, `grok-4.6`, and `grok-4.7` — any other Grok model with `effort` set is
 ignored with a warning rather than remapped.
 
 Orbit does not silently downgrade or remap an unsupported

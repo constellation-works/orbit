@@ -366,11 +366,11 @@ model = "gemini-3.8-flash-high"
 <div class="ose-panel" id="ose-panel-grok">
 <dl class="ose-facts">
 <dt>Binary on <code>PATH</code></dt><dd><code>grok</code></dd>
-<dt>Example model</dt><dd><code>grok-4.6</code></dd>
+<dt>Example model</dt><dd><code>grok-4.7</code></dd>
 <dt>Reasoning effort</dt><dd>Supported per model, rendered as <code>grok --reasoning-effort &lt;value&gt;</code>.</dd>
 </dl>
 <fieldset class="ose-field">
-<legend>2. Reasoning effort for <code>grok-4.6</code> (optional)</legend>
+<legend>2. Reasoning effort for <code>grok-4.7</code> (optional)</legend>
 <div class="ose-choices">
 <span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-grok" id="ose-e-grok-none" value="none" checked><label for="ose-e-grok-none">omit</label></span>
 <span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-grok" id="ose-e-grok-low" value="low"><label for="ose-e-grok-low">low</label></span>
@@ -386,7 +386,7 @@ default_crew = "grok"
 
 [crews.grok]
 provider = "grok"
-model = "grok-4.6"
+model = "grok-4.7"
 <span class="ose-eff" data-effort="low">effort = "low"
 </span><span class="ose-eff" data-effort="medium">effort = "medium"
 </span><span class="ose-eff" data-effort="high">effort = "high"
@@ -395,7 +395,7 @@ model = "grok-4.6"
 
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
-<div class="ose-note"><p>Grok effort is the one model-specific case. This picker shows the <code>grok-4.6</code> set; <code>grok-4.5</code> accepts <code>low</code>, <code>medium</code>, <code>high</code> and ignores <code>xhigh</code> with a warning.</p><p>Effort is verified only for those two models. Setting <code>effort</code> alongside any other Grok model — or alongside no model at all — is ignored with a warning instead of being sent to a CLI that might reinterpret it.</p></div>
+<div class="ose-note"><p>Grok effort is the one model-specific case. This picker shows the <code>grok-4.7</code> set; <code>grok-4.6</code> accepts the same four values, while <code>grok-4.5</code> accepts <code>low</code>, <code>medium</code>, <code>high</code> and ignores <code>xhigh</code> with a warning.</p><p>Effort is verified only for those three models. Setting <code>effort</code> alongside any other Grok model — or alongside no model at all — is ignored with a warning instead of being sent to a CLI that might reinterpret it.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-copilot">
 <dl class="ose-facts">

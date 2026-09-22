@@ -109,7 +109,7 @@ This is the shape a fresh `orbit init` writes on a host with the Claude and Code
 
   **Resolving the `system` name.** A seeded config defines no `[crews.system]` table. Instead `workflow.system_crew` names a real crew, and at load the `system` name shipped job steps use is aliased onto that crew — so `system_crew = "luna"` runs `task_pilot_pipeline` on Luna. To change what runs system work after init, point `system_crew` at another defined crew (`orbit config set workflow.system_crew sonnet`). An explicit `[crews.system]` table in a user-authored config always wins over the alias. Configs written before `system_crew` existed still resolve: for Orbit's default or legacy lane names (`system` and `qa`), a missing crew falls back to an existing `qa` crew and then to the already-validated workspace default, which keeps old Gemini- and Grok-only configs working even though they never seeded `qa`. Unknown custom names are not substituted, so a typo fails closed at dispatch. `[crews.qa]` remains a loadable compatibility lane for explicitly user-authored legacy configs, but fresh init never creates it.
 
-  **What init seeds.** `--non-interactive` writes the cheapest built-in crew of the preferred detected family, in this order: Codex `luna` (`gpt-5.6-luna`), Claude `sonnet`, Grok `grok` (`grok-4.6`), Antigravity `antigravity` (`gemini-3.8-flash-high` via `agy`), Gemini `gemini` (`gemini-3.8-flash` on the legacy Gemini CLI), Copilot `copilot`, Cursor `cursor`, Pi `pi`, then OpenCode `opencode`; single-crew families name their one crew, and appending the newer lanes preserves every existing family's selection. Interactive `orbit init` (or `--force` on a fresh rewrite) offers exactly those detected cheap-tier crews by name with the same recommendation pre-selected; it does not offer Astra, Sol, Opus, Terra, or a free-form provider, and it never prompts for a QA crew. A host with exactly one candidate takes it without a prompt; a host with no supported family leaves `system_crew` unset rather than inventing a provider.
+  **What init seeds.** `--non-interactive` writes the cheapest built-in crew of the preferred detected family, in this order: Codex `luna` (`gpt-5.6-luna`), Claude `sonnet`, Grok `grok` (`grok-4.7`), Antigravity `antigravity` (`gemini-3.8-flash-high` via `agy`), Gemini `gemini` (`gemini-3.8-flash` on the legacy Gemini CLI), Copilot `copilot`, Cursor `cursor`, Pi `pi`, then OpenCode `opencode`; single-crew families name their one crew, and appending the newer lanes preserves every existing family's selection. Interactive `orbit init` (or `--force` on a fresh rewrite) offers exactly those detected cheap-tier crews by name with the same recommendation pre-selected; it does not offer Astra, Sol, Opus, Terra, or a free-form provider, and it never prompts for a QA crew. A host with exactly one candidate takes it without a prompt; a host with no supported family leaves `system_crew` unset rather than inventing a provider.
 - **`*_complexity_crews`** — `low_complexity_crews`, `medium_complexity_crews`, `hard_complexity_crews`, and `xhard_complexity_crews` are the automatic crew pools a crew-less task draws from at creation, by its assessed complexity. Entries are crew names, written `name` or `name:weight` (all bare or all weighted). Init scaffolds all four as `[]`; an empty pool disables routing for that complexity, so the task is routed to `default_crew`. See [Automatic crew pools by complexity](#automatic-crew-pools-by-complexity).
 - **`required_validation_commands`** — commands a distributed execution claim must pass on its exact candidate before this owner accepts its delivery handoff. Empty by default; an empty value is fail-closed and refuses every claimed handoff.
 
@@ -128,7 +128,7 @@ every command.
 
 | Field | Purpose | Values |
 |---|---|---|
-| `model` | Model identifier passed to the provider CLI | Provider-specific (e.g. `opus`, `sonnet`, `gpt-6-astra`, `gemini-3.8-flash-high`, `grok-4.6`) |
+| `model` | Model identifier passed to the provider CLI | Provider-specific (e.g. `opus`, `sonnet`, `gpt-6-astra`, `gemini-3.8-flash-high`, `grok-4.7`) |
 | `provider` | Agent family or execution lane | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, `opencode` (the CLI-executable crew families; see [Provider identity and resolution](#provider-identity-and-resolution) for the full canonical set) |
 | `effort` | Optional provider reasoning effort | Claude/Codex: `low`, `medium`, `high`, `xhigh`, or `max`; Antigravity: `low`, `medium`, `high`; OpenCode: `high` or `max`; Grok: verified per model below |
 | `description` | Optional human-facing crew summary | Any non-empty string after trimming |
@@ -155,9 +155,11 @@ forwards `low`, `medium`, `high`, `xhigh`, and `max` exactly; [Claude's
 effort documentation](https://code.claude.com/docs/en/model-config) notes that
 availability can still depend on the selected model. Grok Build 1.0.13
 advertises `--reasoning-effort` (with `--effort` as an alias), and
-`grok models` currently lists `grok-4.6` and `grok-4.5`. Orbit accepts `low`,
-`medium`, `high`, and `xhigh` for `grok-4.6`, and `low`, `medium`, and `high`
-for `grok-4.5`, matching [xAI's reasoning contract](https://docs.x.ai/developers/model-capabilities/text/reasoning).
+`grok models` currently lists `grok-4.7`, `grok-4.6`, and `grok-4.5`. Orbit
+accepts `low`, `medium`, `high`, and `xhigh` for `grok-4.7` and `grok-4.6`,
+and `low`, `medium`, and `high` for `grok-4.5`, matching [xAI's Grok 4.7
+model contract](https://docs.x.ai/developers/models/grok-4.7) and [reasoning
+contract](https://docs.x.ai/developers/model-capabilities/text/reasoning).
 An invalid or provider-unsupported `effort` (including `max` on Grok,
 Antigravity `xhigh`/`max`, OpenCode `low`/`medium`/`xhigh`, effort on
 providers with no contract, or a slip such as `effort = "hard"`) is ignored
@@ -195,11 +197,11 @@ Example — the standard Grok crew:
 
 ```toml
 [crews.grok]
-model = "grok-4.6"
+model = "grok-4.7"
 provider = "grok"
 ```
 
-The current Grok Build CLI lists `grok-4.6` as its default from `grok models`, so Orbit uses that live menu id. The older `grok-build` string is not retained as a default or alias.
+The current Grok Build CLI lists `grok-4.7` in `grok models`, so Orbit uses that live menu id. The older `grok-build` string is not retained as a default or alias.
 
 Fresh `orbit init` configuration advertises only detected provider CLIs. Claude seeds `opus`, `sonnet`, and `fable`; Codex seeds `astra`, `sol`, `terra`, and `luna`; an installed `agy` seeds `antigravity`; Gemini CLI still seeds the legacy `gemini` crew when that binary is present; Grok seeds `grok`; Copilot seeds `copilot`; an installed `cursor-agent` seeds `cursor`; an installed `pi` seeds `pi`; and an installed `opencode` seeds `opencode`. Antigravity occupies Gemini CLI's previous default-provider slot, so a host with both `agy` and `gemini` prefers Antigravity. Copilot, Cursor, Pi, and OpenCode remain appended after the original families. Those built-in tables are the only crews init writes: `workflow.default_crew` names the preferred family's default crew (`opus`, `astra`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, or `opencode`) and `workflow.system_crew` names the cheap-tier crew described under [`[workflow]`](#workflow--branch-and-crew-defaults). Interactive init asks which existing crew is the default (every seeded crew is offered, recommendation first) and, when more than one cheap-tier family is detected, which is the system crew; both answers are written by name. It never writes a `[crews.custom]` or `[crews.system]` table and does not ask for QA. The legacy `qa` name remains loadable when an existing user-authored config defines `[crews.qa]`, but init does not seed that table. If no supported provider CLI is detected, init asks nothing about crews and leaves the crew registry, `workflow.default_crew`, and `workflow.system_crew` unset instead of writing an unusable provider. Existing files are never rewritten: `orbit init` seeds `config.toml` only when it is absent (or under `--force`).
 

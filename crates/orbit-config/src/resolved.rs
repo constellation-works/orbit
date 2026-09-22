@@ -639,7 +639,7 @@ fn effort_accepted_values(provider: &str, model: Option<&str>) -> &'static str {
         "antigravity" => "low, medium, high",
         "opencode" => "high, max",
         "grok" => match model.map(str::trim).filter(|model| !model.is_empty()) {
-            Some("grok-4.6") => "low, medium, high, xhigh",
+            Some("grok-4.7" | "grok-4.6") => "low, medium, high, xhigh",
             Some("grok-4.5") => "low, medium, high",
             _ => "omit the key",
         },

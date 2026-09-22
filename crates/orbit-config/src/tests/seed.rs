@@ -124,7 +124,7 @@ fn single_crew_families_name_their_crew_for_both_lanes() {
     for (family, model) in [
         ("gemini", "gemini-3.8-flash"),
         ("antigravity", "gemini-3.8-flash-high"),
-        ("grok", "grok-4.6"),
+        ("grok", "grok-4.7"),
         ("cursor", "gpt-5"),
         ("pi", "sonnet"),
         ("opencode", "anthropic/claude-sonnet-4-5"),
