@@ -330,8 +330,18 @@ stored row: `orbit plugin add --enable --grant …`, `orbit plugin enable --gran
 grant-consenting `orbit plugin sync --grant …` replace the recorded set. Omitting `--grant` on
 `plugin enable` preserves the recorded grants,
 so disable followed by an ordinary re-enable does not require restating them. Supplying a
-narrower list is the supported way to revoke grants and replaces the authorization witness
-with one covering only that narrower set.
+narrower list is the supported way to revoke grants down to what remains, and `--grant none` is
+the way to revoke all of them: it records an explicit empty set rather than being read as
+"nothing supplied, preserve what's there". `--grant all` and `--grant requested` are the other
+two reserved spellings `orbit plugin enable` accepts in place of a literal list: every grant this
+build knows, or exactly what the manifest's `permissions`/`backend.sandbox` ask for. Any of the
+three replaces the authorization witness the same way a literal list does, and none can be mixed
+into one.
+
+A `plugins` row's grants are validated once, whether they arrive as a fresh `--grant` list or are
+read back out of storage at load: a name no current grant recognizes — retired, renamed, or
+written by a newer Orbit — refuses the row rather than being dropped and running the plugin under
+a narrower set than what was authorized.
 
 `orbit plugin add --grant …` is rejected unless `--enable` is also present. On a manifest
 digest change, `add` and `upgrade` compare the old and new filesystem roots, network mode,

@@ -661,6 +661,69 @@ fn grants_recorded_by_the_authorizing_path_load_unchanged() {
     assert!(load.diagnostics.is_empty(), "{:?}", load.diagnostics);
 }
 
+/// A row's grants can pass witness verification and still name something no
+/// current `PluginGrant` recognizes — retired, renamed, or written by a newer
+/// Orbit. Dropping it silently, the way a plain `filter_map` would, runs the
+/// plugin under fewer grants than were authorized without saying so; the
+/// loader refuses the row instead, and the diagnostic names the grant it
+/// could not parse.
+#[test]
+fn a_row_naming_a_grant_this_build_does_not_recognize_is_refused() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let orbit_dir = temp.path().join("repo/.orbit");
+    std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
+    write_plugin(
+        &plugin_install_path(&global_root, "demo", "1.0.0"),
+        "demo",
+        "",
+    );
+
+    let store = Store::open(&global_root.join("orbit.db")).expect("open store");
+    store
+        .with_transaction(|tx| tx.upsert_plugin(&record(&global_root, "demo")))
+        .expect("record the install");
+    // Recorded and authorized exactly the way a real grant would be, so the
+    // witness matches; only the name itself is unrecognized.
+    let grants = ["wifi".to_string()];
+    store
+        .with_transaction(|tx| tx.set_plugin_enabled("demo", true, &grants).map(|_| ()))
+        .expect("record the grant");
+    record_authorized_grants(&global_root, "demo", true, &grants).expect("authorize the grant");
+
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let load = load_host_plugins(
+        &global_root,
+        &orbit_dir,
+        &store,
+        &mut registry,
+        &std::collections::BTreeMap::new(),
+    );
+
+    assert!(
+        registry.has("demo.hello") && !registry.is_active("demo.hello"),
+        "the tool name stays addressable but inactive"
+    );
+    let entry = load
+        .registered
+        .iter()
+        .find(|entry| entry.name == "demo")
+        .expect("the plugin is reported");
+    assert_eq!(
+        entry.status,
+        PluginStatus::Inactive,
+        "{:?}",
+        entry.diagnostic
+    );
+    let diagnostic = entry.diagnostic.clone().expect("a diagnostic");
+    assert!(
+        diagnostic.contains("wifi"),
+        "the diagnostic must name the unrecognized grant: {diagnostic}"
+    );
+    assert_eq!(load.diagnostics.len(), 1, "{:?}", load.diagnostics);
+}
+
 /// A row nobody has enabled carries no grants, so there is nothing to verify
 /// and nothing to re-authorize: a host that has never run `orbit plugin enable`
 /// is not broken by the check.

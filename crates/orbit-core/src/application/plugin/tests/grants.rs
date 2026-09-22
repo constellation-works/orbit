@@ -217,6 +217,77 @@ fn sandbox_none_refuses_without_the_grant_and_is_a_doctor_finding_with_it() {
     assert!(!finding.message.contains("runs unsandboxed"), "{finding:?}");
 }
 
+/// `--grant none` is the operator's way to revoke every grant explicitly,
+/// unlike omitting `--grant`, which preserves whatever is recorded. The
+/// witness has to be rewritten for the empty set too, or the row would be
+/// refused as an unauthorized change the next time it loads.
+#[test]
+fn grant_none_records_an_explicit_empty_set_and_rewrites_the_witness() {
+    let fixture = PluginFixture::new();
+    install(&fixture, PluginSpecFixture::new("demo", "demo"));
+
+    enable_plugin(&fixture.runtime, "demo", &grant_options(&["fs"])).expect("grant fs first");
+    let stored = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read plugin row")
+        .expect("installed plugin");
+    assert_eq!(stored.grants, ["fs"]);
+
+    enable_plugin(&fixture.runtime, "demo", &grant_options(&["none"]))
+        .expect("revoke to the explicit empty set");
+    let stored = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read plugin row")
+        .expect("installed plugin");
+    assert!(stored.grants.is_empty(), "{:?}", stored.grants);
+
+    // Reopening re-verifies the row against its witness; if the witness had
+    // not been rewritten for the empty set, this would refuse the plugin as
+    // an unauthorized change rather than show it active with nothing granted.
+    let runtime = fixture.reopen();
+    let summary = show_plugin(&runtime, "demo").expect("show");
+    assert_eq!(summary.status, PluginStatus::Active, "{summary:?}");
+    assert!(summary.granted.is_empty(), "{:?}", summary.granted);
+}
+
+/// `--grant requested` is shorthand for typing out exactly what the manifest
+/// asks for, without an operator having to read `orbit plugin show` first and
+/// retype each name.
+#[test]
+fn grant_requested_grants_exactly_the_manifests_request() {
+    let fixture = PluginFixture::new();
+    install(
+        &fixture,
+        PluginSpecFixture::new("demo", "demo")
+            .requesting_fs_write()
+            .unsandboxed(),
+    );
+
+    enable_plugin(&fixture.runtime, "demo", &grant_options(&["requested"]))
+        .expect("grant exactly what the manifest requests");
+    let stored = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read plugin row")
+        .expect("installed plugin");
+    let mut grants = stored.grants.clone();
+    grants.sort();
+    assert_eq!(grants, ["fs", "unsandboxed"], "{:?}", stored.grants);
+
+    let runtime = fixture.reopen();
+    let summary = show_plugin(&runtime, "demo").expect("show");
+    assert_eq!(summary.status, PluginStatus::Active, "{summary:?}");
+    assert!(summary.unsandboxed);
+}
+
 /// `--grant a,b` as the lifecycle takes it.
 fn grant_options(grants: &[&str]) -> PluginEnableOptions {
     PluginEnableOptions {

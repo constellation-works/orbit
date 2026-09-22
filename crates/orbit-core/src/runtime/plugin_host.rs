@@ -25,7 +25,8 @@ use orbit_tools::plugin::{
 };
 use orbit_types::plugin::{
     InstalledPlugin, PLUGIN_HOST_API, PluginBackendType, PluginGrant, PluginMcpScope,
-    PluginPinFile, PluginProvenance, PluginStatus, SemverRange, Version, plugin_tool_name,
+    PluginPinFile, PluginProvenance, PluginStatus, SemverRange, Version, parse_stored_grants,
+    plugin_tool_name,
 };
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpToolDefinition, McpToolScope};
@@ -632,6 +633,12 @@ pub(crate) fn projected_status(
     if let Some(message) = first_party_row_mismatch(installed, plugin) {
         return ProjectedPluginStatus::inactive(message, false);
     }
+    // Runs before anything below reads `installed.grants` through
+    // `plugin_backend`'s own parse: a name it does not recognize must refuse
+    // the row here, not fall silently out of a `filter_map` there.
+    if let Some(message) = unknown_grant_diagnostic(installed) {
+        return ProjectedPluginStatus::inactive(message, true);
+    }
     // Validate the manifest actually on disk before deciding what a digest
     // mismatch means: an on-disk edit that also breaks the namespace rules
     // (§4.9) is a plain refusal, not tool names inserted as inactive first.
@@ -735,6 +742,17 @@ fn first_party_row_mismatch(installed: &InstalledPlugin, plugin: &LoadedPlugin) 
     }
 }
 
+/// A row's grants contain a name no current [`PluginGrant`] recognizes:
+/// retired, renamed, or written by a newer Orbit. `plugin_backend` would
+/// otherwise drop it with a silent `filter_map`, running the plugin under
+/// fewer grants than the operator authorized without saying so; refusing the
+/// row instead surfaces it, naming the grant it cannot parse.
+fn unknown_grant_diagnostic(installed: &InstalledPlugin) -> Option<String> {
+    parse_stored_grants(&installed.grants)
+        .err()
+        .map(|error| format!("plugin '{}' is refused: {error}", installed.name))
+}
+
 /// The on-disk manifest is not the one this host recorded at install; the
 /// grants apply only to that stored digest (design §4.1).
 fn digest_mismatch_diagnostic(installed: &InstalledPlugin, plugin: &LoadedPlugin) -> String {
@@ -786,10 +804,13 @@ pub(crate) fn plugin_backend(
     plugin: &LoadedPlugin,
     plugin_config: &BTreeMap<String, Value>,
 ) -> PluginBackend {
-    let grants: Vec<PluginGrant> = installed
-        .grants
-        .iter()
-        .filter_map(|name| PluginGrant::parse(name))
+    // A row reaching this point either parsed cleanly, or is on the
+    // register-inactive-tools path where the grant set no longer matters
+    // (`unknown_grant_diagnostic` already refused it); either way there is no
+    // error to surface here.
+    let grants: Vec<PluginGrant> = parse_stored_grants(&installed.grants)
+        .unwrap_or_default()
+        .into_iter()
         .collect();
     // `{{config.<key>}}` resolves against the effective section: what the
     // operator configured in `[plugins.<ns>]`, over what the manifest

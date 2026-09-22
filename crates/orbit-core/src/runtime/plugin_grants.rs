@@ -59,6 +59,7 @@
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::atomic_write_text;
 use orbit_tools::plugin::physical_with_missing_tail;
 use orbit_types::plugin::InstalledPlugin;
 use serde::{Deserialize, Serialize};
@@ -142,9 +143,6 @@ pub fn record_authorized_grants(
     grants: &[String],
 ) -> Result<(), OrbitError> {
     let path = plugin_grant_witness_path(global_root, name);
-    let dir = path.parent().unwrap_or(global_root);
-    std::fs::create_dir_all(dir)
-        .map_err(|error| OrbitError::Io(format!("create {}: {error}", dir.display())))?;
     let witness = GrantAuthorization {
         schema_version: WITNESS_SCHEMA_VERSION,
         plugin: name.to_string(),
@@ -154,7 +152,11 @@ pub fn record_authorized_grants(
     let body = serde_json::to_string_pretty(&witness).map_err(|error| {
         OrbitError::Execution(format!("serialize grant authorization: {error}"))
     })?;
-    std::fs::write(&path, format!("{body}\n"))
+    // Rename-into-place, so a crash mid-write leaves either the previous
+    // witness or the new one, never a truncated file that refuses the plugin
+    // until an operator notices and re-runs `orbit plugin enable`. Creates
+    // `dir` as needed, same as the old explicit `create_dir_all`.
+    atomic_write_text(&path, &format!("{body}\n"))
         .map_err(|error| OrbitError::Io(format!("write {}: {error}", path.display())))?;
     Ok(())
 }
