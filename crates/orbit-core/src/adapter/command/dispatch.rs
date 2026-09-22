@@ -920,7 +920,7 @@ fn apply_callback_resolution(
         CallbackResolution::Identified(identity) => {
             let installed = get_plugin(&identity.name)?;
             stamp_callback_plugin_provenance(&identity, installed.as_ref());
-            refuse_unless_recorded(global_root, installed.as_ref(), &identity.name, name)
+            refuse_unless_recorded(global_root, installed.as_ref(), &identity, name)
         }
         CallbackResolution::InvalidCredential(identity) => {
             if let Some(identity) = identity.as_ref() {
@@ -943,25 +943,57 @@ fn apply_callback_resolution(
     }
 }
 
+/// A callback may do only what *both* halves of its authority still allow.
+///
+/// The recorded install answers "what is this plugin granted now": it is
+/// re-read on every call so revoking a grant, disabling the row, or narrowing
+/// the manifest takes effect on the live session's very next callback. The
+/// host-issued session answers "what was the caller that spawned this child
+/// allowed to reach": it is fixed at mint time, so no later edit to the row —
+/// by an operator, or by the backend itself, which can write its own install
+/// tree — can hand a running child authority its caller never had
+/// [ORB-12801].
+///
+/// Their intersection is therefore monotone downwards for the life of a
+/// session: it can only ever narrow.
 fn refuse_unless_recorded(
     global_root: &Path,
     installed: Option<&InstalledPlugin>,
-    plugin: &str,
+    identity: &PluginCallbackIdentity,
     name: &str,
 ) -> Result<(), OrbitError> {
-    let allowed = match installed {
+    let recorded = match installed {
         Some(installed) => recorded_orbit_tools(global_root, installed)?,
         None => Vec::new(),
     };
-    if allowed.iter().any(|tool| tool == name) {
+    let allowed: Vec<&String> = recorded
+        .iter()
+        .filter(|tool| identity.ceiling_admits(tool))
+        .collect();
+    if allowed.iter().any(|tool| *tool == name) {
         return Ok(());
     }
-    Err(OrbitError::PolicyDenied(format!(
+    let plugin = &identity.name;
+    let mut message = format!(
         "tool '{name}' is not in plugin '{plugin}''s granted orbit_tools allowlist [{}]; the \
          manifest must request it under `permissions.orbit_tools` and the host must grant \
          `orbit_tools`",
-        allowed.join(", ")
-    )))
+        allowed
+            .iter()
+            .map(|tool| tool.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    // Separate the two refusals for the operator: a tool the plugin was never
+    // granted reads differently from one it holds but this caller does not.
+    if recorded.iter().any(|tool| tool == name) {
+        message.push_str(&format!(
+            "; the plugin does request it, but the caller that spawned this backend could reach \
+             only [{}], and a live callback session's authority never widens",
+            identity.effective_tools.join(", ")
+        ));
+    }
+    Err(OrbitError::PolicyDenied(message))
 }
 
 fn stamp_callback_plugin_provenance(

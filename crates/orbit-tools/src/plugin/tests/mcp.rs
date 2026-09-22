@@ -137,6 +137,28 @@ impl Fixture {
         ctx.allowed_tools = allowed.iter().map(|tool| (*tool).to_string()).collect();
         ctx
     }
+
+    /// The `effective_tools` ceiling recorded on every live callback session
+    /// under this fixture's host root, sorted so the set is comparable.
+    fn recorded_session_ceilings(&self) -> Vec<Vec<String>> {
+        let dir = self._host_root.path().join("global/state/plugin-callbacks");
+        let mut ceilings: Vec<Vec<String>> = std::fs::read_dir(&dir)
+            .expect("the host minted a callback session directory")
+            .flatten()
+            .filter_map(|entry| std::fs::read(entry.path()).ok())
+            .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .map(|record| {
+                record["effective_tools"]
+                    .as_array()
+                    .expect("every session record states its ceiling")
+                    .iter()
+                    .map(|tool| tool.as_str().expect("tool name").to_string())
+                    .collect()
+            })
+            .collect();
+        ceilings.sort();
+        ceilings
+    }
 }
 
 #[cfg(unix)]
@@ -350,6 +372,19 @@ fn a_narrower_caller_does_not_inherit_the_wider_session() {
     assert_eq!(
         fourth["pid"], wide_pid,
         "the original wide session is still reused for the same intersection"
+    );
+
+    // Separate children are only half the isolation: each one's host-owned
+    // callback session must record *its* caller's intersection, because that
+    // record — not `ORBIT_ALLOWED_TOOLS`, which the child can rewrite — is
+    // what bounds the callbacks it makes [ORB-12801].
+    assert_eq!(
+        fixture.recorded_session_ceilings(),
+        vec![
+            vec!["orbit.search".to_string(), "orbit.task.show".to_string()],
+            vec!["orbit.task.show".to_string()],
+        ],
+        "each live mcp session carries its own caller's ceiling"
     );
 }
 

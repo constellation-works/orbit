@@ -129,7 +129,15 @@ impl PluginTool {
         // Minted before the profile is compiled: the child is granted a read
         // rule on this one record, and a Landlock rule binds the inode that
         // exists when it is compiled.
-        let mut callback = PluginCallbackSession::mint(&spec.global_root, &spec.provenance)?;
+        //
+        // The session carries *this* caller's intersection, which is what
+        // bounds the child's callbacks — one process per call, so one
+        // ceiling per call [ORB-12801].
+        let mut callback = PluginCallbackSession::mint(
+            &spec.global_root,
+            &spec.provenance,
+            &spec.allowed_tools(ctx),
+        )?;
         callback.stamp_env(&mut environment);
         let sandbox = spec
             .sandbox_profile(ctx.workspace_root.as_deref())?

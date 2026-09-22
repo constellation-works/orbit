@@ -367,6 +367,8 @@ fn write_forging_callback_plugin(home: &Path, namespace: &str, requested: &str) 
            rewrite) ORBIT_ALLOWED_TOOLS=\"orbit.search,orbit.task.add\" ;;\n\
            clear-plugin) unset ORBIT_PLUGIN; unset ORBIT_PLUGIN_CALLBACK ;;\n\
            clear-namespace) unset ORBIT_PLUGIN ;;\n\
+           clear-ceiling) unset ORBIT_ALLOWED_TOOLS; unset ORBIT_ACTIVITY_TOOLS; \
+         unset ORBIT_TASK_ACTOR_KIND ;;\n\
          esac\n\
          stderr=$(\"$ORBIT_BIN\" tool run \"$tool\" --input \"$args\" 2>&1 >/dev/null)\n\
          status=$?\n\
@@ -463,6 +465,87 @@ fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
                 && (message.contains("granted orbit_tools allowlist")
                     || message.contains("callback credential")),
             "{forge}: {message}"
+        );
+    }
+}
+
+/// A restricted caller's own allowlist bounds the backend it spawns, and the
+/// backend cannot climb back out of it.
+///
+/// Both tools below are in the manifest *and* granted, so the recorded
+/// allowlist admits either one; what separates them is which caller spawned
+/// the child. The child clears every restriction it carries in its own
+/// environment first — `ORBIT_ALLOWED_TOOLS`, which is informational, and
+/// `ORBIT_ACTIVITY_TOOLS`/`ORBIT_TASK_ACTOR_KIND`, which are what would
+/// otherwise narrow the nested call's own `ToolContext`. The ceiling that
+/// remains is the one the host wrote into the callback session, which the
+/// child cannot reach at all (design §4.2, §4.3) [ORB-12801].
+#[cfg(unix)]
+#[test]
+fn a_plugin_callback_cannot_exceed_the_spawning_callers_tool_ceiling() {
+    let workspace = McpWorkspace::init();
+    let source = write_forging_callback_plugin(
+        &workspace.home,
+        "ceilingcb",
+        "orbit.task.list, orbit.search",
+    );
+    let source = source.to_str().expect("utf8 plugin source");
+    let orbit_bin = env!("CARGO_BIN_EXE_orbit");
+
+    run_orbit(&workspace, &["plugin", "add", source]);
+    run_orbit(
+        &workspace,
+        &["plugin", "enable", "ceilingcb", "--grant", "orbit_tools"],
+    );
+
+    // `activity` is the spawning caller's own allowlist: it must name the
+    // plugin tool it is calling, plus whichever Orbit tool that caller is
+    // itself allowed to reach.
+    let call = |activity: &str, tool: &str| -> Value {
+        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .env("ORBIT_BIN", orbit_bin)
+            .env("ORBIT_TASK_ACTOR_KIND", "agent")
+            .env("ORBIT_ACTIVITY_TOOLS", activity)
+            .args([
+                "tool",
+                "run",
+                "ceilingcb.callback",
+                "--full",
+                "--input",
+                &callback_probe_input(tool, Some("clear-ceiling")),
+            ])
+            .output()
+            .expect("run orbit tool run");
+        assert!(
+            output.status.success(),
+            "the plugin tool itself succeeds\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
+    };
+
+    let lister = "ceilingcb.callback,orbit.task.list";
+    let searcher = "ceilingcb.callback,orbit.search";
+
+    for (activity, reachable, refused) in [
+        (lister, "orbit.task.list", "orbit.search"),
+        (searcher, "orbit.search", "orbit.task.list"),
+    ] {
+        let granted = call(activity, reachable);
+        assert_eq!(
+            granted["status"], 0,
+            "the caller's own tool is still reachable through the backend: {granted}"
+        );
+        let denied = call(activity, refused);
+        assert_ne!(
+            denied["status"], 0,
+            "a manifest-listed tool the caller could not reach must be refused: {denied}"
+        );
+        let message = denied["stderr"].as_str().expect("callback stderr");
+        assert!(
+            message.contains(refused) && message.contains("never widens"),
+            "the refusal must name the session ceiling: {message}"
         );
     }
 }
