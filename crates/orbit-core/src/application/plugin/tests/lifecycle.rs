@@ -5,8 +5,9 @@ use orbit_types::plugin::PluginStatus;
 
 use super::super::{
     PluginAddOptions, PluginEnableOptions, PluginMigrateRequest, PluginRemoveOptions,
-    disable_plugin, enable_plugin, install_plugin, list_plugins, migrate_plugin_sidecars,
-    plugin_doctor, remove_plugin, show_plugin, sync_plugins, validate_plugin_dir,
+    PluginSeedAction, disable_plugin, enable_plugin, install_plugin, list_plugins,
+    migrate_plugin_sidecars, plugin_doctor, remove_plugin, show_plugin, sync_plugins,
+    validate_plugin_dir,
 };
 use super::definition_fixture::DefinitionPlugin;
 use super::fixture::{PluginFixture, PluginSpecFixture};
@@ -394,6 +395,75 @@ fn failed_enabled_contributions_leave_the_installed_row_disabled() {
             .expect("show")
             .status,
         PluginStatus::Disabled
+    );
+}
+
+/// `orbit plugin add --enable` used to run the same enable as `orbit plugin
+/// enable` and then discard everything it produced beyond the install
+/// summary: seeded routines and auto-tasks, linked skills, and warnings
+/// (including a grant the manifest did not request) were all invisible on
+/// this path [ORB-12807].
+#[test]
+fn add_enable_carries_the_seeded_skills_and_warnings_report_out_of_install() {
+    let fixture = PluginFixture::new();
+    let source = DefinitionPlugin::new("graph").write(&fixture);
+
+    let result = fixture
+        .runtime
+        .add_plugin(
+            source.to_str().expect("utf8 path"),
+            &PluginAddOptions {
+                enable: true,
+                grants: vec!["fs".to_string()],
+                ..PluginAddOptions::default()
+            },
+        )
+        .expect("install and enable the fixture plugin");
+
+    assert_eq!(result.summary.status, PluginStatus::Active, "{result:?}");
+
+    let seeded_contains = |kind: &str, name: &str| {
+        result
+            .seeded
+            .iter()
+            .any(|outcome| outcome.kind == kind && outcome.name == name)
+    };
+    assert!(
+        seeded_contains("routine", "graph-refresh"),
+        "{:?}",
+        result.seeded
+    );
+    assert!(
+        seeded_contains("auto_task", "graph-reindex"),
+        "{:?}",
+        result.seeded
+    );
+    assert!(
+        result
+            .seeded
+            .iter()
+            .all(|outcome| outcome.action == PluginSeedAction::Created),
+        "a fresh install must seed both definitions as created: {:?}",
+        result.seeded
+    );
+
+    assert!(
+        !result.skills.is_empty()
+            && result
+                .skills
+                .iter()
+                .all(|link| link.skill_id == "graph-graph"),
+        "the shipped skill must be linked, not dropped, on the add --enable path: {:?}",
+        result.skills
+    );
+
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("grant `fs`") && warning.contains("does not request")),
+        "an unrequested grant must warn on add --enable the same way it does on enable: {:?}",
+        result.warnings
     );
 }
 

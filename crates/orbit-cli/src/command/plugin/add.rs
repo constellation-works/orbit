@@ -4,7 +4,7 @@ use orbit_core::adapter::command::PluginAddOptions;
 
 use crate::command::{CommandOut, Execute, Payload};
 
-use super::support::plugin_record;
+use super::support::{append_enable_report_text, enable_report_json, plugin_record};
 
 #[derive(Args)]
 pub struct PluginAddArgs {
@@ -25,7 +25,7 @@ pub struct PluginAddArgs {
 
 impl Execute for PluginAddArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let summary = runtime.add_plugin(
+        let result = runtime.add_plugin(
             &self.source,
             &PluginAddOptions {
                 force: self.force,
@@ -33,6 +33,7 @@ impl Execute for PluginAddArgs {
                 grants: self.grants,
             },
         )?;
+        let summary = &result.summary;
         let mut text = format!(
             "Installed plugin '{}' v{} to {}",
             summary.name, summary.version, summary.install_path
@@ -53,6 +54,14 @@ impl Execute for PluginAddArgs {
                 summary.name
             ));
         }
-        Ok(Payload::detail(plugin_record(&summary), text).into())
+        // Same report `orbit plugin enable` renders, carried out of the
+        // install rather than collapsed into the summary, so the seeded
+        // schedules, skill links and warnings `--enable` produced here are
+        // not only visible on the two-step `add` then `enable` path.
+        append_enable_report_text(&mut text, &result.seeded, &result.skills, &result.warnings);
+
+        let mut doc = plugin_record(summary);
+        enable_report_json(&mut doc, &result.seeded, &result.skills, &result.warnings);
+        Ok(Payload::detail(doc, text).into())
     }
 }

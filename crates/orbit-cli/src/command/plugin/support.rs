@@ -1,4 +1,4 @@
-use orbit_core::adapter::command::PluginSummary;
+use orbit_core::adapter::command::{PluginSeedOutcome, PluginSkillLink, PluginSummary};
 use serde_json::{Value, json};
 
 /// JSON projection shared by `list` and `show`.
@@ -55,4 +55,75 @@ pub(super) fn plugin_record(summary: &PluginSummary) -> Value {
             }))
             .collect::<Vec<_>>(),
     })
+}
+
+/// The seeded-schedule / skill-link / warning report `orbit plugin enable`
+/// and `orbit plugin add --enable` both produce, rendered identically so the
+/// two ways of enabling a plugin never disagree about what happened.
+pub(super) fn append_enable_report_text(
+    text: &mut String,
+    seeded: &[PluginSeedOutcome],
+    skills: &[PluginSkillLink],
+    warnings: &[String],
+) {
+    for outcome in seeded {
+        text.push_str(&format!(
+            "\n  {} {} {} ({})",
+            outcome.kind,
+            outcome.name,
+            outcome.action.as_str(),
+            outcome.path.display()
+        ));
+    }
+    if !seeded.is_empty() {
+        text.push_str(
+            "\n  Seeded schedules are disabled; review one, then set `enabled: true` to run it.",
+        );
+    }
+    for link in skills {
+        text.push_str(&format!(
+            "\n  skill {} linked at {}",
+            link.skill_id,
+            link.link.display()
+        ));
+    }
+    for warning in warnings {
+        text.push_str(&format!("\n  warning: {warning}"));
+    }
+}
+
+/// JSON projection matching [`append_enable_report_text`].
+pub(super) fn enable_report_json(
+    doc: &mut Value,
+    seeded: &[PluginSeedOutcome],
+    skills: &[PluginSkillLink],
+    warnings: &[String],
+) {
+    doc["seeded"] = serde_json::Value::Array(
+        seeded
+            .iter()
+            .map(|outcome| {
+                json!({
+                    "kind": outcome.kind,
+                    "name": outcome.name,
+                    "path": outcome.path.display().to_string(),
+                    "action": outcome.action.as_str(),
+                    "warning": outcome.warning,
+                })
+            })
+            .collect(),
+    );
+    doc["skills"] = serde_json::Value::Array(
+        skills
+            .iter()
+            .map(|link| {
+                json!({
+                    "skill_id": link.skill_id,
+                    "link": link.link.display().to_string(),
+                    "target": link.target.display().to_string(),
+                })
+            })
+            .collect(),
+    );
+    doc["warnings"] = json!(warnings);
 }

@@ -248,7 +248,7 @@ fn set_enabled(
     Ok(summary)
 }
 
-fn unrequested_grant_warnings(
+pub(super) fn unrequested_grant_warnings(
     plugin: &orbit_tools::plugin::LoadedPlugin,
     grants: &[String],
 ) -> Vec<String> {

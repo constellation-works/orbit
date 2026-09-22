@@ -22,6 +22,9 @@ use crate::runtime::plugin_grants::{record_authorized_grants, verify_install_pat
 use crate::runtime::plugin_host::{plugin_install_path, plugin_namespace_dir, projected_status};
 
 use super::inspect::{PluginSummary, summary_for_installed};
+use super::lifecycle::unrequested_grant_warnings;
+use super::seed::PluginSeedOutcome;
+use super::skills::PluginSkillLink;
 
 #[derive(Debug, Clone, Default)]
 pub struct PluginAddOptions {
@@ -59,10 +62,16 @@ pub struct PluginUpgradeResult {
     pub grants_reset: bool,
 }
 
-struct PluginInstallOutcome {
-    summary: PluginSummary,
+pub(crate) struct PluginInstallOutcome {
+    pub(crate) summary: PluginSummary,
     permission_changes: Vec<PluginPermissionChange>,
     grants_reset: bool,
+    /// Routines and auto-tasks seeded by `--enable`; empty otherwise.
+    pub(crate) seeded: Vec<PluginSeedOutcome>,
+    /// Skill links maintained by `--enable`; empty otherwise.
+    pub(crate) skills: Vec<PluginSkillLink>,
+    /// Non-fatal problems `--enable` surfaced; empty otherwise.
+    pub(crate) warnings: Vec<String>,
 }
 
 /// Install `source` for this host: a local directory, a `git+<url>#<ref>`
@@ -73,6 +82,18 @@ pub fn install_plugin(
     options: &PluginAddOptions,
 ) -> Result<PluginSummary, OrbitError> {
     install_plugin_inner(runtime, source, options, None).map(|outcome| outcome.summary)
+}
+
+/// Same install as [`install_plugin`], but keeping the enable-time report
+/// (seeded schedules, linked skills, warnings) that `--enable` produced, so
+/// the adapter boundary can render `add --enable` the same way `orbit plugin
+/// enable` does instead of collapsing it into the install summary.
+pub(crate) fn install_plugin_reporting_enable(
+    runtime: &OrbitRuntime,
+    source: &str,
+    options: &PluginAddOptions,
+) -> Result<PluginInstallOutcome, OrbitError> {
+    install_plugin_inner(runtime, source, options, None)
 }
 
 struct ExpectedPluginIdentity<'a> {
@@ -320,12 +341,24 @@ fn install_plugin_inner(
     // rules contributes nothing and is reported inactive — the refusal belongs
     // to the load, which states it on every later command, so it is not raised
     // as this command's error and the install record stands.
+    let mut seeded_outcomes = Vec::new();
+    let mut skill_links = Vec::new();
+    let mut enable_warnings = Vec::new();
     let contributions_refused = if enabled {
         // `--force` on `add` replaces an install of the same version; it is
         // deliberately not an answer about a definition the operator edited.
         // Overwriting one of those stays `orbit plugin enable <ns> --force`.
         match super::lifecycle::apply_enabled_contributions(runtime, &install_path, false) {
-            Ok(_) => None,
+            Ok(contributions) => {
+                // Same report `orbit plugin enable` returns, so the two ways
+                // of enabling render identically rather than this path
+                // silently dropping it into the install summary.
+                enable_warnings = unrequested_grant_warnings(&plugin, &record.grants);
+                enable_warnings.extend(contributions.warnings);
+                seeded_outcomes = contributions.seeded;
+                skill_links = contributions.skills;
+                None
+            }
             Err(error) => {
                 tracing::warn!(
                     target: "orbit.core.plugin",
@@ -382,6 +415,9 @@ fn install_plugin_inner(
         summary,
         permission_changes,
         grants_reset,
+        seeded: seeded_outcomes,
+        skills: skill_links,
+        warnings: enable_warnings,
     })
 }
 

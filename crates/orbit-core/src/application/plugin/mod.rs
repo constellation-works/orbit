@@ -37,6 +37,7 @@ pub use inspect::{
     PluginDoctorResult, PluginPermissionSummary, PluginSummary, PluginToolSummary,
     PluginValidationReport, list_plugins, plugin_doctor, show_plugin, validate_plugin_dir,
 };
+pub(crate) use install::install_plugin_reporting_enable;
 pub use install::{
     PluginAddOptions, PluginPermissionChange, PluginUpgradeOptions, PluginUpgradeResult,
     install_plugin, upgrade_plugin,
