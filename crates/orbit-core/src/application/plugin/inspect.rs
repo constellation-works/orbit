@@ -21,8 +21,8 @@ use super::panels::{PluginLinkSummary, PluginPanelSummary, web_summaries};
 use crate::OrbitRuntime;
 use crate::runtime::plugin_config::plugin_config_section;
 use crate::runtime::plugin_host::{
-    build_plugin_backend, load_installed_plugin, plugin_backend, plugin_state_dir, read_pin_file,
-    unmet_requirement,
+    build_plugin_backend, host_api_deprecation, load_installed_plugin, plugin_backend,
+    plugin_state_dir, read_pin_file, unmet_requirement,
 };
 
 /// One plugin tool as the CLI reports it.
@@ -179,6 +179,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     let stale_seeded = stale_seeded_definition_rows(runtime, &summaries)?;
     let archive_drift = archive_digest_drift_rows(runtime, &summaries)?;
     let scoped_out = scoped_out_fs_root_rows(runtime)?;
+    let host_api_deprecated = host_api_deprecation_rows(runtime);
     // A skill link whose target is gone is invisible to the skill catalog's
     // own doctor — it only walks seeded trees — and to the plugin record,
     // which says nothing about the provider discovery roots (§3).
@@ -243,10 +244,30 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     rows.extend(stale_seeded);
     rows.extend(archive_drift);
     rows.extend(scoped_out);
+    rows.extend(host_api_deprecated);
     if let Some(finding) = invalid_pin_file {
         rows.push(finding);
     }
     Ok(rows)
+}
+
+/// Findings for a plugin running on the `host_api` previous-major grace
+/// window (§4.8): still active, but due to refuse once this host drops it.
+fn host_api_deprecation_rows(runtime: &OrbitRuntime) -> Vec<PluginDoctorResult> {
+    runtime
+        .plugin_load()
+        .registered
+        .iter()
+        .filter_map(|entry| {
+            let plugin = entry.loaded.as_deref()?;
+            let message = host_api_deprecation(plugin)?;
+            Some(PluginDoctorResult {
+                plugin: entry.name.clone(),
+                status: entry.status,
+                message,
+            })
+        })
+        .collect()
 }
 
 /// Findings for a plugin whose `fs` grant is scoped past a root its own
@@ -496,6 +517,9 @@ pub fn validate_plugin_dir(
         }
     }
     if let Some(message) = unmet_requirement(&plugin) {
+        warnings.push(message);
+    }
+    if let Some(message) = host_api_deprecation(&plugin) {
         warnings.push(message);
     }
     if let Some(web) = plugin.manifest.spec.web.as_ref()

@@ -39,7 +39,7 @@ fn copy_tree(source: &Path, target: &Path) {
 fn manifest_field(error: PluginLoadError) -> String {
     match error {
         PluginLoadError::Manifest(error) => error.field,
-        PluginLoadError::Io(message) => panic!("expected a manifest error, got io: {message}"),
+        other => panic!("expected a manifest error, got: {other}"),
     }
 }
 

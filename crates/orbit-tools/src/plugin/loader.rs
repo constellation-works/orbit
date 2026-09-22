@@ -32,13 +32,43 @@ pub const FIRST_PARTY_MANIFEST_DIGESTS: &[&str] = &[];
 pub enum PluginLoadError {
     #[error("{0}")]
     Manifest(#[from] PluginManifestError),
+    /// A filesystem operation reading the plugin tree failed. `kind` is kept
+    /// alongside the formatted message so the `OrbitError` conversion can
+    /// tell a caller-fixable "no such file" from a host-side
+    /// `PermissionDenied` refusal, instead of collapsing every read failure
+    /// into the same error shape.
+    #[error("{message}")]
+    Io {
+        message: String,
+        kind: std::io::ErrorKind,
+    },
+    /// A plugin tree entry is a symbolic link (§4.9): fail-closed security
+    /// policy, not a data problem with the manifest.
     #[error("{0}")]
-    Io(String),
+    SymlinkRefused(String),
+}
+
+impl PluginLoadError {
+    fn io(message: String, kind: std::io::ErrorKind) -> Self {
+        Self::Io { message, kind }
+    }
 }
 
 impl From<PluginLoadError> for OrbitError {
     fn from(error: PluginLoadError) -> Self {
-        OrbitError::InvalidInput(error.to_string())
+        match &error {
+            PluginLoadError::Manifest(_) => OrbitError::InvalidInput(error.to_string()),
+            PluginLoadError::SymlinkRefused(_) => OrbitError::PolicyDenied(error.to_string()),
+            // `NotFound` is ordinary bad input (a path that does not name a
+            // plugin); `PermissionDenied` is the host's own access control
+            // refusing the read, which is a policy refusal, not invalid
+            // input. Anything else is a genuine I/O failure.
+            PluginLoadError::Io { kind, .. } => match kind {
+                std::io::ErrorKind::NotFound => OrbitError::InvalidInput(error.to_string()),
+                std::io::ErrorKind::PermissionDenied => OrbitError::PolicyDenied(error.to_string()),
+                _ => OrbitError::Io(error.to_string()),
+            },
+        }
     }
 }
 
@@ -138,18 +168,20 @@ pub fn refuse_plugin_tree_symlinks(root: &Path) -> Result<(), PluginLoadError> {
 }
 
 fn refuse_plugin_tree_symlinks_in(root: &Path, dir: &Path) -> Result<(), PluginLoadError> {
-    let entries = std::fs::read_dir(dir)
-        .map_err(|error| PluginLoadError::Io(format!("read {}: {error}", dir.display())))?;
+    let entries = std::fs::read_dir(dir).map_err(|error| {
+        PluginLoadError::io(format!("read {}: {error}", dir.display()), error.kind())
+    })?;
     for entry in entries {
-        let entry = entry
-            .map_err(|error| PluginLoadError::Io(format!("read {}: {error}", dir.display())))?;
+        let entry = entry.map_err(|error| {
+            PluginLoadError::io(format!("read {}: {error}", dir.display()), error.kind())
+        })?;
         let path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|error| PluginLoadError::Io(format!("stat {}: {error}", path.display())))?;
+        let file_type = entry.file_type().map_err(|error| {
+            PluginLoadError::io(format!("stat {}: {error}", path.display()), error.kind())
+        })?;
         if file_type.is_symlink() {
             let target = std::fs::read_link(&path).ok();
-            return Err(PluginLoadError::Io(plugin_symlink_refusal(
+            return Err(PluginLoadError::SymlinkRefused(plugin_symlink_refusal(
                 path.strip_prefix(root).unwrap_or(&path),
                 target.as_deref(),
             )));
@@ -182,12 +214,18 @@ pub fn plugin_symlink_refusal(entry: &Path, target: Option<&Path>) -> String {
 /// inside the root, and locate the backend command.
 pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
     let root = std::fs::canonicalize(root).map_err(|error| {
-        PluginLoadError::Io(format!("plugin root '{}': {error}", root.display()))
+        PluginLoadError::io(
+            format!("plugin root '{}': {error}", root.display()),
+            error.kind(),
+        )
     })?;
     refuse_plugin_tree_symlinks(&root)?;
     let manifest_path = root.join(MANIFEST_FILE_NAME);
     let bytes = std::fs::read(&manifest_path).map_err(|error| {
-        PluginLoadError::Io(format!("cannot read {}: {error}", manifest_path.display()))
+        PluginLoadError::io(
+            format!("cannot read {}: {error}", manifest_path.display()),
+            error.kind(),
+        )
     })?;
     let manifest: PluginManifest = serde_yaml::from_slice(&bytes).map_err(|error| {
         PluginManifestError::new(

@@ -237,6 +237,22 @@ fn a_conformance_case_for_an_undeclared_tool_refuses_load() {
     );
 }
 
+/// A plugin root that does not exist is ordinary bad input (a wrong path
+/// given to `orbit plugin add`), not a policy refusal, so it keeps mapping to
+/// `InvalidInput` — the `std::io::ErrorKind` carried on `PluginLoadError::Io`
+/// is what lets the `OrbitError` conversion tell this apart from the
+/// `PermissionDenied` case, which does map to `PolicyDenied` [ORB-12837].
+#[test]
+fn load_plugin_dir_reports_a_missing_root_as_invalid_input() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let missing = temp.path().join("absent");
+    let error = load_plugin_dir(&missing).expect_err("a missing root must refuse load");
+    assert!(matches!(
+        orbit_common::OrbitError::from(error),
+        orbit_common::OrbitError::InvalidInput(_)
+    ));
+}
+
 #[cfg(unix)]
 #[test]
 fn load_plugin_dir_refuses_an_installed_tree_that_contains_a_symlink() {
@@ -246,9 +262,18 @@ fn load_plugin_dir_refuses_an_installed_tree_that_contains_a_symlink() {
     std::fs::write(&secret, "SECRET-CONTENT-OUTSIDE-PLUGIN-TREE").expect("secret");
     std::os::unix::fs::symlink(&secret, temp.path().join("env")).expect("symlink");
 
-    let error = load_plugin_dir(temp.path())
-        .expect_err("a planted symlink must refuse load")
-        .to_string();
+    let error = load_plugin_dir(temp.path()).expect_err("a planted symlink must refuse load");
+    // A symlink refusal is fail-closed security policy (§4.9), not a
+    // malformed-manifest problem, so it must surface as `PolicyDenied`
+    // rather than `InvalidInput` [ORB-12837].
+    assert!(
+        matches!(
+            orbit_common::OrbitError::from(error.clone()),
+            orbit_common::OrbitError::PolicyDenied(_)
+        ),
+        "{error:?}"
+    );
+    let error = error.to_string();
     assert!(
         error.contains("env"),
         "refusal must name the offending entry: {error}"

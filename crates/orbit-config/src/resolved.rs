@@ -284,6 +284,8 @@ impl ResolvedConfig {
             compatibility_keys.warn(config_path);
         }
 
+        let plugins = plugin_sections_from_raw(parsed.plugins.as_ref(), config_path)?;
+
         Ok(Self {
             execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot),
             codex_execution: CodexExecutionPolicy::from_snapshot(&snapshot),
@@ -307,7 +309,7 @@ impl ResolvedConfig {
             operation,
             tasks_id_start: snapshot.tasks_id_start,
             ignored_crew_properties,
-            plugins: plugin_sections_from_raw(parsed.plugins.as_ref(), config_path)?,
+            plugins,
             snapshot,
         })
     }
