@@ -10,6 +10,111 @@ use super::super::{
 };
 use super::fixture::{PluginFixture, PluginSpecFixture, write_plugin_at};
 
+#[cfg(unix)]
+fn enter_fake_git_install_child(test: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let module = module_path!()
+        .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+        .unwrap_or(module_path!());
+    let exact_test = format!("{module}::{test}");
+    if std::env::var("ORBIT_TEST_PLUGIN_GIT_INSTALL_CHILD")
+        .ok()
+        .as_deref()
+        == Some(&exact_test)
+    {
+        return true;
+    }
+
+    let temp = tempfile::tempdir().expect("fake git directory");
+    let git = temp.path().join("git");
+    std::fs::write(
+        &git,
+        r#"#!/bin/sh
+set -eu
+checkout=''
+for arg in "$@"; do checkout=$arg; done
+mkdir -p "$checkout/bin"
+cat > "$checkout/plugin.yaml" <<'EOF'
+schemaVersion: 2
+kind: Plugin
+metadata:
+  name: demo
+  version: 1.2.3
+  description: Git fixture.
+spec:
+  backend:
+    type: exec
+    command: bin/backend.sh
+  tools:
+    - name: hello
+      description: Hello.
+      execution_kind: read_only
+EOF
+printf '#!/bin/sh\n' > "$checkout/bin/backend.sh"
+chmod +x "$checkout/bin/backend.sh"
+"#,
+    )
+    .expect("write fake git");
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755))
+        .expect("make fake git executable");
+    let mut paths = vec![temp.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let output = Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", &exact_test, "--nocapture"])
+        .env("ORBIT_TEST_PLUGIN_GIT_INSTALL_CHILD", &exact_test)
+        .env("PATH", std::env::join_paths(paths).expect("fake git PATH"))
+        .output()
+        .expect("run isolated fake-git install test");
+    assert!(
+        output.status.success(),
+        "fake-git install child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    false
+}
+
+#[cfg(unix)]
+#[test]
+fn add_installs_a_tagged_https_git_source() {
+    if !enter_fake_git_install_child("add_installs_a_tagged_https_git_source") {
+        return;
+    }
+    let fixture = PluginFixture::new();
+    let summary = install_plugin(
+        &fixture.runtime,
+        "git+https://example.com/demo.git#v1.2.3",
+        &PluginAddOptions::default(),
+    )
+    .expect("install tagged HTTPS Git source");
+    assert_eq!(summary.name, "demo");
+    assert_eq!(summary.version, "1.2.3");
+    assert_eq!(summary.status, PluginStatus::Disabled);
+}
+
+#[test]
+fn add_refuses_unsafe_git_source_entries() {
+    let fixture = PluginFixture::new();
+    for source in [
+        "git+ext::sh -c 'exit 0' %S",
+        "git+file:///tmp/plugin",
+        "git+-uplugin",
+        "git+https://example.com/demo.git#-upload-pack=payload",
+    ] {
+        let error = install_plugin(&fixture.runtime, source, &PluginAddOptions::default())
+            .expect_err("unsafe Git source must be refused")
+            .to_string();
+        assert!(
+            error.contains(source),
+            "add refusal must name source entry {source:?}: {error}"
+        );
+    }
+}
+
 #[test]
 fn add_refuses_a_source_inside_the_repository() {
     let fixture = PluginFixture::new();

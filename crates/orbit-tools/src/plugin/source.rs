@@ -65,6 +65,17 @@ fn clone_git_source(spec: &str) -> Result<ResolvedSource, OrbitError> {
             "plugin source 'git+' names no repository URL".to_string(),
         ));
     }
+    if !allowed_git_url(url) {
+        return Err(OrbitError::InvalidInput(format!(
+            "plugin source 'git+{spec}' uses an unsupported Git repository URL; use an `https://`, \
+             `ssh://`, or `git@host:path` URL"
+        )));
+    }
+    if reference.is_some_and(|value| value.starts_with('-')) {
+        return Err(OrbitError::InvalidInput(format!(
+            "plugin source 'git+{spec}' has a Git ref beginning with `-`, which is not allowed"
+        )));
+    }
     let scratch = tempfile::Builder::new()
         .prefix("orbit-plugin-src-")
         .tempdir()
@@ -77,6 +88,7 @@ fn clone_git_source(spec: &str) -> Result<ResolvedSource, OrbitError> {
         args.push("--branch".to_string());
         args.push(reference.to_string());
     }
+    args.push("--".to_string());
     args.push(url.to_string());
     args.push(checkout_arg);
     run_git(args, None)?;
@@ -98,15 +110,48 @@ fn clone_git_source(spec: &str) -> Result<ResolvedSource, OrbitError> {
     })
 }
 
+fn allowed_git_url(url: &str) -> bool {
+    if ["https://", "ssh://"].iter().any(|prefix| {
+        url.strip_prefix(prefix)
+            .is_some_and(|rest| !rest.is_empty())
+    }) {
+        return true;
+    }
+    let Some((host, path)) = url
+        .strip_prefix("git@")
+        .and_then(|rest| rest.split_once(':'))
+    else {
+        return false;
+    };
+    !host.is_empty()
+        && !path.is_empty()
+        && !host.starts_with('-')
+        && !host.chars().any(char::is_whitespace)
+}
+
 fn run_git(args: Vec<String>, current_dir: Option<String>) -> Result<(), OrbitError> {
+    let mut args_with_protocol_policy = vec![
+        "-c".to_string(),
+        "protocol.allow=never".to_string(),
+        "-c".to_string(),
+        "protocol.https.allow=always".to_string(),
+        "-c".to_string(),
+        "protocol.ssh.allow=always".to_string(),
+    ];
+    args_with_protocol_policy.extend(args);
+    let mut environment = allowlisted_child_env(&[], &[]);
+    environment.extend([
+        ("GIT_PROTOCOL_FROM_USER".to_string(), "0".to_string()),
+        ("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()),
+    ]);
     let result = run_process(
         &ExecRequest {
             program: "git".to_string(),
-            args,
+            args: args_with_protocol_policy,
             current_dir,
             timeout_ms: Some(TIMEOUT_LONG_MS),
             stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::ClearAndSet(allowlisted_child_env(&[], &[])),
+            environment_mode: EnvironmentMode::ClearAndSet(environment),
             debug: false,
         },
         &NoSandbox,

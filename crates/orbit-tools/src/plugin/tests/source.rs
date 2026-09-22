@@ -71,6 +71,54 @@ fn assert_refuses_symlink(error: &str, entry: &str) {
     );
 }
 
+#[cfg(unix)]
+fn enter_fake_git_child(test: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let module = module_path!()
+        .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+        .unwrap_or(module_path!());
+    let exact_test = format!("{module}::{test}");
+    if std::env::var("ORBIT_TEST_PLUGIN_GIT_CHILD").ok().as_deref() == Some(&exact_test) {
+        return true;
+    }
+
+    let temp = tempfile::tempdir().expect("fake git directory");
+    let args_capture = temp.path().join("args");
+    let env_capture = temp.path().join("env");
+    let quote =
+        |value: &std::path::Path| format!("'{}'", value.to_string_lossy().replace('\'', "'\"'\"'"));
+    let script = format!(
+        "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$@\" > {args}\nenv | sort > {env}\ncheckout=''\nfor arg in \"$@\"; do checkout=$arg; done\nmkdir -p \"$checkout\"\nprintf 'schemaVersion: 2\\nkind: Plugin\\n' > \"$checkout/plugin.yaml\"\n",
+        args = quote(&args_capture),
+        env = quote(&env_capture),
+    );
+    let git = temp.path().join("git");
+    std::fs::write(&git, script).expect("write fake git");
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755))
+        .expect("make fake git executable");
+    let mut paths = vec![temp.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let output = Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", &exact_test, "--nocapture"])
+        .env("ORBIT_TEST_PLUGIN_GIT_CHILD", &exact_test)
+        .env("ORBIT_TEST_PLUGIN_GIT_ARGS", &args_capture)
+        .env("ORBIT_TEST_PLUGIN_GIT_ENV", &env_capture)
+        .env("PATH", std::env::join_paths(paths).expect("fake git PATH"))
+        .output()
+        .expect("run isolated fake-git test");
+    assert!(
+        output.status.success(),
+        "fake-git child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    false
+}
+
 #[test]
 fn a_tar_archive_with_a_symlink_entry_is_refused_before_the_tree_is_returned() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -125,5 +173,94 @@ fn a_directory_source_with_a_symlink_to_a_file_outside_the_tree_is_refused() {
     assert!(
         !error.contains("SECRET-CONTENT-OUTSIDE-PLUGIN-TREE"),
         "the diagnostic names the link, not the target file's bytes: {error}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unsafe_git_sources_are_refused_before_git_is_spawned() {
+    if !enter_fake_git_child("unsafe_git_sources_are_refused_before_git_is_spawned") {
+        return;
+    }
+    let args_capture = std::path::PathBuf::from(
+        std::env::var_os("ORBIT_TEST_PLUGIN_GIT_ARGS").expect("args capture path"),
+    );
+    for source in [
+        "git+ext::sh -c 'exit 0' %S",
+        "git+file:///tmp/plugin",
+        "git+-uplugin",
+        "git+https://example.com/demo.git#-upload-pack=payload",
+    ] {
+        let error = resolve_plugin_source(source)
+            .expect_err("unsafe Git source must be refused")
+            .to_string();
+        assert!(
+            error.contains(source),
+            "refusal must name the source entry {source:?}: {error}"
+        );
+    }
+    assert!(
+        !args_capture.exists(),
+        "Git must not be spawned for any refused source"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn tagged_https_git_source_uses_hardened_argv_and_environment() {
+    if !enter_fake_git_child("tagged_https_git_source_uses_hardened_argv_and_environment") {
+        return;
+    }
+    let resolved = resolve_plugin_source("git+https://example.com/demo.git#v1.2.3")
+        .expect("tagged HTTPS source resolves");
+    assert!(resolved.root.join(MANIFEST_FILE_NAME).is_file());
+
+    let args = std::fs::read_to_string(
+        std::env::var_os("ORBIT_TEST_PLUGIN_GIT_ARGS").expect("args capture path"),
+    )
+    .expect("read Git argv")
+    .lines()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+    assert_eq!(
+        &args[..args.len() - 1],
+        [
+            "-c",
+            "protocol.allow=never",
+            "-c",
+            "protocol.https.allow=always",
+            "-c",
+            "protocol.ssh.allow=always",
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            "v1.2.3",
+            "--",
+            "https://example.com/demo.git",
+        ],
+        "Git protocol policy and option terminator must precede the URL"
+    );
+    assert_eq!(
+        args.last().map(String::as_str),
+        Some(resolved.root.to_str().expect("UTF-8 checkout path")),
+        "the final argument is the checkout path"
+    );
+
+    let environment = std::fs::read_to_string(
+        std::env::var_os("ORBIT_TEST_PLUGIN_GIT_ENV").expect("environment capture path"),
+    )
+    .expect("read Git environment");
+    assert!(
+        environment
+            .lines()
+            .any(|line| line == "GIT_PROTOCOL_FROM_USER=0"),
+        "Git must not honor user-selected protocols: {environment}"
+    );
+    assert!(
+        environment
+            .lines()
+            .any(|line| line == "GIT_TERMINAL_PROMPT=0"),
+        "Git must not prompt for credentials: {environment}"
     );
 }
