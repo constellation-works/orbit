@@ -1,9 +1,12 @@
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
-use orbit_types::plugin::MANIFEST_FILE_NAME;
+use orbit_types::plugin::{MANIFEST_FILE_NAME, PluginProvenance};
 
+use super::super::backend::PluginBackendSpec;
 use super::super::loader::{
-    first_party_source, fs_write_root_covers, load_plugin_dir, refuse_covering_fs_write_roots,
+    LoadedPlugin, first_party_source, fs_write_root_covers, load_plugin_dir,
+    refuse_covering_fs_write_roots,
 };
 
 const MANIFEST: &str = "\
@@ -27,6 +30,36 @@ fn write_plugin(root: &Path) {
     std::fs::create_dir_all(root.join("bin")).expect("mkdir");
     std::fs::write(root.join(MANIFEST_FILE_NAME), MANIFEST).expect("manifest");
     std::fs::write(root.join("bin/backend.sh"), "#!/bin/sh\n").expect("backend");
+}
+
+fn backend_spec(
+    plugin: &LoadedPlugin,
+    global_root: &Path,
+    state_dir: PathBuf,
+) -> PluginBackendSpec {
+    let grants = plugin.manifest.required_grants();
+    PluginBackendSpec {
+        provenance: PluginProvenance {
+            name: plugin.namespace().to_string(),
+            version: plugin.manifest.metadata.version.clone(),
+            manifest_digest: plugin.manifest_digest.clone(),
+            grants: grants
+                .iter()
+                .map(|grant| grant.as_str().to_string())
+                .collect(),
+        },
+        plugin_root: plugin.root.clone(),
+        state_dir,
+        global_root: global_root.to_path_buf(),
+        command: plugin.backend_command.clone(),
+        args: plugin.manifest.spec.backend.args.clone(),
+        timeout_ms: plugin.manifest.spec.backend.timeout_ms,
+        sandbox: plugin.manifest.spec.backend.sandbox,
+        permissions: plugin.manifest.spec.permissions.clone(),
+        programs: plugin.manifest.spec.requires.programs.clone(),
+        config_values: BTreeMap::new(),
+        grants,
+    }
 }
 
 #[test]
@@ -375,13 +408,14 @@ fn load_refuses_a_manifest_whose_fs_write_covers_the_plugin_root() {
     .expect("covering write");
     let plugin = load_plugin_dir(temp.path()).expect("load");
     let global_root = temp.path().join("global");
-    let error = refuse_covering_fs_write_roots(
+    let spec = backend_spec(
         &plugin,
         &global_root,
-        &global_root.join("state/plugins/demo"),
-    )
-    .expect_err("plugin-root write is refused")
-    .to_string();
+        global_root.join("state/plugins/demo"),
+    );
+    let error = refuse_covering_fs_write_roots(&spec, None)
+        .expect_err("plugin-root write is refused")
+        .to_string();
     assert!(
         error.contains("spec.permissions.fs.write[0]") && error.contains("plugin install root"),
         "{error}"
@@ -412,7 +446,8 @@ fn validate_and_registration_refuse_workspace_metadata_but_allow_a_sibling() {
         )
         .expect("write permission");
         let plugin = load_plugin_dir(temp.path()).expect("load");
-        let error = refuse_covering_fs_write_roots(&plugin, &global_root, &plugin_state)
+        let spec = backend_spec(&plugin, &global_root, plugin_state.clone());
+        let error = refuse_covering_fs_write_roots(&spec, None)
             .expect_err("workspace metadata write must be refused before call time")
             .to_string();
         assert!(
@@ -436,7 +471,8 @@ fn validate_and_registration_refuse_workspace_metadata_but_allow_a_sibling() {
     )
     .expect("write permission");
     let plugin = load_plugin_dir(allowed.path()).expect("load");
-    refuse_covering_fs_write_roots(&plugin, &global_root, &plugin_state)
+    let spec = backend_spec(&plugin, &global_root, plugin_state);
+    refuse_covering_fs_write_roots(&spec, None)
         .expect("a similarly named workspace directory is not Orbit metadata");
 }
 

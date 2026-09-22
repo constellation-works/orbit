@@ -79,7 +79,7 @@ impl Fixture {
             sandbox: plugin.manifest.spec.backend.sandbox,
             permissions: permissions.unwrap_or_else(|| plugin.manifest.spec.permissions.clone()),
             programs: Vec::new(),
-            config_defaults: Default::default(),
+            config_values: Default::default(),
             grants,
         });
         let expected = plugin

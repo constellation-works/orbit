@@ -24,19 +24,19 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_tools::plugin::{
-    LoadedPlugin, McpBackend, McpExpectedTool, PluginBackend, PluginBackendSpec, PluginTool,
-    PluginToolBinding, PluginValidationPolicy, load_plugin_dir, manifest_refusal,
-    refuse_covering_fs_write_roots, validate_loaded_plugin,
+    LoadedPlugin, PluginBackend, PluginTool, PluginToolBinding, PluginValidationPolicy,
+    load_plugin_dir, manifest_refusal, refuse_covering_fs_write_roots, validate_loaded_plugin,
 };
 use orbit_tools::{Tool, ToolContext};
 use orbit_types::plugin::{
-    PluginBackendType, PluginGrant, PluginManifest, PluginNetworkPermission, PluginProvenance,
-    PluginSandbox, PluginTestCase, parse_grants, plugin_tool_name,
+    PluginGrant, PluginManifest, PluginNetworkPermission, PluginProvenance, PluginSandbox,
+    PluginTestCase, parse_grants, plugin_tool_name,
 };
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin_host::{host_version, unmet_requirement};
+use crate::runtime::plugin_config::plugin_config_values;
+use crate::runtime::plugin_host::{build_plugin_backend, host_version, unmet_requirement};
 
 /// One golden's outcome.
 #[derive(Debug, Clone, PartialEq)]
@@ -141,9 +141,28 @@ pub fn test_plugin_dir(
         std::fs::create_dir_all(dir)
             .map_err(|error| OrbitError::Io(format!("create {}: {error}", dir.display())))?;
     }
-    refuse_covering_fs_write_roots(&plugin, &global_root, &state_dir).map_err(manifest_refusal)?;
-
-    let backend = conformance_backend(&plugin, &global_root, &state_dir);
+    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
+        runtime.global_root(),
+        runtime.shared_root(),
+    ))?;
+    let grants = plugin.manifest.required_grants();
+    let backend = build_plugin_backend(
+        &plugin,
+        PluginProvenance {
+            name: plugin.namespace().to_string(),
+            version: plugin.manifest.metadata.version.clone(),
+            manifest_digest: plugin.manifest_digest.clone(),
+            grants: grants
+                .iter()
+                .map(|grant| grant.as_str().to_string())
+                .collect(),
+        },
+        &state_dir,
+        &global_root,
+        grants,
+        plugin_config_values(&plugin, &config.plugins),
+    );
+    refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
     let mut results = Vec::with_capacity(cases.len());
     for case in cases {
         results.push(run_case(&plugin, &backend, &workspace_root, case));
@@ -327,58 +346,6 @@ fn format_requested_grants(manifest: &PluginManifest) -> String {
         "none".to_string()
     } else {
         parts.join("; ")
-    }
-}
-
-/// The backend a conformance run uses: the manifest's own permissions, with
-/// every grant it requests treated as recorded.
-fn conformance_backend(
-    plugin: &LoadedPlugin,
-    global_root: &Path,
-    state_dir: &Path,
-) -> PluginBackend {
-    let grants: Vec<PluginGrant> = plugin.manifest.required_grants();
-    let spec = Arc::new(PluginBackendSpec {
-        provenance: PluginProvenance {
-            name: plugin.namespace().to_string(),
-            version: plugin.manifest.metadata.version.clone(),
-            manifest_digest: plugin.manifest_digest.clone(),
-            grants: grants
-                .iter()
-                .map(|grant| grant.as_str().to_string())
-                .collect(),
-        },
-        plugin_root: plugin.root.clone(),
-        state_dir: state_dir.to_path_buf(),
-        global_root: global_root.to_path_buf(),
-        command: plugin.backend_command.clone(),
-        args: plugin.manifest.spec.backend.args.clone(),
-        timeout_ms: plugin.manifest.spec.backend.timeout_ms,
-        sandbox: plugin.manifest.spec.backend.sandbox,
-        permissions: plugin.manifest.spec.permissions.clone(),
-        programs: plugin.manifest.spec.requires.programs.clone(),
-        config_defaults: plugin
-            .config_defaults
-            .iter()
-            .filter_map(|(key, value)| value.as_str().map(|text| (key.clone(), text.to_string())))
-            .collect(),
-        grants,
-    });
-    match plugin.manifest.spec.backend.backend_type {
-        PluginBackendType::Exec => PluginBackend::Exec(spec),
-        PluginBackendType::Mcp => {
-            let expected = plugin
-                .tools
-                .iter()
-                .map(|tool| McpExpectedTool {
-                    verb: tool.verb.clone(),
-                    input_schema: tool
-                        .input_schema_declared
-                        .then(|| tool.input_schema.clone()),
-                })
-                .collect();
-            PluginBackend::Mcp(Arc::new(McpBackend::new(spec, expected)))
-        }
     }
 }
 

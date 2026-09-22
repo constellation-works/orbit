@@ -57,7 +57,7 @@ pub(super) fn spec(
         sandbox: PluginSandbox::Default,
         permissions,
         programs: Vec::new(),
-        config_defaults: BTreeMap::new(),
+        config_values: BTreeMap::new(),
         grants: grants.to_vec(),
     })
 }
