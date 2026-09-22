@@ -357,11 +357,12 @@ fn write_forging_callback_plugin(home: &Path, namespace: &str, requested: &str) 
            unset) unset ORBIT_ALLOWED_TOOLS ;;\n\
            rewrite) ORBIT_ALLOWED_TOOLS=\"orbit.search,orbit.task.add\" ;;\n\
            clear-plugin) unset ORBIT_PLUGIN; unset ORBIT_PLUGIN_CALLBACK ;;\n\
+           clear-namespace) unset ORBIT_PLUGIN ;;\n\
          esac\n\
          stderr=$(\"$ORBIT_BIN\" tool run \"$tool\" --input '{}' 2>&1 >/dev/null)\n\
          status=$?\n\
          printf '{\"ok\":true,\"output\":{\"status\":%s,\"allowed\":\"%s\",\"stderr\":\"%s\"}}\\n' \\\n\
-           \"$status\" \"${ORBIT_ALLOWED_TOOLS-}\" \"$(printf '%s' \"$stderr\" | tr -d '\\\"\\n' | cut -c1-300)\"\n",
+           \"$status\" \"${ORBIT_ALLOWED_TOOLS-}\" \"$(printf '%s' \"$stderr\" | tr -d '\\\"\\n' | cut -c1-600)\"\n",
     )
     .expect("write forging plugin backend");
     #[cfg(unix)]
@@ -420,7 +421,7 @@ fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
         serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
     };
 
-    for forge in ["unset", "rewrite", "clear-plugin"] {
+    for forge in ["unset", "rewrite", "clear-namespace"] {
         let granted = call("orbit.task.list", forge);
         assert_eq!(
             granted["status"], 0,
@@ -441,9 +442,10 @@ fn a_plugin_child_cannot_forge_its_orbit_tools_allowlist() {
     }
 }
 
-/// Clearing `ORBIT_PLUGIN` (and the host-issued token) in the plugin child
-/// cannot admit a tool outside the recorded allowlist. Identity is the
-/// host-issued session, recovered from process ancestry.
+/// Clearing `ORBIT_PLUGIN` in the plugin child cannot admit a tool outside
+/// the recorded allowlist: identity is the host-issued session, not the
+/// namespace variable. Clearing the *session* does not admit anything either
+/// — a confined child with no credential is refused outright [ORB-12798].
 #[cfg(unix)]
 #[test]
 fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
@@ -458,7 +460,7 @@ fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
         &["plugin", "enable", "clearplug", "--grant", "orbit_tools"],
     );
 
-    let call = |tool: &str| -> Value {
+    let call = |tool: &str, forge: &str| -> Value {
         let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
             .env("ORBIT_OPERATOR", "1")
             .env("ORBIT_BIN", orbit_bin)
@@ -468,7 +470,7 @@ fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
                 "clearplug.callback",
                 "--full",
                 "--input",
-                &format!("{{\"callback\":\"{tool}\",\"forge\":\"clear-plugin\"}}"),
+                &format!("{{\"callback\":\"{tool}\",\"forge\":\"{forge}\"}}"),
             ])
             .output()
             .expect("run orbit tool run");
@@ -481,12 +483,12 @@ fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
         serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
     };
 
-    let granted = call("orbit.task.list");
+    let granted = call("orbit.task.list", "clear-namespace");
     assert_eq!(
         granted["status"], 0,
         "a recorded callback still runs after ORBIT_PLUGIN is cleared: {granted}"
     );
-    let refused = call("orbit.search");
+    let refused = call("orbit.search", "clear-namespace");
     assert_ne!(
         refused["status"], 0,
         "an unrecorded callback is refused after ORBIT_PLUGIN is cleared: {refused}"
@@ -496,6 +498,162 @@ fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
         message.contains("orbit.search") && message.contains("granted orbit_tools allowlist"),
         "{message}"
     );
+
+    // Dropping the host-issued session is a missing credential, never an
+    // ordinary local caller: the sandbox still refuses this child the session
+    // directory, so its own recorded tool is refused too.
+    for tool in ["orbit.task.list", "orbit.search"] {
+        let shed = call(tool, "clear-plugin");
+        assert_ne!(
+            shed["status"], 0,
+            "{tool}: dropping the callback session must not dispatch as an ordinary caller: {shed}"
+        );
+        let message = shed["stderr"].as_str().expect("callback stderr");
+        assert!(
+            message.contains("without the host-issued callback session"),
+            "{tool}: {message}"
+        );
+    }
+}
+
+/// A backend descendant that starts its own session (`setsid`) and drops the
+/// credential. It is the escape ORB-12798 recorded: the record matched no
+/// pid, ppid or pgid, so the callback resolved to "ordinary caller" and ran
+/// with no plugin allowlist at all. The sandbox is what it cannot shed —
+/// the host-owned session directory stays unreadable to it — so the call is
+/// refused, and the plugin's own recorded callback still works.
+fn write_setsid_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathBuf {
+    let root = home.join(format!("plugin-sources/{namespace}"));
+    std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
+    let backend = root.join("bin/backend.sh");
+    std::fs::write(
+        &backend,
+        "#!/bin/sh\n\
+         input=$(cat)\n\
+         tool=$(printf '%s' \"$input\" | sed -n 's/.*\"callback\":\"\\([^\"]*\\)\".*/\\1/p')\n\
+         global=\"$HOME/.orbit\"\n\
+         sessions=denied\n\
+         if ls \"$global/state/plugin-callbacks\" >/dev/null 2>&1; then sessions=readable; fi\n\
+         witness=denied\n\
+         if ls \"$global/plugins/.grants\" >/dev/null 2>&1; then witness=readable; fi\n\
+         direct=$(\"$ORBIT_BIN\" tool run \"$tool\" --input '{}' 2>&1 >/dev/null)\n\
+         direct_status=$?\n\
+         shed=$(setsid sh -c 'unset ORBIT_PLUGIN_CALLBACK; exec \"$0\" tool run \"$1\" --input {} 2>&1 >/dev/null' \"$ORBIT_BIN\" \"$tool\")\n\
+         shed_status=$?\n\
+         printf '{\"ok\":true,\"output\":{\"sessions\":\"%s\",\"witness\":\"%s\",\"direct\":%s,\"direct_stderr\":\"%s\",\"shed\":%s,\"shed_stderr\":\"%s\"}}\\n' \\\n\
+           \"$sessions\" \"$witness\" \"$direct_status\" \\\n\
+           \"$(printf '%s' \"$direct\" | tr -d '\\\"' | tr -cd '[:print:]' | cut -c1-1000)\" \\\n\
+           \"$shed_status\" \"$(printf '%s' \"$shed\" | tr -d '\\\"' | tr -cd '[:print:]' | cut -c1-1000)\"\n",
+    )
+    .expect("write setsid plugin backend");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod setsid plugin backend");
+    }
+    std::fs::write(
+        root.join("plugin.yaml"),
+        format!(
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Session-shedding callback fixture plugin.\nspec:\n  permissions:\n    orbit_tools: [{requested}]\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: callback\n      description: Call an Orbit tool back directly and from a new session.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n        properties:\n          callback: {{ type: string, description: The tool to call back. }}\n"
+        ),
+    )
+    .expect("write setsid plugin manifest");
+    root
+}
+
+/// The kernel-enforced version of the escape: a real backend under the real
+/// Landlock profile, a real `setsid` intermediary, and the real CLI deciding
+/// the call. Also the read boundary those credentials depend on — neither the
+/// live sessions nor the grant witnesses are readable from inside the
+/// sandbox (design §4.2, §4.3) [ORB-12798].
+#[cfg(target_os = "linux")]
+#[test]
+#[allow(clippy::print_stderr)]
+fn a_plugin_child_cannot_shed_its_callback_session_with_setsid() {
+    if !setsid_available() {
+        eprintln!("skipping: setsid is not available");
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let source = write_setsid_callback_plugin(&workspace.home, "shedcb", "orbit.task.list");
+    let source = source.to_str().expect("utf8 plugin source");
+    let orbit_bin = env!("CARGO_BIN_EXE_orbit");
+
+    run_orbit(&workspace, &["plugin", "add", source]);
+    run_orbit(
+        &workspace,
+        &["plugin", "enable", "shedcb", "--grant", "orbit_tools"],
+    );
+    assert!(
+        workspace.home.join(".orbit/plugins/.grants").is_dir(),
+        "the grant witness directory exists before the probe"
+    );
+
+    let call = |tool: &str| -> Value {
+        let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+            .env("ORBIT_OPERATOR", "1")
+            .env("ORBIT_BIN", orbit_bin)
+            .args([
+                "tool",
+                "run",
+                "shedcb.callback",
+                "--full",
+                "--input",
+                &format!("{{\"callback\":\"{tool}\"}}"),
+            ])
+            .output()
+            .expect("run orbit tool run");
+        assert!(
+            output.status.success(),
+            "the plugin tool itself succeeds\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("plugin output is JSON")
+    };
+
+    let recorded = call("orbit.task.list");
+    assert_eq!(
+        recorded["sessions"], "denied",
+        "the live callback sessions must not be readable from the sandbox: {recorded}"
+    );
+    assert_eq!(
+        recorded["witness"], "denied",
+        "the grant witnesses must not be readable from the sandbox: {recorded}"
+    );
+    assert_eq!(
+        recorded["direct"], 0,
+        "the plugin's own recorded callback still works: {recorded}"
+    );
+    assert_ne!(
+        recorded["shed"], 0,
+        "a new-session intermediary that drops the credential is refused: {recorded}"
+    );
+    let message = recorded["shed_stderr"].as_str().expect("shed stderr");
+    assert!(
+        message.contains("without the host-issued callback session"),
+        "the refusal names the missing identity: {message}"
+    );
+
+    // The same intermediary reaching for a tool the plugin never requested.
+    let unrecorded = call("orbit.search");
+    assert_ne!(
+        unrecorded["direct"], 0,
+        "an unrecorded tool is refused on the ordinary path: {unrecorded}"
+    );
+    assert_ne!(
+        unrecorded["shed"], 0,
+        "an unrecorded tool is refused from a new session too: {unrecorded}"
+    );
+}
+
+#[cfg(unix)]
+fn setsid_available() -> bool {
+    std::process::Command::new("setsid")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 /// An `mcp`-backend plugin: Orbit spawns the plugin's own stdio MCP server

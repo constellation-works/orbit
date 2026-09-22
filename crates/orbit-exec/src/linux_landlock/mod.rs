@@ -185,6 +185,15 @@ pub(crate) struct RulesetScope {
 pub struct LandlockBoundary {
     /// Directories (read as trees) or files the child may read and execute.
     pub read: Vec<PathBuf>,
+    /// Directories beneath [`Self::read`] the child must *not* reach: the
+    /// grant is compiled so each of them keeps no granted ancestor, which
+    /// refuses listing them as well as reading what is inside. A rule binds an
+    /// inode and Landlock has no deny, so the ancestors are not granted and
+    /// each of their allowed children is granted in its own right — the
+    /// ancestors themselves therefore stop being listable. Naming a file in
+    /// [`Self::read`] that sits inside a denied directory grants that one
+    /// file and nothing else beside it.
+    pub read_denies: Vec<PathBuf>,
     /// Directories or files the child may also modify. A directory that does
     /// not exist yet is created before spawn: the grant names it, and a rule
     /// cannot bind to an inode that is not there.
@@ -223,15 +232,16 @@ pub fn linux_landlock_boundary_grants(
             grants.push(LandlockPathGrant::write_file(path.to_path_buf()));
         }
     }
+    let denied: BTreeSet<PathBuf> = boundary
+        .read_denies
+        .iter()
+        .filter_map(|path| existing_canonical(path))
+        .collect();
     for root in &boundary.read {
         let Some(path) = existing_canonical(root) else {
             continue;
         };
-        grants.push(if path.is_dir() {
-            LandlockPathGrant::read_tree(path)
-        } else {
-            LandlockPathGrant::read_file(path)
-        });
+        grants.extend(workspace::carve_out_unlistable(&path, &denied)?);
     }
     for root in &boundary.write {
         if !root.exists() {

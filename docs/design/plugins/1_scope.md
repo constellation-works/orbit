@@ -348,14 +348,36 @@ only for tools listed in `permissions.orbit_tools` *and* granted. The same inter
 stamped into `ORBIT_ALLOWED_TOOLS` as information for the backend. No socket, no shared store
 handle. Identity is a host-issued session: when the host spawns the backend it writes a
 per-call record under `{global_root}/state/plugin-callbacks/` (plugin, pid, start time) and
-stamps `ORBIT_PLUGIN_CALLBACK` into the child. `orbit tool run` and MCP dispatch look up that
-session — by the token, or by this process's pid, parent pid, or process group (the backend
-is spawned with `process_group(0)`, so descendants inherit the backend pid as PGID even after
-the child unsets its environment) — then enforce the recorded install. Landlock does not
-grant `/proc/<pid>` of another process, so identity never reads another process's `environ`. `ORBIT_PLUGIN` names the plugin for the backend; it is not the
-gate. The inherited `ORBIT_ALLOWED_TOOLS` value is not the gate either. Unsetting either
-variable cannot expand the set. A token that matches no session is a missing credential and
-is refused. The backend's restraint is not the boundary.
+stamps `ORBIT_PLUGIN_CALLBACK` into the child. `orbit tool run` and MCP dispatch resolve that
+session and enforce the recorded install. `ORBIT_PLUGIN` names the plugin for the backend; it
+is not the gate, and neither is the inherited `ORBIT_ALLOWED_TOOLS` value. The backend's
+restraint is not the boundary.
+
+**What the credential is bound to.** The token names a record, and that record names a
+process. A presented token is accepted only when the recorded pid is the calling process, its
+parent, or its process group — the three the kernel still answers for a confined child, and
+the reason the backend is spawned with `process_group(0)` so ordinary descendants carry the
+backend pid as their PGID. Anything else is a mismatch: a token read out of another plugin's
+record, or a token carried into a process that called `setsid`. A token that matches no
+session at all is a missing credential. Every one of those is refused; none of them resolves
+to a different plugin's allowlist, and none resolves to "ordinary caller". The recorded start
+time is checked when a *scan* proposes a record — which is how a reused pid is rejected — but
+not when a token names one: a confined child cannot read `/proc` of another process, so
+demanding proof that its own parent is alive would refuse every legitimate callback. The
+token is what makes the record this caller's; the host minted it for exactly this call.
+
+**A confined child with no credential is refused, not promoted.** The sandbox does not grant
+a plugin backend the session directory (§4.3), so a process that cannot even list
+`{global_root}/state/plugin-callbacks/` is by construction inside a plugin sandbox. With no
+token, that is an unidentified backend descendant and the call is refused on both entry
+points. This is the boundary `setsid` cannot cross: a new session or process group sheds
+ancestry, not confinement. The consequence to design against is the other direction — the
+credential has to reach every process that calls back, so a backend that scrubs its child
+environment (`env -i`) denies *itself* the callback rather than escaping its allowlist.
+Ancestry alone still identifies a backend where the session directory is readable, which is
+the unsandboxed case (`backend.sandbox: none` plus the `unsandboxed` grant) and the host's own
+in-process dispatch. Landlock does not grant `/proc/<pid>` of another process, so identity
+never reads another process's `environ`.
 
 As implemented, the child also carries `ORBIT_PLUGIN_VERSION`, `ORBIT_TOOL_CWD` and
 `ORBIT_PROC_ALLOWED_PROGRAMS` (`requires.programs`). `ORBIT_TOOL_NAME` is absent for an `mcp`
@@ -380,7 +402,7 @@ plugin missing a required grant never reaches this point (§4.1).
 | `permissions.network: none` (default) | — | `ACCESS_NET_BIND_TCP \| ACCESS_NET_CONNECT_TCP` handled with no rule, which refuses every TCP endpoint (needs Landlock ABI 4; an older kernel fails closed) | `(deny network*)` appended after the compiler's broad allow |
 | `permissions.network: loopback` | `network` | TCP left open — Landlock has no address filter, and the design's confinement claim is the filesystem | `(deny network*)` then loopback re-allows |
 | `permissions.network: any` | `network` | TCP left open | the compiler's `(allow network*)` stands |
-| `permissions.orbit_tools` | `orbit_tools` | Orbit's own global root and the workspace's `.orbit/` become **readable**, because a callback *is* `orbit tool run` and that command cannot start without `config.toml`, the recorded install and `workspaces.json`. Writable is a named inventory, never the roots: `state/logs`, `state/audit` and `tasks` under the global root, `tasks`, `frictions`, `state/audit`, `state/logs` and `state/job-runs` under the workspace's `.orbit/`, plus the `orbit.db` and `state/semantic.db` WAL file sets and the two executable-generation locks as individual files. `bin/orbit` — run unconfined by the scheduler and every worker — `plugins/`, `config.toml`, `mcp-callers.toml`, `clock.toml`, `state/plugin-callbacks/` (the host-issued callback sessions) and the workspace's `plugins.yaml`, `routines/` and `auto_tasks/` are read-only to the child. What the callback itself may do is decided by the plugin's recorded `orbit_tools` grant and `permissions.orbit_tools`, looked up from the host-issued session (token or process ancestry) on both `orbit tool run` and MCP `tools/call`, together with the ordinary governed-operation rows — not by the sandbox, not by `ORBIT_PLUGIN`, and not by the inherited `ORBIT_ALLOWED_TOOLS` value [ORB-12777] [ORB-12789] | same boundary, from the same inventory: write directories become `(subpath …)` roots and the named files are emitted literally, so a store file never widens into the root that holds it |
+| `permissions.orbit_tools` | `orbit_tools` | Orbit's own global root and the workspace's `.orbit/` become **readable**, because a callback *is* `orbit tool run` and that command cannot start without `config.toml`, the recorded install and `workspaces.json`. Writable is a named inventory, never the roots: `state/logs`, `state/audit` and `tasks` under the global root, `tasks`, `frictions`, `state/audit`, `state/logs` and `state/job-runs` under the workspace's `.orbit/`, plus the `orbit.db` and `state/semantic.db` WAL file sets and the two executable-generation locks as individual files. `bin/orbit` — run unconfined by the scheduler and every worker — `plugins/`, `config.toml`, `mcp-callers.toml`, `clock.toml` and the workspace's `plugins.yaml`, `routines/` and `auto_tasks/` are read-only to the child. Two trees under the global root are **not readable at all**: `state/plugin-callbacks/` (the live callback credentials) and `plugins/.grants/` (the grant witnesses). The child is granted two single files inside them and nothing else: its *own* session record, which its `orbit tool run` reads back to identify itself, and its *own* grant witness, which that nested Orbit verifies before it registers the plugin row. Both directories stay unlistable, and no other plugin's token or witness is reachable — a confined child that loads another plugin's row therefore registers it inactive. What the callback itself may do is decided by the plugin's recorded `orbit_tools` grant and `permissions.orbit_tools`, looked up from the host-issued session on both `orbit tool run` and MCP `tools/call`, together with the ordinary governed-operation rows — not by the sandbox, not by `ORBIT_PLUGIN`, and not by the inherited `ORBIT_ALLOWED_TOOLS` value [ORB-12777] [ORB-12789] [ORB-12798] | same boundary, from the same inventory: write directories become `(subpath …)` roots and the named files are emitted literally, so a store file never widens into the root that holds it; the two unreadable trees are `(deny file-read* (subpath …))` clauses appended after the compiler's broad read allow, with the child's own session record and its own witness re-allowed after them (SBPL is last-match-wins) |
 | `permissions.env_pass` | `env_pass` | Those names are copied from Orbit's environment into the otherwise allowlisted child environment, composed through the same `allowlisted_child_env` admission path as the baseline — `ORBIT_*` names are reserved for Orbit's own envelope and refused by `validate_structure`, so a privilege-bearing name (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`) can never reach a plugin child even if requested | same |
 | `requires.programs` | — | Not a sandbox rule: the declared programs are checked against a restricted caller's own `proc.spawn` allowlist and stamped into `ORBIT_PROC_ALLOWED_PROGRAMS` | same |
 | `backend.sandbox: none` | `unsandboxed` | No ruleset at all | No `sandbox-exec` wrapper at all |
@@ -396,6 +418,23 @@ file simply yields no grant. The host process spawning the backend has already o
 store and pinned its generation, so the file set is there for the call. A host that can
 enforce neither backend refuses to run the plugin rather than running it unconfined;
 `unsandboxed` is the only opt-out and it is a `doctor` finding.
+
+Landlock has no deny rule, so the two unreadable trees are compiled by *not* granting them.
+A rule's rights apply to everything beneath the path it names, so granting an ancestor
+list-only would still let the child enumerate the denied directory — which for a directory of
+credentials is most of the disclosure. The carve-out therefore grants no ancestor of a denied
+path at all and grants each allowed sibling in its own right. Three consequences follow, all
+from a rule binding an inode:
+
+- The ancestors themselves stop being listable. A confined backend can read
+  `{global_root}/config.toml` and the recorded installs, but cannot list `{global_root}`,
+  `{global_root}/state/` or `{global_root}/plugins/`.
+- A name created directly inside a carved-out directory after the child started has no
+  granted ancestor either, so a plugin cannot rely on reading host state that appears at those
+  levels mid-call.
+- The child's own session record is granted as one inode, so the host rewrites that record in
+  place when it binds the backend pid. Replacing it through a rename would leave the grant on
+  an unlinked inode and the record unreadable to the very process it identifies.
 
 The `orbit_tools` boundary is deliberately not "whatever the child needs": it is the same
 inventory the agent sandbox grants a nested Orbit process (`append_linux_runtime_write_roots`

@@ -2,12 +2,19 @@
 //!
 //! The child controls its environment: it can unset `ORBIT_PLUGIN` or any
 //! other variable the host stamped. Identity therefore lives in a session
-//! file the host writes under `{global_root}/state/plugin-callbacks/`, a
-//! path the `orbit_tools` sandbox does not grant for writing, plus the
-//! child's pid and kernel start time. A later `orbit tool run` or MCP
-//! `tools/call` presents the token *or* is recognised by process ancestry.
-//! Unsetting the environment is a missing credential, not an absent
-//! restriction.
+//! file the host writes under `{global_root}/state/plugin-callbacks/`, plus
+//! the child's pid and kernel start time. A later `orbit tool run` or MCP
+//! `tools/call` presents the token, and the record it names must belong to
+//! the process presenting it — self, parent, or process group.
+//!
+//! The sandbox grants a confined backend read access to its *own* session
+//! record and to nothing else in that directory (design
+//! `docs/design/plugins/1_scope.md` §4.3). That is also what makes an
+//! unidentified child recognisable: a process that cannot even list the
+//! session directory is inside a plugin sandbox, so a missing credential
+//! there is a refusal rather than an ordinary caller. Changing process group
+//! or starting a new session does not change that answer — `setsid` sheds
+//! ancestry, not confinement.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -23,9 +30,11 @@ use serde::{Deserialize, Serialize};
 /// Informational namespace the backend already carries. Not the gate.
 pub const ORBIT_PLUGIN_ENV: &str = "ORBIT_PLUGIN";
 
-/// Host-issued callback token. The child may unset it; ancestry still
-/// identifies the session. A presented value that matches no session is
-/// a missing credential and is refused.
+/// Host-issued callback token, stamped into the backend child and inherited
+/// by its descendants. A value that matches no session — or that names a
+/// session belonging to another process — is a missing credential and is
+/// refused. Dropping it inside the sandbox is a refusal too, never a way out
+/// of the plugin's allowlist.
 pub const ORBIT_PLUGIN_CALLBACK_ENV: &str = "ORBIT_PLUGIN_CALLBACK";
 
 const SESSION_DIR: &str = "state/plugin-callbacks";
@@ -123,6 +132,13 @@ impl PluginCallbackSession {
         &self.token
     }
 
+    /// The record file the confined child is granted read access to. A
+    /// Landlock rule binds an inode, so this path is resolved once, before
+    /// the child starts, and [`Self::bind_pid`] never replaces it.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Record the spawned child's pid and start time so ancestry can find it
     /// after the child unsets its environment.
     pub fn bind_pid(&mut self, pid: u32) -> Result<(), OrbitError> {
@@ -133,7 +149,7 @@ impl PluginCallbackSession {
         })?;
         self.record.pid = key.pid;
         self.record.starttime = key.starttime;
-        rewrite_session(&self.path, &self.record)
+        rewrite_session_in_place(&self.path, &self.record)
     }
 }
 
@@ -152,12 +168,14 @@ impl Drop for PluginCallbackSession {
     }
 }
 
-/// Identify a plugin callback from the host-issued token or from process
-/// ancestry against live session files. `None` is an ordinary caller.
+/// Identify a plugin callback from the host-issued token, or — where the
+/// session directory is readable — from process ancestry against the live
+/// session files. `None` is an ordinary caller.
 ///
-/// A token that is set and matches no session is a missing credential:
-/// [`OrbitError::PolicyDenied`], never an absent restriction. Ancestry
-/// still names the plugin so the refusal can be audited.
+/// Every other outcome is [`OrbitError::PolicyDenied`], never an absent
+/// restriction: a token matching no session, a token belonging to another
+/// process, and a confined child carrying no credential at all. Ancestry
+/// still names the plugin, where it can, so the refusal can be audited.
 pub fn resolve_plugin_callback(
     global_root: &Path,
 ) -> Result<Option<PluginCallbackIdentity>, OrbitError> {
@@ -168,10 +186,9 @@ pub fn resolve_plugin_callback(
             identity.as_ref().map(|id| id.name.as_str()),
         )),
         CallbackResolution::Mismatched { token, ancestry } => {
-            Err(OrbitError::PolicyDenied(format!(
-                "plugin callback credential for '{token}' does not match the live backend process '{ancestry}'"
-            )))
+            Err(mismatched_callback_credential(&token, ancestry.as_deref()))
         }
+        CallbackResolution::UnidentifiedPluginChild => Err(unidentified_plugin_child()),
     }
 }
 
@@ -193,22 +210,43 @@ pub fn resolve_plugin_callback_session(
         },
         None => TokenLookup::Absent,
     };
-    let ancestry_record = find_ancestry_session(&dir);
-    Ok(match (token_record, ancestry_record) {
-        (TokenLookup::Found(token), Some(ancestry)) if token.plugin != ancestry.plugin => {
+    let caller = CallerProcess::current();
+    let ancestry = scan_ancestry_session(&dir, &caller);
+    Ok(match (token_record, ancestry) {
+        // A record the presenting process is no part of is somebody else's
+        // credential, whether it was read out of the session directory, copied
+        // from another child's environment, or kept across a `setsid`.
+        (TokenLookup::Found(record), ancestry) if !caller.owns(&record) => {
+            CallbackResolution::Mismatched {
+                token: record.plugin,
+                ancestry: match ancestry {
+                    AncestryScan::Session(ancestry) => Some(ancestry.plugin),
+                    AncestryScan::None | AncestryScan::Unreadable => None,
+                },
+            }
+        }
+        (TokenLookup::Found(token), AncestryScan::Session(ancestry))
+            if token.plugin != ancestry.plugin =>
+        {
             CallbackResolution::Mismatched {
                 token: token.plugin,
-                ancestry: ancestry.plugin,
+                ancestry: Some(ancestry.plugin),
             }
         }
         (TokenLookup::Found(record), _) => CallbackResolution::Identified(identity_from(&record)),
         (TokenLookup::Invalid, ancestry) => {
-            CallbackResolution::InvalidCredential(ancestry.as_ref().map(identity_from))
+            CallbackResolution::InvalidCredential(ancestry.session().map(identity_from))
         }
-        (TokenLookup::Absent, Some(record)) => {
+        (TokenLookup::Absent, AncestryScan::Session(record)) => {
             CallbackResolution::Identified(identity_from(&record))
         }
-        (TokenLookup::Absent, None) => CallbackResolution::None,
+        // No credential, and the host-owned session directory is out of
+        // reach: only a sandboxed plugin child is refused that read, so this
+        // is a backend descendant that shed its identity, not a local caller.
+        (TokenLookup::Absent, AncestryScan::Unreadable) => {
+            CallbackResolution::UnidentifiedPluginChild
+        }
+        (TokenLookup::Absent, AncestryScan::None) => CallbackResolution::None,
     })
 }
 
@@ -222,14 +260,83 @@ pub enum CallbackResolution {
     /// A token was presented that matches no session. `Some` when ancestry
     /// still names the backend so the refusal can be audited.
     InvalidCredential(Option<PluginCallbackIdentity>),
-    /// Token and ancestry name two different plugins.
-    Mismatched { token: String, ancestry: String },
+    /// The presented token is not this process's own: it names a plugin the
+    /// caller is no part of, or two different plugins at once. `ancestry` is
+    /// the plugin a live session still names for this process, when there is
+    /// one to name.
+    Mismatched {
+        token: String,
+        ancestry: Option<String>,
+    },
+    /// No credential, from a process that cannot read the host-owned session
+    /// directory at all. Only a plugin sandbox denies that read, so identity
+    /// is missing rather than irrelevant.
+    UnidentifiedPluginChild,
 }
 
 enum TokenLookup {
     Absent,
     Found(SessionRecord),
     Invalid,
+}
+
+/// What a scan of the session directory could see from the calling process.
+enum AncestryScan {
+    /// A live session this process belongs to.
+    Session(SessionRecord),
+    /// The directory is readable and names no session for this process.
+    None,
+    /// The directory cannot be read: the caller is inside a plugin sandbox.
+    Unreadable,
+}
+
+impl AncestryScan {
+    fn session(&self) -> Option<&SessionRecord> {
+        match self {
+            Self::Session(record) => Some(record),
+            Self::None | Self::Unreadable => None,
+        }
+    }
+}
+
+/// The pids a confined child can still ask the kernel about: its own, its
+/// parent's, and its process group's. Orbit spawns a backend with
+/// `process_group(0)`, so an ordinary descendant carries the backend pid as
+/// its PGID; one that called `setsid` or `setpgid` carries none of the three
+/// and is therefore not the process any record was bound to.
+struct CallerProcess {
+    self_pid: u32,
+    parent_pid: Option<u32>,
+    pgid: Option<u32>,
+}
+
+impl CallerProcess {
+    fn current() -> Self {
+        Self {
+            self_pid: std::process::id(),
+            parent_pid: current_parent_pid(),
+            pgid: current_process_group(),
+        }
+    }
+
+    /// Whether `record` was bound to this process, its parent, or its process
+    /// group. A record minted but not yet bound (`pid == 0`) exists only
+    /// between `mint` and `bind_pid`, before any child has run.
+    ///
+    /// The recorded start time is deliberately *not* consulted here. Reading
+    /// `/proc/<pid>` of another process is exactly what the sandbox refuses a
+    /// confined child, so a backend descendant cannot prove its own parent is
+    /// alive — asking would refuse every legitimate callback. It is not
+    /// needed either: this record was found through a 256-bit token the host
+    /// minted for it, not by scanning for a matching pid, and
+    /// [`scan_ancestry_session`] — which does scan — still checks liveness
+    /// before it trusts a pid.
+    fn owns(&self, record: &SessionRecord) -> bool {
+        record.pid == 0
+            || record.pid == self.self_pid
+            || self.parent_pid == Some(record.pid)
+            || self.pgid == Some(record.pid)
+    }
 }
 
 fn callback_dir(global_root: &Path) -> PathBuf {
@@ -251,7 +358,15 @@ fn load_token_session(dir: &Path, token: &str) -> Result<SessionRecord, OrbitErr
     let path = dir.join(token);
     match fs::read(&path) {
         Ok(bytes) => parse_session(&bytes).ok_or_else(|| invalid_callback_credential(None)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        // `NotFound` is a token that matches no session. `PermissionDenied`
+        // is a confined child reaching for a record the sandbox grants some
+        // other plugin: both are a credential this caller does not hold.
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+            ) =>
+        {
             Err(invalid_callback_credential(None))
         }
         Err(error) => Err(OrbitError::Io(format!(
@@ -261,17 +376,22 @@ fn load_token_session(dir: &Path, token: &str) -> Result<SessionRecord, OrbitErr
     }
 }
 
-fn find_ancestry_session(dir: &Path) -> Option<SessionRecord> {
+fn scan_ancestry_session(dir: &Path, caller: &CallerProcess) -> AncestryScan {
     // Landlock refuses `/proc/<pid>` of any other process (it would leak
     // `environ`). Identity therefore uses syscalls that still work in the
-    // confined child: this pid, `getppid`, and `getpgrp`. Orbit spawns the
-    // backend with `process_group(0)`, so PGID equals the backend pid and
-    // every descendant inherits it — including `orbit tool run` started from
-    // a `$()` subshell.
-    let self_pid = std::process::id();
-    let parent_pid = current_parent_pid();
-    let pgid = current_process_group();
-    let entries = fs::read_dir(dir).ok()?;
+    // confined child: this pid, `getppid`, and `getpgrp`.
+    //
+    // A confined backend is not granted the session directory at all, so this
+    // scan is how an unidentified plugin child is told apart from a local
+    // caller: `EACCES` here is the sandbox answering, and an absent directory
+    // means no session was ever minted on this host.
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return AncestryScan::Unreadable;
+        }
+        Err(_) => return AncestryScan::None,
+    };
     for entry in entries.flatten() {
         let Ok(bytes) = fs::read(entry.path()) else {
             continue;
@@ -279,17 +399,14 @@ fn find_ancestry_session(dir: &Path) -> Option<SessionRecord> {
         let Some(record) = parse_session(&bytes) else {
             continue;
         };
-        if record.pid == 0 {
+        if record.pid == 0 || !session_process_is_live(&record) {
             continue;
         }
-        if !session_process_is_live(&record) {
-            continue;
-        }
-        if record.pid == self_pid || parent_pid == Some(record.pid) || pgid == Some(record.pid) {
-            return Some(record);
+        if caller.owns(&record) {
+            return AncestryScan::Session(record);
         }
     }
-    None
+    AncestryScan::None
 }
 
 /// Count callback session records whose recorded process no longer exists.
@@ -353,29 +470,12 @@ fn parse_session(bytes: &[u8]) -> Option<SessionRecord> {
     (record.schema_version == 1 && !record.plugin.trim().is_empty()).then_some(record)
 }
 
+/// Create one session file, failing with `AlreadyExists` if the token is
+/// taken. `create_new` is the check: the record is the child's credential, so
+/// two mints must never share an inode, and the kernel decides that without a
+/// window between the test and the write.
 fn write_session_exclusive(path: &Path, record: &SessionRecord) -> std::io::Result<()> {
-    if path.try_exists()? {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            "plugin callback session already exists",
-        ));
-    }
     let bytes = session_bytes(record)?;
-    write_session_atomically(path, &bytes).map_err(|error| std::io::Error::other(error.to_string()))
-}
-
-fn rewrite_session(path: &Path, record: &SessionRecord) -> Result<(), OrbitError> {
-    let bytes = session_bytes(record).map_err(|error| {
-        OrbitError::Io(format!(
-            "serialize plugin callback session `{}`: {error}",
-            path.display()
-        ))
-    })?;
-    write_session_atomically(path, &bytes)
-}
-
-fn write_session_atomically(path: &Path, bytes: &[u8]) -> Result<(), OrbitError> {
-    let temp = path.with_extension(format!("tmp-{}", random_token()?));
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -383,19 +483,32 @@ fn write_session_atomically(path: &Path, bytes: &[u8]) -> Result<(), OrbitError>
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
+    let mut file = options.open(path)?;
+    file.write_all(&bytes)?;
+    file.sync_all()
+}
+
+/// Rewrite the record the child was granted, keeping its inode.
+///
+/// A Landlock rule binds an inode, and the child's read grant is compiled
+/// from this path before the child starts. Replacing the file through a
+/// temporary name and `rename` would leave the grant on an unlinked inode and
+/// the record unreadable to the very process it identifies, so the bytes are
+/// written back in place. They are one small `write`, which the kernel serves
+/// a concurrent reader either wholly before or wholly after.
+fn rewrite_session_in_place(path: &Path, record: &SessionRecord) -> Result<(), OrbitError> {
+    let bytes = session_bytes(record).map_err(|error| {
+        OrbitError::Io(format!(
+            "serialize plugin callback session `{}`: {error}",
+            path.display()
+        ))
+    })?;
     let write_result = (|| -> std::io::Result<()> {
-        let mut file = options.open(&temp)?;
-        file.write_all(bytes)?;
+        let mut file = OpenOptions::new().write(true).truncate(true).open(path)?;
+        file.write_all(&bytes)?;
         file.sync_all()
     })();
-    if let Err(error) = write_result {
-        let _ = fs::remove_file(&temp);
-        return Err(OrbitError::Io(format!(
-            "update plugin callback session `{}`: {error}",
-            path.display()
-        )));
-    }
-    fs::rename(&temp, path).map_err(|error| {
+    write_result.map_err(|error| {
         OrbitError::Io(format!(
             "update plugin callback session `{}`: {error}",
             path.display()
@@ -441,6 +554,31 @@ fn invalid_callback_credential(plugin: Option<&str>) -> OrbitError {
              cannot reach Orbit without the host-issued session"
             .to_string(),
     })
+}
+
+/// A token that resolves to a session belonging to another process.
+pub fn mismatched_callback_credential(token: &str, ancestry: Option<&str>) -> OrbitError {
+    OrbitError::PolicyDenied(match ancestry {
+        Some(ancestry) => format!(
+            "plugin callback credential for '{token}' does not match the live backend process \
+             '{ancestry}'"
+        ),
+        None => format!(
+            "plugin callback credential for '{token}' is not held by the calling process; a \
+             host-issued session identifies the backend it was minted for and its descendants, \
+             and is not transferable"
+        ),
+    })
+}
+
+/// A caller the plugin sandbox confines that presented no credential at all.
+pub fn unidentified_plugin_child() -> OrbitError {
+    OrbitError::PolicyDenied(
+        "a plugin backend descendant reached Orbit without the host-issued callback session; \
+         changing process group or session does not make a confined child an ordinary caller, \
+         and the credential must be carried through to every process that calls back"
+            .to_string(),
+    )
 }
 
 fn upsert_env(env: &mut Vec<(String, String)>, key: &str, value: String) {

@@ -66,10 +66,10 @@ pub use linux_sandbox::{
 };
 pub use macos_sandbox::{
     MacosLoginKeychainAccess, MacosNetworkAccess, MacosSandboxSpawnRequest,
-    append_macos_network_access, claude_state_dir_from_env, compile_macos_sandbox_profile,
-    grok_state_dir_from_env, macos_login_keychain_access, sandbox_exec_available,
-    sandbox_exec_path, sandbox_exec_program_for_audit, sandbox_exec_unavailable_message,
-    spawn_under_macos_sandbox,
+    append_macos_network_access, append_macos_read_boundary, claude_state_dir_from_env,
+    compile_macos_sandbox_profile, grok_state_dir_from_env, macos_login_keychain_access,
+    sandbox_exec_available, sandbox_exec_path, sandbox_exec_program_for_audit,
+    sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
 };
 pub use result::ExecutionResult;
 pub use runner::{

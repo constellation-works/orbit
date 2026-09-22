@@ -1073,3 +1073,103 @@ fn plugin_callback_refusal_is_audited_with_plugin_identity() {
     assert_eq!(plugin.name, "callback");
     assert_eq!(plugin.version, "1.0.0");
 }
+
+/// A backend descendant that changed process group and dropped the credential
+/// is not an ordinary caller. The plugin sandbox is what it cannot shed: the
+/// host-owned session directory stays unreadable to it, and an unreadable
+/// session directory with no credential is a refusal on both entry points
+/// [ORB-12798].
+#[cfg(unix)]
+#[test]
+fn plugin_callback_refuses_an_unidentified_confined_child() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    record_callback_plugin(&runtime, &["orbit.task.list"]);
+    // SAFETY: callers hold `env_guard()` while changing process environment.
+    unsafe {
+        std::env::remove_var(ORBIT_PLUGIN_ENV);
+        std::env::remove_var(orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV);
+    }
+
+    let sessions = runtime.global_root().join("state/plugin-callbacks");
+    std::fs::create_dir_all(&sessions).expect("create the session directory");
+    std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o000))
+        .expect("make the session directory unreadable");
+    if std::fs::read_dir(&sessions).is_ok() {
+        // Root ignores directory permissions; the kernel-enforced case is the
+        // CLI regression through the real plugin sandbox.
+        std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o700))
+            .expect("restore");
+        return;
+    }
+
+    let refusals: Vec<OrbitError> = [ToolEntryPoint::Cli, ToolEntryPoint::Mcp]
+        .into_iter()
+        .map(|entry_point| {
+            dispatch_entry(&runtime, "orbit.task.list", entry_point)
+                .expect_err("an unidentified plugin child is refused")
+        })
+        .collect();
+    std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o700)).expect("restore");
+
+    for error in refusals {
+        assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
+        assert!(
+            error
+                .to_string()
+                .contains("without the host-issued callback session"),
+            "{error}"
+        );
+    }
+}
+
+/// A live token identifies the process the host bound it to. Presenting one
+/// that belongs to another process — read out of the session directory, or
+/// kept across a `setsid` — is a mismatch, never that plugin's allowlist.
+#[test]
+fn plugin_callback_refuses_a_token_bound_to_another_process() {
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    record_callback_plugin(&runtime, &["orbit.task.list"]);
+    let installed = runtime
+        .stores()
+        .plugins()
+        .get_plugin("callback")
+        .expect("read plugin")
+        .expect("callback plugin is recorded");
+    let mut session = PluginCallbackSession::mint(
+        &runtime.global_root(),
+        &PluginProvenance {
+            name: installed.name,
+            version: installed.version,
+            manifest_digest: installed.manifest_digest,
+            grants: installed.grants,
+        },
+    )
+    .expect("mint callback session");
+    // pid 1 is live and is never this process, its parent, or its group.
+    session.bind_pid(1).expect("bind another process");
+    // SAFETY: callers hold `env_guard()` while changing process environment.
+    unsafe {
+        std::env::set_var(
+            orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV,
+            session.token(),
+        );
+    }
+
+    let error = dispatch_cli(&runtime, "orbit.task.list")
+        .expect_err("a token bound to another process is not this caller's credential");
+    // SAFETY: callers hold `env_guard()` while changing process environment.
+    unsafe {
+        std::env::remove_var(orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV);
+    }
+    assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("not held by the calling process"),
+        "{error}"
+    );
+}

@@ -702,6 +702,7 @@ fn the_landlock_ruleset_refuses_every_denied_orbit_path() {
         debug: false,
     };
     let boundary = LandlockBoundary {
+        read_denies: profile.read_denies.clone(),
         read: profile.read.clone(),
         write: profile.write.clone(),
         write_files: profile.write_files.clone(),
@@ -743,5 +744,161 @@ fn the_landlock_ruleset_refuses_every_denied_orbit_path() {
     assert!(
         !global_root.join("orbit.db-wal").exists(),
         "a named write file is never materialised by the compiler"
+    );
+}
+
+/// The live callback sessions and the grant witnesses are host state, not
+/// plugin state. A backend holding `orbit_tools` reads Orbit's global root,
+/// so those two trees are carved back out of that grant — otherwise plugin B
+/// reads plugin A's live token, or reads the witness that decides what A is
+/// allowed to do [ORB-12798].
+#[cfg(target_os = "linux")]
+#[test]
+fn the_landlock_ruleset_hides_callback_sessions_and_grant_witnesses() {
+    use orbit_exec::{EnvironmentMode, ExecRequest, LandlockBoundary, StdinMode};
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let plugin_root = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_root).expect("plugin root");
+    std::fs::create_dir_all(global_root.join("plugins/.grants")).expect("grant witness dir");
+    std::fs::write(global_root.join("plugins/.grants/demo.json"), "{}").expect("own witness");
+    std::fs::write(global_root.join("plugins/.grants/other.json"), "{}").expect("other witness");
+    std::fs::create_dir_all(global_root.join("plugins/demo/1.0.0")).expect("install tree");
+    std::fs::write(global_root.join("plugins/demo/1.0.0/plugin.yaml"), "").expect("manifest");
+    std::fs::write(global_root.join("config.toml"), "").expect("host config");
+
+    let spec = orbit_tools_spec(&global_root, &plugin_root);
+    let mut session =
+        super::super::callback::PluginCallbackSession::mint(&global_root, &spec.provenance)
+            .expect("mint callback session");
+    session.bind_pid(std::process::id()).expect("bind pid");
+    let other = super::super::callback::PluginCallbackSession::mint(
+        &global_root,
+        &orbit_types::plugin::PluginProvenance {
+            name: "other".to_string(),
+            version: "1.0.0".to_string(),
+            manifest_digest: "0".repeat(64),
+            grants: Vec::new(),
+        },
+    )
+    .expect("mint a second plugin's session");
+
+    let profile = spec
+        .sandbox_profile(None)
+        .expect("profile")
+        .with_callback_session(&session);
+    let request = ExecRequest {
+        program: "/bin/sh".to_string(),
+        args: vec!["-c".to_string(), "true".to_string()],
+        current_dir: None,
+        timeout_ms: Some(1_000),
+        stdin_mode: StdinMode::Null,
+        environment_mode: EnvironmentMode::ClearAndSet(vec![(
+            "PATH".to_string(),
+            "/usr/bin:/bin".to_string(),
+        )]),
+        debug: false,
+    };
+    let boundary = LandlockBoundary {
+        read: profile.read.clone(),
+        read_denies: profile.read_denies.clone(),
+        write: profile.write.clone(),
+        write_files: profile.write_files.clone(),
+        deny_tcp: true,
+    };
+    let grants =
+        orbit_exec::linux_landlock_boundary_grants(&request, &boundary).expect("compile grants");
+    let reads = |path: &Path| orbit_exec::grants_read(&grants, path);
+
+    assert!(
+        !reads(&global_root.join("state/plugin-callbacks")),
+        "the session directory must not be listable"
+    );
+    assert!(
+        !reads(&global_root.join("state")),
+        "no ancestor of a denied directory is granted, or it could be listed \
+         through that grant"
+    );
+    assert!(
+        !reads(other.path()),
+        "another plugin's live token must not be readable"
+    );
+    assert!(
+        !reads(&global_root.join("plugins/.grants")),
+        "the witness directory must not be listable"
+    );
+    assert!(
+        !reads(&global_root.join("plugins/.grants/other.json")),
+        "another plugin's grant witness must not be readable"
+    );
+    assert!(
+        reads(&global_root.join("plugins/.grants/demo.json")),
+        "the child's own witness stays readable: its nested `orbit tool run` \
+         verifies the grants recorded for this plugin"
+    );
+    assert!(
+        reads(session.path()),
+        "the child's own callback record stays readable: it is how the child \
+         identifies itself"
+    );
+    assert!(
+        reads(&global_root.join("config.toml")),
+        "the rest of the global root stays readable"
+    );
+    assert!(
+        reads(&global_root.join("plugins/demo/1.0.0/plugin.yaml")),
+        "the recorded installs stay readable beside the witness that is not"
+    );
+}
+
+/// The same carve-out on macOS, where reads are broadly allowed and the
+/// boundary is a deny appended after them. Compiled on any host so the two
+/// platforms cannot drift.
+#[test]
+fn the_macos_profile_denies_callback_sessions_and_re_allows_the_childs_own_record() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let plugin_root = temp.path().join("plugin");
+    std::fs::create_dir_all(&plugin_root).expect("plugin root");
+    let spec = orbit_tools_spec(&global_root, &plugin_root);
+    let session =
+        super::super::callback::PluginCallbackSession::mint(&global_root, &spec.provenance)
+            .expect("mint callback session");
+    let profile = spec
+        .sandbox_profile(None)
+        .expect("profile")
+        .with_callback_session(&session);
+
+    let mut profile_text =
+        orbit_exec::compile_macos_sandbox_profile(&profile.macos_fs_rules(), "plugin")
+            .expect("compile seatbelt profile");
+    orbit_exec::append_macos_read_boundary(
+        &mut profile_text,
+        &profile.read_denies,
+        &profile.readable_denied_files(),
+    );
+
+    for denied in ["state/plugin-callbacks", "plugins/.grants"] {
+        assert!(
+            profile_text.contains(&format!(
+                "(deny file-read* (subpath \"{}\"))",
+                global_root.join(denied).display()
+            )),
+            "{denied} is not denied: {profile_text}"
+        );
+    }
+    let deny_at = profile_text
+        .find("(deny file-read* (subpath")
+        .expect("a read deny");
+    let allow_at = profile_text
+        .find(&format!(
+            "(allow file-read* (literal \"{}\"))",
+            session.path().display()
+        ))
+        .expect("the child's own record is re-allowed");
+    assert!(
+        allow_at > deny_at,
+        "SBPL is last-match-wins: the re-allow must follow the deny\n{profile_text}"
     );
 }
