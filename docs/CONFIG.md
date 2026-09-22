@@ -1310,7 +1310,7 @@ plugins:
 |---|---|
 | `orbit plugin add <dir\|git+url#ref\|archive>` | Install for this machine. `--enable` puts its tools on the surface immediately; `--grant` records requested permissions; `--force` replaces the same version. |
 | `orbit plugin enable <ns> [--grant …]` / `disable <ns>` | Turn the plugin's tools on or off for this machine. The change takes effect on the next Orbit command, which is when the tool registry is next built. |
-| `orbit plugin remove <ns>` | Uninstall. Data the plugin wrote elsewhere is retained. |
+| `orbit plugin remove <ns> --yes` | Uninstall after explicit confirmation. Data the plugin wrote elsewhere is retained. |
 | `orbit plugin list` / `show <ns>` | What is installed or pinned, its tools, and its **requested versus granted** permissions side by side. |
 | `orbit plugin doctor` | One row per plugin naming the step that would make it active. |
 | `orbit plugin validate <dir>` | Check a manifest without installing it. Every rejection names the offending field. |

@@ -87,6 +87,18 @@ fn cli_parses_the_plugin_lifecycle() {
         _ => panic!("expected the plugin command"),
     }
 
+    let cli = Cli::parse_from(["orbit", "plugin", "remove", "demo", "--yes"]);
+    match cli.command {
+        Commands::Plugin(command) => match command.command {
+            PluginSubcommand::Remove(args) => {
+                assert_eq!(args.name, "demo");
+                assert!(args.yes);
+            }
+            _ => panic!("expected plugin remove"),
+        },
+        _ => panic!("expected the plugin command"),
+    }
+
     let cli = Cli::parse_from([
         "orbit",
         "plugin",

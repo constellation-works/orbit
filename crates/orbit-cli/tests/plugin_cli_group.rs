@@ -415,6 +415,100 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
         .stdout(predicate::str::contains("failed"));
 }
 
+#[cfg(unix)]
+#[test]
+fn remove_requires_confirmation_unlinks_skills_and_renders_json() {
+    let fixture = Fixture::new();
+    let source = fixture.source("demo");
+    let source_arg = source.to_str().expect("utf8 source");
+
+    fixture
+        .orbit()
+        .args(["plugin", "scaffold", "demo", "--dir", source_arg])
+        .assert()
+        .success();
+    let added = fixture
+        .orbit()
+        .args(["plugin", "add", source_arg, "--enable", "--format", "json"])
+        .output()
+        .expect("add enabled plugin");
+    assert!(added.status.success(), "{added:?}");
+    let added = stdout_json(&added);
+    let install_path = Path::new(added["install_path"].as_str().expect("install_path string"));
+    let link_roots = [".agents", ".claude"].map(|dir| fixture.home.join(dir).join("skills"));
+    for root in &link_roots {
+        assert!(
+            std::fs::symlink_metadata(root.join("demo-demo"))
+                .expect("plugin skill link")
+                .file_type()
+                .is_symlink(),
+            "add --enable must link the scaffolded skill into {}",
+            root.display()
+        );
+    }
+
+    fixture
+        .orbit()
+        .args(["plugin", "remove", "demo"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("pass --yes to proceed"));
+
+    let removed = fixture
+        .orbit()
+        .args(["plugin", "remove", "demo", "--yes", "--format", "json"])
+        .output()
+        .expect("remove plugin");
+    assert!(removed.status.success(), "{removed:?}");
+    let removed = stdout_json(&removed);
+    assert_eq!(removed["name"], "demo");
+    assert_eq!(removed["removed"], true);
+    assert_eq!(removed["plugin_data_retained"], true);
+    for root in &link_roots {
+        assert!(
+            std::fs::symlink_metadata(root.join("demo-demo")).is_err(),
+            "remove must not leave a demo-* link in {}",
+            root.display()
+        );
+    }
+
+    // Reproduce the legacy leftover before reinstalling. Its target is in the
+    // same namespace's install family but names an absent prior version.
+    let previous_skill = install_path
+        .parent()
+        .expect("plugin install family")
+        .join("0.0.0/skills/demo");
+    for root in &link_roots {
+        std::os::unix::fs::symlink(&previous_skill, root.join("demo-demo"))
+            .expect("create dangling plugin-owned link");
+    }
+
+    fixture
+        .orbit()
+        .args(["plugin", "add", source_arg, "--enable"])
+        .assert()
+        .success();
+    for root in &link_roots {
+        assert_eq!(
+            root.join("demo-demo")
+                .canonicalize()
+                .expect("relinked skill resolves"),
+            install_path
+                .join("skills/demo")
+                .canonicalize()
+                .expect("reinstalled skill resolves"),
+            "re-add must replace the dangling plugin-owned link in {}",
+            root.display()
+        );
+    }
+
+    fixture
+        .orbit()
+        .args(["plugin", "remove", "demo", "--yes"])
+        .assert()
+        .success();
+}
+
 #[test]
 fn tool_scaffold_still_works_and_points_at_plugin_scaffold() {
     let fixture = Fixture::new();

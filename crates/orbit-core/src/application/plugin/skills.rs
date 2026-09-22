@@ -138,7 +138,8 @@ fn ensure_plugin_skill_link(
     })?;
     let existing_is_plugin_owned = existing
         .canonicalize()
-        .is_ok_and(|resolved| resolved.starts_with(install_family));
+        .is_ok_and(|resolved| resolved.starts_with(install_family))
+        || (!existing.exists() && existing.starts_with(install_family));
     if !existing_is_plugin_owned {
         return Err(OrbitError::InvalidInput(format!(
             "refusing to replace discovery link '{}' because it points outside plugin '{}'",
