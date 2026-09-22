@@ -24,7 +24,7 @@ pub struct PluginScaffoldArgs {
     /// Namespace for the new plugin: it owns `<ns>.*` tools, `orbit <ns>`,
     /// and `[plugins.<ns>]`
     pub namespace: String,
-    /// Directory to create (defaults to `./<namespace>`)
+    /// Directory to create (defaults to `~/.orbit/scaffold/<namespace>`)
     #[arg(long)]
     pub dir: Option<PathBuf>,
     /// Overwrite existing files
@@ -41,7 +41,10 @@ impl Execute for PluginScaffoldArgs {
                  '_' or '-', starting with a letter, and not the reserved 'orbit'"
             )));
         }
-        let root = self.dir.unwrap_or_else(|| PathBuf::from(&namespace));
+        // Plugin installation deliberately refuses sources inside a workspace
+        // repository. Keep the no-flag scaffold path vendorable when this
+        // command is run from the repository it just initialized.
+        let root = self.dir.unwrap_or_else(|| default_scaffold_dir(&namespace));
         let files = scaffold_files(&namespace);
         if !self.force {
             for (relative, _, _) in &files {
@@ -75,8 +78,8 @@ impl Execute for PluginScaffoldArgs {
             .collect();
         let text = format!(
             "Created the '{namespace}' plugin in {root_display}:\n{}\n\nNext steps:\n  orbit \
-             plugin validate {root_display}\n  orbit plugin test {root_display}\n  orbit plugin \
-             add {root_display} --enable\n  orbit {namespace} status\n\nThe seeded auto-task is \
+             plugin validate {root_display}\n  orbit plugin add {root_display} --enable\n  orbit plugin \
+             test {root_display}\n  orbit {namespace} status\n\nThe seeded auto-task is \
              disabled; review it before switching it on.",
             written
                 .iter()
@@ -94,6 +97,15 @@ impl Execute for PluginScaffoldArgs {
         )
         .into())
     }
+}
+
+fn default_scaffold_dir(namespace: &str) -> PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".orbit/scaffold")
+        .join(namespace)
 }
 
 /// `(path relative to the plugin root, contents, executable)`.

@@ -5,10 +5,10 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::plugin::{
-    FIRST_PARTY_PUBLISHER, MANIFEST_KIND, MANIFEST_SCHEMA_VERSION, ORBIT_NAMESPACE_PREFIX,
-    PluginBackend, PluginBackendType, PluginExecutionKind, PluginManifest, PluginMcpScope,
-    PluginMetadata, PluginOrigin, PluginPermissions, PluginRequires, PluginSandbox, PluginSpec,
-    PluginToolSpec, is_valid_namespace, is_valid_verb,
+    MANIFEST_KIND, MANIFEST_SCHEMA_VERSION, ORBIT_NAMESPACE_PREFIX, PluginBackend,
+    PluginBackendType, PluginExecutionKind, PluginManifest, PluginMcpScope, PluginMetadata,
+    PluginPermissions, PluginRequires, PluginSandbox, PluginSpec, PluginToolSpec,
+    is_valid_namespace, is_valid_verb,
 };
 use orbit_types::tool::ToolParam;
 use serde::Deserialize;
@@ -67,8 +67,10 @@ pub fn load_sidecar_manifest(path: &Path) -> Result<SidecarManifest, OrbitError>
 }
 
 /// Build a v2 manifest from v1 sidecars sharing one namespace. Tool names are
-/// preserved: `orbit.graph.recommend` becomes namespace `graph` with
-/// `origin: orbit` and verb `recommend`.
+/// preserved: `orbit.graph.recommend` becomes namespace `graph` and verb
+/// `recommend`. Migration never asserts first-party provenance: operators may
+/// add `origin: orbit` only when the plugin satisfies the first-party source
+/// rule.
 pub fn migrate_sidecars(
     sidecars: &[SidecarManifest],
     backend_command: &str,
@@ -80,17 +82,17 @@ pub fn migrate_sidecars(
             "no v1 sidecars to migrate; pass --sidecar or --sidecar-dir".to_string(),
         ));
     }
-    let mut namespace: Option<(String, bool)> = None;
+    let mut namespace: Option<String> = None;
     let mut tools = Vec::with_capacity(sidecars.len());
     for sidecar in sidecars {
         let (ns, first_party, verb) = split_tool_name(&sidecar.name, namespace_override)?;
         match &namespace {
-            None => namespace = Some((ns.clone(), first_party)),
-            Some((seen, seen_first_party)) if *seen != ns || *seen_first_party != first_party => {
+            None => namespace = Some(ns.clone()),
+            Some(seen) if *seen != ns => {
                 return Err(OrbitError::InvalidInput(format!(
                     "sidecars span more than one namespace ('{}' and '{}'); one plugin owns one \
                      namespace, so migrate each set separately",
-                    display_namespace(seen, *seen_first_party),
+                    seen,
                     display_namespace(&ns, first_party)
                 )));
             }
@@ -114,7 +116,7 @@ pub fn migrate_sidecars(
             cli: None,
         });
     }
-    let (namespace, first_party) = namespace.unwrap_or_default();
+    let namespace = namespace.unwrap_or_default();
     Ok(PluginManifest {
         schema_version: MANIFEST_SCHEMA_VERSION,
         kind: MANIFEST_KIND.to_string(),
@@ -122,8 +124,8 @@ pub fn migrate_sidecars(
             name: namespace,
             version: version.to_string(),
             description: String::new(),
-            publisher: first_party.then(|| FIRST_PARTY_PUBLISHER.to_string()),
-            origin: first_party.then_some(PluginOrigin::Orbit),
+            publisher: None,
+            origin: None,
             homepage: None,
         },
         spec: PluginSpec {

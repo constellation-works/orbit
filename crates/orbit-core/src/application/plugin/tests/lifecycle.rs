@@ -325,11 +325,20 @@ fn migrate_writes_a_v2_manifest_from_v1_sidecars() {
     .expect("migrate");
     assert!(yaml.contains("kind: Plugin"), "{yaml}");
     assert_eq!(path.as_deref(), Some(out_dir.join("plugin.yaml").as_path()));
+    assert!(
+        !yaml.contains("null") && !yaml.contains("[]"),
+        "migration must omit optional and empty fields: {yaml}"
+    );
+    assert!(yaml.contains("command: bin/legacy-tool"), "{yaml}");
+    assert!(
+        !yaml.contains("publisher:") && !yaml.contains("origin:"),
+        "migration must not claim first-party provenance: {yaml}"
+    );
 
     // The generated manifest is what `orbit plugin validate` accepts, and the
-    // v1 tool names survive.
-    std::fs::copy(plugin_dir.join("legacy-tool"), out_dir.join("legacy-tool"))
-        .expect("copy backend");
+    // v1 tool names survive. Migration places the backend in the plugin root
+    // even though its source and sidecars were elsewhere.
+    assert!(out_dir.join("bin/legacy-tool").is_file());
     let report = validate_plugin_dir(&fixture.runtime, &out_dir, false).expect("validate migrated");
     assert_eq!(report.tools, ["legacy.recommend", "legacy.status"]);
 }
