@@ -14,8 +14,8 @@ use crate::runtime::plugin_host;
 pub use crate::application::plugin::{
     PluginAddOptions, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
     PluginLinkSummary, PluginMigrateRequest, PluginPanelSummary, PluginPermissionSummary,
-    PluginSeedAction, PluginSeedOutcome, PluginSummary, PluginSyncOutcome, PluginTestOutcome,
-    PluginTestReport, PluginToolSummary, PluginValidationReport,
+    PluginSeedAction, PluginSeedOutcome, PluginSummary, PluginSyncOutcome, PluginTestOptions,
+    PluginTestOutcome, PluginTestReport, PluginToolSummary, PluginValidationReport,
 };
 pub use crate::runtime::plugin_host::{PluginCliGroup, PluginCliVerb};
 
@@ -73,10 +73,17 @@ impl OrbitRuntime {
     }
 
     /// Run a plugin directory's `spec.tests` goldens through the real
-    /// protocol in a temp workspace, and record the passing Orbit version on
-    /// this host's record when the directory is the installed one (§5).
-    pub fn test_plugin_dir(&self, dir: &Path) -> Result<PluginTestReport, OrbitError> {
-        plugin::test_plugin_dir(self, dir)
+    /// protocol in a temp workspace. `options` consents to an unconfined
+    /// backend, an absolute write root, `network: any`, or `env_pass`;
+    /// without that consent those requests are refused. A passing run records
+    /// the Orbit version on this host's record when the directory is the
+    /// installed one (§5).
+    pub fn test_plugin_dir(
+        &self,
+        dir: &Path,
+        options: &PluginTestOptions,
+    ) -> Result<PluginTestReport, OrbitError> {
+        plugin::test_plugin_dir(self, dir, options)
     }
 
     /// Execute one declared dashboard panel's `read_only` source (§4.7).

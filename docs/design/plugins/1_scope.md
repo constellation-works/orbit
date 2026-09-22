@@ -483,10 +483,15 @@ schema self-consistency, definition cross-references, and the `spec.web` rules o
 `orbit plugin test <dir>` — runs `spec.tests` goldens through the real protocol. Each file is
 `schemaVersion: 1`, `kind: PluginTest`, and a list of `{name, tool, input, expect.output}`
 cases; `tool` is the manifest verb, so a golden travels with the plugin. A case whose tool
-the manifest does not declare refuses the directory rather than being skipped. The run is
-hermetic: a temp directory stands in for the global root and the workspace, and the backend
-runs under the profile the manifest *requests*, so the answer is "would this plugin work
-once granted" rather than "what may it do here right now". Output is compared as JSON
+the manifest does not declare refuses the directory rather than being skipped. A temp
+directory stands in for the global root and the workspace, so template paths do not touch
+the operator's Orbit state. Template paths, `network: loopback`, and `orbit_tools` run
+under the profile the manifest requests. An unconfined backend (`sandbox: none`), an
+absolute non-template `fs.write` root, `network: any`, or any `env_pass` is refused, and
+the refusal prints the requested grant set, unless the caller passes `--accept-requested`
+or a `--grant` list naming each of those grants. With that consent the run uses the
+requested profile. The consent is for this run only and does not record a host grant.
+Output is compared as JSON
 (exact, key order irrelevant); a failure names the test and prints expected beside actual,
 and the command exits non-zero so a plugin's own CI can gate on it. A passing run records the
 host's version on the installed plugin — `orbit plugin show` then prints "Certified for:

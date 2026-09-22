@@ -44,6 +44,11 @@ orbit plugin list                        # what is installed or pinned here
 orbit plugin show my-plugin              # tools, panels, and requested versus granted
 ```
 
+Run `orbit plugin test` before `add`. It applies ordinary template paths on its
+own. When the manifest asks for an unconfined backend, an absolute write root,
+`network: any`, or `env_pass`, it stops and prints the requested grants instead
+of running them. See [Certifying a plugin](#certifying-a-plugin-for-this-orbit).
+
 `add` also accepts `git+<url>#<ref>` and a `.tar.gz` archive. `--enable`
 installs and enables in one step. The tool registry is built when an Orbit
 command starts, so an enable takes effect on the next command — restart a
@@ -129,9 +134,22 @@ orbit plugin test ./demo              # run its goldens through the real protoco
 ```
 
 `orbit plugin test` runs each `spec.tests` golden — `{name, tool, input, expect.output}` —
-in a temp workspace with the grants the manifest requests, compares the output exactly, and
-exits non-zero when a case fails, naming it. A passing run records this Orbit's version on
-the installed plugin, and `orbit plugin show <ns>` prints it as `Certified for: <version>`.
+in a temp workspace and compares the output exactly. It exits non-zero when a case fails,
+naming it. Template paths (`{{workspace}}`, `{{plugin_root}}`, `{{plugin_state}}`,
+`{{config.<key>}}`), `network: loopback`, and `orbit_tools` are applied as the manifest
+requests them, inside that temp workspace, so those paths do not touch the operator's
+Orbit state.
+
+The command refuses, and prints the requested grant set, when the manifest asks for an
+unconfined backend (`backend.sandbox: none`), an absolute `fs.write` root that is not a
+template, `network: any`, or any `env_pass` variable. Re-run with `--accept-requested` to
+test under that requested profile, or with `--grant` using the same names as `orbit plugin
+enable --grant` (`fs`, `network`, `env_pass`, `orbit_tools`, `unsandboxed`). The `--grant`
+list has to name each of those requests. Either flag applies only to this run and does not
+record a host grant; `orbit plugin enable --grant` is still what authorizes the installed
+plugin.
+
+A passing run records this Orbit's version on the installed plugin, and `orbit plugin show <ns>` prints it as `Certified for: <version>`.
 The record is only written when the directory tested is the installed one (same manifest
 digest); reinstalling a changed manifest drops the claim.
 
