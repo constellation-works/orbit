@@ -439,6 +439,10 @@ pub struct PluginWebPanel {
     pub render: PluginPanelRender,
     #[serde(default)]
     pub group: PluginPanelGroup,
+    /// How long the dashboard server may reuse this panel's last successful
+    /// response. Omitted panels use [`DEFAULT_PANEL_REFRESH_MS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_ms: Option<u64>,
 }
 
 impl PluginWebPanel {
@@ -453,6 +457,15 @@ impl PluginWebPanel {
 
 /// The only source form v1 accepts.
 pub const PANEL_SOURCE_TOOL_PREFIX: &str = "tool:";
+
+/// Default server-side panel cache window. It matches the dashboard refresh
+/// cadence, so overlapping tabs share a single audited backend execution.
+pub const DEFAULT_PANEL_REFRESH_MS: u64 = 30_000;
+
+/// Bounds keep a manifest from accidentally turning a visible dashboard tab
+/// into a tight backend loop or a day-long stale view.
+pub const MIN_PANEL_REFRESH_MS: u64 = 1_000;
+pub const MAX_PANEL_REFRESH_MS: u64 = 3_600_000;
 
 /// The schemes a `spec.web.links[].url` may use (§4.7).
 pub const LINK_URL_SCHEMES: &[&str] = &["http://", "https://"];
@@ -744,6 +757,16 @@ impl PluginManifest {
                         "panel '{}' sources tool '{verb}', which is `execution_kind: mutating`; \
                          a dashboard panel may only read a `read_only` tool",
                         panel.id
+                    ),
+                ));
+            }
+            if let Some(refresh_ms) = panel.refresh_ms
+                && !(MIN_PANEL_REFRESH_MS..=MAX_PANEL_REFRESH_MS).contains(&refresh_ms)
+            {
+                return Err(PluginManifestError::new(
+                    format!("{field}.refresh_ms"),
+                    format!(
+                        "must be between {MIN_PANEL_REFRESH_MS} and {MAX_PANEL_REFRESH_MS} milliseconds"
                     ),
                 ));
             }

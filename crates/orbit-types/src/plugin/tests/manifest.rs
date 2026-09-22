@@ -307,7 +307,32 @@ fn panel(id: &str, source: &str) -> PluginWebPanel {
         source: source.into(),
         render: PluginPanelRender::Kv,
         group: PluginPanelGroup::Diagnostics,
+        refresh_ms: None,
     }
+}
+
+#[test]
+fn a_panel_refresh_window_is_optional_and_bounded() {
+    let mut manifest = minimal();
+    let mut web_panel = panel("index", "tool:hello");
+    web_panel.refresh_ms = Some(super::super::manifest::MIN_PANEL_REFRESH_MS);
+    manifest.spec.web = Some(PluginWebSection {
+        panels: vec![web_panel.clone()],
+        links: vec![],
+    });
+    manifest
+        .validate_structure()
+        .expect("the minimum panel refresh window is valid");
+
+    web_panel.refresh_ms = Some(super::super::manifest::MIN_PANEL_REFRESH_MS - 1);
+    manifest.spec.web = Some(PluginWebSection {
+        panels: vec![web_panel],
+        links: vec![],
+    });
+    assert_eq!(
+        manifest.validate_structure().unwrap_err().field,
+        "spec.web.panels[0].refresh_ms"
+    );
 }
 
 /// §4.7: a panel may only read a `read_only` tool, and the refusal names the

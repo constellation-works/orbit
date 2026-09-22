@@ -84,6 +84,16 @@ impl OrbitRuntime {
         plugin::list_plugins(self)
     }
 
+    /// Whether host plugin lifecycle state changed after this runtime built
+    /// its plugin tool surface.
+    ///
+    /// Long-lived hosts use this cheap row comparison to discard the frozen
+    /// runtime and rebuild it. The replacement then loads manifests, grants,
+    /// tools, panels and links from one coherent pass.
+    pub fn plugin_state_changed(&self) -> Result<bool, OrbitError> {
+        Ok(self.stores().plugins().list_plugins()? != self.plugin_load().installed)
+    }
+
     pub fn show_plugin(&self, name: &str) -> Result<PluginSummary, OrbitError> {
         plugin::show_plugin(self, name)
     }
@@ -134,6 +144,11 @@ impl OrbitRuntime {
     /// Execute one declared dashboard panel's `read_only` source (§4.7).
     pub fn read_plugin_panel(&self, namespace: &str, panel: &str) -> Result<Value, OrbitError> {
         plugin::read_plugin_panel(self, namespace, panel)
+    }
+
+    /// Effective server-side cache window for one dashboard panel.
+    pub fn plugin_panel_refresh_ms(&self, namespace: &str, panel: &str) -> Result<u64, OrbitError> {
+        plugin::plugin_panel_refresh_ms(self, namespace, panel)
     }
 
     /// The `orbit <ns>` command groups this runtime's active plugins

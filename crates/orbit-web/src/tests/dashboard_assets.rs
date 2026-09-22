@@ -5200,7 +5200,7 @@ fn dashboard_config_renders_provenance_and_writes_one_key_per_save() {
 fn dashboard_plugins_tab_renders_every_panel_mode_and_sanitises_markdown() {
     run_dashboard_javascript_test(&format!(
         "{}\n{}",
-        include_str!("dashboard_loading_dom.mjs"),
+        include_str!("dashboard_purify_dom.mjs"),
         include_str!("dashboard_plugins.mjs")
     ));
 }

@@ -162,6 +162,7 @@ spec:
         source: tool:status                          # read_only tools only
         render: kv                                   # kv | table | markdown | json
         group: diagnostics                           # diagnostics | operations | config
+        refresh_ms: 30000                            # optional; 1000..3600000
     links:
       - title: Graph explorer
         url: "http://127.0.0.1:{{config.explorer_port}}"
@@ -745,9 +746,23 @@ refuses a manifest whose panel names a mutating tool — naming the panel — so
 re-checks the loaded manifest before executing. Writes (install, enable, grants) stay on the
 CLI, where the operator answers the grant request.
 
+The server single-flights each workspace/plugin/panel and reuses its successful response for
+`refresh_ms` (30 seconds when omitted; accepted range 1–3600 seconds). Tabs therefore share one
+audited backend execution per TTL window. Failures are not cached. Serialized tool output is
+limited to 256 KiB; a larger value becomes a bounded JSON prefix with `truncated: true` and a
+diagnostic stating the original size and limit, so a backend cannot make the dashboard retain
+or ship an unbounded response.
+
+Long-lived dashboard runtimes compare the current host plugin row set, including each row's
+`updated_at`, with the exact rows used to build their tool surface. An install, enable, disable,
+upgrade, grant, or certification change evicts and lazily rebuilds the affected workspace
+runtime on its next request. `GET /api/plugins` and panel routes therefore reflect CLI lifecycle
+changes without restarting `orbit web serve`.
+
 `links` are plain tiles to plugin-hosted UIs (loopback by default), with `{{config.<key>}}`
-rendered against the plugin's effective `[plugins.<ns>]` section; an unresolved reference is
-left visible rather than half-rendered. A tile's URL must be `http://` or `https://` —
+rendered against the plugin's effective `[plugins.<ns>]` section; any unresolved allowed
+reference (`workspace`, `plugin_state`, or `config`) is left visible rather than rendered as an
+empty string or a half-resolved URL. A tile's URL must be `http://` or `https://` —
 `validate_structure` refuses any other scheme, and the renderer draws no tile for one, so a
 `javascript:` URL can never become an anchor in the operator's session. Plugins cannot introduce tabs or switch built-in
 dashboard features on; that idea is deferred past v1. `router.js` gains one `plugins` entry

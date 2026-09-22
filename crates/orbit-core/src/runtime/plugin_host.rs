@@ -98,6 +98,10 @@ pub struct RegisteredPlugin {
 /// Outcome of a host plugin load pass.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PluginHostLoad {
+    /// Exact host rows this load pass observed. The long-lived dashboard uses
+    /// this snapshot to notice a later lifecycle write and rebuild the tool
+    /// surface before serving another plugin request.
+    pub(crate) installed: Vec<InstalledPlugin>,
     pub registered: Vec<RegisteredPlugin>,
     pub diagnostics: Vec<PluginDiagnostic>,
 }
@@ -426,6 +430,7 @@ fn load_host_plugins_with_audit(
         Ok(installed) => installed,
         Err(error) => {
             return PluginHostLoad {
+                installed: Vec::new(),
                 registered: Vec::new(),
                 diagnostics: vec![PluginDiagnostic {
                     plugin: String::new(),
@@ -436,7 +441,10 @@ fn load_host_plugins_with_audit(
         }
     };
 
-    let mut load = PluginHostLoad::default();
+    let mut load = PluginHostLoad {
+        installed: installed.clone(),
+        ..PluginHostLoad::default()
+    };
     let mut active_definition_owners = ActiveDefinitionOwners::default();
     for plugin in &installed {
         // The grant set a row records is only authority when `orbit plugin

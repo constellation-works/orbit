@@ -13,14 +13,20 @@
 //! That is what makes a panel safe to serve to any dashboard session while
 //! the dashboard's mutations still require an operator session.
 
-use axum::extract::Path;
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::adapter::command::PluginSummary;
 use orbit_types::plugin::PluginStatus;
 use serde_json::{Value, json};
 
 use super::{blocking, not_found, validate_id};
-use crate::state::Ws;
+use crate::state::{DashboardState, Ws};
+
+/// Maximum serialized tool output retained or returned for one panel.
+pub(crate) const PANEL_OUTPUT_LIMIT_BYTES: usize = 256 * 1024;
 
 pub(super) async fn list_plugins(Ws(runtime): Ws) -> Response {
     match blocking("list plugins", move || runtime.list_plugins()).await {
@@ -32,6 +38,7 @@ pub(super) async fn list_plugins(Ws(runtime): Ws) -> Response {
 }
 
 pub(super) async fn read_panel(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Path((namespace, panel)): Path<(String, String)>,
 ) -> Response {
@@ -46,16 +53,55 @@ pub(super) async fn read_panel(
     // asks for what a previous `/api/plugins` listed, and a plugin disabled
     // since then is exactly this answer. `map_runtime_error` only knows the
     // task/job kinds, so the projection happens here.
-    match blocking("read plugin panel", move || {
-        Ok(runtime.read_plugin_panel(&namespace, &panel))
-    })
-    .await
+    let refresh_ms = match runtime.plugin_panel_refresh_ms(&namespace, &panel) {
+        Ok(refresh_ms) => refresh_ms,
+        Err(orbit_core::OrbitError::NotFound { id, .. }) => return not_found(id),
+        Err(error) => return super::map_runtime_error(error),
+    };
+    let compute_runtime = Arc::clone(&runtime);
+    let compute_namespace = namespace.clone();
+    let compute_panel = panel.clone();
+    match state
+        .plugin_panel_memo()
+        .get_or_compute(
+            &runtime,
+            &namespace,
+            &panel,
+            Duration::from_millis(refresh_ms),
+            move || {
+                compute_runtime
+                    .read_plugin_panel(&compute_namespace, &compute_panel)
+                    .map(bounded_panel_response)
+            },
+        )
+        .await
     {
-        Ok(Ok(output)) => Json(json!({ "output": output })).into_response(),
-        Ok(Err(orbit_core::OrbitError::NotFound { id, .. })) => not_found(id),
-        Ok(Err(error)) => super::map_runtime_error(error),
-        Err(response) => *response,
+        Ok(body) => Json((*body).clone()).into_response(),
+        Err(orbit_core::OrbitError::NotFound { id, .. }) => not_found(id),
+        Err(error) => super::map_runtime_error(error),
     }
+}
+
+fn bounded_panel_response(output: Value) -> Value {
+    let serialized = serde_json::to_string(&output).unwrap_or_else(|_| "null".to_string());
+    let original_bytes = serialized.len();
+    if original_bytes <= PANEL_OUTPUT_LIMIT_BYTES {
+        return json!({ "output": output });
+    }
+
+    // JSON string escaping can expand the preview, so retain at most half the
+    // ceiling and leave room for the diagnostic envelope.
+    let mut end = PANEL_OUTPUT_LIMIT_BYTES / 2;
+    while !serialized.is_char_boundary(end) {
+        end -= 1;
+    }
+    json!({
+        "output": &serialized[..end],
+        "truncated": true,
+        "diagnostic": format!(
+            "Panel output was {original_bytes} bytes, above the {PANEL_OUTPUT_LIMIT_BYTES}-byte limit; showing a serialized JSON prefix."
+        ),
+    })
 }
 
 fn plugin_to_json(summary: &PluginSummary) -> Value {
@@ -104,6 +150,7 @@ fn plugin_to_json(summary: &PluginSummary) -> Value {
                 "tool": panel.tool,
                 "render": panel.render.as_str(),
                 "group": panel.group.as_str(),
+                "refresh_ms": panel.refresh_ms,
             }))
             .collect::<Vec<_>>(),
         "links": summary

@@ -9,14 +9,15 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
-use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::{PluginAddOptions, PluginEnableOptions};
+use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::{OrbitRuntime, ShipMode};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
 use super::super::router;
 use super::test_support::body_json;
-use crate::state::DashboardState;
+use crate::state::{DashboardState, WsEntry};
 
 struct PluginFixture {
     _temp: TempDir,
@@ -46,6 +47,29 @@ impl PluginFixture {
     fn source(&self) -> PathBuf {
         self._temp.path().join("sources/panels")
     }
+
+    fn dashboard_state(&self) -> DashboardState {
+        let binding_id = self.runtime().workspace_id().expect("workspace id");
+        DashboardState::global(
+            self.global_root.clone(),
+            vec![WsEntry {
+                id: "ws_plugins".to_string(),
+                name: "plugins".to_string(),
+                repo_root: self._temp.path().join("repo"),
+                orbit_dir: self.workspace_root.clone(),
+                binding: Some(WorkspaceRuntimeBinding {
+                    logical_workspace_id: binding_id.clone(),
+                    task_partition_id: binding_id,
+                    owner_machine_id: None,
+                    repo_root: self._temp.path().join("repo"),
+                    ship_mode: ShipMode::Local,
+                    base_branch: None,
+                }),
+                active: true,
+            }],
+            Some("ws_plugins".to_string()),
+        )
+    }
 }
 
 /// A plugin with one `read_only` tool and one `kv` panel over it.
@@ -65,12 +89,32 @@ fn write_plugin(root: &Path) {
     }
     std::fs::write(
         root.join("plugin.yaml"),
-        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: panels\n  version: 0.1.0\n  \
-         description: Panel fixture.\nspec:\n  backend:\n    type: exec\n    command: \
-         bin/backend.sh\n  tools:\n    - name: status\n      description: Report status.\n      \
-         execution_kind: read_only\n      mcp_scope: workspace\n  web:\n    panels:\n      - id: \
-         status\n        title: Index\n        source: tool:status\n        render: kv\n    \
-         links:\n      - title: Explorer\n        url: http://127.0.0.1:7890/\n",
+        r#"schemaVersion: 2
+kind: Plugin
+metadata:
+  name: panels
+  version: 0.1.0
+  description: Panel fixture.
+spec:
+  backend:
+    type: exec
+    command: bin/backend.sh
+  tools:
+    - name: status
+      description: Report status.
+      execution_kind: read_only
+      mcp_scope: workspace
+  web:
+    panels:
+      - id: status
+        title: Index
+        source: tool:status
+        render: kv
+        refresh_ms: 1000
+    links:
+      - title: Explorer
+        url: http://127.0.0.1:7890/
+"#,
     )
     .expect("write manifest");
 }
@@ -120,9 +164,12 @@ async fn plugins_list_reports_enable_state_and_a_panel_serves_its_read_only_tool
             &PluginAddOptions::default(),
         )
         .expect("install the fixture plugin");
+    let state = fixture.dashboard_state();
 
-    // Installed but not enabled: listed, with the step that would activate it.
-    let payload = body_json(get(state(fixture.runtime()), "/plugins").await).await;
+    // This request builds and caches the web runtime while the plugin is
+    // disabled. The same DashboardState must observe the lifecycle write
+    // below without a server restart.
+    let payload = body_json(get(state.clone(), "/plugins").await).await;
     let plugin = &payload
         .as_array()
         .unwrap_or_else(|| panic!("an array of plugins, got {payload}"))[0];
@@ -143,7 +190,7 @@ async fn plugins_list_reports_enable_state_and_a_panel_serves_its_read_only_tool
         .enable_plugin("panels", &PluginEnableOptions::default())
         .expect("enable the fixture plugin");
 
-    let payload = body_json(get(state(fixture.runtime()), "/plugins").await).await;
+    let payload = body_json(get(state.clone(), "/plugins").await).await;
     let plugin = &payload.as_array().expect("an array of plugins")[0];
     assert_eq!(plugin["status"], "active");
     assert_eq!(plugin["enabled"], true);
@@ -153,11 +200,8 @@ async fn plugins_list_reports_enable_state_and_a_panel_serves_its_read_only_tool
     assert_eq!(plugin["links"][0]["url"], "http://127.0.0.1:7890/");
     assert_eq!(plugin["tools"][0]["execution_kind"], "read_only");
 
-    let response = without_inherited_activity_scope(get(
-        state(fixture.runtime()),
-        "/plugins/panels/panels/status",
-    ))
-    .await;
+    let response =
+        without_inherited_activity_scope(get(state, "/plugins/panels/panels/status")).await;
     let status = response.status();
     let payload = body_json(response).await;
     assert_eq!(status, StatusCode::OK, "{payload}");
@@ -165,6 +209,99 @@ async fn plugins_list_reports_enable_state_and_a_panel_serves_its_read_only_tool
         payload["output"],
         serde_json::json!({ "indexed": 7, "state": "ready" }),
         "the panel serves the source tool's output"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn concurrent_panel_reads_write_one_audit_row_per_ttl_window() {
+    let fixture = PluginFixture::new();
+    let source = fixture.source();
+    write_plugin(&source);
+    let runtime = fixture.runtime();
+    runtime
+        .add_plugin(
+            source.to_str().expect("utf8 source"),
+            &PluginAddOptions::default(),
+        )
+        .expect("install plugin");
+    runtime
+        .enable_plugin("panels", &PluginEnableOptions::default())
+        .expect("enable plugin");
+    let state = fixture.dashboard_state();
+
+    let (first, second) = without_inherited_activity_scope(async {
+        tokio::join!(
+            get(state.clone(), "/plugins/panels/panels/status"),
+            get(state.clone(), "/plugins/panels/panels/status"),
+        )
+    })
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::OK);
+    assert_eq!(
+        runtime
+            .list_audit_events(None, Some("panels.status".to_string()), None, None, 10)
+            .expect("audit rows")
+            .len(),
+        1,
+        "overlapping tabs must share one audited panel execution"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(1_050)).await;
+    let third = without_inherited_activity_scope(get(state, "/plugins/panels/panels/status")).await;
+    assert_eq!(third.status(), StatusCode::OK);
+    assert_eq!(
+        runtime
+            .list_audit_events(None, Some("panels.status".to_string()), None, None, 10)
+            .expect("audit rows")
+            .len(),
+        2,
+        "the next TTL window admits exactly one new execution"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn oversized_panel_output_is_replaced_by_a_bounded_diagnostic_payload() {
+    let fixture = PluginFixture::new();
+    let source = fixture.source();
+    write_plugin(&source);
+    std::fs::write(
+        source.join("bin/backend.sh"),
+        "#!/bin/sh\ncat > /dev/null\nprintf '{\"ok\":true,\"output\":\"'\nhead -c 300000 /dev/zero | tr '\\000' x\nprintf '\"}\\n'\n",
+    )
+    .expect("large-output backend");
+    let runtime = fixture.runtime();
+    runtime
+        .add_plugin(
+            source.to_str().expect("utf8 source"),
+            &PluginAddOptions::default(),
+        )
+        .expect("install plugin");
+    runtime
+        .enable_plugin("panels", &PluginEnableOptions::default())
+        .expect("enable plugin");
+
+    let response = without_inherited_activity_scope(get(
+        fixture.dashboard_state(),
+        "/plugins/panels/panels/status",
+    ))
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(payload["truncated"], true);
+    assert!(
+        payload["diagnostic"]
+            .as_str()
+            .is_some_and(|message| message.contains("above the 262144-byte limit")),
+        "a truncated response explains its ceiling: {payload}"
+    );
+    assert!(
+        payload["output"]
+            .as_str()
+            .is_some_and(|output| output.len() < 262_144),
+        "the retained prefix stays below the ceiling"
     );
 }
 

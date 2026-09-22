@@ -5,6 +5,7 @@ mod fixture;
 mod grants;
 mod install;
 mod lifecycle;
+mod panels;
 mod plugin_config;
 mod seed;
 mod skills;

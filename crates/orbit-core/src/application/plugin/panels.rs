@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 use orbit_tools::plugin::LoadedPlugin;
 use orbit_types::plugin::{
-    PluginExecutionKind, PluginPanelGroup, PluginPanelRender, PluginTemplateVars, plugin_tool_name,
-    render_template,
+    DEFAULT_PANEL_REFRESH_MS, PluginExecutionKind, PluginPanelGroup, PluginPanelRender,
+    PluginTemplateVars, PluginWebPanel, plugin_tool_name, render_template, template_references,
 };
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::Value;
@@ -29,6 +29,8 @@ pub struct PluginPanelSummary {
     pub tool: String,
     pub render: PluginPanelRender,
     pub group: PluginPanelGroup,
+    /// Effective server-side cache window for this panel.
+    pub refresh_ms: u64,
 }
 
 /// One link tile, with its `{{config.<key>}}` references resolved against
@@ -63,6 +65,7 @@ pub(super) fn web_summaries(
                 tool: plugin_tool_name(plugin.namespace(), verb, first_party),
                 render: panel.render,
                 group: panel.group,
+                refresh_ms: panel.refresh_ms.unwrap_or(DEFAULT_PANEL_REFRESH_MS),
             })
         })
         .collect();
@@ -81,8 +84,18 @@ pub(super) fn web_summaries(
             // A reference the configuration does not answer leaves the
             // template visible rather than half-rendering a URL: an operator
             // seeing `{{config.port}}` knows which key to set.
-            url: render_template(&link.url, &vars, &format!("spec.web.links[{index}].url"))
-                .unwrap_or_else(|_| link.url.clone()),
+            url: if template_references(&link.url)
+                .iter()
+                .any(|reference| matches!(reference.as_str(), "workspace" | "plugin_state"))
+            {
+                // Dashboard summaries have no backend invocation context.
+                // Keep the complete template visible instead of partially
+                // resolving other references around an unavailable one.
+                link.url.clone()
+            } else {
+                render_template(&link.url, &vars, &format!("spec.web.links[{index}].url"))
+                    .unwrap_or_else(|_| link.url.clone())
+            },
         })
         .collect();
     (panels, links)
@@ -100,29 +113,7 @@ pub fn read_plugin_panel(
     namespace: &str,
     panel_id: &str,
 ) -> Result<Value, OrbitError> {
-    let plugin = runtime
-        .plugin_load()
-        .active()
-        .find(|plugin| plugin.namespace() == namespace)
-        .cloned()
-        .ok_or_else(|| {
-            OrbitError::not_found(
-                orbit_common::NotFoundKind::Tool,
-                format!("plugin '{namespace}' is not active on this host"),
-            )
-        })?;
-    let panel = plugin
-        .manifest
-        .spec
-        .web
-        .as_ref()
-        .and_then(|web| web.panels.iter().find(|panel| panel.id == panel_id))
-        .ok_or_else(|| {
-            OrbitError::not_found(
-                orbit_common::NotFoundKind::Tool,
-                format!("plugin '{namespace}' declares no panel '{panel_id}'"),
-            )
-        })?;
+    let (plugin, panel) = plugin_panel(runtime, namespace, panel_id)?;
     let verb = panel.source_verb().ok_or_else(|| {
         OrbitError::InvalidInput(format!(
             "panel '{panel_id}' of plugin '{namespace}' has no `tool:<verb>` source"
@@ -163,4 +154,44 @@ pub fn read_plugin_panel(
             ..ToolSessionContext::default()
         },
     )
+}
+
+/// Effective cache window for one declared panel.
+pub fn plugin_panel_refresh_ms(
+    runtime: &OrbitRuntime,
+    namespace: &str,
+    panel_id: &str,
+) -> Result<u64, OrbitError> {
+    let (_, panel) = plugin_panel(runtime, namespace, panel_id)?;
+    Ok(panel.refresh_ms.unwrap_or(DEFAULT_PANEL_REFRESH_MS))
+}
+
+fn plugin_panel<'a>(
+    runtime: &'a OrbitRuntime,
+    namespace: &str,
+    panel_id: &str,
+) -> Result<(&'a LoadedPlugin, &'a PluginWebPanel), OrbitError> {
+    let plugin = runtime
+        .plugin_load()
+        .active()
+        .find(|plugin| plugin.namespace() == namespace)
+        .ok_or_else(|| {
+            OrbitError::not_found(
+                orbit_common::NotFoundKind::Tool,
+                format!("plugin '{namespace}' is not active on this host"),
+            )
+        })?;
+    let panel = plugin
+        .manifest
+        .spec
+        .web
+        .as_ref()
+        .and_then(|web| web.panels.iter().find(|panel| panel.id == panel_id))
+        .ok_or_else(|| {
+            OrbitError::not_found(
+                orbit_common::NotFoundKind::Tool,
+                format!("plugin '{namespace}' declares no panel '{panel_id}'"),
+            )
+        })?;
+    Ok((plugin, panel))
 }

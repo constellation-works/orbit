@@ -118,7 +118,11 @@ async function loadPanel(plugin, panel) {
   const key = panelKey(plugin, panel);
   try {
     const payload = await fetchJson(`/api/plugins/${encodeURIComponent(plugin.name)}/panels/${encodeURIComponent(panel.id)}`);
-    panelCache.set(key, { output: payload?.output });
+    panelCache.set(key, {
+      output: payload?.output,
+      diagnostic: typeof payload?.diagnostic === 'string' ? payload.diagnostic : null,
+      truncated: payload?.truncated === true,
+    });
   } catch (error) {
     panelCache.set(key, { error: error.message || String(error) });
   }
@@ -137,7 +141,14 @@ function renderPanelBody(node, panel, state) {
     syncNodes(node, [el('div', { class: 'panel-placeholder action-error', text: state.error })]);
     return;
   }
-  syncNodes(node, renderNodes(panel.render, state.output));
+  const nodes = renderNodes(panel.render, state.output);
+  if (state.diagnostic) {
+    nodes.unshift(el('div', {
+      class: `panel-placeholder ${state.truncated ? 'action-error' : ''}`.trim(),
+      text: state.diagnostic,
+    }));
+  }
+  syncNodes(node, nodes);
 }
 
 // The four render modes of §4.7. An output that does not fit the declared

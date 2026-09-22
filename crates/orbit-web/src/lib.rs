@@ -17,6 +17,7 @@ mod connect;
 mod health;
 mod log_format;
 mod parse;
+mod plugin_panel_memo;
 mod projections;
 mod ssh_tunnel;
 mod state;
