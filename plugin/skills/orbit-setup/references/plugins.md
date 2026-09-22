@@ -146,6 +146,13 @@ JSON drawn by a generic renderer — `kv` (label/value rows), `table` (an array 
 *mutating* tool is refused by `orbit plugin validate`, naming the panel. Installing, enabling and granting stay on the
 CLI: the dashboard reads.
 
+Panel reads are cached and single-flighted by the web server for 30 seconds by default, so
+several tabs produce one audited backend call in that window. A panel may set `refresh_ms`
+between 1000 and 3600000 in `spec.web.panels[]`; failed reads are retried rather than cached.
+Serialized output above 256 KiB is returned as a bounded prefix with a truncation diagnostic.
+Plugin lifecycle changes made by the CLI appear on the next dashboard request without
+restarting `orbit web serve`.
+
 ## Certifying a plugin for this Orbit
 
 ```bash

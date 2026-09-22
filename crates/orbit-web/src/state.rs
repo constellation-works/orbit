@@ -53,6 +53,7 @@ use orbit_types::workspace::WorkspaceStatus;
 use serde_json::json;
 
 use crate::audit_summary_memo::AuditSummaryMemo;
+use crate::plugin_panel_memo::PluginPanelMemo;
 
 /// Synthetic workspace id used by [`DashboardState::single`].
 pub(crate) const SINGLE_WORKSPACE_ID: &str = "default";
@@ -348,6 +349,8 @@ struct StateInner {
     /// Per-server memo for `/api/audit/summary`. Keyed by runtime identity
     /// and the raw `since` window so relative cutoffs (`24h`) still hit.
     audit_summary: AuditSummaryMemo,
+    /// Per-server single-flight TTL memo for audited plugin panel reads.
+    plugin_panels: PluginPanelMemo,
     /// `orbit web serve --operator` (and `orbit web connect` by default):
     /// stamp operator onto the dashboard session envelope regardless of TTY
     /// or `ORBIT_OPERATOR`.
@@ -417,7 +420,7 @@ impl StateInner {
         let generation = snapshot.generation;
 
         // Fast path: a cached runtime whose binding still matches this snapshot.
-        if let Some(runtime) = self.cached_matching(id, &binding, &orbit_dir) {
+        if let Some(runtime) = self.cached_matching(id, &binding, &orbit_dir)? {
             return Ok(runtime);
         }
 
@@ -487,12 +490,35 @@ impl StateInner {
         id: &str,
         binding: &WorkspaceRuntimeBinding,
         orbit_dir: &Path,
-    ) -> Option<Arc<OrbitRuntime>> {
-        let cache = self.lock_runtimes();
-        cache.get(id).and_then(|cached| {
-            (cached.binding == *binding && cached.orbit_dir == orbit_dir)
-                .then(|| cached.runtime.clone())
-        })
+    ) -> Result<Option<Arc<OrbitRuntime>>, WsRejection> {
+        let runtime = {
+            let cache = self.lock_runtimes();
+            cache.get(id).and_then(|cached| {
+                (cached.binding == *binding && cached.orbit_dir == orbit_dir)
+                    .then(|| cached.runtime.clone())
+            })
+        };
+        let Some(runtime) = runtime else {
+            return Ok(None);
+        };
+        if !runtime
+            .plugin_state_changed()
+            .map_err(|error| WsRejection::build_failed(id, &error))?
+        {
+            return Ok(Some(runtime));
+        }
+
+        // A lifecycle verb rewrote the host plugin rows after this runtime's
+        // load pass. Remove only the exact stale entry observed above: a
+        // concurrent request may already have published its replacement.
+        let mut cache = self.lock_runtimes();
+        if cache
+            .get(id)
+            .is_some_and(|cached| Arc::ptr_eq(&cached.runtime, &runtime))
+        {
+            cache.remove(id);
+        }
+        Ok(None)
     }
 
     /// The open (built + cached) runtimes whose binding matches `snapshot`, in
@@ -652,6 +678,7 @@ impl DashboardState {
                 // Next successful refresh allocates INITIAL_GENERATION + 1.
                 generation_counter: AtomicU64::new(INITIAL_GENERATION + 1),
                 audit_summary: AuditSummaryMemo::new(),
+                plugin_panels: PluginPanelMemo::new(),
                 operator: AtomicBool::new(false),
                 #[cfg(test)]
                 on_pre_publish: Mutex::new(None),
@@ -680,6 +707,11 @@ impl DashboardState {
     /// Process-local `/api/audit/summary` memo for this server instance.
     pub(crate) fn audit_summary_memo(&self) -> &AuditSummaryMemo {
         &self.inner.audit_summary
+    }
+
+    /// Process-local plugin panel memo shared by every dashboard tab.
+    pub(crate) fn plugin_panel_memo(&self) -> &PluginPanelMemo {
+        &self.inner.plugin_panels
     }
 
     /// Whether this server was started with `--operator`, granting operator

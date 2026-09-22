@@ -3,10 +3,17 @@
 // XSS fixture. Nothing here names a plugin the dashboard knows about — the
 // fixture data is the only input, which is the point of the generic
 // renderer.
+const assert = (condition, message) => { if (!condition) throw new Error(message); };
+await import('./marked.umd.js');
+await import('./purify.min.js');
+assert(globalThis.DOMPurify?.isSupported, 'the Plugins harness must run the vendored DOMPurify runtime');
+const sanitizerProbe = globalThis.DOMPurify.sanitize('<p>kept</p><script>removed()</script>');
+assert(sanitizerProbe.includes('<p>kept</p>'), `DOMPurify dropped safe markdown output: ${sanitizerProbe}`);
+assert(!sanitizerProbe.includes('<script'), `DOMPurify did not strip a script from markdown output: ${sanitizerProbe}`);
+
 const { setWorkspace } = await import('./common.js');
 const { fetchAndRenderPlugins } = await import('./plugins.js');
 
-const assert = (condition, message) => { if (!condition) throw new Error(message); };
 const descendants = node => [node, ...(node.children || []).flatMap(descendants)];
 const hasClass = (node, name) => String(node.className || '').split(/\s+/).includes(name);
 const body = () => document.getElementById('plugins-body');
@@ -67,7 +74,12 @@ globalThis.fetch = async path => {
   requested.push(url);
   const panel = /\/api\/plugins\/([^/]+)\/panels\/([^?]+)/.exec(url);
   const payload = panel
-    ? { output: panelOutputs[`${decodeURIComponent(panel[1])}/${decodeURIComponent(panel[2])}`] }
+    ? {
+        output: panelOutputs[`${decodeURIComponent(panel[1])}/${decodeURIComponent(panel[2])}`],
+        ...(decodeURIComponent(panel[2]) === 'raw'
+          ? { truncated: true, diagnostic: 'Panel output exceeded the response limit.' }
+          : {}),
+      }
     : plugins;
   return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) };
 };
@@ -105,16 +117,15 @@ for (const column of ['path', 'score', 'note']) {
   assert(tableText.includes(column), `table must carry the '${column}' column: ${tableText}`);
 }
 assert(tableText.includes('src/a.rs') && tableText.includes('0.91'), `table must carry its rows: ${tableText}`);
-assert(headers.length >= 0, 'headers are rendered as cells');
+assert(headers.length === 3, `headers are rendered as cells: ${headers.length}`);
 
 // json: the raw answer, pretty-printed.
 const json = withClass('plugin-json');
 assert(json.length === 1 && json[0].textContent.includes('"nested"'), `json panel rendered ${json.map(node => node.textContent)}`);
+assert(body().textContent.includes('Panel output exceeded the response limit.'), 'a truncation diagnostic is visible beside the bounded panel output');
 
-// markdown: rendered through the sanitizing wrapper. This harness has no
-// DOM for DOMPurify, so `renderMarkdown` declines and the source is planted
-// as text — inert either way, and no element carrying script or an event
-// handler is ever created.
+// markdown: rendered through the real vendored sanitizer loaded above. Raw
+// HTML is escaped by the marked wrapper and DOMPurify is the final boundary.
 const markdown = withClass('markdown-body');
 assert(markdown.length === 1, `expected one markdown panel, got ${markdown.length}`);
 const rendered = markdown[0].textContent;
