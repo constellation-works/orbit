@@ -158,13 +158,14 @@ impl PluginBackendSpec {
                 &self.plugin_root,
                 &self.global_root,
                 &self.state_dir,
+                workspace_root,
             ) {
                 return Err(plugin_refusal(PluginManifestError::new(
                     format!("spec.permissions.fs.write[{index}]"),
                     format!(
                         "'{}' grants write access to the {protected}; a plugin cannot request \
                          writes to its own install tree or anywhere beneath Orbit's global root \
-                         except its own plugin state tree",
+                         except its own plugin state tree, or to workspace metadata `.orbit` / `.git`",
                         self.permissions
                             .fs
                             .write
@@ -212,6 +213,11 @@ impl PluginBackendSpec {
             read,
             write,
             write_files,
+            materialization_roots: workspace_root
+                .into_iter()
+                .map(Path::to_path_buf)
+                .chain(std::iter::once(self.state_dir.clone()))
+                .collect(),
             network,
             unsandboxed: self.sandbox == PluginSandbox::None
                 && self.granted(PluginGrant::Unsandboxed),
@@ -345,6 +351,10 @@ pub struct PluginSandboxProfile {
     /// is never created as a directory, and so neither platform widens a
     /// leaf grant into its parent tree.
     pub write_files: Vec<PathBuf>,
+    /// Roots beneath which the host may materialize an absent granted write
+    /// directory. Other grants can name existing host paths, but creating
+    /// those paths is never part of spawning a plugin.
+    pub(crate) materialization_roots: Vec<PathBuf>,
     pub network: PluginNetworkPermission,
     /// `backend.sandbox: none` with the `unsandboxed` grant: no confinement.
     pub unsandboxed: bool,
@@ -389,27 +399,139 @@ impl Sandbox for PluginSandboxProfile {
     /// `sandbox-exec` on macOS. Anywhere else the only way to run is the
     /// `unsandboxed` grant; there is no unconfined fallback (§4.9).
     fn spawn(&self, req: &ExecRequest) -> Result<Child, OrbitError> {
-        // A granted write directory is materialised before the child exists:
-        // the grant names it, and neither a kernel rule nor an unconfined
-        // backend can create a directory the grant's parent never allowed.
+        // A granted write directory inside the workspace or plugin state is
+        // materialised before the child exists: the grant names it, and
+        // neither a kernel rule nor an unconfined backend can create a
+        // directory the grant's parent never allowed. Host paths outside
+        // those roots are never created here, and every component we do
+        // create is checked without following symbolic links.
         // `write_files` is deliberately absent here — those name store files
         // SQLite and the generation protocol own, and creating one as an
         // empty directory would break the store rather than confine it.
         for root in &self.write {
-            if !root.exists() {
-                std::fs::create_dir_all(root).map_err(|error| {
-                    OrbitError::Io(format!(
-                        "create granted write directory `{}`: {error}",
-                        root.display()
-                    ))
-                })?;
-            }
+            materialize_write_directory(root, &self.materialization_roots)?;
         }
         if self.unsandboxed {
             return NoSandbox.spawn(req);
         }
         spawn_confined(self, req)
     }
+}
+
+/// Create an absent write root only when its normalized path is contained by
+/// a host-owned materialization root. Existing prefixes are inspected with
+/// `symlink_metadata`, so directory creation never walks through a link into
+/// an unrelated host tree.
+fn materialize_write_directory(root: &Path, allowed_roots: &[PathBuf]) -> Result<(), OrbitError> {
+    let root = super::loader::lexical_normalize(root);
+    let Some(allowed) = allowed_roots
+        .iter()
+        .map(|allowed| super::loader::lexical_normalize(allowed))
+        .find(|allowed| root == *allowed || root.starts_with(allowed))
+    else {
+        return Ok(());
+    };
+
+    // Start at the closest existing ancestor of the trusted root. This lets
+    // platform aliases before that root (for example macOS `/var` ->
+    // `/private/var`) resolve once, while every component controlled beneath
+    // the workspace/plugin-state boundary remains subject to the no-link
+    // walk below.
+    let mut anchor = allowed.clone();
+    loop {
+        match std::fs::symlink_metadata(&anchor) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "plugin write materialization root `{}` must not be a symbolic link",
+                    anchor.display()
+                )));
+            }
+            Ok(metadata) if metadata.is_dir() => break,
+            Ok(_) => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "plugin write materialization root `{}` is not a directory",
+                    anchor.display()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && anchor.pop() => {}
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "inspect plugin write materialization root `{}`: {error}",
+                    anchor.display()
+                )));
+            }
+        }
+    }
+    let canonical_anchor = anchor.canonicalize().map_err(|error| {
+        OrbitError::Io(format!(
+            "canonicalize plugin write materialization root `{}`: {error}",
+            anchor.display()
+        ))
+    })?;
+    let relative = root.strip_prefix(&anchor).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "granted write directory `{}` is not below materialization anchor `{}`: {error}",
+            root.display(),
+            anchor.display()
+        ))
+    })?;
+    let root = canonical_anchor.join(relative);
+
+    let mut current = canonical_anchor;
+    for component in relative.components() {
+        current.push(component);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "granted write directory `{}` resolves through symbolic link `{}`; plugin \
+                     write directories may not follow symbolic links",
+                    root.display(),
+                    current.display()
+                )));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "granted write directory `{}` resolves through non-directory `{}`",
+                    root.display(),
+                    current.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::create_dir(&current) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        let metadata = std::fs::symlink_metadata(&current).map_err(|error| {
+                            OrbitError::Io(format!(
+                                "inspect concurrently created write directory `{}`: {error}",
+                                current.display()
+                            ))
+                        })?;
+                        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                            return Err(OrbitError::InvalidInput(format!(
+                                "granted write directory `{}` acquired an unsafe component `{}`",
+                                root.display(),
+                                current.display()
+                            )));
+                        }
+                    }
+                    Err(error) => {
+                        return Err(OrbitError::Io(format!(
+                            "create granted write directory `{}`: {error}",
+                            current.display()
+                        )));
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "inspect granted write directory `{}`: {error}",
+                    current.display()
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]

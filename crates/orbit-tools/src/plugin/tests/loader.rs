@@ -94,15 +94,33 @@ fn fs_write_root_refuses_protected_global_paths_but_allows_plugin_state() {
     std::fs::create_dir_all(&plugin_state).expect("plugin state");
 
     assert_eq!(
-        fs_write_root_covers(&plugin_root, &plugin_root, &global_root, &plugin_state),
+        fs_write_root_covers(
+            &plugin_root,
+            &plugin_root,
+            &global_root,
+            &plugin_state,
+            None,
+        ),
         Some("plugin install root")
     );
     assert_eq!(
-        fs_write_root_covers(Path::new("/"), &plugin_root, &global_root, &plugin_state),
+        fs_write_root_covers(
+            Path::new("/"),
+            &plugin_root,
+            &global_root,
+            &plugin_state,
+            None,
+        ),
         Some("plugin install root")
     );
     assert_eq!(
-        fs_write_root_covers(&global_root, &plugin_root, &global_root, &plugin_state),
+        fs_write_root_covers(
+            &global_root,
+            &plugin_root,
+            &global_root,
+            &plugin_state,
+            None,
+        ),
         Some("plugin install root")
     );
     for protected in [
@@ -113,7 +131,7 @@ fn fs_write_root_refuses_protected_global_paths_but_allows_plugin_state() {
         plugin_root.join("cache"),
     ] {
         assert_eq!(
-            fs_write_root_covers(&protected, &plugin_root, &global_root, &plugin_state),
+            fs_write_root_covers(&protected, &plugin_root, &global_root, &plugin_state, None,),
             Some("protected path beneath Orbit global root"),
             "{} must stay read-only",
             protected.display()
@@ -121,7 +139,7 @@ fn fs_write_root_refuses_protected_global_paths_but_allows_plugin_state() {
     }
     for allowed in [&plugin_state, &plugin_state.join("cache")] {
         assert_eq!(
-            fs_write_root_covers(allowed, &plugin_root, &global_root, &plugin_state),
+            fs_write_root_covers(allowed, &plugin_root, &global_root, &plugin_state, None,),
             None,
             "{} is inside this plugin's writable state tree",
             allowed.display()
@@ -156,6 +174,58 @@ fn load_refuses_a_manifest_whose_fs_write_covers_the_plugin_root() {
         error.contains("spec.permissions.fs.write[0]") && error.contains("plugin install root"),
         "{error}"
     );
+}
+
+#[test]
+fn validate_and_registration_refuse_workspace_metadata_but_allow_a_sibling() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let global_root = global.path().join("global");
+    let plugin_state = global_root.join("state/plugins/demo");
+
+    for declared in [
+        "{{workspace}}",
+        "{{workspace}}/.orbit/routines",
+        "{{workspace}}/.git/hooks",
+    ] {
+        let temp = tempfile::tempdir().expect("plugin tempdir");
+        write_plugin(temp.path());
+        let manifest = temp.path().join(MANIFEST_FILE_NAME);
+        let body = std::fs::read_to_string(&manifest).expect("read manifest");
+        std::fs::write(
+            &manifest,
+            body.replace(
+                "  backend:\n",
+                &format!("  permissions:\n    fs:\n      write: [\"{declared}\"]\n  backend:\n"),
+            ),
+        )
+        .expect("write permission");
+        let plugin = load_plugin_dir(temp.path()).expect("load");
+        let error = refuse_covering_fs_write_roots(&plugin, &global_root, &plugin_state)
+            .expect_err("workspace metadata write must be refused before call time")
+            .to_string();
+        assert!(
+            error.contains("spec.permissions.fs.write[0]")
+                && error.contains(".orbit")
+                && error.contains(".git"),
+            "{declared}: {error}"
+        );
+    }
+
+    let allowed = tempfile::tempdir().expect("allowed plugin tempdir");
+    write_plugin(allowed.path());
+    let manifest = allowed.path().join(MANIFEST_FILE_NAME);
+    let body = std::fs::read_to_string(&manifest).expect("read manifest");
+    std::fs::write(
+        &manifest,
+        body.replace(
+            "  backend:\n",
+            "  permissions:\n    fs:\n      write: [\"{{workspace}}/.orbit-graph\"]\n  backend:\n",
+        ),
+    )
+    .expect("write permission");
+    let plugin = load_plugin_dir(allowed.path()).expect("load");
+    refuse_covering_fs_write_roots(&plugin, &global_root, &plugin_state)
+        .expect("a similarly named workspace directory is not Orbit metadata");
 }
 
 fn git(root: &Path, args: &[&str]) -> String {
