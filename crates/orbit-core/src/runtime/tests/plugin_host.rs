@@ -1244,7 +1244,13 @@ fn typed_config_and_relative_fs_roots_match_validate_registration_call_and_confo
         "rooted".to_string(),
         serde_json::json!({"directory": "../configured", "enabled": false}),
     )]);
-    let config_values = super::super::plugin_config::plugin_config_values(&plugin, &config);
+    let section = super::super::plugin_config::plugin_config_section(&plugin, &config);
+    assert_eq!(
+        section.as_value(),
+        &serde_json::json!({"directory": "../configured", "enabled": false, "port": 7}),
+        "the backend's own view of the section keeps every JSON type"
+    );
+    let config_values = section.rendered_values();
     assert_eq!(
         config_values,
         BTreeMap::from([
@@ -1271,7 +1277,7 @@ fn typed_config_and_relative_fs_roots_match_validate_registration_call_and_confo
         &state_dir,
         &global_root,
         grants.clone(),
-        config_values.clone(),
+        section.clone(),
     );
     refuse_covering_fs_write_roots(validate.spec(), None).expect("validate roots");
 
@@ -1297,7 +1303,7 @@ fn typed_config_and_relative_fs_roots_match_validate_registration_call_and_confo
         &state_dir,
         &global_root,
         grants,
-        config_values,
+        section,
     );
     refuse_covering_fs_write_roots(conformance.spec(), None).expect("conformance roots");
 
@@ -1307,7 +1313,7 @@ fn typed_config_and_relative_fs_roots_match_validate_registration_call_and_confo
             workspace: Some(workspace_root.to_string_lossy().into_owned()),
             plugin_root: spec.plugin_root.to_string_lossy().into_owned(),
             plugin_state: spec.state_dir.to_string_lossy().into_owned(),
-            config: spec.config_values.clone(),
+            config: spec.config_values(),
         };
         render_fs_roots(spec, &vars).expect("render roots")
     };

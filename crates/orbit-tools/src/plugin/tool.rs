@@ -13,11 +13,11 @@ use orbit_common::OrbitError;
 use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode, supervise_child};
 use orbit_types::plugin::{PluginExecutionKind, PluginProvenance};
 use orbit_types::tool::{ToolParam, ToolSchema};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::backend::PluginBackendSpec;
 use super::callback::PluginCallbackSession;
-use super::envelope::{PLUGIN_ENVELOPE_SCHEMA_VERSION, parse_response, validate_output};
+use super::envelope::{exec_envelope, parse_response, validate_output};
 use super::mcp::McpBackend;
 use super::schema::CompiledSchema;
 use crate::{Tool, ToolContext, ToolExecutionKind};
@@ -112,16 +112,7 @@ impl PluginTool {
                 self.name
             ))
         })?;
-        let envelope = json!({
-            "schema_version": PLUGIN_ENVELOPE_SCHEMA_VERSION,
-            "tool": self.name,
-            "input": input,
-            "context": {
-                "workspace_root": ctx.workspace_root.as_ref().map(|path| path.to_string_lossy().into_owned()),
-                "agent": ctx.agent_name,
-                "model": ctx.model_name,
-            },
-        });
+        let envelope = exec_envelope(spec, ctx, &self.name, input);
         let stdin = serde_json::to_vec(&envelope).map_err(|error| {
             OrbitError::Execution(format!("serialize plugin envelope: {error}"))
         })?;

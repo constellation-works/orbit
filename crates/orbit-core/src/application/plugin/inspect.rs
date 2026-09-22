@@ -18,7 +18,7 @@ use orbit_types::plugin::{
 use super::panels::{PluginLinkSummary, PluginPanelSummary, web_summaries};
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin_config::plugin_config_values;
+use crate::runtime::plugin_config::plugin_config_section;
 use crate::runtime::plugin_host::{
     build_plugin_backend, load_installed_plugin, plugin_state_dir, read_pin_file, unmet_requirement,
 };
@@ -354,7 +354,7 @@ pub fn validate_plugin_dir(
         &plugin_state_dir(&global_root, plugin.namespace()),
         &global_root,
         grants,
-        plugin_config_values(&plugin, &config.plugins),
+        plugin_config_section(&plugin, &config.plugins),
     );
     refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
 

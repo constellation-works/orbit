@@ -8,6 +8,7 @@
 //! the profile resolved here is exactly the granted one.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 
@@ -19,6 +20,7 @@ use orbit_types::plugin::{
     PluginProvenance, PluginSandbox, PluginTemplateVars, render_template,
 };
 use orbit_types::policy::ResolvedFsProfile;
+use serde_json::Value;
 
 use super::callback::PluginCallbackSession;
 use crate::builtin::proc::spawn::enforce_program_allowlist;
@@ -102,8 +104,79 @@ const ORBIT_TOOLS_WORKSPACE_WRITE_FILES: &[&str] = &[
     "state/semantic.db-shm",
 ];
 
+/// The effective `[plugins.<ns>]` section: what the operator configured over
+/// the manifest's declared defaults, checked against the plugin's own schema
+/// before the host built this spec (§1).
+///
+/// A section may hold credentials — a plugin that talks to a paid API is
+/// configured with its token like any other key — so it reaches the backend
+/// process and nothing else. `Debug` prints the key names and never a value,
+/// which keeps the section out of a log line that formats a spec, and no
+/// caller formats it by hand.
+#[derive(Clone, PartialEq)]
+pub struct PluginConfigSection(Value);
+
+impl Default for PluginConfigSection {
+    /// A plugin that declares no keys and is configured with none still has a
+    /// section: an empty object, so a backend reads `context.config` the same
+    /// way whether or not the operator wrote a `[plugins.<ns>]` table.
+    fn default() -> Self {
+        Self(Value::Object(serde_json::Map::new()))
+    }
+}
+
+impl PluginConfigSection {
+    /// Wrap an already-resolved section. The host resolves it once, so both
+    /// dispatch surfaces read the same object.
+    pub fn new(section: Value) -> Self {
+        Self(section)
+    }
+
+    /// The section as the backend receives it, with every JSON type intact.
+    pub fn as_value(&self) -> &Value {
+        &self.0
+    }
+
+    /// The declared keys, in section order. Values are deliberately absent.
+    pub fn keys(&self) -> Vec<&str> {
+        self.0
+            .as_object()
+            .map(|values| values.keys().map(String::as_str).collect())
+            .unwrap_or_default()
+    }
+
+    /// The same section rendered for `{{config.<key>}}`, where a template can
+    /// only interpolate text: strings as themselves, every other JSON scalar
+    /// as its JSON form.
+    pub fn rendered_values(&self) -> BTreeMap<String, String> {
+        self.0
+            .as_object()
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|(key, value)| {
+                        let rendered = match value {
+                            Value::String(text) => text.clone(),
+                            other => other.to_string(),
+                        };
+                        (key.clone(), rendered)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+impl fmt::Debug for PluginConfigSection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("PluginConfigSection")
+            .field(&self.keys())
+            .finish()
+    }
+}
+
 /// The per-plugin facts a backend needs to run one of its tools.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PluginBackendSpec {
     pub provenance: PluginProvenance,
     pub plugin_root: PathBuf,
@@ -124,9 +197,11 @@ pub struct PluginBackendSpec {
     pub permissions: PluginPermissions,
     /// `spec.requires.programs`: what the backend declares it spawns.
     pub programs: Vec<String>,
-    /// Effective `{{config.<key>}}` values: operator configuration over the
-    /// manifest's defaults, with every JSON scalar rendered as text.
-    pub config_values: BTreeMap<String, String>,
+    /// The effective `[plugins.<ns>]` section. One resolution serves the
+    /// backend's own view of its configuration — `context.config` on both
+    /// dispatch surfaces — and the manifest's `{{config.<key>}}` templates,
+    /// so the two cannot disagree.
+    pub config: PluginConfigSection,
     /// The grants recorded at enable time.
     pub grants: Vec<PluginGrant>,
 }
@@ -185,12 +260,18 @@ impl PluginBackendSpec {
             .min(PLUGIN_TIMEOUT_CEILING_MS)
     }
 
+    /// The effective section rendered for text surfaces: manifest templates
+    /// and the dashboard tiles that show what the plugin runs with.
+    pub fn config_values(&self) -> BTreeMap<String, String> {
+        self.config.rendered_values()
+    }
+
     pub(crate) fn template_vars(&self, workspace_root: Option<&Path>) -> PluginTemplateVars {
         PluginTemplateVars {
             workspace: workspace_root.map(|path| path.to_string_lossy().into_owned()),
             plugin_root: self.plugin_root.to_string_lossy().into_owned(),
             plugin_state: self.state_dir.to_string_lossy().into_owned(),
-            config: self.config_values.clone(),
+            config: self.config.rendered_values(),
         }
     }
 

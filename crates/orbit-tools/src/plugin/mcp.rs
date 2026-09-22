@@ -35,6 +35,7 @@ use serde_json::{Value, json};
 
 use super::backend::PluginBackendSpec;
 use super::callback::PluginCallbackSession;
+use super::envelope::call_context;
 use crate::ToolContext;
 
 /// Lines the reader may queue ahead of the consumer before it blocks.
@@ -183,11 +184,7 @@ impl McpBackend {
         // A shared child cannot be told in its environment which caller the
         // call is for, so the context an `exec` backend reads from its stdin
         // envelope rides the request (§4.2).
-        let params = json!({
-            "name": verb,
-            "arguments": input,
-            "_meta": { "orbit": call_context(ctx, tool_name) },
-        });
+        let params = tools_call_params(&self.spec, ctx, tool_name, verb, input);
         // At most one retry: the session this call found may have been ended
         // by another caller's failure between the lookup and the lock, and
         // that caller's broken wire is not this one's error.
@@ -402,22 +399,25 @@ fn child_cwd(ctx: &ToolContext, tool_name: &str) -> Result<String, OrbitError> {
         })
 }
 
-/// The per-call context, sent as `params._meta.orbit` on `tools/call`.
+/// The `tools/call` params one proxied call sends.
 ///
-/// This is the `context` object an `exec` backend reads from its stdin
-/// envelope (`tool.rs`), plus the tool name: one `mcp` child serves every
-/// tool of its plugin and every caller sharing its key, so `ORBIT_TOOL_NAME`
-/// is absent from its environment (§4.2) and `ORBIT_WORKSPACE_ROOT` names
-/// the workspace the session is bound to rather than this call's.
-fn call_context(ctx: &ToolContext, tool_name: &str) -> Value {
+/// `_meta.orbit` is the `context` object an `exec` backend reads from its
+/// stdin envelope (`envelope.rs`), plus the tool name: one `mcp` child serves
+/// every tool of its plugin and every caller sharing its key, so
+/// `ORBIT_TOOL_NAME` is absent from its environment (§4.2) and
+/// `ORBIT_WORKSPACE_ROOT` names the workspace the session is bound to rather
+/// than this call's.
+pub(crate) fn tools_call_params(
+    spec: &PluginBackendSpec,
+    ctx: &ToolContext,
+    tool_name: &str,
+    verb: &str,
+    input: Value,
+) -> Value {
     json!({
-        "workspace_root": ctx
-            .workspace_root
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned()),
-        "agent": ctx.agent_name,
-        "model": ctx.model_name,
-        "tool": tool_name,
+        "name": verb,
+        "arguments": input,
+        "_meta": { "orbit": call_context(spec, ctx, Some(tool_name)) },
     })
 }
 

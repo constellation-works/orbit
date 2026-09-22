@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orbit_types::plugin::{MANIFEST_FILE_NAME, PluginProvenance};
@@ -57,7 +56,7 @@ fn backend_spec(
         sandbox: plugin.manifest.spec.backend.sandbox,
         permissions: plugin.manifest.spec.permissions.clone(),
         programs: plugin.manifest.spec.requires.programs.clone(),
-        config_values: BTreeMap::new(),
+        config: Default::default(),
         grants,
     }
 }
