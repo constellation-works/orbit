@@ -14,6 +14,13 @@ fn provenance(name: &str) -> PluginProvenance {
     }
 }
 
+/// Mint a session whose ceiling is the plugin's full requested list; the
+/// ceiling's own behaviour has its own tests below.
+fn mint(root: &std::path::Path, name: &str) -> PluginCallbackSession {
+    PluginCallbackSession::mint(root, &provenance(name), &["orbit.task.list".to_string()])
+        .expect("mint")
+}
+
 fn present_token(token: &str) -> orbit_common::test_env::ScopedEnv {
     orbit_common::test_env::scoped([(ORBIT_PLUGIN_CALLBACK_ENV, Some(token))])
 }
@@ -34,7 +41,7 @@ fn write_record(
     std::fs::write(
         &path,
         format!(
-            r#"{{"schema_version":1,"plugin":"stale","version":"1.0.0","manifest_digest":"abc","pid":{pid},"starttime":{starttime}}}"#
+            r#"{{"schema_version":2,"plugin":"stale","version":"1.0.0","manifest_digest":"abc","effective_tools":[],"pid":{pid},"starttime":{starttime}}}"#
         ),
     )
     .expect("write callback record");
@@ -44,7 +51,7 @@ fn write_record(
 #[test]
 fn token_identifies_the_minted_plugin() {
     let root = tempfile::tempdir().expect("tempdir");
-    let session = PluginCallbackSession::mint(root.path(), &provenance("demo")).expect("mint");
+    let session = mint(root.path(), "demo");
     let _env = present_token(session.token());
     let identity = resolve_plugin_callback(root.path())
         .expect("resolve")
@@ -56,7 +63,7 @@ fn token_identifies_the_minted_plugin() {
 #[test]
 fn ancestry_identifies_the_plugin_after_the_token_is_cleared() {
     let root = tempfile::tempdir().expect("tempdir");
-    let mut session = PluginCallbackSession::mint(root.path(), &provenance("demo")).expect("mint");
+    let mut session = mint(root.path(), "demo");
     session
         .bind_pid(std::process::id())
         .expect("bind this process");
@@ -84,7 +91,7 @@ fn a_real_child_resolves_the_plugin_through_its_parent_pid() {
     }
 
     let root = tempfile::tempdir().expect("tempdir");
-    let mut session = PluginCallbackSession::mint(root.path(), &provenance("demo")).expect("mint");
+    let mut session = mint(root.path(), "demo");
     session
         .bind_pid(std::process::id())
         .expect("bind the parent process");
@@ -125,7 +132,7 @@ fn ancestry_ignores_a_live_pid_with_a_different_starttime() {
 #[test]
 fn corrupt_record_does_not_hide_a_valid_ancestry_session() {
     let root = tempfile::tempdir().expect("tempdir");
-    let mut session = PluginCallbackSession::mint(root.path(), &provenance("demo")).expect("mint");
+    let mut session = mint(root.path(), "demo");
     session
         .bind_pid(std::process::id())
         .expect("bind this process");
@@ -147,7 +154,7 @@ fn mint_removes_dead_callback_records() {
     let root = tempfile::tempdir().expect("tempdir");
     let stale = write_record(root.path(), "dead", u32::MAX, 0);
 
-    let _session = PluginCallbackSession::mint(root.path(), &provenance("demo")).expect("mint");
+    let _session = mint(root.path(), "demo");
 
     assert!(
         !stale.exists(),
@@ -181,7 +188,7 @@ fn drop_removes_the_session_file() {
     let root = tempfile::tempdir().expect("tempdir");
     let token;
     {
-        let session = PluginCallbackSession::mint(root.path(), &provenance("demo")).expect("mint");
+        let session = mint(root.path(), "demo");
         token = session.token().to_string();
         assert!(
             root.path()
@@ -206,12 +213,12 @@ fn drop_removes_the_session_file() {
 fn a_token_bound_to_another_process_is_a_mismatch() {
     let root = tempfile::tempdir().expect("tempdir");
     // Plugin B: bound to this process, so ancestry names it.
-    let mut ours = PluginCallbackSession::mint(root.path(), &provenance("b")).expect("mint b");
+    let mut ours = mint(root.path(), "b");
     ours.bind_pid(std::process::id())
         .expect("bind this process");
     // Plugin A: bound to a live process this one is no part of — pid 1 is
     // never this process, its parent, or its group.
-    let mut theirs = PluginCallbackSession::mint(root.path(), &provenance("a")).expect("mint a");
+    let mut theirs = mint(root.path(), "a");
     theirs.bind_pid(1).expect("bind pid 1");
     let _env = present_token(theirs.token());
 
@@ -229,7 +236,7 @@ fn a_token_bound_to_another_process_is_a_mismatch() {
 #[test]
 fn a_token_whose_record_is_not_ours_is_refused_without_ancestry() {
     let root = tempfile::tempdir().expect("tempdir");
-    let mut session = PluginCallbackSession::mint(root.path(), &provenance("demo")).expect("mint");
+    let mut session = mint(root.path(), "demo");
     session.bind_pid(1).expect("bind pid 1");
     let _env = present_token(session.token());
 
@@ -248,7 +255,7 @@ fn a_token_whose_record_is_not_ours_is_refused_without_ancestry() {
 #[test]
 fn a_token_bound_to_this_process_group_is_identified() {
     let root = tempfile::tempdir().expect("tempdir");
-    let mut session = PluginCallbackSession::mint(root.path(), &provenance("demo")).expect("mint");
+    let mut session = mint(root.path(), "demo");
     let pgid =
         orbit_common::process::ancestry::current_process_group().expect("a process group on unix");
     session
@@ -295,6 +302,105 @@ fn an_unreadable_session_directory_with_no_credential_is_refused() {
         error
             .to_string()
             .contains("without the host-issued callback session"),
+        "{error}"
+    );
+}
+
+/// The record carries authority as well as identity: the spawning caller's
+/// effective intersection, which dispatch intersects with the recorded
+/// allowlist on every callback [ORB-12801].
+#[test]
+fn the_session_carries_the_callers_effective_tool_ceiling() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let session = PluginCallbackSession::mint(
+        root.path(),
+        &provenance("demo"),
+        // Unsorted and repeated on purpose: the recorded ceiling must not
+        // depend on how the caller happened to spell its own allowlist.
+        &[
+            "orbit.task.list".to_string(),
+            "orbit.search".to_string(),
+            "orbit.task.list".to_string(),
+        ],
+    )
+    .expect("mint");
+    assert_eq!(
+        session.effective_tools(),
+        ["orbit.search".to_string(), "orbit.task.list".to_string()]
+    );
+    let _env = present_token(session.token());
+
+    let identity = resolve_plugin_callback(root.path())
+        .expect("resolve")
+        .expect("identified");
+    assert_eq!(
+        identity.effective_tools,
+        ["orbit.search".to_string(), "orbit.task.list".to_string()]
+    );
+    assert!(identity.ceiling_admits("orbit.search"));
+    assert!(!identity.ceiling_admits("orbit.task.update"));
+}
+
+/// Two live sessions of the same plugin, minted for callers with different
+/// allowlists. A token resolves to its own record's ceiling, not to whichever
+/// session happens to be listed first.
+#[test]
+fn each_token_resolves_to_its_own_ceiling() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let mut narrow = PluginCallbackSession::mint(
+        root.path(),
+        &provenance("demo"),
+        &["orbit.task.list".to_string()],
+    )
+    .expect("mint narrow");
+    narrow
+        .bind_pid(std::process::id())
+        .expect("bind this process");
+    let mut wide = PluginCallbackSession::mint(
+        root.path(),
+        &provenance("demo"),
+        &["orbit.task.list".to_string(), "orbit.search".to_string()],
+    )
+    .expect("mint wide");
+    wide.bind_pid(std::process::id())
+        .expect("bind this process");
+
+    let ceiling_for = |session: &PluginCallbackSession| {
+        let _env = present_token(session.token());
+        resolve_plugin_callback(root.path())
+            .expect("resolve")
+            .expect("identified")
+            .effective_tools
+    };
+    assert_eq!(ceiling_for(&narrow), ["orbit.task.list".to_string()]);
+    assert_eq!(
+        ceiling_for(&wide),
+        ["orbit.search".to_string(), "orbit.task.list".to_string()]
+    );
+}
+
+/// A record that states no ceiling is not a session with an unbounded one. It
+/// can only be a leftover from a host that predates the ceiling, so it is
+/// refused rather than read as authority nobody granted.
+#[test]
+fn a_record_without_a_ceiling_is_not_a_session() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let dir = root.path().join("state/plugin-callbacks");
+    std::fs::create_dir_all(&dir).expect("create callback directory");
+    let token = "ab".repeat(32);
+    std::fs::write(
+        dir.join(&token),
+        br#"{"schema_version":1,"plugin":"demo","version":"1.0.0","manifest_digest":"abc","pid":0,"starttime":0}"#,
+    )
+    .expect("write a pre-ceiling record");
+    let _env = present_token(&token);
+
+    let error = resolve_plugin_callback(root.path()).expect_err("a record with no ceiling");
+    assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("credential is missing or invalid"),
         "{error}"
     );
 }

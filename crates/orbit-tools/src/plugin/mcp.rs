@@ -253,8 +253,15 @@ impl McpBackend {
                 ))
             })?;
         let mut environment = self.spec.child_environment(ctx, &cwd, None);
-        let mut callback =
-            PluginCallbackSession::mint(&self.spec.global_root, &self.spec.provenance)?;
+        // The same intersection the session is keyed by, recorded as the
+        // child's callback ceiling: a session is shared only by callers who
+        // agree on it, so one ceiling describes every caller it serves
+        // [ORB-12801].
+        let mut callback = PluginCallbackSession::mint(
+            &self.spec.global_root,
+            &self.spec.provenance,
+            &self.spec.allowed_tools(ctx),
+        )?;
         callback.stamp_env(&mut environment);
         let request = ExecRequest {
             program: self.spec.command.to_string_lossy().into_owned(),

@@ -856,7 +856,20 @@ fn set_plugin_callback_env(plugin: &str, allowed_tools: Option<&str>) {
     }
 }
 
+/// A live session whose ceiling is everything the recorded install requests:
+/// the spawning caller was unrestricted, which is the shape every test that
+/// predates the ceiling assumes.
 fn bind_live_callback_session(runtime: &OrbitRuntime) -> PluginCallbackSession {
+    let requested = recorded_orbit_tools_request(runtime);
+    bind_live_callback_session_with_ceiling(runtime, &requested)
+}
+
+/// The same session minted for a caller whose own allowlist was narrower than
+/// the plugin's manifest request [ORB-12801].
+fn bind_live_callback_session_with_ceiling(
+    runtime: &OrbitRuntime,
+    effective_tools: &[String],
+) -> PluginCallbackSession {
     let installed = runtime
         .stores()
         .plugins()
@@ -871,12 +884,29 @@ fn bind_live_callback_session(runtime: &OrbitRuntime) -> PluginCallbackSession {
             manifest_digest: installed.manifest_digest,
             grants: installed.grants,
         },
+        effective_tools,
     )
     .expect("mint callback session");
     session
         .bind_pid(std::process::id())
         .expect("bind this process as the plugin child");
     session
+}
+
+/// What the recorded manifest asks for under `permissions.orbit_tools`.
+fn recorded_orbit_tools_request(runtime: &OrbitRuntime) -> Vec<String> {
+    let installed = runtime
+        .stores()
+        .plugins()
+        .get_plugin("callback")
+        .expect("read plugin")
+        .expect("callback plugin is recorded");
+    orbit_tools::plugin::load_plugin_dir(std::path::Path::new(&installed.install_path))
+        .expect("load the recorded install")
+        .manifest
+        .spec
+        .permissions
+        .orbit_tools
 }
 
 fn dispatch_entry(
@@ -1147,6 +1177,7 @@ fn plugin_callback_refuses_a_token_bound_to_another_process() {
             manifest_digest: installed.manifest_digest,
             grants: installed.grants,
         },
+        &["orbit.task.list".to_string()],
     )
     .expect("mint callback session");
     // pid 1 is live and is never this process, its parent, or its group.
@@ -1171,5 +1202,155 @@ fn plugin_callback_refuses_a_token_bound_to_another_process() {
             .to_string()
             .contains("not held by the calling process"),
         "{error}"
+    );
+}
+
+/// Clear every restriction the child controls: the namespace, the
+/// informational allowlist, the callback token, and the activity envelope
+/// that would otherwise bound `ToolContext.allowed_tools`. What remains is
+/// the host-owned session, which is the whole point [ORB-12801].
+fn shed_child_restrictions() {
+    // SAFETY: callers hold `env_guard()` while changing process environment.
+    unsafe {
+        std::env::remove_var(ORBIT_PLUGIN_ENV);
+        std::env::remove_var(orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV);
+        std::env::remove_var("ORBIT_ALLOWED_TOOLS");
+        std::env::remove_var("ORBIT_ACTIVITY_TOOLS");
+        std::env::remove_var("ORBIT_TASK_ACTOR_KIND");
+    }
+}
+
+fn assert_ceiling_denied(error: &OrbitError, tool: &str) {
+    assert_plugin_allowlist_denied(error, tool);
+    assert!(
+        error.to_string().contains("never widens"),
+        "the refusal must name the session ceiling, not only the manifest: {error}"
+    );
+}
+
+/// The manifest requests two tools and the host granted `orbit_tools`, but
+/// the caller that spawned this backend could reach only one of them. The
+/// second is refused on both entry points even though the child has shed
+/// every restriction it carries in its own environment.
+#[test]
+fn plugin_callback_cannot_exceed_the_spawning_callers_ceiling() {
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    record_callback_plugin(&runtime, &["orbit.task.list", "orbit.search"]);
+    let _session =
+        bind_live_callback_session_with_ceiling(&runtime, &["orbit.task.list".to_string()]);
+    shed_child_restrictions();
+
+    for entry_point in [ToolEntryPoint::Cli, ToolEntryPoint::Mcp] {
+        dispatch_entry(&runtime, "orbit.task.list", entry_point)
+            .expect("the tool inside the caller's ceiling still runs");
+        assert_ceiling_denied(
+            &dispatch_entry(&runtime, "orbit.search", entry_point).expect_err(
+                "a manifest-listed tool outside the caller's ceiling must not be dispatched",
+            ),
+            "orbit.search",
+        );
+    }
+}
+
+/// Two live sessions of the same plugin, minted for callers with different
+/// allowlists. Each token carries its own ceiling; neither borrows the
+/// other's.
+#[test]
+fn separate_callback_sessions_keep_their_own_ceilings() {
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    record_callback_plugin(&runtime, &["orbit.task.list", "orbit.search"]);
+    let lister =
+        bind_live_callback_session_with_ceiling(&runtime, &["orbit.task.list".to_string()]);
+    let searcher = bind_live_callback_session_with_ceiling(&runtime, &["orbit.search".to_string()]);
+    shed_child_restrictions();
+
+    let as_session = |session: &PluginCallbackSession, tool: &str| {
+        // SAFETY: callers hold `env_guard()` while changing process environment.
+        unsafe {
+            std::env::set_var(
+                orbit_tools::plugin::ORBIT_PLUGIN_CALLBACK_ENV,
+                session.token(),
+            );
+        }
+        dispatch_cli(&runtime, tool)
+    };
+
+    as_session(&lister, "orbit.task.list").expect("the lister's own tool");
+    assert_ceiling_denied(
+        &as_session(&lister, "orbit.search")
+            .expect_err("the lister must not reach the searcher's tool"),
+        "orbit.search",
+    );
+    as_session(&searcher, "orbit.search").expect("the searcher's own tool");
+    assert_ceiling_denied(
+        &as_session(&searcher, "orbit.task.list")
+            .expect_err("the searcher must not reach the lister's tool"),
+        "orbit.task.list",
+    );
+}
+
+/// A backend can write its own install tree, so it can widen what the row's
+/// manifest requests while it is still running. The recorded list is re-read
+/// on every callback — and intersected with a ceiling that was fixed when the
+/// host minted the session, so the widened request buys nothing.
+#[test]
+fn a_live_callback_session_does_not_widen_when_the_recorded_manifest_does() {
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    record_callback_plugin(&runtime, &["orbit.task.list"]);
+    let _session =
+        bind_live_callback_session_with_ceiling(&runtime, &["orbit.task.list".to_string()]);
+    shed_child_restrictions();
+    dispatch_cli(&runtime, "orbit.task.list").expect("the recorded install admits its own tool");
+
+    // Rewrite the manifest in place, inside the install root the gate holds
+    // the row to, so nothing but the requested allowlist changes.
+    record_callback_plugin_tree(
+        &plugin_install_path(&runtime.global_root(), "callback", "1.0.0"),
+        &["orbit.task.list", "orbit.search"],
+    );
+
+    assert_ceiling_denied(
+        &dispatch_cli(&runtime, "orbit.search")
+            .expect_err("widening the recorded request must not widen a live session"),
+        "orbit.search",
+    );
+    dispatch_cli(&runtime, "orbit.task.list")
+        .expect("the session's own tool is unaffected by the rewrite");
+}
+
+/// The other direction, which the ceiling must not freeze: revocation. The
+/// recorded grant is read on every callback, so withdrawing `orbit_tools`
+/// stops a session that is already live at its next call — there is no
+/// session to kill and no cache to invalidate.
+#[test]
+fn revoking_the_grant_stops_a_live_callback_session() {
+    let _g = env_guard();
+    let runtime = fresh_runtime();
+    record_callback_plugin(&runtime, &["orbit.task.list"]);
+    let _session =
+        bind_live_callback_session_with_ceiling(&runtime, &["orbit.task.list".to_string()]);
+    shed_child_restrictions();
+    dispatch_cli(&runtime, "orbit.task.list").expect("the granted callback runs");
+
+    let mut installed = runtime
+        .stores()
+        .plugins()
+        .get_plugin("callback")
+        .expect("read plugin")
+        .expect("recorded");
+    installed.grants = Vec::new();
+    runtime
+        .stores()
+        .plugins()
+        .upsert_plugin(&installed)
+        .expect("revoke orbit_tools");
+
+    assert_plugin_allowlist_denied(
+        &dispatch_cli(&runtime, "orbit.task.list")
+            .expect_err("a revoked grant refuses the next callback of a live session"),
+        "orbit.task.list",
     );
 }

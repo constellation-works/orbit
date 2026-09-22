@@ -1039,7 +1039,7 @@ fn the_landlock_ruleset_hides_callback_sessions_and_grant_witnesses() {
 
     let spec = orbit_tools_spec(&global_root, &plugin_root);
     let mut session =
-        super::super::callback::PluginCallbackSession::mint(&global_root, &spec.provenance)
+        super::super::callback::PluginCallbackSession::mint(&global_root, &spec.provenance, &[])
             .expect("mint callback session");
     session.bind_pid(std::process::id()).expect("bind pid");
     let other = super::super::callback::PluginCallbackSession::mint(
@@ -1050,6 +1050,7 @@ fn the_landlock_ruleset_hides_callback_sessions_and_grant_witnesses() {
             manifest_digest: "0".repeat(64),
             grants: Vec::new(),
         },
+        &[],
     )
     .expect("mint a second plugin's session");
 
@@ -1132,7 +1133,7 @@ fn the_macos_profile_denies_callback_sessions_and_re_allows_the_childs_own_recor
     std::fs::create_dir_all(&plugin_root).expect("plugin root");
     let spec = orbit_tools_spec(&global_root, &plugin_root);
     let session =
-        super::super::callback::PluginCallbackSession::mint(&global_root, &spec.provenance)
+        super::super::callback::PluginCallbackSession::mint(&global_root, &spec.provenance, &[])
             .expect("mint callback session");
     let profile = spec
         .sandbox_profile(None)

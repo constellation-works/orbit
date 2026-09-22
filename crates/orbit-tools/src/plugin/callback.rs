@@ -15,6 +15,13 @@
 //! there is a refusal rather than an ordinary caller. Changing process group
 //! or starting a new session does not change that answer — `setsid` sheds
 //! ancestry, not confinement.
+//!
+//! The record carries *authority* as well as identity: the effective tool
+//! ceiling the spawning caller had when the host minted it. Knowing which
+//! plugin is calling is not enough to decide a callback, because the same
+//! plugin is reachable from callers with different allowlists — the
+//! intersection is computed per call and the manifest list is not it
+//! [ORB-12801].
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -41,6 +48,13 @@ const SESSION_DIR: &str = "state/plugin-callbacks";
 const TOKEN_BYTES: usize = 32;
 const TOKEN_HEX_LEN: usize = TOKEN_BYTES * 2;
 
+/// Records carry the session's effective tool ceiling from version 2 on. A
+/// record without one states no ceiling, so it is not parsed at all rather
+/// than read as an unbounded session: these files live only as long as the
+/// child they identify, and refusing a leftover from an older host is the
+/// fail-closed half of the choice.
+const SESSION_SCHEMA_VERSION: u32 = 2;
+
 /// Live callback session the host minted for one backend child.
 #[derive(Debug)]
 pub struct PluginCallbackSession {
@@ -49,12 +63,17 @@ pub struct PluginCallbackSession {
     record: SessionRecord,
 }
 
-/// The plugin a resolved callback belongs to.
+/// The plugin a resolved callback belongs to, and what that session may do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginCallbackIdentity {
     pub name: String,
     pub version: String,
     pub manifest_digest: String,
+    /// The tool ceiling the host minted this session with: the spawning
+    /// caller's own `permissions.orbit_tools` ∩ grant ∩ `allowed_tools`
+    /// intersection, sorted and deduped. A callback may never reach past it,
+    /// whatever the plugin row says later [ORB-12801].
+    pub effective_tools: Vec<String>,
 }
 
 impl PluginCallbackIdentity {
@@ -66,6 +85,11 @@ impl PluginCallbackIdentity {
             grants: Vec::new(),
         }
     }
+
+    /// Whether this session's ceiling still names `tool`.
+    pub fn ceiling_admits(&self, tool: &str) -> bool {
+        self.effective_tools.iter().any(|allowed| allowed == tool)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,13 +98,25 @@ struct SessionRecord {
     plugin: String,
     version: String,
     manifest_digest: String,
+    /// Host-owned authority, fixed at mint time. The child can rewrite
+    /// `ORBIT_ALLOWED_TOOLS` and `ORBIT_ACTIVITY_TOOLS` in its own
+    /// environment; it cannot write this directory at all (§4.3).
+    effective_tools: Vec<String>,
     pid: u32,
     starttime: u64,
 }
 
 impl PluginCallbackSession {
     /// Create the session file and return a guard that unlinks it on drop.
-    pub fn mint(global_root: &Path, provenance: &PluginProvenance) -> Result<Self, OrbitError> {
+    ///
+    /// `effective_tools` is the spawning caller's intersection — what this
+    /// one child is allowed to call back for, for as long as it lives.
+    pub fn mint(
+        global_root: &Path,
+        provenance: &PluginProvenance,
+        effective_tools: &[String],
+    ) -> Result<Self, OrbitError> {
+        let effective_tools = normalize_tools(effective_tools);
         let dir = callback_dir(global_root);
         fs::create_dir_all(&dir).map_err(|error| {
             OrbitError::Io(format!(
@@ -93,10 +129,11 @@ impl PluginCallbackSession {
             let token = random_token()?;
             let path = dir.join(&token);
             let record = SessionRecord {
-                schema_version: 1,
+                schema_version: SESSION_SCHEMA_VERSION,
                 plugin: provenance.name.clone(),
                 version: provenance.version.clone(),
                 manifest_digest: provenance.manifest_digest.clone(),
+                effective_tools: effective_tools.clone(),
                 pid: 0,
                 starttime: 0,
             };
@@ -130,6 +167,11 @@ impl PluginCallbackSession {
     /// The token stamped into the child. Tests use this to present or clear it.
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    /// The ceiling this session was minted with, as it was recorded.
+    pub fn effective_tools(&self) -> &[String] {
+        &self.record.effective_tools
     }
 
     /// The record file the confined child is granted read access to. A
@@ -348,7 +390,17 @@ fn identity_from(record: &SessionRecord) -> PluginCallbackIdentity {
         name: record.plugin.clone(),
         version: record.version.clone(),
         manifest_digest: record.manifest_digest.clone(),
+        effective_tools: record.effective_tools.clone(),
     }
+}
+
+/// Sorted and deduped, so the recorded ceiling does not depend on the order
+/// the caller happened to list its own allowlist in.
+fn normalize_tools(tools: &[String]) -> Vec<String> {
+    let mut tools = tools.to_vec();
+    tools.sort();
+    tools.dedup();
+    tools
 }
 
 fn load_token_session(dir: &Path, token: &str) -> Result<SessionRecord, OrbitError> {
@@ -467,7 +519,8 @@ fn session_process_is_live(record: &SessionRecord) -> bool {
 
 fn parse_session(bytes: &[u8]) -> Option<SessionRecord> {
     let record: SessionRecord = serde_json::from_slice(bytes).ok()?;
-    (record.schema_version == 1 && !record.plugin.trim().is_empty()).then_some(record)
+    (record.schema_version == SESSION_SCHEMA_VERSION && !record.plugin.trim().is_empty())
+        .then_some(record)
 }
 
 /// Create one session file, failing with `AlreadyExists` if the token is

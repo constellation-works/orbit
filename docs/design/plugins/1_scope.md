@@ -405,14 +405,49 @@ client; the plugin never listens on a socket. This is how orbit-research plugs i
 rewrite.
 
 Callbacks: the backend reaches Orbit only through `orbit tool run` or MCP `tools/call`, and
-only for tools listed in `permissions.orbit_tools` *and* granted. The same intersection is
+only for tools listed in `permissions.orbit_tools` *and* granted *and* reachable by the
+caller that spawned it. The same intersection is
 stamped into `ORBIT_ALLOWED_TOOLS` as information for the backend. No socket, no shared store
 handle. Identity is a host-issued session: when the host spawns the backend it writes a
-per-call record under `{global_root}/state/plugin-callbacks/` (plugin, pid, start time) and
+per-call record under `{global_root}/state/plugin-callbacks/` (plugin, pid, start time, and
+the effective tool ceiling below) and
 stamps `ORBIT_PLUGIN_CALLBACK` into the child. `orbit tool run` and MCP dispatch resolve that
 session and enforce the recorded install. `ORBIT_PLUGIN` names the plugin for the backend; it
 is not the gate, and neither is the inherited `ORBIT_ALLOWED_TOOLS` value. The backend's
 restraint is not the boundary.
+
+**The session carries the caller's ceiling, not just the plugin's name.** Knowing *which*
+plugin is calling back does not decide the call, because the same plugin is reachable from
+callers with different allowlists: a restricted caller's `permissions.orbit_tools` ∩ grant ∩
+`allowed_tools` intersection is narrower than the manifest list, and the manifest list is
+what a name-only gate would admit. So the child could accept a narrow intersection, clear the
+`ORBIT_ACTIVITY_TOOLS` it inherited, and spend its valid token on any tool the manifest
+requested [ORB-12801]. Spawning a separate `mcp` child per intersection (§4.2) does not close
+that: it keeps the *advertised* allowlists apart, and the callback gate never read them.
+The host therefore writes that intersection into the session record it owns — the one tree
+the child is denied write access to (§4.3) — and every callback is decided by **the recorded
+allowlist ∩ the session's ceiling**. Both halves are consulted on every call, and neither is
+ever read out of the child's environment.
+
+**How revocation and live sessions interact.** The two halves answer different questions and
+change on different clocks, which is what makes the intersection monotone downwards for the
+life of a session:
+
+- The *recorded* half — the row's `enabled` flag, its grants, and `permissions.orbit_tools`
+  read back from the install tree — is re-read on every callback. Revoking a grant, disabling
+  the plugin or narrowing the manifest therefore stops a backend that is already running, at
+  its next callback. There is no session to kill and no cache to invalidate, and a running
+  child is not grandfathered past an operator's revocation.
+- The *session* half is fixed when the host mints the record and never rewritten. So nothing
+  that happens to the row afterwards can widen a live child: not an operator re-granting,
+  not an upgrade whose manifest asks for more, and not the backend rewriting its own install
+  tree — which it can do, since `{{plugin_state}}` and the install path checks bound *where*
+  it may write, not whether the row can be made to name a wider allowlist.
+
+The record states the ceiling from `schema_version: 2` on. A record that states none is
+refused rather than read as unbounded: these files live only as long as the child they
+identify, so the only way to meet one is a leftover from an older host, and a leftover is not
+consent.
 
 **Every other CLI command is refused.** "Only through `orbit tool run` or MCP `tools/call`"
 is a rule about the whole CLI, not about those two commands: `orbit workspace list --format
@@ -491,7 +526,7 @@ plugin missing a required grant never reaches this point (§4.1).
 | `permissions.network: none` (default) | — | `ACCESS_NET_BIND_TCP \| ACCESS_NET_CONNECT_TCP` handled with no rule, which refuses every TCP endpoint (needs Landlock ABI 4; an older kernel fails closed) | `(deny network*)` appended after the compiler's broad allow |
 | `permissions.network: loopback` | `network` | TCP left open — Landlock has no address filter, and the design's confinement claim is the filesystem | `(deny network*)` then loopback re-allows |
 | `permissions.network: any` | `network` | TCP left open | the compiler's `(allow network*)` stands |
-| `permissions.orbit_tools` | `orbit_tools` | Orbit's own global root and the workspace's `.orbit/` become **readable**, because a callback *is* `orbit tool run` and that command cannot start without `config.toml`, the recorded install and `workspaces.json`. Writable is a named inventory, never the roots: `state/logs`, `state/audit` and `tasks` under the global root, `tasks`, `frictions`, `state/audit`, `state/logs` and `state/job-runs` under the workspace's `.orbit/`, plus the `orbit.db` and `state/semantic.db` WAL file sets and the two executable-generation locks as individual files. `bin/orbit` — run unconfined by the scheduler and every worker — `plugins/`, `config.toml`, `mcp-callers.toml`, `clock.toml` and the workspace's `plugins.yaml`, `routines/` and `auto_tasks/` are read-only to the child. Two trees under the global root are **not readable at all**: `state/plugin-callbacks/` (the live callback credentials) and `plugins/.grants/` (the grant witnesses). The child is granted two single files inside them and nothing else: its *own* session record, which its `orbit tool run` reads back to identify itself, and its *own* grant witness, which that nested Orbit verifies before it registers the plugin row. Both directories stay unlistable, and no other plugin's token or witness is reachable — a confined child that loads another plugin's row therefore registers it inactive. What the callback itself may do is decided by the plugin's recorded `orbit_tools` grant and `permissions.orbit_tools`, looked up from the host-issued session on both `orbit tool run` and MCP `tools/call`, together with the ordinary governed-operation rows — not by the sandbox, not by `ORBIT_PLUGIN`, and not by the inherited `ORBIT_ALLOWED_TOOLS` value [ORB-12777] [ORB-12789] [ORB-12798] | same boundary, from the same inventory: write directories become `(subpath …)` roots and the named files are emitted literally, so a store file never widens into the root that holds it; the two unreadable trees are `(deny file-read* (subpath …))` clauses appended after the compiler's broad read allow, with the child's own session record and its own witness re-allowed after them (SBPL is last-match-wins) |
+| `permissions.orbit_tools` | `orbit_tools` | Orbit's own global root and the workspace's `.orbit/` become **readable**, because a callback *is* `orbit tool run` and that command cannot start without `config.toml`, the recorded install and `workspaces.json`. Writable is a named inventory, never the roots: `state/logs`, `state/audit` and `tasks` under the global root, `tasks`, `frictions`, `state/audit`, `state/logs` and `state/job-runs` under the workspace's `.orbit/`, plus the `orbit.db` and `state/semantic.db` WAL file sets and the two executable-generation locks as individual files. `bin/orbit` — run unconfined by the scheduler and every worker — `plugins/`, `config.toml`, `mcp-callers.toml`, `clock.toml` and the workspace's `plugins.yaml`, `routines/` and `auto_tasks/` are read-only to the child. Two trees under the global root are **not readable at all**: `state/plugin-callbacks/` (the live callback credentials) and `plugins/.grants/` (the grant witnesses). The child is granted two single files inside them and nothing else: its *own* session record, which its `orbit tool run` reads back to identify itself, and its *own* grant witness, which that nested Orbit verifies before it registers the plugin row. Both directories stay unlistable, and no other plugin's token or witness is reachable — a confined child that loads another plugin's row therefore registers it inactive. What the callback itself may do is decided by the plugin's recorded `orbit_tools` grant and `permissions.orbit_tools` **intersected with the tool ceiling the host wrote into that session** — the spawning caller's own allowlist, which the recorded manifest list alone would ignore — looked up from the host-issued session on both `orbit tool run` and MCP `tools/call`, together with the ordinary governed-operation rows — not by the sandbox, not by `ORBIT_PLUGIN`, and not by the inherited `ORBIT_ALLOWED_TOOLS` value [ORB-12777] [ORB-12789] [ORB-12798] [ORB-12801] | same boundary, from the same inventory: write directories become `(subpath …)` roots and the named files are emitted literally, so a store file never widens into the root that holds it; the two unreadable trees are `(deny file-read* (subpath …))` clauses appended after the compiler's broad read allow, with the child's own session record and its own witness re-allowed after them (SBPL is last-match-wins) |
 | `permissions.env_pass` | `env_pass` | Those names are copied from Orbit's environment into the otherwise allowlisted child environment, composed through the same `allowlisted_child_env` admission path as the baseline — `ORBIT_*` names are reserved for Orbit's own envelope and refused by `validate_structure`, so a privilege-bearing name (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`) can never reach a plugin child even if requested | same |
 | `requires.programs` | — | Not a sandbox rule: the declared programs are checked against a restricted caller's own `proc.spawn` allowlist and stamped into `ORBIT_PROC_ALLOWED_PROGRAMS` | same |
 | `backend.sandbox: none` | `unsandboxed` | No ruleset at all | No `sandbox-exec` wrapper at all |
