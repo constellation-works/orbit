@@ -14,20 +14,12 @@ fn orbit_tools_permissions() -> PluginPermissions {
     }
 }
 
-fn prepare_orbit_tools_global(root: &std::path::Path) {
-    for relative in ["state/logs", "state/audit", "tasks"] {
-        std::fs::create_dir_all(root.join("global").join(relative))
-            .expect("create callback-writable global fixture directory");
-    }
-}
-
 #[cfg(unix)]
 #[test]
 #[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
 fn exec_backend_receives_the_envelope_and_returns_output() {
     require_sandbox();
     let temp = tempfile::tempdir().expect("tempdir");
-    prepare_orbit_tools_global(temp.path());
     let command = stub_backend(temp.path(), ECHO_BACKEND);
     let tool = tool(
         spec(
@@ -61,7 +53,6 @@ fn exec_backend_receives_the_envelope_and_returns_output() {
 fn the_callback_allowlist_is_exactly_the_granted_orbit_tools() {
     require_sandbox();
     let temp = tempfile::tempdir().expect("tempdir");
-    prepare_orbit_tools_global(temp.path());
     let command = stub_backend(temp.path(), ECHO_BACKEND);
 
     // Granted, no caller allowlist: every requested tool.

@@ -453,18 +453,33 @@ plugin missing a required grant never reaches this point (§4.1).
 | `backend.sandbox: none` | `unsandboxed` | No ruleset at all | No `sandbox-exec` wrapper at all |
 
 Granted write *directories* are created before the child starts only when their normalized path
-is contained by one of three host-owned materialization roots: the selected workspace, the
-plugin's own `{{plugin_state}}`, or — when `orbit_tools` is granted — Orbit's
-`<global_root>/state` tree. The global state root is host-owned rather than manifest-controlled,
-and only the named `orbit_tools` write inventory above is added to the profile; making the root
-materializable does not grant the child a write tree over all of `state/`. Creation checks every
-existing component without following symbolic links; an escaping `..` root is left absent and a
-symlinked prefix is refused. A granted root outside those host-owned materialization roots is
-never created by Orbit, even after explicit operator consent: it must already exist as a
-directory or the call is refused with a diagnostic telling the operator to create the consented
-directory first. Consent authorizes the profile; it does not make a manifest path a host-owned
-materialization root. A Landlock rule binds to an inode, so a safe grant naming a directory that
-does not exist yet would otherwise grant nothing. Compiling the boundary resolves a root exactly
+is at or beneath a **host-materialized prefix**. There are exactly three kinds, and this is the
+whole list:
+
+| Host-materialized prefix | Present when |
+| --- | --- |
+| the selected workspace root (`{{workspace}}`) | a workspace is selected for the call |
+| the plugin's own state tree (`{{plugin_state}}`) | always |
+| `<global_root>/state/logs`, `<global_root>/state/audit`, `<global_root>/tasks`, and `<workspace>/.orbit/` `tasks`, `frictions`, `state/audit`, `state/logs`, `state/job-runs` | `orbit_tools` is granted |
+
+The third group is not a separate list: it *is* the `orbit_tools` write inventory named in the
+table above, the directories the host itself adds to the profile. One list decides both what is
+granted and what may be created, so an entry added to that inventory is writable and creatable
+in the same edit — the drift between the two that reddened CI four times cannot recur
+[ORB-12872]. Note what the third group is *not*: `<global_root>/state` is not a prefix, so
+making the two named stores under it materializable does not give the child — or the host — a
+creatable tree over all of `state/`.
+
+Creation checks every existing component without following symbolic links; an escaping `..` root
+is left absent and a symlinked prefix is refused. A granted root outside those host-materialized
+prefixes is never created by Orbit, even after explicit operator consent: it must already exist
+as a directory or the call is refused with a diagnostic naming the root and telling the operator
+to create the consented directory first. Consent authorizes the profile; it does not make a
+manifest path a host-materialized prefix. Both halves are one test
+(`the_host_materializes_its_own_write_roots_and_never_a_manifest_path_outside_them`): the
+host-owned prefixes are created on the plugin's behalf, and an absent manifest-named path
+outside them stays absent. A Landlock rule binds to an inode, so a safe grant naming a directory
+that does not exist yet would otherwise grant nothing. Compiling the boundary resolves a root exactly
 as the refusal above did — the same existing-prefix resolution — and creates a missing tail one
 component at a time, refusing a link that appears between the two and refusing a created path
 that no longer resolves to the identity that was checked. Validation and the compiled rule
