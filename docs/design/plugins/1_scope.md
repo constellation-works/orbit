@@ -182,9 +182,12 @@ orbit plugin remove <ns> --yes --record-only  →  gone        (record only; eve
 orbit plugin list | show <ns> | doctor | validate <dir> | test <dir> | scaffold <ns> | sync | migrate
 ```
 
-Enable creates only the namespaced skill links reported by `plugin validate`. Disable removes
-only discovery links whose targets are inside `~/.orbit/plugins/<ns>/`; shipped, user-owned and
-other plugins' links remain untouched.
+Enable creates only the namespaced skill links reported by `plugin validate`. Discovery roots
+are siblings of the active global root: `~/.orbit` uses `~/.agents/skills` and
+`~/.claude/skills`, while `--root /path/to/root` uses `/path/to/.agents/skills` and
+`/path/to/.claude/skills`. Disable removes only discovery links whose targets are inside the
+active global root's `plugins/<ns>/`; shipped, user-owned and other plugins' links remain
+untouched.
 
 **Every verb that touches the recorded tree checks it first.** The `install_path` in the
 `plugins` row is writable by any backend holding `orbit_tools`, so `enable`, `disable` and

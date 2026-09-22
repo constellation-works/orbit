@@ -174,9 +174,10 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
         if summary.install_path.is_empty() {
             continue;
         }
-        for (link, target) in
-            super::skills::dangling_plugin_skill_links(Path::new(&summary.install_path))
-        {
+        for (link, target) in super::skills::dangling_plugin_skill_links(
+            &runtime.global_root(),
+            Path::new(&summary.install_path),
+        ) {
             dangling.push(PluginDoctorResult {
                 plugin: summary.name.clone(),
                 status: summary.status,

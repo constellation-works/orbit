@@ -2,12 +2,14 @@
 //! (design `docs/design/plugins/1_scope.md` §1, §3).
 //!
 //! A plugin's skills stay in its install directory: Orbit links them into the
-//! same `skill_link_roots` (`~/.agents/skills`, `~/.claude/skills`) the
-//! shipped skills use, under the namespaced id `<plugin>-<skill>`. The
-//! namespace keeps plugin links disjoint from shipped skills, and linking
-//! refuses to replace a same-named link owned outside the plugin's install
-//! family. Disable removes exactly the links that point into that plugin's
-//! root, and `orbit plugin doctor` reports a link whose target is gone.
+//! same `skill_link_roots` (`~/.agents/skills`, `~/.claude/skills` for the
+//! default `~/.orbit` root) the shipped skills use, under the namespaced id
+//! `<plugin>-<skill>`. An alternate global root keeps the discovery roots
+//! beside itself rather than mutating the invoking user's home. The namespace
+//! keeps plugin links disjoint from shipped skills, and linking refuses to
+//! replace a same-named link owned outside the plugin's install family.
+//! Disable removes exactly the links that point into that plugin's root, and
+//! `orbit plugin doctor` reports a link whose target is gone.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,14 +31,16 @@ pub struct PluginSkillLink {
     pub target: PathBuf,
 }
 
-/// The discovery roots this host links skills into.
+/// The provider discovery roots belonging to one runtime's global root.
 ///
-/// Every function below takes the roots explicitly and this is the only place
-/// that reads the home directory, so the linking rules can be exercised
-/// against temporary roots without a test touching a real `~/.claude`.
-pub(crate) fn link_roots() -> Vec<PathBuf> {
-    crate::paths::home_dir()
-        .map(|home| skill_link_roots(&home))
+/// The default global root is `~/.orbit`, so its siblings are the ordinary
+/// `~/.agents/skills` and `~/.claude/skills` directories. A `--root` or
+/// `ORBIT_ROOT` override instead keeps the links beside that selected root,
+/// which also confines in-process fixtures to their temporary directory.
+pub(crate) fn link_roots(global_root: &Path) -> Vec<PathBuf> {
+    global_root
+        .parent()
+        .map(skill_link_roots)
         .unwrap_or_default()
 }
 
@@ -46,8 +50,11 @@ pub(crate) fn link_roots() -> Vec<PathBuf> {
 /// than failing the enable: the plugin's tools and definitions are already
 /// recorded, and a missing skill link is a `doctor` finding, not a reason to
 /// leave the host half-enabled.
-pub fn link_plugin_skills(plugin: &LoadedPlugin) -> (Vec<PluginSkillLink>, Vec<String>) {
-    link_plugin_skills_into(&link_roots(), plugin)
+pub(crate) fn link_plugin_skills(
+    global_root: &Path,
+    plugin: &LoadedPlugin,
+) -> (Vec<PluginSkillLink>, Vec<String>) {
+    link_plugin_skills_into(&link_roots(global_root), plugin)
 }
 
 /// [`link_plugin_skills`] against explicit discovery roots.
@@ -167,8 +174,11 @@ fn resolve_link_target(link: &Path) -> Result<PathBuf, OrbitError> {
 /// The install path rather than the manifest's skill list is the selector, so
 /// a disable still cleans up after a manifest that changed between enable and
 /// disable.
-pub fn unlink_plugin_skills(install_path: &Path) -> Result<Vec<PathBuf>, OrbitError> {
-    unlink_plugin_skills_from(&link_roots(), install_path)
+pub(crate) fn unlink_plugin_skills(
+    global_root: &Path,
+    install_path: &Path,
+) -> Result<Vec<PathBuf>, OrbitError> {
+    unlink_plugin_skills_from(&link_roots(global_root), install_path)
 }
 
 /// [`unlink_plugin_skills`] against explicit discovery roots.
@@ -193,8 +203,11 @@ pub fn unlink_plugin_skills_from(
 /// Links in the discovery roots whose target no longer exists, paired with the
 /// target they name. Only links pointing into `plugin_root` are reported: a
 /// dangling link to anything else belongs to the skill catalog's own doctor.
-pub fn dangling_plugin_skill_links(plugin_root: &Path) -> Vec<(PathBuf, PathBuf)> {
-    dangling_plugin_skill_links_in(&link_roots(), plugin_root)
+pub(crate) fn dangling_plugin_skill_links(
+    global_root: &Path,
+    plugin_root: &Path,
+) -> Vec<(PathBuf, PathBuf)> {
+    dangling_plugin_skill_links_in(&link_roots(global_root), plugin_root)
 }
 
 /// [`dangling_plugin_skill_links`] against explicit discovery roots.
