@@ -14,7 +14,7 @@ use std::process::Child;
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::{allowlisted_child_env, allowlisted_child_env_from};
-use orbit_exec::{ExecRequest, NoSandbox, Sandbox};
+use orbit_exec::{ExecRequest, InheritedFd, Sandbox};
 use orbit_types::plugin::{
     PLUGIN_HOST_API, PluginGrant, PluginGrantSet, PluginManifestError, PluginNetworkPermission,
     PluginPermissions, PluginProvenance, PluginSandbox, PluginTemplateVars, render_template,
@@ -22,7 +22,7 @@ use orbit_types::plugin::{
 use orbit_types::policy::ResolvedFsProfile;
 use serde_json::Value;
 
-use super::callback::PluginCallbackSession;
+use super::callback::{PLUGIN_CALLBACK_FD, PluginCallbackSession};
 use super::loader::physical_with_missing_tail;
 use crate::builtin::proc::spawn::enforce_program_allowlist;
 use crate::{TIMEOUT_SLOW_MS, ToolContext, upsert_env};
@@ -64,8 +64,9 @@ const ORBIT_TOOLS_GLOBAL_WRITE_FILES: &[&str] = &[
 /// that could read the directory could present another plugin's token, and
 /// one that could list it could enumerate every backend running on the host.
 /// A confined child is granted its *own* record as a single file instead
-/// ([`PluginSandboxProfile::with_callback_session`]), which is what its
-/// `orbit tool run` reads to identify itself. `plugins/.grants/` holds the
+/// ([`PluginSandboxProfile::with_callback_session`]), which is what lets the
+/// child check that the credential descriptor it inherited really is the
+/// record the host wrote for it. `plugins/.grants/` holds the
 /// grant witnesses that decide what each plugin is authorized to do; those are
 /// the host's answer, never a plugin's input, and the child is likewise
 /// granted only its own ([`plugin_grant_witness_relative`]) so it can verify
@@ -548,6 +549,8 @@ impl PluginBackendSpec {
             network,
             unsandboxed: self.sandbox == PluginSandbox::None
                 && self.granted(PluginGrant::Unsandboxed),
+            // Set by `with_callback_session` once the session exists.
+            callback_fd: None,
         })
     }
 
@@ -653,8 +656,8 @@ impl PluginBackendSpec {
             );
         }
         // Always present, even when empty: information for the backend.
-        // The callback gate does not read this value; identity is the
-        // host-issued session (`ORBIT_PLUGIN_CALLBACK` plus ancestry).
+        // The callback gate does not read this value; identity is the session
+        // record the child inherits on `PLUGIN_CALLBACK_FD`.
         set("ORBIT_ALLOWED_TOOLS", self.allowed_tools(ctx).join(","));
         // `requires.programs` is what a callback through `proc.spawn` may run.
         set("ORBIT_PROC_ALLOWED_PROGRAMS", self.programs.join(","));
@@ -733,18 +736,26 @@ pub struct PluginSandboxProfile {
     pub network: PluginNetworkPermission,
     /// `backend.sandbox: none` with the `unsandboxed` grant: no confinement.
     pub unsandboxed: bool,
+    /// The host descriptor the child receives as [`PLUGIN_CALLBACK_FD`]: its
+    /// callback credential. Borrowed from the [`PluginCallbackSession`], which
+    /// owns it and must outlive the spawn.
+    pub(crate) callback_fd: Option<i32>,
 }
 
 impl PluginSandboxProfile {
-    /// Grant the child read access to the one callback record that identifies
-    /// it, inside the otherwise denied session directory.
+    /// Carry one live callback session into the spawn.
     ///
-    /// This is the credential `orbit tool run` reads back in the child. The
-    /// grant is a single file: the directory stays unlistable and every other
-    /// plugin's live token stays unreadable.
+    /// Two things travel together. The child receives the open record as
+    /// [`PLUGIN_CALLBACK_FD`] — the credential itself, which survives a
+    /// cleared environment and a `setsid`. And it is granted read access to
+    /// that one record *by name*, inside the otherwise denied session
+    /// directory, so it can confirm the descriptor it holds is the record the
+    /// host wrote for it. The grant is a single file: the directory stays
+    /// unlistable and every other plugin's live record stays out of reach.
     #[must_use]
     pub fn with_callback_session(mut self, session: &PluginCallbackSession) -> Self {
         self.read.push(session.path().to_path_buf());
+        self.callback_fd = Some(session.credential_fd());
         self
     }
 
@@ -814,10 +825,21 @@ impl Sandbox for PluginSandboxProfile {
         for root in &self.write {
             materialize_write_directory(root, &self.materialization_roots)?;
         }
+        // The callback credential reaches the child the same way under every
+        // confinement: `sandbox-exec` execs the program it wraps and Landlock
+        // governs paths, not descriptors, so an inherited number survives both.
+        let inherited: Vec<InheritedFd> = self
+            .callback_fd
+            .map(|source| InheritedFd {
+                source,
+                target: PLUGIN_CALLBACK_FD,
+            })
+            .into_iter()
+            .collect();
         if self.unsandboxed {
-            return NoSandbox.spawn(req);
+            return orbit_exec::spawn_with_inherited_fds(req, &inherited);
         }
-        spawn_confined(self, req)
+        spawn_confined(self, req, &inherited)
     }
 }
 
@@ -957,7 +979,11 @@ fn materialize_write_directory(root: &Path, allowed_roots: &[PathBuf]) -> Result
 }
 
 #[cfg(target_os = "linux")]
-fn spawn_confined(profile: &PluginSandboxProfile, req: &ExecRequest) -> Result<Child, OrbitError> {
+fn spawn_confined(
+    profile: &PluginSandboxProfile,
+    req: &ExecRequest,
+    inherited_fds: &[InheritedFd],
+) -> Result<Child, OrbitError> {
     let boundary = orbit_exec::LandlockBoundary {
         read: profile.read.clone(),
         read_denies: profile.read_denies.clone(),
@@ -967,11 +993,15 @@ fn spawn_confined(profile: &PluginSandboxProfile, req: &ExecRequest) -> Result<C
         // TCP open, and only `none` is held at the kernel.
         deny_tcp: profile.network == PluginNetworkPermission::None,
     };
-    orbit_exec::spawn_under_linux_landlock_boundary(req, &boundary)
+    orbit_exec::spawn_under_linux_landlock_boundary(req, &boundary, inherited_fds)
 }
 
 #[cfg(target_os = "macos")]
-fn spawn_confined(profile: &PluginSandboxProfile, req: &ExecRequest) -> Result<Child, OrbitError> {
+fn spawn_confined(
+    profile: &PluginSandboxProfile,
+    req: &ExecRequest,
+    inherited_fds: &[InheritedFd],
+) -> Result<Child, OrbitError> {
     use orbit_exec::{
         EnvironmentMode, MacosNetworkAccess, MacosSandboxSpawnRequest, StdinMode,
         append_macos_network_access, append_macos_read_boundary, compile_macos_sandbox_profile,
@@ -1017,12 +1047,17 @@ fn spawn_confined(profile: &PluginSandboxProfile, req: &ExecRequest) -> Result<C
         stdin,
         stdout: Stdio::piped(),
         stderr: Stdio::piped(),
+        inherited_fds,
     })?;
     Ok(child)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn spawn_confined(_profile: &PluginSandboxProfile, req: &ExecRequest) -> Result<Child, OrbitError> {
+fn spawn_confined(
+    _profile: &PluginSandboxProfile,
+    req: &ExecRequest,
+    _inherited_fds: &[InheritedFd],
+) -> Result<Child, OrbitError> {
     Err(OrbitError::PolicyDenied(format!(
         "plugin backend `{}` cannot run confined on {}: Orbit sandboxes plugins with Landlock \
          (Linux) or sandbox-exec (macOS); a manifest may opt out with `backend.sandbox: none` \

@@ -318,6 +318,12 @@ define_config_settings! {
         section: ConfigSection::Operation, order: 30,
         resolve: |raw: Option<u32>| operation::review_reviewer_starts(raw),
     },
+    plugin_legacy_callback_identity: bool => bool {
+        key: "plugin.legacy_callback_identity", value_type: "bool",
+        description: "Deprecated: also accept the environment token and process ancestry as a plugin callback credential. Off by default; identity is the session record the host hands a backend on file descriptor 3. Removed in the next release.",
+        section: ConfigSection::Housekeeping, order: 80,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
     pr_task_url_template: Option<String> => String {
         key: "pr.task_url_template", value_type: "string",
         description: "URL template used to link a task ID in PR descriptions.",

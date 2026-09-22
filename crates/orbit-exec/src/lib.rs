@@ -35,6 +35,8 @@
 //!   child itself, used by activity-scoped `proc.spawn`
 //! - [`spawn_under_linux_landlock_boundary`] — Linux read + write + TCP
 //!   confinement to explicit granted roots, used by plugin backends
+//! - [`InheritedFd`] — an open descriptor handed to the child at a fixed
+//!   number, which is how a plugin backend receives its callback credential
 //! - [`EnvironmentMode`], [`StdinMode`] — environment and stdin control
 //! - [`physical_with_missing_tail`] / [`create_write_root`] — the one
 //!   resolution a granted path gets, shared by the layer that validates it
@@ -76,6 +78,7 @@ pub use macos_sandbox::{
     sandbox_exec_unavailable_message, spawn_under_macos_sandbox,
 };
 pub use path_identity::{create_write_root, lexical_normalize, physical_with_missing_tail};
+pub use process::{InheritedFd, spawn_with_inherited_fds};
 pub use result::ExecutionResult;
 pub use runner::{
     EnvironmentMode, ExecRequest, StdinMode, SupervisedOutcome, run_process,

@@ -70,6 +70,7 @@ fn spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path() {
         stdin: Stdio::null(),
         stdout: Stdio::piped(),
         stderr: Stdio::piped(),
+        inherited_fds: &[],
     })
     .expect("spawn sandboxed child");
     let output = child.wait_with_output().expect("wait for child");
@@ -117,6 +118,7 @@ fn spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment() {
         stdin: Stdio::null(),
         stdout: Stdio::piped(),
         stderr: Stdio::piped(),
+        inherited_fds: &[],
     })
     .expect("spawn sandboxed child");
     let output = child.wait_with_output().expect("wait for child");
@@ -163,6 +165,7 @@ fn spawn_under_macos_sandbox_runs_program_in_provided_cwd() {
         stdin: Stdio::null(),
         stdout: Stdio::piped(),
         stderr: Stdio::piped(),
+        inherited_fds: &[],
     })
     .expect("spawn sandboxed child");
     let output = child.wait_with_output().expect("wait for child");
@@ -237,6 +240,7 @@ fn pty_allocation_is_allowed_under_compiled_profile() {
         stdin: Stdio::null(),
         stdout: Stdio::piped(),
         stderr: Stdio::piped(),
+        inherited_fds: &[],
     })
     .expect("spawn sandboxed pty probe");
     let output = child.wait_with_output().expect("wait for pty probe");
@@ -275,6 +279,7 @@ fn spawn_under_macos_sandbox_reuses_tempfile_for_identical_profile_text() {
             stdin: Stdio::null(),
             stdout: Stdio::piped(),
             stderr: Stdio::piped(),
+            inherited_fds: &[],
         })
         .expect("spawn sandboxed child");
         let output = child.wait_with_output().expect("wait for child");

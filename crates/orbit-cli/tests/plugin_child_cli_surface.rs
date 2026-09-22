@@ -8,10 +8,12 @@
 //! reads orbit-graph actually performs — and read whatever the CLI exposes.
 //!
 //! This exercises the real binary as a recognized plugin child: a live
-//! callback session bound to *this* process, and `orbit` spawned as its child,
-//! which is how the host-issued credential reaches a backend descendant in
-//! production. The child is identified by ancestry as well as by the token, so
-//! neither dropping `ORBIT_PLUGIN_CALLBACK` nor keeping it changes the answer.
+//! callback session, and `orbit` spawned holding the session record open on an
+//! inherited descriptor, which is how the host-issued credential reaches a
+//! backend descendant in production [ORB-12841]. Nothing in the child's
+//! environment decides it — the record on the descriptor does — so the
+//! fixture also keeps the retired `ORBIT_PLUGIN_CALLBACK` variable set to
+//! show it changes nothing.
 
 #![allow(missing_docs)]
 // Tests use unwrap/expect to keep fixture setup readable.
@@ -29,16 +31,20 @@ use tempfile::TempDir;
 /// green-to-red test.
 const SURFACE_REFUSAL: &str = "a plugin backend reaches Orbit only through `orbit tool run";
 
-/// An Orbit root holding one live callback session, bound to this process.
+/// An Orbit root holding one live callback session, with the session record
+/// open on a descriptor every spawned `orbit` inherits.
 ///
-/// Binding to the test process rather than to the spawned child is what makes
-/// the fixture realistic *and* race-free: a backend descendant is recognized
-/// through `getppid`, so every `orbit` this test spawns resolves as a plugin
-/// child without the test having to know a pid before it forks.
+/// Holding the descriptor open in the test process rather than binding a pid
+/// is what makes the fixture realistic *and* race-free: the credential is the
+/// record, not the process tree, so the test hands it down without having to
+/// know a pid before it forks.
 struct PluginChildFixture {
     _temp: TempDir,
     root: PathBuf,
     token: String,
+    /// The host's open handle on the record. Inheritable, so the spawned
+    /// `orbit` holds the very same descriptor.
+    credential: std::fs::File,
 }
 
 impl PluginChildFixture {
@@ -53,10 +59,11 @@ impl PluginChildFixture {
         let starttime = process_start_key(pid)
             .expect("read this process's start time")
             .starttime;
+        let record = sessions.join(&token);
         std::fs::write(
-            sessions.join(&token),
+            &record,
             serde_json::json!({
-                "schema_version": 2,
+                "schema_version": 3,
                 "plugin": "graph",
                 "version": "0.4.1",
                 "manifest_digest": "0".repeat(64),
@@ -66,24 +73,39 @@ impl PluginChildFixture {
                 // the refusal under test is the guard's, not the credential
                 // check's.
                 "effective_tools": ["orbit.search", "orbit.task.list"],
+                // The record names itself: a child holding the descriptor
+                // checks that this name resolves to the very inode it holds.
+                "token": token,
                 "pid": pid,
                 "starttime": starttime,
             })
             .to_string(),
         )
         .expect("write callback session record");
+        let credential = inheritable_credential(&record);
 
         Self {
             _temp: temp,
             root,
             token,
+            credential,
         }
     }
 
     /// `orbit --root <fixture> …`, run the way a backend descendant runs it.
     fn orbit(&self, args: &[&str]) -> std::process::Output {
+        use std::os::fd::AsRawFd;
+
         let mut command = cargo_bin_cmd!("orbit");
         command
+            // The credential: the record the host wrote, open on a descriptor
+            // this process is handing down. A test cannot dictate a
+            // process-wide number, so it names the one it got — which is what
+            // the variable exists for.
+            .env(
+                "ORBIT_PLUGIN_CALLBACK_FD",
+                self.credential.as_raw_fd().to_string(),
+            )
             .env("ORBIT_PLUGIN_CALLBACK", &self.token)
             .env("ORBIT_PLUGIN", "graph")
             // A backend cannot widen its reach by claiming the allowlist is
@@ -94,6 +116,27 @@ impl PluginChildFixture {
             .args(args);
         command.output().expect("run orbit as a plugin child")
     }
+}
+
+/// Open `record` on a descriptor a spawned child inherits.
+///
+/// Rust marks every descriptor it opens close-on-exec, which is what keeps an
+/// ordinary child from inheriting a handle nobody meant to give it. The host
+/// clears the flag deliberately for exactly one descriptor; so does this
+/// fixture.
+fn inheritable_credential(record: &Path) -> std::fs::File {
+    use std::os::fd::AsRawFd;
+
+    let file = std::fs::File::open(record).expect("open the callback session record");
+    // SAFETY: `file` owns the descriptor for the whole call, and clearing
+    // close-on-exec only changes what `exec` does with it.
+    let cleared = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) };
+    assert!(
+        cleared >= 0,
+        "clear close-on-exec on the callback credential: {}",
+        std::io::Error::last_os_error()
+    );
+    file
 }
 
 fn stderr_of(output: &std::process::Output) -> String {
@@ -178,6 +221,7 @@ fn an_ordinary_caller_is_not_gated_by_the_cli_surface_guard() {
     let mut command = cargo_bin_cmd!("orbit");
     command
         .env_remove("ORBIT_PLUGIN_CALLBACK")
+        .env_remove("ORBIT_PLUGIN_CALLBACK_FD")
         .env_remove("ORBIT_PLUGIN")
         .arg("--root")
         .arg(root)

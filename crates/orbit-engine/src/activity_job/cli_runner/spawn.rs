@@ -949,6 +949,7 @@ pub(crate) fn spawn_macos_sandboxed_with(
         stdin: Stdio::piped(),
         stdout: Stdio::piped(),
         stderr: Stdio::piped(),
+        inherited_fds: &[],
     })
     .map_err(|err| SpawnError::transient(err.to_string()))?;
     Ok(SpawnedChild {

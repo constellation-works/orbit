@@ -365,7 +365,8 @@ fn write_forging_callback_plugin(home: &Path, namespace: &str, requested: &str) 
          case \"$forge\" in\n\
            unset) unset ORBIT_ALLOWED_TOOLS ;;\n\
            rewrite) ORBIT_ALLOWED_TOOLS=\"orbit.search,orbit.task.add\" ;;\n\
-           clear-plugin) unset ORBIT_PLUGIN; unset ORBIT_PLUGIN_CALLBACK ;;\n\
+           clear-plugin) unset ORBIT_PLUGIN; unset ORBIT_PLUGIN_CALLBACK; \
+         unset ORBIT_PLUGIN_CALLBACK_FD; exec 3<&- ;;\n\
            clear-namespace) unset ORBIT_PLUGIN ;;\n\
            clear-ceiling) unset ORBIT_ALLOWED_TOOLS; unset ORBIT_ACTIVITY_TOOLS; \
          unset ORBIT_TASK_ACTOR_KIND ;;\n\
@@ -607,7 +608,8 @@ fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
         "{message}"
     );
 
-    // Dropping the host-issued session is a missing credential, never an
+    // Dropping the host-issued session — the inherited credential descriptor
+    // as well as the retired variables — is a missing credential, never an
     // ordinary local caller: the sandbox still refuses this child the session
     // directory, so its own recorded tool is refused too.
     for tool in ["orbit.task.list", "orbit.search"] {
@@ -624,12 +626,19 @@ fn a_plugin_child_cannot_clear_orbit_plugin_to_escape_its_allowlist() {
     }
 }
 
-/// A backend descendant that starts its own session (`setsid`) and drops the
-/// credential. It is the escape ORB-12798 recorded: the record matched no
-/// pid, ppid or pgid, so the callback resolved to "ordinary caller" and ran
-/// with no plugin allowlist at all. The sandbox is what it cannot shed —
-/// the host-owned session directory stays unreadable to it — so the call is
-/// refused, and the plugin's own recorded callback still works.
+/// Two backend descendants that start their own session (`setsid`) and unset
+/// every `ORBIT_*` variable the host stamped. `kept` leaves the inherited
+/// credential descriptor alone; `shed` closes it with `exec 3<&-`.
+///
+/// This is the escape ORB-12798 recorded, from both sides. Identity used to be
+/// the environment token plus pid/ppid/pgid, and `setsid` matched none of the
+/// three — so the callback resolved to "ordinary caller" and ran with no
+/// plugin allowlist at all. Identity is now the descriptor, which `setsid` and
+/// a cleared environment cannot touch: `kept` is still the plugin, allowlist
+/// and ceiling intact. `shed` is what dropping a credential looks like, and
+/// the sandbox is what it cannot shed — the host-owned session directory stays
+/// unreadable to it, so the call is refused rather than admitted as a local
+/// caller [ORB-12841].
 fn write_setsid_callback_plugin(home: &Path, namespace: &str, requested: &str) -> PathBuf {
     let root = home.join(format!("plugin-sources/{namespace}"));
     std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
@@ -647,13 +656,21 @@ fn write_setsid_callback_plugin(home: &Path, namespace: &str, requested: &str) -
          query=$(printf '%s' \"$input\" | sed -n 's/.*\"query\":\"\\([^\"]*\\)\".*/\\1/p')\n\
          args='{}'\n\
          if [ -n \"$query\" ]; then args=\"{\\\"query\\\":\\\"$query\\\"}\"; fi\n\
-         direct=$(\"$ORBIT_BIN\" tool run \"$tool\" --input \"$args\" 2>&1 >/dev/null)\n\
+         bin=\"$ORBIT_BIN\"\n\
+         strip='for v in $(env | sed -n \"s/^\\(ORBIT_[A-Za-z0-9_]*\\)=.*/\\1/p\"); \
+         do unset \"$v\"; done; '\n\
+         direct=$(\"$bin\" tool run \"$tool\" --input \"$args\" 2>&1 >/dev/null)\n\
          direct_status=$?\n\
-         shed=$(setsid sh -c 'unset ORBIT_PLUGIN_CALLBACK; exec \"$0\" tool run \"$1\" --input \"$2\" 2>&1 >/dev/null' \"$ORBIT_BIN\" \"$tool\" \"$args\")\n\
+         kept=$(setsid sh -c \"$strip\"'exec \"$0\" tool run \"$1\" --input \"$2\" 2>&1 >/dev/null' \
+         \"$bin\" \"$tool\" \"$args\")\n\
+         kept_status=$?\n\
+         shed=$(setsid sh -c \"$strip\"'exec 3<&-; exec \"$0\" tool run \"$1\" --input \"$2\" 2>&1 >/dev/null' \
+         \"$bin\" \"$tool\" \"$args\")\n\
          shed_status=$?\n\
-         printf '{\"ok\":true,\"output\":{\"sessions\":\"%s\",\"witness\":\"%s\",\"direct\":%s,\"direct_stderr\":\"%s\",\"shed\":%s,\"shed_stderr\":\"%s\"}}\\n' \\\n\
+         printf '{\"ok\":true,\"output\":{\"sessions\":\"%s\",\"witness\":\"%s\",\"direct\":%s,\"direct_stderr\":\"%s\",\"kept\":%s,\"kept_stderr\":\"%s\",\"shed\":%s,\"shed_stderr\":\"%s\"}}\\n' \\\n\
            \"$sessions\" \"$witness\" \"$direct_status\" \\\n\
            \"$(printf '%s' \"$direct\" | tr -d '\\\"' | tr -cd '[:print:]' | cut -c1-1000)\" \\\n\
+           \"$kept_status\" \"$(printf '%s' \"$kept\" | tr -d '\\\"' | tr -cd '[:print:]' | cut -c1-1000)\" \\\n\
            \"$shed_status\" \"$(printf '%s' \"$shed\" | tr -d '\\\"' | tr -cd '[:print:]' | cut -c1-1000)\"\n",
     )
     .expect("write setsid plugin backend");
@@ -674,9 +691,10 @@ fn write_setsid_callback_plugin(home: &Path, namespace: &str, requested: &str) -
 }
 
 /// The kernel-enforced version of the escape: a real backend under the real
-/// Landlock profile, a real `setsid` intermediary, and the real CLI deciding
-/// the call — a well-formed one, so a refusal is the gate's and not the
-/// tool's own input validation [ORB-12865]. Also the read boundary those credentials depend on — neither the
+/// Landlock profile, real `setsid` intermediaries with every `ORBIT_*`
+/// variable unset, and the real CLI deciding the call — a well-formed one, so
+/// a refusal is the gate's and not the tool's own input validation
+/// [ORB-12865]. Also the read boundary the credential depends on — neither the
 /// live sessions nor the grant witnesses are readable from inside the
 /// sandbox (design §4.2, §4.3) [ORB-12798].
 #[cfg(target_os = "linux")]
@@ -738,9 +756,14 @@ fn a_plugin_child_cannot_shed_its_callback_session_with_setsid() {
         recorded["direct"], 0,
         "the plugin's own recorded callback still works: {recorded}"
     );
+    assert_eq!(
+        recorded["kept"], 0,
+        "a new-session intermediary that kept file descriptor 3 is still the plugin, with every \
+         ORBIT_* variable unset: {recorded}"
+    );
     assert_ne!(
         recorded["shed"], 0,
-        "a new-session intermediary that drops the credential is refused: {recorded}"
+        "a new-session intermediary that closed file descriptor 3 is refused: {recorded}"
     );
     let message = recorded["shed_stderr"].as_str().expect("shed stderr");
     assert!(
@@ -758,6 +781,16 @@ fn a_plugin_child_cannot_shed_its_callback_session_with_setsid() {
     assert!(
         message.contains("orbit.search") && message.contains("granted orbit_tools allowlist"),
         "the refusal is the allowlist's, not the tool's input validation: {message}"
+    );
+    assert_ne!(
+        unrecorded["kept"], 0,
+        "keeping the credential through a new session carries the ceiling with it, so an \
+         unrecorded tool is still refused: {unrecorded}"
+    );
+    let message = unrecorded["kept_stderr"].as_str().expect("kept stderr");
+    assert!(
+        message.contains("orbit.search") && message.contains("granted orbit_tools allowlist"),
+        "the inherited credential is bounded by the allowlist, not a way around it: {message}"
     );
     assert_ne!(
         unrecorded["shed"], 0,
