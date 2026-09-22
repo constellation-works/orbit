@@ -2,6 +2,7 @@
 //! the real protocol, and the certification that records what they passed on.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use orbit_common::OrbitError;
 
@@ -91,6 +92,69 @@ fn a_passing_suite_certifies_the_installed_plugin_for_this_orbit() {
         recorded.certified_orbit_version.as_deref(),
         Some(host_version().to_string().as_str()),
         "`orbit plugin show` reads the certification from the record"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_installed_first_party_suite_runs_and_is_certified() {
+    let fixture = PluginFixture::new();
+    let root = write_tested_plugin(&fixture, "firstparty", "world");
+    mark_first_party_source(&root);
+    install_plugin(
+        &fixture.runtime,
+        root.to_str().expect("utf8 source"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install the verified first-party fixture");
+
+    let runtime = fixture.reopen();
+    let report = run(&runtime, &root).expect("run the first-party conformance suite");
+
+    assert!(report.passed(), "{:?}", report.results);
+    assert_eq!(report.results[0].tool, "orbit.firstparty.greet");
+    assert!(report.certified, "{}", report.certification_note);
+    assert_eq!(
+        runtime
+            .stores()
+            .plugins()
+            .get_plugin("firstparty")
+            .expect("read the plugin record")
+            .expect("the plugin is installed")
+            .certified_orbit_version
+            .as_deref(),
+        Some(host_version().to_string().as_str())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_uninstalled_first_party_suite_requires_the_explicit_flag() {
+    let fixture = PluginFixture::new();
+    let root = write_tested_plugin(&fixture, "uninstalled", "world");
+    mark_first_party_manifest(&root);
+
+    let refused = run(&fixture.runtime, &root).expect_err("unverified origin must refuse");
+    assert!(
+        refused.to_string().contains("claims the reserved"),
+        "the existing origin diagnostic remains visible: {refused}"
+    );
+
+    let report = run_with(
+        &fixture.runtime,
+        &root,
+        PluginTestOptions {
+            first_party: true,
+            ..PluginTestOptions::default()
+        },
+    )
+    .expect("the explicit first-party flag runs the goldens");
+    assert!(report.passed(), "{:?}", report.results);
+    assert!(!report.certified, "{}", report.certification_note);
+    assert!(
+        report.certification_note.contains("not installed"),
+        "an uninstalled directory cannot record a certification: {}",
+        report.certification_note
     );
 }
 
@@ -215,6 +279,41 @@ fn run_with(
     test_plugin_dir(runtime, root, &options)
 }
 
+#[cfg(unix)]
+fn mark_first_party_source(root: &Path) {
+    mark_first_party_manifest(root);
+    let status = Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(root)
+        .status()
+        .expect("run git init");
+    assert!(status.success(), "git init must succeed");
+    let status = Command::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/constellation-works/fixture.git",
+        ])
+        .current_dir(root)
+        .status()
+        .expect("add first-party origin");
+    assert!(status.success(), "git remote add must succeed");
+}
+
+#[cfg(unix)]
+fn mark_first_party_manifest(root: &Path) {
+    let path = root.join("plugin.yaml");
+    let manifest = std::fs::read_to_string(&path).expect("read manifest");
+    let patched = manifest.replacen(
+        "  version: 1.0.0\n",
+        "  version: 1.0.0\n  publisher: constellation-works\n  origin: orbit\n",
+        1,
+    );
+    assert_ne!(patched, manifest, "the fixture manifest shape changed");
+    std::fs::write(path, patched).expect("mark first-party manifest");
+}
+
 /// Insert backend lines and a `permissions` block into a fixture manifest.
 fn patch_manifest(root: &Path, backend_extra: &str, permissions: &str) {
     let path = root.join("plugin.yaml");
@@ -329,6 +428,7 @@ fn a_grant_list_that_omits_a_dangerous_request_still_refuses() {
         &fixture.runtime,
         &root,
         PluginTestOptions {
+            first_party: false,
             grants: vec!["unsandboxed".to_string()],
             accept_requested: false,
         },
@@ -354,6 +454,7 @@ fn an_unknown_grant_name_is_refused_before_the_run() {
         &fixture.runtime,
         &root,
         PluginTestOptions {
+            first_party: false,
             grants: vec!["wifi".to_string()],
             accept_requested: true,
         },
@@ -422,6 +523,7 @@ fn accept_requested_keeps_the_certification_rule() {
     );
 
     let accepted = PluginTestOptions {
+        first_party: false,
         grants: Vec::new(),
         accept_requested: true,
     };
@@ -492,6 +594,7 @@ fn grant_names_that_cover_the_request_run_the_requested_profile() {
         &fixture.runtime,
         &root,
         PluginTestOptions {
+            first_party: false,
             grants: vec![
                 "fs".to_string(),
                 "network".to_string(),
@@ -535,6 +638,7 @@ fn accept_requested_still_refuses_a_write_root_that_covers_the_global_root() {
         &fixture.runtime,
         &root,
         PluginTestOptions {
+            first_party: false,
             grants: Vec::new(),
             accept_requested: true,
         },

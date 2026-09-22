@@ -12,6 +12,10 @@ use crate::output::color::Domain;
 pub struct PluginTestArgs {
     /// Plugin directory holding `plugin.yaml`
     pub dir: PathBuf,
+    /// Treat the source as a verified first-party checkout, so an
+    /// `origin: orbit` manifest runs as it would after a verified install.
+    #[arg(long)]
+    pub first_party: bool,
     /// Consent to these grants for this run (repeatable, comma-separated):
     /// fs, network, env_pass, orbit_tools, unsandboxed. Same names as
     /// `orbit plugin enable --grant`. Required when the manifest asks for an
@@ -32,6 +36,7 @@ impl Execute for PluginTestArgs {
         let report = runtime.test_plugin_dir(
             &self.dir,
             &PluginTestOptions {
+                first_party: self.first_party,
                 grants: self.grants,
                 accept_requested: self.accept_requested,
             },
