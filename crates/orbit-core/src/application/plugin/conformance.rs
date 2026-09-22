@@ -86,6 +86,9 @@ impl PluginTestReport {
 /// How `orbit plugin test` was asked to treat a manifest's requested profile.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginTestOptions {
+    /// Treat a directory that is not installed at this manifest digest as a
+    /// verified first-party checkout, like `orbit plugin validate --first-party`.
+    pub first_party: bool,
     /// `--grant` names, parsed with the same rules as `orbit plugin enable`.
     /// Empty means the flag was omitted.
     pub grants: Vec<String>,
@@ -99,8 +102,15 @@ pub fn test_plugin_dir(
     options: &PluginTestOptions,
 ) -> Result<PluginTestReport, OrbitError> {
     let plugin = load_plugin_dir(dir)?;
-    validate_loaded_plugin(&plugin, &PluginValidationPolicy::host_default())
-        .map_err(manifest_refusal)?;
+    let first_party_verified = match runtime.stores().plugins().get_plugin(plugin.namespace())? {
+        Some(installed) if installed.manifest_digest == plugin.manifest_digest => {
+            installed.first_party
+        }
+        _ => options.first_party,
+    };
+    let policy =
+        PluginValidationPolicy::host_default().with_first_party_verified(first_party_verified);
+    validate_loaded_plugin(&plugin, &policy).map_err(manifest_refusal)?;
     if let Some(message) = unmet_requirement(&plugin) {
         return Err(OrbitError::InvalidInput(message));
     }

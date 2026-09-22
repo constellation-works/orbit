@@ -208,6 +208,7 @@ fn cli_parses_plugin_test_consent_flags() {
         "plugin",
         "test",
         "./demo",
+        "--first-party",
         "--grant",
         "fs,unsandboxed",
         "--accept-requested",
@@ -216,6 +217,7 @@ fn cli_parses_plugin_test_consent_flags() {
         Commands::Plugin(command) => match command.command {
             PluginSubcommand::Test(args) => {
                 assert_eq!(args.dir, PathBuf::from("./demo"));
+                assert!(args.first_party);
                 assert_eq!(args.grants, ["fs", "unsandboxed"]);
                 assert!(args.accept_requested);
             }
@@ -240,6 +242,7 @@ fn scaffolded_plugin_passes_plugin_test_with_no_flags() {
 
     let output = PluginTestArgs {
         dir: plugin_dir,
+        first_party: false,
         grants: Vec::new(),
         accept_requested: false,
     }
@@ -279,6 +282,7 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
 
     let refused = PluginTestArgs {
         dir: plugin_dir.clone(),
+        first_party: false,
         grants: Vec::new(),
         accept_requested: false,
     }
@@ -308,6 +312,7 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
 
     let accepted = PluginTestArgs {
         dir: plugin_dir,
+        first_party: false,
         grants: Vec::new(),
         accept_requested: true,
     }
