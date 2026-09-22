@@ -422,14 +422,17 @@ plugin missing a required grant never reaches this point (§4.1).
 Granted write *directories* are created before the child starts only when their normalized path
 is contained by the selected workspace or the plugin's own `{{plugin_state}}`. Creation checks
 every existing component without following symbolic links; an escaping `..` root is left absent
-and a symlinked prefix is refused. A Landlock rule binds to an inode, so a safe grant naming a
-directory that does not exist yet would otherwise grant nothing. Compiling the boundary resolves
-a root exactly as the refusal above did — the same existing-prefix resolution — and creates a
-missing tail one component at a time, refusing a link that appears between the two and refusing
-a created path that no longer resolves to the identity that was checked. Validation and the
-compiled rule therefore always name one directory: a root the check refuses is precisely the
-root a rule would have carried, so call-time path construction cannot widen what was granted
-[ORB-12799].
+and a symlinked prefix is refused. A granted root outside those host-owned materialization roots
+is never created by Orbit, even after explicit operator consent: it must already exist as a
+directory or the call is refused with a diagnostic telling the operator to create the consented
+directory first. Consent authorizes the profile; it does not make a manifest path a host-owned
+materialization root. A Landlock rule binds to an inode, so a safe grant naming a directory that
+does not exist yet would otherwise grant nothing. Compiling the boundary resolves a root exactly
+as the refusal above did — the same existing-prefix resolution — and creates a missing tail one
+component at a time, refusing a link that appears between the two and refusing a created path
+that no longer resolves to the identity that was checked. Validation and the compiled rule
+therefore always name one directory: a root the check refuses is precisely the root a rule would
+have carried, so call-time path construction cannot widen what was granted [ORB-12799].
 Named write *files* are the exception — they belong to SQLite and to the generation protocol,
 and a host that materialised one would break the store rather than confine it, so an absent
 file simply yields no grant. The host process spawning the backend has already opened the

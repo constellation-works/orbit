@@ -391,7 +391,9 @@ pub struct PluginSandboxProfile {
     /// paths rather than beside them.
     pub read_denies: Vec<PathBuf>,
     /// Writable directories: granted writes only. Materialised before the
-    /// child starts, because a rule cannot bind an inode that is not there.
+    /// child starts when they are beneath a host-owned materialization root;
+    /// granted host paths outside those roots must already exist because a
+    /// rule cannot bind an inode that is not there.
     pub write: Vec<PathBuf>,
     /// Writable single files, granted only where one already exists as a
     /// regular file. Kept apart from [`Self::write`] so a named store file
@@ -476,8 +478,8 @@ impl Sandbox for PluginSandboxProfile {
         // materialised before the child exists: the grant names it, and
         // neither a kernel rule nor an unconfined backend can create a
         // directory the grant's parent never allowed. Host paths outside
-        // those roots are never created here, and every component we do
-        // create is checked without following symbolic links.
+        // those roots are never created here and must already exist; every
+        // component we do create is checked without following symbolic links.
         // `write_files` is deliberately absent here — those name store files
         // SQLite and the generation protocol own, and creating one as an
         // empty directory would break the store rather than confine it.
@@ -492,9 +494,9 @@ impl Sandbox for PluginSandboxProfile {
 }
 
 /// Create an absent write root only when its normalized path is contained by
-/// a host-owned materialization root. Existing prefixes are inspected with
-/// `symlink_metadata`, so directory creation never walks through a link into
-/// an unrelated host tree.
+/// a host-owned materialization root. Other granted roots must already exist.
+/// Existing prefixes are inspected with `symlink_metadata`, so directory
+/// creation never walks through a link into an unrelated host tree.
 fn materialize_write_directory(root: &Path, allowed_roots: &[PathBuf]) -> Result<(), OrbitError> {
     let root = orbit_exec::lexical_normalize(root);
     let Some(allowed) = allowed_roots
@@ -502,7 +504,25 @@ fn materialize_write_directory(root: &Path, allowed_roots: &[PathBuf]) -> Result
         .map(|allowed| orbit_exec::lexical_normalize(allowed))
         .find(|allowed| root == *allowed || root.starts_with(allowed))
     else {
-        return Ok(());
+        return match std::fs::metadata(&root) {
+            Ok(metadata) if metadata.is_dir() => Ok(()),
+            Ok(_) => Err(OrbitError::InvalidInput(format!(
+                "granted write directory `{}` is not a directory",
+                root.display()
+            ))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Err(OrbitError::InvalidInput(format!(
+                    "granted write directory `{}` does not exist; Orbit creates absent plugin \
+                     write directories only inside the selected workspace or the plugin state \
+                     directory; create this consented directory before running the plugin",
+                    root.display()
+                )))
+            }
+            Err(error) => Err(OrbitError::Io(format!(
+                "inspect granted write directory `{}`: {error}",
+                root.display()
+            ))),
+        };
     };
 
     // Start at the closest existing ancestor of the trusted root. This lets
