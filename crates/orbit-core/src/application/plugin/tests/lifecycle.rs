@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_types::plugin::PluginStatus;
@@ -633,5 +633,236 @@ fn a_relocated_row_is_refused_by_every_lifecycle_verb_and_leaves_that_tree_alone
     assert!(
         Path::new(&install_path).is_dir(),
         "record-only leaves every installed file where it is"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Digest-pinned HTTPS archive sources.
+// ---------------------------------------------------------------------------
+
+const ARCHIVE_URL: &str = "https://example.test/demo-1.0.0.tar.gz";
+const UNINSTALLED_DIGEST: &str =
+    "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+
+/// Re-enter this test with a fetch shim on `PATH` that serves whatever the
+/// child writes to `ORBIT_TEST_PLUGIN_ARCHIVE`, so an `https://` source runs
+/// the real install path without a network or a TLS server.
+#[cfg(unix)]
+fn enter_fake_fetch_child(test: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let module = module_path!()
+        .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+        .unwrap_or(module_path!());
+    let exact_test = format!("{module}::{test}");
+    if std::env::var("ORBIT_TEST_PLUGIN_FETCH_CHILD")
+        .ok()
+        .as_deref()
+        == Some(&exact_test)
+    {
+        return true;
+    }
+
+    let temp = tempfile::tempdir().expect("fake fetch directory");
+    let archive = temp.path().join("archive.tar.gz");
+    let quote = |value: &Path| format!("'{}'", value.to_string_lossy().replace('\'', "'\"'\"'"));
+    let curl = temp.path().join("curl");
+    std::fs::write(
+        &curl,
+        format!(
+            "#!/bin/sh\nset -eu\nout=''\nprev=''\nfor arg in \"$@\"; do\n  if [ \"$prev\" = '--output' ]; then out=$arg; fi\n  prev=$arg\ndone\n[ -n \"$out\" ] || exit 2\n[ -f {archive} ] || exit 22\ncat {archive} > \"$out\"\n",
+            archive = quote(&archive),
+        ),
+    )
+    .expect("write fake curl");
+    std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o755))
+        .expect("make fake curl executable");
+
+    let mut paths = vec![temp.path().to_path_buf()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let output = Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", &exact_test, "--nocapture"])
+        .env("ORBIT_TEST_PLUGIN_FETCH_CHILD", &exact_test)
+        .env("ORBIT_TEST_PLUGIN_ARCHIVE", &archive)
+        .env(
+            "PATH",
+            std::env::join_paths(paths).expect("fake fetch PATH"),
+        )
+        .output()
+        .expect("run isolated fake-fetch test");
+    assert!(
+        output.status.success(),
+        "fake-fetch child failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    false
+}
+
+/// Pack `source` as the archive the fetch shim will serve, and return the
+/// `sha256:` digest a pin has to name for it.
+#[cfg(unix)]
+fn publish_archive(source: &Path) -> String {
+    let archive =
+        PathBuf::from(std::env::var_os("ORBIT_TEST_PLUGIN_ARCHIVE").expect("archive path"));
+    let status = std::process::Command::new("tar")
+        .args([
+            "czf".as_ref(),
+            archive.as_os_str(),
+            "-C".as_ref(),
+            source.as_os_str(),
+            ".".as_ref(),
+        ])
+        .status()
+        .expect("run tar");
+    assert!(status.success(), "tar must pack the fixture plugin");
+    let bytes = std::fs::read(&archive).expect("read published archive");
+    format!(
+        "sha256:{}",
+        orbit_common::security::release::sha256_hex(&bytes)
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_installs_a_digest_pinned_https_archive() {
+    if !enter_fake_fetch_child("sync_installs_a_digest_pinned_https_archive") {
+        return;
+    }
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let digest = publish_archive(&source);
+    fixture.write_pin_file(&format!(
+        "schemaVersion: 1\nplugins:\n  - name: demo\n    source: {ARCHIVE_URL}\n    digest: {digest}\n    enabled: true\n"
+    ));
+
+    let outcomes = sync_plugins(&fixture.runtime, false, &[]).expect("sync");
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].status, PluginStatus::Active, "{outcomes:?}");
+    assert!(
+        outcomes[0].message.contains("installed v1.0.0"),
+        "{outcomes:?}"
+    );
+
+    let installed = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("demo")
+        .expect("read record")
+        .expect("demo is installed");
+    assert_eq!(
+        installed.archive_digest.as_deref(),
+        Some(digest.trim_start_matches("sha256:")),
+        "the verified archive digest is recorded so doctor can compare it later"
+    );
+    fixture
+        .reopen()
+        .show_tool("demo.hello")
+        .expect("the fetched plugin registers its tool");
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_refuses_a_pinned_archive_whose_digest_does_not_match() {
+    if !enter_fake_fetch_child("sync_refuses_a_pinned_archive_whose_digest_does_not_match") {
+        return;
+    }
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let served = publish_archive(&source);
+    fixture.write_pin_file(&format!(
+        "schemaVersion: 1\nplugins:\n  - name: demo\n    source: {ARCHIVE_URL}\n    digest: {UNINSTALLED_DIGEST}\n    enabled: true\n"
+    ));
+
+    let outcomes = sync_plugins(&fixture.runtime, false, &[]).expect("sync continues");
+    assert_eq!(outcomes[0].status, PluginStatus::Missing, "{outcomes:?}");
+    assert!(
+        outcomes[0].message.contains("pin for 'demo'"),
+        "the refusal must name the pin entry: {outcomes:?}"
+    );
+    assert!(
+        outcomes[0].message.contains(&served) && outcomes[0].message.contains(UNINSTALLED_DIGEST),
+        "the refusal must report both digests: {outcomes:?}"
+    );
+    assert!(
+        fixture
+            .runtime
+            .stores()
+            .plugins()
+            .get_plugin("demo")
+            .expect("read record")
+            .is_none(),
+        "nothing may be installed from an archive that is not the pinned one"
+    );
+}
+
+/// No trust on first use: an archive pin with no digest is refused before any
+/// fetch, and the diagnostic names the entry to fix.
+#[test]
+fn sync_refuses_an_archive_pin_without_a_digest() {
+    let fixture = PluginFixture::new();
+    fixture.write_pin_file(&format!(
+        "schemaVersion: 1\nplugins:\n  - name: demo\n    source: {ARCHIVE_URL}\n    enabled: true\n"
+    ));
+
+    let error = sync_plugins(&fixture.runtime, false, &[])
+        .expect_err("an unpinned archive source must be refused")
+        .to_string();
+    assert!(
+        error.contains("plugins[0].digest") && error.contains(ARCHIVE_URL),
+        "the refusal must name the pin entry and its source: {error}"
+    );
+    assert!(
+        error.contains("first use"),
+        "the refusal must say why a digest is mandatory: {error}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_reports_a_pinned_archive_whose_digest_no_longer_matches() {
+    if !enter_fake_fetch_child("doctor_reports_a_pinned_archive_whose_digest_no_longer_matches") {
+        return;
+    }
+    let fixture = PluginFixture::new();
+    let source = fixture.write_plugin(PluginSpecFixture::new("demo", "demo"));
+    let installed_digest = publish_archive(&source);
+    let pin = |digest: &str| {
+        format!(
+            "schemaVersion: 1\nplugins:\n  - name: demo\n    source: {ARCHIVE_URL}\n    digest: {digest}\n    enabled: true\n"
+        )
+    };
+    fixture.write_pin_file(&pin(&installed_digest));
+    sync_plugins(&fixture.runtime, false, &[]).expect("sync");
+
+    assert!(
+        plugin_doctor(&fixture.runtime)
+            .expect("doctor")
+            .iter()
+            .all(|row| !row.message.contains("archive")),
+        "a pin that matches what is installed is not a finding"
+    );
+
+    // The workspace moves the pin to a release this host has never installed.
+    fixture.write_pin_file(&pin(UNINSTALLED_DIGEST));
+    let rows = plugin_doctor(&fixture.runtime).expect("doctor");
+    let finding = rows
+        .iter()
+        .find(|row| row.message.contains(UNINSTALLED_DIGEST))
+        .unwrap_or_else(|| panic!("doctor must report the moved pin: {rows:?}"));
+    assert_eq!(finding.plugin, "demo");
+    assert!(
+        finding
+            .message
+            .contains(installed_digest.trim_start_matches("sha256:")),
+        "the finding must name what is actually installed: {finding:?}"
+    );
+    assert!(
+        finding.message.contains("orbit plugin upgrade demo"),
+        "the finding must name the recovery: {finding:?}"
     );
 }

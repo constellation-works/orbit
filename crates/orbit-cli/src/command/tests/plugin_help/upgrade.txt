@@ -7,7 +7,8 @@ Arguments:
   [SOURCE]  Replacement source; defaults to the source recorded at install time
 
 Options:
-      --grant <GRANTS>        Complete permission grant set authorizing and enabling the new manifest (repeatable, comma-separated): fs, network, env_pass, orbit_tools, unsandboxed. Without it, widened requests disable the plugin and clear its grants
+      --digest <DIGEST>       `sha256:<hex>` the archive at an `https://` source must hash to. Required for such a source, including one recorded at install time: the replacement archive is a new download and needs its own pin
       --root <ROOT>           Override the Orbit root directory (highest precedence)
+      --grant <GRANTS>        Complete permission grant set authorizing and enabling the new manifest (repeatable, comma-separated): fs, network, env_pass, orbit_tools, unsandboxed. Without it, widened requests disable the plugin and clear its grants
       --workspace <SELECTOR>  Select a workspace by registered name, logical ID (`ws_*`), or absolute checkout path. Distinct from `--root`, which overrides the Orbit data directory. Only active workspaces may be bound; commands fail if the workspace status is not active
   -h, --help                  Print help

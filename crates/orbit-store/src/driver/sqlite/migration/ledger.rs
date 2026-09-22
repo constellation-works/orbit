@@ -262,12 +262,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::apply_plugin_certified_orbit_version,
     },
+    // Plugin standard: the SHA-256 of the archive a digest-pinned `https://`
+    // plugin source was installed from, so `orbit plugin doctor` can report a
+    // pin whose digest has since moved without going back to the network.
+    Migration {
+        version: 28,
+        name: "plugin_archive_digest",
+        compat: MigrationCompatibility::Additive,
+        apply: super::apply_plugin_archive_digest,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 27;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 28;
 
 const LEDGER_KEY_PREFIX: &str = "migration.v";
 

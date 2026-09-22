@@ -17,6 +17,7 @@ fn install(fixture: &PluginFixture, spec: PluginSpecFixture<'_>) {
         &fixture.runtime,
         source.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             enable: true,
             ..PluginAddOptions::default()
         },
@@ -111,6 +112,7 @@ fn add_enable_and_show_share_the_missing_grant_projection() {
         &fixture.runtime,
         source.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             enable: true,
             ..PluginAddOptions::default()
         },
@@ -476,6 +478,7 @@ fn add_and_enable_with_grants_both_replace_the_recorded_set() {
         &fixture.runtime,
         source.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             enable: true,
             grants: vec!["fs".to_string()],
             ..PluginAddOptions::default()
@@ -487,6 +490,7 @@ fn add_and_enable_with_grants_both_replace_the_recorded_set() {
         &fixture.runtime,
         source.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             force: true,
             enable: true,
             grants: vec!["network".to_string()],
@@ -533,6 +537,7 @@ fn the_ordinary_lifecycle_keeps_the_row_authorized() {
         &fixture.runtime,
         source.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             enable: true,
             grants: vec!["fs".to_string()],
             ..PluginAddOptions::default()
@@ -567,6 +572,7 @@ fn the_ordinary_lifecycle_keeps_the_row_authorized() {
         &runtime,
         source.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             force: true,
             ..PluginAddOptions::default()
         },

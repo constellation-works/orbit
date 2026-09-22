@@ -227,6 +227,7 @@ fn adding_a_version_with_wider_requests_revokes_carried_grants() {
         &fixture.runtime,
         v1.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             enable: true,
             grants: vec!["fs".to_string()],
             ..PluginAddOptions::default()
@@ -296,6 +297,7 @@ fn adding_a_version_without_wider_requests_preserves_authority() {
         &fixture.runtime,
         v1.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             enable: true,
             grants: vec!["fs".to_string()],
             ..PluginAddOptions::default()
@@ -334,6 +336,7 @@ fn upgrade_reports_the_permission_diff_and_accepts_explicit_reconsent() {
         &fixture.runtime,
         v1.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             enable: true,
             grants: vec!["fs".to_string()],
             ..PluginAddOptions::default()
@@ -350,6 +353,7 @@ fn upgrade_reports_the_permission_diff_and_accepts_explicit_reconsent() {
         "demo",
         Some(v2.to_str().expect("utf8 path")),
         &PluginUpgradeOptions {
+            digest: None,
             grants: vec!["fs".to_string()],
         },
     )
@@ -376,6 +380,7 @@ fn add_rejects_grants_without_enable() {
         &fixture.runtime,
         source.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             grants: vec!["fs".to_string()],
             ..PluginAddOptions::default()
         },
@@ -394,6 +399,7 @@ fn an_enabled_plugin_tool_executes_through_audited_dispatch() {
         &fixture.runtime,
         source.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             enable: true,
             ..PluginAddOptions::default()
         },
@@ -443,6 +449,7 @@ fn a_rewritten_manifest_after_install_is_refused_until_reconsent() {
         &fixture.runtime,
         source.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             enable: true,
             ..PluginAddOptions::default()
         },
@@ -605,6 +612,7 @@ fn a_failing_plugin_call_is_audited_with_plugin_provenance_and_no_partial_output
             &fixture.runtime,
             source.to_str().expect("utf8 path"),
             &PluginAddOptions {
+                digest: None,
                 enable: true,
                 ..PluginAddOptions::default()
             },
@@ -646,6 +654,7 @@ fn an_ungranted_plugin_call_is_audited_as_denied_with_plugin_provenance() {
         &fixture.runtime,
         source.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             enable: true,
             ..PluginAddOptions::default()
         },
@@ -837,6 +846,7 @@ fn a_hand_edited_install_with_a_symlink_cannot_become_active() {
         &fixture.runtime,
         source.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             enable: true,
             ..PluginAddOptions::default()
         },
@@ -982,6 +992,7 @@ fn a_forced_reinstall_never_exposes_a_half_copied_tree() {
         &fixture.runtime,
         second.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             force: true,
             ..PluginAddOptions::default()
         },
@@ -1105,6 +1116,7 @@ fn an_install_that_fails_after_the_copy_leaves_no_tree_and_no_row() {
         &fixture.runtime,
         source.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             enable: true,
             grants: vec!["not-a-grant".to_string()],
             ..PluginAddOptions::default()
@@ -1149,6 +1161,7 @@ fn a_forced_replace_that_fails_puts_the_previous_tree_back() {
         &fixture.runtime,
         second.to_str().expect("utf8 path"),
         &PluginAddOptions {
+            digest: None,
             force: true,
             enable: true,
             grants: vec!["not-a-grant".to_string()],

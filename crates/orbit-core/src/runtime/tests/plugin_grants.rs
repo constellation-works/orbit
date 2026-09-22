@@ -18,6 +18,7 @@ fn record(name: &str, enabled: bool, grants: &[&str]) -> InstalledPlugin {
         version: "1.0.0".to_string(),
         source: "fixture".to_string(),
         install_path: format!("/nowhere/{name}"),
+        archive_digest: None,
         manifest_digest: "0".repeat(64),
         enabled,
         grants: grants.iter().map(|grant| (*grant).to_string()).collect(),

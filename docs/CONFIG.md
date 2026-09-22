@@ -1296,6 +1296,16 @@ It also refuses a directory, `git+` clone, or archive that contains a
 symbolic link, naming the entry: following the link would copy the target's
 bytes into the install root the plugin backend can read.
 
+A source is a directory, a `git+<url>#<ref>` reference, a local
+`.tar.gz`/`.tgz`/`.tar`/`.zip` archive, or an `https://` URL naming one of
+those archives, which Orbit downloads itself. **A downloaded archive must be
+pinned by digest**: the pin file declares a `sha256:` digest, Orbit refuses an
+archive that hashes to anything else, and there is no trust-on-first-use path —
+an archive source with no digest is refused outright. The download is HTTPS
+only and never follows a redirect to another scheme, and extraction refuses a
+member with `..` in its path, an absolute member or a symbolic link, and is
+bounded in both total unpacked size and member count.
+
 ```yaml
 # .orbit/plugins.yaml — committed
 schemaVersion: 1
@@ -1304,16 +1314,24 @@ plugins:
     version: "^0.4.1"                # optional: a version or a semver range
     source: git+https://github.com/constellation-works/orbit-graph#v0.4.1
     enabled: true
+  - name: chart                      # a compiled plugin, shipped as an archive
+    source: https://github.com/constellation-works/orbit-chart/releases/download/v1.2.0/orbit-chart-1.2.0.tar.gz
+    digest: sha256:0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9
+    enabled: true
 ```
+
+`digest` belongs to an `https://` archive source and only to one: every other
+form names bytes Orbit does not download, so a digest on it would claim a check
+the install never performs, and the pin file refuses it.
 
 | Command | What it does |
 |---|---|
-| `orbit plugin add <dir\|git+url#ref\|archive>` | Install for this machine. `--enable` puts its tools on the surface immediately; `--grant` records requested permissions; `--force` replaces the same version. |
-| `orbit plugin upgrade <ns> [source]` | Replace an installed plugin (using its recorded source by default) and print its requested-permission diff. A widening disables it and clears carried grants unless `--grant` explicitly re-consents. |
+| `orbit plugin add <dir\|git+url#ref\|archive\|https-url>` | Install for this machine. `--digest sha256:…` is required for an `https://` archive source; `--enable` puts its tools on the surface immediately; `--grant` records requested permissions; `--force` replaces the same version. |
+| `orbit plugin upgrade <ns> [source]` | Replace an installed plugin (using its recorded source by default) and print its requested-permission diff. `--digest sha256:…` is required whenever the source is an `https://` archive, including a recorded one: the replacement is a fresh download. A widening disables it and clears carried grants unless `--grant` explicitly re-consents. |
 | `orbit plugin enable <ns> [--grant …]` / `disable <ns>` | Turn the plugin's tools on or off for this machine. The change takes effect on the next Orbit command, which is when the tool registry is next built. |
 | `orbit plugin remove <ns> --yes` | Uninstall after explicit confirmation. Only the tree under `~/.orbit/plugins/<ns>/` is deleted: a row whose recorded install path lies outside it is refused, and `--record-only` clears such a record without touching the recorded path. Data the plugin wrote elsewhere is retained. |
 | `orbit plugin list` / `show <ns>` | What is installed or pinned, its tools, and its **requested versus granted** permissions side by side. |
-| `orbit plugin doctor` | One row per plugin naming the step that would make it active. |
+| `orbit plugin doctor` | One row per plugin naming the step that would make it active, plus a finding for a pinned archive whose `digest` no longer matches the archive this machine installed from. |
 | `orbit plugin validate <dir>` | Check a manifest without installing it. Every rejection names the offending field. |
 | `orbit plugin sync [--dry-run] [--grant …]` | Converge `.orbit/plugins.yaml`: install missing plugins, apply its enabled/disabled state, and seed enabled contributions into this workspace. A grant-requesting plugin stays disabled until `--grant` supplies the complete reviewed set. |
 | `orbit plugin migrate <binary>` | Write a v2 manifest from a set of v1 `*.orbit-tool.yaml` sidecars. |

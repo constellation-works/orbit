@@ -537,6 +537,10 @@ pub fn sync_plugins(
                 }
                 let options = super::install::PluginAddOptions {
                     force: false,
+                    // The pin file is the only place an archive's digest is
+                    // declared, and the resolver refuses a fetched archive
+                    // that carries none.
+                    digest: pin.digest.clone(),
                     // A committed pin is not grant consent. Install disabled,
                     // then take the same reviewed enable path used above.
                     enable: false,

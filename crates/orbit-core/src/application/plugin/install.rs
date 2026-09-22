@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use orbit_common::OrbitError;
 use orbit_tools::plugin::{
-    LoadedPlugin, PluginValidationPolicy, first_party_source, load_plugin_dir, manifest_refusal,
-    plugin_symlink_refusal, refuse_plugin_tree_symlinks, resolve_plugin_source,
+    LoadedPlugin, PluginSourceRequest, PluginValidationPolicy, first_party_source, load_plugin_dir,
+    manifest_refusal, plugin_symlink_refusal, refuse_plugin_tree_symlinks, resolve_plugin_source,
     validate_loaded_plugin,
 };
 use orbit_types::plugin::{
@@ -30,6 +30,9 @@ use super::skills::PluginSkillLink;
 pub struct PluginAddOptions {
     /// Replace an existing install of the same namespace and version.
     pub force: bool,
+    /// `sha256:<hex>` an `https://` archive source must hash to. Such a
+    /// source is refused without one; every other source ignores it.
+    pub digest: Option<String>,
     /// Enable the plugin as part of the install.
     pub enable: bool,
     /// Grants recorded when `enable` is set.
@@ -49,6 +52,10 @@ pub struct PluginPermissionChange {
 
 #[derive(Debug, Clone, Default)]
 pub struct PluginUpgradeOptions {
+    /// `sha256:<hex>` for an `https://` archive source, as in
+    /// [`PluginAddOptions::digest`]. A recorded archive source is re-fetched
+    /// on upgrade, so the new archive needs its own pin.
+    pub digest: Option<String>,
     /// Complete grant set authorizing and enabling the upgraded manifest.
     /// Without it, a safe upgrade preserves the existing row; a widening
     /// disables the plugin and clears its grants.
@@ -75,13 +82,14 @@ pub(crate) struct PluginInstallOutcome {
 }
 
 /// Install `source` for this host: a local directory, a `git+<url>#<ref>`
-/// reference, or a tar archive.
+/// reference, a local archive, or a digest-pinned `https://` archive.
 pub fn install_plugin(
     runtime: &OrbitRuntime,
     source: &str,
     options: &PluginAddOptions,
 ) -> Result<PluginSummary, OrbitError> {
-    install_plugin_inner(runtime, source, options, None).map(|outcome| outcome.summary)
+    install_plugin_inner(runtime, source, options, None, FLAG_DIGEST_ORIGIN)
+        .map(|outcome| outcome.summary)
 }
 
 /// Same install as [`install_plugin`], but keeping the enable-time report
@@ -93,8 +101,12 @@ pub(crate) fn install_plugin_reporting_enable(
     source: &str,
     options: &PluginAddOptions,
 ) -> Result<PluginInstallOutcome, OrbitError> {
-    install_plugin_inner(runtime, source, options, None)
+    install_plugin_inner(runtime, source, options, None, FLAG_DIGEST_ORIGIN)
 }
+
+/// Where a digest came from when the operator passed one directly, named in
+/// the refusal an unpinned or mismatching archive produces.
+const FLAG_DIGEST_ORIGIN: &str = "the `--digest` option";
 
 struct ExpectedPluginIdentity<'a> {
     name: &'a str,
@@ -119,6 +131,7 @@ pub(super) fn install_pinned_plugin(
             name: expected_name,
             version: expected_version,
         }),
+        &format!("the `.orbit/plugins.yaml` pin for '{expected_name}'"),
     )
     .map(|outcome| outcome.summary)
 }
@@ -150,6 +163,7 @@ pub fn upgrade_plugin(
     }
     let add_options = PluginAddOptions {
         force: true,
+        digest: options.digest.clone(),
         enable: !options.grants.is_empty(),
         grants: options.grants.clone(),
     };
@@ -161,6 +175,7 @@ pub fn upgrade_plugin(
             name,
             version: None,
         }),
+        FLAG_DIGEST_ORIGIN,
     )?;
     Ok(PluginUpgradeResult {
         summary: outcome.summary,
@@ -174,6 +189,7 @@ fn install_plugin_inner(
     source: &str,
     options: &PluginAddOptions,
     expected_identity: Option<ExpectedPluginIdentity<'_>>,
+    digest_origin: &str,
 ) -> Result<PluginInstallOutcome, OrbitError> {
     if !options.enable && !options.grants.is_empty() {
         return Err(OrbitError::InvalidInput(
@@ -181,7 +197,11 @@ fn install_plugin_inner(
                 .to_string(),
         ));
     }
-    let resolved = resolve_plugin_source(source)?;
+    let resolved = resolve_plugin_source(&PluginSourceRequest {
+        source,
+        expected_digest: options.digest.as_deref(),
+        digest_origin,
+    })?;
     let source_root = resolved.root.clone();
     refuse_in_repository_source(runtime, &source_root)?;
 
@@ -294,6 +314,7 @@ fn install_plugin_inner(
         source: source.to_string(),
         install_path: install_path.to_string_lossy().into_owned(),
         manifest_digest: plugin.manifest_digest.clone(),
+        archive_digest: resolved.archive_digest.clone(),
         enabled,
         grants,
         first_party,

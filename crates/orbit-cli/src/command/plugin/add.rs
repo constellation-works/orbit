@@ -8,11 +8,17 @@ use super::support::{append_enable_report_text, enable_report_json, plugin_recor
 
 #[derive(Args)]
 pub struct PluginAddArgs {
-    /// Plugin source: a directory, a `git+<url>#<ref>` reference, or a tar archive
+    /// Plugin source: a directory, a `git+<url>#<ref>` reference, a local
+    /// archive, or an `https://` archive URL
     pub source: String,
     /// Replace an existing install of the same version
     #[arg(long)]
     pub force: bool,
+    /// `sha256:<hex>` the archive at an `https://` source must hash to.
+    /// Required for such a source; Orbit never installs a downloaded archive
+    /// it has not been told the hash of.
+    #[arg(long)]
+    pub digest: Option<String>,
     /// Enable the plugin as part of the install
     #[arg(long)]
     pub enable: bool,
@@ -29,6 +35,7 @@ impl Execute for PluginAddArgs {
             &self.source,
             &PluginAddOptions {
                 force: self.force,
+                digest: self.digest,
                 enable: self.enable,
                 grants: self.grants,
             },
