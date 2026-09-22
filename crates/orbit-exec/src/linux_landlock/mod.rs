@@ -244,20 +244,11 @@ pub fn linux_landlock_boundary_grants(
         grants.extend(workspace::carve_out_unlistable(&path, &denied)?);
     }
     for root in &boundary.write {
-        if !root.exists() {
-            std::fs::create_dir_all(root).map_err(|error| {
-                OrbitError::Io(format!(
-                    "create granted write directory `{}`: {error}",
-                    root.display()
-                ))
-            })?;
-        }
-        let path = root.canonicalize().map_err(|error| {
-            OrbitError::Io(format!(
-                "resolve granted write path `{}`: {error}",
-                root.display()
-            ))
-        })?;
+        // The same resolution the grant was validated under, materialised
+        // without following a link out of it: the rule binds the inode the
+        // check decided on, so compiling the boundary cannot widen it
+        // [ORB-12799].
+        let path = crate::path_identity::create_write_root(root)?;
         grants.push(if path.is_dir() {
             LandlockPathGrant::write_tree(path)
         } else {
@@ -318,44 +309,12 @@ fn existing_canonical(path: &Path) -> Option<PathBuf> {
 
 /// Whether any compiled grant lets the child read `path`.
 pub fn grants_read(grants: &[LandlockPathGrant], path: &Path) -> bool {
-    let path = canonicalize_with_missing_tail(path);
+    // Workspace grants are compiled from canonical paths. A query for a file
+    // that has not been created yet cannot itself be canonicalized, so the
+    // same existing-prefix resolution the grants were compiled under decides
+    // its identity here.
+    let path = crate::path_identity::physical_with_missing_tail(path);
     grants.iter().any(|grant| grant.reads(&path))
-}
-
-/// Resolve the existing part of a path before appending any missing names.
-///
-/// Workspace grants are compiled from canonical paths. A query for a file
-/// that has not been created yet cannot itself be canonicalized, so falling
-/// back to its original spelling makes an existing symlink alias (such as
-/// macOS's `/var` → `/private/var`) look unrelated to the grant. Preserve the
-/// same canonical identity for both existing and not-yet-existing paths.
-fn canonicalize_with_missing_tail(path: &Path) -> PathBuf {
-    let mut missing = Vec::new();
-    let mut current = path;
-
-    loop {
-        if let Ok(canonical) = current.canonicalize() {
-            let mut canonical = canonical;
-            for component in missing.iter().rev() {
-                canonical.push(component);
-            }
-            return canonical;
-        }
-
-        let Some(name) = current.file_name() else {
-            return path.to_path_buf();
-        };
-        missing.push(name.to_os_string());
-
-        let Some(parent) = current.parent() else {
-            return path.to_path_buf();
-        };
-        current = if parent.as_os_str().is_empty() {
-            Path::new(".")
-        } else {
-            parent
-        };
-    }
 }
 
 /// Result of asking the running kernel whether it can enforce a ruleset.

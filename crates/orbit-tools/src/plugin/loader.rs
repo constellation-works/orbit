@@ -4,9 +4,12 @@
 //! [`PluginLoadError`] naming the manifest field, and the caller decides
 //! whether that refuses `orbit plugin add` or registers the plugin inactive.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+// Re-exported: `orbit-core` holds recorded plugin paths to the same physical
+// resolution this module's guards use, and reaches it through this crate.
+pub use orbit_exec::physical_with_missing_tail;
 use orbit_types::plugin::{
     FIRST_PARTY_PUBLISHER, MANIFEST_FILE_NAME, PluginExecutionKind, PluginManifest,
     PluginManifestError, PluginMcpScope, PluginTemplateVars, PluginTestFile, RESERVED_CLI_COMMANDS,
@@ -773,6 +776,13 @@ pub fn refuse_covering_fs_write_roots(
 /// is writable. A workspace grant must neither contain nor sit inside
 /// `.orbit` or `.git`; component comparisons mean `.orbit-graph` remains an
 /// ordinary workspace directory.
+///
+/// Every side of every comparison is resolved with
+/// [`physical_with_missing_tail`], the same resolution the sandbox compiles
+/// its rules under: a root whose tail does not exist yet is still read at the
+/// place its existing ancestors physically live, so an alias a backend
+/// planted in its own writable state cannot present a protected install tree
+/// as a path inside `{{plugin_state}}` [ORB-12799].
 pub fn fs_write_root_covers(
     write: &Path,
     plugin_root: &Path,
@@ -780,10 +790,10 @@ pub fn fs_write_root_covers(
     plugin_state: &Path,
     workspace_root: Option<&Path>,
 ) -> Option<&'static str> {
-    let write = physical_or_lexical(write);
-    let plugin_root = physical_or_lexical(plugin_root);
-    let global_root = physical_or_lexical(global_root);
-    let plugin_state = physical_or_lexical(plugin_state);
+    let write = physical_with_missing_tail(write);
+    let plugin_root = physical_with_missing_tail(plugin_root);
+    let global_root = physical_with_missing_tail(global_root);
+    let plugin_state = physical_with_missing_tail(plugin_state);
     if is_path_prefix(&write, &plugin_root) {
         return Some("plugin install root");
     } else if is_path_prefix(&write, &global_root) {
@@ -791,9 +801,9 @@ pub fn fs_write_root_covers(
     } else if is_path_prefix(&global_root, &write) && !is_path_prefix(&plugin_state, &write) {
         return Some("protected path beneath Orbit global root");
     } else if let Some(workspace_root) = workspace_root {
-        let workspace_root = physical_or_lexical(workspace_root);
-        let workspace_orbit = physical_or_lexical(&workspace_root.join(".orbit"));
-        let workspace_git = physical_or_lexical(&workspace_root.join(".git"));
+        let workspace_root = physical_with_missing_tail(workspace_root);
+        let workspace_orbit = physical_with_missing_tail(&workspace_root.join(".orbit"));
+        let workspace_git = physical_with_missing_tail(&workspace_root.join(".git"));
         if is_path_prefix(&write, &workspace_orbit)
             || is_path_prefix(&workspace_orbit, &write)
             || is_path_prefix(&write, &workspace_git)
@@ -803,31 +813,6 @@ pub fn fs_write_root_covers(
         }
     }
     None
-}
-
-/// The path as the kernel would resolve it when it exists (symlinks and `..`
-/// followed), and as a lexical `..`-collapse when it does not. Both sides of a
-/// containment check go through this so a `..` or a link cannot place a path
-/// beneath a root it does not physically live under.
-pub fn physical_or_lexical(path: &Path) -> PathBuf {
-    path.canonicalize()
-        .unwrap_or_else(|_| lexical_normalize(path))
-}
-
-pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if out.parent().is_some() {
-                    out.pop();
-                }
-            }
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 fn is_path_prefix(prefix: &Path, path: &Path) -> bool {

@@ -146,6 +146,72 @@ fn fs_write_root_refuses_protected_global_paths_but_allows_plugin_state() {
     }
 }
 
+/// A backend with a writable `{{plugin_state}}` can plant a symbolic link in
+/// its own state tree, so the guard cannot read a declared root by name: a
+/// root whose tail does not exist yet is judged where its existing ancestors
+/// physically live. Otherwise `state/plugins/demo/alias/9.0.0` reads as
+/// plugin state while it materialises a new version tree inside the
+/// plugin's protected install namespace [ORB-12799].
+#[cfg(unix)]
+#[test]
+fn fs_write_root_refuses_an_absent_tail_below_a_symlink_into_the_global_root() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let install_root = global_root.join("plugins/demo");
+    let plugin_root = install_root.join("1.0.0");
+    let plugin_state = global_root.join("state/plugins/demo");
+    for directory in [
+        &plugin_root,
+        &plugin_state,
+        &global_root.join("bin"),
+        &global_root.join("plugins/.grants"),
+        &global_root.join("plugins/other/1.0.0"),
+    ] {
+        std::fs::create_dir_all(directory).expect("fixture directory");
+    }
+
+    for (alias, target) in [
+        ("install", install_root.clone()),
+        ("bin", global_root.join("bin")),
+        ("grants", global_root.join("plugins/.grants")),
+        ("other", global_root.join("plugins/other")),
+    ] {
+        let link = plugin_state.join(alias);
+        symlink(&target, &link).expect("state alias");
+        let absent = link.join("9.0.0");
+        assert_eq!(
+            fs_write_root_covers(&absent, &plugin_root, &global_root, &plugin_state, None),
+            Some("protected path beneath Orbit global root"),
+            "{} reaches {} through an alias in writable plugin state",
+            absent.display(),
+            target.display()
+        );
+        assert!(
+            !absent.exists(),
+            "the guard decides a path without creating it"
+        );
+    }
+
+    // The alias to this plugin's own install root is the only one that could
+    // be mistaken for its own tree; it is refused as the install namespace it
+    // physically is, not as plugin state.
+    assert!(!install_root.join("9.0.0").exists());
+
+    for allowed in [
+        plugin_state.join("cache"),
+        plugin_state.join("cache/deeper/still-absent"),
+    ] {
+        assert_eq!(
+            fs_write_root_covers(&allowed, &plugin_root, &global_root, &plugin_state, None),
+            None,
+            "{} is an absent directory inside the real plugin state tree",
+            allowed.display()
+        );
+    }
+}
+
 #[test]
 fn load_refuses_a_manifest_whose_fs_write_covers_the_plugin_root() {
     let temp = tempfile::tempdir().expect("tempdir");

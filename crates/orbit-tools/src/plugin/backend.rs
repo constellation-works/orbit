@@ -496,10 +496,10 @@ impl Sandbox for PluginSandboxProfile {
 /// `symlink_metadata`, so directory creation never walks through a link into
 /// an unrelated host tree.
 fn materialize_write_directory(root: &Path, allowed_roots: &[PathBuf]) -> Result<(), OrbitError> {
-    let root = super::loader::lexical_normalize(root);
+    let root = orbit_exec::lexical_normalize(root);
     let Some(allowed) = allowed_roots
         .iter()
-        .map(|allowed| super::loader::lexical_normalize(allowed))
+        .map(|allowed| orbit_exec::lexical_normalize(allowed))
         .find(|allowed| root == *allowed || root.starts_with(allowed))
     else {
         return Ok(());

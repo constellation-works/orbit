@@ -59,7 +59,7 @@
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_tools::plugin::physical_or_lexical;
+use orbit_tools::plugin::physical_with_missing_tail;
 use orbit_types::plugin::InstalledPlugin;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -283,8 +283,8 @@ pub fn verify_install_path(global_root: &Path, installed: &InstalledPlugin) -> R
     if !recorded.is_absolute() {
         return Err(relocated_message(installed, &expected));
     }
-    let resolved = physical_or_lexical(recorded);
-    let root = physical_or_lexical(&expected);
+    let resolved = physical_with_missing_tail(recorded);
+    let root = physical_with_missing_tail(&expected);
     if resolved == root || !resolved.starts_with(&root) {
         return Err(relocated_message(installed, &expected));
     }
