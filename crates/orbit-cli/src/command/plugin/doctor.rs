@@ -6,6 +6,7 @@ use crate::output::color::{Domain, Role};
 
 pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
     let results = runtime.plugin_doctor()?;
+    let stale_callbacks = runtime.stale_plugin_callback_session_count()?;
 
     use crate::output::table::{Column, Table};
     use comfy_table::Cell;
@@ -26,7 +27,7 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
             Cell::new(&result.message),
         ]);
     }
-    let records = results
+    let mut records = results
         .iter()
         .map(|result| {
             json!({
@@ -36,6 +37,22 @@ pub(super) fn execute_doctor(runtime: &OrbitRuntime) -> CommandOut {
             })
         })
         .collect::<Vec<_>>();
+    if stale_callbacks > 0 {
+        issues += 1;
+        let message = format!(
+            "{stale_callbacks} stale plugin callback session record(s); they will be removed when a plugin backend starts"
+        );
+        table.add_row(vec![
+            Cell::new("plugin callbacks"),
+            crate::output::color::cell("inactive", Domain::JobState),
+            Cell::new(&message),
+        ]);
+        records.push(json!({
+            "plugin": "plugin callbacks",
+            "status": "inactive",
+            "message": message,
+        }));
+    }
 
     let mut blocks = vec![Block::table(table)];
     if issues == 0 {
