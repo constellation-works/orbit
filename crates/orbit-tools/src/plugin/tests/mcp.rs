@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use orbit_types::plugin::{PluginExecutionKind, PluginGrant, PluginPermissions};
+use orbit_types::plugin::{PluginExecutionKind, PluginGrant, PluginGrantSet, PluginPermissions};
 use serde_json::{Value, json};
 
 use super::super::loader::load_plugin_dir;
@@ -80,7 +80,7 @@ impl Fixture {
             config: super::super::backend::PluginConfigSection::new(
                 json!({ "index_dir": "/srv/graph", "max_nodes": 500 }),
             ),
-            grants,
+            grants: PluginGrantSet::from_grants(grants),
         });
         let expected = plugin
             .tools

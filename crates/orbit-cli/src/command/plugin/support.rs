@@ -21,6 +21,7 @@ pub(super) fn plugin_record(summary: &PluginSummary) -> Value {
                 "grant": permission.grant.as_str(),
                 "requested": permission.requested,
                 "granted": permission.granted,
+                "granted_roots": permission.granted_roots,
             }))
             .collect::<Vec<_>>(),
         "granted": summary.granted,

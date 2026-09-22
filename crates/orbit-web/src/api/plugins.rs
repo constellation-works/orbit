@@ -128,6 +128,7 @@ fn plugin_to_json(summary: &PluginSummary) -> Value {
                 "grant": permission.grant.as_str(),
                 "requested": permission.requested,
                 "granted": permission.granted,
+                "granted_roots": permission.granted_roots,
             }))
             .collect::<Vec<_>>(),
         "tools": summary

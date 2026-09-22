@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use orbit_types::plugin::{MANIFEST_FILE_NAME, PluginProvenance};
+use orbit_types::plugin::{MANIFEST_FILE_NAME, PluginGrantSet, PluginProvenance};
 
 use super::super::backend::PluginBackendSpec;
 use super::super::loader::{
@@ -36,16 +36,13 @@ fn backend_spec(
     global_root: &Path,
     state_dir: PathBuf,
 ) -> PluginBackendSpec {
-    let grants = plugin.manifest.required_grants();
+    let grants = PluginGrantSet::from_grants(plugin.manifest.required_grants());
     PluginBackendSpec {
         provenance: PluginProvenance {
             name: plugin.namespace().to_string(),
             version: plugin.manifest.metadata.version.clone(),
             manifest_digest: plugin.manifest_digest.clone(),
-            grants: grants
-                .iter()
-                .map(|grant| grant.as_str().to_string())
-                .collect(),
+            grants: grants.to_recorded(),
         },
         plugin_root: plugin.root.clone(),
         state_dir,

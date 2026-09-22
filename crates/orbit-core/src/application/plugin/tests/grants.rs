@@ -10,6 +10,7 @@ use super::super::{
     plugin_doctor, show_plugin,
 };
 use super::fixture::{PluginFixture, PluginSpecFixture};
+use crate::runtime::plugin_grants::plugin_grant_witness_path;
 
 fn install(fixture: &PluginFixture, spec: PluginSpecFixture<'_>) {
     let source = fixture.write_plugin(spec);
@@ -288,6 +289,154 @@ fn grant_requested_grants_exactly_the_manifests_request() {
     let summary = show_plugin(&runtime, "demo").expect("show");
     assert_eq!(summary.status, PluginStatus::Active, "{summary:?}");
     assert!(summary.unsandboxed);
+}
+
+/// A path-scoped `fs` grant records its roots, and the roots are inside the
+/// authorization witness: re-scoping a plugin is a change to the authorized
+/// set, not a detail beside it, so it needs fresh consent the same way adding
+/// a grant does [ORB-12840].
+#[test]
+fn a_path_scoped_fs_grant_records_its_roots_and_moves_the_witness() {
+    let fixture = PluginFixture::new();
+    install(
+        &fixture,
+        PluginSpecFixture::new("demo", "demo").requesting_fs_write(),
+    );
+
+    // The manifest requests `{{plugin_state}}`; the operator allows one
+    // directory inside it.
+    enable_plugin(
+        &fixture.runtime,
+        "demo",
+        &grant_options(&["fs={{plugin_state}}/cache"]),
+    )
+    .expect("grant fs scoped to one root");
+    let stored = |fixture: &PluginFixture| {
+        fixture
+            .runtime
+            .stores()
+            .plugins()
+            .get_plugin("demo")
+            .expect("read plugin row")
+            .expect("installed plugin")
+    };
+    assert_eq!(stored(&fixture).grants, ["fs={{plugin_state}}/cache"]);
+
+    let witness = |fixture: &PluginFixture| {
+        std::fs::read_to_string(plugin_grant_witness_path(
+            &fixture.runtime.global_root(),
+            "demo",
+        ))
+        .expect("witness")
+    };
+    let scoped_witness = witness(&fixture);
+
+    // The plugin still loads: a scoped `fs` is `fs` recorded, so the
+    // manifest's request is satisfied and the row verifies against its
+    // witness on a fresh open.
+    let runtime = fixture.reopen();
+    let summary = show_plugin(&runtime, "demo").expect("show");
+    assert_eq!(summary.status, PluginStatus::Active, "{summary:?}");
+    assert_eq!(summary.granted, ["fs={{plugin_state}}/cache"]);
+
+    // `show` puts the manifest's request beside the operator's roots, which
+    // is the delta an operator needs in order to see what was narrowed.
+    let fs = summary
+        .permissions
+        .iter()
+        .find(|permission| permission.grant == PluginGrant::Fs)
+        .expect("an fs row");
+    assert_eq!(fs.requested.as_deref(), Some("write={{plugin_state}}"));
+    assert!(fs.granted);
+    assert_eq!(
+        fs.granted_roots.as_deref(),
+        Some(["{{plugin_state}}/cache".to_string()].as_slice())
+    );
+
+    // Widening the roots is a different authorized set, so the witness moves.
+    enable_plugin(
+        &fixture.runtime,
+        "demo",
+        &grant_options(&["fs={{plugin_state}}"]),
+    )
+    .expect("re-scope to the whole request");
+    assert_eq!(stored(&fixture).grants, ["fs={{plugin_state}}"]);
+    assert_ne!(
+        witness(&fixture),
+        scoped_witness,
+        "the witness has to cover the roots, or a backend could widen its own \
+         scope in the row and still verify"
+    );
+
+    // And the unscoped shorthand is a third distinct set, not a synonym for
+    // having granted every root the manifest happens to request today.
+    enable_plugin(&fixture.runtime, "demo", &grant_options(&["fs"])).expect("shorthand");
+    assert_eq!(stored(&fixture).grants, ["fs"]);
+    assert_ne!(witness(&fixture), scoped_witness);
+    let runtime = fixture.reopen();
+    let summary = show_plugin(&runtime, "demo").expect("show");
+    assert_eq!(summary.status, PluginStatus::Active, "{summary:?}");
+    let fs = summary
+        .permissions
+        .iter()
+        .find(|permission| permission.grant == PluginGrant::Fs)
+        .expect("an fs row");
+    assert!(fs.granted);
+    assert_eq!(
+        fs.granted_roots, None,
+        "`--grant fs` records no roots: it is the manifest's request at this digest"
+    );
+}
+
+/// Narrowing a grant is the operator's decision, so `doctor` stays quiet
+/// about it — but a requested root that overlaps *nothing* granted will never
+/// open, and the plugin would fail somewhere inside itself rather than at
+/// load. That one is a finding.
+#[test]
+fn doctor_names_a_requested_root_the_grant_leaves_out_entirely() {
+    let fixture = PluginFixture::new();
+    install(
+        &fixture,
+        PluginSpecFixture::new("demo", "demo").requesting_two_fs_writes(),
+    );
+
+    enable_plugin(
+        &fixture.runtime,
+        "demo",
+        &grant_options(&["fs={{plugin_state}}/kept"]),
+    )
+    .expect("grant one of the two requested roots");
+
+    let runtime = fixture.reopen();
+    let findings = plugin_doctor(&runtime).expect("doctor");
+    let scoped_out: Vec<&str> = findings
+        .iter()
+        .filter(|row| row.message.contains("outside every root this host granted"))
+        .map(|row| row.message.as_str())
+        .collect();
+    assert_eq!(scoped_out.len(), 1, "{findings:?}");
+    assert!(
+        scoped_out[0].contains("{{plugin_state}}/dropped")
+            && scoped_out[0].contains("spec.permissions.fs.write[1]"),
+        "{}",
+        scoped_out[0]
+    );
+    assert!(
+        !scoped_out[0].contains("{{plugin_state}}/kept"),
+        "the granted root is not a finding: {}",
+        scoped_out[0]
+    );
+
+    // The unscoped shorthand grants the whole request, so nothing is dropped.
+    enable_plugin(&fixture.runtime, "demo", &grant_options(&["fs"])).expect("shorthand");
+    let runtime = fixture.reopen();
+    let findings = plugin_doctor(&runtime).expect("doctor");
+    assert!(
+        !findings
+            .iter()
+            .any(|row| row.message.contains("outside every root this host granted")),
+        "{findings:?}"
+    );
 }
 
 /// `--grant a,b` as the lifecycle takes it.

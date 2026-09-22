@@ -109,6 +109,13 @@ pub fn plugin_grant_witness_path(global_root: &Path, name: &str) -> PathBuf {
 ///
 /// Grants are sorted and deduplicated first, so the value states which grants
 /// were authorized and nothing about the order they were recorded in.
+///
+/// A path-scoped grant carries its roots in the string it is recorded as
+/// (`fs=/srv/data,/srv/cache`), so the roots are inside the digest without
+/// this function knowing the grammar: re-scoping a plugin changes its
+/// recorded set, which revokes the witness and requires fresh consent, and a
+/// backend that widened its own roots in the row is refused at the next load
+/// exactly as one that added a grant is [ORB-12840].
 pub fn plugin_grants_digest(name: &str, enabled: bool, grants: &[String]) -> String {
     let mut canonical: Vec<&str> = grants.iter().map(String::as_str).collect();
     canonical.sort_unstable();

@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orbit_types::plugin::{
-    PluginExecutionKind, PluginGrant, PluginPermissions, PluginProvenance, PluginSandbox,
+    PluginExecutionKind, PluginGrant, PluginGrantSet, PluginPermissions, PluginProvenance,
+    PluginSandbox,
 };
 use serde_json::Value;
 
@@ -44,9 +45,30 @@ pub(super) fn spec(
     permissions: PluginPermissions,
     grants: &[PluginGrant],
 ) -> Arc<PluginBackendSpec> {
+    scoped_spec(
+        command,
+        root,
+        permissions,
+        PluginGrantSet::from_grants(grants.iter().copied()),
+    )
+}
+
+/// The same spec from an already-built grant set, for tests that need `fs`
+/// scoped to particular roots rather than granted as the whole request.
+pub(super) fn scoped_spec(
+    command: PathBuf,
+    root: &Path,
+    permissions: PluginPermissions,
+    grants: PluginGrantSet,
+) -> Arc<PluginBackendSpec> {
     let global_root = root.join("global");
     Arc::new(PluginBackendSpec {
-        provenance: provenance(grants),
+        provenance: PluginProvenance {
+            name: "demo".into(),
+            version: "1.0.0".into(),
+            manifest_digest: "abc".into(),
+            grants: grants.to_recorded(),
+        },
         plugin_root: root.to_path_buf(),
         state_dir: root.join("state"),
         global_root,
@@ -57,7 +79,7 @@ pub(super) fn spec(
         permissions,
         programs: Vec::new(),
         config: Default::default(),
-        grants: grants.to_vec(),
+        grants,
     })
 }
 

@@ -22,7 +22,8 @@ pub use conformance::{
     PluginTestCase, PluginTestExpectation, PluginTestFile, TEST_FILE_KIND, TEST_FILE_SCHEMA_VERSION,
 };
 pub use grant::{
-    PluginGrant, PluginGrantRequest, parse_grants, parse_stored_grants, resolve_grant_selection,
+    PluginGrant, PluginGrantEntry, PluginGrantRequest, PluginGrantSet, parse_grant_entries,
+    parse_grants, parse_stored_grants, resolve_grant_selection,
 };
 pub use manifest::{
     DEFAULT_PANEL_REFRESH_MS, LINK_URL_SCHEMES, MANIFEST_FILE_NAME, MANIFEST_KIND,

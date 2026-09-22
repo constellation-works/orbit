@@ -289,9 +289,7 @@ fn install_plugin_inner(
     let grants = if options.enable {
         orbit_types::plugin::parse_grants(&options.grants)
             .map_err(OrbitError::InvalidInput)?
-            .into_iter()
-            .map(|grant| grant.as_str().to_string())
-            .collect()
+            .to_recorded()
     } else if grants_reset {
         Vec::new()
     } else {

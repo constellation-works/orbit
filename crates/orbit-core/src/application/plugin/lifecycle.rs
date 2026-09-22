@@ -7,7 +7,8 @@ use orbit_automation::routines::loader::ROUTINES_DIR;
 use orbit_common::OrbitError;
 use orbit_tools::plugin::{load_plugin_dir, load_sidecar_manifest, migrate_sidecars};
 use orbit_types::plugin::{
-    InstalledPlugin, MANIFEST_FILE_NAME, PluginStatus, parse_grants, resolve_grant_selection,
+    InstalledPlugin, MANIFEST_FILE_NAME, PluginGrantEntry, PluginGrantSet, PluginStatus,
+    parse_grants, parse_stored_grants, resolve_grant_selection,
 };
 use orbit_types::record::OrbitEvent;
 
@@ -90,12 +91,7 @@ pub fn enable_plugin(
     } else {
         let resolved = resolve_grant_selection(&options.grants, &plugin.manifest)
             .map_err(OrbitError::InvalidInput)?;
-        Some(
-            resolved
-                .into_iter()
-                .map(|grant| grant.as_str().to_string())
-                .collect(),
-        )
+        Some(resolved.to_recorded())
     };
     let contributions = apply_enabled_contributions(runtime, &install_path, options.force)?;
     let warn_against: &[String] = record_grants.as_deref().unwrap_or_default();
@@ -261,8 +257,15 @@ fn set_enabled(
     } else {
         PluginStatus::Disabled
     };
+    // A row that reaches here was just written from a parsed set, so the
+    // spellings parse back; an unreadable one grants nothing, which is what
+    // the loader would conclude too.
+    let parsed = parse_stored_grants(&grants).unwrap_or_default();
     for permission in &mut summary.permissions {
-        permission.granted = grants.iter().any(|name| name == permission.grant.as_str());
+        permission.granted = parsed.contains(permission.grant);
+        permission.granted_roots = parsed
+            .entry(permission.grant)
+            .and_then(|entry| entry.roots.clone());
     }
     summary.granted = grants;
     summary.diagnostic = None;
@@ -274,13 +277,10 @@ pub(super) fn unrequested_grant_warnings(
     grants: &[String],
 ) -> Vec<String> {
     let requested = plugin.manifest.required_grants();
-    grants
+    parse_stored_grants(grants)
+        .unwrap_or_default()
         .iter()
-        .filter(|grant| {
-            !requested
-                .iter()
-                .any(|requested| requested.as_str() == grant.as_str())
-        })
+        .filter(|entry| !requested.contains(&entry.grant))
         .map(|grant| {
             format!(
                 "grant `{grant}` was supplied but plugin '{}' does not request it; it was recorded but grants no additional access",
@@ -407,11 +407,9 @@ pub fn sync_plugins(
     dry_run: bool,
     grants: &[String],
 ) -> Result<Vec<PluginSyncOutcome>, OrbitError> {
-    let grants = parse_grants(grants)
-        .map_err(OrbitError::InvalidInput)?
-        .into_iter()
-        .map(|grant| grant.as_str().to_string())
-        .collect::<Vec<_>>();
+    // Kept as the parsed set, not a name list: a `--grant fs=<root>` consent
+    // has to carry its roots through to the row each pin records.
+    let grants = parse_grants(grants).map_err(OrbitError::InvalidInput)?;
     let Some(pins) = read_pin_file(&runtime.shared_root())? else {
         return Ok(Vec::new());
     };
@@ -615,24 +613,29 @@ enum SyncEnable {
 fn enable_for_sync(
     runtime: &OrbitRuntime,
     name: &str,
-    grants: &[String],
+    grants: &PluginGrantSet,
 ) -> Result<SyncEnable, OrbitError> {
     let summary = show_plugin(runtime, name)?;
     let requested = summary
         .permissions
         .iter()
         .filter(|permission| permission.requested.is_some())
-        .map(|permission| permission.grant.as_str().to_string())
+        .map(|permission| permission.grant)
         .collect::<Vec<_>>();
-    if requested
-        .iter()
-        .any(|requested| !grants.contains(requested))
-    {
-        return Ok(SyncEnable::NeedsGrant(requested));
+    if requested.iter().any(|grant| !grants.contains(*grant)) {
+        return Ok(SyncEnable::NeedsGrant(
+            requested.iter().map(|grant| grant.to_string()).collect(),
+        ));
     }
     // One sync can consent to the union needed by several pins. Each plugin
-    // records only the grants its own manifest requested, never the union.
-    let plugin_grants = requested;
+    // records only the grants its own manifest requested, never the union —
+    // and records each one exactly as it was consented to, so a scoped `fs`
+    // reaches the row with its roots rather than as the whole request.
+    let plugin_grants = requested
+        .iter()
+        .filter_map(|grant| grants.entry(*grant))
+        .map(PluginGrantEntry::to_recorded)
+        .collect::<Vec<_>>();
     enable_plugin(
         runtime,
         name,

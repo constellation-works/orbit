@@ -16,13 +16,14 @@ use orbit_common::OrbitError;
 use orbit_common::security::child_env::{allowlisted_child_env, allowlisted_child_env_from};
 use orbit_exec::{ExecRequest, NoSandbox, Sandbox};
 use orbit_types::plugin::{
-    PLUGIN_HOST_API, PluginGrant, PluginManifestError, PluginNetworkPermission, PluginPermissions,
-    PluginProvenance, PluginSandbox, PluginTemplateVars, render_template,
+    PLUGIN_HOST_API, PluginGrant, PluginGrantSet, PluginManifestError, PluginNetworkPermission,
+    PluginPermissions, PluginProvenance, PluginSandbox, PluginTemplateVars, render_template,
 };
 use orbit_types::policy::ResolvedFsProfile;
 use serde_json::Value;
 
 use super::callback::PluginCallbackSession;
+use super::loader::physical_with_missing_tail;
 use crate::builtin::proc::spawn::enforce_program_allowlist;
 use crate::{TIMEOUT_SLOW_MS, ToolContext};
 
@@ -202,8 +203,9 @@ pub struct PluginBackendSpec {
     /// dispatch surfaces — and the manifest's `{{config.<key>}}` templates,
     /// so the two cannot disagree.
     pub config: PluginConfigSection,
-    /// The grants recorded at enable time.
-    pub grants: Vec<PluginGrant>,
+    /// The grants recorded at enable time, with the roots `fs` was scoped to
+    /// when the operator named them.
+    pub grants: PluginGrantSet,
 }
 
 /// Manifest-declared filesystem roots after template rendering and resolution
@@ -223,34 +225,151 @@ pub fn render_fs_roots(
     spec: &PluginBackendSpec,
     vars: &PluginTemplateVars,
 ) -> Result<RenderedFsRoots, PluginManifestError> {
-    let render = |paths: &[String], key: &str| -> Result<Vec<PathBuf>, PluginManifestError> {
-        paths
-            .iter()
-            .enumerate()
-            .map(|(index, declared)| {
-                let rendered = render_template(
-                    declared,
-                    vars,
-                    &format!("spec.permissions.fs.{key}[{index}]"),
-                )?;
-                let path = PathBuf::from(rendered);
-                Ok(if path.is_absolute() {
-                    path
-                } else {
-                    spec.plugin_root.join(path)
-                })
-            })
-            .collect()
-    };
     Ok(RenderedFsRoots {
-        read: render(&spec.permissions.fs.read, "read")?,
-        write: render(&spec.permissions.fs.write, "write")?,
+        read: render_root_list(
+            &spec.permissions.fs.read,
+            vars,
+            &spec.plugin_root,
+            "spec.permissions.fs.read",
+        )?,
+        write: render_root_list(
+            &spec.permissions.fs.write,
+            vars,
+            &spec.plugin_root,
+            "spec.permissions.fs.write",
+        )?,
     })
+}
+
+/// Render one list of declared roots under the rule [`render_fs_roots`]
+/// documents.
+///
+/// Shared with the operator's `--grant fs=<root>,…` list, which is written in
+/// the same template language as the manifest and must resolve identically:
+/// the profile compiler compares the two path sets, and a root that resolved
+/// one way on the request side and another on the grant side would compare as
+/// disjoint and silently drop the access the operator meant to allow.
+fn render_root_list(
+    declared: &[String],
+    vars: &PluginTemplateVars,
+    plugin_root: &Path,
+    field: &str,
+) -> Result<Vec<PathBuf>, PluginManifestError> {
+    declared
+        .iter()
+        .enumerate()
+        .map(|(index, declared)| {
+            let rendered = render_template(declared, vars, &format!("{field}[{index}]"))?;
+            let path = PathBuf::from(rendered);
+            Ok(if path.is_absolute() {
+                path
+            } else {
+                plugin_root.join(path)
+            })
+        })
+        .collect()
+}
+
+/// One filesystem root the sandbox will actually open, beside the manifest
+/// entry it serves so a refusal can name what was asked for.
+struct EffectiveRoot {
+    path: PathBuf,
+    field: String,
+    declared: String,
+}
+
+/// A manifest root the operator's grant left out entirely.
+///
+/// The plugin will fail to reach it at run time, which is the intended
+/// outcome of scoping a grant — but it is also the shape of an honest
+/// mistake, so every surface that can name it does: a log line at call time
+/// and an `orbit plugin doctor` row before the call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DroppedFsRoot {
+    /// `spec.permissions.fs.write[1]`.
+    pub field: String,
+    /// The root as the manifest declares it, before rendering.
+    pub declared: String,
+}
+
+/// Narrow the manifest's rendered request to what the operator granted.
+///
+/// `granted` is `None` for the manifest-request shorthand (`--grant fs`), and
+/// the request passes through unchanged — the behaviour every recorded `fs`
+/// grant had before roots existed. When the operator named roots, each
+/// requested root is kept only where it overlaps one of them, and the
+/// *narrower* side of the overlap is what the profile gets: a request for
+/// `{{workspace}}` under a grant of `{{workspace}}/.orbit-graph` opens the one
+/// directory, never the workspace (design §4.3).
+///
+/// A requested root that overlaps nothing granted is dropped with a
+/// diagnostic rather than refused. The manifest asked for more than this host
+/// allows, which is the operator's decision working as intended; refusing
+/// would make a narrower grant equivalent to no grant, and the plugin would
+/// be unusable exactly when the operator scoped it most carefully.
+fn scope_fs_roots(
+    requested: &[PathBuf],
+    declared: &[String],
+    granted: Option<&[PathBuf]>,
+    field: &str,
+    dropped: &mut Vec<DroppedFsRoot>,
+) -> Vec<EffectiveRoot> {
+    let mut effective: Vec<EffectiveRoot> = Vec::new();
+    let mut push = |path: PathBuf, index: usize| {
+        if effective.iter().any(|root| root.path == path) {
+            return;
+        }
+        effective.push(EffectiveRoot {
+            path,
+            field: format!("{field}[{index}]"),
+            declared: declared.get(index).cloned().unwrap_or_default(),
+        });
+    };
+    for (index, request) in requested.iter().enumerate() {
+        let Some(granted) = granted else {
+            push(request.clone(), index);
+            continue;
+        };
+        let mut overlapped = false;
+        for allowed in granted {
+            if let Some(intersection) = root_intersection(request, allowed) {
+                overlapped = true;
+                push(intersection, index);
+            }
+        }
+        if !overlapped {
+            dropped.push(DroppedFsRoot {
+                field: format!("{field}[{index}]"),
+                declared: declared.get(index).cloned().unwrap_or_default(),
+            });
+        }
+    }
+    effective
+}
+
+/// The narrower of two roots when one contains the other, or `None` when they
+/// are disjoint.
+///
+/// Both sides are resolved the way the sandbox compiles its rules before they
+/// are compared, so a symlink cannot make a granted root appear to contain a
+/// request it does not ([`physical_with_missing_tail`]). The *unresolved*
+/// winner is returned: it resolves to the same place, and keeping the path the
+/// operator or manifest wrote keeps the profile readable in a diagnostic.
+fn root_intersection(requested: &Path, granted: &Path) -> Option<PathBuf> {
+    let request = physical_with_missing_tail(requested);
+    let allowed = physical_with_missing_tail(granted);
+    if request == allowed || request.starts_with(&allowed) {
+        Some(requested.to_path_buf())
+    } else if allowed.starts_with(&request) {
+        Some(granted.to_path_buf())
+    } else {
+        None
+    }
 }
 
 impl PluginBackendSpec {
     pub fn granted(&self, grant: PluginGrant) -> bool {
-        self.grants.contains(&grant)
+        self.grants.contains(grant)
     }
 
     /// The effective timeout for one call, capped by the host ceiling.
@@ -284,39 +403,78 @@ impl PluginBackendSpec {
     ) -> Result<PluginSandboxProfile, OrbitError> {
         let vars = self.template_vars(workspace_root);
         let roots = render_fs_roots(self, &vars).map_err(plugin_refusal)?;
+        // The operator's roots, rendered under the manifest's own rule. They
+        // narrow both lists: one `--grant fs=<roots>` scopes reads and writes
+        // together, because a root a plugin may read is the same kind of
+        // decision as one it may write.
+        let granted_roots = match self.grants.fs_roots() {
+            Some(declared) => Some(
+                render_root_list(declared, &vars, &self.plugin_root, "--grant fs")
+                    .map_err(plugin_refusal)?,
+            ),
+            None => None,
+        };
+        let mut dropped = Vec::new();
         let mut read = vec![self.plugin_root.clone()];
         if self.granted(PluginGrant::Fs) {
-            read.extend(roots.read);
+            read.extend(
+                scope_fs_roots(
+                    &roots.read,
+                    &self.permissions.fs.read,
+                    granted_roots.as_deref(),
+                    "spec.permissions.fs.read",
+                    &mut dropped,
+                )
+                .into_iter()
+                .map(|root| root.path),
+            );
         }
-        let mut write = if self.granted(PluginGrant::Fs) {
-            roots.write
+        let scoped_write = if self.granted(PluginGrant::Fs) {
+            scope_fs_roots(
+                &roots.write,
+                &self.permissions.fs.write,
+                granted_roots.as_deref(),
+                "spec.permissions.fs.write",
+                &mut dropped,
+            )
         } else {
             Vec::new()
         };
-        for (index, path) in write.iter().enumerate() {
+        for root in &dropped {
+            tracing::warn!(
+                target: "orbit.tools.plugin",
+                plugin = %self.provenance.name,
+                field = %root.field,
+                requested = %root.declared,
+                "plugin requests a filesystem root outside the roots this host granted; it is \
+                 not on the sandbox profile. Re-run `orbit plugin enable` with a `--grant \
+                 fs=<root>` list covering it if the access is intended.",
+            );
+        }
+        // Run on the *effective* roots, not the requested ones: narrowing can
+        // only shrink a tree, but the granted side supplies the path when it
+        // is the narrower one, so this is the last point at which a protected
+        // path could reach the profile.
+        for root in &scoped_write {
             if let Some(protected) = super::loader::fs_write_root_covers(
-                path,
+                &root.path,
                 &self.plugin_root,
                 &self.global_root,
                 &self.state_dir,
                 workspace_root,
             ) {
                 return Err(plugin_refusal(PluginManifestError::new(
-                    format!("spec.permissions.fs.write[{index}]"),
+                    root.field.clone(),
                     format!(
                         "'{}' grants write access to the {protected}; a plugin cannot request \
                          writes to its own install tree or anywhere beneath Orbit's global root \
                          except its own plugin state tree, or to workspace metadata `.orbit` / `.git`",
-                        self.permissions
-                            .fs
-                            .write
-                            .get(index)
-                            .map(String::as_str)
-                            .unwrap_or("")
+                        root.declared
                     ),
                 )));
             }
         }
+        let mut write: Vec<PathBuf> = scoped_write.into_iter().map(|root| root.path).collect();
         let mut write_files = Vec::new();
         // The write directories the *host itself* adds for a grant, as opposed
         // to the ones the manifest asked for above. They are also exactly the
@@ -391,6 +549,46 @@ impl PluginBackendSpec {
             unsandboxed: self.sandbox == PluginSandbox::None
                 && self.granted(PluginGrant::Unsandboxed),
         })
+    }
+
+    /// The manifest roots the operator's `fs` scope leaves out, for a surface
+    /// that reports them before a call rather than after one
+    /// ([`DroppedFsRoot`]).
+    ///
+    /// Empty whenever `fs` is unscoped or ungranted: the shorthand drops
+    /// nothing, and a plugin without the grant has no fs profile to narrow.
+    /// A render error is reported as no drops — the call itself refuses on it,
+    /// with a better message than a doctor row could give.
+    pub fn dropped_fs_roots(&self, workspace_root: Option<&Path>) -> Vec<DroppedFsRoot> {
+        if !self.granted(PluginGrant::Fs) {
+            return Vec::new();
+        }
+        let vars = self.template_vars(workspace_root);
+        let Some(declared) = self.grants.fs_roots() else {
+            return Vec::new();
+        };
+        let (Ok(roots), Ok(granted)) = (
+            render_fs_roots(self, &vars),
+            render_root_list(declared, &vars, &self.plugin_root, "--grant fs"),
+        ) else {
+            return Vec::new();
+        };
+        let mut dropped = Vec::new();
+        scope_fs_roots(
+            &roots.read,
+            &self.permissions.fs.read,
+            Some(&granted),
+            "spec.permissions.fs.read",
+            &mut dropped,
+        );
+        scope_fs_roots(
+            &roots.write,
+            &self.permissions.fs.write,
+            Some(&granted),
+            "spec.permissions.fs.write",
+            &mut dropped,
+        );
+        dropped
     }
 
     /// The child environment for one call: the allowlisted baseline, the

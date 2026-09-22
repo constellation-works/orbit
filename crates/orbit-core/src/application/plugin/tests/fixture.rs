@@ -149,6 +149,15 @@ impl<'a> PluginSpecFixture<'a> {
         self
     }
 
+    /// Request `fs.write` on two sibling directories under the plugin's own
+    /// state tree, so a grant can be scoped to one of them.
+    pub(super) fn requesting_two_fs_writes(mut self) -> Self {
+        self.permissions = Some(
+            "  permissions:\n    fs:\n      write: [\"{{plugin_state}}/kept\", \"{{plugin_state}}/dropped\"]\n",
+        );
+        self
+    }
+
     pub(super) fn unsandboxed(mut self) -> Self {
         self.sandbox = Some("none");
         self

@@ -23,6 +23,8 @@ pub struct PluginUpgradeArgs {
     /// (repeatable, comma-separated): fs, network, env_pass, orbit_tools,
     /// unsandboxed. Without it, widened requests disable the plugin and clear
     /// its grants.
+    /// Scope fs to particular roots with `fs=<root>[,<root>]`, as
+    /// `orbit plugin enable --grant` documents.
     #[arg(long = "grant", value_delimiter = ',')]
     pub grants: Vec<String>,
 }
