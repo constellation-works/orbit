@@ -9,7 +9,7 @@ use orbit_store::Store;
 use orbit_tools::ToolRegistry;
 use orbit_tools::plugin::{load_plugin_dir, refuse_covering_fs_write_roots, render_fs_roots};
 use orbit_types::plugin::{
-    InstalledPlugin, PLUGIN_HOST_API, PluginGrant, PluginProvenance, PluginStatus,
+    InstalledPlugin, PLUGIN_HOST_API, PluginGrant, PluginGrantSet, PluginProvenance, PluginStatus,
     PluginTemplateVars,
 };
 use orbit_types::telemetry::AuditEventStatus;
@@ -1261,7 +1261,7 @@ fn typed_config_and_relative_fs_roots_match_validate_registration_call_and_confo
         ])
     );
 
-    let grants = vec![PluginGrant::Fs];
+    let grants = PluginGrantSet::from_grants([PluginGrant::Fs]);
     let provenance = || PluginProvenance {
         name: "rooted".to_string(),
         version: plugin.manifest.metadata.version.clone(),

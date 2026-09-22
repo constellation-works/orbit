@@ -25,6 +25,8 @@ pub struct PluginAddArgs {
     /// Complete permission grant set to record when enabling (repeatable,
     /// comma-separated): fs, network, env_pass, orbit_tools, unsandboxed.
     /// Replaces any recorded set.
+    /// Scope fs to particular roots with `fs=<root>[,<root>]`, as
+    /// `orbit plugin enable --grant` documents.
     #[arg(long = "grant", value_delimiter = ',', requires = "enable")]
     pub grants: Vec<String>,
 }

@@ -74,7 +74,14 @@ impl Execute for PluginShowArgs {
                         .requested
                         .clone()
                         .unwrap_or_else(|| "-".to_string()),
-                    if permission.granted { "yes" } else { "no" }.to_string(),
+                    match (permission.granted, &permission.granted_roots) {
+                        // The delta an operator needs to see: the manifest
+                        // asked for the REQUESTED column, this host allowed
+                        // only these roots, and the sandbox opens the overlap.
+                        (true, Some(roots)) => format!("yes ({})", roots.join(", ")),
+                        (true, None) => "yes".to_string(),
+                        (false, _) => "no".to_string(),
+                    },
                 ]);
             }
             blocks.push(Block::table(permissions));

@@ -11,9 +11,9 @@ use orbit_tools::plugin::{
     refuse_covering_fs_write_roots, validate_loaded_plugin,
 };
 use orbit_types::plugin::{
-    InstalledPlugin, PluginExecutionKind, PluginGrant, PluginProvenance, PluginSandbox,
-    PluginStatus, SemverRange, Version, parse_archive_digest, plugin_tool_name,
-    remote_archive_source,
+    InstalledPlugin, PluginExecutionKind, PluginGrant, PluginGrantSet, PluginProvenance,
+    PluginSandbox, PluginStatus, SemverRange, Version, parse_archive_digest, parse_stored_grants,
+    plugin_tool_name, remote_archive_source,
 };
 
 use super::panels::{PluginLinkSummary, PluginPanelSummary, web_summaries};
@@ -21,7 +21,8 @@ use super::panels::{PluginLinkSummary, PluginPanelSummary, web_summaries};
 use crate::OrbitRuntime;
 use crate::runtime::plugin_config::plugin_config_section;
 use crate::runtime::plugin_host::{
-    build_plugin_backend, load_installed_plugin, plugin_state_dir, read_pin_file, unmet_requirement,
+    build_plugin_backend, load_installed_plugin, plugin_backend, plugin_state_dir, read_pin_file,
+    unmet_requirement,
 };
 
 /// One plugin tool as the CLI reports it.
@@ -44,6 +45,12 @@ pub struct PluginPermissionSummary {
     /// The manifest's request, `None` when it does not ask for this grant.
     pub requested: Option<String>,
     pub granted: bool,
+    /// The roots the operator scoped this grant to, `None` when the grant is
+    /// unscoped — either not granted at all, or granted as the whole request
+    /// the manifest makes. Reading it beside `requested` is how a surface
+    /// shows the delta: the manifest asks for these paths, the operator
+    /// allowed those, and the sandbox opens the intersection.
+    pub granted_roots: Option<Vec<String>>,
 }
 
 /// One plugin as `orbit plugin list` / `show` reports it.
@@ -171,6 +178,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
         });
     let stale_seeded = stale_seeded_definition_rows(runtime, &summaries)?;
     let archive_drift = archive_digest_drift_rows(runtime, &summaries)?;
+    let scoped_out = scoped_out_fs_root_rows(runtime)?;
     // A skill link whose target is gone is invisible to the skill catalog's
     // own doctor — it only walks seeded trees — and to the plugin record,
     // which says nothing about the provider discovery roots (§3).
@@ -234,8 +242,61 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
     rows.extend(dangling);
     rows.extend(stale_seeded);
     rows.extend(archive_drift);
+    rows.extend(scoped_out);
     if let Some(finding) = invalid_pin_file {
         rows.push(finding);
+    }
+    Ok(rows)
+}
+
+/// Findings for a plugin whose `fs` grant is scoped past a root its own
+/// manifest asks for.
+///
+/// The narrowing itself is the operator's decision and not a problem, so
+/// `orbit plugin show` reports it and `doctor` stays quiet about it. What
+/// `doctor` names is the part the operator cannot see from either side alone:
+/// a requested root that overlaps *nothing* granted will never open, so the
+/// plugin will fail somewhere inside itself rather than at load [ORB-12840].
+fn scoped_out_fs_root_rows(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, OrbitError> {
+    let mut rows = Vec::new();
+    // The workspace a call from here would resolve to, so the overlap this
+    // reports is the one that call would compute. A root rendered against
+    // some other workspace could report a drop that never happens.
+    let workspace_root = runtime.paths().repo_root.clone();
+    // The effective `[plugins.<ns>]` section, because an fs root may be
+    // written `{{config.<key>}}` and would otherwise fail to render here and
+    // report nothing.
+    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
+        runtime.global_root(),
+        runtime.shared_root(),
+    ))?;
+    for entry in &runtime.plugin_load().registered {
+        // A row whose grants did not verify granted nothing at all, and is
+        // already its own finding; reading its scope would repeat an
+        // unauthorized claim back as though it were a narrowing.
+        if !entry.grants_authorized {
+            continue;
+        }
+        let Some(plugin) = entry.loaded.as_deref() else {
+            continue;
+        };
+        let Some(installed) = runtime.stores().plugins().get_plugin(&entry.name)? else {
+            continue;
+        };
+        let backend = plugin_backend(&runtime.global_root(), &installed, plugin, &config.plugins);
+        for root in backend.spec().dropped_fs_roots(Some(&workspace_root)) {
+            rows.push(PluginDoctorResult {
+                plugin: entry.name.clone(),
+                status: entry.status,
+                message: format!(
+                    "plugin '{}' requests `{}` at {}, which lies outside every root this host \
+                     granted; the sandbox will not open it. Re-run `orbit plugin enable {} \
+                     --grant fs=<root>[,<root>]` with a list that covers it, or `--grant fs` to \
+                     grant the whole request",
+                    entry.name, root.declared, root.field, entry.name,
+                ),
+            });
+        }
     }
     Ok(rows)
 }
@@ -407,17 +468,16 @@ pub fn validate_plugin_dir(
         &global_root,
         runtime.shared_root(),
     ))?;
-    let grants = plugin.manifest.required_grants();
+    // Validation reports on the manifest, which has no operator behind it
+    // yet: every grant is the unscoped form of what it requests.
+    let grants = PluginGrantSet::from_grants(plugin.manifest.required_grants());
     let backend = build_plugin_backend(
         &plugin,
         PluginProvenance {
             name: plugin.namespace().to_string(),
             version: plugin.manifest.metadata.version.clone(),
             manifest_digest: plugin.manifest_digest.clone(),
-            grants: grants
-                .iter()
-                .map(|grant| grant.as_str().to_string())
-                .collect(),
+            grants: grants.to_recorded(),
         },
         &plugin_state_dir(&global_root, plugin.namespace()),
         &global_root,
@@ -565,6 +625,7 @@ fn summary_from_runtime(runtime: &OrbitRuntime, installed: &InstalledPlugin) -> 
         summary.unsandboxed = false;
         for permission in &mut summary.permissions {
             permission.granted = false;
+            permission.granted_roots = None;
         }
     }
     summary.diagnostic = registered.and_then(|entry| entry.diagnostic.clone());
@@ -660,13 +721,21 @@ fn mcp_scope_label(scope: orbit_types::plugin::PluginMcpScope) -> &'static str {
 }
 
 /// Requested versus granted, one row per grant, for `orbit plugin show`.
+///
+/// A row this build cannot parse reports nothing as granted: the loader
+/// refuses it for the same reason, and repeating an unreadable claim back as
+/// authority is what [ORB-12778] closed.
 fn permission_rows(plugin: &LoadedPlugin, granted: &[String]) -> Vec<PluginPermissionSummary> {
+    let granted = parse_stored_grants(granted).unwrap_or_default();
     plugin
         .manifest
         .grant_requests()
         .into_iter()
         .map(|request| PluginPermissionSummary {
-            granted: granted.iter().any(|name| name == request.grant.as_str()),
+            granted: granted.contains(request.grant),
+            granted_roots: granted
+                .entry(request.grant)
+                .and_then(|entry| entry.roots.clone()),
             grant: request.grant,
             requested: request.requested,
         })

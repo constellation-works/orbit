@@ -16,6 +16,12 @@ pub struct PluginEnableArgs {
     /// `requested` (exactly what the manifest asks for). Replaces the
     /// recorded set when present; omitting --grant preserves it. A tool whose
     /// plugin requests a grant it has not been given registers inactive.
+    /// Scope fs to particular roots with `fs=<root>[,<root>]`, in the
+    /// manifest's template language ({{workspace}}, {{plugin_state}},
+    /// absolute, or relative to the plugin root); the sandbox then opens only
+    /// where those roots and the manifest's request overlap. Write a bare
+    /// relative root after the first as ./<root>, so it is not read as a
+    /// mistyped grant name. Plain fs grants every root the manifest requests.
     #[arg(long = "grant", value_delimiter = ',')]
     pub grants: Vec<String>,
     /// Overwrite a seeded routine or auto-task that was edited after Orbit

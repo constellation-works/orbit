@@ -5,12 +5,13 @@
 use std::path::{Path, PathBuf};
 
 use orbit_types::plugin::{
-    PluginFsPermissions, PluginGrant, PluginNetworkPermission, PluginPermissions, PluginSandbox,
+    PluginFsPermissions, PluginGrant, PluginGrantSet, PluginNetworkPermission, PluginPermissions,
+    PluginSandbox, parse_grants,
 };
 use serde_json::json;
 
 use super::super::backend::{PLUGIN_TIMEOUT_CEILING_MS, PluginBackendSpec};
-use super::support::{context, require_sandbox, spec, stub_backend, tool};
+use super::support::{context, require_sandbox, scoped_spec, spec, stub_backend, tool};
 use crate::{Tool, ToolContext};
 
 /// Writes `$1`-style paths handed in via the envelope input: `inside` under
@@ -18,6 +19,11 @@ use crate::{Tool, ToolContext};
 const WRITER_BACKEND: &str = "#!/bin/sh\ncat >/dev/null\nresult=ok\nif ! echo inside > \"$ORBIT_PLUGIN_STATE/inside.txt\" 2>/dev/null; then result=inside_denied; fi\nif echo outside > \"$OUTSIDE\" 2>/dev/null; then result=\"$result,outside_written\"; fi\nprintf '{\"ok\":true,\"output\":{\"result\":\"%s\"}}\\n' \"$result\"\n";
 
 const WORKSPACE_METADATA_WRITER_BACKEND: &str = "#!/bin/sh\ncat >/dev/null\nresult=ok\nif ! echo allowed > \"$ORBIT_WORKSPACE_ROOT/output/allowed.txt\" 2>/dev/null; then result=allowed_denied; fi\nif echo schedule > \"$ORBIT_WORKSPACE_ROOT/.orbit/routines/demo.yaml\" 2>/dev/null; then result=\"$result,orbit_written\"; fi\nif echo hook > \"$ORBIT_WORKSPACE_ROOT/.git/hooks/pre-commit\" 2>/dev/null; then result=\"$result,git_written\"; fi\nprintf '{\"ok\":true,\"output\":{\"result\":\"%s\"}}\\n' \"$result\"\n";
+
+/// Writes into two subdirectories of the one write root the manifest asks
+/// for. An operator who scoped the grant to the first must see the second
+/// denied even though the manifest requested the tree that contains it.
+const SCOPED_ROOT_WRITER_BACKEND: &str = "#!/bin/sh\ncat >/dev/null\nresult=ok\nif ! echo allowed > \"$ORBIT_WORKSPACE_ROOT/output/granted/allowed.txt\" 2>/dev/null; then result=granted_denied; fi\nif echo denied > \"$ORBIT_WORKSPACE_ROOT/output/ungranted/denied.txt\" 2>/dev/null; then result=\"$result,ungranted_written\"; fi\nprintf '{\"ok\":true,\"output\":{\"result\":\"%s\"}}\\n' \"$result\"\n";
 
 const NOOP_BACKEND: &str =
     "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":true,\"output\":{\"result\":\"ok\"}}\\n'\n";
@@ -122,6 +128,130 @@ fn a_workspace_subdirectory_grant_cannot_write_orbit_or_git_metadata() {
     assert!(!workspace.join(".git/hooks/pre-commit").exists());
 }
 
+/// The point of a path-scoped grant: the kernel, not a projection, is what
+/// keeps the backend out of the part of its own request the operator did not
+/// allow [ORB-12840].
+#[cfg(unix)]
+#[test]
+#[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
+fn a_grant_narrower_than_the_request_denies_the_un_granted_part_of_it() {
+    require_sandbox();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("plugin");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&root).expect("plugin root");
+    // Both directories exist, so the only thing separating them is the grant.
+    std::fs::create_dir_all(workspace.join("output/granted")).expect("granted");
+    std::fs::create_dir_all(workspace.join("output/ungranted")).expect("ungranted");
+    let command = stub_backend(&root, SCOPED_ROOT_WRITER_BACKEND);
+    // The manifest asks for the whole `output` tree...
+    let permissions = PluginPermissions {
+        fs: PluginFsPermissions {
+            read: vec![],
+            write: vec!["{{workspace}}/output".into()],
+        },
+        ..PluginPermissions::default()
+    };
+    // ...and the operator granted one directory inside it.
+    let grants = parse_grants(&["fs={{workspace}}/output/granted".to_string()]).expect("grammar");
+    assert_eq!(
+        grants.fs_roots(),
+        Some(["{{workspace}}/output/granted".to_string()].as_slice())
+    );
+    let backend = tool(scoped_spec(command, &root, permissions, grants), None);
+    let ctx = ToolContext {
+        workspace_root: Some(workspace.clone()),
+        proc_spawn_environment: Some(vec![("PATH".to_string(), "/usr/bin:/bin".to_string())]),
+        ..context(&workspace)
+    };
+
+    let output = backend.execute(&ctx, json!({})).expect("backend runs");
+    assert_eq!(
+        output["result"], "ok",
+        "the granted directory writes and the un-granted one does not"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("output/granted/allowed.txt"))
+            .expect("granted write"),
+        "allowed\n"
+    );
+    assert!(
+        !workspace.join("output/ungranted/denied.txt").exists(),
+        "the manifest requested `output`, but the grant stopped at `output/granted`"
+    );
+}
+
+/// The compiled profile, without a live sandbox: what the intersection keeps,
+/// what it narrows, and what it drops.
+#[test]
+fn a_scoped_grant_intersects_the_manifests_request() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("plugin");
+    let workspace = temp.path().join("workspace");
+    let permissions = PluginPermissions {
+        fs: PluginFsPermissions {
+            read: vec!["{{workspace}}/shared".into()],
+            write: vec!["{{workspace}}/output".into(), "{{plugin_state}}".into()],
+        },
+        ..PluginPermissions::default()
+    };
+    let spec = scoped_spec(
+        root.join("backend.sh"),
+        &root,
+        permissions.clone(),
+        parse_grants(&[
+            "fs={{workspace}}/output/granted".to_string(),
+            "{{workspace}}/shared".to_string(),
+        ])
+        .expect("grammar"),
+    );
+    let profile = spec
+        .sandbox_profile(Some(&workspace))
+        .expect("profile compiles");
+
+    assert_eq!(
+        profile.write,
+        vec![workspace.join("output/granted")],
+        "a grant inside a requested root narrows it, and `{{{{plugin_state}}}}` overlaps no \
+         granted root, so it is dropped rather than refused"
+    );
+    assert_eq!(
+        profile.read,
+        vec![root.clone(), workspace.join("shared")],
+        "the plugin root is always readable, and a root that is granted exactly as \
+         requested passes through"
+    );
+
+    // A grant wider than a requested root does not widen it: the request is
+    // still the ceiling, so the profile opens the request and not the grant.
+    let wider = scoped_spec(
+        root.join("backend.sh"),
+        &root,
+        permissions.clone(),
+        parse_grants(&["fs={{workspace}}".to_string()]).expect("grammar"),
+    );
+    let profile = wider
+        .sandbox_profile(Some(&workspace))
+        .expect("profile compiles");
+    assert_eq!(profile.write, vec![workspace.join("output")]);
+
+    // The same manifest under the unscoped shorthand keeps its whole request.
+    let shorthand = scoped_spec(
+        root.join("backend.sh"),
+        &root,
+        permissions,
+        parse_grants(&["fs".to_string()]).expect("grammar"),
+    );
+    let profile = shorthand
+        .sandbox_profile(Some(&workspace))
+        .expect("profile compiles");
+    assert_eq!(
+        profile.write,
+        vec![workspace.join("output"), root.join("state")],
+        "`--grant fs` still means every root the manifest requests"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 #[ignore = "requires a host plugin sandbox; the Linux CI sandbox gate runs it"]
@@ -157,7 +287,7 @@ fn unsandboxed_needs_the_grant_and_then_confines_nothing() {
     assert!(!profile.unsandboxed, "no grant, no escape");
 
     let mut unsandboxed = confined.clone();
-    unsandboxed.grants.push(PluginGrant::Unsandboxed);
+    unsandboxed.grants = PluginGrantSet::from_grants([PluginGrant::Fs, PluginGrant::Unsandboxed]);
     let profile = unsandboxed.sandbox_profile(None).expect("profile");
     assert!(profile.unsandboxed);
     let output = tool(std::sync::Arc::new(unsandboxed), None)
@@ -863,7 +993,7 @@ fn without_orbit_tools_no_orbit_store_is_opened() {
     let global_root = Path::new("/srv/orbit-global");
     let spec = orbit_tools_spec(global_root, Path::new("/srv/plugins/demo"));
     let mut ungranted = spec.clone();
-    ungranted.grants.clear();
+    ungranted.grants = PluginGrantSet::default();
     ungranted.provenance.grants.clear();
     let profile = ungranted
         .sandbox_profile(Some(Path::new("/srv/checkout")))

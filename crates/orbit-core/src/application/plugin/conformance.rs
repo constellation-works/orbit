@@ -29,8 +29,8 @@ use orbit_tools::plugin::{
 };
 use orbit_tools::{Tool, ToolContext};
 use orbit_types::plugin::{
-    PluginGrant, PluginManifest, PluginNetworkPermission, PluginProvenance, PluginSandbox,
-    PluginTestCase, parse_grants, plugin_tool_name,
+    PluginGrant, PluginGrantSet, PluginManifest, PluginNetworkPermission, PluginProvenance,
+    PluginSandbox, PluginTestCase, parse_grants, plugin_tool_name,
 };
 use serde_json::Value;
 
@@ -145,17 +145,17 @@ pub fn test_plugin_dir(
         runtime.global_root(),
         runtime.shared_root(),
     ))?;
-    let grants = plugin.manifest.required_grants();
+    // A conformance run exercises the profile the *manifest* asks for, so
+    // every grant it builds is the unscoped form. Operator consent above
+    // decides whether the run happens, not how wide its profile is.
+    let grants = PluginGrantSet::from_grants(plugin.manifest.required_grants());
     let backend = build_plugin_backend(
         &plugin,
         PluginProvenance {
             name: plugin.namespace().to_string(),
             version: plugin.manifest.metadata.version.clone(),
             manifest_digest: plugin.manifest_digest.clone(),
-            grants: grants
-                .iter()
-                .map(|grant| grant.as_str().to_string())
-                .collect(),
+            grants: grants.to_recorded(),
         },
         &state_dir,
         &global_root,
@@ -271,7 +271,7 @@ fn authorize_conformance_run(
     requested_grants: &str,
 ) -> Result<(), OrbitError> {
     let consented = if options.grants.is_empty() {
-        Vec::new()
+        PluginGrantSet::default()
     } else {
         parse_grants(&options.grants).map_err(OrbitError::InvalidInput)?
     };
@@ -280,7 +280,7 @@ fn authorize_conformance_run(
     }
     let missing: Vec<PluginGrant> = consent_required_grants(&plugin.manifest)
         .into_iter()
-        .filter(|grant| !consented.contains(grant))
+        .filter(|grant| !consented.contains(*grant))
         .collect();
     if missing.is_empty() {
         return Ok(());

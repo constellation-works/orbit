@@ -25,7 +25,7 @@ use orbit_tools::plugin::{
     load_plugin_dir, manifest_digest, refuse_covering_fs_write_roots, validate_loaded_plugin,
 };
 use orbit_types::plugin::{
-    InstalledPlugin, MANIFEST_FILE_NAME, PLUGIN_HOST_API, PluginBackendType, PluginGrant,
+    InstalledPlugin, MANIFEST_FILE_NAME, PLUGIN_HOST_API, PluginBackendType, PluginGrantSet,
     PluginMcpScope, PluginPinFile, PluginProvenance, PluginStatus, SemverRange, Version,
     parse_stored_grants, plugin_tool_name,
 };
@@ -1049,10 +1049,7 @@ pub(crate) fn plugin_backend(
     // register-inactive-tools path where the grant set no longer matters
     // (`unknown_grant_diagnostic` already refused it); either way there is no
     // error to surface here.
-    let grants: Vec<PluginGrant> = parse_stored_grants(&installed.grants)
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
+    let grants = parse_stored_grants(&installed.grants).unwrap_or_default();
     // `{{config.<key>}}` resolves against the effective section: what the
     // operator configured in `[plugins.<ns>]`, over what the manifest
     // defaults (§1).
@@ -1063,10 +1060,10 @@ pub(crate) fn plugin_backend(
             name: installed.name.clone(),
             version: installed.version.clone(),
             manifest_digest: plugin.manifest_digest.clone(),
-            grants: grants
-                .iter()
-                .map(|grant| grant.as_str().to_string())
-                .collect(),
+            // The audit row carries the set as recorded, scopes included:
+            // "ran with `fs`" and "ran with `fs` narrowed to one directory"
+            // are different facts about the same call (design §4.4).
+            grants: grants.to_recorded(),
         },
         &plugin_state_dir(global_root, &installed.name),
         global_root,
@@ -1081,7 +1078,7 @@ pub(crate) fn build_plugin_backend(
     provenance: PluginProvenance,
     state_dir: &Path,
     global_root: &Path,
-    grants: Vec<PluginGrant>,
+    grants: PluginGrantSet,
     config: PluginConfigSection,
 ) -> PluginBackend {
     let spec = Arc::new(PluginBackendSpec {
