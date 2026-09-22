@@ -42,7 +42,7 @@ Execution (execution.*)      how agent subprocesses run          ⚠ workspace f
 
 Review (operation.*)         automatic review policy — 5 keys unset (pass --all to list them)
 
-Housekeeping                 logs, scoring, ids, and PR links
+Housekeeping                 logs, scoring, ids, plugins, and PR links
   scoring.enabled                  true                  workspace  Whether scoreboard metrics are recorded for task runs.
   automation.stall_window_minutes  60                    default    Minutes a deferred delivery-automation reason may persist before the evaluator logs it at warn and files one friction (1..=1440).
   runtime.log_retention_days       7                     default    Delete JSONL log archives whose mtime is older than this many days (must be >= 1).
@@ -50,6 +50,7 @@ Housekeeping                 logs, scoring, ids, and PR links
   runtime.log_max_file_mb          100                   default    Roll the active JSONL log once it grows past this many MiB (must be >= 1 and <= runtime.log_max_total_mb).
   tasks.id_start                   –                     unset      Floor for the local task-id allocator on this machine (forward-only; lets machines hold disjoint id ranges).
   pr.task_url_template             –                     unset      URL template used to link a task ID in PR descriptions.
+  plugin.legacy_callback_identity  false                 default    Deprecated: also accept the environment token and process ancestry as a plugin callback credential. Off by default; identity is the session record the host hands a backend on file descriptor 3. Removed in the next release.
 
 Paths
   global root                            <global-root>

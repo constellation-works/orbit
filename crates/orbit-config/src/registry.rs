@@ -77,7 +77,8 @@ pub enum ConfigSection {
     Execution,
     /// `operation.*` — automatic review policy.
     Operation,
-    /// Everything else: `automation.*`, `runtime.*`, `scoring.*`, `tasks.*`, `pr.*`.
+    /// Everything else: `automation.*`, `runtime.*`, `scoring.*`, `tasks.*`,
+    /// `pr.*`, `plugin.*`.
     Housekeeping,
 }
 
@@ -112,7 +113,7 @@ impl ConfigSection {
             Self::Crews => "named provider/model assignments",
             Self::Execution => "how agent subprocesses run",
             Self::Operation => "automatic review policy",
-            Self::Housekeeping => "logs, scoring, ids, and PR links",
+            Self::Housekeeping => "logs, scoring, ids, plugins, and PR links",
         }
     }
 
