@@ -663,6 +663,85 @@ fn a_rewritten_manifest_is_registered_inactive_naming_both_digests() {
     );
 }
 
+/// ORB-12827: `metadata.name` (not the store row's install identity) decides
+/// a plugin's namespace, so tampering it on disk after install can make a
+/// plugin's manifest claim another plugin's namespace — the digest changes,
+/// taking the same digest-mismatch path as
+/// `a_rewritten_manifest_is_registered_inactive_naming_both_digests`, but the
+/// rewritten name collides with an already-active plugin's tool instead of
+/// an unrelated field. `register_entry` must refuse to let the tampered
+/// row's inactive entry displace the real owner's active one (§4.9).
+#[test]
+fn a_tampered_manifest_claiming_another_plugins_namespace_cannot_displace_its_active_tool() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    let orbit_dir = temp.path().join("repo/.orbit");
+    std::fs::create_dir_all(&orbit_dir).expect("create orbit dir");
+
+    write_plugin(&plugin_install_path(&global_root, "a", "1.0.0"), "a", "");
+    write_plugin(&plugin_install_path(&global_root, "b", "1.0.0"), "b", "");
+
+    let store = Store::open(&global_root.join("orbit.db")).expect("open store");
+    for name in ["a", "b"] {
+        store
+            .with_transaction(|tx| tx.upsert_plugin(&record(&global_root, name)))
+            .expect("record the install");
+    }
+
+    // Tamper plugin b's on-disk manifest to claim plugin a's namespace, so
+    // its tool becomes `a.hello` instead of `b.hello`, colliding with the
+    // already-installed, already-active plugin a.
+    let manifest = plugin_install_path(&global_root, "b", "1.0.0").join("plugin.yaml");
+    let body = std::fs::read_to_string(&manifest).expect("read manifest");
+    let tampered = body.replace("name: b", "name: a");
+    assert_ne!(
+        body, tampered,
+        "the replace must actually rename the namespace"
+    );
+    std::fs::write(&manifest, tampered).expect("tamper manifest");
+
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let load = load_host_plugins(
+        &global_root,
+        &orbit_dir,
+        &store,
+        &mut registry,
+        &std::collections::BTreeMap::new(),
+    );
+
+    assert!(
+        registry.is_active("a.hello"),
+        "plugin a's active entry survives the collision"
+    );
+    assert_eq!(
+        registry
+            .plugin_binding("a.hello")
+            .expect("a.hello is plugin-backed")
+            .provenance
+            .name,
+        "a",
+        "the entry still belongs to plugin a, not the tampered plugin b"
+    );
+
+    let entry = load
+        .registered
+        .iter()
+        .find(|entry| entry.name == "b")
+        .expect("the plugin is reported");
+    assert_eq!(
+        entry.status,
+        PluginStatus::Inactive,
+        "the tampered plugin is refused: {:?}",
+        entry.diagnostic
+    );
+    let diagnostic = entry.diagnostic.clone().expect("a diagnostic");
+    assert!(
+        diagnostic.contains("does not match the stored digest"),
+        "{diagnostic}"
+    );
+}
+
 /// `fs.write` on the plugin root (or a parent, or `/`) would let the backend
 /// rewrite `plugin.yaml` under an already-recorded `fs` grant. Registration
 /// refuses it independently of the digest check.
