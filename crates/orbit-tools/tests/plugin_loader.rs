@@ -9,7 +9,7 @@ use orbit_tools::plugin::{
     PluginLoadError, PluginValidationPolicy, load_plugin_dir, load_sidecar_manifest,
     migrate_sidecars, validate_loaded_plugin,
 };
-use orbit_types::plugin::{PluginBackendType, PluginMcpScope};
+use orbit_types::plugin::{PluginBackendType, PluginMcpScope, SemverRange};
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -77,6 +77,27 @@ fn design_example_loads_and_validates_with_unused_sections_tolerated() {
     assert_eq!(plugin.manifest_digest.len(), 64);
     // Not first-party: no `origin`, so tools are `graph.<verb>`.
     assert_eq!(plugin.tool_name("recommend", false), "graph.recommend");
+}
+
+#[test]
+fn design_example_supports_the_shipped_orbit_host() {
+    let plugin = load_plugin_dir(&fixtures().join("plugins/graph-example")).expect("loads");
+    let requirement = plugin
+        .manifest
+        .spec
+        .requires
+        .orbit
+        .as_deref()
+        .expect("design example declares its host requirement");
+    let range = SemverRange::parse(requirement).expect("host requirement parses");
+    let host_version = env!("CARGO_PKG_VERSION")
+        .parse()
+        .expect("crate version is semver");
+
+    assert!(
+        range.matches(&host_version),
+        "design example must support this shipped Orbit host"
+    );
 }
 
 #[test]
