@@ -11,9 +11,11 @@ pub struct PluginEnableArgs {
     /// Plugin namespace
     pub name: String,
     /// Complete permission grant set to record (repeatable, comma-separated):
-    /// fs, network, env_pass, orbit_tools, unsandboxed. Replaces the recorded
-    /// set when present; omitting --grant preserves it. A tool whose plugin
-    /// requests a grant it has not been given registers inactive.
+    /// fs, network, env_pass, orbit_tools, unsandboxed — or one of the
+    /// reserved words `none` (revoke every grant), `all` (every grant) or
+    /// `requested` (exactly what the manifest asks for). Replaces the
+    /// recorded set when present; omitting --grant preserves it. A tool whose
+    /// plugin requests a grant it has not been given registers inactive.
     #[arg(long = "grant", value_delimiter = ',')]
     pub grants: Vec<String>,
     /// Overwrite a seeded routine or auto-task that was edited after Orbit

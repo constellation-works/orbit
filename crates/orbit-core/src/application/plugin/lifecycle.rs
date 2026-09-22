@@ -6,7 +6,9 @@ use orbit_automation::auto_tasks::loader::AUTO_TASKS_DIR;
 use orbit_automation::routines::loader::ROUTINES_DIR;
 use orbit_common::OrbitError;
 use orbit_tools::plugin::{load_plugin_dir, load_sidecar_manifest, migrate_sidecars};
-use orbit_types::plugin::{InstalledPlugin, MANIFEST_FILE_NAME, PluginStatus, parse_grants};
+use orbit_types::plugin::{
+    InstalledPlugin, MANIFEST_FILE_NAME, PluginStatus, parse_grants, resolve_grant_selection,
+};
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
@@ -24,7 +26,9 @@ use crate::runtime::plugin_definitions::load_plugin_definitions;
 #[derive(Debug, Clone, Default)]
 pub struct PluginEnableOptions {
     /// Complete grant set to record when `--grant` is present. An empty list
-    /// preserves the existing set for an ordinary re-enable.
+    /// preserves the existing set for an ordinary re-enable; a lone `none`,
+    /// `all` or `requested` selects by name instead of listing grants
+    /// (see [`resolve_grant_selection`]).
     pub grants: Vec<String>,
     /// Overwrite a seeded definition the operator has since edited (§3).
     pub force: bool,
@@ -70,19 +74,34 @@ pub fn enable_plugin(
     name: &str,
     options: &PluginEnableOptions,
 ) -> Result<PluginEnableResult, OrbitError> {
-    let grants: Vec<String> = parse_grants(&options.grants)
-        .map_err(OrbitError::InvalidInput)?
-        .into_iter()
-        .map(|grant| grant.as_str().to_string())
-        .collect();
     // Seeding reads definitions and skills out of the recorded tree, so the
     // row buys nothing until the path it names is this host's install.
     let install_path = verified_install_path(runtime, &installed_plugin(runtime, name)?)?;
-    let contributions = apply_enabled_contributions(runtime, &install_path, options.force)?;
+    // `requested` needs the manifest, so it is resolved before the writes
+    // below rather than deferred to `set_enabled`; an invalid `--grant` then
+    // fails closed with nothing yet touched, as it always has.
     let plugin = load_plugin_dir(&install_path)?;
-    let mut warnings = unrequested_grant_warnings(&plugin, &grants);
+    // An empty `options.grants` is "no `--grant` flag": preserve the
+    // recorded set (`None`). Anything else — including the explicit `none`
+    // alias — is a complete replacement, even when it resolves to zero
+    // grants (`Some(vec![])`).
+    let record_grants: Option<Vec<String>> = if options.grants.is_empty() {
+        None
+    } else {
+        let resolved = resolve_grant_selection(&options.grants, &plugin.manifest)
+            .map_err(OrbitError::InvalidInput)?;
+        Some(
+            resolved
+                .into_iter()
+                .map(|grant| grant.as_str().to_string())
+                .collect(),
+        )
+    };
+    let contributions = apply_enabled_contributions(runtime, &install_path, options.force)?;
+    let warn_against: &[String] = record_grants.as_deref().unwrap_or_default();
+    let mut warnings = unrequested_grant_warnings(&plugin, warn_against);
     warnings.extend(contributions.warnings);
-    let summary = set_enabled(runtime, name, true, &grants)?;
+    let summary = set_enabled(runtime, name, true, record_grants.as_deref())?;
 
     Ok(PluginEnableResult {
         summary,
@@ -157,7 +176,7 @@ pub struct PluginEnableResult {
 /// (§3).
 pub fn disable_plugin(runtime: &OrbitRuntime, name: &str) -> Result<PluginSummary, OrbitError> {
     verified_install_path(runtime, &installed_plugin(runtime, name)?)?;
-    let summary = set_enabled(runtime, name, false, &[])?;
+    let summary = set_enabled(runtime, name, false, None)?;
     unlink_namespace_skills(runtime, name)?;
     Ok(summary)
 }
@@ -180,17 +199,19 @@ fn set_enabled(
     runtime: &OrbitRuntime,
     name: &str,
     enabled: bool,
-    grants: &[String],
+    grants: Option<&[String]>,
 ) -> Result<PluginSummary, OrbitError> {
     let mut existing = runtime
         .stores()
         .plugins()
         .get_plugin(name)?
         .ok_or_else(|| missing_install(runtime, name))?;
-    let grants = if enabled && !grants.is_empty() {
-        grants.to_vec()
-    } else {
-        existing.grants.clone()
+    // `None` (no `--grant` flag, or a disable/remove that never authorizes
+    // grants) preserves the recorded set; `Some` — including an explicit
+    // empty slice — replaces it completely.
+    let grants = match (enabled, grants) {
+        (true, Some(grants)) => grants.to_vec(),
+        _ => existing.grants.clone(),
     };
     let projection = if enabled {
         let plugin = load_plugin_dir(Path::new(&existing.install_path))?;
@@ -329,7 +350,7 @@ pub fn remove_plugin(
     // every discovery link into this namespace's install family; deleting the
     // tree first would leave those links dangling with no plugin row left for
     // doctor to inspect.
-    set_enabled(runtime, name, false, &[])?;
+    set_enabled(runtime, name, false, None)?;
     unlink_namespace_skills(runtime, name)?;
 
     runtime.with_mutation(|| {

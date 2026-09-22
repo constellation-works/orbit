@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::super::grant::{PluginGrant, parse_grants};
+use super::super::grant::{PluginGrant, parse_grants, resolve_grant_selection};
 use super::super::manifest::{PluginManifest, PluginNetworkPermission, PluginSandbox};
 use super::super::template::{PluginTemplateVars, render_template, template_references};
 
@@ -51,6 +51,43 @@ fn grant_names_are_validated_and_deduplicated() {
         error.contains("wifi") && error.contains("unsandboxed"),
         "{error}"
     );
+}
+
+#[test]
+fn grant_selection_resolves_the_reserved_spellings() {
+    let plain = manifest(
+        "schemaVersion: 2\nkind: Plugin\nmetadata: {name: demo, version: 0.1.0}\nspec:\n  backend: {type: exec, command: bin/demo}\n  tools:\n    - {name: hello, execution_kind: read_only}\n",
+    );
+    let mut requesting = plain.clone();
+    requesting.spec.permissions.fs.write = vec!["{{plugin_state}}".into()];
+    requesting.spec.backend.sandbox = PluginSandbox::None;
+
+    assert_eq!(
+        resolve_grant_selection(&["none".into()], &requesting),
+        Ok(Vec::new()),
+        "`none` is an explicit empty set, not the manifest's own request"
+    );
+    assert_eq!(
+        resolve_grant_selection(&["all".into()], &requesting),
+        Ok(PluginGrant::ALL.to_vec())
+    );
+    assert_eq!(
+        resolve_grant_selection(&["requested".into()], &requesting),
+        Ok(vec![PluginGrant::Fs, PluginGrant::Unsandboxed])
+    );
+    assert_eq!(
+        resolve_grant_selection(&["requested".into()], &plain),
+        Ok(Vec::new()),
+        "a manifest that asks for nothing resolves `requested` to nothing"
+    );
+    // An ordinary list still validates the way it always did; the reserved
+    // words only apply when they are the sole entry.
+    assert_eq!(
+        resolve_grant_selection(&["fs".into(), "network".into()], &plain),
+        Ok(vec![PluginGrant::Fs, PluginGrant::Network])
+    );
+    let error = resolve_grant_selection(&["none".into(), "fs".into()], &plain).unwrap_err();
+    assert!(error.contains("none"), "{error}");
 }
 
 #[test]

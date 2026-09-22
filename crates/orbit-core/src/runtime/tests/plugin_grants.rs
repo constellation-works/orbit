@@ -137,6 +137,53 @@ fn a_record_that_cannot_be_read_as_this_hosts_authorization_is_refused() {
     }
 }
 
+/// The witness is written rename-into-place, not a plain `fs::write`, so a
+/// crash mid-write leaves either the previous witness or the new one, never a
+/// truncated file that refuses the plugin until an operator notices. The
+/// staged-write path creates the file private (`0o600`) and cleans up its
+/// temp file on success; a plain `fs::write` would instead leave the mode at
+/// the process umask (typically `0o644`).
+#[cfg(unix)]
+#[test]
+fn the_witness_is_written_through_the_atomic_private_write_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path();
+    record_authorized_grants(global_root, "demo", true, &["fs".to_string()])
+        .expect("record the authorized set");
+    // Overwrite, to also exercise the replace path, not only the first write.
+    record_authorized_grants(
+        global_root,
+        "demo",
+        true,
+        &["fs".to_string(), "network".to_string()],
+    )
+    .expect("overwrite the authorized set");
+
+    let path = plugin_grant_witness_path(global_root, "demo");
+    let mode = std::fs::metadata(&path)
+        .expect("witness metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "the witness must go through the atomic private-file write path"
+    );
+
+    let siblings: Vec<_> = std::fs::read_dir(path.parent().expect("witness dir"))
+        .expect("read witness dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        siblings,
+        vec!["demo.json"],
+        "the atomic write leaves no `.tmp` staging file behind: {siblings:?}"
+    );
+}
+
 fn record_at(name: &str, install_path: &Path) -> InstalledPlugin {
     let mut installed = record(name, true, &[]);
     installed.install_path = install_path.to_string_lossy().into_owned();

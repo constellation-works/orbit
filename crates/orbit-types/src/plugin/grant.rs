@@ -6,6 +6,7 @@
 //! grant name, so the loader, `orbit plugin show`, and the audit row all
 //! agree on which grants a plugin needs.
 
+use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
@@ -77,12 +78,26 @@ impl Display for PluginGrant {
 /// Validate a `--grant` list: every name must be one of [`PluginGrant::ALL`].
 /// Returns the accepted grants deduplicated in canonical order.
 pub fn parse_grants(names: &[String]) -> Result<Vec<PluginGrant>, String> {
+    Ok(parse_stored_grants(names)?.into_iter().collect())
+}
+
+/// Parse a `plugins` row's persisted grant strings into the typed set the
+/// runtime builds a plugin's backend from.
+///
+/// Unlike [`parse_grants`] — which validates a `--grant` list an operator just
+/// typed — this runs on grants already recorded in storage: an unknown name
+/// here means the row is corrupt, or was written by a newer Orbit that
+/// renamed or retired a grant this build does not know about. Dropping it
+/// silently would run the plugin under fewer grants than were authorized
+/// without saying so; the caller must refuse the row instead (design §4.1).
+pub fn parse_stored_grants(names: &[String]) -> Result<BTreeSet<PluginGrant>, String> {
     let mut unknown = Vec::new();
-    let mut grants = Vec::new();
+    let mut grants = BTreeSet::new();
     for name in names {
         match PluginGrant::parse(name) {
-            Some(grant) if !grants.contains(&grant) => grants.push(grant),
-            Some(_) => {}
+            Some(grant) => {
+                grants.insert(grant);
+            }
             None => unknown.push(name.trim().to_string()),
         }
     }
@@ -98,8 +113,27 @@ pub fn parse_grants(names: &[String]) -> Result<Vec<PluginGrant>, String> {
                 .join(", ")
         ));
     }
-    grants.sort();
     Ok(grants)
+}
+
+/// Resolve a `--grant` value list into the grants to record, including its
+/// three reserved spellings: a lone `none` records an explicit empty set —
+/// the CLI's way to revoke every grant, since an empty list otherwise means
+/// "leave the recorded grants alone" (design §4.1's narrower-list revocation
+/// otherwise stops one short of empty); a lone `all` is every grant this
+/// build knows; a lone `requested` is exactly what `manifest` asks for. Any
+/// other list is validated the way an ordinary `--grant` list always was, so
+/// none of the three names can be mixed into a literal grant list.
+pub fn resolve_grant_selection(
+    names: &[String],
+    manifest: &PluginManifest,
+) -> Result<Vec<PluginGrant>, String> {
+    match names {
+        [only] if only.trim() == "none" => Ok(Vec::new()),
+        [only] if only.trim() == "all" => Ok(PluginGrant::ALL.to_vec()),
+        [only] if only.trim() == "requested" => Ok(manifest.required_grants()),
+        _ => parse_grants(names),
+    }
 }
 
 /// What one grant means for this manifest: whether the manifest asks for it,
