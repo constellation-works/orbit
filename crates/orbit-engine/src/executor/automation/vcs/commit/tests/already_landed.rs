@@ -216,6 +216,8 @@ fn already_landed_refuses_missing_or_invalid_evidence_without_mutating_git() {
         "empty_covering_task",
         "missing_required",
         "failed_log",
+        "wrong_schema",
+        "unknown_field",
     ] {
         let (temp, mut task, input, mut report, mut log) = fixture();
         match fault {
@@ -237,6 +239,8 @@ fn already_landed_refuses_missing_or_invalid_evidence_without_mutating_git() {
                 report["required_commands"] = json!(["test behavior", "workspace lint"])
             }
             "failed_log" => log["exit_code"] = json!(1),
+            "wrong_schema" => report["schema_version"] = json!(2),
+            "unknown_field" => report["unexpected"] = json!(true),
             _ => {}
         }
         let mut stored = artifacts(&report, &log);
@@ -265,6 +269,31 @@ fn already_landed_refuses_missing_or_invalid_evidence_without_mutating_git() {
                 .is_empty()
         );
     }
+}
+
+#[test]
+fn already_landed_refuses_nested_validation_wrapper_with_flattened_shape_hint() {
+    let (temp, task, input, mut report, log) = fixture();
+    report["validation"] = json!([{
+        "validation": {
+            "command": "test behavior",
+            "outcome": "passed",
+            "role": "required"
+        },
+        "log_artifact": "validation.json"
+    }]);
+    let host = CommitTestHost::new(vec![task], temp.path().to_path_buf())
+        .with_artifacts(artifacts(&report, &log));
+
+    let error = git_commit(&host, &input).expect_err("nested validation wrapper");
+    let message = error.to_string();
+    assert!(message.contains("already_landed_unverified"), "{message}");
+    assert!(message.contains("flatten"), "{message}");
+    for field in ["command", "outcome", "role", "log_artifact"] {
+        assert!(message.contains(field), "missing {field} in: {message}");
+    }
+    assert_eq!(host.get_task("T1").unwrap().status, TaskStatus::InProgress);
+    assert_git_unmutated(temp.path(), &input["base_sha"]);
 }
 
 #[test]
