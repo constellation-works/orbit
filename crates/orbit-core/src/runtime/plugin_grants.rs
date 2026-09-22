@@ -32,9 +32,10 @@
 //!   [`verify_install_path`]: the loader refuses a row whose path does not
 //!   resolve beneath `<global_root>/plugins/<name>/`, the directory the
 //!   confined backend cannot write, before it reads anything from that path
-//!   [ORB-12785]. Without this, a row could keep its authorized grant names
-//!   and point them at a tree the backend wrote under one of its own write
-//!   roots, and the witness would still match.
+//!   [ORB-12785], and so does every lifecycle verb that would read or delete
+//!   that tree [ORB-12800]. Without this, a row could keep its authorized
+//!   grant names and point them at a tree the backend wrote under one of its
+//!   own write roots, and the witness would still match.
 //! - `manifest_digest` — **not** in the witness, deliberately: grants survive
 //!   `orbit plugin add` of a newer version only when its permission requests
 //!   did not widen; a widening revokes the witness and requires re-consent.
@@ -58,7 +59,7 @@ use orbit_types::plugin::InstalledPlugin;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::plugin_host::plugin_install_root;
+use super::plugin_host::{plugin_install_root, plugin_namespace_dir};
 
 /// Host-owned directory beside the namespace install directories. A namespace
 /// must start with a lowercase letter (`is_valid_segment`), so the leading dot
@@ -248,7 +249,7 @@ pub fn verify_recorded_grants(
     Ok(())
 }
 
-/// Check that one enabled row's `install_path` is a tree this host installed.
+/// Check that one row's `install_path` is a tree this host installed.
 ///
 /// The witness does not cover the path (module docs), so this is what stops a
 /// row-writing backend from pointing its authorized grant names at a tree of
@@ -259,11 +260,16 @@ pub fn verify_recorded_grants(
 /// it does not, so a vanished install is still reported as vanished by the
 /// loader rather than as relocated.
 ///
+/// Every consumer that reads or writes the recorded tree holds it to this
+/// check, not only the loader: `orbit plugin enable`, `disable` and `remove`
+/// refuse a row that fails it rather than seeding from, unlinking by, or
+/// deleting a path this host did not install [ORB-12800].
+///
 /// `Err` is the operator-facing diagnostic naming the recorded and the
 /// expected path. Like [`verify_recorded_grants`], the caller refuses the
 /// plugin and audits the refusal.
 pub fn verify_install_path(global_root: &Path, installed: &InstalledPlugin) -> Result<(), String> {
-    let expected = plugin_install_root(global_root).join(&installed.name);
+    let expected = plugin_namespace_dir(global_root, &installed.name);
     let recorded = Path::new(&installed.install_path);
     // A relative path would resolve against whatever the current directory
     // happens to be; `orbit plugin add` never records one.
@@ -280,12 +286,20 @@ pub fn verify_install_path(global_root: &Path, installed: &InstalledPlugin) -> R
 
 /// The install-path counterpart of [`unauthorized_message`]: what the row
 /// records, where this host installs, and the commands that settle it.
+///
+/// The remediation it names has to be a command that does not itself follow
+/// the recorded path: `orbit plugin remove <ns>` deletes the recorded tree, so
+/// recommending it would turn this diagnostic into the deletion of whatever
+/// the row points at. `--record-only` is the verb that drops Orbit's record of
+/// the plugin and leaves the recorded path alone [ORB-12800].
 fn relocated_message(installed: &InstalledPlugin, expected: &Path) -> String {
     format!(
         "plugin '{}' is refused: its recorded install path {} does not resolve beneath {}, the \
          only place this host installs it; grants apply only to a tree `orbit plugin add` placed \
-         there, so this Orbit will not load the plugin from the recorded path. Reinstall it with \
-         `orbit plugin add`, or run `orbit plugin remove {}` if you did not install it.",
+         there, so this Orbit will not run the plugin from the recorded path, and no plugin \
+         command will write to or delete anything under it. Reinstall it with `orbit plugin add`, \
+         or run `orbit plugin remove {} --yes --record-only` to drop this host's record of it \
+         without touching the recorded path.",
         installed.name,
         installed.install_path,
         expected.display(),

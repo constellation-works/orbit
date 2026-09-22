@@ -177,12 +177,21 @@ orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed] [--workspa
                                               →  active      (tools Active; definitions seeded; skills linked)
 orbit plugin disable <ns>                     →  installed   (tools Inactive; seeded definitions skipped with a warning)
 orbit plugin remove <ns> --yes                →  gone        (derived data such as .orbit-graph/ is retained)
+orbit plugin remove <ns> --yes --record-only  →  gone        (record only; every installed file is left in place)
 orbit plugin list | show <ns> | doctor | validate <dir> | test <dir> | scaffold <ns> | sync | migrate
 ```
 
 Enable creates only the namespaced skill links reported by `plugin validate`. Disable removes
-only discovery links whose targets are inside that plugin's recorded install path; shipped,
-user-owned and other plugins' links remain untouched.
+only discovery links whose targets are inside `~/.orbit/plugins/<ns>/`; shipped, user-owned and
+other plugins' links remain untouched.
+
+**Every verb that touches the recorded tree checks it first.** The `install_path` in the
+`plugins` row is writable by any backend holding `orbit_tools`, so `enable`, `disable` and
+`remove` refuse a row that does not resolve beneath `~/.orbit/plugins/<ns>/` — the same check
+the loader applies — before they seed from, unlink by, or delete it. The refusal names the
+recorded and the expected path and leaves the row intact, because the operator's recovery is
+`orbit plugin add` (reinstall) or `orbit plugin remove <ns> --yes --record-only`, which drops
+this host's record and never touches the recorded path.
 
 **Workspace declares, host installs.** A committed `.orbit/plugins.yaml` pins what a
 workspace uses:

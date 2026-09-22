@@ -15,9 +15,9 @@ use crate::runtime::plugin_host;
 pub use crate::application::plugin::{
     PluginAddOptions, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
     PluginLinkSummary, PluginMigrateRequest, PluginPanelSummary, PluginPermissionChange,
-    PluginPermissionSummary, PluginSeedAction, PluginSeedOutcome, PluginSummary, PluginSyncOutcome,
-    PluginTestOptions, PluginTestOutcome, PluginTestReport, PluginToolSummary,
-    PluginUpgradeOptions, PluginUpgradeResult, PluginValidationReport,
+    PluginPermissionSummary, PluginRemoveOptions, PluginSeedAction, PluginSeedOutcome,
+    PluginSummary, PluginSyncOutcome, PluginTestOptions, PluginTestOutcome, PluginTestReport,
+    PluginToolSummary, PluginUpgradeOptions, PluginUpgradeResult, PluginValidationReport,
 };
 pub use crate::runtime::plugin_host::{PluginCliGroup, PluginCliVerb};
 
@@ -51,8 +51,12 @@ impl OrbitRuntime {
         plugin::disable_plugin(self, name)
     }
 
-    pub fn remove_plugin(&self, name: &str) -> Result<(), OrbitError> {
-        plugin::remove_plugin(self, name)
+    pub fn remove_plugin(
+        &self,
+        name: &str,
+        options: &PluginRemoveOptions,
+    ) -> Result<(), OrbitError> {
+        plugin::remove_plugin(self, name, options)
     }
 
     pub fn list_plugins(&self) -> Result<Vec<PluginSummary>, OrbitError> {

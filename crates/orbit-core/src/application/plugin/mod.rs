@@ -42,8 +42,9 @@ pub use install::{
     install_plugin, upgrade_plugin,
 };
 pub use lifecycle::{
-    PluginEnableOptions, PluginEnableResult, PluginMigrateRequest, PluginSyncOutcome,
-    disable_plugin, enable_plugin, migrate_plugin_sidecars, remove_plugin, sync_plugins,
+    PluginEnableOptions, PluginEnableResult, PluginMigrateRequest, PluginRemoveOptions,
+    PluginSyncOutcome, disable_plugin, enable_plugin, migrate_plugin_sidecars, remove_plugin,
+    sync_plugins,
 };
 pub use panels::{PluginLinkSummary, PluginPanelSummary, read_plugin_panel};
 pub use seed::{PluginSeedAction, PluginSeedOutcome, seed_plugin_definitions};

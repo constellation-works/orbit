@@ -6,12 +6,14 @@ use orbit_automation::auto_tasks::loader::AUTO_TASKS_DIR;
 use orbit_automation::routines::loader::ROUTINES_DIR;
 use orbit_common::OrbitError;
 use orbit_tools::plugin::{load_plugin_dir, load_sidecar_manifest, migrate_sidecars};
-use orbit_types::plugin::{MANIFEST_FILE_NAME, PluginStatus, parse_grants};
+use orbit_types::plugin::{InstalledPlugin, MANIFEST_FILE_NAME, PluginStatus, parse_grants};
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin_grants::{forget_authorized_grants, record_authorized_grants};
-use crate::runtime::plugin_host::{plugin_current_link, read_pin_file};
+use crate::runtime::plugin_grants::{
+    forget_authorized_grants, record_authorized_grants, verify_install_path,
+};
+use crate::runtime::plugin_host::{plugin_current_link, plugin_namespace_dir, read_pin_file};
 
 use super::inspect::{PluginSummary, show_plugin};
 use super::seed::{PluginSeedOutcome, seed_plugin_definitions};
@@ -26,6 +28,33 @@ pub struct PluginEnableOptions {
     pub grants: Vec<String>,
     /// Overwrite a seeded definition the operator has since edited (§3).
     pub force: bool,
+}
+
+/// The installed tree a lifecycle verb may read from or delete, or the
+/// operator-facing refusal that says why it may not.
+///
+/// The `plugins` row is writable by any backend holding `orbit_tools` (see the
+/// `runtime::plugin_grants` module docs), so `install_path` is authority only
+/// once it has been held to the install root — the same check the loader
+/// applies before it reads the tree [ORB-12785]. Callers run this *before*
+/// their first mutation: a refused row is the one an operator most needs to be
+/// able to act on, so the refusal must leave the record, and the recovery the
+/// diagnostic names, intact [ORB-12800].
+fn verified_install_path(
+    runtime: &OrbitRuntime,
+    installed: &InstalledPlugin,
+) -> Result<PathBuf, OrbitError> {
+    verify_install_path(&runtime.global_root(), installed).map_err(OrbitError::PolicyDenied)?;
+    Ok(PathBuf::from(&installed.install_path))
+}
+
+/// The recorded row for `name`, or the diagnostic naming what to do instead.
+fn installed_plugin(runtime: &OrbitRuntime, name: &str) -> Result<InstalledPlugin, OrbitError> {
+    runtime
+        .stores()
+        .plugins()
+        .get_plugin(name)?
+        .ok_or_else(|| missing_install(runtime, name))
 }
 
 /// Record the operator's grants, seed the plugin's schedules and link its
@@ -46,15 +75,11 @@ pub fn enable_plugin(
         .into_iter()
         .map(|grant| grant.as_str().to_string())
         .collect();
+    // Seeding reads definitions and skills out of the recorded tree, so the
+    // row buys nothing until the path it names is this host's install.
+    let install_path = verified_install_path(runtime, &installed_plugin(runtime, name)?)?;
     let summary = set_enabled(runtime, name, true, &grants)?;
-
-    let installed = runtime
-        .stores()
-        .plugins()
-        .get_plugin(name)?
-        .ok_or_else(|| missing_install(runtime, name))?;
-    let contributions =
-        apply_enabled_contributions(runtime, Path::new(&installed.install_path), options.force)?;
+    let contributions = apply_enabled_contributions(runtime, &install_path, options.force)?;
 
     Ok(PluginEnableResult {
         summary,
@@ -128,12 +153,23 @@ pub struct PluginEnableResult {
 /// carry an operator's edits, and a re-enable must not have to recreate them
 /// (§3).
 pub fn disable_plugin(runtime: &OrbitRuntime, name: &str) -> Result<PluginSummary, OrbitError> {
-    let installed = runtime.stores().plugins().get_plugin(name)?;
+    verified_install_path(runtime, &installed_plugin(runtime, name)?)?;
     let summary = set_enabled(runtime, name, false, &[])?;
-    if let Some(installed) = installed {
-        unlink_plugin_skills(Path::new(&installed.install_path))?;
-    }
+    unlink_namespace_skills(runtime, name)?;
     Ok(summary)
+}
+
+/// Drop every discovery link that points into this namespace's install family.
+///
+/// The selector is the namespace directory this host installs into, not the
+/// row's `install_path`: a row naming `/home/<user>` would otherwise unlink
+/// every skill beneath it, shipped ones included, and a record-only removal
+/// has to clean up after a row whose path it deliberately never reads
+/// [ORB-12800]. The namespace directory also covers links left pointing at a
+/// previously installed version.
+fn unlink_namespace_skills(runtime: &OrbitRuntime, name: &str) -> Result<(), OrbitError> {
+    unlink_plugin_skills(&plugin_namespace_dir(&runtime.global_root(), name))?;
+    Ok(())
 }
 
 fn set_enabled(
@@ -206,21 +242,47 @@ fn missing_install(runtime: &OrbitRuntime, name: &str) -> OrbitError {
     }
 }
 
+/// What `orbit plugin remove` was asked to delete.
+#[derive(Debug, Clone, Default)]
+pub struct PluginRemoveOptions {
+    /// Drop this host's record of the plugin — its `plugins` row, its grant
+    /// witness and its discovery links — and leave every file under the
+    /// install root where it is.
+    ///
+    /// The recovery path for a row whose `install_path` this host cannot
+    /// verify: ordinary removal deletes the recorded tree and therefore
+    /// refuses such a row, which would otherwise leave the operator with a
+    /// refused plugin and no command that removes it [ORB-12800].
+    pub record_only: bool,
+}
+
 /// Remove the host's install. Derived data a plugin wrote elsewhere is
 /// deliberately retained (§3).
-pub fn remove_plugin(runtime: &OrbitRuntime, name: &str) -> Result<(), OrbitError> {
-    let installed = runtime
-        .stores()
-        .plugins()
-        .get_plugin(name)?
-        .ok_or_else(|| missing_install(runtime, name))?;
+///
+/// Only the tree this host installed is deleted. The recorded `install_path`
+/// is as writable as the rest of the row, so it is verified against the
+/// namespace install directory before anything is removed; a row that fails
+/// the check is refused whole, before any mutation, and
+/// [`PluginRemoveOptions::record_only`] is what clears it.
+pub fn remove_plugin(
+    runtime: &OrbitRuntime,
+    name: &str,
+    options: &PluginRemoveOptions,
+) -> Result<(), OrbitError> {
+    let installed = installed_plugin(runtime, name)?;
+    let owned_install = if options.record_only {
+        None
+    } else {
+        Some(verified_install_path(runtime, &installed)?)
+    };
 
-    // Disable first while the install path still exists. Besides taking the
-    // tools and seeded definitions off the active surface, this removes every
-    // discovery link that points into the recorded install tree. Deleting the
+    // Take the plugin off the surface before the record goes. Besides
+    // stopping its tools and seeded definitions from registering, this removes
+    // every discovery link into this namespace's install family; deleting the
     // tree first would leave those links dangling with no plugin row left for
     // doctor to inspect.
-    disable_plugin(runtime, name)?;
+    set_enabled(runtime, name, false, &[])?;
+    unlink_namespace_skills(runtime, name)?;
 
     runtime.with_mutation(|| {
         runtime.stores().plugins().delete_plugin(name)?;
@@ -236,7 +298,10 @@ pub fn remove_plugin(runtime: &OrbitRuntime, name: &str) -> Result<(), OrbitErro
     // starts from no authorized grants rather than inheriting these.
     forget_authorized_grants(&runtime.global_root(), name);
 
-    let install_path = PathBuf::from(&installed.install_path);
+    // Everything below deletes files, so it runs only for a verified install.
+    let Some(install_path) = owned_install else {
+        return Ok(());
+    };
     if install_path.is_dir() {
         std::fs::remove_dir_all(&install_path).map_err(|error| {
             OrbitError::Io(format!("remove {}: {error}", install_path.display()))
@@ -247,12 +312,12 @@ pub fn remove_plugin(runtime: &OrbitRuntime, name: &str) -> Result<(), OrbitErro
         let _ = std::fs::remove_file(&link).or_else(|_| std::fs::remove_dir_all(&link));
     }
     // Leave the namespace directory only when another version still lives in it.
-    if let Some(parent) = install_path.parent()
-        && parent
-            .read_dir()
-            .is_ok_and(|mut entries| entries.next().is_none())
+    let namespace_dir = plugin_namespace_dir(&runtime.global_root(), name);
+    if namespace_dir
+        .read_dir()
+        .is_ok_and(|mut entries| entries.next().is_none())
     {
-        let _ = std::fs::remove_dir(parent);
+        let _ = std::fs::remove_dir(&namespace_dir);
     }
     Ok(())
 }

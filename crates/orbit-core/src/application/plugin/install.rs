@@ -16,7 +16,7 @@ use orbit_types::plugin::{
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin_grants::record_authorized_grants;
+use crate::runtime::plugin_grants::{record_authorized_grants, verify_install_path};
 use crate::runtime::plugin_host::{plugin_current_link, plugin_install_path, unmet_requirement};
 
 use super::inspect::{PluginSummary, summary_for_installed};
@@ -147,13 +147,23 @@ fn install_plugin_inner(
     let manifest_changed = existing
         .as_ref()
         .is_some_and(|installed| installed.manifest_digest != plugin.manifest_digest);
+    // The permission diff is read out of the tree the previous row records,
+    // and reinstalling is the recovery the relocated-install refusal names, so
+    // this is a path a tampered row reaches. A row pointing outside the
+    // install root is not evidence about what the plugin previously asked
+    // for: report it as an unreadable previous manifest, which resets carried
+    // grants below, rather than diffing against a tree a backend could have
+    // written itself [ORB-12800].
     let (permission_changes, previous_manifest_error) = if manifest_changed {
         match existing.as_ref().map(|installed| {
-            load_plugin_dir(Path::new(&installed.install_path))
-                .map(|previous| permission_diff(&previous, &plugin))
+            verify_install_path(&global_root, installed).and_then(|()| {
+                load_plugin_dir(Path::new(&installed.install_path))
+                    .map(|previous| permission_diff(&previous, &plugin))
+                    .map_err(|error| error.to_string())
+            })
         }) {
             Some(Ok(changes)) => (changes, None),
-            Some(Err(error)) => (Vec::new(), Some(error.to_string())),
+            Some(Err(message)) => (Vec::new(), Some(message)),
             None => (Vec::new(), None),
         }
     } else {
