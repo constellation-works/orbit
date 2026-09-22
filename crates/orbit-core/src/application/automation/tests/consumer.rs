@@ -1315,3 +1315,129 @@ fn a_resolvable_branch_still_awaits_and_pins_a_baseline() {
     let baselined = evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
     assert_eq!(baselined.reason, "baselined");
 }
+
+/// Persist a delivery fixture on disk under `owner`, enabled, so the surfaces
+/// that read `auto_task_list` see exactly what an operator would have.
+fn enabled_delivery(
+    runtime: &OrbitRuntime,
+    name: &str,
+    owner: Option<&str>,
+) -> orbit_types::workflow::AutoTaskDefinition {
+    let mut fixture = definition(runtime, name, CoverageClass::IntegratedQaV1);
+    set_owner(&mut fixture, owner);
+    runtime
+        .auto_task_update(
+            name,
+            crate::application::auto_tasks::AutoTaskUpdateParams {
+                schedule: Some(fixture.schedule.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    runtime.auto_task_toggle(name, true).unwrap()
+}
+
+/// Making "enabled but unadmittable here" legible must not move the admission
+/// line [ORB-12867]: the definition owned elsewhere still refuses and records
+/// no state, and the one this host owns still baselines.
+#[test]
+fn reporting_an_unadmittable_definition_leaves_admission_alone() {
+    let runtime = runtime();
+    let mine = enabled_delivery(&runtime, "owned-here", Some("fixture-machine"));
+    let theirs = enabled_delivery(&runtime, "owned-elsewhere", Some("another-machine"));
+
+    let admitted = evaluate_auto_task(&runtime, &mine, false, Utc::now()).unwrap();
+    assert_eq!(
+        admitted.reason, "baselined",
+        "the definition this host owns still admits"
+    );
+    let refused = evaluate_auto_task(&runtime, &theirs, false, Utc::now()).unwrap();
+    assert_eq!(refused.reason, "owned_elsewhere");
+    assert!(
+        runtime
+            .automation_store()
+            .unwrap()
+            .automation_state(&consumer_key(&runtime, "auto-task", &theirs.name).unwrap())
+            .unwrap()
+            .is_none(),
+        "a refused owner still records nothing"
+    );
+}
+
+/// `owned_elsewhere` and `ownership_unresolved` are distinct answers, and a
+/// definition this host owns — or one the operator disabled — is not reported
+/// at all.
+#[test]
+fn unadmittable_definitions_classify_ownership_and_stay_quiet_when_owned_here() {
+    use super::super::{delivery_ownership_refusal, unadmittable_delivery_definitions};
+
+    let runtime = runtime();
+    enabled_delivery(&runtime, "owned-here", Some("fixture-machine"));
+    enabled_delivery(&runtime, "owned-elsewhere", Some("another-machine"));
+    enabled_delivery(&runtime, "unresolved", None);
+    let disabled = enabled_delivery(&runtime, "disabled-elsewhere", Some("another-machine"));
+    runtime.auto_task_toggle(&disabled.name, false).unwrap();
+
+    let reported = unadmittable_delivery_definitions(&runtime).unwrap();
+    assert_eq!(
+        reported
+            .iter()
+            .map(|entry| (entry.definition.as_str(), entry.refusal))
+            .collect::<Vec<_>>(),
+        vec![
+            ("owned-elsewhere", "owned_elsewhere"),
+            ("unresolved", "ownership_unresolved"),
+        ],
+        "only an enabled definition this host can never admit is reported"
+    );
+
+    let elsewhere = &reported[0];
+    assert_eq!(elsewhere.ownership.authority, OwnerAuthority::Definition);
+    assert_eq!(
+        elsewhere.ownership.owner_machine.as_deref(),
+        Some("another-machine")
+    );
+    assert_eq!(elsewhere.this_host.as_deref(), Some("fixture-machine"));
+    let reason = elsewhere.reason();
+    assert!(
+        reason.contains("`another-machine`") && reason.contains("`fixture-machine`"),
+        "the reason names both machines: {reason}"
+    );
+    assert!(
+        reason.contains("orbit auto-task show owned-elsewhere --preview"),
+        "{reason}"
+    );
+
+    let unresolved = &reported[1];
+    assert_eq!(unresolved.ownership.authority, OwnerAuthority::Missing);
+    assert_eq!(unresolved.ownership.owner_machine, None);
+    assert!(
+        unresolved.mismatch().starts_with("ownership_unresolved: "),
+        "{}",
+        unresolved.mismatch()
+    );
+
+    // A workspace record that contradicts this replica's declared owner is
+    // the other unresolved case, and reads the same way.
+    let contradicted = runtime
+        .clone()
+        .with_workspace_owner_machine_id(Some("fixture-machine"))
+        .with_coordination_write_owner(Some("another-machine".into()));
+    let definitions = contradicted.auto_task_list().unwrap();
+    let conflicting = definitions
+        .iter()
+        .find(|entry| entry.name == "unresolved")
+        .unwrap();
+    let conflicting = delivery_ownership_refusal(&contradicted, conflicting).unwrap();
+    assert_eq!(conflicting.refusal, "ownership_unresolved");
+    assert_eq!(conflicting.ownership.authority, OwnerAuthority::Conflicting);
+
+    let owned_here = definitions
+        .iter()
+        .find(|entry| entry.name == "owned-here")
+        .unwrap();
+    assert!(
+        delivery_ownership_refusal(&runtime, owned_here).is_none(),
+        "a definition this host owns is not an ownership problem"
+    );
+}

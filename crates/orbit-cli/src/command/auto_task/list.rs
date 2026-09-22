@@ -29,12 +29,22 @@ impl Execute for AutoTaskListArgs {
             definitions.retain(|d| !d.enabled);
         }
 
-        // A definition a plugin seeded stops firing when that plugin is
-        // disabled. It is still listed — the file is still there — with the
-        // reason, so the list never silently implies it is scheduled.
+        // Two ways an enabled definition never fires, both reported here so
+        // the list never silently implies it is scheduled. A definition a
+        // plugin seeded stops firing when that plugin is disabled; a delivery
+        // definition whose resolved owner is another machine can never be
+        // admitted on this host at all [ORB-12867]. The file stays exactly
+        // where it is either way.
         let skips: Vec<Option<String>> = definitions
             .iter()
-            .map(|definition| runtime.auto_task_skip_reason(definition))
+            .map(|definition| {
+                runtime.auto_task_skip_reason(definition).or_else(|| {
+                    orbit_core::application::automation::delivery_ownership_refusal(
+                        runtime, definition,
+                    )
+                    .map(|unadmittable| unadmittable.reason())
+                })
+            })
             .collect();
         let records: Vec<Value> = definitions
             .iter()

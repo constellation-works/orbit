@@ -58,9 +58,17 @@ no registered workspace owner, or a workspace record and replica checkout naming
 different owners — an enabled definition reports `ownership_unresolved` rather
 than `disabled`, and `disabled` continues to mean the operator disabled it.
 Preview, inspection and real evaluation report the same effective owner and the
-same refusal. Fix it by registering the workspace owner or by setting
-`owner_machine` explicitly. Reassigning ownership is a definition change: retain
-and settle the old owner's debt and preview the new baseline first.
+same refusal, and so do the two surfaces an operator reads first [ORB-12867]:
+`orbit auto-task list` renders such a definition as `skipped` rather than
+`enabled`, with the refusal, the resolved owner machine and this host in its
+`skipped_reason` (table and `--format json` alike), and `orbit doctor` warns
+under `automation-consumers` instead of reporting `ok`. Both stay quiet for a
+definition this host owns and for one the operator disabled, where `disabled`
+already says why nothing fires. Neither surface changes who may admit: an
+unadmittable definition was already refused and stays refused. Fix it by
+registering the workspace owner or by setting `owner_machine` explicitly.
+Reassigning ownership is a definition change: retain and settle the old owner's
+debt and preview the new baseline first.
 
 A delivery review definition mints its tasks with the crew named in its own
 template, exactly like any other auto-task. `operation.review_crew` is a
@@ -204,7 +212,11 @@ text appears in the sweep row, `orbit auto-task show` and
 not backpressure: `orbit doctor` reports every enabled definition this host owns
 whose branch does not resolve under `automation-consumers`, naming the branch,
 git's text and the fix (point `schedule.deliveries_landed.branch` at the
-workspace base branch, or create the branch).
+workspace base branch, or create the branch). The same check reports every
+enabled definition whose resolved owner is not this host, naming the refusal
+(`owned_elsewhere` or `ownership_unresolved`), the owner machine and this host's,
+and pointing at `orbit auto-task show <name> --preview` for the coverage debt it
+is holding.
 Validation failures such as `unauthorized_submitter`, `batch_or_attempt_mismatch`
 and `incomplete_examination` remain attached to the relevant admission or evidence
 operation. State read failures are reported separately; corrupted delivery state is

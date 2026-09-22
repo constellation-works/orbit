@@ -25,7 +25,8 @@ mod tests;
 
 pub(crate) use direct::record_direct_landing_intent;
 pub use inspect::{
-    UnresolvableBranch, inspect_auto_task, inspect_routine, unresolvable_delivery_branches,
+    UnadmittableDefinition, UnresolvableBranch, delivery_ownership_refusal, inspect_auto_task,
+    inspect_routine, unadmittable_delivery_definitions, unresolvable_delivery_branches,
 };
 pub use recovery::recover_auto_task;
 pub use reset::reset_auto_task;
