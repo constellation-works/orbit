@@ -46,8 +46,7 @@ spec:
     - Before reading anything else, inspect the injected task. If
       `task.terminal` is true, do no investigation, edits, or validation; return
       success with `skipped_reason: "task_terminal"` and name `task.status` in
-      the summary. This safely handles retries and work overtaken by another
-      actor.
+      the summary.
     - Re-read status with `orbit.task.show` before the first edit and before validation.
       Apply the same stop rule if the fresh status refuses writes,
       or if `orbit.task.update` rejects a write because the task became terminal.
@@ -60,18 +59,17 @@ spec:
        it with `orbit.task.show`. Read description, criteria, and plan first;
        persist a concrete plan when it is blank. Read comments chronologically.
        Later authorized refinements supersede earlier suggested directions;
-       report unresolved contradictions rather than guessing. If comments are
-       truncated, recover missing context with the granted task tools when it
-       is needed to understand the mandate.
+       report unresolved contradictions rather than guessing. If needed to
+       understand the mandate, recover truncated comments with granted task tools.
     2. Resolve every canonical `context_files` selector: read each `file:`
        target with the provider-native file-read tool. For each `dir:` selector,
-       do not call the file-read tool on the directory; after verifying it
-       resolves beneath the workspace root, use `rg --files <directory>` to
-       list it, then use the provider-native file-read tool for its key files.
+       do not call the file-read tool on the directory; verify it resolves
+       beneath the workspace root, list it with `rg --files <directory>`, then
+       use that read tool for key files.
     3. `input.workspace_path` and `input.repo_root` override task paths. Before
        any write, obtain `pwd -P` and `git rev-parse --show-toplevel`; both
-       supplied roots must resolve to that same canonical checkout. Otherwise
-       write nothing and fail with `worktree_mismatch`, naming requested and
+       supplied roots must resolve to the canonical checkout. Otherwise write
+       nothing and fail with `worktree_mismatch`, naming requested and
        resolved roots. Read the workspace's AGENTS.md and relevant guidance.
        Record the starting HEAD and a full starting inventory
        (`git status --short`) as the baseline separating run-owned output from
@@ -83,13 +81,13 @@ spec:
     4. Implement only scoped work. Treat `context_files` as the intended
        boundary, but not as a perfect inventory. Before changing an unlisted
        file, append its canonical in-workspace `file:`, `dir:`, or `symbol:`
-       selector through `orbit.task.update` only when needed for an acceptance
-       criterion or to keep directly affected materials and consumers
+       selector via `orbit.task.update` only for an acceptance criterion or to
+       keep directly affected materials and consumers
        consistent; record why in the execution summary and make the smallest
-       compatible change. A file this task creates does not exist yet: pass
-       `allow_missing_context: true` on that update (a call from your own
-       run's worktree relaxes the existence check for this task automatically
-       and reports those selectors as `context_files_unverified`). Declaring a
+       compatible change. For files this task creates, pass
+       `allow_missing_context: true` on that update (calls from its run
+       worktree automatically relax this task's existence check
+       and report those selectors as `context_files_unverified`). Declaring a
        path never converts an accidental or unintended edit into scoped work:
        revert that edit instead of widening the boundary. Stop after a task
        comment if target behavior is out of scope, broad, or ambiguous. Never
@@ -97,18 +95,18 @@ spec:
     5. Keep shared instructions domain-neutral. Apply the owning workspace's
        AGENTS.md for code-, language-, and repository-specific practices.
        Use current evidence and explicit requirements to justify decisions.
-    6. Produce clear, usable outputs appropriate to the task and its audience.
-       Preserve required compatibility and explain concrete constraints.
-       Available tools are not a checklist or permission to install global
-       packages, bypass policy, or access secrets; do not assume they are installed.
+    6. Produce clear, usable outputs for the task's audience. Preserve required
+       compatibility and explain concrete constraints. Available tools are
+       neither a checklist nor proof of installation, and do not permit global
+       package installation, policy bypass, or secret access.
 
     Validation and handoff
 
     7. Follow workspace validation policy. Check each acceptance criterion
-       against appropriate evidence: for example, source support for research,
+       with appropriate evidence: source support for research,
        reproducibility for analysis, or behavior checks for software.
-       Exercise the affected environment when needed and state limits of
-       indirect evidence or checks run elsewhere.
+       Exercise the affected environment when needed; state limits of indirect
+       evidence or checks run elsewhere.
        A sandbox/runner denial such as EPERM is not evidence of a defective
        result or of correctness. Try safe in-scope alternatives without
        bypassing policy. Record the exact command, denial, and remaining
@@ -169,10 +167,10 @@ spec:
         a sibling whose commit already covers this HEAD), scope (title,
         description, acceptance_criteria, plan, context_files, tags,
         relations, required_tools, type, comments), required_commands,
-        criteria_evidence, and validation. Each validation[] element is one
-        flattened object with command, outcome, role, and log_artifact as
-        sibling fields; do not nest those fields under a validation wrapper.
-        Separately, attach the referenced validation log as JSON with run_id,
+        criteria_evidence, and validation. Each validation[] element is a
+        flattened object with sibling fields command, outcome, role, and
+        log_artifact; never nest them under a validation wrapper. Separately
+        attach the referenced validation log as JSON with run_id,
         tested_head, command, exit_code, and captured output.
         Never relabel old checks; missing, failed, or unavailable checks
         cannot use this path. The pipeline verifies exact HEAD, clean state,
