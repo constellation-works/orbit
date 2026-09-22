@@ -20,6 +20,7 @@ use orbit_types::plugin::{
 };
 use orbit_types::policy::ResolvedFsProfile;
 
+use super::callback::PluginCallbackSession;
 use crate::builtin::proc::spawn::enforce_program_allowlist;
 use crate::{TIMEOUT_SLOW_MS, ToolContext};
 
@@ -52,6 +53,33 @@ const ORBIT_TOOLS_GLOBAL_WRITE_FILES: &[&str] = &[
     ".generation.lock",
     ".generation-admission.lock",
 ];
+
+/// Host-owned trees beneath the global root that no plugin child may read,
+/// whatever else it was granted.
+///
+/// `state/plugin-callbacks/` holds the live callback credentials: a plugin
+/// that could read the directory could present another plugin's token, and
+/// one that could list it could enumerate every backend running on the host.
+/// A confined child is granted its *own* record as a single file instead
+/// ([`PluginSandboxProfile::with_callback_session`]), which is what its
+/// `orbit tool run` reads to identify itself. `plugins/.grants/` holds the
+/// grant witnesses that decide what each plugin is authorized to do; those are
+/// the host's answer, never a plugin's input, and the child is likewise
+/// granted only its own ([`plugin_grant_witness_relative`]) so it can verify
+/// its own row and read nothing about any other plugin [ORB-12798].
+const PLUGIN_GLOBAL_READ_DENY_DIRS: &[&str] = &["state/plugin-callbacks", "plugins/.grants"];
+
+/// Host-owned directory beside the namespace install directories, holding one
+/// grant-authorization witness per plugin (`orbit-core`'s `plugin_grants`).
+/// Named here because the sandbox decides who may read it.
+pub const PLUGIN_GRANT_WITNESS_DIR: &str = ".grants";
+
+/// Where `plugin`'s witness sits, relative to the global root.
+pub fn plugin_grant_witness_relative(plugin: &str) -> PathBuf {
+    Path::new("plugins")
+        .join(PLUGIN_GRANT_WITNESS_DIR)
+        .join(format!("{plugin}.json"))
+}
 
 /// The same narrowing for the workspace's `.orbit/`: the stores a callback
 /// writes, never `plugins.yaml` (the install pin), `routines/`, `auto_tasks/`
@@ -187,6 +215,15 @@ impl PluginBackendSpec {
             // rewrite the binary the scheduler runs unconfined, the recorded
             // plugin installs, or the MCP authorization ceiling [ORB-12777].
             read.push(self.global_root.clone());
+            // Its own witness, and no other plugin's: the nested `orbit tool
+            // run` verifies the grants recorded for this plugin before it
+            // registers the row, and the witness directory itself is denied
+            // above. A confined child therefore cannot read what any other
+            // plugin was authorized for [ORB-12798].
+            read.push(
+                self.global_root
+                    .join(plugin_grant_witness_relative(&self.provenance.name)),
+            );
             for relative in ORBIT_TOOLS_GLOBAL_WRITE_DIRS {
                 write.push(self.global_root.join(relative));
             }
@@ -211,6 +248,10 @@ impl PluginBackendSpec {
         };
         Ok(PluginSandboxProfile {
             read,
+            read_denies: PLUGIN_GLOBAL_READ_DENY_DIRS
+                .iter()
+                .map(|relative| self.global_root.join(relative))
+                .collect(),
             write,
             write_files,
             materialization_roots: workspace_root
@@ -343,6 +384,12 @@ pub struct PluginSandboxProfile {
     /// and — for `orbit_tools` — Orbit's global root and the workspace's
     /// `.orbit/`, which `orbit tool run` reads but must not rewrite.
     pub read: Vec<PathBuf>,
+    /// Host-owned trees carved out of [`Self::read`] however it was composed:
+    /// the live callback sessions and the grant witnesses
+    /// ([`PLUGIN_GLOBAL_READ_DENY_DIRS`]). Neither platform lets a manifest
+    /// buy them back, because the carve-out is applied after the granted
+    /// paths rather than beside them.
+    pub read_denies: Vec<PathBuf>,
     /// Writable directories: granted writes only. Materialised before the
     /// child starts, because a rule cannot bind an inode that is not there.
     pub write: Vec<PathBuf>,
@@ -361,6 +408,32 @@ pub struct PluginSandboxProfile {
 }
 
 impl PluginSandboxProfile {
+    /// Grant the child read access to the one callback record that identifies
+    /// it, inside the otherwise denied session directory.
+    ///
+    /// This is the credential `orbit tool run` reads back in the child. The
+    /// grant is a single file: the directory stays unlistable and every other
+    /// plugin's live token stays unreadable.
+    #[must_use]
+    pub fn with_callback_session(mut self, session: &PluginCallbackSession) -> Self {
+        self.read.push(session.path().to_path_buf());
+        self
+    }
+
+    /// The callback records this profile re-allows inside a denied directory:
+    /// what [`Self::with_callback_session`] granted, and nothing else.
+    pub fn readable_denied_files(&self) -> Vec<PathBuf> {
+        self.read
+            .iter()
+            .filter(|path| {
+                self.read_denies
+                    .iter()
+                    .any(|denied| path.starts_with(denied))
+            })
+            .cloned()
+            .collect()
+    }
+
     /// The seatbelt view of this boundary.
     ///
     /// Not gated on the host OS: the macOS spawn path compiles it, and a
@@ -538,6 +611,7 @@ fn materialize_write_directory(root: &Path, allowed_roots: &[PathBuf]) -> Result
 fn spawn_confined(profile: &PluginSandboxProfile, req: &ExecRequest) -> Result<Child, OrbitError> {
     let boundary = orbit_exec::LandlockBoundary {
         read: profile.read.clone(),
+        read_denies: profile.read_denies.clone(),
         write: profile.write.clone(),
         write_files: profile.write_files.clone(),
         // Landlock has no address filter: `loopback` and `any` both leave
@@ -551,7 +625,8 @@ fn spawn_confined(profile: &PluginSandboxProfile, req: &ExecRequest) -> Result<C
 fn spawn_confined(profile: &PluginSandboxProfile, req: &ExecRequest) -> Result<Child, OrbitError> {
     use orbit_exec::{
         EnvironmentMode, MacosNetworkAccess, MacosSandboxSpawnRequest, StdinMode,
-        append_macos_network_access, compile_macos_sandbox_profile, spawn_under_macos_sandbox,
+        append_macos_network_access, append_macos_read_boundary, compile_macos_sandbox_profile,
+        spawn_under_macos_sandbox,
     };
     use std::process::Stdio;
 
@@ -559,6 +634,14 @@ fn spawn_confined(profile: &PluginSandboxProfile, req: &ExecRequest) -> Result<C
     // "plugin" is not a provider name, so the compiler keeps every default
     // credential deny (it fails closed on an unknown provider).
     let mut profile_text = compile_macos_sandbox_profile(&rules, "plugin")?;
+    // The compiler allows reads broadly, so the plugin's read carve-outs are
+    // denials appended after it; the child's own callback record is re-allowed
+    // last. SBPL is last-match-wins.
+    append_macos_read_boundary(
+        &mut profile_text,
+        &profile.read_denies,
+        &profile.readable_denied_files(),
+    );
     append_macos_network_access(
         &mut profile_text,
         match profile.network {

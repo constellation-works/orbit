@@ -239,6 +239,40 @@ pub(super) fn carve_out(
     carve_out_beneath(root, denied, &DenyReach::none(root))
 }
 
+/// Grant `root` while leaving every denied path beneath it with no grant at
+/// all — not even a listable ancestor.
+///
+/// [`carve_out`] leaves the directory holding a denied path granted list-only,
+/// which is right for a credential *file* beside readable siblings: the
+/// directory still has to be listable for the tool that owns it to work. A
+/// denied *directory* needs more, because Landlock rights apply down the whole
+/// hierarchy: a list-only ancestor would let the child enumerate the denied
+/// directory's contents, which for a directory of credentials is most of the
+/// disclosure. Here every allowed child is granted in its own right and no
+/// ancestor of a denied path is granted anything, so listing it is refused
+/// too. The cost is that the ancestors themselves stop being listable; naming
+/// a file inside a denied directory as its own read root is how the one entry
+/// a child is entitled to is granted back [ORB-12798].
+pub(super) fn carve_out_unlistable(
+    root: &Path,
+    denied: &BTreeSet<PathBuf>,
+) -> Result<Vec<LandlockPathGrant>, OrbitError> {
+    if denied.contains(root) {
+        return Ok(Vec::new());
+    }
+    if !denied.iter().any(|path| path.starts_with(root)) {
+        return Ok(vec![whole_path_grant(root)]);
+    }
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut grants = Vec::new();
+    for child in children_under(root, root)? {
+        grants.extend(carve_out_unlistable(&child, denied)?);
+    }
+    Ok(grants)
+}
+
 /// Grant `root` while leaving both the denied paths beneath it and the paths
 /// `reach` can still name there without a readable ancestor.
 fn carve_out_beneath(

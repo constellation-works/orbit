@@ -686,6 +686,7 @@ fn a_bounded_child_writes_only_inside_its_granted_roots() {
     fixture.write("input.txt", "READABLE");
     let state = fixture.host_root().join("state");
     let boundary = LandlockBoundary {
+        read_denies: Vec::new(),
         read: vec![fixture.root()],
         write: vec![state.clone()],
         write_files: vec![],
@@ -751,6 +752,7 @@ fn a_bounded_child_with_deny_tcp_cannot_connect() {
     }
     let fixture = Fixture::new();
     let boundary = LandlockBoundary {
+        read_denies: Vec::new(),
         read: vec![fixture.root()],
         write: vec![],
         write_files: vec![],

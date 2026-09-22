@@ -17,9 +17,14 @@
 //! backend, `orbit.db` is not.
 //!
 //! The value is a plain digest, not a MAC. A keyed value would need a secret
-//! the child cannot read, and a child holding `orbit_tools` reads the whole
-//! global root — it could read any key it could then forge with. What bounds
-//! the attacker here is the write boundary, not a secret.
+//! the child cannot read, and the `orbit_tools` read grant was the whole global
+//! root when this was designed — a key kept there was a key the child could
+//! read and then forge with. What bounds the attacker here is the write
+//! boundary, not a secret. The witness directory is unreadable to a confined
+//! backend today (each is granted only its own witness, which it needs to
+//! verify its own row), but that is defence in depth: it keeps one plugin from
+//! reading what another was authorized for, and the digest is still not a
+//! secret [ORB-12798].
 //!
 //! # What the witness binds, and what binds the rest of the row
 //!
@@ -63,8 +68,10 @@ use super::plugin_host::{plugin_install_root, plugin_namespace_dir};
 
 /// Host-owned directory beside the namespace install directories. A namespace
 /// must start with a lowercase letter (`is_valid_segment`), so the leading dot
-/// cannot collide with one.
-const GRANT_WITNESS_DIR: &str = ".grants";
+/// cannot collide with one. Named in `orbit-tools` because the plugin sandbox
+/// decides who may read it: the directory is denied to every confined backend,
+/// which is granted its own witness file and no other.
+const GRANT_WITNESS_DIR: &str = orbit_tools::plugin::PLUGIN_GRANT_WITNESS_DIR;
 
 /// Domain separator, so the preimage of one Orbit record is never the preimage
 /// of another. Bumping it invalidates every witness, which fails closed.

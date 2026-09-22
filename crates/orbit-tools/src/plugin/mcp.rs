@@ -266,7 +266,10 @@ impl McpBackend {
             environment_mode: EnvironmentMode::ClearAndSet(environment),
             debug: false,
         };
-        let sandbox = self.spec.sandbox_profile(ctx.workspace_root.as_deref())?;
+        let sandbox = self
+            .spec
+            .sandbox_profile(ctx.workspace_root.as_deref())?
+            .with_callback_session(&callback);
         sandbox.validate(&request)?;
         let mut child = sandbox.spawn(&request)?;
         if let Err(error) = callback.bind_pid(child.id()) {

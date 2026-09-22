@@ -123,10 +123,15 @@ impl PluginTool {
             OrbitError::Execution(format!("serialize plugin envelope: {error}"))
         })?;
         let timeout_ms = spec.timeout_ms();
-        let sandbox = spec.sandbox_profile(ctx.workspace_root.as_deref())?;
         let mut environment = spec.child_environment(ctx, &cwd, Some(&self.name));
+        // Minted before the profile is compiled: the child is granted a read
+        // rule on this one record, and a Landlock rule binds the inode that
+        // exists when it is compiled.
         let mut callback = PluginCallbackSession::mint(&spec.global_root, &spec.provenance)?;
         callback.stamp_env(&mut environment);
+        let sandbox = spec
+            .sandbox_profile(ctx.workspace_root.as_deref())?
+            .with_callback_session(&callback);
         let request = ExecRequest {
             program: spec.command.to_string_lossy().into_owned(),
             args: spec.args.clone(),

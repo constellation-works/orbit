@@ -806,10 +806,12 @@ pub(crate) use orbit_tools::plugin::ORBIT_PLUGIN_ENV;
 /// A process launched as a plugin backend reaches Orbit only through
 /// `orbit tool run` or MCP `tools/call`, and only for tools in that plugin's
 /// recorded `permissions.orbit_tools` once the host has granted `orbit_tools`.
-/// Identity is the host-issued session (token plus process ancestry), not
-/// `ORBIT_PLUGIN`. Anything else is refused before the tool runs; a missing
-/// install, missing grant, unloadable manifest, or a row whose install path is
-/// not one this host installed refuses everything.
+/// Identity is the host-issued session — the token, bound to the process
+/// presenting it — not `ORBIT_PLUGIN`, and a confined descendant carrying no
+/// session is refused rather than dispatched as a local caller. Anything else
+/// is refused before the tool runs; a missing install, missing grant,
+/// unloadable manifest, or a row whose install path is not one this host
+/// installed refuses everything.
 fn enforce_plugin_callback_allowlist(
     global_root: &Path,
     plugins: &dyn PluginStoreBackend,
@@ -873,10 +875,14 @@ fn apply_callback_resolution(
                 }
             }))
         }
-        CallbackResolution::Mismatched { token, ancestry } => {
-            Err(OrbitError::PolicyDenied(format!(
-                "plugin callback credential for '{token}' does not match the live backend process '{ancestry}'"
-            )))
+        CallbackResolution::Mismatched { token, ancestry } => Err(
+            orbit_tools::plugin::mismatched_callback_credential(&token, ancestry.as_deref()),
+        ),
+        // A confined backend descendant with no credential. It is not an
+        // ordinary caller: `setsid` sheds ancestry, not the sandbox, and the
+        // sandbox is what refused it the host-issued session directory.
+        CallbackResolution::UnidentifiedPluginChild => {
+            Err(orbit_tools::plugin::unidentified_plugin_child())
         }
     }
 }

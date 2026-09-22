@@ -21,11 +21,15 @@ mod tool;
 #[cfg(test)]
 mod tests;
 
-pub use backend::{PLUGIN_TIMEOUT_CEILING_MS, PluginBackendSpec, PluginSandboxProfile};
+pub use backend::{
+    PLUGIN_GRANT_WITNESS_DIR, PLUGIN_TIMEOUT_CEILING_MS, PluginBackendSpec, PluginSandboxProfile,
+    plugin_grant_witness_relative,
+};
 pub use callback::{
     CallbackResolution, ORBIT_PLUGIN_CALLBACK_ENV, ORBIT_PLUGIN_ENV, PluginCallbackIdentity,
-    PluginCallbackSession, resolve_plugin_callback, resolve_plugin_callback_session,
-    stale_plugin_callback_session_count,
+    PluginCallbackSession, mismatched_callback_credential, resolve_plugin_callback,
+    resolve_plugin_callback_session, stale_plugin_callback_session_count,
+    unidentified_plugin_child,
 };
 pub use envelope::{PLUGIN_ENVELOPE_SCHEMA_VERSION, parse_response, validate_output};
 pub use loader::{
