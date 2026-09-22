@@ -1,7 +1,9 @@
 # Request/response goldens. `orbit plugin test <dir>` runs each case through
-# the real protocol in a temp workspace with the grants the manifest requests,
-# and records the passing Orbit version so `orbit plugin show` can print
-# "certified for <version>".
+# the real protocol in a temp workspace. Template paths, `network: loopback`,
+# and `orbit_tools` are applied as requested. An unconfined backend, an
+# absolute write root, `network: any`, or `env_pass` needs `--accept-requested`
+# or `--grant`. A passing run records the Orbit version so `orbit plugin show`
+# can print "certified for <version>".
 schemaVersion: 1
 kind: PluginTest
 tests:

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use orbit_core::OrbitRuntime;
+use orbit_core::adapter::command::PluginTestOptions;
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Execute, Payload};
@@ -11,11 +12,30 @@ use crate::output::color::Domain;
 pub struct PluginTestArgs {
     /// Plugin directory holding `plugin.yaml`
     pub dir: PathBuf,
+    /// Consent to these grants for this run (repeatable, comma-separated):
+    /// fs, network, env_pass, orbit_tools, unsandboxed. Same names as
+    /// `orbit plugin enable --grant`. Required when the manifest asks for an
+    /// unconfined backend, an absolute write root, `network: any`, or
+    /// `env_pass`, unless `--accept-requested` is set. Does not record a
+    /// host grant.
+    #[arg(long = "grant", value_delimiter = ',')]
+    pub grants: Vec<String>,
+    /// Run under the profile the manifest requests, including an unconfined
+    /// backend, absolute write roots, `network: any`, and `env_pass`. Does
+    /// not record a host grant.
+    #[arg(long = "accept-requested")]
+    pub accept_requested: bool,
 }
 
 impl Execute for PluginTestArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let report = runtime.test_plugin_dir(&self.dir)?;
+        let report = runtime.test_plugin_dir(
+            &self.dir,
+            &PluginTestOptions {
+                grants: self.grants,
+                accept_requested: self.accept_requested,
+            },
+        )?;
 
         use crate::output::table::{Column, Table};
         use comfy_table::Cell;
@@ -38,9 +58,10 @@ impl Execute for PluginTestArgs {
             ]);
         }
 
+        let grant_line = format!("Requested grants: {}.", report.requested_grants);
         let summary = if report.passed() {
             format!(
-                "{} of {} conformance test(s) passed against Orbit {}; {}",
+                "{grant_line}\n{} of {} conformance test(s) passed against Orbit {}; {}",
                 report.results.len(),
                 report.results.len(),
                 report.orbit_version,
@@ -48,7 +69,7 @@ impl Execute for PluginTestArgs {
             )
         } else {
             format!(
-                "{} of {} conformance test(s) failed against Orbit {}: {}",
+                "{grant_line}\n{} of {} conformance test(s) failed against Orbit {}: {}",
                 report.failures().len(),
                 report.results.len(),
                 report.orbit_version,
@@ -61,6 +82,7 @@ impl Execute for PluginTestArgs {
             "root": report.root,
             "manifest_digest": report.manifest_digest,
             "orbit_version": report.orbit_version,
+            "requested_grants": report.requested_grants,
             "passed": report.passed(),
             "certified": report.certified,
             "certification": report.certification_note,

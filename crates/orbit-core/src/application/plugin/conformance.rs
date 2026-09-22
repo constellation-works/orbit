@@ -1,11 +1,19 @@
 //! `orbit plugin test <dir>`: run a plugin's `spec.tests` goldens through the
 //! real protocol and record the Orbit version they passed on (design §5).
 //!
-//! The run is deliberately hermetic. A temp directory stands in for the
-//! Orbit global root and the workspace, so a golden cannot read or write the
-//! operator's state, and the backend runs under the sandbox profile the
-//! manifest *requests* — a conformance run answers "would this plugin work
-//! once granted", not "what may it do on this host right now".
+//! A temp directory stands in for the Orbit global root and the workspace, so
+//! template paths (`{{workspace}}`, `{{plugin_root}}`, `{{plugin_state}}`,
+//! `{{config.<key>}}`) do not touch the operator's Orbit state. The backend
+//! runs under the profile the manifest requests for those template paths,
+//! `network: loopback`, and `orbit_tools`: the run answers whether the plugin
+//! would work once those grants are recorded.
+//!
+//! The run refuses, and the error prints the requested grant set, when the
+//! manifest asks for an unconfined backend (`sandbox: none`), an absolute
+//! `fs.write` root that is not a template, `network: any`, or any `env_pass`,
+//! unless the caller passes `--accept-requested` or a `--grant` list that
+//! names each of those grants. With that consent the run uses the requested
+//! profile. Consent applies to this run only; it does not record a host grant.
 //!
 //! Certification is written only when this host has the same plugin
 //! installed at the same manifest digest: a directory that differs from the
@@ -22,7 +30,8 @@ use orbit_tools::plugin::{
 };
 use orbit_tools::{Tool, ToolContext};
 use orbit_types::plugin::{
-    PluginBackendType, PluginGrant, PluginProvenance, PluginTestCase, plugin_tool_name,
+    PluginBackendType, PluginGrant, PluginManifest, PluginNetworkPermission, PluginProvenance,
+    PluginSandbox, PluginTestCase, parse_grants, plugin_tool_name,
 };
 use serde_json::Value;
 
@@ -54,6 +63,9 @@ pub struct PluginTestReport {
     /// and why it was not when it was not.
     pub certified: bool,
     pub certification_note: String,
+    /// The manifest's requested grant set, in the same spelling the refusal
+    /// prints. `none` when the manifest requests nothing.
+    pub requested_grants: String,
 }
 
 impl PluginTestReport {
@@ -71,7 +83,21 @@ impl PluginTestReport {
     }
 }
 
-pub fn test_plugin_dir(runtime: &OrbitRuntime, dir: &Path) -> Result<PluginTestReport, OrbitError> {
+/// How `orbit plugin test` was asked to treat a manifest's requested profile.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginTestOptions {
+    /// `--grant` names, parsed with the same rules as `orbit plugin enable`.
+    /// Empty means the flag was omitted.
+    pub grants: Vec<String>,
+    /// `--accept-requested`: run under the manifest's full requested profile.
+    pub accept_requested: bool,
+}
+
+pub fn test_plugin_dir(
+    runtime: &OrbitRuntime,
+    dir: &Path,
+    options: &PluginTestOptions,
+) -> Result<PluginTestReport, OrbitError> {
     let plugin = load_plugin_dir(dir)?;
     validate_loaded_plugin(&plugin, &PluginValidationPolicy::host_default())
         .map_err(manifest_refusal)?;
@@ -90,9 +116,12 @@ pub fn test_plugin_dir(runtime: &OrbitRuntime, dir: &Path) -> Result<PluginTestR
             plugin.namespace()
         )));
     }
+    let requested_grants = format_requested_grants(&plugin.manifest);
+    authorize_conformance_run(&plugin, options, &requested_grants)?;
 
-    // One temp root stands in for both the global root and the workspace, so
-    // a golden that writes through a granted path touches nothing durable.
+    // One temp root stands in for both the global root and the workspace.
+    // Template paths render under it. An absolute write root is opened as
+    // declared, which is why that shape needs consent before this point.
     let sandbox_root = tempfile::tempdir()
         .map_err(|error| OrbitError::Io(format!("create the conformance workspace: {error}")))?;
     let global_root = sandbox_root.path().join("global");
@@ -119,6 +148,7 @@ pub fn test_plugin_dir(runtime: &OrbitRuntime, dir: &Path) -> Result<PluginTestR
         results,
         certified: false,
         certification_note: String::new(),
+        requested_grants,
     };
     let (certified, note) = record_certification(runtime, &plugin, &report);
     report.certified = certified;
@@ -200,6 +230,94 @@ fn run_case(
 
 fn compact(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
+}
+
+/// Refuse a conformance run that would apply an unconfined backend, an
+/// absolute non-template write root, `network: any`, or `env_pass` unless
+/// the caller consented. Other requested grants stay on the profile the
+/// manifest asked for.
+fn authorize_conformance_run(
+    plugin: &LoadedPlugin,
+    options: &PluginTestOptions,
+    requested_grants: &str,
+) -> Result<(), OrbitError> {
+    let consented = if options.grants.is_empty() {
+        Vec::new()
+    } else {
+        parse_grants(&options.grants).map_err(OrbitError::InvalidInput)?
+    };
+    if options.accept_requested {
+        return Ok(());
+    }
+    let missing: Vec<PluginGrant> = consent_required_grants(&plugin.manifest)
+        .into_iter()
+        .filter(|grant| !consented.contains(grant))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let missing_names = missing
+        .iter()
+        .map(|grant| grant.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    Err(OrbitError::InvalidInput(format!(
+        "plugin '{}' requests grants `orbit plugin test` will not apply without consent. \
+         Requested grants: {requested_grants}. Re-run with `--accept-requested` to test under \
+         the requested profile, or `--grant {missing_names}`",
+        plugin.namespace()
+    )))
+}
+
+/// Grants a conformance run will not apply on its own, in canonical order.
+fn consent_required_grants(manifest: &PluginManifest) -> Vec<PluginGrant> {
+    let mut grants = Vec::new();
+    if manifest
+        .spec
+        .permissions
+        .fs
+        .write
+        .iter()
+        .any(|path| is_absolute_non_template_write(path))
+    {
+        grants.push(PluginGrant::Fs);
+    }
+    if manifest.spec.permissions.network == PluginNetworkPermission::Any {
+        grants.push(PluginGrant::Network);
+    }
+    if !manifest.spec.permissions.env_pass.is_empty() {
+        grants.push(PluginGrant::EnvPass);
+    }
+    if manifest.spec.backend.sandbox == PluginSandbox::None {
+        grants.push(PluginGrant::Unsandboxed);
+    }
+    grants
+}
+
+/// An `fs.write` entry the sandbox would open as given: absolute, and not a
+/// `{{...}}` template. Template roots render inside the temp workspace.
+fn is_absolute_non_template_write(path: &str) -> bool {
+    let trimmed = path.trim();
+    !trimmed.contains("{{") && Path::new(trimmed).is_absolute()
+}
+
+/// The requested grant set, one entry per grant the manifest actually asks
+/// for. Details come from the manifest (`write=/var/plugin-cache`, `any`).
+fn format_requested_grants(manifest: &PluginManifest) -> String {
+    let parts: Vec<String> = manifest
+        .grant_requests()
+        .into_iter()
+        .filter_map(|request| {
+            request
+                .requested
+                .map(|detail| format!("{} ({detail})", request.grant.as_str()))
+        })
+        .collect();
+    if parts.is_empty() {
+        "none".to_string()
+    } else {
+        parts.join("; ")
+    }
 }
 
 /// The backend a conformance run uses: the manifest's own permissions, with
