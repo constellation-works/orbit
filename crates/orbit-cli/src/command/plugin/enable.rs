@@ -34,6 +34,9 @@ impl Execute for PluginEnableArgs {
             "Enabled plugin '{}' v{}. Its tools register on the next Orbit command.",
             summary.name, summary.version
         );
+        if let Some(diagnostic) = &summary.diagnostic {
+            text.push_str(&format!("\n\nPlugin is inactive: {diagnostic}"));
+        }
         for seeded in &result.seeded {
             text.push_str(&format!(
                 "\n  {} {} {} ({})",

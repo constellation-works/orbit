@@ -17,7 +17,7 @@ use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin_grants::{record_authorized_grants, verify_install_path};
-use crate::runtime::plugin_host::{plugin_current_link, plugin_install_path, unmet_requirement};
+use crate::runtime::plugin_host::{plugin_current_link, plugin_install_path, projected_status};
 
 use super::inspect::{PluginSummary, summary_for_installed};
 
@@ -297,18 +297,27 @@ fn install_plugin_inner(
 
     // Report the status the next runtime will register it with, so `add
     // --enable` on an incompatible host says so now rather than at first use.
-    let status = if !enabled {
-        PluginStatus::Disabled
-    } else if unmet_requirement(&plugin).is_some() || contributions_refused.is_some() {
-        PluginStatus::Inactive
-    } else {
-        PluginStatus::Active
-    };
     let stored = runtime
         .stores()
         .plugins()
         .get_plugin(&name)?
         .unwrap_or(record);
+    let projection = if enabled {
+        let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(
+            &global_root,
+        ))?;
+        Some(projected_status(
+            &stored,
+            &plugin,
+            &global_root,
+            &config.plugins,
+        ))
+    } else {
+        None
+    };
+    let status = projection
+        .as_ref()
+        .map_or(PluginStatus::Disabled, |projection| projection.status);
     // Held until the copy above finished, so a fetched tree is not collected
     // out from under it.
     drop(resolved);
@@ -320,8 +329,10 @@ fn install_plugin_inner(
             &permission_changes,
             previous_manifest_error.as_deref(),
         ))
+    } else if let Some(message) = contributions_refused {
+        Some(message)
     } else {
-        contributions_refused
+        projection.and_then(|projection| projection.diagnostic)
     };
     Ok(PluginInstallOutcome {
         summary,

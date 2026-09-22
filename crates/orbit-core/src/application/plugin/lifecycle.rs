@@ -13,9 +13,11 @@ use crate::OrbitRuntime;
 use crate::runtime::plugin_grants::{
     forget_authorized_grants, record_authorized_grants, verify_install_path,
 };
-use crate::runtime::plugin_host::{plugin_current_link, plugin_namespace_dir, read_pin_file};
+use crate::runtime::plugin_host::{
+    plugin_current_link, plugin_namespace_dir, projected_status, read_pin_file,
+};
 
-use super::inspect::{PluginSummary, show_plugin};
+use super::inspect::{PluginSummary, show_plugin, summary_for_installed};
 use super::seed::{PluginSeedOutcome, seed_plugin_definitions};
 use super::skills::{PluginSkillLink, link_plugin_skills, unlink_plugin_skills};
 use crate::runtime::plugin_definitions::load_plugin_definitions;
@@ -78,14 +80,17 @@ pub fn enable_plugin(
     // Seeding reads definitions and skills out of the recorded tree, so the
     // row buys nothing until the path it names is this host's install.
     let install_path = verified_install_path(runtime, &installed_plugin(runtime, name)?)?;
-    let summary = set_enabled(runtime, name, true, &grants)?;
     let contributions = apply_enabled_contributions(runtime, &install_path, options.force)?;
+    let plugin = load_plugin_dir(&install_path)?;
+    let mut warnings = unrequested_grant_warnings(&plugin, &grants);
+    warnings.extend(contributions.warnings);
+    let summary = set_enabled(runtime, name, true, &grants)?;
 
     Ok(PluginEnableResult {
         summary,
         seeded: contributions.seeded,
         skills: contributions.skills,
-        warnings: contributions.warnings,
+        warnings,
     })
 }
 
@@ -178,7 +183,7 @@ fn set_enabled(
     enabled: bool,
     grants: &[String],
 ) -> Result<PluginSummary, OrbitError> {
-    let existing = runtime
+    let mut existing = runtime
         .stores()
         .plugins()
         .get_plugin(name)?
@@ -187,6 +192,20 @@ fn set_enabled(
         grants.to_vec()
     } else {
         existing.grants.clone()
+    };
+    let projection = if enabled {
+        let plugin = load_plugin_dir(Path::new(&existing.install_path))?;
+        existing.enabled = true;
+        existing.grants.clone_from(&grants);
+        let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(
+            runtime.global_root(),
+        ))?;
+        Some((
+            projected_status(&existing, &plugin, &runtime.global_root(), &config.plugins),
+            plugin,
+        ))
+    } else {
+        None
     };
     runtime.with_mutation(|| {
         runtime
@@ -209,6 +228,11 @@ fn set_enabled(
     // a failure here leaves a plugin that refuses to load and says why, rather
     // than a witness authorizing a grant set the store never took [ORB-12778].
     record_authorized_grants(&runtime.global_root(), name, enabled, &grants)?;
+    if let Some((projection, plugin)) = projection {
+        let mut summary = summary_for_installed(&existing, Some(&plugin), projection.status);
+        summary.diagnostic = projection.diagnostic;
+        return Ok(summary);
+    }
     // The live runtime built its registry before this write, so report the
     // stored state rather than the surface this process happens to hold.
     let mut summary = show_plugin(runtime, name)?;
@@ -223,6 +247,27 @@ fn set_enabled(
     summary.granted = grants;
     summary.diagnostic = None;
     Ok(summary)
+}
+
+fn unrequested_grant_warnings(
+    plugin: &orbit_tools::plugin::LoadedPlugin,
+    grants: &[String],
+) -> Vec<String> {
+    let requested = plugin.manifest.required_grants();
+    grants
+        .iter()
+        .filter(|grant| {
+            !requested
+                .iter()
+                .any(|requested| requested.as_str() == grant.as_str())
+        })
+        .map(|grant| {
+            format!(
+                "grant `{grant}` was supplied but plugin '{}' does not request it; it was recorded but grants no additional access",
+                plugin.namespace()
+            )
+        })
+        .collect()
 }
 
 fn missing_install(runtime: &OrbitRuntime, name: &str) -> OrbitError {

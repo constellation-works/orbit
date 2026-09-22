@@ -6,7 +6,7 @@ use orbit_types::plugin::PluginStatus;
 use super::super::{
     PluginAddOptions, PluginEnableOptions, PluginMigrateRequest, PluginRemoveOptions,
     disable_plugin, enable_plugin, install_plugin, list_plugins, migrate_plugin_sidecars,
-    plugin_doctor, remove_plugin, sync_plugins, validate_plugin_dir,
+    plugin_doctor, remove_plugin, show_plugin, sync_plugins, validate_plugin_dir,
 };
 use super::definition_fixture::DefinitionPlugin;
 use super::fixture::{PluginFixture, PluginSpecFixture};
@@ -275,6 +275,46 @@ fn validate_reports_an_unsatisfiable_requirement_as_a_warning() {
             .iter()
             .any(|warning| warning.contains("requires orbit >=99.0.0")),
         "{report:?}"
+    );
+}
+
+#[test]
+fn failed_enabled_contributions_leave_the_installed_row_disabled() {
+    let fixture = PluginFixture::new();
+    let source = DefinitionPlugin::new("unsafe-default")
+        .with_enabled_routine()
+        .write(&fixture);
+    install_plugin(
+        &fixture.runtime,
+        source.to_str().expect("utf8 path"),
+        &PluginAddOptions::default(),
+    )
+    .expect("install disabled plugin");
+
+    let error = enable_plugin(
+        &fixture.runtime,
+        "unsafe-default",
+        &PluginEnableOptions::default(),
+    )
+    .expect_err("enabled shipped schedules are refused")
+    .to_string();
+    assert!(error.contains("enabled: true"), "{error}");
+    let installed = fixture
+        .runtime
+        .stores()
+        .plugins()
+        .get_plugin("unsafe-default")
+        .expect("read plugin row")
+        .expect("plugin remains installed");
+    assert!(
+        !installed.enabled,
+        "contribution failure must not commit the enable row"
+    );
+    assert_eq!(
+        show_plugin(&fixture.reopen(), "unsafe-default")
+            .expect("show")
+            .status,
+        PluginStatus::Disabled
     );
 }
 

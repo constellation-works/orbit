@@ -237,7 +237,7 @@ fn upgrade_reports_the_permission_diff_and_accepts_explicit_reconsent() {
 
     let mut v2 = PluginSpecFixture::new("demo-v2", "demo");
     v2.version = "2.0.0";
-    v2.permissions = Some("  permissions:\n    fs:\n      write: [\"{{workspace}}\"]\n");
+    v2.permissions = Some("  permissions:\n    fs:\n      write: [\"{{workspace}}/.cache\"]\n");
     let v2 = fixture.write_plugin(v2);
     let result = upgrade_plugin(
         &fixture.runtime,
@@ -255,7 +255,10 @@ fn upgrade_reports_the_permission_diff_and_accepts_explicit_reconsent() {
     assert_eq!(result.permission_changes.len(), 1);
     let change = &result.permission_changes[0];
     assert_eq!(change.grant.as_str(), "fs");
-    assert_eq!(change.requested.as_deref(), Some("write={{workspace}}"));
+    assert_eq!(
+        change.requested.as_deref(),
+        Some("write={{workspace}}/.cache")
+    );
     assert!(change.widened);
 }
 

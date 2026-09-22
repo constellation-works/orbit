@@ -171,6 +171,29 @@ spec:
     .expect("write manifest");
 }
 
+fn write_status_plugin(root: &Path, namespace: &str, extra_spec: &str) {
+    std::fs::create_dir_all(root.join("bin")).expect("create plugin dirs");
+    let backend = root.join("bin/backend.sh");
+    std::fs::write(
+        &backend,
+        "#!/bin/sh\nprintf '{\"ok\":true,\"output\":{}}\\n'\n",
+    )
+    .expect("write backend");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod backend");
+    }
+    std::fs::write(
+        root.join("plugin.yaml"),
+        format!(
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Status projection fixture.\nspec:\n{extra_spec}  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: status\n      description: Report status.\n      execution_kind: read_only\n      mcp_scope: workspace\n"
+        ),
+    )
+    .expect("write manifest");
+}
+
 fn stdout_json(output: &std::process::Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
@@ -341,6 +364,97 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("unrecognized subcommand"));
+}
+
+#[cfg(unix)]
+#[test]
+fn enable_prints_the_projected_refusal_and_returns_inactive_json() {
+    let fixture = Fixture::new();
+    let cases = [
+        (
+            "guarded",
+            "  permissions:\n    fs:\n      write: [\"{{plugin_state}}\"]\n",
+            "has not granted",
+        ),
+        (
+            "future",
+            "  requires:\n    orbit: \">=99.0.0\"\n",
+            "requires orbit >=99.0.0",
+        ),
+    ];
+
+    for (namespace, extra_spec, expected) in cases {
+        let source = fixture.source(namespace);
+        write_status_plugin(&source, namespace, extra_spec);
+        fixture
+            .orbit()
+            .args(["plugin", "add", source.to_str().expect("utf8 source")])
+            .assert()
+            .success();
+
+        fixture
+            .orbit()
+            .args(["plugin", "enable", namespace])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Plugin is inactive"))
+            .stdout(predicate::str::contains(expected));
+
+        let json = fixture
+            .orbit()
+            .args(["plugin", "enable", namespace, "--format", "json"])
+            .output()
+            .expect("enable with JSON output");
+        assert!(json.status.success(), "{json:?}");
+        let json = stdout_json(&json);
+        assert_eq!(json["status"], "inactive", "{json}");
+        assert!(
+            json["diagnostic"]
+                .as_str()
+                .is_some_and(|diagnostic| diagnostic.contains(expected)),
+            "{json}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn enable_warns_when_a_grant_was_not_requested() {
+    let fixture = Fixture::new();
+    let source = fixture.source("plain");
+    write_status_plugin(&source, "plain", "");
+    fixture
+        .orbit()
+        .args(["plugin", "add", source.to_str().expect("utf8 source")])
+        .assert()
+        .success();
+
+    fixture
+        .orbit()
+        .args(["plugin", "enable", "plain", "--grant", "fs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("warning:"))
+        .stdout(predicate::str::contains("grant `fs`"))
+        .stdout(predicate::str::contains("does not request"));
+
+    let json = fixture
+        .orbit()
+        .args([
+            "plugin", "enable", "plain", "--grant", "network", "--format", "json",
+        ])
+        .output()
+        .expect("enable with JSON output");
+    assert!(json.status.success(), "{json:?}");
+    let json = stdout_json(&json);
+    assert_eq!(json["status"], "active", "{json}");
+    assert!(
+        json["warnings"][0]
+            .as_str()
+            .is_some_and(|warning| warning.contains("grant `network`")
+                && warning.contains("does not request")),
+        "{json}"
+    );
 }
 
 #[cfg(unix)]

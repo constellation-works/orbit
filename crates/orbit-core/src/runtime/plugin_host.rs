@@ -40,6 +40,36 @@ pub struct PluginDiagnostic {
     pub message: String,
 }
 
+/// The status a loaded plugin will have on the next host load.
+///
+/// Lifecycle commands use this before reporting their result, and the loader
+/// uses it before registering tools, so both surfaces apply one eligibility
+/// decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectedPluginStatus {
+    pub(crate) status: PluginStatus,
+    pub(crate) diagnostic: Option<String>,
+    register_inactive_tools: bool,
+}
+
+impl ProjectedPluginStatus {
+    fn active() -> Self {
+        Self {
+            status: PluginStatus::Active,
+            diagnostic: None,
+            register_inactive_tools: false,
+        }
+    }
+
+    fn inactive(message: String, register_inactive_tools: bool) -> Self {
+        Self {
+            status: PluginStatus::Inactive,
+            diagnostic: Some(message),
+            register_inactive_tools,
+        }
+    }
+}
+
 /// What the runtime registered for one host plugin.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RegisteredPlugin {
@@ -331,7 +361,6 @@ pub fn load_host_plugins(
     };
 
     let mut load = PluginHostLoad::default();
-    let policy = PluginValidationPolicy::host_default();
     for plugin in &installed {
         // The grant set a row records is only authority when `orbit plugin
         // enable` wrote it. A backend that can write `orbit.db` can write its
@@ -366,8 +395,7 @@ pub fn load_host_plugins(
             });
             continue;
         }
-        let registered =
-            register_installed_plugin(global_root, plugin, &policy, registry, plugin_config);
+        let registered = register_installed_plugin(global_root, plugin, registry, plugin_config);
         if let Some(message) = &registered.diagnostic {
             load.diagnostics.push(PluginDiagnostic {
                 plugin: plugin.name.clone(),
@@ -513,7 +541,6 @@ fn audit_refused_row(store: &Store, installed: &InstalledPlugin, check: &str, me
 fn register_installed_plugin(
     global_root: &Path,
     installed: &InstalledPlugin,
-    policy: &PluginValidationPolicy,
     registry: &mut ToolRegistry,
     plugin_config: &BTreeMap<String, Value>,
 ) -> RegisteredPlugin {
@@ -554,58 +581,15 @@ fn register_installed_plugin(
             );
         }
     };
-    if let Some(message) = first_party_row_mismatch(installed, &plugin) {
+    let projection = projected_status(installed, &plugin, global_root, plugin_config);
+    if projection.status == PluginStatus::Inactive {
+        let message = projection
+            .diagnostic
+            .unwrap_or_else(|| format!("plugin '{}' is inactive", installed.name));
+        if projection.register_inactive_tools {
+            return register_inactive_tools(global_root, installed, &plugin, registry, message);
+        }
         return refused(PluginStatus::Inactive, message);
-    }
-    // Validate the manifest actually on disk before deciding what a digest
-    // mismatch means: an on-disk edit that also breaks the namespace rules
-    // (§4.9) is a plain refusal, not tool names inserted as inactive first.
-    let policy = policy
-        .clone()
-        .with_first_party_verified(installed.first_party);
-    if let Err(error) = validate_loaded_plugin(&plugin, &policy) {
-        return refused(
-            PluginStatus::Inactive,
-            format!("plugin '{}' is refused: {error}", installed.name),
-        );
-    }
-    if plugin.manifest_digest != installed.manifest_digest {
-        return register_inactive_tools(
-            global_root,
-            installed,
-            &plugin,
-            registry,
-            digest_mismatch_diagnostic(installed, &plugin),
-        );
-    }
-    if let Err(error) = refuse_covering_fs_write_roots(
-        &plugin,
-        global_root,
-        &plugin_state_dir(global_root, &installed.name),
-    ) {
-        return register_inactive_tools(
-            global_root,
-            installed,
-            &plugin,
-            registry,
-            format!("plugin '{}' is refused: {error}", installed.name),
-        );
-    }
-    if let Some(message) = unmet_requirement(&plugin) {
-        return register_inactive_tools(global_root, installed, &plugin, registry, message);
-    }
-    if let Some(message) = missing_grant_diagnostic(installed, &plugin) {
-        return register_inactive_tools(global_root, installed, &plugin, registry, message);
-    }
-    // A plugin whose shipped definitions break the §4.5 rules, or whose
-    // `[plugins.<ns>]` section its own schema rejects, contributes nothing:
-    // registering its tools while its catalog layer is unusable would leave
-    // half a plugin on the surface.
-    if let Err(message) = validate_plugin_contributions(&plugin, plugin_config) {
-        return refused(
-            PluginStatus::Inactive,
-            format!("plugin '{}' is refused: {message}", installed.name),
-        );
     }
 
     let backend = plugin_backend(global_root, installed, &plugin, plugin_config);
@@ -640,6 +624,63 @@ fn register_installed_plugin(
         config_values: backend.spec().config_defaults.clone(),
         loaded: Some(Arc::new(plugin)),
     }
+}
+
+/// Derive the status the host loader will assign to a loaded plugin without
+/// registering any tools or mutating host state.
+pub(crate) fn projected_status(
+    installed: &InstalledPlugin,
+    plugin: &LoadedPlugin,
+    global_root: &Path,
+    plugin_config: &BTreeMap<String, Value>,
+) -> ProjectedPluginStatus {
+    if let Some(message) = first_party_row_mismatch(installed, plugin) {
+        return ProjectedPluginStatus::inactive(message, false);
+    }
+    // Validate the manifest actually on disk before deciding what a digest
+    // mismatch means: an on-disk edit that also breaks the namespace rules
+    // (§4.9) is a plain refusal, not tool names inserted as inactive first.
+    let policy =
+        PluginValidationPolicy::host_default().with_first_party_verified(installed.first_party);
+    if let Err(error) = validate_loaded_plugin(plugin, &policy) {
+        return ProjectedPluginStatus::inactive(
+            format!("plugin '{}' is refused: {error}", installed.name),
+            false,
+        );
+    }
+    if plugin.manifest_digest != installed.manifest_digest {
+        return ProjectedPluginStatus::inactive(
+            digest_mismatch_diagnostic(installed, plugin),
+            true,
+        );
+    }
+    if let Err(error) = refuse_covering_fs_write_roots(
+        plugin,
+        global_root,
+        &plugin_state_dir(global_root, &installed.name),
+    ) {
+        return ProjectedPluginStatus::inactive(
+            format!("plugin '{}' is refused: {error}", installed.name),
+            true,
+        );
+    }
+    if let Some(message) = unmet_requirement(plugin) {
+        return ProjectedPluginStatus::inactive(message, true);
+    }
+    if let Some(message) = missing_grant_diagnostic(installed, plugin) {
+        return ProjectedPluginStatus::inactive(message, true);
+    }
+    // A plugin whose shipped definitions break the §4.5 rules, or whose
+    // `[plugins.<ns>]` section its own schema rejects, contributes nothing:
+    // registering its tools while its catalog layer is unusable would leave
+    // half a plugin on the surface.
+    if let Err(message) = validate_plugin_contributions(plugin, plugin_config) {
+        return ProjectedPluginStatus::inactive(
+            format!("plugin '{}' is refused: {message}", installed.name),
+            false,
+        );
+    }
+    ProjectedPluginStatus::active()
 }
 
 /// An enabled plugin whose `requires` no longer hold keeps its tool names on
