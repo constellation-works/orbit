@@ -13,9 +13,7 @@ use crate::OrbitRuntime;
 use crate::runtime::plugin_grants::{
     forget_authorized_grants, record_authorized_grants, verify_install_path,
 };
-use crate::runtime::plugin_host::{
-    plugin_current_link, plugin_namespace_dir, projected_status, read_pin_file,
-};
+use crate::runtime::plugin_host::{plugin_namespace_dir, projected_status, read_pin_file};
 
 use super::inspect::{PluginSummary, show_plugin, summary_for_installed};
 use super::seed::{PluginSeedOutcome, seed_plugin_definitions};
@@ -305,10 +303,10 @@ pub struct PluginRemoveOptions {
 /// Remove the host's install. Derived data a plugin wrote elsewhere is
 /// deliberately retained (§3).
 ///
-/// Only the tree this host installed is deleted. The recorded `install_path`
-/// is as writable as the rest of the row, so it is verified against the
-/// namespace install directory before anything is removed; a row that fails
-/// the check is refused whole, before any mutation, and
+/// Only this namespace's install family is deleted. The recorded
+/// `install_path` is as writable as the rest of the row, so it is verified
+/// against the namespace install directory before anything is removed; a row
+/// that fails the check is refused whole, before any mutation, and
 /// [`PluginRemoveOptions::record_only`] is what clears it.
 pub fn remove_plugin(
     runtime: &OrbitRuntime,
@@ -316,10 +314,14 @@ pub fn remove_plugin(
     options: &PluginRemoveOptions,
 ) -> Result<(), OrbitError> {
     let installed = installed_plugin(runtime, name)?;
-    let owned_install = if options.record_only {
-        None
+    // Ordinary removal deletes files, so the recorded path is held to this
+    // host's install directory first; `--record-only` is the verb for a row
+    // that cannot pass.
+    let owns_install = if options.record_only {
+        false
     } else {
-        Some(verified_install_path(runtime, &installed)?)
+        verified_install_path(runtime, &installed)?;
+        true
     };
 
     // Take the plugin off the surface before the record goes. Besides
@@ -345,25 +347,24 @@ pub fn remove_plugin(
     forget_authorized_grants(&runtime.global_root(), name);
 
     // Everything below deletes files, so it runs only for a verified install.
-    let Some(install_path) = owned_install else {
+    if !owns_install {
         return Ok(());
-    };
-    if install_path.is_dir() {
-        std::fs::remove_dir_all(&install_path).map_err(|error| {
-            OrbitError::Io(format!("remove {}: {error}", install_path.display()))
-        })?;
     }
-    let link = plugin_current_link(&runtime.global_root(), name);
-    if link.symlink_metadata().is_ok() {
-        let _ = std::fs::remove_file(&link).or_else(|_| std::fs::remove_dir_all(&link));
-    }
-    // Leave the namespace directory only when another version still lives in it.
+    // The whole namespace family goes, not only the recorded version. An
+    // upgrade performed by an Orbit that did not prune may have left older
+    // `<ns>/<version>/` trees, and every plugin backend can read the install
+    // family (§4.3), so leaving them would leave this plugin's code on the
+    // host after `remove` reported it gone. Deleting the directory rather than
+    // the recorded path also retires the previous `remove_dir(parent)`, which
+    // silently failed whenever anything else was still in there. The path is
+    // derived from the namespace and the global root, never from the row
+    // [ORB-12800], and the verification above already held the recorded path
+    // to it.
     let namespace_dir = plugin_namespace_dir(&runtime.global_root(), name);
-    if namespace_dir
-        .read_dir()
-        .is_ok_and(|mut entries| entries.next().is_none())
-    {
-        let _ = std::fs::remove_dir(&namespace_dir);
+    if namespace_dir.exists() {
+        std::fs::remove_dir_all(&namespace_dir).map_err(|error| {
+            OrbitError::Io(format!("remove {}: {error}", namespace_dir.display()))
+        })?;
     }
     Ok(())
 }

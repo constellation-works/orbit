@@ -2,7 +2,8 @@
 //! tree into the host install root, and record it.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use orbit_common::OrbitError;
 use orbit_tools::plugin::{
@@ -18,7 +19,7 @@ use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin_grants::{record_authorized_grants, verify_install_path};
-use crate::runtime::plugin_host::{plugin_current_link, plugin_install_path, projected_status};
+use crate::runtime::plugin_host::{plugin_install_path, plugin_namespace_dir, projected_status};
 
 use super::inspect::{PluginSummary, summary_for_installed};
 
@@ -232,19 +233,15 @@ fn install_plugin_inner(
                 || permission_changes.iter().any(|change| change.widened))
     });
     let install_path = plugin_install_path(&global_root, &name, &version);
-    if install_path.exists() {
-        if !options.force {
-            return Err(OrbitError::InvalidInput(format!(
-                "plugin '{name}' v{version} is already installed at {}; pass --force to replace it",
-                install_path.display()
-            )));
-        }
-        std::fs::remove_dir_all(&install_path).map_err(|error| {
-            OrbitError::Io(format!("replace {}: {error}", install_path.display()))
-        })?;
+    if install_path.exists() && !options.force {
+        return Err(OrbitError::InvalidInput(format!(
+            "plugin '{name}' v{version} is already installed at {}; pass --force to replace it",
+            install_path.display()
+        )));
     }
-    copy_tree(&source_root, &install_path)?;
-    link_current(&global_root, &name, &version)?;
+    let mut staged = StagedInstall::begin(&global_root, &name, &version)?;
+    copy_tree(&source_root, staged.staging())?;
+    staged.publish()?;
 
     let enabled =
         !grants_reset && (options.enable || existing.as_ref().is_some_and(|plugin| plugin.enabled));
@@ -302,6 +299,11 @@ fn install_plugin_inner(
             },
         ))
     })?;
+    // The row names the new tree from here on, so the replaced one may go and
+    // the staged swap must not roll back. Anything that fails below leaves an
+    // install that landed, which is what the row says.
+    staged.commit();
+    prune_namespace(&global_root, &name, &install_path);
     // `--enable` (including upgrade re-consent) is the operator authorizing
     // this grant set, so it records the integrity value the loader checks the
     // row back against. An ordinary plain `add` deliberately does not rewrite
@@ -516,26 +518,167 @@ fn refuse_in_repository_source(
     )))
 }
 
-fn link_current(global_root: &Path, name: &str, version: &str) -> Result<(), OrbitError> {
-    let link = plugin_current_link(global_root, name);
-    if link.exists() || link.symlink_metadata().is_ok() {
-        std::fs::remove_file(&link)
-            .or_else(|_| std::fs::remove_dir_all(&link))
-            .map_err(|error| OrbitError::Io(format!("replace {}: {error}", link.display())))?;
+/// A plugin tree staged beside the version directories, and the tree it
+/// replaces.
+///
+/// `add --force` used to delete the live `<version>/` and copy the new tree
+/// into it file by file, so a concurrent `orbit` — a clock tick, an MCP
+/// server, a dashboard panel — could load a `plugin.yaml` that was already in
+/// place while `bin/backend` was still being written, and execute truncated
+/// bytes. The copy now lands in a staging directory in the same namespace
+/// directory and becomes visible with a single `rename`, so a reader sees
+/// either the whole old tree or the whole new one. Replacing a tree does leave
+/// a brief moment with no `<version>/` at all, between renaming the old one
+/// aside and renaming the new one in: `rename` cannot replace a non-empty
+/// directory, and a reader that lands there gets a plain "not installed"
+/// error rather than half a plugin.
+///
+/// The swap rolls back unless [`Self::commit`] is reached, so an install that
+/// fails after the copy leaves neither a tree without a `plugins` row — which
+/// the next `add` would demand `--force` for — nor a namespace whose row and
+/// tree disagree.
+struct StagedInstall {
+    staging: PathBuf,
+    install_path: PathBuf,
+    /// Where the replaced tree was moved, held until the row names the new one.
+    displaced: Option<PathBuf>,
+    published: bool,
+    committed: bool,
+}
+
+impl StagedInstall {
+    fn begin(global_root: &Path, name: &str, version: &str) -> Result<Self, OrbitError> {
+        let namespace_dir = plugin_namespace_dir(global_root, name);
+        std::fs::create_dir_all(&namespace_dir).map_err(|error| {
+            OrbitError::Io(format!("create {}: {error}", namespace_dir.display()))
+        })?;
+        Ok(Self {
+            staging: namespace_dir.join(scratch_name("staging")),
+            install_path: namespace_dir.join(version),
+            displaced: None,
+            published: false,
+            committed: false,
+        })
     }
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(Path::new(version), &link)
-            .map_err(|error| OrbitError::Io(format!("link {}: {error}", link.display())))?;
+
+    /// Where the tree is copied before it is anything a reader can reach.
+    fn staging(&self) -> &Path {
+        &self.staging
     }
-    #[cfg(not(unix))]
-    {
-        // No symlink guarantee off Unix: record the current version as a file
-        // beside the install directories instead.
-        std::fs::write(&link, version)
-            .map_err(|error| OrbitError::Io(format!("write {}: {error}", link.display())))?;
+
+    /// Move any tree already at `<version>/` aside, then make the staged one
+    /// visible with one rename.
+    fn publish(&mut self) -> Result<(), OrbitError> {
+        if self.install_path.symlink_metadata().is_ok() {
+            let displaced = self.install_path.with_file_name(scratch_name("replaced"));
+            std::fs::rename(&self.install_path, &displaced).map_err(|error| {
+                OrbitError::Io(format!("replace {}: {error}", self.install_path.display()))
+            })?;
+            self.displaced = Some(displaced);
+        }
+        std::fs::rename(&self.staging, &self.install_path).map_err(|error| {
+            OrbitError::Io(format!("install {}: {error}", self.install_path.display()))
+        })?;
+        self.published = true;
+        Ok(())
     }
-    Ok(())
+
+    /// The row names the staged tree: keep it, and drop the replaced one.
+    fn commit(&mut self) {
+        self.committed = true;
+        if let Some(displaced) = self.displaced.take() {
+            remove_install_scratch(&displaced);
+        }
+    }
+}
+
+impl Drop for StagedInstall {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        if self.published {
+            remove_install_scratch(&self.install_path);
+            // The replaced tree stays where it is if it cannot be put back:
+            // the row still names it, and leaving it under a scratch name the
+            // warning points at beats deleting the operator's only copy.
+            if let Some(displaced) = self.displaced.take()
+                && let Err(error) = std::fs::rename(&displaced, &self.install_path)
+            {
+                tracing::warn!(
+                    target: "orbit.core.plugin",
+                    path = %self.install_path.display(),
+                    replaced = %displaced.display(),
+                    "a failed install could not put the replaced plugin tree back: {error}",
+                );
+            }
+        }
+        remove_install_scratch(&self.staging);
+        if let Some(displaced) = self.displaced.take() {
+            remove_install_scratch(&displaced);
+        }
+    }
+}
+
+/// A name inside the namespace directory that only this install owns. The
+/// leading dot cannot collide with a version directory: a plugin version is
+/// semver, which never starts with one.
+fn scratch_name(kind: &str) -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let (seconds, nanos) = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or((0, 0), |since| (since.as_secs(), since.subsec_nanos()));
+    format!(
+        ".{kind}-{pid}-{seconds:x}{nanos:x}-{nonce:x}",
+        pid = std::process::id(),
+        nonce = COUNTER.fetch_add(1, Ordering::Relaxed),
+    )
+}
+
+/// Delete a leftover the install owns. Best effort: the caller is either
+/// unwinding from an error it will report, or finishing an install that has
+/// already landed.
+fn remove_install_scratch(path: &Path) {
+    let Ok(metadata) = path.symlink_metadata() else {
+        return;
+    };
+    let removed = if metadata.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    if let Err(error) = removed {
+        tracing::warn!(
+            target: "orbit.core.plugin",
+            path = %path.display(),
+            "left behind a plugin install directory that could not be removed: {error}",
+        );
+    }
+}
+
+/// Delete everything in the namespace install directory except the tree the
+/// `plugins` row now names.
+///
+/// Each upgrade used to leave `plugins/<ns>/<oldversion>/` behind. Those trees
+/// are readable to every plugin backend — the install family is always
+/// readable (§4.3) — and are enough to make a later `add` of that version
+/// demand `--force`. One host row names one version, so nothing else under the
+/// namespace directory is referenced: not an older version, not a `current`
+/// link an earlier Orbit wrote beside them, not scratch a crashed install left.
+///
+/// Best effort, and only after the row is written: an install that landed is
+/// not reported as a failure because a stale directory would not delete.
+fn prune_namespace(global_root: &Path, name: &str, keep: &Path) {
+    let namespace_dir = plugin_namespace_dir(global_root, name);
+    let Ok(entries) = std::fs::read_dir(&namespace_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path != keep {
+            remove_install_scratch(&path);
+        }
+    }
 }
 
 fn copy_tree(source: &Path, target: &Path) -> Result<(), OrbitError> {

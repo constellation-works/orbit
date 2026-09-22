@@ -171,7 +171,7 @@ stay inside the plugin root or the granted fs profile.
 ## 3. Lifecycle and state
 
 ```
-orbit plugin add <path|git+url#ref|archive>   →  installed   (~/.orbit/plugins/<ns>/<version>/, `current` link)
+orbit plugin add <path|git+url#ref|archive>   →  installed   (~/.orbit/plugins/<ns>/<version>/)
 orbit plugin upgrade <ns> [source] [--grant …]
                                               →  upgraded    (permission diff printed; widening requires re-consent)
 orbit plugin enable <ns> [--grant fs,network,orbit_tools,unsandboxed] [--workspace]
@@ -188,6 +188,27 @@ are siblings of the active global root: `~/.orbit` uses `~/.agents/skills` and
 `/path/to/.claude/skills`. Disable removes only discovery links whose targets are inside the
 active global root's `plugins/<ns>/`; shipped, user-owned and other plugins' links remain
 untouched.
+
+**One version directory per namespace, swapped whole.** The host row in `plugins` is the only
+authority for where a plugin lives: its `install_path` is what the loader reads, what every
+lifecycle verb verifies, and what the sandbox profile is built from. There is deliberately no
+`current` link beside the version directories — nothing read it, and a second name for the
+install is a second thing that can drift from the row. An earlier Orbit wrote one beside the
+version directories; the next `add` prunes it, and `remove` takes it with the namespace.
+
+`add` copies the source into a staging directory inside `~/.orbit/plugins/<ns>/` and makes it
+visible with a single `rename`, so a concurrent `orbit` — a clock tick, an MCP server, a
+dashboard panel — never loads a `plugin.yaml` from a tree whose backend is still being
+written. Replacing a tree renames the old one aside first, because `rename` cannot replace a
+non-empty directory: for that moment `<version>/` does not exist, and a reader there gets a
+plain "not installed" error rather than half a plugin. The swap is rolled back if anything
+before the row is written fails, so a failed install never leaves a tree with no row — which
+the next `add` would refuse without `--force`. Once the row names the new tree, everything
+else under `~/.orbit/plugins/<ns>/` is unreferenced and is pruned: the version the upgrade
+replaced, a stale `current`, and scratch a crashed install left. Old version trees are
+readable to every plugin backend (§4.3), so keeping them would leave code on the host that no
+row admits to. `remove` deletes the whole `~/.orbit/plugins/<ns>/` family for the same reason,
+after the same install-path verification; `--record-only` still leaves every file in place.
 
 **Every verb that touches the recorded tree checks it first.** The `install_path` in the
 `plugins` row is writable by any backend holding `orbit_tools`, so `enable`, `disable` and
