@@ -246,7 +246,7 @@ pub fn host_plugin_cli_groups(
         return Ok(Vec::new());
     }
     let mut registry = ToolRegistry::new();
-    let load = load_host_plugins(
+    let load = load_host_plugins_without_refusal_audit(
         global_root,
         global_root,
         &store,
@@ -323,7 +323,7 @@ pub fn host_plugin_registry(
     let mut registry = ToolRegistry::new();
     // No workspace here, so no pin file: the global root holds none, and an
     // absent pin file is a valid configuration.
-    let load = load_host_plugins(
+    let load = load_host_plugins_without_refusal_audit(
         global_root,
         global_root,
         &store,
@@ -341,6 +341,41 @@ pub fn load_host_plugins(
     store: &Store,
     registry: &mut ToolRegistry,
     plugin_config: &BTreeMap<String, Value>,
+) -> PluginHostLoad {
+    load_host_plugins_with_audit(global_root, orbit_dir, store, registry, plugin_config, true)
+}
+
+/// Load plugins while deliberately avoiding refusal-audit writes.
+///
+/// Global CLI and MCP discovery open their store read-only before the runtime
+/// has selected its writable handle. They still report refused rows, but the
+/// writable runtime load records the refusal audit event. Attempting that
+/// insert here only produces a misleading error about an audit that is
+/// subsequently recorded by the writable pass.
+fn load_host_plugins_without_refusal_audit(
+    global_root: &Path,
+    orbit_dir: &Path,
+    store: &Store,
+    registry: &mut ToolRegistry,
+    plugin_config: &BTreeMap<String, Value>,
+) -> PluginHostLoad {
+    load_host_plugins_with_audit(
+        global_root,
+        orbit_dir,
+        store,
+        registry,
+        plugin_config,
+        false,
+    )
+}
+
+fn load_host_plugins_with_audit(
+    global_root: &Path,
+    orbit_dir: &Path,
+    store: &Store,
+    registry: &mut ToolRegistry,
+    plugin_config: &BTreeMap<String, Value>,
+    audit_refusals: bool,
 ) -> PluginHostLoad {
     let installed = match store.list_plugins() {
         Ok(installed) => installed,
@@ -370,7 +405,9 @@ pub fn load_host_plugins(
         if plugin.enabled
             && let Err((check, message)) = verify_enabled_row(global_root, plugin)
         {
-            audit_refused_row(store, plugin, check, &message);
+            if audit_refusals {
+                audit_refused_row(store, plugin, check, &message);
+            }
             load.diagnostics.push(PluginDiagnostic {
                 plugin: plugin.name.clone(),
                 status: PluginStatus::Inactive,
@@ -460,9 +497,8 @@ fn verify_enabled_row(
 ///
 /// A failed write is logged and swallowed, like every other audit write on a
 /// path that is already refusing (`record_authorization_event`): the plugin is
-/// not registered either way, and `host_plugin_registry` deliberately opens the
-/// store read-only, so an insert failure here is an expected outcome rather
-/// than a new one to propagate.
+/// not registered either way. Read-only host discovery skips this function;
+/// its following writable runtime load records the durable refusal event.
 fn audit_refused_row(store: &Store, installed: &InstalledPlugin, check: &str, message: &str) {
     let params = AuditEventInsertParams {
         execution_id: audit_execution_id("plugin-load"),

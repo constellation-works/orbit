@@ -436,6 +436,94 @@ fn grants_injected_into_the_store_row_are_refused_instead_of_registered() {
     assert_eq!(denial.error_message.as_deref(), Some(diagnostic.as_str()));
 }
 
+#[test]
+fn read_only_host_discovery_reports_a_refused_row_without_attempting_its_audit() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let global_root = temp.path().join("global");
+    write_plugin_unsandboxed(
+        &plugin_install_path(&global_root, "loose", "1.0.0"),
+        "loose",
+    );
+
+    let audit_db = global_root.join("orbit.db");
+    let store = Store::open(&audit_db).expect("open store");
+    store
+        .with_transaction(|tx| tx.upsert_plugin(&record(&global_root, "loose")))
+        .expect("record the install");
+    store
+        .with_transaction(|tx| {
+            tx.set_plugin_enabled(
+                "loose",
+                true,
+                &["orbit_tools".to_string(), "unsandboxed".to_string()],
+            )
+            .map(|_| ())
+        })
+        .expect("write the unauthorized grants");
+
+    let groups = host_plugin_cli_groups(&global_root, &audit_db, &BTreeMap::new())
+        .expect("read-only CLI discovery completes");
+    assert!(
+        groups.is_empty(),
+        "a refused plugin has no CLI group: {groups:?}"
+    );
+
+    let (_, load) = host_plugin_registry(&global_root, &audit_db, &BTreeMap::new())
+        .expect("read-only MCP discovery completes");
+    assert!(
+        load.diagnostics.iter().any(|diagnostic| {
+            diagnostic.plugin == "loose"
+                && diagnostic
+                    .message
+                    .contains("no authorization record exists")
+        }),
+        "the refusal remains visible: {:?}",
+        load.diagnostics
+    );
+
+    let denials = store
+        .list_audit_events(&orbit_store::contracts::AuditEventFilter {
+            target_type: Some("plugin".to_string()),
+            status: Some(AuditEventStatus::Denied),
+            limit: 10,
+            ..Default::default()
+        })
+        .expect("audit events");
+    assert!(
+        denials.is_empty(),
+        "read-only discovery must not attempt a refusal audit: {denials:?}"
+    );
+
+    let mut registry = ToolRegistry::new();
+    let writable_load = load_host_plugins(
+        &global_root,
+        &global_root,
+        &store,
+        &mut registry,
+        &BTreeMap::new(),
+    );
+    assert!(
+        writable_load
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.plugin == "loose"),
+        "the writable load still refuses the row"
+    );
+    assert_eq!(
+        store
+            .list_audit_events(&orbit_store::contracts::AuditEventFilter {
+                target_type: Some("plugin".to_string()),
+                status: Some(AuditEventStatus::Denied),
+                limit: 10,
+                ..Default::default()
+            })
+            .expect("audit events")
+            .len(),
+        1,
+        "the writable load records the refusal"
+    );
+}
+
 /// The composition gap ORB-12785 closes: the witness binds the grant *names*,
 /// not the tree they apply to. A backend enabled with `fs,orbit_tools` writes a
 /// second plugin tree under one of its own write roots (`state/logs`), then
