@@ -12,7 +12,7 @@ use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process
 use orbit_types::plugin::{
     FIRST_PARTY_PUBLISHER, MANIFEST_FILE_NAME, PluginExecutionKind, PluginManifest,
     PluginManifestError, PluginMcpScope, PluginTemplateVars, PluginTestFile, RESERVED_CLI_COMMANDS,
-    namespace_collides_with_tool, plugin_tool_name, render_template, template_references,
+    namespace_collides_with_tool, plugin_tool_name, render_template,
 };
 use orbit_types::tool::ToolParam;
 use serde_json::Value;
@@ -709,23 +709,29 @@ pub fn validate_loaded_plugin(
 }
 
 /// Refuse `spec.permissions.fs.write` roots that contain the plugin install
-/// tree or Orbit's global root, or that select a protected path inside the
-/// global root.
+/// tree or Orbit's global root, that select a protected path inside the
+/// global root, or that reach a workspace's `.orbit` / `.git` metadata.
 ///
 /// A write tree on `{{plugin_root}}` (or any parent) lets the backend rewrite
 /// `plugin.yaml` under an already-recorded `fs` grant; a write tree on the
 /// global root does the same to the host install. A narrower write inside the
 /// global root can still replace host executables, grant witnesses, or another
 /// plugin's files, so only the current plugin's `{{plugin_state}}` tree is
-/// allowed there. Paths that need `{{workspace}}` are skipped here and checked
-/// again when a call renders them.
+/// allowed there. Paths that need `{{workspace}}` are rendered against a
+/// synthetic root here, so validation and registration can enforce the
+/// workspace-relative rule before a concrete workspace is selected. Call time
+/// repeats the check against the real workspace root.
 pub fn refuse_covering_fs_write_roots(
     plugin: &LoadedPlugin,
     global_root: &Path,
     plugin_state: &Path,
 ) -> Result<(), PluginManifestError> {
+    // Validation and registration do not have a selected workspace. A stable
+    // absolute sentinel preserves every path relationship beneath
+    // `{{workspace}}` without borrowing any real host path.
+    let validation_workspace = Path::new("/__orbit_plugin_workspace__");
     let vars = PluginTemplateVars {
-        workspace: None,
+        workspace: Some(validation_workspace.to_string_lossy().into_owned()),
         plugin_root: plugin.root.to_string_lossy().into_owned(),
         plugin_state: plugin_state.to_string_lossy().into_owned(),
         config: plugin
@@ -736,12 +742,6 @@ pub fn refuse_covering_fs_write_roots(
     };
     for (index, declared) in plugin.manifest.spec.permissions.fs.write.iter().enumerate() {
         let field = format!("spec.permissions.fs.write[{index}]");
-        if template_references(declared)
-            .iter()
-            .any(|reference| reference == "workspace")
-        {
-            continue;
-        }
         let rendered = render_template(declared, &vars, &field)?;
         let path = PathBuf::from(&rendered);
         let absolute = if path.is_absolute() {
@@ -749,15 +749,19 @@ pub fn refuse_covering_fs_write_roots(
         } else {
             plugin.root.join(path)
         };
-        if let Some(protected) =
-            fs_write_root_covers(&absolute, &plugin.root, global_root, plugin_state)
-        {
+        if let Some(protected) = fs_write_root_covers(
+            &absolute,
+            &plugin.root,
+            global_root,
+            plugin_state,
+            Some(validation_workspace),
+        ) {
             return Err(PluginManifestError::new(
                 field,
                 format!(
                     "'{declared}' grants write access to the {protected}; a plugin cannot request \
                      writes to its own install tree or anywhere beneath Orbit's global root \
-                     except its own plugin state tree"
+                     except its own plugin state tree, or to workspace metadata `.orbit` / `.git`"
                 ),
             ));
         }
@@ -768,26 +772,39 @@ pub fn refuse_covering_fs_write_roots(
 /// Whether `write` reaches a host path a plugin must not modify. Equality
 /// counts: a grant on the plugin root itself is how a backend rewrites
 /// `plugin.yaml`. Within the global root, only the current plugin's state tree
-/// is writable.
+/// is writable. A workspace grant must neither contain nor sit inside
+/// `.orbit` or `.git`; component comparisons mean `.orbit-graph` remains an
+/// ordinary workspace directory.
 pub fn fs_write_root_covers(
     write: &Path,
     plugin_root: &Path,
     global_root: &Path,
     plugin_state: &Path,
+    workspace_root: Option<&Path>,
 ) -> Option<&'static str> {
     let write = physical_or_lexical(write);
     let plugin_root = physical_or_lexical(plugin_root);
     let global_root = physical_or_lexical(global_root);
     let plugin_state = physical_or_lexical(plugin_state);
     if is_path_prefix(&write, &plugin_root) {
-        Some("plugin install root")
+        return Some("plugin install root");
     } else if is_path_prefix(&write, &global_root) {
-        Some("Orbit global root")
+        return Some("Orbit global root");
     } else if is_path_prefix(&global_root, &write) && !is_path_prefix(&plugin_state, &write) {
-        Some("protected path beneath Orbit global root")
-    } else {
-        None
+        return Some("protected path beneath Orbit global root");
+    } else if let Some(workspace_root) = workspace_root {
+        let workspace_root = physical_or_lexical(workspace_root);
+        let workspace_orbit = physical_or_lexical(&workspace_root.join(".orbit"));
+        let workspace_git = physical_or_lexical(&workspace_root.join(".git"));
+        if is_path_prefix(&write, &workspace_orbit)
+            || is_path_prefix(&workspace_orbit, &write)
+            || is_path_prefix(&write, &workspace_git)
+            || is_path_prefix(&workspace_git, &write)
+        {
+            return Some("workspace metadata paths `.orbit` / `.git`");
+        }
     }
+    None
 }
 
 /// The path as the kernel would resolve it when it exists (symlinks and `..`
@@ -799,7 +816,7 @@ pub fn physical_or_lexical(path: &Path) -> PathBuf {
         .unwrap_or_else(|_| lexical_normalize(path))
 }
 
-fn lexical_normalize(path: &Path) -> PathBuf {
+pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {

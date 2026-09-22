@@ -17,6 +17,11 @@ use crate::{Tool, ToolContext};
 /// the granted state directory, `outside` beside the plugin root.
 const WRITER_BACKEND: &str = "#!/bin/sh\ncat >/dev/null\nresult=ok\nif ! echo inside > \"$ORBIT_PLUGIN_STATE/inside.txt\" 2>/dev/null; then result=inside_denied; fi\nif echo outside > \"$OUTSIDE\" 2>/dev/null; then result=\"$result,outside_written\"; fi\nprintf '{\"ok\":true,\"output\":{\"result\":\"%s\"}}\\n' \"$result\"\n";
 
+const WORKSPACE_METADATA_WRITER_BACKEND: &str = "#!/bin/sh\ncat >/dev/null\nresult=ok\nif ! echo allowed > \"$ORBIT_WORKSPACE_ROOT/output/allowed.txt\" 2>/dev/null; then result=allowed_denied; fi\nif echo schedule > \"$ORBIT_WORKSPACE_ROOT/.orbit/routines/demo.yaml\" 2>/dev/null; then result=\"$result,orbit_written\"; fi\nif echo hook > \"$ORBIT_WORKSPACE_ROOT/.git/hooks/pre-commit\" 2>/dev/null; then result=\"$result,git_written\"; fi\nprintf '{\"ok\":true,\"output\":{\"result\":\"%s\"}}\\n' \"$result\"\n";
+
+const NOOP_BACKEND: &str =
+    "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":true,\"output\":{\"result\":\"ok\"}}\\n'\n";
+
 fn fs_state_permissions() -> PluginPermissions {
     PluginPermissions {
         fs: PluginFsPermissions {
@@ -65,6 +70,43 @@ fn a_write_outside_the_granted_fs_profile_is_denied_under_the_sandbox() {
         !outside.exists(),
         "a write outside the granted profile must not reach the disk"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_workspace_subdirectory_grant_cannot_write_orbit_or_git_metadata() {
+    if sandbox_unavailable() {
+        return;
+    }
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("plugin");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(root.clone()).expect("plugin root");
+    std::fs::create_dir_all(workspace.join(".orbit/routines")).expect("routines");
+    std::fs::create_dir_all(workspace.join(".git/hooks")).expect("hooks");
+    let command = stub_backend(&root, WORKSPACE_METADATA_WRITER_BACKEND);
+    let permissions = PluginPermissions {
+        fs: PluginFsPermissions {
+            read: vec![],
+            write: vec!["{{workspace}}/output".into()],
+        },
+        ..PluginPermissions::default()
+    };
+    let backend = tool(spec(command, &root, permissions, &[PluginGrant::Fs]), None);
+    let ctx = ToolContext {
+        workspace_root: Some(workspace.clone()),
+        proc_spawn_environment: Some(vec![("PATH".to_string(), "/usr/bin:/bin".to_string())]),
+        ..context(&workspace)
+    };
+
+    let output = backend.execute(&ctx, json!({})).expect("backend runs");
+    assert_eq!(output["result"], "ok");
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("output/allowed.txt")).expect("allowed write"),
+        "allowed\n"
+    );
+    assert!(!workspace.join(".orbit/routines/demo.yaml").exists());
+    assert!(!workspace.join(".git/hooks/pre-commit").exists());
 }
 
 #[cfg(unix)]
@@ -150,6 +192,132 @@ fn the_profile_follows_the_grants_not_the_requests() {
     // `{{workspace}}` with no workspace is a refusal, not an empty path.
     let error = granted.sandbox_profile(None).unwrap_err().to_string();
     assert!(error.contains("no workspace"), "{error}");
+}
+
+#[test]
+fn call_time_refuses_workspace_metadata_but_allows_a_similar_directory() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("plugin");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&root).expect("plugin root");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+
+    for declared in [
+        "{{workspace}}",
+        "{{workspace}}/.orbit/routines",
+        "{{workspace}}/.git/hooks",
+    ] {
+        let permissions = PluginPermissions {
+            fs: PluginFsPermissions {
+                read: vec![],
+                write: vec![declared.into()],
+            },
+            ..PluginPermissions::default()
+        };
+        let granted = spec(root.join("bin"), &root, permissions, &[PluginGrant::Fs]);
+        let error = granted
+            .sandbox_profile(Some(&workspace))
+            .expect_err("workspace metadata must be refused at call time")
+            .to_string();
+        assert!(
+            error.contains("spec.permissions.fs.write[0]")
+                && error.contains(".orbit")
+                && error.contains(".git"),
+            "{declared}: {error}"
+        );
+    }
+
+    let permissions = PluginPermissions {
+        fs: PluginFsPermissions {
+            read: vec![],
+            write: vec!["{{workspace}}/.orbit-graph".into()],
+        },
+        ..PluginPermissions::default()
+    };
+    let profile = spec(root.join("bin"), &root, permissions, &[PluginGrant::Fs])
+        .sandbox_profile(Some(&workspace))
+        .expect("a similarly named workspace directory remains writable");
+    assert_eq!(profile.write, vec![workspace.join(".orbit-graph")]);
+}
+
+#[test]
+fn spawn_does_not_materialize_a_write_root_escaping_the_workspace() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("plugin");
+    let workspace = temp.path().join("workspace/nested");
+    std::fs::create_dir_all(&root).expect("plugin root");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let command = stub_backend(&root, NOOP_BACKEND);
+    let permissions = PluginPermissions {
+        fs: PluginFsPermissions {
+            read: vec![],
+            write: vec!["{{workspace}}/../../escaped".into()],
+        },
+        ..PluginPermissions::default()
+    };
+    let mut backend_spec = (*spec(
+        command,
+        &root,
+        permissions,
+        &[PluginGrant::Fs, PluginGrant::Unsandboxed],
+    ))
+    .clone();
+    backend_spec.sandbox = PluginSandbox::None;
+    let backend = tool(std::sync::Arc::new(backend_spec), None);
+    let ctx = ToolContext {
+        workspace_root: Some(workspace.clone()),
+        ..context(&workspace)
+    };
+
+    let output = backend.execute(&ctx, json!({})).expect("backend runs");
+    assert_eq!(output["result"], "ok");
+    assert!(
+        !temp.path().join("escaped").exists(),
+        "the host must not create a normalized write root outside the workspace"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn spawn_refuses_to_materialize_through_a_workspace_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("plugin");
+    let workspace = temp.path().join("workspace");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&root).expect("plugin root");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    std::fs::create_dir_all(&outside).expect("outside");
+    symlink(&outside, workspace.join("linked")).expect("symlink");
+    let command = stub_backend(&root, NOOP_BACKEND);
+    let permissions = PluginPermissions {
+        fs: PluginFsPermissions {
+            read: vec![],
+            write: vec!["{{workspace}}/linked/created".into()],
+        },
+        ..PluginPermissions::default()
+    };
+    let mut backend_spec = (*spec(
+        command,
+        &root,
+        permissions,
+        &[PluginGrant::Fs, PluginGrant::Unsandboxed],
+    ))
+    .clone();
+    backend_spec.sandbox = PluginSandbox::None;
+    let backend = tool(std::sync::Arc::new(backend_spec), None);
+    let ctx = ToolContext {
+        workspace_root: Some(workspace.clone()),
+        ..context(&workspace)
+    };
+
+    let error = backend
+        .execute(&ctx, json!({}))
+        .expect_err("a symlinked prefix must fail before spawn")
+        .to_string();
+    assert!(error.contains("symbolic link"), "{error}");
+    assert!(!outside.join("created").exists());
 }
 
 #[test]

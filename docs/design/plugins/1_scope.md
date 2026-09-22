@@ -280,8 +280,12 @@ that digest check, every rendered `permissions.fs.write` root is normalized befo
 A root that contains the plugin install tree or Orbit's global root is refused, and any root
 *beneath* the global root is also refused unless it is inside that plugin's own
 `{{plugin_state}}` tree. The same rule runs at `orbit plugin validate`, registration and call
-time (the last pass resolves deferred `{{workspace}}` paths), so an `fs` grant cannot reopen
-`bin/`, `plugins/.grants`, another plugin's install tree or another protected global path.
+time. A root that contains or lies inside the selected workspace's `.orbit` or `.git`
+metadata is refused too; the comparison is by path component, so a sibling such as
+`{{workspace}}/.orbit-graph` remains valid. Validation and registration enforce that
+workspace-relative rule against a synthetic root, then call time repeats it against the real
+workspace. Thus an `fs` grant cannot reopen `bin/`, `plugins/.grants`, another plugin's install
+tree, workspace control files, Git hooks or another protected global path.
 
 ### 4.2 Execution protocol
 
@@ -341,7 +345,7 @@ plugin missing a required grant never reaches this point (§4.1).
 |---|---|---|---|
 | (always) | — | The plugin root is readable and executable; the host runtime grants (`/usr`, the loader, resolver files, `PATH` directories, tool state) come from the same table activity-scoped `proc.spawn` uses | The compiler's own read allow plus its credential denies |
 | `permissions.fs.read` | `fs` | Each rendered path as a read tree (directory) or read file | `(allow file-read* (subpath …))` via the profile's `read` rules |
-| `permissions.fs.write` | `fs` | Each rendered path as a write tree; before a rule is compiled, normalized paths at or beneath Orbit's global root are refused except paths inside this plugin's `{{plugin_state}}` tree. The ruleset handles every write-side right, so a path without a write grant is read-only to the child | `(allow file-write* (subpath …))` via the profile's `modify` rules, after the same global-root refusal |
+| `permissions.fs.write` | `fs` | Each rendered path as a write tree; before a rule is compiled, normalized paths at or beneath Orbit's global root are refused except paths inside this plugin's `{{plugin_state}}` tree, and paths containing or inside workspace `.orbit` / `.git` are refused. The ruleset handles every write-side right, so a path without a write grant is read-only to the child | `(allow file-write* (subpath …))` via the profile's `modify` rules, after the same global-root and workspace-metadata refusal |
 | `permissions.network: none` (default) | — | `ACCESS_NET_BIND_TCP \| ACCESS_NET_CONNECT_TCP` handled with no rule, which refuses every TCP endpoint (needs Landlock ABI 4; an older kernel fails closed) | `(deny network*)` appended after the compiler's broad allow |
 | `permissions.network: loopback` | `network` | TCP left open — Landlock has no address filter, and the design's confinement claim is the filesystem | `(deny network*)` then loopback re-allows |
 | `permissions.network: any` | `network` | TCP left open | the compiler's `(allow network*)` stands |
@@ -350,8 +354,11 @@ plugin missing a required grant never reaches this point (§4.1).
 | `requires.programs` | — | Not a sandbox rule: the declared programs are checked against a restricted caller's own `proc.spawn` allowlist and stamped into `ORBIT_PROC_ALLOWED_PROGRAMS` | same |
 | `backend.sandbox: none` | `unsandboxed` | No ruleset at all | No `sandbox-exec` wrapper at all |
 
-Granted write *directories* are created before the child starts: a Landlock rule binds to an
-inode, so a grant naming a directory that does not exist yet would otherwise grant nothing.
+Granted write *directories* are created before the child starts only when their normalized path
+is contained by the selected workspace or the plugin's own `{{plugin_state}}`. Creation checks
+every existing component without following symbolic links; an escaping `..` root is left absent
+and a symlinked prefix is refused. A Landlock rule binds to an inode, so a safe grant naming a
+directory that does not exist yet would otherwise grant nothing.
 Named write *files* are the exception — they belong to SQLite and to the generation protocol,
 and a host that materialised one would break the store rather than confine it, so an absent
 file simply yields no grant. The host process spawning the backend has already opened the
