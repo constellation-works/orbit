@@ -3,7 +3,9 @@
 # and `orbit_tools` are applied as requested. An unconfined backend, an
 # absolute write root, `network: any`, or `env_pass` needs `--accept-requested`
 # or `--grant`. A passing run records the Orbit version so `orbit plugin show`
-# can print "certified for <version>".
+# can print "certified for <version>". String values in input and expect.output
+# may use {{workspace}} and {{plugin_root}}. A failure case uses:
+#   expect: { error: { code: backend_error } }
 schemaVersion: 1
 kind: PluginTest
 tests:
@@ -24,3 +26,12 @@ tests:
         plugin: __ORBIT_PLUGIN_NS__
         status: ready
         subject: conformance
+  - name: status_renders_workspace_template
+    tool: status
+    input:
+      subject: "{{workspace}}"
+    expect:
+      output:
+        plugin: __ORBIT_PLUGIN_NS__
+        status: ready
+        subject: "{{workspace}}"

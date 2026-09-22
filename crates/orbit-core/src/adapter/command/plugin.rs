@@ -127,6 +127,17 @@ impl OrbitRuntime {
         plugin::validate_plugin_dir(self, dir, first_party)
     }
 
+    /// Validate a plugin and render the profile/environment the backend would
+    /// receive for `workspace` without executing it.
+    pub fn validate_plugin_dir_rendered(
+        &self,
+        dir: &Path,
+        first_party: bool,
+        workspace: &Path,
+    ) -> Result<PluginValidationReport, OrbitError> {
+        plugin::validate_plugin_dir_for_workspace(self, dir, first_party, Some(workspace))
+    }
+
     pub fn sync_plugins(
         &self,
         dry_run: bool,

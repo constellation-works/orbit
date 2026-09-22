@@ -19,7 +19,8 @@ mod version;
 mod tests;
 
 pub use conformance::{
-    PluginTestCase, PluginTestExpectation, PluginTestFile, TEST_FILE_KIND, TEST_FILE_SCHEMA_VERSION,
+    PluginTestCase, PluginTestErrorExpectation, PluginTestExpectation, PluginTestFile,
+    TEST_FILE_KIND, TEST_FILE_SCHEMA_VERSION,
 };
 pub use grant::{
     PluginGrant, PluginGrantEntry, PluginGrantRequest, PluginGrantSet, parse_grant_entries,
