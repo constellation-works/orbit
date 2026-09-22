@@ -14,11 +14,24 @@ pub struct PluginValidateArgs {
     /// `origin: orbit` manifest is validated as it would be on install
     #[arg(long)]
     pub first_party: bool,
+    /// Print the effective sandbox profile and child environment for the
+    /// selected workspace without executing the backend. Use the global
+    /// `--workspace <SELECTOR>` option to render another workspace.
+    #[arg(long)]
+    pub render: bool,
 }
 
 impl Execute for PluginValidateArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let report = runtime.validate_plugin_dir(&self.dir, self.first_party)?;
+        let report = if self.render {
+            runtime.validate_plugin_dir_rendered(
+                &self.dir,
+                self.first_party,
+                &runtime.paths().repo_root,
+            )?
+        } else {
+            runtime.validate_plugin_dir(&self.dir, self.first_party)?
+        };
         let mut text = format!(
             "Valid plugin '{}' v{}\n  root:   {}\n  digest: {}\n  tools:",
             report.name, report.version, report.root, report.manifest_digest
@@ -29,7 +42,47 @@ impl Execute for PluginValidateArgs {
         for warning in &report.warnings {
             text.push_str(&format!("\n  warning: {warning}"));
         }
-        let doc = json!({
+        if let Some(rendered) = &report.rendered {
+            text.push_str(&format!(
+                "\nRendered backend profile for {}\n  read:         {}\n  read denies: {}\n  write:        {}\n  write files:  {}\n  network:      {}\n  unsandboxed:  {}",
+                rendered.workspace,
+                display_list(&rendered.read),
+                display_list(&rendered.read_denies),
+                display_list(&rendered.write),
+                display_list(&rendered.write_files),
+                rendered.network,
+                rendered.unsandboxed,
+            ));
+            for environment in &rendered.environments {
+                text.push_str(&format!(
+                    "\n  child env{}:",
+                    environment
+                        .tool
+                        .as_deref()
+                        .map(|tool| format!(" ({tool})"))
+                        .unwrap_or_default()
+                ));
+                for (name, value) in &environment.variables {
+                    text.push_str(&format!("\n    {name}={value}"));
+                }
+            }
+        }
+        let rendered = report.rendered.as_ref().map(|rendered| {
+            json!({
+                "workspace": rendered.workspace,
+                "read": rendered.read,
+                "read_denies": rendered.read_denies,
+                "write": rendered.write,
+                "write_files": rendered.write_files,
+                "network": rendered.network,
+                "unsandboxed": rendered.unsandboxed,
+                "environments": rendered.environments.iter().map(|environment| json!({
+                    "tool": environment.tool,
+                    "variables": environment.variables,
+                })).collect::<Vec<_>>(),
+            })
+        });
+        let mut doc = json!({
             "name": report.name,
             "version": report.version,
             "root": report.root,
@@ -37,6 +90,19 @@ impl Execute for PluginValidateArgs {
             "tools": report.tools,
             "warnings": report.warnings,
         });
+        if let Some(rendered) = rendered
+            && let Some(fields) = doc.as_object_mut()
+        {
+            fields.insert("rendered".to_string(), rendered);
+        }
         Ok(Payload::detail(doc, text).into())
+    }
+}
+
+fn display_list(items: &[String]) -> String {
+    if items.is_empty() {
+        "(none)".to_string()
+    } else {
+        items.join(", ")
     }
 }

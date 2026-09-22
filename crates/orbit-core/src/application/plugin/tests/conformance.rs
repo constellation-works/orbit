@@ -124,6 +124,59 @@ fn omitted_golden_input_is_an_empty_object_for_an_object_schema() {
 
 #[cfg(unix)]
 #[test]
+fn golden_templates_and_backend_error_codes_run_in_the_hermetic_workspace() {
+    let fixture = PluginFixture::new();
+    let root = write_tested_plugin(&fixture, "templated", "unused");
+    let backend = root.join("bin/backend.sh");
+    std::fs::write(
+        &backend,
+        r#"#!/bin/sh
+request=$(cat)
+case "$request" in
+  *'"subject":"fail"'*)
+    printf '{"ok":false,"error":{"code":"backend_error","message":"requested"}}\n'
+    ;;
+  *"$ORBIT_PLUGIN_ROOT"*)
+    printf '{"ok":true,"output":{"subject":"%s"}}\n' "$ORBIT_WORKSPACE_ROOT"
+    ;;
+  *)
+    printf '{"ok":false,"error":{"code":"template_missing","message":"plugin root absent"}}\n'
+    ;;
+esac
+"#,
+    )
+    .expect("write templated backend");
+    let golden = root.join("tests/conformance/greet.yaml");
+    std::fs::write(
+        &golden,
+        r#"schemaVersion: 1
+kind: PluginTest
+tests:
+  - name: paths_render
+    tool: greet
+    input:
+      path: "{{plugin_root}}"
+    expect:
+      output:
+        subject: "{{workspace}}"
+  - name: errors_match_code
+    tool: greet
+    input:
+      subject: fail
+    expect:
+      error:
+        code: backend_error
+"#,
+    )
+    .expect("write templated goldens");
+
+    let report = run(&fixture.runtime, &root).expect("run templated conformance suite");
+    assert!(report.passed(), "{:?}", report.results);
+    assert_eq!(report.results.len(), 2);
+}
+
+#[cfg(unix)]
+#[test]
 fn a_directory_with_a_first_party_origin_remote_is_refused() {
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "firstparty", "world");
@@ -447,6 +500,7 @@ fn a_grant_list_that_omits_a_dangerous_request_still_refuses() {
             first_party: false,
             grants: vec!["unsandboxed".to_string()],
             accept_requested: false,
+            ..PluginTestOptions::default()
         },
     )
     .expect_err("network: any was not named in --grant");
@@ -473,6 +527,7 @@ fn an_unknown_grant_name_is_refused_before_the_run() {
             first_party: false,
             grants: vec!["wifi".to_string()],
             accept_requested: true,
+            ..PluginTestOptions::default()
         },
     )
     .expect_err("an unknown --grant name is not consent");
@@ -542,6 +597,7 @@ fn accept_requested_keeps_the_certification_rule() {
         first_party: false,
         grants: Vec::new(),
         accept_requested: true,
+        ..PluginTestOptions::default()
     };
     let report = run_with(&runtime, &root, accepted.clone()).expect("the requested profile runs");
     assert!(report.passed(), "{:?}", report.results);
@@ -618,6 +674,7 @@ fn grant_names_that_cover_the_request_run_the_requested_profile() {
                 "unsandboxed".to_string(),
             ],
             accept_requested: false,
+            ..PluginTestOptions::default()
         },
     )
     .expect("the suite reports a refused call");
@@ -650,6 +707,7 @@ fn grant_names_that_cover_the_request_run_the_requested_profile() {
                 "unsandboxed".to_string(),
             ],
             accept_requested: false,
+            ..PluginTestOptions::default()
         },
     )
     .expect("a covering --grant list runs the requested profile");
@@ -689,6 +747,7 @@ fn accept_requested_still_refuses_a_write_root_that_covers_the_global_root() {
             first_party: false,
             grants: Vec::new(),
             accept_requested: true,
+            ..PluginTestOptions::default()
         },
     )
     .expect_err("consent does not lift the global-root write refusal");

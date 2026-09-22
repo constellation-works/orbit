@@ -6,8 +6,9 @@ use std::path::{Path, PathBuf};
 use orbit_automation::auto_tasks::loader::AUTO_TASKS_DIR;
 use orbit_automation::routines::loader::ROUTINES_DIR;
 use orbit_common::OrbitError;
+use orbit_tools::ToolContext;
 use orbit_tools::plugin::{
-    LoadedPlugin, PluginValidationPolicy, load_plugin_dir, manifest_refusal,
+    LoadedPlugin, PluginBackend, PluginValidationPolicy, load_plugin_dir, manifest_refusal,
     refuse_covering_fs_write_roots, validate_loaded_plugin,
 };
 use orbit_types::plugin::{
@@ -104,10 +105,34 @@ pub struct PluginValidationReport {
     pub root: String,
     pub manifest_digest: String,
     pub tools: Vec<String>,
+    /// Effective call-time profile, when validation was asked to render it.
+    pub rendered: Option<PluginRenderedProfile>,
     /// Non-fatal observations: a `requires` this host does not satisfy, a
     /// first-party claim this source cannot support, sections parsed but not
     /// yet consumed.
     pub warnings: Vec<String>,
+}
+
+/// The exact sandbox and environment projection a validated backend would
+/// receive for the selected workspace on this host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginRenderedProfile {
+    pub workspace: String,
+    pub read: Vec<String>,
+    pub read_denies: Vec<String>,
+    pub write: Vec<String>,
+    pub write_files: Vec<String>,
+    pub network: String,
+    pub unsandboxed: bool,
+    pub environments: Vec<PluginRenderedEnvironment>,
+}
+
+/// One child environment. Exec backends have one per tool because
+/// `ORBIT_TOOL_NAME` differs; an MCP backend has one shared environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginRenderedEnvironment {
+    pub tool: Option<String>,
+    pub variables: BTreeMap<String, String>,
 }
 
 pub fn list_plugins(runtime: &OrbitRuntime) -> Result<Vec<PluginSummary>, OrbitError> {
@@ -480,6 +505,16 @@ pub fn validate_plugin_dir(
     dir: &Path,
     first_party_verified: bool,
 ) -> Result<PluginValidationReport, OrbitError> {
+    validate_plugin_dir_for_workspace(runtime, dir, first_party_verified, None)
+}
+
+/// Validate and optionally render the effective profile for one workspace.
+pub fn validate_plugin_dir_for_workspace(
+    runtime: &OrbitRuntime,
+    dir: &Path,
+    first_party_verified: bool,
+    workspace: Option<&Path>,
+) -> Result<PluginValidationReport, OrbitError> {
     let plugin = load_plugin_dir(dir)?;
     let policy =
         PluginValidationPolicy::host_default().with_first_party_verified(first_party_verified);
@@ -506,6 +541,9 @@ pub fn validate_plugin_dir(
         plugin_config_section(&plugin, &config.plugins),
     );
     refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
+    let rendered = workspace
+        .map(|workspace| render_backend_profile(runtime, &plugin, &backend, workspace))
+        .transpose()?;
 
     let mut warnings = Vec::new();
     for skill_dir in &plugin.skills {
@@ -532,7 +570,11 @@ pub fn validate_plugin_dir(
             web.links.len()
         ));
     }
-    let tests: usize = plugin.tests.iter().map(|file| file.tests.len()).sum();
+    let tests: usize = plugin
+        .tests
+        .iter()
+        .map(|loaded| loaded.file.tests.len())
+        .sum();
     if tests == 0 {
         warnings.push(
             "this plugin ships no `spec.tests` goldens, so `orbit plugin test` cannot certify \
@@ -596,7 +638,75 @@ pub fn validate_plugin_dir(
                 )
             })
             .collect(),
+        rendered,
         warnings,
+    })
+}
+
+fn render_backend_profile(
+    runtime: &OrbitRuntime,
+    plugin: &LoadedPlugin,
+    backend: &PluginBackend,
+    workspace: &Path,
+) -> Result<PluginRenderedProfile, OrbitError> {
+    let workspace = workspace
+        .canonicalize()
+        .unwrap_or_else(|_| workspace.to_path_buf());
+    let workspace_text = workspace.to_string_lossy().into_owned();
+    let profile = backend.spec().sandbox_profile(Some(&workspace))?;
+    let context = ToolContext {
+        cwd: Some(workspace_text.clone()),
+        workspace_root: Some(workspace.clone()),
+        proc_allowed_programs: plugin.manifest.spec.requires.programs.clone(),
+        proc_spawn_environment: Some(runtime.execution_env_policy().agent_subprocess_env(&[])),
+        ..ToolContext::default()
+    };
+    let environment_tools: Vec<Option<String>> = match backend {
+        PluginBackend::Exec(_) => plugin
+            .tools
+            .iter()
+            .map(|tool| {
+                Some(plugin_tool_name(
+                    plugin.namespace(),
+                    &tool.verb,
+                    plugin.manifest.claims_first_party_namespace(),
+                ))
+            })
+            .collect(),
+        PluginBackend::Mcp(_) => vec![None],
+    };
+    let environments = environment_tools
+        .into_iter()
+        .map(|tool| PluginRenderedEnvironment {
+            variables: backend
+                .spec()
+                .child_environment(&context, &workspace_text, tool.as_deref())
+                .into_iter()
+                .collect(),
+            tool,
+        })
+        .collect();
+    let paths = |items: Vec<PathBuf>| {
+        items
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
+    };
+    let network = match profile.network {
+        orbit_types::plugin::PluginNetworkPermission::None => "none",
+        orbit_types::plugin::PluginNetworkPermission::Loopback => "loopback",
+        orbit_types::plugin::PluginNetworkPermission::Any => "any",
+    }
+    .to_string();
+    Ok(PluginRenderedProfile {
+        workspace: workspace_text,
+        read: paths(profile.read),
+        read_denies: paths(profile.read_denies),
+        write: paths(profile.write),
+        write_files: paths(profile.write_files),
+        network,
+        unsandboxed: profile.unsandboxed,
+        environments,
     })
 }
 

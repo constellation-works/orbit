@@ -3,7 +3,8 @@
 //!
 //! A golden is a plugin's own statement of what its tools return, written
 //! once and re-checked against every Orbit it is certified for. The shape is
-//! deliberately small: a tool, an input, and the output the plugin promises.
+//! deliberately small: a tool, an input, and the output or error code the
+//! plugin promises.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,7 +25,7 @@ pub struct PluginTestFile {
     pub tests: Vec<PluginTestCase>,
 }
 
-/// One golden: call `tool` with `input`, expect `expect.output`.
+/// One golden: call `tool` with `input`, expect output or a plugin error code.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginTestCase {
@@ -39,10 +40,18 @@ pub struct PluginTestCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PluginTestExpectation {
+#[serde(untagged, deny_unknown_fields)]
+pub enum PluginTestExpectation {
     /// The exact tool output. Compared as JSON, so key order does not matter.
-    pub output: Value,
+    Output { output: Value },
+    /// A backend-declared `ok: false` error code.
+    Error { error: PluginTestErrorExpectation },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginTestErrorExpectation {
+    pub code: String,
 }
 
 impl PluginTestFile {
@@ -88,6 +97,14 @@ impl PluginTestFile {
                         "test '{}' names tool '{}', which is not a valid tool verb",
                         case.name, case.tool
                     ),
+                ));
+            }
+            if let PluginTestExpectation::Error { error } = &case.expect
+                && error.code.trim().is_empty()
+            {
+                return Err(PluginManifestError::new(
+                    field,
+                    format!("test '{}' has an empty expect.error.code", case.name),
                 ));
             }
         }

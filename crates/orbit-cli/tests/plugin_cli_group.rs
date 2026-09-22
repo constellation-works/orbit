@@ -121,7 +121,7 @@ fn write_fixture_plugin(root: &Path) {
     let backend = root.join("bin/backend.sh");
     std::fs::write(
         &backend,
-        "#!/bin/sh\ninput=$(cat)\nprintf '{\"ok\":true,\"output\":{\"echo\":%s}}\\n' \"$input\"\n",
+        "#!/bin/sh\ninput=$(cat)\ncase \"$input\" in *'shapes.fail'*) exit 91;; esac\nprintf '{\"ok\":true,\"output\":{\"echo\":%s}}\\n' \"$input\"\n",
     )
     .expect("write backend");
     #[cfg(unix)]
@@ -166,6 +166,10 @@ spec:
         type: object
         properties:
           force: { type: boolean }
+    - name: fail
+      description: Exit if the backend is actually executed.
+      execution_kind: read_only
+      mcp_scope: workspace
 "#,
     )
     .expect("write manifest");
@@ -230,6 +234,22 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
         .args(["plugin", "enable", "shapes"])
         .assert()
         .success();
+
+    let explained = fixture
+        .orbit_as_operator()
+        .args(["shapes", "fail", "--explain", "--format", "json"])
+        .output()
+        .expect("explain the derived tool call");
+    assert!(
+        explained.status.success(),
+        "--explain must not execute the backend that exits 91: {explained:?}"
+    );
+    let explained = stdout_json(&explained);
+    assert_eq!(explained["tool"], "shapes.fail");
+    assert_eq!(
+        explained["command"],
+        "orbit tool run shapes.fail --input '{}'"
+    );
 
     // `orbit <ns> --help` lists the verbs with the manifest's descriptions.
     fixture
@@ -557,6 +577,57 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
         "the default scaffold source must be outside the workspace repository"
     );
 
+    let rendered = fixture
+        .orbit()
+        .args([
+            "plugin",
+            "validate",
+            &root_arg,
+            "--render",
+            "--workspace",
+            fixture.work.to_str().expect("utf8 workspace"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("render the validated backend profile");
+    assert!(rendered.status.success(), "{rendered:?}");
+    let rendered = stdout_json(&rendered);
+    let canonical_workspace = fixture
+        .work
+        .canonicalize()
+        .expect("canonical workspace")
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(rendered["rendered"]["workspace"], canonical_workspace);
+    assert_eq!(rendered["rendered"]["network"], "none");
+    assert_eq!(
+        rendered["rendered"]["environments"][0]["variables"]["ORBIT_WORKSPACE_ROOT"],
+        canonical_workspace
+    );
+
+    // Exercise template substitution in both input and output plus the
+    // structured error expectation through the public CLI.
+    let backend = root.join("bin/backend.py");
+    let backend_text = std::fs::read_to_string(&backend).expect("read scaffold backend");
+    std::fs::write(
+        &backend,
+        backend_text.replace(
+            "    return {\n",
+            "    if payload.get(\"subject\") == \"fail\":\n        raise ValueError(\"requested failure\")\n    return {\n",
+        ),
+    )
+    .expect("add error path to scaffold backend");
+    let golden = root.join("tests/conformance/status.yaml");
+    let golden_text = std::fs::read_to_string(&golden).expect("read scaffold golden");
+    std::fs::write(
+        &golden,
+        format!(
+            "{golden_text}  - name: status_renders_workspace\n    tool: status\n    input:\n      subject: \"{{{{workspace}}}}\"\n    expect:\n      output:\n        plugin: demo\n        status: ready\n        subject: \"{{{{workspace}}}}\"\n  - name: status_reports_backend_error\n    tool: status\n    input:\n      subject: fail\n    expect:\n      error:\n        code: backend_error\n"
+        ),
+    )
+    .expect("add templated and error goldens");
+
     // Run every command that scaffold printed, word-for-word, while remaining
     // in the repository root. This makes the advertised `add` command an e2e
     // contract instead of a hand-maintained variant of it.
@@ -605,7 +676,6 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
     assert_eq!(stdout_json(&called)["subject"], "conformance");
 
     // A deliberately wrong expectation fails, naming the test.
-    let golden = root.join("tests/conformance/status.yaml");
     let contents = std::fs::read_to_string(&golden).expect("read the golden");
     std::fs::write(&golden, contents.replace("status: ready", "status: broken"))
         .expect("write the golden");
@@ -616,6 +686,42 @@ fn scaffold_validate_test_and_install_run_end_to_end() {
         .failure()
         .stdout(predicate::str::contains("status_reports_ready"))
         .stdout(predicate::str::contains("failed"));
+
+    fixture
+        .orbit()
+        .args([
+            "plugin",
+            "test",
+            &root_arg,
+            "--case",
+            "status_reports_ready",
+            "--update-goldens",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("updated"));
+    let updated = std::fs::read_to_string(&golden).expect("read updated golden");
+    assert!(updated.contains("status: ready"), "{updated}");
+
+    // Filtering one case ignores a deliberately broken sibling and does not
+    // claim that the full suite was certified.
+    std::fs::write(
+        &golden,
+        updated.replacen("subject: conformance", "subject: still-broken", 1),
+    )
+    .expect("break the unselected case");
+    fixture
+        .orbit()
+        .args([
+            "plugin",
+            "test",
+            &root_arg,
+            "--case",
+            "status_reports_ready",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 of 1"));
 }
 
 #[cfg(unix)]

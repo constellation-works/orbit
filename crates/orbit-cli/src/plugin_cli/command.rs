@@ -16,10 +16,11 @@ use std::sync::OnceLock;
 use clap::{Arg, ArgMatches, Command};
 use orbit_core::adapter::command::{PluginCliGroup, PluginCliVerb};
 use orbit_core::{OrbitError, OrbitRuntime};
+use serde_json::json;
 
 use super::schema::{DerivedArg, clap_arg, derive_args, input_from_matches};
 use crate::command::tool::ToolRunArgs;
-use crate::command::{CommandOut, Execute};
+use crate::command::{CommandOut, Execute, Payload};
 
 /// Help heading `orbit --help` lists plugin groups under.
 pub(crate) const PLUGIN_HELP_HEADING: &str = "Plugins:";
@@ -41,12 +42,38 @@ pub struct PluginGroupInvocation {
     /// reaches the operator through the same error path, and the same audit
     /// row, as any other bad tool input.
     pub input_error: Option<String>,
+    /// Print the equivalent `orbit tool run` command instead of dispatching.
+    pub explain: bool,
 }
 
 impl Execute for PluginGroupInvocation {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         if let Some(message) = self.input_error {
             return Err(OrbitError::InvalidInput(message));
+        }
+        if self.explain {
+            let input = self.tool_run.parsed_input()?;
+            let encoded = serde_json::to_string(&input).map_err(|error| {
+                OrbitError::InvalidInput(format!("serialize plugin tool input: {error}"))
+            })?;
+            let mut command = format!(
+                "orbit tool run {} --input {}",
+                self.tool_run.name,
+                shell_quote(&encoded)
+            );
+            if self.tool_run.dry_run {
+                command.push_str(" --dry-run");
+            }
+            return Ok(Payload::detail(
+                json!({
+                    "command": command,
+                    "tool": self.tool_run.name,
+                    "input": input,
+                    "dry_run": self.tool_run.dry_run,
+                }),
+                command,
+            )
+            .into());
         }
         self.tool_run.execute(runtime)
     }
@@ -132,6 +159,12 @@ fn verb_command(verb: &PluginCliVerb) -> Command {
                 .action(clap::ArgAction::SetTrue)
                 .help("Validate without executing"),
         )
+        .arg(
+            Arg::new("explain")
+                .long("explain")
+                .action(clap::ArgAction::SetTrue)
+                .help("Print the equivalent `orbit tool run` command without executing"),
+        )
 }
 
 /// Resolve a top-level match against the plugin groups, and reduce it to the
@@ -204,7 +237,17 @@ fn build_invocation(
             parsed_input: OnceLock::new(),
         },
         input_error,
+        explain: matches
+            .try_get_one::<bool>("explain")
+            .ok()
+            .flatten()
+            .copied()
+            .unwrap_or(false),
     }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 /// The `Plugins:` block `orbit --help` prints, or an empty string when this

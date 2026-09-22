@@ -38,7 +38,7 @@ copy would follow it and place the target's bytes inside the plugin root.
 
 ```bash
 orbit plugin scaffold demo               # start a new plugin from a working example
-orbit plugin validate ./my-plugin        # check the manifest before installing
+orbit plugin validate ./my-plugin --render  # inspect the manifest and effective backend profile
 orbit plugin add ./my-plugin             # install for this machine (disabled)
 orbit plugin upgrade my-plugin           # update and review permission changes
 orbit plugin enable my-plugin            # put its tools on the surface
@@ -126,7 +126,8 @@ from the top level of the schema and nowhere deeper:
 `--input '<json>'`, `--input-file` and `--dry-run` are always accepted, and `--input`
 overrides every flag — that is the escape hatch for a shape no flag expresses. A property
 whose flag would collide with one Orbit owns keeps its place in the schema and is reached
-through `--input`.
+through `--input`. Add `--explain` to print the equivalent `orbit tool run <ns>.<verb>
+--input '<json>'` command without executing the backend.
 
 A boolean's explicit value must use `=`: `--kebab-case value` never treats `value` as the
 flag's own, so a boolean flag can sit directly in front of a positional argument without
@@ -157,13 +158,19 @@ restarting `orbit web serve`.
 
 ```bash
 orbit plugin scaffold demo            # a starter plugin: backend, tool, panel, skill, goldens
-orbit plugin validate ./demo          # manifest, paths, namespace, panels
+orbit plugin validate ./demo --render # manifest plus effective profile/env for this workspace
 orbit plugin test ./demo              # run its goldens through the real protocol
+orbit plugin test ./demo --case status_reports_ready
+orbit plugin test ./demo --update-goldens
 ```
 
-`orbit plugin test` runs each `spec.tests` golden — `{name, tool, input, expect.output}` —
-in a temp workspace and compares the output exactly. It exits non-zero when a case fails,
-naming it. Template paths (`{{workspace}}`, `{{plugin_root}}`, `{{plugin_state}}`,
+`orbit plugin test` runs each `spec.tests` golden — `{name, tool, input, expect}` —
+in a temp workspace and compares `expect.output` exactly, or matches the backend code in
+`expect.error: {code: ...}`. String values in `input` and `expect.output` substitute
+`{{workspace}}` and `{{plugin_root}}` against that hermetic run. It exits non-zero when a
+case fails, naming it. `--case <name>` runs one case without certifying the full suite;
+`--update-goldens` replaces mismatched output expectations with actual output. Manifest
+template paths (`{{workspace}}`, `{{plugin_root}}`, `{{plugin_state}}`,
 `{{config.<key>}}`), `network: loopback`, and `orbit_tools` are applied as the manifest
 requests them, inside that temp workspace, so those paths do not touch the operator's
 Orbit state.
@@ -180,6 +187,11 @@ plugin.
 A passing run records this Orbit's version on the installed plugin, and `orbit plugin show <ns>` prints it as `Certified for: <version>`.
 The record is only written when the directory tested is the installed one (same manifest
 digest); reinstalling a changed manifest drops the claim.
+
+`orbit plugin validate <dir> --render` uses the same profile and child-environment builders
+as a real call, but starts no backend. Its read/write roots, network mode and environment
+are rendered for the current workspace; pass the global `--workspace <selector>` option to
+inspect another registered checkout.
 
 `orbit tool scaffold` still writes the older executable-plus-sidecar form for one more
 release and prints a deprecation pointing here.

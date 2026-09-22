@@ -20,13 +20,16 @@ use super::validate::PluginValidateArgs;
 const PLUGIN_COMMAND_AFTER_HELP: &str = "\
 Examples:
   orbit plugin scaffold demo
-  orbit plugin validate ./demo
-  orbit plugin test ./demo
+  orbit plugin validate ./demo --render
+  orbit plugin test ./demo --case status_reports_ready
+  orbit plugin test ./demo --update-goldens
   orbit plugin add ./demo --enable
   orbit plugin list
 
 Plugins install once per machine under the Orbit global root; a repository
 commits only the `.orbit/plugins.yaml` pin file, never a plugin tree.
+Golden input and output strings may use {{workspace}} and {{plugin_root}};
+expect.error.code matches a backend's structured error code.
 ";
 
 #[derive(Args)]

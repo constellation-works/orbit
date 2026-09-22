@@ -84,6 +84,7 @@ fn group() -> PluginCliGroup {
                         "input": { "type": "object" },
                         "input-file": { "type": "object" },
                         "dry-run": { "type": "object" },
+                        "explain": { "type": "object" },
                         "help": { "type": "object" },
                         "format": { "type": "object" },
                         "root": { "type": "object" },
@@ -141,6 +142,8 @@ fn object_properties_named_after_host_arguments_parse_in_the_complete_command() 
             r#"{"path":"derived"}"#,
             "--dry-run-json",
             r#"{"mode":"derived"}"#,
+            "--explain-json",
+            r#"{"mode":"derived"}"#,
             "--help-json",
             r#"{"topic":"derived"}"#,
             "--format-json",
@@ -175,6 +178,7 @@ fn object_properties_named_after_host_arguments_parse_in_the_complete_command() 
             "input": { "source": "derived" },
             "input-file": { "path": "derived" },
             "dry-run": { "mode": "derived" },
+            "explain": { "mode": "derived" },
             "help": { "topic": "derived" },
             "format": { "style": "derived" },
             "root": { "path": "derived" },
@@ -193,7 +197,7 @@ fn raw_input_still_expresses_every_property_when_a_derived_name_collides() {
         "--input-json",
         r#"{"ignored":true}"#,
         "--input",
-        r#"{"input":{"raw":true},"input-file":{"raw":true},"dry-run":{"raw":true},"help":{"raw":true},"format":{"raw":true},"root":{"raw":true},"workspace":{"raw":true},"version":{"raw":true}}"#,
+        r#"{"input":{"raw":true},"input-file":{"raw":true},"dry-run":{"raw":true},"explain":{"raw":true},"help":{"raw":true},"format":{"raw":true},"root":{"raw":true},"workspace":{"raw":true},"version":{"raw":true}}"#,
     ])
     .expect("a plugin group invocation");
 
@@ -203,6 +207,7 @@ fn raw_input_still_expresses_every_property_when_a_derived_name_collides() {
             "input": { "raw": true },
             "input-file": { "raw": true },
             "dry-run": { "raw": true },
+            "explain": { "raw": true },
             "help": { "raw": true },
             "format": { "raw": true },
             "root": { "raw": true },
@@ -245,6 +250,7 @@ fn host_help_is_available_beside_a_help_property() {
     assert!(help.contains("--input <JSON>"), "{help}");
     assert!(help.contains("--input-file <PATH>"), "{help}");
     assert!(help.contains("--dry-run"), "{help}");
+    assert!(help.contains("--explain"), "{help}");
     assert!(help.contains("--help"), "{help}");
 }
 
@@ -346,6 +352,25 @@ fn dry_run_reaches_the_tool_run_arguments() {
 }
 
 #[test]
+fn explain_is_carried_without_changing_the_tool_input() {
+    let invocation = parse(&[
+        "orbit",
+        "demo",
+        "recommend",
+        "leakage",
+        "--max-depth",
+        "2",
+        "--explain",
+    ])
+    .expect("a plugin group invocation");
+    assert!(invocation.explain);
+    assert_eq!(
+        input(&invocation),
+        json!({ "query": "leakage", "max_depth": 2 })
+    );
+}
+
+#[test]
 fn the_scaffolded_status_verb_parses_both_the_positional_and_the_flag_form() {
     let positional =
         parse(&["orbit", "demo", "status", "operator"]).expect("the positional form parses");
@@ -398,6 +423,30 @@ fn group_help_lists_manifest_descriptions() {
         "{help}"
     );
     assert!(help.contains("demo"), "{help}");
+}
+
+#[test]
+fn plugin_verb_help_matches_the_shipped_surface() {
+    let groups = vec![group()];
+    let actual = parser(&groups)
+        .find_subcommand_mut("demo")
+        .expect("plugin group")
+        .find_subcommand_mut("recommend")
+        .expect("plugin verb")
+        .render_long_help()
+        .to_string();
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/plugin_cli/tests/verb_help.txt");
+    if std::env::var("ORBIT_UPDATE_HELP_GOLDENS").as_deref() == Ok("1") {
+        std::fs::write(&path, &actual)
+            .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+        return;
+    }
+    assert_eq!(
+        actual,
+        include_str!("verb_help.txt"),
+        "derived plugin verb help drifted; regenerate with make goldens UPDATE=1"
+    );
 }
 
 #[test]

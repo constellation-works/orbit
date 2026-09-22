@@ -219,6 +219,9 @@ fn cli_parses_plugin_test_consent_flags() {
         "--grant",
         "fs,unsandboxed",
         "--accept-requested",
+        "--case",
+        "status_reports_ready",
+        "--update-goldens",
     ]);
     match cli.command {
         Commands::Plugin(command) => match command.command {
@@ -227,6 +230,8 @@ fn cli_parses_plugin_test_consent_flags() {
                 assert!(args.first_party);
                 assert_eq!(args.grants, ["fs", "unsandboxed"]);
                 assert!(args.accept_requested);
+                assert_eq!(args.case.as_deref(), Some("status_reports_ready"));
+                assert!(args.update_goldens);
             }
             _ => panic!("expected plugin test"),
         },
@@ -252,6 +257,8 @@ fn scaffolded_plugin_passes_plugin_test_with_no_flags() {
         first_party: false,
         grants: Vec::new(),
         accept_requested: false,
+        case: None,
+        update_goldens: false,
     }
     .execute(&fixture.runtime)
     .expect("the scaffolded plugin passes with no flags");
@@ -292,6 +299,8 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
         first_party: false,
         grants: Vec::new(),
         accept_requested: false,
+        case: None,
+        update_goldens: false,
     }
     .execute(&fixture.runtime)
     .expect_err("an unconfined absolute-write manifest needs consent");
@@ -321,6 +330,8 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
         first_party: false,
         grants: Vec::new(),
         accept_requested: true,
+        case: None,
+        update_goldens: false,
     }
     .execute(&fixture.runtime)
     .expect("the suite reports the missing consented directory");
@@ -348,6 +359,8 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
         first_party: false,
         grants: Vec::new(),
         accept_requested: true,
+        case: None,
+        update_goldens: false,
     }
     .execute(&fixture.runtime)
     .expect("accept-requested runs the requested profile");

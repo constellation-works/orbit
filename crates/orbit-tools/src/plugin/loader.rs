@@ -135,7 +135,14 @@ pub struct LoadedPlugin {
     pub config_defaults: BTreeMap<String, Value>,
     /// `spec.tests[]` resolved to golden files inside the root, parsed and
     /// structurally validated (§5). Empty when the manifest ships none.
-    pub tests: Vec<PluginTestFile>,
+    pub tests: Vec<LoadedPluginTestFile>,
+}
+
+/// One resolved `spec.tests` file and its parsed cases.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadedPluginTestFile {
+    pub path: PathBuf,
+    pub file: PluginTestFile,
 }
 
 impl LoadedPlugin {
@@ -311,7 +318,7 @@ pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
 fn resolve_tests(
     root: &Path,
     manifest: &PluginManifest,
-) -> Result<Vec<PluginTestFile>, PluginLoadError> {
+) -> Result<Vec<LoadedPluginTestFile>, PluginLoadError> {
     let paths = resolve_patterns(root, &manifest.spec.tests, "spec.tests")?;
     let mut files = Vec::with_capacity(paths.len());
     for path in paths {
@@ -344,7 +351,7 @@ fn resolve_tests(
                 .into());
             }
         }
-        files.push(file);
+        files.push(LoadedPluginTestFile { path, file });
     }
     Ok(files)
 }

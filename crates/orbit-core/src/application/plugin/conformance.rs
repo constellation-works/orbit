@@ -23,14 +23,16 @@ use std::path::Path;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
+use orbit_common::fs::io::atomic_write_text;
 use orbit_tools::plugin::{
-    LoadedPlugin, PluginBackend, PluginTool, PluginToolBinding, PluginValidationPolicy,
-    load_plugin_dir, manifest_refusal, refuse_covering_fs_write_roots, validate_loaded_plugin,
+    LoadedPlugin, LoadedPluginTestFile, PluginBackend, PluginTool, PluginToolBinding,
+    PluginValidationPolicy, load_plugin_dir, manifest_refusal, refuse_covering_fs_write_roots,
+    validate_loaded_plugin,
 };
 use orbit_tools::{Tool, ToolContext};
 use orbit_types::plugin::{
     PluginGrant, PluginGrantSet, PluginManifest, PluginNetworkPermission, PluginProvenance,
-    PluginSandbox, PluginTestCase, parse_grants, plugin_tool_name,
+    PluginSandbox, PluginTestCase, PluginTestExpectation, parse_grants, plugin_tool_name,
 };
 use serde_json::Value;
 
@@ -45,6 +47,8 @@ pub struct PluginTestOutcome {
     /// Canonical tool name the case called.
     pub tool: String,
     pub passed: bool,
+    /// Whether `--update-goldens` replaced this case's expected output.
+    pub updated: bool,
     /// Why it failed, or empty when it passed.
     pub detail: String,
 }
@@ -94,6 +98,10 @@ pub struct PluginTestOptions {
     pub grants: Vec<String>,
     /// `--accept-requested`: run under the manifest's full requested profile.
     pub accept_requested: bool,
+    /// `--case <name>`: run exactly one named golden.
+    pub case: Option<String>,
+    /// Replace mismatched output expectations with the actual output.
+    pub update_goldens: bool,
 }
 
 pub fn test_plugin_dir(
@@ -101,7 +109,7 @@ pub fn test_plugin_dir(
     dir: &Path,
     options: &PluginTestOptions,
 ) -> Result<PluginTestReport, OrbitError> {
-    let plugin = load_plugin_dir(dir)?;
+    let mut plugin = load_plugin_dir(dir)?;
     let first_party_verified = match runtime.stores().plugins().get_plugin(plugin.namespace())? {
         Some(installed) if installed.manifest_digest == plugin.manifest_digest => {
             installed.first_party
@@ -114,12 +122,8 @@ pub fn test_plugin_dir(
     if let Some(message) = unmet_requirement(&plugin) {
         return Err(OrbitError::InvalidInput(message));
     }
-    let cases: Vec<&PluginTestCase> = plugin
-        .tests
-        .iter()
-        .flat_map(|file| file.tests.iter())
-        .collect();
-    if cases.is_empty() {
+    let case_locations = selected_case_locations(&plugin, options.case.as_deref())?;
+    if case_locations.is_empty() {
         return Err(OrbitError::InvalidInput(format!(
             "plugin '{}' declares no `spec.tests` goldens; a plugin is certified by the tests it \
              ships (see `orbit plugin scaffold` for the shape)",
@@ -163,9 +167,33 @@ pub fn test_plugin_dir(
         plugin_config_section(&plugin, &config.plugins),
     );
     refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
-    let mut results = Vec::with_capacity(cases.len());
-    for case in cases {
-        results.push(run_case(&plugin, &backend, &workspace_root, case));
+    let mut results = Vec::with_capacity(case_locations.len());
+    let mut changed_files = std::collections::BTreeSet::new();
+    for (file_index, case_index) in case_locations {
+        let execution = run_case(
+            &plugin,
+            &backend,
+            &workspace_root,
+            &plugin.tests[file_index].file.tests[case_index],
+        );
+        let mut outcome = execution.outcome;
+        if options.update_goldens
+            && let Some(output) = execution.actual_output
+            && !outcome.passed
+        {
+            plugin.tests[file_index].file.tests[case_index].expect =
+                PluginTestExpectation::Output {
+                    output: template_golden_value(&output, &workspace_root, &plugin.root),
+                };
+            changed_files.insert(file_index);
+            outcome.passed = true;
+            outcome.updated = true;
+            outcome.detail = "updated expected output".to_string();
+        }
+        results.push(outcome);
+    }
+    for file_index in changed_files {
+        write_golden_file(&plugin.tests[file_index])?;
     }
 
     let mut report = PluginTestReport {
@@ -179,10 +207,72 @@ pub fn test_plugin_dir(
         certification_note: String::new(),
         requested_grants,
     };
-    let (certified, note) = record_certification(runtime, &plugin, &report);
+    let (certified, note) = if options.case.is_some() {
+        (
+            false,
+            "not recorded: a filtered --case run does not certify the full suite".to_string(),
+        )
+    } else {
+        record_certification(runtime, &plugin, &report)
+    };
     report.certified = certified;
     report.certification_note = note;
     Ok(report)
+}
+
+fn selected_case_locations(
+    plugin: &LoadedPlugin,
+    selected: Option<&str>,
+) -> Result<Vec<(usize, usize)>, OrbitError> {
+    let all: Vec<(usize, usize)> = plugin
+        .tests
+        .iter()
+        .enumerate()
+        .flat_map(|(file_index, loaded)| {
+            loaded
+                .file
+                .tests
+                .iter()
+                .enumerate()
+                .map(move |(case_index, _)| (file_index, case_index))
+        })
+        .collect();
+    let Some(selected) = selected else {
+        return Ok(all);
+    };
+    let matches: Vec<(usize, usize)> = all
+        .into_iter()
+        .filter(|(file_index, case_index)| {
+            plugin.tests[*file_index].file.tests[*case_index].name == selected
+        })
+        .collect();
+    match matches.len() {
+        0 => Err(OrbitError::InvalidInput(format!(
+            "plugin '{}' has no conformance case named '{selected}'",
+            plugin.namespace()
+        ))),
+        1 => Ok(matches),
+        _ => Err(OrbitError::InvalidInput(format!(
+            "plugin '{}' declares conformance case '{selected}' in more than one file; case names \
+             must be unique across the suite to use --case",
+            plugin.namespace()
+        ))),
+    }
+}
+
+fn write_golden_file(loaded: &LoadedPluginTestFile) -> Result<(), OrbitError> {
+    let mut encoded = serde_yaml::to_string(&loaded.file)
+        .map_err(|error| OrbitError::Io(format!("encode {}: {error}", loaded.path.display())))?;
+    if !encoded.ends_with('\n') {
+        encoded.push('\n');
+    }
+    atomic_write_text(&loaded.path, &encoded)
+        .map_err(|error| OrbitError::Io(format!("write {}: {error}", loaded.path.display())))
+}
+
+struct CaseExecution {
+    outcome: PluginTestOutcome,
+    actual_output: Option<Value>,
 }
 
 /// Run one golden and compare the output to what the manifest promises.
@@ -191,15 +281,19 @@ fn run_case(
     backend: &PluginBackend,
     workspace_root: &Path,
     case: &PluginTestCase,
-) -> PluginTestOutcome {
+) -> CaseExecution {
     let first_party = plugin.manifest.claims_first_party_namespace();
     let name = plugin_tool_name(plugin.namespace(), &case.tool, first_party);
     let Some(resolved) = plugin.tools.iter().find(|tool| tool.verb == case.tool) else {
-        return PluginTestOutcome {
-            name: case.name.clone(),
-            tool: name,
-            passed: false,
-            detail: format!("the manifest declares no tool '{}'", case.tool),
+        return CaseExecution {
+            outcome: PluginTestOutcome {
+                name: case.name.clone(),
+                tool: name,
+                passed: false,
+                updated: false,
+                detail: format!("the manifest declares no tool '{}'", case.tool),
+            },
+            actual_output: None,
         };
     };
     let binding = Arc::new(PluginToolBinding {
@@ -229,32 +323,139 @@ fn run_case(
     let input = if case.input.is_null() {
         Value::Object(Default::default())
     } else {
-        case.input.clone()
+        render_golden_value(&case.input, workspace_root, &plugin.root)
     };
     match tool.execute(&context, input) {
-        Ok(output) if output == case.expect.output => PluginTestOutcome {
-            name: case.name.clone(),
-            tool: name,
-            passed: true,
-            detail: String::new(),
-        },
-        Ok(output) => PluginTestOutcome {
-            name: case.name.clone(),
-            tool: name,
-            passed: false,
-            detail: format!(
-                "expected {}, got {}",
-                compact(&case.expect.output),
-                compact(&output)
-            ),
-        },
-        Err(error) => PluginTestOutcome {
-            name: case.name.clone(),
-            tool: name,
-            passed: false,
-            detail: error.to_string(),
-        },
+        Ok(output) => {
+            let (passed, detail) = match &case.expect {
+                PluginTestExpectation::Output { output: expected } => {
+                    let expected = render_golden_value(expected, workspace_root, &plugin.root);
+                    (
+                        output == expected,
+                        (output != expected).then(|| {
+                            format!("expected {}, got {}", compact(&expected), compact(&output))
+                        }),
+                    )
+                }
+                PluginTestExpectation::Error { error } => (
+                    false,
+                    Some(format!(
+                        "expected plugin error code '{}', got output {}",
+                        error.code,
+                        compact(&output)
+                    )),
+                ),
+            };
+            CaseExecution {
+                outcome: PluginTestOutcome {
+                    name: case.name.clone(),
+                    tool: name,
+                    passed,
+                    updated: false,
+                    detail: detail.unwrap_or_default(),
+                },
+                actual_output: Some(output),
+            }
+        }
+        Err(error) => {
+            let actual_code = reported_plugin_error_code(&error);
+            let passed = matches!(
+                &case.expect,
+                PluginTestExpectation::Error { error }
+                    if actual_code.as_deref() == Some(error.code.as_str())
+            );
+            let detail = if passed {
+                String::new()
+            } else {
+                match &case.expect {
+                    PluginTestExpectation::Error { error: expected } => format!(
+                        "expected plugin error code '{}', got {}",
+                        expected.code, error
+                    ),
+                    PluginTestExpectation::Output { output } => format!(
+                        "expected {}, got error: {}",
+                        compact(&render_golden_value(output, workspace_root, &plugin.root)),
+                        error
+                    ),
+                }
+            };
+            CaseExecution {
+                outcome: PluginTestOutcome {
+                    name: case.name.clone(),
+                    tool: name,
+                    passed,
+                    updated: false,
+                    detail,
+                },
+                actual_output: None,
+            }
+        }
     }
+}
+
+fn render_golden_value(value: &Value, workspace: &Path, plugin_root: &Path) -> Value {
+    match value {
+        Value::String(text) => Value::String(
+            text.replace("{{workspace}}", &workspace.to_string_lossy())
+                .replace("{{plugin_root}}", &plugin_root.to_string_lossy()),
+        ),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| render_golden_value(item, workspace, plugin_root))
+                .collect(),
+        ),
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        render_golden_value(value, workspace, plugin_root),
+                    )
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn template_golden_value(value: &Value, workspace: &Path, plugin_root: &Path) -> Value {
+    match value {
+        Value::String(text) => {
+            let plugin_root = plugin_root.to_string_lossy();
+            let workspace = workspace.to_string_lossy();
+            Value::String(
+                text.replace(plugin_root.as_ref(), "{{plugin_root}}")
+                    .replace(workspace.as_ref(), "{{workspace}}"),
+            )
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| template_golden_value(item, workspace, plugin_root))
+                .collect(),
+        ),
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        template_golden_value(value, workspace, plugin_root),
+                    )
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn reported_plugin_error_code(error: &OrbitError) -> Option<String> {
+    let message = error.to_string();
+    let (_, after) = message.split_once(" failed (")?;
+    let (code, _) = after.split_once("):")?;
+    (!code.is_empty()).then(|| code.to_string())
 }
 
 fn compact(value: &Value) -> String {

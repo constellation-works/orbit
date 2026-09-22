@@ -37,6 +37,7 @@ pub(super) const RESERVED_FLAGS: &[&str] = &[
     "input",
     "input-file",
     "dry-run",
+    "explain",
     "format",
     "root",
     "workspace",

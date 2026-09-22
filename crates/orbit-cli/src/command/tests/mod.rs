@@ -107,6 +107,16 @@ fn plugin_help_matches_the_shipped_surface() {
             "plugin_help/upgrade.txt",
             include_str!("plugin_help/upgrade.txt"),
         ),
+        (
+            &["orbit", "plugin", "validate"],
+            "plugin_help/validate.txt",
+            include_str!("plugin_help/validate.txt"),
+        ),
+        (
+            &["orbit", "plugin", "test"],
+            "plugin_help/test.txt",
+            include_str!("plugin_help/test.txt"),
+        ),
     ];
     for (args, relative, expected) in cases {
         assert_help_matches_golden(args, relative, expected);

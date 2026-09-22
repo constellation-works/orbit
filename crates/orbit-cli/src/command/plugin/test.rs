@@ -29,6 +29,12 @@ pub struct PluginTestArgs {
     /// not record a host grant.
     #[arg(long = "accept-requested")]
     pub accept_requested: bool,
+    /// Run exactly one named conformance case
+    #[arg(long = "case", value_name = "NAME")]
+    pub case: Option<String>,
+    /// Replace mismatched `expect.output` values with the actual output
+    #[arg(long = "update-goldens")]
+    pub update_goldens: bool,
 }
 
 impl Execute for PluginTestArgs {
@@ -39,6 +45,8 @@ impl Execute for PluginTestArgs {
                 first_party: self.first_party,
                 grants: self.grants,
                 accept_requested: self.accept_requested,
+                case: self.case,
+                update_goldens: self.update_goldens,
             },
         )?;
 
@@ -56,7 +64,13 @@ impl Execute for PluginTestArgs {
                 Cell::new(&result.name),
                 Cell::new(&result.tool),
                 crate::output::color::cell(
-                    if result.passed { "passed" } else { "failed" },
+                    if result.updated {
+                        "updated"
+                    } else if result.passed {
+                        "passed"
+                    } else {
+                        "failed"
+                    },
                     Domain::JobState,
                 ),
                 Cell::new(&result.detail),
@@ -81,6 +95,16 @@ impl Execute for PluginTestArgs {
                 report.failures().join(", ")
             )
         };
+        let updated = report
+            .results
+            .iter()
+            .filter(|result| result.updated)
+            .count();
+        let summary = if updated == 0 {
+            summary
+        } else {
+            format!("{summary}\nUpdated {updated} golden expectation(s).")
+        };
         let doc = json!({
             "name": report.name,
             "version": report.version,
@@ -98,6 +122,7 @@ impl Execute for PluginTestArgs {
                     "name": result.name,
                     "tool": result.tool,
                     "passed": result.passed,
+                    "updated": result.updated,
                     "detail": result.detail,
                 }))
                 .collect::<Vec<_>>(),

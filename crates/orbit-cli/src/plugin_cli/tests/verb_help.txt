@@ -1,0 +1,52 @@
+Recommend files for a task.
+
+Runs `demo.recommend`, a read-only plugin tool. `--input` and `--input-file` are always accepted and override every flag.
+
+Usage: recommend [OPTIONS] [QUERY]
+
+Arguments:
+  [QUERY]
+          
+
+Options:
+      --filters-json <JSON>
+          
+
+      --loud[=<BOOL>]
+          [possible values: true, false]
+
+      --max-depth <N>
+          
+
+      --mode <VALUE>
+          [possible values: fast, thorough]
+
+      --query <VALUE>
+          
+
+      --tags <VALUE>
+          
+
+      --input <JSON>
+          JSON input for the tool; overrides every derived flag
+
+      --input-file <PATH>
+          Path to a JSON file to use as input; overrides every derived flag
+
+      --dry-run
+          Validate without executing
+
+      --explain
+          Print the equivalent `orbit tool run` command without executing
+
+      --format <MODE>
+          Output format (default: auto — a table on a terminal, plain text when piped)
+
+          Possible values:
+          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
+          - table:  Aligned columns with a header
+          - json:   A single JSON document
+          - ndjson: One complete JSON document per line
+
+  -h, --help
+          Print help (see a summary with '-h')
