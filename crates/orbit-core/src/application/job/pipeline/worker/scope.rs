@@ -265,6 +265,10 @@ impl WorkerScopeCgroup {
 
     /// Parse `/proc/<pid>/cgroup` (cgroup v2 `0::<path>` line) and keep it
     /// only when its leaf is a worker scope.
+    ///
+    /// Its only production caller is [`Self::read`]'s Linux arm, but unit
+    /// tests exercise it directly on every platform the suite runs on.
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn from_proc_cgroup(content: &str, cgroup_root: &Path) -> Option<Self> {
         let path = content.lines().find_map(|line| line.strip_prefix("0::"))?;
         let unit = path.rsplit('/').next()?;
