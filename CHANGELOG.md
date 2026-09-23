@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.24.0
+
+### Breaking Changes
+
+- **Activity, executor, and policy commands removed**: `orbit activity`, `orbit executor`, and `orbit policy` are gone with no aliases and now fail as unknown subcommands. `job`, `tool`, and `plugin` only moved in help. ([ORB-12893])
+- **Operation mode removed**: the `orbit operation` CLI group, `orbit run auto --grant`, and the `orbit.operation.*` tools are gone. Store migration v26 drops operation grants, so older binaries fail against an upgraded store. ([ORB-12770])
+- **Docs command and tools removed**: `orbit docs` and the five `orbit.docs.*` tools are gone. A leftover `[docs]` config section is ignored with a one-time warning → delete it. ([ORB-12741])
+- **Host renamed to machine**: `orbit host` is removed; `~/.orbit/host.toml` moves into `[machine]` in global `config.toml` (copied automatically this release), and `host` fields become `machine_name` / `job_run_machine`. Migration v23 renames audit columns, so older binaries fail against an upgraded store. ([ORB-12725])
+- **Semantic and hybrid search removed**: `orbit semantic`, `orbit search similar`, `--hybrid`, and the `semantic` / `hybrid` inputs on `orbit.search` are gone. Lexical `orbit search` / `orbit.search` is unchanged. ([ORB-12742])
+
+### Highlights
+
+- **Plugin standard**: `plugin.yaml` v2 plugins install and manage through `orbit plugin`, run under enforced grants in a sandboxed exec or `mcp` backend, and can ship tools, jobs, routines, auto-tasks, skills, and a schema-derived `orbit <ns> <verb>` CLI. ([ORB-12735])
+- **Distributed drain v1**: drains across machines admit work atomically through durable claims with replayable receipts, pull and bind leaves uniquely, and hand results back to the owning workspace. ([ORB-12493])
+- **Complexity crew pools**: a new `xhard` tier, weighted `name:weight` pool entries, and pool routing for ordinary `orbit run ship` admission; the drawn crew is fixed when the task is created. ([ORB-12605])
+- **State-triggered task-pilot**: task-pilot runs as a `preparation_eligible` state routine and batches due tasks into one run instead of polling on a cron. ([ORB-12745])
+- **Dashboard Config tab and runnable jobs**: the dashboard shows effective config grouped with provenance and inline edits, and the Jobs pane can start runs. ([ORB-12724])
+- **Bounded worker runs**: on Linux, pipeline worker runs execute inside a bounded cgroup, so a runaway run cannot run the host out of memory. ([ORB-12903])
+
 ## 0.23.0
 
 ### Breaking Changes
