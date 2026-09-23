@@ -76,7 +76,7 @@ pub(crate) fn attach_inherited_fds(_command: &mut Command, _fds: &[InheritedFd])
 /// the ruleset the host opens next takes the lowest free number and lands in
 /// exactly that hole. Relocating once, before either hook is registered,
 /// removes the overlap for good rather than leaving it to descriptor luck.
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn relocate_clear_of_targets(
     fd: std::os::fd::OwnedFd,
     fds: &[InheritedFd],
