@@ -677,10 +677,11 @@ pub(crate) fn open_private_file(path: &Path, options: &mut OpenOptions) -> io::R
 /// caller remains responsible for checking the opened descriptor's type and
 /// mapping errors into its domain-specific behavior.
 pub fn open_read_only_no_follow(path: &Path) -> io::Result<File> {
+    let path = validated_private_file_path(path)?;
     let mut options = OpenOptions::new();
     options.read(true);
     apply_read_only_no_follow(&mut options);
-    options.open(path)
+    options.open(&path)
 }
 
 /// Resolve a private file's parent before opening it and reject a final

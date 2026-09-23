@@ -605,7 +605,7 @@ fn callback_dir(global_root: &Path) -> PathBuf {
 /// Resolve the existing callback directory under the selected host root.
 /// Symlinked state subdirectories that escape that root are refused before a
 /// directory scan can follow them.
-fn validated_callback_session_dir(global_root: &Path) -> std::io::Result<PathBuf> {
+fn validated_callback_session_entries(global_root: &Path) -> std::io::Result<fs::ReadDir> {
     let root = global_root.canonicalize()?;
     let dir = callback_dir(&root).canonicalize()?;
     if !dir.starts_with(&root) || !std::fs::metadata(&dir)?.is_dir() {
@@ -614,7 +614,7 @@ fn validated_callback_session_dir(global_root: &Path) -> std::io::Result<PathBuf
             "plugin callback directory is outside its host root or is not a directory",
         ));
     }
-    Ok(dir)
+    fs::read_dir(&dir)
 }
 
 fn identity_from(record: &SessionRecord) -> PluginCallbackIdentity {
@@ -695,14 +695,7 @@ fn scan_ancestry_session(global_root: &Path, caller: &CallerProcess) -> Ancestry
     // scan is how an unidentified plugin child is told apart from a local
     // caller: `EACCES` here is the sandbox answering, and an absent directory
     // means no session was ever minted on this host.
-    let dir = match validated_callback_session_dir(global_root) {
-        Ok(dir) => dir,
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            return AncestryScan::Unreadable;
-        }
-        Err(_) => return AncestryScan::None,
-    };
-    let entries = match fs::read_dir(&dir) {
+    let entries = match validated_callback_session_entries(global_root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             return AncestryScan::Unreadable;

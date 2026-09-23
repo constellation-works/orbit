@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io;
+use std::io::{self, Read};
 
 #[cfg(unix)]
 use std::time::{Duration, Instant};
@@ -10,6 +10,44 @@ use crate::OrbitError;
 use crate::fs::io::{
     read_file_lock_holder, remove_path_if_exists, sync_parent_dir, with_exclusive_file_lock,
 };
+
+#[test]
+fn open_read_only_no_follow_reads_regular_files() {
+    let temp = TempDir::new().expect("tempdir");
+    let path = temp.path().join("record");
+    std::fs::write(&path, b"payload").expect("write record");
+
+    let mut file = crate::fs::io::open_read_only_no_follow(&path).expect("open record");
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents).expect("read record");
+    assert_eq!(contents, b"payload");
+}
+
+#[test]
+fn open_read_only_no_follow_rejects_directories() {
+    let temp = TempDir::new().expect("tempdir");
+    let error = crate::fs::io::open_read_only_no_follow(temp.path())
+        .expect_err("directories are not readable records");
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+}
+
+#[cfg(unix)]
+#[test]
+fn open_read_only_no_follow_preserves_symlinked_parent_routes() {
+    let temp = TempDir::new().expect("tempdir");
+    let real_parent = temp.path().join("real");
+    std::fs::create_dir(&real_parent).expect("create real parent");
+    std::fs::write(real_parent.join("record"), b"payload").expect("write record");
+    let linked_parent = temp.path().join("linked");
+    std::os::unix::fs::symlink(&real_parent, &linked_parent).expect("link parent");
+
+    let mut file = crate::fs::io::open_read_only_no_follow(&linked_parent.join("record"))
+        .expect("open record through parent link");
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents).expect("read record");
+    assert_eq!(contents, b"payload");
+}
 
 #[test]
 fn sync_parent_dir_uses_a_preopened_directory_handle() {
