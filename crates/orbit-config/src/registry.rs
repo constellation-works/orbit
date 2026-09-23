@@ -22,6 +22,7 @@ use orbit_types::identity::{
 use orbit_types::workflow::automation::recovery::DEFAULT_STALL_WINDOW_MINUTES;
 use orbit_types::workflow::{CODEX_PROVIDER_SANDBOX_MODES, Provider};
 
+use crate::memory_limit::MemoryLimit;
 use crate::operation::{self, ReviewPolicy};
 use serde::de::DeserializeOwned;
 use serde_json::{Value as JsonValue, json};
@@ -296,13 +297,13 @@ define_config_settings! {
         section: ConfigSection::Machine, order: 40,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
     },
-    machine_worker_memory_high: String => String {
+    machine_worker_memory_high: MemoryLimit => String {
         key: "machine.worker_memory_high", value_type: "string",
         description: "MemoryHigh= for each contained worker scope, where the kernel starts throttling the run: bytes with an optional K/M/G/T suffix, a percentage of physical RAM, or infinity (default 40%).",
         section: ConfigSection::Machine, order: 50,
         resolve: |raw: Option<String>| resolve_memory_limit(raw, DEFAULT_WORKER_MEMORY_HIGH, "machine.worker_memory_high"),
     },
-    machine_worker_memory_max: String => String {
+    machine_worker_memory_max: MemoryLimit => String {
         key: "machine.worker_memory_max", value_type: "string",
         description: "MemoryMax= for each contained worker scope, where the kernel OOM-kills inside the run instead of the host: bytes with an optional K/M/G/T suffix, a percentage of physical RAM, or infinity (default 50%).",
         section: ConfigSection::Machine, order: 60,
@@ -492,17 +493,17 @@ impl ConfigSnapshot {
 
 /// Resource limits for each detached pipeline worker (`machine.worker_*`).
 ///
-/// Values are already admitted: memory limits are systemd size strings
-/// (`<bytes>[K|M|G|T]`, `<n>%` of physical RAM, or `infinity`), so a consumer
-/// can hand them to the service manager verbatim.
+/// Values are already admitted: memory limits are typed [`MemoryLimit`]s, so
+/// a consumer only formats them for the service manager and has nothing left
+/// to reject.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerContainmentSettings {
     /// `machine.worker_containment` — launch workers in their own scope.
     pub enabled: bool,
     /// `machine.worker_memory_high` — throttling threshold.
-    pub memory_high: String,
+    pub memory_high: MemoryLimit,
     /// `machine.worker_memory_max` — hard limit; OOM kills stay inside the run.
-    pub memory_max: String,
+    pub memory_max: MemoryLimit,
     /// `machine.worker_tasks_max` — process/thread ceiling.
     pub tasks_max: u32,
 }
@@ -512,8 +513,8 @@ impl ConfigSnapshot {
     pub fn worker_containment(&self) -> WorkerContainmentSettings {
         WorkerContainmentSettings {
             enabled: self.machine_worker_containment,
-            memory_high: self.machine_worker_memory_high.clone(),
-            memory_max: self.machine_worker_memory_max.clone(),
+            memory_high: self.machine_worker_memory_high,
+            memory_max: self.machine_worker_memory_max,
             tasks_max: self.machine_worker_tasks_max,
         }
     }
@@ -881,47 +882,32 @@ fn resolve_bounded_minutes(raw: Option<u32>, default: u32, key: &str) -> Result<
 
 /// Default `machine.worker_memory_high`: throttle one run well before it can
 /// crowd out the host (2026-09-23 OOM outage, ORB-12903).
-const DEFAULT_WORKER_MEMORY_HIGH: &str = "40%";
+const DEFAULT_WORKER_MEMORY_HIGH: MemoryLimit = MemoryLimit::Percent(40);
 /// Default `machine.worker_memory_max`: one runaway run keeps at most half of
 /// physical RAM, leaving the rest for the host and sibling runs.
-const DEFAULT_WORKER_MEMORY_MAX: &str = "50%";
+const DEFAULT_WORKER_MEMORY_MAX: MemoryLimit = MemoryLimit::Percent(50);
 const DEFAULT_WORKER_TASKS_MAX: u32 = 4096;
 
-/// Admit a systemd memory size: `infinity`, `<n>%` (1..=100) of physical RAM,
-/// or `<bytes>` with an optional `K`/`M`/`G`/`T` suffix.
+/// Admit a systemd memory size through [`MemoryLimit::parse`].
 ///
-/// The value is later passed to the service manager as one `-p` argument, so
-/// anything outside this grammar is refused here instead of failing every
+/// The value later becomes one `systemd-run --property=` argument, so
+/// anything outside the grammar is refused here instead of failing every
 /// worker launch.
 fn resolve_memory_limit(
     raw: Option<String>,
-    default: &str,
+    default: MemoryLimit,
     key: &str,
-) -> Result<String, OrbitError> {
+) -> Result<MemoryLimit, OrbitError> {
     let Some(value) = raw else {
-        return Ok(default.to_string());
+        return Ok(default);
     };
-    let value = value.trim();
-    let valid = if value == "infinity" {
-        true
-    } else if let Some(percent) = value.strip_suffix('%') {
-        percent
-            .parse::<u8>()
-            .is_ok_and(|percent| (1..=100).contains(&percent))
-    } else {
-        let digits = value.strip_suffix(['K', 'M', 'G', 'T']).unwrap_or(value);
-        !digits.is_empty()
-            && digits.bytes().all(|byte| byte.is_ascii_digit())
-            && digits.parse::<u64>().is_ok_and(|amount| amount > 0)
-    };
-    if valid {
-        Ok(value.to_string())
-    } else {
-        Err(OrbitError::InvalidInput(format!(
-            "{key} has invalid value '{value}'; expected a size such as 8G or 512M, \
-             a percentage of physical memory such as 50%, or infinity"
-        )))
-    }
+    MemoryLimit::parse(&value).ok_or_else(|| {
+        OrbitError::InvalidInput(format!(
+            "{key} has invalid value '{}'; expected a size such as 8G or 512M, \
+             a percentage of physical memory such as 50%, or infinity",
+            value.trim()
+        ))
+    })
 }
 
 fn resolve_worker_tasks_max(raw: Option<u32>) -> Result<u32, OrbitError> {
