@@ -317,6 +317,9 @@ fn agent_implement_requires_final_scope_reconciliation_before_handoff() {
             "name the exact leftover paths",
             "record the blocker with `orbit.task.update` (`comment`)",
             "do not hand off as success",
+            // ...except for the sanctioned scratch dir, which is ignored
+            // and run-scoped, so a denied removal there is not a blocker.
+            "if run-owned output outside `.orbit/tmp/` remains because cleanup was denied or unsafe",
             // Durable state stays the authority for delivery.
             "record the item 11 reconciliation",
             "never parse the execution summary as an oracle",
@@ -326,6 +329,13 @@ fn agent_implement_requires_final_scope_reconciliation_before_handoff() {
                 "{source} agent_implement lost the reconciliation clause: {clause}"
             );
         }
+
+        assert!(
+            !instruction.contains("if run-owned output remains because cleanup was denied"),
+            "{source} agent_implement blocks handoff on denied `.orbit/tmp/` scratch cleanup \
+             [ORB-12779: jrun-20260921-0952-c3 delivered green, then failed as cleanup_denied \
+             when a sandbox denied moving `.orbit/tmp/` scratch to Trash]"
+        );
 
         assert!(
             !instruction.contains("record the bounded leftover"),
@@ -409,6 +419,13 @@ fn agent_implement_reconciliation_answers_each_handoff_scenario() {
                 "record the blocker with `orbit.task.update` (`comment`)",
                 "separately from cleanup so a denied cleanup cannot skip these reads",
                 "repeat the inventory after any cleanup",
+            ],
+        ),
+        (
+            "a denied move of `.orbit/tmp/` scratch to Trash still hands off success",
+            vec![
+                "scratch there needs no trash-based recoverable cleanup",
+                "if run-owned output outside `.orbit/tmp/` remains because cleanup was denied or unsafe",
             ],
         ),
     ] {

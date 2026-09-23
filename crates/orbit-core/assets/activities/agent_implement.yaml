@@ -134,7 +134,8 @@ spec:
         handoff. Write scratch, logs, and review evidence under `.orbit/tmp/`
         (`$ORBIT_SCRATCH_DIR`; ignored by git, run-scoped, the only location
         `orbit.task.artifact.put` accepts). Never under `/tmp`. Attach it
-        through granted task tools, and before a successful exit, remove or revert the run-owned
+        through granted task tools; scratch there needs no Trash-based
+        recoverable cleanup. Before a successful exit, remove or revert the run-owned
         output you verified is not part of the deliverable. Deleting is an
         exception for a stray untracked path, not a step: never use raw `rm -f`
         or `rm -rf`, and never clean broadly to catch a specific leftover. If a
@@ -151,8 +152,8 @@ spec:
         file, append its exact `file:` selector through `orbit.task.update`; a
         containing directory selector is not new-file intent. Tracked changes
         need no declaration beyond existing task scope. Repeat the inventory
-        after any cleanup. If run-owned output remains because cleanup was
-        denied or unsafe, name the exact leftover paths, record the blocker
+        after any cleanup. If run-owned output outside `.orbit/tmp/` remains
+        because cleanup was denied or unsafe, name the exact leftover paths, record the blocker
         with `orbit.task.update` (`comment`), and do not hand off as success.
     12. Workflow admission already set `in-progress`: do not redundantly set
         that status or move the task to `review`; the pipeline owns that
@@ -177,8 +178,8 @@ spec:
         task identity, covering marker, scope, ancestry, and logs.
 
         Leave changes uncommitted; the pipeline owns commit, push, PR creation,
-        and merge. Write temporary evidence and scratch files under `.orbit/tmp/`
-        (`$ORBIT_SCRATCH_DIR`); never under `/tmp`. Delivery refuses untracked paths
+        and merge. Write temporary evidence and scratch files under `.orbit/tmp/`;
+        never under `/tmp`. Delivery refuses untracked paths
         without exact durable intent;
         deterministic gates read durable artifacts and task state and never
         parse the execution summary as an oracle. Do not invoke another agent
