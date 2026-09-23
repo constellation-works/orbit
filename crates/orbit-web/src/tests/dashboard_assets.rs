@@ -440,7 +440,7 @@ class Node {
 }
 const byId = new Map();
 const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
-const tabs = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge"].map((tab) => Object.assign(new Node(), { dataset: { tab } }));
+const tabs = ["tasks", "audit", "diagnostics", "operations", "knowledge"].map((tab) => Object.assign(new Node(), { dataset: { tab } }));
 const panes = [...tabs, Object.assign(new Node(), { dataset: { tab: "run-detail" } })];
 globalThis.document = {
   body: new Node("body"), hidden: false,
@@ -475,11 +475,14 @@ row.listeners.click();
 const historyLines = nodes.filter((node) => node.className === "history-line").map((node) => node.textContent);
 if (historyLines.length !== 5 || historyLines.some((line) => line.includes("commented")) || !historyLines[0].includes("status-6") || !historyLines[4].includes("status-2")) throw new Error(`recent history rendered incorrectly: ${historyLines}`);
 let selected = null;
-initRouter({ setTab: (tab) => { selected = tab; }, getDiagSubtab: () => "runs", setDiagSubtab: () => {}, getOperationsSubtab: () => "routines", setOperationsSubtab: () => {}, getKnowledgeSubtab: () => "frictions", setKnowledgeSubtab: () => {}, getRunId: () => null, setRunId: () => {}, getRunSubtab: () => "steps", setRunSubtab: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {}, setRunLogs: () => {}, refreshDashboard: () => {}, fitLogPanelToViewport: () => {}, });
+let drainDock = 0;
+initRouter({ showDrainDock: () => { drainDock += 1; }, setTab: (tab) => { selected = tab; }, getDiagSubtab: () => "runs", setDiagSubtab: () => {}, getOperationsSubtab: () => "routines", setOperationsSubtab: () => {}, getKnowledgeSubtab: () => "frictions", setKnowledgeSubtab: () => {}, getRunId: () => null, setRunId: () => {}, getRunSubtab: () => "steps", setRunSubtab: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {}, setRunLogs: () => {}, refreshDashboard: () => {}, fitLogPanelToViewport: () => {}, });
 setActiveTab("operations/auto-tasks", { refresh: false, updateHash: false });
 if (selected !== "operations" || !tabs.find((tab) => tab.dataset.tab === "operations").className.includes("active")) throw new Error("route did not select the Operations view");
+setActiveTab("auto-drain", { refresh: false, updateHash: false });
+if (selected !== "tasks" || drainDock !== 1 || !tabs.find((tab) => tab.dataset.tab === "tasks").className.includes("active")) throw new Error("retired #auto-drain did not open Tasks with the Drain dock");
 setActiveTab("operations/auto-drain", { refresh: false, updateHash: false });
-if (selected !== "auto-drain" || !tabs.find((tab) => tab.dataset.tab === "auto-drain").className.includes("active")) throw new Error("legacy #operations/auto-drain did not redirect to the Auto-drain view");
+if (selected !== "tasks" || drainDock !== 2) throw new Error("legacy #operations/auto-drain did not open Tasks with the Drain dock");
 await import("./app.js");
 await tick(); await tick(); requests.length = 0;
 const selector = get("rail-workspace").children.find((child) => child.id === "workspace-select");
@@ -530,7 +533,6 @@ async fn dashboard_top_level_nav_matches_the_operator_tabs() {
         nav,
         vec![
             "tasks",
-            "auto-drain",
             "audit",
             "diagnostics",
             "operations",
@@ -543,7 +545,6 @@ async fn dashboard_top_level_nav_matches_the_operator_tabs() {
     // Every routable tab must still have a pane to render into.
     for tab in [
         "tasks",
-        "auto-drain",
         "audit",
         "diagnostics",
         "operations",
@@ -625,7 +626,7 @@ fn dashboard_operations_are_typed_guarded_and_responsive() {
     assert!(operations.contains("operation-row-head"));
     assert!(operations.contains(r#"{ class: "operation-details" }"#));
     assert!(router.contains(
-        r#"classList.toggle("operations-active", top === "operations" || top === "auto-drain" || top === "config")"#
+        r#"classList.toggle("operations-active", top === "operations" || top === "config")"#
     ));
 }
 
@@ -833,14 +834,7 @@ fn dashboard_narrow_shell_collapses_rail_and_task_rows() {
         "the 520px task row must keep its two-row areas for phone widths"
     );
 
-    for tab in [
-        "tasks",
-        "auto-drain",
-        "audit",
-        "diagnostics",
-        "operations",
-        "knowledge",
-    ] {
+    for tab in ["tasks", "audit", "diagnostics", "operations", "knowledge"] {
         assert!(
             index.contains(&format!(r#"class="tab" data-tab="{tab}""#)),
             "{tab} must remain a top-level tab"
@@ -883,7 +877,7 @@ class Node {
 }
 const byId = new Map();
 const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
-for (const id of ["routines-body", "clock-body", "auto-tasks-body", "auto-drain-body", "routines-count", "clock-host", "auto-tasks-count", "auto-drain-count", "operations-session", "routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback"]) get(id);
+for (const id of ["routines-body", "clock-body", "auto-tasks-body", "auto-drain-body", "routines-count", "clock-host", "auto-tasks-count", "auto-drain-live", "operations-session", "routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback"]) get(id);
 globalThis.document = { getElementById: get, createElement: () => new Node(), createTextNode: (text) => Object.assign(new Node(), { textContent: text }), body: new Node("body") };
 globalThis.window = { confirm: () => true, location: new URL("http://dashboard.test/"), addEventListener: () => {}, localStorage: { getItem: () => null, setItem: () => {} } };
 const pad = (n) => String(n).padStart(2, "0");
@@ -957,219 +951,107 @@ if (!clockText.includes("14:00 PDT") && !clockText.includes("14:05 PDT")) {
 
 /// ORB-11250: the bounded auto-delivery window action. Default completion
 /// (review) needs no operator authorization, the same as the ship endpoint;
-/// only the `--complete`-equivalent opt-in is separately governed. The panel
+/// only the `--complete`-equivalent opt-in is separately governed. The card
 /// reuses the mint/clock in-flight idiom — one fixed `pendingOperations` key,
 /// guard released in `finally` — rather than a per-row guard, since this is a
 /// single workspace-scoped action, not one per task.
+///
+/// ORB-12898: the window is a compact card at the top of the Tasks dock's
+/// Drain mode, above Locked files; the Auto-drain rail destination is gone and
+/// its hashes open Tasks with Drain selected. What the card renders and posts
+/// is driven in `dashboard_operations.mjs`; this pins the markup, routing and
+/// endpoint contracts around it.
 #[test]
-fn dashboard_auto_drain_action_is_bounded_governed_and_guarded() {
+fn dashboard_auto_drain_card_lives_in_the_tasks_dock() {
     let index = include_str!("../../assets/dashboard/index.html");
     let operations = include_str!("../../assets/dashboard/operations.js");
     let router = include_str!("../../assets/dashboard/router.js");
+    let app = include_str!("../../assets/dashboard/app.js");
     let css = include_str!("../../assets/dashboard/dashboard.css");
 
-    for id in [
-        "operations-auto-drain-main",
-        "auto-drain-panel",
-        "auto-drain-count",
-        "auto-drain-operation-feedback",
-        "auto-drain-body",
-    ] {
-        assert!(index.contains(&format!(r#"id="{id}""#)), "{id}");
-    }
-    // Auto-drain lives under Work beside Tasks, not under Operations: it is a
-    // top-level destination with its own pane, its rail entry mirrors the
-    // Tasks count with the eligible-now figure, and the old subtab hash is
-    // rewritten rather than dropped so bookmarks keep resolving.
     assert!(
-        index.contains(r#"<button class="tab" data-tab="auto-drain" type="button">"#)
-            && index.contains(r#"<section class="tab-pane" data-tab="auto-drain">"#)
-            && index.contains(r#"id="rail-count-auto-drain""#),
-        "auto-drain must be offered as a Work destination in the rail"
+        !index.contains(r#"data-tab="auto-drain""#) && !index.contains("rail-count-auto-drain"),
+        "Auto-drain must no longer be a rail destination or pane"
     );
-    assert!(
-        !index.contains(r#"data-subtab="auto-drain""#),
-        "auto-drain must no longer be an Operations subtab"
-    );
-    let work_group = index
-        .split(r#"<div class="rail-group-label">Work</div>"#)
+    let drain_pane = index
+        .split(r#"<div class="dock-pane" data-pane="drain">"#)
         .nth(1)
-        .and_then(|rest| rest.split(r#"<div class="rail-group-label">"#).next())
-        .expect("the rail must have a Work group");
-    let tasks_at = work_group
-        .find(r#"data-tab="tasks""#)
-        .expect("Tasks in Work");
-    let drain_at = work_group
-        .find(r#"data-tab="auto-drain""#)
-        .expect("Auto-drain in Work");
+        .and_then(|rest| rest.split(r#"<div class="dock-pane""#).next())
+        .expect("the dock must have a Drain pane");
+    let card_at = drain_pane
+        .find(r#"id="auto-drain-panel""#)
+        .expect("the auto-drain card is in the Drain pane");
+    let locks_at = drain_pane
+        .find(r#"id="locks-panel""#)
+        .expect("Locked files is in the Drain pane");
     assert!(
-        tasks_at < drain_at,
-        "Auto-drain sits beneath Tasks in the Work group"
+        card_at < locks_at,
+        "the auto-drain card sits above Locked files"
     );
-    assert!(router.contains(r#"const TABS = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge", "plugins", "config", "run-detail"];"#));
+    for id in ["auto-drain-body", "auto-drain-live", "auto-drain-dot"] {
+        assert!(drain_pane.contains(&format!(r#"id="{id}""#)), "{id}");
+    }
     assert!(
-        router.contains(r#"if (head === "operations" && segments[1] === "auto-drain") {"#)
-            && router.contains(r#"head = "auto-drain";"#),
-        "the legacy #operations/auto-drain hash must redirect to #auto-drain"
-    );
-    assert!(
-        router.contains(
-            r#"classList.toggle("operations-active", top === "operations" || top === "auto-drain" || top === "config")"#
+        drain_pane.contains(
+            r#"<div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>"#
         ),
-        "the auto-drain pane must scroll like the operations pane"
+        "start/stop results need a polite status line inside the card"
+    );
+
+    assert!(router.contains(r#"const TABS = ["tasks", "audit", "diagnostics", "operations", "knowledge", "plugins", "config", "run-detail"];"#));
+    assert!(
+        router.contains(r#"if (head === "auto-drain" || (head === "operations" && segments[1] === "auto-drain")) {"#)
+            && router.contains("ctx.showDrainDock()"),
+        "the retired #auto-drain hashes must open Tasks with the Drain dock"
     );
     assert!(
-        operations.contains(r#"export async function fetchAndRenderAutoDrainPane()"#)
-            && operations.contains(r#"$("rail-count-auto-drain")"#)
-            && operations.contains("setAutoDrainRailCount(counts.eligible)"),
-        "the auto-drain pane refreshes on its own and feeds the rail count"
+        app.contains(r#"showDrainDock: () => setDockMode("drain"),"#)
+            && !app.contains(r#"activeTab === "auto-drain""#),
+        "the router's Drain redirect must select the dock mode"
     );
-    let app = include_str!("../../assets/dashboard/app.js");
+    let tasks_refresh = app
+        .split(r#"if (activeTab === "tasks") {"#)
+        .nth(1)
+        .and_then(|rest| rest.split("return jobs;").next())
+        .expect("the Tasks refresh branch");
     assert!(
-        app.contains(r#"if (activeTab === "auto-drain") {"#)
-            && app.contains("jobs.push(fetchAndRenderAutoDrainPane());"),
-        "the dashboard refresh must fetch the auto-drain pane when it is active"
+        tasks_refresh.contains("jobs.push(fetchAndRenderAutoDrainPane());"),
+        "the Drain card must refresh with the Tasks tab, as the Auto-drain view did"
     );
 
     assert!(
-        operations.contains(r#"postJson("/api/workflows/auto""#),
-        "starting the window must submit through the dashboard auto-drain endpoint"
+        operations.contains(r#"postJson("/api/workflows/auto""#)
+            && operations.contains(r#"postJson("/api/workflows/auto/stop""#)
+            && operations.contains(r#"`/api/workflows/auto/readiness"#),
+        "the card must use the same readiness, start and stop endpoints"
     );
     assert!(
-        operations.contains(r#"`/api/workflows/auto/readiness"#),
-        "the panel must project the read-only readiness snapshot, not recompute eligibility"
-    );
-    assert!(
-        operations.contains("for_duration: autoDrainDuration"),
-        "the submitted duration must come from the bounded picker, not free text"
-    );
-    assert!(
-        operations.contains("complete: autoDrainComplete"),
-        "the completion opt-in must be explicit, not inferred"
-    );
-
-    // Duplicate-click guard: same fixed-key idiom as the clock/mint buttons.
-    assert!(operations.contains(r#"const key = "auto-drain:start";"#));
-    assert!(
-        operations.contains("if (pendingOperations.has(key)) return;")
-            && operations.contains("pendingOperations.add(key);")
+        operations.contains(r#"const key = "auto-drain:start";"#)
+            && operations.contains(r#"const key = "auto-drain:stop";"#)
+            && operations.contains("if (pendingOperations.has(key)) return;")
             && operations.contains("pendingOperations.delete(key);"),
-        "the start action must guard against a duplicate submission while one is pending"
-    );
-
-    // Explicit opt-in requires confirmation and states the run's scope.
-    assert!(operations.contains("window.confirm(confirmText)"));
-    assert!(
-        operations.contains("Currently eligible: ${counts.eligible} · waiting: ${counts.waiting}")
+        "start and stop must guard against duplicate submissions under their own keys"
     );
     assert!(
-        operations.contains("Proposed tasks are never drained automatically"),
-        "the panel must explain proposed tasks require separate authorization"
-    );
-    assert!(
-        operations.contains("autoDrainReadinessList(payload, workspace)"),
-        "the panel must render every server-provided readiness row"
-    );
-    // Readiness rows are grouped by what the operator can do about them, and
-    // every row still lands in exactly one group: eligible, lock-blocked,
-    // dependency-waiting, or the catch-all so an unfamiliar server reason
-    // is never dropped.
-    assert!(
-        operations.contains("groups.eligible.push(task)")
-            && operations.contains("groups.locked.push(task)")
-            && operations.contains("groups.dependency.push(task)")
-            && operations.contains("groups.other.push(task)")
-            && operations.contains("autoDrainOtherGroup(groups.other, workspace)"),
-        "every readiness row must land in one of the four groups"
-    );
-    assert!(
-        operations.contains("conflict?.locking_task_id || conflict?.blocking_task_id"),
-        "lock-blocked rows must group by holder for both context locks and same-wave deferrals"
-    );
-    assert!(
-        operations.contains("autoDrainDependencyRoots(tasks, allTasks)")
-            && operations.contains("autoDrainDependencyDepths(tasks)"),
-        "dependency-waiting rows must name the chain roots and lay the chain out by depth"
-    );
-    // The window controls sit above the rows and say what the window would
-    // admit; occupied slots name the task and phase per run.
-    assert!(
-        operations.contains("body.appendChild(autoDrainControls(payload, counts));")
-            && operations.contains("body.appendChild(autoDrainSlots(capacity, workspace));"),
-        "controls and the slot picture must precede the readiness rows"
-    );
-    assert!(
-        operations.contains(r#"segment.setAttribute("aria-label", "Window duration");"#)
-            && operations.contains(r#"option.setAttribute("aria-pressed""#),
-        "the duration picker must be a labelled, pressed-state segmented control"
-    );
-    assert!(
-        operations.contains("occupancy.runs") && operations.contains("run?.task_ids"),
-        "slot tiles must come from the server's per-run occupancy, not be inferred"
-    );
-    assert!(
-        css.contains(".auto-drain-slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }"),
-        "slot tiles must wrap for up to twenty distributed-drain slots"
-    );
-    assert!(
-        css.contains(
-            ".operation-state.waiting { color: var(--fg-dim); border-color: var(--border); }"
-        ) && operations.contains(r#"eligible ? "enabled" : "waiting""#),
-        "a waiting row is a normal state and must not borrow the failure color"
-    );
-    assert!(
-        operations.contains("task.task_id")
-            && operations.contains("task.reason")
-            && operations.contains("task.dependencies")
-            && operations.contains("task.conflicts")
-            && operations.contains("task.run_ids")
-            && operations.contains("task.active_run_ids")
-            && operations.contains("task.allowed_crews")
-            && operations.contains("task.grant_id"),
-        "readiness rows must expose the server's reason-specific evidence"
-    );
-    assert!(
-        operations.contains("these counts are not a workspace total")
-            && operations.contains("candidate_pool_truncated")
-            && operations.contains("No additional evidence was supplied"),
-        "bounded, truncated, and unknown snapshots must remain honest"
-    );
-    assert!(
-        css.contains(".auto-drain-task-head, .auto-drain-evidence-row { grid-template-columns: minmax(0, 1fr); }")
-            && css.contains(".auto-drain-reference { color: var(--accent); overflow-wrap: anywhere; }"),
-        "readiness evidence must stack and wrap at narrow widths"
-    );
-
-    // Failure recovery: an error must surface, not silently no-op, and must
-    // not leave the guard held.
-    assert!(operations.contains("Auto-delivery window failed to start"));
-
-    // [ORB-12728] Stop admissions is the `orbit run auto --stop` counterpart:
-    // governed, confirmed, keyed against duplicate clicks, and enabled only
-    // for a live window that is not already stopped.
-    assert!(
-        operations.contains(r#"postJson("/api/workflows/auto/stop""#)
-            && operations.contains(r#"const key = "auto-drain:stop";"#),
-        "stopping admissions must post through the dashboard auto-drain stop endpoint under its own guard key"
-    );
-    assert!(
-        operations.contains("This is not cancellation.")
-            && operations.contains("window.confirm(`${AUTO_DRAIN_STOP_CONFIRM}"),
-        "the stop control must confirm and say admitted workers keep running"
+        operations.contains("window.confirm(confirmText)")
+            && operations.contains("window.confirm(`${AUTO_DRAIN_STOP_CONFIRM}")
+            && operations.contains("This is not cancellation."),
+        "start and stop must confirm first; stop must say admitted workers keep running"
     );
     assert!(
         operations.contains("No auto-delivery window is live in this workspace.")
             && operations.contains("Admissions are already stopped for ")
-            && operations.contains("Stopping admissions requires an authorized operator session."),
-        "the disabled stop control must name why it is disabled"
+            && operations.contains("Stopping admissions requires an authorized operator session.")
+            && operations.contains("Automatic completion requires an authorized operator session"),
+        "disabled controls must name why they are disabled"
     );
     assert!(
-        operations.contains("autoDrainRunLink(live.runId, workspace)"),
-        "the live coordinator must be shown as a run link next to the stop control"
+        !css.contains(".auto-drain-") && !css.contains("#auto-drain-body { padding: 12px"),
+        "the old Auto-drain page styles must be deleted, not left unused"
     );
     assert!(
-        css.contains("#routines-body, #clock-body, #auto-tasks-body, #auto-drain-body { padding: 12px; background: var(--bg); }"),
-        "the auto-drain body must share the padded operations-body rule"
+        css.contains(".drain-durations {\n        display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));"),
+        "the duration segments share the card width equally so they fit a 336px dock"
     );
 }
 
@@ -2792,7 +2674,7 @@ fn dashboard_workspace_selection_persists_to_the_url() {
 }
 
 /// ORB-10972 supersedes ORB-10874's log-panel affordances. The tail moved into
-/// the Tasks tab's right dock, which has two modes (Status / Log) and fills the
+/// the Tasks tab's right dock, which has two modes (Drain / Log) and fills the
 /// column's full height — so there is no panel height to drag and no collapsed
 /// state to toggle. Their job is now split between the dock's mode toggle and
 /// an always-on bottom status bar that carries the newest line on every tab.
@@ -2810,9 +2692,17 @@ fn dashboard_log_dock_has_two_modes_and_an_always_on_status_bar() {
         "the dock's mode preference must persist to localStorage"
     );
     assert!(
-        log_tail.contains(r#"const DOCK_MODES = ["status", "log"];"#)
+        log_tail.contains(r#"const DOCK_MODES = ["drain", "log"];"#)
             && log_tail.contains("function wireDockModeToggle("),
-        "the dock must offer exactly the Status and Log modes, with a wired toggle"
+        "the dock must offer exactly the Drain and Log modes, with a wired toggle"
+    );
+    assert!(
+        log_tail.contains(r#"parsed.dockMode === "status" ? "drain""#),
+        "a dock mode persisted as `status` before ORB-12898 must open as Drain"
+    );
+    assert!(
+        index.contains(r#"<button type="button" role="tab" class="dock-seg on" data-mode="drain" aria-selected="true" tabindex="0">Drain</button>"#),
+        "the dock toggle reads Drain | Log and keeps its tab semantics"
     );
     assert!(
         !log_tail.contains("wireLogPanelResizeHandle")
@@ -2824,7 +2714,7 @@ fn dashboard_log_dock_has_two_modes_and_an_always_on_status_bar() {
         "the dock and its mode toggle must exist in the markup"
     );
     assert!(
-        index.contains(r#"data-pane="status""#) && index.contains(r#"data-pane="log""#),
+        index.contains(r#"data-pane="drain""#) && index.contains(r#"data-pane="log""#),
         "the dock must declare both panes"
     );
     assert!(
@@ -4887,7 +4777,7 @@ class Node {
 }
 const byId = new Map();
 const get = (id) => byId.get(id) || (byId.set(id, new Node(id)), byId.get(id));
-const tabs = ["tasks", "auto-drain", "audit", "diagnostics", "operations", "knowledge"].map((tab) => Object.assign(new Node(), { dataset: { tab } }));
+const tabs = ["tasks", "audit", "diagnostics", "operations", "knowledge"].map((tab) => Object.assign(new Node(), { dataset: { tab } }));
 const panes = [...tabs, Object.assign(new Node(), { dataset: { tab: "run-detail" } })];
 const tabsStrip = new Node("tabs");
 tabsStrip.className = "tabs";

@@ -110,7 +110,6 @@ The left rail is the section map:
 | Rail | What it shows |
 |---|---|
 | **Tasks** | Backlog and other statuses for the selected workspace (or the aggregate list). |
-| **Auto-drain** | Under Work beside Tasks: the bounded auto-delivery window. The rail count is the number of tasks eligible now. |
 | **Audit** | Recent events and a 24-hour summary. |
 | **Diagnostics** | Recent runs, metrics, errors, incidents, reliability, and the scoreboard. |
 | **Operations** | Three rail subtabs: **Routines** (with the sweep clock), **Auto-tasks**, and **Jobs**. |
@@ -145,9 +144,10 @@ hatch as `orbit task update <id> --status <status> --force`, recorded in task
 history as a `forced` event. Agents have no equivalent: `orbit.task.update` and
 the MCP surface cannot force.
 
-The right dock has two modes that share the same column width: **Status**
-(files currently locked by tasks) and **Log** (a live `orbit.log` tail with
-all / err / deny / warn filters).
+The right dock has two modes that share the same column width: **Drain**
+(the [auto-drain](#auto-drain) window card, then the files currently locked
+by tasks) and **Log** (a live `orbit.log` tail with all / err / deny / warn
+filters).
 
 #### Edit task metadata inline
 
@@ -212,10 +212,11 @@ orbit audit list
 ## Operations: mint, toggle, clock, drain
 
 Operations has three subtabs in the rail: **Routines**, which also holds the
-sweep clock bar; **Auto-tasks**; and **Jobs**. **Auto-drain** is its own
-destination under Work (`#auto-drain`; the older `#operations/auto-drain`
-link still resolves). All of them require a **single active workspace**. In
-**All workspaces** the panels stay read-only and explain why.
+sweep clock bar; **Auto-tasks**; and **Jobs**. The auto-drain window is a
+card in the Tasks dock's **Drain** mode; `#auto-drain` and the older
+`#operations/auto-drain` links open Tasks with Drain selected. All of them
+require a **single active workspace**. In **All workspaces** the panels stay
+read-only and explain why.
 
 Routines, auto-tasks and jobs share one row layout: the thing, what triggers
 it, when it fires next, what happened last time, and one control at the
@@ -326,33 +327,30 @@ The button will submit the same run once a job endpoint lands.
 
 ### Auto-drain
 
-The pane reads top to bottom in the order you act: the window controls, the
-slot picture, a summary strip, then task readiness.
+The auto-drain card is the first card in the Tasks dock's **Drain** mode,
+above Locked files. Top to bottom:
 
-**Start … window** submits `orbit run auto` for the selected duration
-(a segmented picker) and concurrency (blank means the runtime default). The
-line beside the button says what the window would admit — the eligible count
-against free slots — and the button label carries the chosen duration.
-Shipped tasks stay in `review` unless you opt into automatic completion.
+- **Header** — a cyan dot and the live window's run (short id; the full id
+  is in its title, and it opens the run) while a window is live, otherwise
+  `idle`. Time left is shown for a window started from this browser; the
+  readiness snapshot does not carry the deadline of one started elsewhere.
+- **Duration** — `15m` to `8h`; the selected segment is filled.
+- **Concurrency** — `−` / `+` around the leaf-run limit. Blank means the
+  runtime default, shown as the placeholder.
+- **Completion** — unchecked reads `leave in review`; checked reads
+  `mark done · skip review` and turns amber.
+- **Start … window** submits `orbit run auto` with those settings after a
+  confirmation. **Stop** stops new admissions on the live window
+  (`orbit run auto --stop`); admitted workers keep running. The line under
+  them reads `busy/limit slots busy · admits up to N now`.
+- **Eligible now** and **Blocked by running** — counts from the readiness
+  snapshot.
+- **Blocked detail** — up to three tasks waiting on a running task, each as
+  `ORB-A waits on ORB-B` with the holder's slot phase and the contested lock,
+  then `+N more`.
 
-**Slots** draws one tile per leaf slot. Occupied tiles name the task the run
-carries and its phase; free tiles are dashed. Distributed drain can raise the
-slot count to twenty, so the tiles wrap.
-
-**Task readiness** groups the server's readiness rows by what you can do
-about them:
-
-- **Eligible now** — admitted in listed order when the window starts.
-- **Blocked by a running task** — grouped by the task holding the lock, with
-  the contested files as chips and the holder's slot phase, for both context
-  locks and same-wave deferrals.
-- **Waiting on dependencies** — collapsed to the tasks the chain bottoms out
-  on and the chain laid out by depth; **Show all** expands the full rows.
-- **Other reasons** — every remaining server reason with its evidence, so no
-  row is hidden.
-
-The snapshot is read-only: nothing is reserved or started until you start a
-window, and the counts cover the bounded snapshot, not the workspace.
+Start and Stop results appear in the card's status line. The snapshot is
+read-only: nothing is reserved or started until you start a window.
 
 The completion checkbox is a governed operator action: it marks every task
 the window ships as `done` (`review` → `done`), not only the ones visible at

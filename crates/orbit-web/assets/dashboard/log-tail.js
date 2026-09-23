@@ -5,7 +5,8 @@
 // by a single `initLogTail();` call from app.js (the bootstrap call site is kept
 // in app.js per the extraction contract; the call still fires exactly once at
 // page load). The module exports `initLogTail` and `fitLogPanelToViewport` for
-// the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`).
+// the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
+// and `setDockMode` for the router's `#auto-drain` redirect.
 
 import { el, fetchJson } from './common.js';
 
@@ -25,22 +26,25 @@ let logStreamRetryTimer = null;
 let logStreamRetryMs = LOG_STREAM_RETRY_MIN_MS;
 
 // ORB-10972: the log lives in the Tasks tab's right dock, which has two modes
-// — Status (in-flight runs, locked files, sweep clock) and Log (the tail at
-// full dock height). The mode is a local presentation preference, not shared
-// state, so it persists to localStorage rather than the URL. This supersedes
-// ORB-10874's collapse toggle and height-resize handle: a full-height dock has
-// no height to negotiate, and the always-visible bottom status bar took over
-// the job the collapsed panel used to do.
+// — Drain (the auto-drain window card above locked files, ORB-12898) and Log
+// (the tail at full dock height). The mode is a local presentation
+// preference, not shared state, so it persists to localStorage rather than
+// the URL. This supersedes ORB-10874's collapse toggle and height-resize
+// handle: a full-height dock has no height to negotiate, and the
+// always-visible bottom status bar took over the job the collapsed panel used
+// to do.
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
-const DOCK_MODES = ["status", "log"];
+const DOCK_MODES = ["drain", "log"];
 
 function loadLogPanelPrefs() {
   try {
     const raw = window.localStorage.getItem(LOG_PANEL_PREFS_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
-    return { dockMode: DOCK_MODES.includes(parsed.dockMode) ? parsed.dockMode : "status" };
+    // `status` is the Drain mode's name before ORB-12898; a stored one opens as Drain.
+    const dockMode = parsed.dockMode === "status" ? "drain" : parsed.dockMode;
+    return { dockMode: DOCK_MODES.includes(dockMode) ? dockMode : "drain" };
   } catch (_) {
-    return { dockMode: "status" };
+    return { dockMode: "drain" };
   }
 }
 
@@ -314,7 +318,9 @@ function applyDockMode() {
   }
 }
 
-function setDockMode(mode) {
+// Also the router's handle for the retired `#auto-drain` destination, which
+// now opens Tasks with the Drain mode selected.
+export function setDockMode(mode) {
   if (!DOCK_MODES.includes(mode)) return;
   logPanelPrefs = { ...logPanelPrefs, dockMode: mode };
   saveLogPanelPrefs(logPanelPrefs);
