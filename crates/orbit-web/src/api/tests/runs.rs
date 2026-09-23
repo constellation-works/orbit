@@ -1015,6 +1015,104 @@ async fn ship_endpoint_launches_the_substitute_worker_not_the_test_binary() {
     }
 }
 
+async fn request_job_run(state: crate::state::DashboardState, job_id: &str) -> Response {
+    router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(format!("/jobs/{job_id}/run?workspace=default"))
+                .header(header::ORIGIN, "http://localhost:3000")
+                .header(header::HOST, "localhost:3000")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response")
+}
+
+/// The route must use the downstream substitute-worker hook: spawning this
+/// libtest binary as a worker caused the 2026-09-23 OOM incident.
+#[tokio::test]
+async fn job_run_endpoint_submits_sweep_through_substitute_worker() {
+    use std::time::{Duration, Instant};
+
+    substitute_pipeline_worker();
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    write_replay_job(&runtime, "worktree_gc_pipeline");
+    let state = crate::state::DashboardState::single(Arc::new(runtime.clone()));
+    state.set_operator_session(true);
+
+    let response = request_job_run(state, "worktree_gc_pipeline").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(payload["job_id"], "worktree_gc_pipeline");
+    assert!(matches!(
+        payload["state"].as_str(),
+        Some("queued" | "submitted")
+    ));
+    assert!(payload["submitted_at"].as_str().is_some());
+    let run_id = payload["run_id"].as_str().expect("run_id");
+    let run = runtime.show_job_run(run_id).expect("persisted run");
+    assert_eq!(run.job_id, "worktree_gc_pipeline");
+
+    let expected = format!("{SUBSTITUTE_WORKER_MARKER} {run_id}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let log = runtime
+            .read_pipeline_worker_log(run_id)
+            .expect("read worker log")
+            .and_then(|snapshot| snapshot.content)
+            .unwrap_or_default();
+        if log.contains(&expected) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "substitute did not launch: {log:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn job_run_endpoint_refuses_unauthorized_unknown_and_delivery_without_creating_runs() {
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    write_replay_job(&runtime, "worktree_gc_pipeline");
+    write_replay_job(&runtime, "task_pr_pipeline");
+    let state = crate::state::DashboardState::single(Arc::new(runtime.clone()));
+    let response = with_caller_env(
+        [
+            (
+                orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV,
+                None,
+            ),
+            ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
+            ("ORBIT_AGENT_MODEL", Some("orbit-web-test")),
+        ],
+        request_job_run(state.clone(), "worktree_gc_pipeline"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    state.set_operator_session(true);
+    let response = request_job_run(state.clone(), "missing_job").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = request_job_run(state, "task_pr_pipeline").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_json(response).await["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("task input"))
+    );
+    assert!(
+        runtime
+            .list_job_runs(JobRunListParams::default())
+            .expect("list runs")
+            .is_empty()
+    );
+}
+
 // ─── auto-drain stop [ORB-12728] ──────────────────────────────────────────
 
 async fn request_auto_drain_stop(

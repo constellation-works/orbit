@@ -15,7 +15,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const allowed = { authorized: true, reason: null };
 const denied = { authorized: false, reason: 'Test session cannot perform this action. Ask the server operator.' };
-const capabilities = { routine_toggle: allowed, clock_service: allowed, clock_cadence: allowed, auto_task_toggle: allowed, auto_task_mint: allowed };
+const capabilities = { routine_toggle: allowed, job_run: allowed, clock_service: allowed, clock_cadence: allowed, auto_task_toggle: allowed, auto_task_mint: allowed };
 const enabled = { one: true, two: true };
 let clock = { enabled: true, configured_cadence_seconds: 60, provider: 'fixture', health: 'healthy', loaded: true, running: true, schedulable: true, last_tick_at: '2026-09-07T21:00:00Z', next_tick_at: '2026-09-07T21:01:00Z' };
 let responseError = null;
@@ -26,6 +26,7 @@ let delayGet = false;
 let releaseGet = null;
 let nextTask = 1;
 let drainRunId = null;
+let submittedJob = null;
 const requests = [];
 const confirmations = [];
 const readinessTasks = [
@@ -52,6 +53,10 @@ globalThis.fetch = async (path, options = {}) => {
     if (url.pathname.endsWith('/toggle')) enabled[workspace] = body.enabled;
     if (url.pathname === '/api/workflows/auto') return response({ workflow: 'auto', run_id: 'jrun-20260923-0400-a1', state: 'submitted', completion: body.complete ? 'done' : 'review', submitted_at: new Date().toISOString() });
     if (url.pathname === '/api/workflows/auto/stop') return response({ workflow: 'auto', outcome: 'stopped', coordinators: [{ run_id: drainRunId, outcome: 'stopped', remaining_children: ['jrun-child'] }] });
+    if (url.pathname === '/api/jobs/fixture/run') {
+      submittedJob = { run_id: 'jrun-dashboard-fixture', job_id: 'fixture', state: 'pending', created_at: new Date().toISOString() };
+      return response({ job_id: 'fixture', run_id: submittedJob.run_id, state: 'submitted', submitted_at: submittedJob.created_at });
+    }
     return response(url.pathname.endsWith('/mint')
       ? { message: `Minted TEST-${nextTask}`, task_id: `TEST-${nextTask++}` }
       : { message: 'Saved', clock: { enabled: true } });
@@ -72,11 +77,12 @@ globalThis.fetch = async (path, options = {}) => {
   });
   if (url.pathname === '/api/job-runs') return response({
     items: [
+      ...(submittedJob ? [submittedJob] : []),
       { run_id: 'jrun-fixture-running', job_id: 'fixture', state: 'running', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:59:00Z', started_at: '2026-09-07T20:59:10Z', finished_at: null, duration_ms: null },
       { run_id: 'jrun-fixture-done', job_id: 'fixture', state: 'succeeded', run_role: 'top-level', resolved_crew: 'system', created_at: '2026-09-07T20:30:00Z', started_at: '2026-09-07T20:30:05Z', finished_at: '2026-09-07T20:33:10Z', duration_ms: 185000 },
       { run_id: 'jrun-orphan', job_id: 'task_pr_pipeline', state: 'failed', run_role: 'child', resolved_crew: 'opus', created_at: '2026-09-07T19:00:00Z', started_at: '2026-09-07T19:00:01Z', finished_at: '2026-09-07T19:05:00Z', duration_ms: 299000 },
     ],
-    total: 3, limit: 100, truncated: false,
+    total: submittedJob ? 4 : 3, limit: 100, truncated: false,
   });
   if (url.pathname === '/api/workflows/auto/readiness') return response({
     controls_authorized: true,
@@ -175,19 +181,45 @@ assert(descendants(get('routines-body')).some(node => node.href === '#operations
 assert(descendants(get('routines-body')).some(node => String(node.className || '').includes('operation-timeline')), 'routines pane projects the next hour');
 assert(!get('routines-body').textContent.includes('Routine two'), 'routines stay scoped to the selected workspace');
 assert(descendants(get('clock-body')).some(node => String(node.className || '').includes('operation-clock-bar')), 'clock renders as a bar');
-// Jobs are projected from routine targets plus recent runs; Run is offered but
-// not wired, so no job endpoint is ever posted to.
+// Jobs are projected from routine targets plus recent runs. Authorized Run
+// submits in the selected workspace and refreshes the run cells.
 const jobsText = get('jobs-body').textContent;
 assert(jobsText.includes('Running now1'), `running strip counts in-flight runs: ${jobsText.slice(0, 120)}`);
 const jobCards = descendants(get('jobs-body')).filter(node => String(node.className || '').includes('job-card'));
 assert(jobCards.length === 3 && ['fixture', 'task_pr_pipeline', 'parked_pipeline'].every(id => jobCards.some(card => card.dataset.job === id)), `catalogue unions routine targets (paused included) and run job ids: ${jobCards.map(card => card.dataset.job)}`);
 const fixtureCard = jobCards.find(card => card.dataset.job === 'fixture');
+const jobRunButton = id => {
+  const card = descendants(get('jobs-body')).find(node => node.dataset?.job === id);
+  return card && descendants(card).find(node => node.type === 'button' && node.textContent === 'Run ▸');
+};
 assert(fixtureCard.textContent.includes('Routine one') && fixtureCard.textContent.includes('1 running') && fixtureCard.textContent.includes('jrun-fixture-running'), 'job row shows its routine, active count and latest run');
 const runButton = descendants(fixtureCard).find(node => node.textContent === 'Run ▸' && node.type === 'button');
-assert(runButton?.disabled && String(runButton.title).includes('orbit run job fixture --workspace one'), 'run is offered but hands over the CLI command until the endpoint lands');
+assert(runButton && !runButton.disabled, 'authorized job run is enabled');
+assert(!jobRunButton('parked_pipeline').disabled, 'a paused routine does not disable manual Run');
 assert(fixtureCard.textContent.includes('orbit run job fixture --workspace one'), 'job details carry the CLI command');
-assert(!requests.some(r => r.path.startsWith('/api/jobs')), 'no job endpoint is called');
+assert(jobRunButton('task_pr_pipeline')?.disabled, 'delivery job needs task input');
+assert(descendants(jobCards.find(card => card.dataset.job === 'task_pr_pipeline')).some(node => String(node.title).includes('Use Ship or Drain')), 'disabled delivery button explains its reason');
 assert(requests.some(r => r.path === '/api/job-runs' && r.workspace === 'one'), 'jobs read the workspace-scoped recent runs');
+delayPost = true;
+runButton.click(); runButton.click(); await tick();
+assert(requests.filter(r => r.path === '/api/jobs/fixture/run').length === 1, 'double click submits one job run');
+assert(requests.find(r => r.path === '/api/jobs/fixture/run').workspace === 'one', 'job submission keeps workspace scope');
+assert(get('job-operation-feedback').textContent.includes('Submitting fixture'), 'pending job feedback is visible');
+assert(descendants(get('jobs-body')).some(node => node.textContent === 'Submitting…' && node.disabled), 'pending job button is disabled');
+releasePost(); await tick(); await tick(); await tick();
+delayPost = false;
+assert(get('job-operation-feedback').textContent.includes('jrun-dashboard-fixture submitted'), 'submission receipt is visible');
+assert(get('jobs-body').textContent.includes('jrun-dashboard-fixture'), 'new run appears after refresh');
+responseError = 'Fixture submission refused';
+jobRunButton('fixture').click(); await tick(); await tick();
+assert(get('job-operation-feedback').textContent.includes('Fixture submission refused'), 'server error is visible');
+assert(!jobRunButton('fixture').disabled, 'failed submission can be retried');
+responseError = null;
+capabilities.job_run = denied;
+await fetchAndRenderOperations();
+assert(jobRunButton('fixture').disabled && String(jobRunButton('fixture').title).includes('Test session'), 'read-only session disables job Run with reason');
+capabilities.job_run = allowed;
+await fetchAndRenderOperations();
 assert(!button('auto-tasks-body', 'Disable').disabled, 'authorized toggle available');
 assert(!button('auto-tasks-body', 'Mint now').disabled, 'authorized mint available');
 assert(!button('clock-body', 'Pause clock').disabled, 'authorized clock available');

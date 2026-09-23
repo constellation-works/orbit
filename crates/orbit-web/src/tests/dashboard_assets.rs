@@ -705,10 +705,8 @@ fn dashboard_config_hard_codes_no_key_names_or_enum_options() {
 }
 
 /// The Operations subtabs live in the rail like the Diagnostics ones, and the
-/// third one, Jobs, is projected purely from what the dashboard already
-/// serves (routine `job:` targets plus `/api/job-runs`): Run is offered as a
-/// control but is not wired to any endpoint yet, so the row hands over the
-/// CLI command instead of posting anywhere.
+/// third one, Jobs, is projected from routine targets and recent runs. Its
+/// Run control submits a catalog job and keeps the CLI command available.
 #[test]
 fn dashboard_operations_rows_share_one_vocabulary_and_jobs_is_projected() {
     let index = include_str!("../../assets/dashboard/index.html");
@@ -782,21 +780,18 @@ fn dashboard_operations_rows_share_one_vocabulary_and_jobs_is_projected() {
         assert!(css.contains(needle), "{needle}");
     }
 
-    // Jobs: projected, read-only for now.
+    // Jobs: projected from routine targets and recent runs.
     assert!(operations.contains("fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}`)"));
     assert!(
         operations.contains("function jobIdFromTarget(")
             && operations.contains("function jobCatalog(")
     );
     assert!(
-        operations.contains("Running a job from the dashboard is not wired yet.")
+        operations.contains("postJson(`/api/jobs/${encodeURIComponent(job.id)}/run`, {})")
             && operations.contains("orbit run job ${jobId} --workspace"),
-        "the Run control explains itself and hands over the CLI command"
+        "the Run control submits the catalog job and retains the CLI command"
     );
-    assert!(
-        !operations.contains("/api/jobs"),
-        "no job endpoint exists yet; the pane must not call one"
-    );
+    assert!(operations.contains("refresh: fetchAndRenderJobs"));
 }
 
 /// ORB-11559: below 760px the 216px rail must give up the content column so

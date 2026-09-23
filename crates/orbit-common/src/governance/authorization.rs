@@ -177,6 +177,14 @@ pub const DASHBOARD_ROUTINE_TOGGLE: GovernedOperation = GovernedOperation {
     rationale: "changing a versioned routine definition changes unattended execution",
 };
 
+/// Manual catalog job submission from the dashboard.
+pub const DASHBOARD_JOB_RUN: GovernedOperation = GovernedOperation {
+    id: "job.run",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "starting a job manually can execute workspace work outside its schedule",
+};
+
 /// Native sweep-clock start/stop action exposed by the dashboard.
 pub const DASHBOARD_CLOCK_SERVICE: GovernedOperation = GovernedOperation {
     id: "clock.service",
@@ -467,6 +475,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "collection force-removes worktrees and deletes their branches",
     },
     DASHBOARD_ROUTINE_TOGGLE,
+    DASHBOARD_JOB_RUN,
     DASHBOARD_CLOCK_SERVICE,
     DASHBOARD_CLOCK_CADENCE,
     DASHBOARD_AUTO_TASK_TOGGLE,
