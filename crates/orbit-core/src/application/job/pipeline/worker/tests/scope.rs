@@ -88,6 +88,54 @@ fn scoped_command_runs_the_worker_argv_under_the_configured_limits() {
 }
 
 #[test]
+fn memory_limits_are_reduced_to_admitted_values_before_becoming_arguments() {
+    for (memory_high, memory_max, expected_high, expected_max) in [
+        (
+            " 040%",
+            "0008G",
+            "--property=MemoryHigh=40%",
+            "--property=MemoryMax=8G",
+        ),
+        (
+            "6G",
+            "infinity",
+            "--property=MemoryHigh=6G",
+            "--property=MemoryMax=infinity",
+        ),
+    ] {
+        let settings = WorkerContainmentSettings {
+            enabled: true,
+            memory_high: memory_high.to_string(),
+            memory_max: memory_max.to_string(),
+            tasks_max: 512,
+        };
+        let limits = WorkerLimits::from_settings(&settings).expect("valid limits");
+        let scoped = scoped_worker_command(&Command::new("orbit"), "unit", &limits);
+        let scoped_args = args(&scoped);
+
+        assert!(scoped_args.contains(&expected_high));
+        assert!(scoped_args.contains(&expected_max));
+    }
+}
+
+#[test]
+fn malformed_memory_limits_are_not_forwarded_to_systemd() {
+    for value in ["8G TasksMax=1", "--help", "0", "101%", "8g"] {
+        let settings = WorkerContainmentSettings {
+            enabled: true,
+            memory_high: value.to_string(),
+            memory_max: "8G".to_string(),
+            tasks_max: 512,
+        };
+
+        assert!(
+            WorkerLimits::from_settings(&settings).is_none(),
+            "invalid value was admitted: {value}"
+        );
+    }
+}
+
+#[test]
 fn unit_names_are_valid_and_unique_per_launch() {
     let first = scope_unit_name("jrun-20260923-0308-c3");
     let second = scope_unit_name("jrun-20260923-0308-c3");

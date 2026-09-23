@@ -40,17 +40,97 @@ const SYSTEMD_RUN: &str = "systemd-run";
 /// The limits applied to one worker scope, admitted from `machine.worker_*`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WorkerLimits {
-    memory_high: String,
-    memory_max: String,
+    memory_high: MemoryLimit,
+    memory_max: MemoryLimit,
     tasks_max: u32,
 }
 
+/// A systemd memory limit reduced to numeric input and a fixed unit before it
+/// is formatted into a process argument.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MemoryLimit {
+    Bytes {
+        amount: u64,
+        unit: Option<MemoryUnit>,
+    },
+    Percent(u8),
+    Infinity,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MemoryUnit {
+    K,
+    M,
+    G,
+    T,
+}
+
+impl MemoryLimit {
+    fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value == "infinity" {
+            return Some(Self::Infinity);
+        }
+
+        if let Some(percent) = value.strip_suffix('%') {
+            let percent = percent.parse::<u8>().ok()?;
+            return (1..=100)
+                .contains(&percent)
+                .then_some(Self::Percent(percent));
+        }
+
+        let (amount, unit) = if let Some(amount) = value.strip_suffix('K') {
+            (amount, Some(MemoryUnit::K))
+        } else if let Some(amount) = value.strip_suffix('M') {
+            (amount, Some(MemoryUnit::M))
+        } else if let Some(amount) = value.strip_suffix('G') {
+            (amount, Some(MemoryUnit::G))
+        } else if let Some(amount) = value.strip_suffix('T') {
+            (amount, Some(MemoryUnit::T))
+        } else {
+            (value, None)
+        };
+        if amount.is_empty() || !amount.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        let amount = amount.parse::<u64>().ok()?;
+        (amount > 0).then_some(Self::Bytes { amount, unit })
+    }
+
+    fn systemd_value(self) -> String {
+        match self {
+            Self::Bytes {
+                amount,
+                unit: Some(MemoryUnit::K),
+            } => format!("{amount}K"),
+            Self::Bytes {
+                amount,
+                unit: Some(MemoryUnit::M),
+            } => format!("{amount}M"),
+            Self::Bytes {
+                amount,
+                unit: Some(MemoryUnit::G),
+            } => format!("{amount}G"),
+            Self::Bytes {
+                amount,
+                unit: Some(MemoryUnit::T),
+            } => format!("{amount}T"),
+            Self::Bytes { amount, unit: None } => amount.to_string(),
+            Self::Percent(percent) => format!("{percent}%"),
+            Self::Infinity => "infinity".to_string(),
+        }
+    }
+}
+
 impl WorkerLimits {
-    /// `None` when `machine.worker_containment = false`.
+    /// `None` when containment is disabled or a memory limit is not admitted.
     pub(crate) fn from_settings(settings: &WorkerContainmentSettings) -> Option<Self> {
-        settings.enabled.then(|| Self {
-            memory_high: settings.memory_high.clone(),
-            memory_max: settings.memory_max.clone(),
+        if !settings.enabled {
+            return None;
+        }
+        Some(Self {
+            memory_high: MemoryLimit::parse(&settings.memory_high)?,
+            memory_max: MemoryLimit::parse(&settings.memory_max)?,
             tasks_max: settings.tasks_max,
         })
     }
@@ -58,8 +138,8 @@ impl WorkerLimits {
     /// The unit properties, in `systemd-run --property=` form.
     fn properties(&self) -> [String; 4] {
         [
-            format!("MemoryHigh={}", self.memory_high),
-            format!("MemoryMax={}", self.memory_max),
+            format!("MemoryHigh={}", self.memory_high.systemd_value()),
+            format!("MemoryMax={}", self.memory_max.systemd_value()),
             format!("TasksMax={}", self.tasks_max),
             "OOMPolicy=continue".to_string(),
         ]
