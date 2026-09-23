@@ -18,3 +18,4 @@ mod tests;
 pub(super) use envelope::cli_agent_envelope_json;
 pub(super) use envelope::task_id_from_input;
 pub use orchestrator::run_cli_backend;
+pub use spawn::locate_provider_launcher;

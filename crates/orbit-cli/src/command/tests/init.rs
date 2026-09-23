@@ -7,8 +7,8 @@ use orbit_common::fs::io::create_dir_symlink;
 use orbit_core::OrbitRuntime;
 
 use crate::InitCommand;
-use crate::command::executor::ExecutorShowArgs;
-use crate::command::{CommandOutput, Execute};
+use crate::command::CommandOutput;
+use crate::command::doctor::provider_diagnostics;
 use crate::tests::env_isolation::EnvGuard;
 
 fn seed_discovery_sentinel(home: &Path, agent_dir: &str) -> (PathBuf, PathBuf) {
@@ -444,16 +444,17 @@ fn show_executor_sandbox(global_root: &Path, name: &str) -> serde_json::Value {
         .join("repo/.orbit");
     fs::create_dir_all(&workspace).expect("workspace root");
     let runtime = OrbitRuntime::from_roots(global_root, &workspace).expect("runtime from roots");
-    let CommandOutput::Payload(payload) = ExecutorShowArgs {
-        name: name.to_string(),
-        json: true,
-    }
-    .execute(&runtime)
-    .expect("executor show") else {
-        panic!("executor show must return a payload");
+    let CommandOutput::Payload(payload) = provider_diagnostics(&runtime).expect("doctor providers")
+    else {
+        panic!("doctor providers must return a payload");
     };
     let (json, _) = payload.into_view();
-    json["sandbox"].clone()
+    json.as_array()
+        .expect("one row per executor")
+        .iter()
+        .find(|row| row["name"] == name)
+        .unwrap_or_else(|| panic!("doctor providers must list {name}: {json}"))["sandbox"]
+        .clone()
 }
 
 fn shipped_sandbox_json() -> serde_json::Value {

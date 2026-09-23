@@ -1,4 +1,4 @@
-use clap::CommandFactory;
+use clap::{CommandFactory, Parser};
 use orbit_cmd::{OrphanTaskStoreRemoval, WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use orbit_core::OrbitRuntime;
 
@@ -7,10 +7,11 @@ use std::path::PathBuf;
 use orbit_core::application::routines::{ClockUnitInspection, ClockUnitVerdict};
 
 use super::super::doctor::{
-    clock_unit_row_from_inspection, doctor_row_json, human_detail,
-    orphan_task_store_removal_message, state_directory_permissions_row,
+    DoctorSubcommand, clock_unit_row_from_inspection, doctor_row_json, fs_access, human_detail,
+    orphan_task_store_removal_message, provider_diagnostics, state_directory_permissions_row,
 };
-use super::super::{Cli, CommandOutput, Execute};
+use super::super::{Cli, CommandOutput, Commands, Execute};
+use crate::output::payload::{Block, View};
 
 fn clock_unit_inspection(
     verdict: ClockUnitVerdict,
@@ -26,6 +27,137 @@ fn clock_unit_inspection(
         running_version: "0.21.0".to_string(),
         verdict,
     }
+}
+
+fn payload_parts(output: CommandOutput) -> (serde_json::Value, View) {
+    let CommandOutput::Payload(payload) = output else {
+        panic!("doctor diagnostics must return a payload");
+    };
+    payload.into_view()
+}
+
+#[test]
+fn fs_access_reports_the_shipped_policy_verdicts_for_workspace_relative_paths() {
+    let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    for (path, read, modify) in [
+        ("src/main.rs", true, true),
+        (".orbit/tmp/x", true, true),
+        (".orbit/tasks/x", true, false),
+        ("src/.env", false, false),
+    ] {
+        let (json, view) =
+            payload_parts(fs_access(&runtime, "implementer", path).expect("fs-access dry-run"));
+        assert_eq!(json["policy"], "default", "{json}");
+        assert_eq!(json["profile"], "implementer", "{json}");
+        assert_eq!(json["path"], path, "{json}");
+        assert_eq!(json["read"]["allowed"], read, "{path}: {json}");
+        assert_eq!(json["modify"]["allowed"], modify, "{path}: {json}");
+        assert!(json["read"]["matched_rule"].is_string(), "{json}");
+        let View::Blocks(blocks) = view else {
+            panic!("human detail blocks");
+        };
+        let expected = format!("modify:  {}", if modify { "allowed" } else { "denied" });
+        assert!(
+            blocks
+                .iter()
+                .any(|block| matches!(block, Block::Text(text) if text.contains(&expected))),
+            "{path}: human output must carry the modify verdict"
+        );
+    }
+}
+
+#[test]
+fn fs_access_rejects_an_unknown_profile() {
+    let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    assert!(fs_access(&runtime, "no-such-profile", "src/main.rs").is_err());
+}
+
+#[test]
+fn provider_diagnostics_reports_launcher_availability_and_sandbox() {
+    use orbit_types::resource::ExecutorResource;
+    use orbit_types::workflow::ExecutorDef;
+
+    let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
+    let bin = tempfile::tempdir().expect("launcher dir");
+    let present = bin.path().join("fake-provider");
+    std::fs::write(&present, "#!/bin/sh\n").expect("write fake launcher");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&present, std::fs::Permissions::from_mode(0o755))
+            .expect("mark launcher executable");
+    }
+    let missing = bin.path().join("missing-provider");
+    for (name, command, sandbox) in [
+        ("fake-present", &present, "off"),
+        ("fake-missing", &missing, "linux-bwrap"),
+    ] {
+        let resource: ExecutorResource = serde_yaml::from_str(&format!(
+            "schemaVersion: 2\nkind: Executor\nmetadata:\n  name: {name}\nspec:\n  executor_type: direct_agent\n  command: {}\n  sandbox: {sandbox}\n",
+            command.display()
+        ))
+        .expect("executor YAML");
+        let def = ExecutorDef::from_resource_spec(
+            resource.metadata.name,
+            resource.spec.clone(),
+            resource.spec.created_at,
+            resource.spec.updated_at,
+        );
+        runtime.upsert_executor_def(&def).expect("store executor");
+    }
+
+    let (json, _) = payload_parts(provider_diagnostics(&runtime).expect("provider diagnostics"));
+    let rows = json.as_array().expect("one JSON row per executor");
+    let row = |name: &str| {
+        rows.iter()
+            .find(|row| row["name"] == name)
+            .unwrap_or_else(|| panic!("missing executor {name}: {json}"))
+    };
+    let found = row("fake-present");
+    assert_eq!(found["cli_available"], true, "{found}");
+    assert_eq!(found["launcher"], present.display().to_string(), "{found}");
+    assert_eq!(found["sandbox"], "off", "{found}");
+    let absent = row("fake-missing");
+    assert_eq!(absent["cli_available"], false, "{absent}");
+    assert!(absent["launcher"].is_null(), "{absent}");
+    assert_eq!(absent["sandbox"], "linux-bwrap", "{absent}");
+}
+
+#[test]
+fn doctor_subcommands_parse_and_refuse_repair_flags() {
+    let cli = Cli::parse_from([
+        "orbit",
+        "doctor",
+        "fs-access",
+        "implementer",
+        "src/lib.rs",
+        "--json",
+    ]);
+    match cli.command {
+        Commands::Doctor(command) => {
+            let Some(DoctorSubcommand::FsAccess(args)) = command.command else {
+                panic!("expected doctor fs-access");
+            };
+            assert_eq!(args.profile, "implementer");
+            assert_eq!(args.path, "src/lib.rs");
+            assert!(args.json);
+        }
+        _ => panic!("expected top-level doctor command"),
+    }
+    let cli = Cli::parse_from(["orbit", "doctor", "providers", "--json"]);
+    match cli.command {
+        Commands::Doctor(command) => {
+            assert!(matches!(
+                command.command,
+                Some(DoctorSubcommand::Providers(args)) if args.json
+            ));
+        }
+        _ => panic!("expected top-level doctor command"),
+    }
+    assert!(
+        Cli::try_parse_from(["orbit", "doctor", "--fix-stale-locks", "providers"]).is_err(),
+        "a repair flag must not be silently ignored by a focused diagnostic"
+    );
 }
 
 #[test]
@@ -174,6 +306,7 @@ fn failing_workspace_renders_diagnostics_and_exits_nonzero() {
     std::fs::write(runtime.global_root().join("config.toml"), "[").expect("write invalid config");
 
     let output = super::super::doctor::DoctorCommand {
+        command: None,
         json: false,
         fix_stale_locks: false,
         fix_stale_task_locks: false,
@@ -216,6 +349,7 @@ fn warning_only_workspace_keeps_zero_exit_and_structured_rows() {
     .expect("write stale lock metadata");
 
     let output = super::super::doctor::DoctorCommand {
+        command: None,
         json: false,
         fix_stale_locks: false,
         fix_stale_task_locks: false,
@@ -255,6 +389,7 @@ fn fix_stale_locks_records_repair_count_in_payload_doc() {
     .expect("write stale lock metadata");
 
     let output = super::super::doctor::DoctorCommand {
+        command: None,
         json: false,
         fix_stale_locks: true,
         fix_stale_task_locks: false,
@@ -364,6 +499,7 @@ fn fix_orphan_task_stores_help_documents_bundle_deletion_on_confirmed_absent_che
 fn fix_orphan_task_stores_without_confirm_fails_with_bundle_loss_message() {
     let runtime = OrbitRuntime::in_memory().expect("build in-memory runtime");
     let err = super::super::doctor::DoctorCommand {
+        command: None,
         json: false,
         fix_stale_locks: false,
         fix_stale_task_locks: false,

@@ -30,8 +30,9 @@ Use this section when you are setting up Orbit for the first time.
 
 ## Prerequisites
 
-You need at least one authenticated provider CLI — `orbit executor list` names
-the nine Orbit supports — and, for PR mode, an authenticated GitHub CLI. See
+You need at least one authenticated provider CLI — `orbit doctor providers`
+lists the ones Orbit supports and whether this machine can launch each — and,
+for PR mode, an authenticated GitHub CLI. See
 [Prerequisites](./install/#prerequisites).
 
 ## Then what

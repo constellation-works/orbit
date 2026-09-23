@@ -1,3 +1,0 @@
-NAME           DESCRIPTION    FSPROFILES    UPDATED
-default        Default…       docs_writer…  2026-08-02 04:06
-strict-review  Deny-by-defa…  reviewer      2026-08-02 09:15

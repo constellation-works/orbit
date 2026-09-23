@@ -141,10 +141,6 @@ fn root_help_groups_scheduler_commands_in_layer_order() {
         "{help}"
     );
     assert!(
-        !root_help_section(&help, "Definitions").contains("auto-task"),
-        "{help}"
-    );
-    assert!(
         !help
             .lines()
             .any(|line| line.trim_start().starts_with("locks")),

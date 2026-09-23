@@ -30,6 +30,7 @@ before the subcommand.
 | `orbit workspace publication bind` \| `show` \| `rebind` \| `remove` | Manage the owner-local binding to a dedicated task-publication repository. See [Publish and Restore Tasks](../../how-to/task-publication/). |
 | `orbit workspace remove` \| `teardown` | Deregister a workspace, or remove Orbit artifacts from it. |
 | `orbit config show` \| `get` \| `set` \| `keys` \| `path` | Read and write configuration, including this machine's identity under `machine.*`. Rename the machine with `orbit config set --global machine.name <value>`. See [Configuration](../config/). |
+| `orbit plugin add` \| `list` \| `show` \| `upgrade` \| `enable` \| `disable` \| `remove` \| `doctor` \| `sync` | Install and manage Orbit plugins; `validate`, `test`, `scaffold`, and `migrate` support plugin authoring. Installed plugin command groups appear under `Plugins:` in `orbit --help`. |
 | `orbit migrate` | Inspect pending `.orbit` layout and store migrations; `--confirm` applies them. |
 | `orbit update` | Install a published release and converge to it. `--check`, `--version`, `--allow-downgrade`. |
 
@@ -83,6 +84,13 @@ See [Delivery Workflows](../../getting-started/workflows/).
 | `orbit run concurrency <run_id> --set N` | Retune how many tasks a live drain keeps in flight. `--reason`, `--if-revision`. |
 | `orbit gc worktrees` | Report job-run worktrees whose task has settled; `--confirm` reaps them. `--run <ID>` restricts to one run, `--older-than-hours <N>` to runs finished at least that long ago. Dry-run skips the recursive byte estimate unless `--estimate-bytes`. |
 
+### Jobs and tools
+
+| Command | Purpose |
+|---|---|
+| `orbit job list` \| `show` \| `run` \| `replay` \| `resume` | View job definitions and the activity each step runs; run one by ID or YAML path, replay a previous run from step 0, or resume an interrupted run from its step checkpoints. See [Activities and Jobs](../../concepts/activities-jobs/). |
+| `orbit tool list` \| `show` \| `run` \| `add` \| `scaffold` \| `remove` \| `enable` \| `disable` \| `doctor` | View and run registered tools, manage external tool and MCP plugins, and validate tool health. |
+
 ## Observe
 
 | Command | Purpose |
@@ -97,16 +105,8 @@ See [Delivery Workflows](../../getting-started/workflows/).
 | `orbit run trace [run_id]` | Parent/child run tree. |
 | `orbit log tail` | Tail the unified Orbit log feed. |
 | `orbit doctor` | Diagnose workspace health: config, database, disk, indexes, locks, runs. The `--fix-*` flags are opt-in repairs. |
-
-## Definitions
-
-| Command | Purpose |
-|---|---|
-| `orbit activity` | View activity definitions. See [Activities and Jobs](../../concepts/activities-jobs/). |
-| `orbit job list` \| `show` \| `run` \| `replay` \| `resume` | View job definitions; run one by ID or YAML path, replay a previous run from step 0, or resume an interrupted run from its step checkpoints. |
-| `orbit tool list` \| `show` \| `run` \| `add` \| `scaffold` \| `remove` \| `enable` \| `disable` \| `doctor` | View and run registered tools, manage external tool and MCP plugins, and validate tool health. |
-| `orbit policy list` \| `show` \| `check <profile> <path>` | View filesystem policies; `check` dry-runs a path against a profile. See [Policy Format](../policy-format/) and [Scoping](../scoping/). |
-| `orbit executor` | View executors. |
+| `orbit doctor providers` | Each executor's provider CLI, whether dispatch can find it (and where), and its resolved `sandbox` mode. `--json`. |
+| `orbit doctor fs-access <profile> <path>` | Dry-run a workspace-relative path against a filesystem profile's read and modify rules. `--json`. See [Policy Format](../policy-format/) and [Scoping](../scoping/). |
 
 ## Scheduler
 

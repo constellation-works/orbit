@@ -17,11 +17,12 @@ use tempfile::tempdir;
 use super::super::super::dispatcher::ResolvedSandbox;
 use super::super::spawn::{
     SUPPORTED_SYSTEM_BIN_DIRS, SpawnError, SpawnedChild, copilot_model_unavailable_diagnostic,
-    linux_bwrap_failed_write_diagnostic, macos_keychain_auth_diagnostic_with,
-    macos_sandbox_apply_failure_diagnostic, orbit_tool_env_with,
-    prepare_linux_sandbox_for_dispatch_with_probe, prepare_macos_codex_ca_environment_with,
-    reject_unsatisfiable_managed_grants, resolve_provider_launcher_with,
-    resolve_provider_launcher_with_extra_dirs, spawn_bare, spawn_macos_sandboxed_with,
+    linux_bwrap_failed_write_diagnostic, locate_provider_launcher,
+    macos_keychain_auth_diagnostic_with, macos_sandbox_apply_failure_diagnostic,
+    orbit_tool_env_with, prepare_linux_sandbox_for_dispatch_with_probe,
+    prepare_macos_codex_ca_environment_with, reject_unsatisfiable_managed_grants,
+    resolve_provider_launcher_with, resolve_provider_launcher_with_extra_dirs, spawn_bare,
+    spawn_macos_sandboxed_with,
 };
 use super::test_support::{sandbox_for_test, sh_args, write_executable};
 
@@ -925,6 +926,36 @@ fn provider_launcher_resolution_falls_back_to_temp_home_with_scrubbed_path() {
     .expect("HOME fallback should resolve provider");
 
     assert_eq!(resolved, launcher.to_string_lossy());
+}
+
+#[test]
+#[cfg(unix)]
+fn locate_provider_launcher_reports_only_launchable_path_like_programs() {
+    let temp = tempdir().expect("tempdir");
+    let bin = temp.path().join("bin");
+    std::fs::create_dir_all(&bin).expect("create bin");
+    let launchable = bin.join("provider");
+    write_executable(&launchable, "#!/bin/sh\n");
+    let not_executable = bin.join("plain");
+    std::fs::write(&not_executable, "not a launcher").expect("write plain file");
+
+    assert_eq!(
+        locate_provider_launcher(&launchable.to_string_lossy(), None),
+        Some(launchable.clone())
+    );
+    assert_eq!(
+        locate_provider_launcher("bin/provider", Some(temp.path())),
+        Some(launchable),
+        "a relative path-like program resolves against the dispatch cwd"
+    );
+    assert_eq!(
+        locate_provider_launcher(&not_executable.to_string_lossy(), None),
+        None
+    );
+    assert_eq!(
+        locate_provider_launcher(&bin.join("missing").to_string_lossy(), None),
+        None
+    );
 }
 
 #[test]

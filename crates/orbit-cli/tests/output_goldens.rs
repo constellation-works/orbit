@@ -2,7 +2,7 @@
 // Tests use unwrap/expect to keep fixture setup readable.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-//! Golden-file regression coverage for the plain and `json` forms of four
+//! Golden-file regression coverage for the plain and `json` forms of the
 //! list commands, per `docs/design/terminal-interface/specs/output-modes.md`
 //! and `docs/design/terminal-interface/specs/table-rendering.md` (ORB-10571).
 //!
@@ -43,8 +43,7 @@ struct Command {
     args: &'static [&'static str],
 }
 
-/// At least four list commands across table, plain, and json (ORB-10571
-/// acceptance criteria). Each renders through `output::table::Table` for its
+/// List commands covered across table, plain, and json. Each renders through `output::table::Table` for its
 /// non-`--json` form, so the plain-form assertions here exercise the same
 /// contract as the pinned-width fixtures in `output/tests/table.rs`.
 const COMMANDS: &[Command] = &[
@@ -55,10 +54,6 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "task_list",
         args: &["task", "list"],
-    },
-    Command {
-        name: "policy_list",
-        args: &["policy", "list"],
     },
     Command {
         name: "skill_list",
@@ -99,9 +94,9 @@ struct Fixture {
 }
 
 impl Fixture {
-    /// A fresh workspace with the deterministic task seed applied. Policies
-    /// and skills need no seeding: `orbit workspace init` seeds the default
-    /// policy and the default skill catalog on every fresh workspace.
+    /// A fresh workspace with the deterministic task seed applied. Skills
+    /// need no seeding: `orbit workspace init` seeds the default skill
+    /// catalog on every fresh workspace.
     ///
     /// Init runs with an empty `PATH`: crew seeding probes which agent CLIs
     /// the host has installed, so a developer box with `claude` on `PATH`
@@ -446,7 +441,7 @@ fn no_ansi_escapes_under_any_color_configuration() {
 /// Converted families: task add/update/show `--fields`/artifact, tool run
 /// (including dry-run), config get, run job helpers, log tail, plus other
 /// json/Silent forks without a separate owner (config keys, skill link/unlink,
-/// auto_task, policy check, docs index, lint/export/import/archive/start/
+/// auto_task, doctor fs-access, docs index, lint/export/import/archive/start/
 /// reindex/artifacts, locks list, search reindex, audit
 /// stats, gc/sweep, run cancel/agent/auto/concurrency/sweep/ship/trace/logs).
 fn parse_json_stdout(output: &std::process::Output, label: &str) -> Value {

@@ -130,8 +130,8 @@ fn requested_format(matches: &ArgMatches) -> Option<FormatArg> {
 /// machine-readable form".
 ///
 /// `--ops` is here alongside `--json` because it is the same rung wearing a
-/// different name: on `task list`, `job list`, and `activity list` it selects a
-/// narrower record shape and has always forced JSON. Leaving it out would make
+/// different name: on `task list` and `job list` it selects a narrower record
+/// shape and has always forced JSON. Leaving it out would make
 /// `orbit task list --ops` render a table on a terminal.
 const LEGACY_JSON_ARG_IDS: [&str; 2] = ["json", "ops"];
 

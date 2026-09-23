@@ -123,6 +123,77 @@ fn plugin_help_matches_the_shipped_surface() {
     }
 }
 
+/// `orbit --help`'s sections, in order, each with the commands it lists.
+fn root_help_sections(help: &str) -> Vec<(String, Vec<String>)> {
+    let mut sections: Vec<(String, Vec<String>)> = Vec::new();
+    for line in help.lines() {
+        if let Some(heading) = line.strip_suffix(':').filter(|_| !line.starts_with(' ')) {
+            sections.push((heading.to_string(), Vec::new()));
+        } else if let (Some(name), Some((_, commands))) = (
+            line.strip_prefix("  ")
+                .and_then(|row| row.split_whitespace().next()),
+            sections.last_mut(),
+        ) {
+            commands.push(name.to_string());
+        }
+    }
+    sections.retain(|(heading, _)| heading != "Options");
+    sections
+}
+
+#[test]
+fn root_help_groups_every_visible_command_exactly_once() {
+    let help = help_for(&["orbit"]);
+    let sections = root_help_sections(&help);
+    let expected: &[(&str, &[&str])] = &[
+        (
+            "Environment",
+            &["init", "workspace", "config", "plugin", "migrate", "update"],
+        ),
+        ("Knowledge", &["task", "friction", "search"]),
+        ("Operate", &["run", "job", "tool", "gc"]),
+        ("Observe", &["audit", "log", "doctor"]),
+        ("Scheduler", &["clock", "sweep", "routine", "auto-task"]),
+        ("Services", &["mcp", "web"]),
+    ];
+    let expected: Vec<(String, Vec<String>)> = expected
+        .iter()
+        .map(|(heading, commands)| {
+            (
+                (*heading).to_string(),
+                commands.iter().map(ToString::to_string).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(sections, expected, "{help}");
+
+    // The template is hand-rolled, so a visible command missing from it
+    // would silently vanish from `orbit --help`.
+    let listed: Vec<&String> = sections.iter().flat_map(|(_, names)| names).collect();
+    for subcommand in Cli::command().get_subcommands() {
+        if subcommand.is_hide_set() {
+            continue;
+        }
+        let name = subcommand.get_name().to_string();
+        assert_eq!(
+            listed.iter().filter(|listed| ***listed == name).count(),
+            1,
+            "`{name}` must appear exactly once in the root help template:\n{help}"
+        );
+    }
+}
+
+#[test]
+fn removed_definition_commands_are_unknown_subcommands() {
+    for removed in ["activity", "executor", "policy"] {
+        assert_cli_rejects(
+            &["orbit", removed, "list"],
+            ErrorKind::InvalidSubcommand,
+            removed,
+        );
+    }
+}
+
 #[test]
 fn recursive_cli_help_uses_only_placeholder_artifact_ids() {
     assert_help_tree_has_no_concrete_artifact_ids(&Cli::command());

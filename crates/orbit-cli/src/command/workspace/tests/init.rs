@@ -91,6 +91,7 @@ fn workspace_init_before_machine_identity_is_repaired_after_orbit_init() {
     );
 
     let output = crate::command::doctor::DoctorCommand {
+        command: None,
         json: false,
         fix_stale_locks: false,
         fix_stale_task_locks: false,
