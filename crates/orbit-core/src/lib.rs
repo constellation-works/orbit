@@ -56,6 +56,19 @@ pub mod runtime;
 #[cfg(test)]
 mod tests;
 
+/// Hooks for tests in crates that depend on `orbit-core`, behind the
+/// `test-support` feature. Enable it only from `[dev-dependencies]`.
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    /// Replaced with the run id in every argv entry of a substitute worker.
+    pub use crate::application::job::pipeline::worker_command_override::RUN_ID_PLACEHOLDER;
+    /// Substitute the detached pipeline worker program for this whole test
+    /// process. Any test that submits a pipeline run (ship, resume, auto, job)
+    /// must install one: the production spawn refuses to re-exec a cargo test
+    /// harness, so an unsubstituted submission fails.
+    pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
+}
+
 // Store metric/scoreboard projections consumed by the dashboard's JSON API.
 pub use orbit_store::scoreboard_summary;
 pub use orbit_store::skill_store as skill_catalog;

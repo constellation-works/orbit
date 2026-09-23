@@ -6,6 +6,25 @@ use chrono::Utc;
 use orbit_core::{JobRun, JobRunState, OrbitRuntime};
 use serde_json::Value;
 
+/// First word the substitute pipeline worker writes to its run's worker log.
+pub(super) const SUBSTITUTE_WORKER_MARKER: &str = "substitute-pipeline-worker";
+
+/// Launch a shell stub, not this test binary, as every pipeline worker this
+/// process spawns [ORB-12902]. Call it in any test whose request can submit a
+/// run (ship, resume, auto): the production spawn refuses to re-exec a libtest
+/// harness, so an unsubstituted submission fails. The stub logs
+/// `SUBSTITUTE_WORKER_MARKER <run_id>` and exits without claiming the run.
+pub(super) fn substitute_pipeline_worker() {
+    orbit_core::test_support::install_substitute_pipeline_worker([
+        "sh".to_string(),
+        "-c".to_string(),
+        format!(
+            "echo {SUBSTITUTE_WORKER_MARKER} {}",
+            orbit_core::test_support::RUN_ID_PLACEHOLDER
+        ),
+    ]);
+}
+
 pub(super) fn write_lines(path: &std::path::Path, lines: &[String]) {
     let mut content = String::new();
     for line in lines {

@@ -290,6 +290,7 @@ spec:
 /// insert a second run here instead of returning this typed shared conflict.
 #[test]
 fn interactive_ship_inherits_the_shared_in_flight_guard() {
+    super::substitute_pipeline_worker();
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     write_ship_job_asset(&runtime);
     let task = runtime

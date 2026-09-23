@@ -39,6 +39,8 @@ tracing.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+# Substitute pipeline worker for tests that submit runs [ORB-12902].
+orbit-core = { path = "../orbit-core", features = ["test-support"] }
 assert_cmd.workspace = true
 predicates.workspace = true
 regex.workspace = true

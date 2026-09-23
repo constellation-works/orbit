@@ -22,6 +22,14 @@ use crate::command::{Cli, CommandOutput, Commands, Execute};
 use super::cancel::RunCancelArgs;
 use super::*;
 
+/// Launch a bounded `sleep`, not this test binary, as every pipeline worker
+/// this process spawns [ORB-12902]. Any test that submits a run must call it:
+/// the production spawn refuses to re-exec a libtest harness. The worker stays
+/// alive briefly so its unclaimed run is still in flight for guard tests.
+fn substitute_pipeline_worker() {
+    orbit_core::test_support::install_substitute_pipeline_worker(["sleep", "10"]);
+}
+
 fn parse_run(args: &[&str]) -> RunCommand {
     let cli = Cli::parse_from(args);
     match cli.command {

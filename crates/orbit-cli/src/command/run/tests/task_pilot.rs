@@ -142,6 +142,7 @@ fn task_pilot_is_a_required_workflow_operation() {
 
 #[test]
 fn task_pilot_dispatch_submits_task_pilot_pipeline_with_workflow_payload_shape() {
+    super::substitute_pipeline_worker();
     let runtime = OrbitRuntime::in_memory().expect("runtime");
     let jobs_dir = runtime.global_root().join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).expect("create jobs dir");

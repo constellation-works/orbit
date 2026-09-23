@@ -63,10 +63,12 @@ pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
 #[cfg(test)]
 pub(crate) use wait::{PIPELINE_WAIT_MAX_TIMEOUT_SECONDS, PipelineWaitClock};
 pub use wait::{PipelineWaitEntry, PipelineWaitResult, pipeline_wait_status_is_success};
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use worker::command::worker_command_override;
 #[cfg(test)]
 pub(crate) use worker::command::{
-    configure_pipeline_worker_command, pipeline_worker_profile_file, pipeline_worker_root_override,
-    resolve_pipeline_worker_executable, worker_command_override,
+    configure_pipeline_worker_command, orbit_worker_command, pipeline_worker_profile_file,
+    pipeline_worker_root_override, refuse_test_harness_worker, resolve_pipeline_worker_executable,
 };
 pub(crate) use worker::command::{run_definition_snapshot_path, workspace_auto_run_input};
 #[cfg(test)]
