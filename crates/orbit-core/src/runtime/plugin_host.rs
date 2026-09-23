@@ -348,7 +348,14 @@ pub fn read_pin_file(orbit_dir: &Path) -> Result<Option<PluginPinFile>, OrbitErr
 /// Resolve the runtime-selected `.orbit` directory before appending the fixed
 /// pin filename. The leaf is opened with no-follow semantics by the caller.
 fn validated_pin_file_path(orbit_dir: &Path) -> std::io::Result<PathBuf> {
-    let root = orbit_dir.canonicalize()?;
+    let root = super::validated_existing_config_root(orbit_dir)
+        .map_err(|error| std::io::Error::other(error.to_string()))?
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "plugin pin root does not exist",
+            )
+        })?;
     if !std::fs::metadata(&root)?.is_dir() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotADirectory,
