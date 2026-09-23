@@ -813,7 +813,7 @@
       
       .row {
         display: grid;
-        grid-template-columns: minmax(80px, max-content) minmax(140px, 1fr) minmax(108px, max-content) minmax(132px, max-content);
+        grid-template-columns: minmax(80px, max-content) minmax(140px, 1fr) minmax(104px, max-content) minmax(120px, max-content);
         gap: 12px;
         padding: 8px 16px;
         margin: 0;
@@ -865,7 +865,7 @@
       .task-status-select {
         width: 100%;
         min-width: 104px;
-        max-width: 160px;
+        max-width: 108px;
         height: 28px;
         border: 1px solid var(--border);
         border-left-width: 2px;
@@ -901,7 +901,7 @@
       .task-complexity-select {
         width: 100%;
         min-width: 110px;
-        max-width: 200px;
+        max-width: 120px;
         height: 28px;
         border: 1px solid var(--border);
         border-radius: 2px;
@@ -2558,90 +2558,6 @@
       .scoreboard-insights .ag-tag.gemini { color: var(--ag-gemini); background: var(--ag-gemini-low); }
       .scoreboard-narrative .ag-tag.grok,
       .scoreboard-insights .ag-tag.grok { color: var(--ag-grok); background: var(--ag-grok-low); }
-
-      .scoreboard-highlights-host {
-        border-bottom: 1px solid var(--border);
-        background: var(--bg);
-        min-width: 0;
-      }
-      .scoreboard-highlights-host:empty { display: none; }
-      .scoreboard-highlights {
-        padding: 12px 16px 14px;
-        display: grid;
-        gap: 10px;
-        min-width: 0;
-      }
-      .scoreboard-highlights-heading {
-        display: grid;
-        gap: 4px;
-        min-width: 0;
-      }
-      .scoreboard-highlights-title {
-        margin: 0;
-        font-family: var(--font-sans);
-        font-size: 13px;
-        font-weight: 600;
-        color: var(--fg);
-      }
-      .scoreboard-highlights-rule {
-        margin: 0;
-        font-size: 12px;
-        line-height: 1.45;
-        color: var(--fg-dim);
-        overflow-wrap: anywhere;
-      }
-      .scoreboard-highlights-list {
-        list-style: none;
-        margin: 0;
-        padding: 0;
-        display: grid;
-        gap: 8px;
-        min-width: 0;
-      }
-      .scoreboard-highlight {
-        display: grid;
-        gap: 4px;
-        min-width: 0;
-        padding: 8px 10px;
-        border: 1px solid var(--border);
-        border-radius: 2px;
-        background: var(--bg-elev, #111);
-      }
-      .scoreboard-highlight-head,
-      .scoreboard-highlight-meta {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px 12px;
-        align-items: baseline;
-        min-width: 0;
-      }
-      .scoreboard-highlight-id {
-        font-family: var(--font-mono);
-        font-size: 11px;
-        color: var(--accent-hover, var(--accent));
-      }
-      .scoreboard-highlight-title {
-        font-size: 13px;
-        color: var(--fg);
-        overflow-wrap: anywhere;
-        min-width: 0;
-      }
-      .scoreboard-highlight-meta {
-        font-family: var(--font-mono);
-        font-size: 11px;
-        color: var(--fg-dim);
-      }
-      .scoreboard-highlight-excerpt {
-        margin: 0;
-        font-size: 12.5px;
-        line-height: 1.45;
-        color: var(--fg);
-        overflow-wrap: anywhere;
-      }
-      .scoreboard-highlight-excerpt.missing {
-        color: var(--fg-dim);
-        font-style: italic;
-      }
 
       .scoreboard-agent-strip {
         border-bottom: 1px solid var(--border);
@@ -5150,9 +5066,32 @@
       .operation-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-mute); flex: 0 0 auto; }
       .operation-dot.ok { background: var(--state-success); }
       .operation-dot.failed { background: var(--state-failed); }
-      .operation-dot.running { background: var(--priority-medium); box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18); }
-      .operation-run-link { color: var(--accent); }
-      .operation-chips { gap: 4px 6px; }
+      .operation-run-link,
+      .operation-task-link,
+      .operation-job-link,
+      .operation-routine-link,
+      .operation-link {
+        color: var(--accent);
+      }
+      .operation-run-link:hover,
+      .operation-task-link:hover,
+      .operation-job-link:hover,
+      .operation-routine-link:hover,
+      .operation-link:hover {
+        color: var(--accent-hover);
+      }
+      .operations-layout a:not(.operation-chip) {
+        color: var(--accent);
+      }
+      .operations-layout a:not(.operation-chip):hover {
+        color: var(--accent-hover);
+      }
+      .operation-feedback a {
+        color: var(--accent);
+      }
+      .operation-feedback a:hover {
+        color: var(--accent-hover);
+      }
       .operation-chip {
         display: inline-flex; align-items: center; min-height: 18px; padding: 0 6px; border: 1px solid var(--border);
         border-radius: 3px; background: var(--bg); color: var(--fg-dim); font-size: 10.5px; text-decoration: none;
