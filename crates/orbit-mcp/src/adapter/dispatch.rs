@@ -19,7 +19,8 @@ use serde_json::{Map, Value};
 use super::OrbitToolServer;
 use super::name_map::build_name_map;
 use super::schema::{
-    SelectorAdvertisement, WorkspaceBinding, ensure_workspace_selector, schema_to_tool,
+    SelectorAdvertisement, WorkspaceBinding, ensure_workspace_selector, host_owns_plugin_selector,
+    schema_to_tool,
 };
 use super::structured::mcp_tool_call_result;
 use crate::error::tool_error_result;
@@ -208,12 +209,31 @@ impl OrbitToolServer {
         &self,
         request: CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
-        let call_context = self.context_for_tool_call();
+        let mut call_context = self.context_for_tool_call();
         let canonical = self.canonical_name(request.name.as_ref())?;
-        let input = request
+        let mut input = request
             .arguments
             .map(Value::Object)
             .unwrap_or_else(|| Value::Object(Map::new()));
+
+        if self
+            .load_tool_definitions()
+            .map_err(invalid_definitions_mcp_error)?
+            .iter()
+            .any(|definition| {
+                definition.schema.name == canonical && host_owns_plugin_selector(definition)
+            })
+            && let Value::Object(arguments) = &mut input
+            && let Some(selector) = arguments
+                .get("workspace")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        {
+            // The host still needs the selector to route this call. Plugin
+            // inputs see only properties from their own declared schema.
+            arguments.remove("workspace");
+            call_context.workspace = Some(selector);
+        }
 
         let host = Arc::clone(&self.host);
         let execution_name = canonical.clone();

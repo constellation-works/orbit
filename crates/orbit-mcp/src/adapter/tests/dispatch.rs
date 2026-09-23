@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use orbit_common::OrbitError;
 use orbit_types::tool::{McpToolDefinition, McpToolScope, ToolSessionContext};
 use rmcp::model::CallToolRequestParams;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::super::OrbitToolServer;
@@ -213,4 +214,118 @@ fn canonical_name_rejects_sanitized_dispatch_collisions() {
             .message
             .contains("invalid canonical MCP tool definitions")
     );
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VersionInput {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeclaredWorkspaceInput {
+    workspace: String,
+}
+
+struct StrictPluginHost {
+    federated: bool,
+}
+
+impl crate::McpHost for StrictPluginHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        let mut version = tool_schema("orbit.graph.version");
+        version.builtin = false;
+        let mut declared = tool_schema("orbit.graph.declared");
+        declared.builtin = false;
+        declared
+            .parameters
+            .push(super::super::test_support::param("workspace"));
+        Ok(vec![
+            McpToolDefinition::new(version, McpToolScope::WorkspaceRequired),
+            McpToolDefinition::new(declared, McpToolScope::WorkspaceRequired),
+        ])
+    }
+
+    fn federated_workspace_selectors(&self) -> bool {
+        self.federated
+    }
+
+    fn call_tool(
+        &self,
+        name: &str,
+        input: Value,
+        context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        let selector = input
+            .get("workspace")
+            .and_then(Value::as_str)
+            .or(context.workspace.as_deref())
+            .ok_or_else(|| OrbitError::InvalidInput("missing routed workspace".to_string()))?
+            .to_string();
+        match name {
+            "orbit.graph.version" => {
+                serde_json::from_value::<VersionInput>(input)
+                    .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+                Ok(json!({ "routed_workspace": selector }))
+            }
+            "orbit.graph.declared" => {
+                let declared = serde_json::from_value::<DeclaredWorkspaceInput>(input)
+                    .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+                Ok(json!({ "routed_workspace": selector, "plugin_workspace": declared.workspace }))
+            }
+            _ => Err(OrbitError::InvalidInput("unknown fixture tool".to_string())),
+        }
+    }
+}
+
+#[tokio::test]
+async fn plugin_selector_routes_without_leaking_into_strict_plugin_input() {
+    for federated in [false, true] {
+        let server = OrbitToolServer::new(Arc::new(StrictPluginHost { federated }));
+        let definition = server
+            .tool_definitions()
+            .expect("fixture definitions")
+            .into_iter()
+            .find(|definition| definition.schema.name == "orbit.graph.version")
+            .expect("version tool");
+        let advertised = server
+            .input_schema_for(&definition)
+            .expect("plugin input schema");
+        assert_eq!(advertised["required"], json!(["workspace"]));
+        let description = advertised["properties"]["workspace"]["description"]
+            .as_str()
+            .expect("injected selector description");
+        assert_eq!(description.contains("Copy the `selector` field"), federated);
+        let result = server
+            .call_tool_request(super::super::test_support::request_with_args(
+                "orbit.graph.version",
+                json!({ "workspace": "ws_orbit" }),
+            ))
+            .await
+            .expect("MCP dispatch completes");
+        assert_eq!(result.is_error, Some(false), "federated={federated}");
+        assert_eq!(
+            result
+                .structured_content
+                .as_ref()
+                .map(|value| &value["routed_workspace"]),
+            Some(&json!("ws_orbit")),
+            "federated={federated}"
+        );
+
+        let declared = server
+            .call_tool_request(super::super::test_support::request_with_args(
+                "orbit.graph.declared",
+                json!({ "workspace": "ws_orbit" }),
+            ))
+            .await
+            .expect("MCP dispatch completes");
+        assert_eq!(declared.is_error, Some(false));
+        assert_eq!(
+            declared
+                .structured_content
+                .as_ref()
+                .map(|value| &value["plugin_workspace"]),
+            Some(&json!("ws_orbit"))
+        );
+    }
 }

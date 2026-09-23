@@ -495,6 +495,17 @@ fn mcp_serve_tools_list_matches_production_snapshot() {
 }
 
 #[test]
+fn mcp_search_without_query_or_tag_keeps_its_refusal_message() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let refused = client.call_tool_err("orbit_search", json!({ "model": "codex" }));
+    assert_eq!(
+        refused["message"],
+        "invalid input: search requires a query, --path, or --tag"
+    );
+}
+
+#[test]
 fn mcp_server_advertises_governed_tools_but_denies_an_unprivileged_session() {
     let workspace = McpWorkspace::init();
     let mut client = workspace.serve();
@@ -1577,6 +1588,25 @@ fn uninitialized_unbound_mcp_launch_gives_setup_guidance_without_operator_author
                 .iter()
                 .any(|tool| tool["name"] == "orbit_workspace_list")),
         "the first routing tool must be available from a clean launch: {listed}"
+    );
+    let tools = listed["result"]["tools"].as_array().expect("tools array");
+    let task_list = tools
+        .iter()
+        .find(|tool| tool["name"] == "orbit_task_list")
+        .expect("task list schema");
+    assert!(
+        task_list["inputSchema"]["required"]
+            .as_array()
+            .is_some_and(|required| required.contains(&json!("workspace")))
+    );
+    let task_show = tools
+        .iter()
+        .find(|tool| tool["name"] == "orbit_task_show")
+        .expect("task show schema");
+    assert!(
+        !task_show["inputSchema"]["required"]
+            .as_array()
+            .is_some_and(|required| required.contains(&json!("workspace")))
     );
 
     let unscoped = client.call_tool_err("orbit_task_list", json!({}));

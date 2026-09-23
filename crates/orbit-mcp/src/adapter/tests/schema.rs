@@ -456,6 +456,46 @@ fn an_unbound_session_advertises_the_selector_as_required() {
         description.contains("refused"),
         "the fail-closed consequence must be stated: {description}"
     );
+    let server = OrbitToolServer::new(Arc::new(SessionContextHost::default()));
+    let schema = server.input_schema_for(&definition).expect("input schema");
+    assert_eq!(schema["required"], json!(["workspace"]));
+}
+
+#[test]
+fn bound_session_keeps_declared_requirements_without_requiring_workspace() {
+    let definition = definition_with_scope(
+        "orbit.task.update",
+        vec![ToolParam {
+            required: true,
+            ..param("id")
+        }],
+        McpToolScope::WorkspaceRequired,
+    );
+    let server = OrbitToolServer::new_with_context(
+        Arc::new(SessionContextHost::default()),
+        ToolSessionContext::with_workspace("ws_orbit"),
+    );
+    let schema = server.input_schema_for(&definition).expect("input schema");
+    assert_eq!(schema["required"], json!(["id"]));
+}
+
+#[test]
+fn search_schema_requires_a_query_or_tag_and_an_unbound_workspace() {
+    let definition = definition_with_scope(
+        "orbit.search",
+        vec![param("query"), param_with_type("tag", "string_list")],
+        McpToolScope::WorkspaceRequired,
+    );
+    let server = OrbitToolServer::new(Arc::new(SessionContextHost::default()));
+    let schema = server.input_schema_for(&definition).expect("input schema");
+    assert_eq!(schema["required"], json!(["workspace"]));
+    assert_eq!(
+        schema["allOf"],
+        json!([{ "anyOf": [
+        { "required": ["query"] },
+        { "required": ["tag"] }
+    ] }])
+    );
 }
 
 fn selector_description(definition: &McpToolDefinition, launch_workspace: Option<&str>) -> String {
@@ -521,6 +561,9 @@ fn federated_task_show_requires_the_machine_qualified_selector() {
         .expect("federated task.show advertises the host-qualified selector");
 
     assert_federated_selector_description(description);
+    let server = OrbitToolServer::new(Arc::new(SessionContextHost::federated()));
+    let schema = server.input_schema_for(&definition).expect("input schema");
+    assert_eq!(schema["required"], json!(["workspace"]));
 }
 
 /// A v1 `ws_*` initialize binding must not rewrite federated list copy as
