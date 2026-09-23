@@ -23,6 +23,7 @@ use super::wait::PIPELINE_WAIT_MIN_POLL_SECONDS;
 pub(super) mod command;
 pub(super) mod log;
 mod record;
+pub(super) mod scope;
 pub(super) mod supervisor;
 
 #[cfg(test)]
@@ -259,6 +260,7 @@ impl OrbitRuntime {
             )
         })();
         let finished_at = Utc::now();
+        self.record_worker_resource_limit(run, started_at, finished_at, outcome.as_ref());
         self.finalize_v2_pipeline_run(
             run,
             &input,
@@ -268,6 +270,42 @@ impl OrbitRuntime {
             V2RunFinalizationOptions::DETACHED_WORKER,
         )?;
         outcome.map(|_| ())
+    }
+    /// [ORB-12903] A run that failed after its worker scope hit a memory or
+    /// task limit names that cause, under its own error code, ahead of the
+    /// generic failure step finalization would write (the first recorded
+    /// error wins). Only this process's own `orbit-worker-*` scope counts, so
+    /// an uncontained worker never blames its launcher's other work on itself.
+    fn record_worker_resource_limit(
+        &self,
+        run: &JobRun,
+        started_at: chrono::DateTime<Utc>,
+        finished_at: chrono::DateTime<Utc>,
+        outcome: Result<&crate::application::job::V2JobRunResult, &OrbitError>,
+    ) {
+        let failure = match outcome {
+            Ok(result) if result.success => return,
+            Ok(result) => result
+                .message
+                .clone()
+                .unwrap_or_else(|| "job completed with success=false".to_string()),
+            Err(error) => error.to_string(),
+        };
+        let Some(breach) =
+            scope::WorkerScopeCgroup::of_current_process().and_then(|scope| scope.limit_breach())
+        else {
+            return;
+        };
+        let message = format!("{}; run failure: {failure}", breach.describe());
+        tracing::warn!(target: "orbit.core.job_run", run_id = run.run_id, "{message}");
+        let _ = self.record_pipeline_diagnostic_step(
+            run,
+            started_at,
+            finished_at,
+            Some(scope::WORKER_RESOURCE_LIMIT_ERROR_CODE),
+            &message,
+            JobRunState::Failed,
+        );
     }
     pub(crate) fn record_pipeline_failure_step(
         &self,
@@ -339,12 +377,20 @@ impl OrbitRuntime {
     /// Built per call: supervision is a short-lived unit of work, and a fresh
     /// one always reflects the runtime's current handles.
     fn pipeline_worker_supervisor(&self) -> PipelineWorkerSupervisor {
+        // In-crate tests substitute the worker program and must not reach the
+        // host's service manager; the live containment test opts in on its
+        // own supervisor.
+        let limits = if cfg!(test) {
+            None
+        } else {
+            scope::WorkerLimits::from_settings(self.context.settings().worker_containment())
+        };
         PipelineWorkerSupervisor::new(
             Arc::clone(&self.stores().job_run),
             Arc::clone(&self.stores().audit_event),
             self.paths().clone(),
             self.event_log.clone(),
-            WorkerCommandConfig::for_paths(self.paths()),
+            WorkerCommandConfig::for_paths(self.paths()).contained(limits),
             Arc::new(self.clone()),
         )
     }

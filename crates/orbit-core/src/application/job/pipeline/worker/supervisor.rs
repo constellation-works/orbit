@@ -19,6 +19,7 @@ use orbit_store::contracts::{AuditEventStoreBackend, JobRunStoreBackend};
 
 use super::command::WorkerCommandConfig;
 use super::record::{self, PipelineAuditRow};
+use super::scope::{WORKER_RESOURCE_LIMIT_ERROR_CODE, WorkerScopeCgroup};
 use super::*;
 use crate::runtime::event_bus::EventLog;
 
@@ -217,6 +218,9 @@ impl PipelineWorkerSupervisor {
         let workspace = self.workspace();
         let child_pid = child.id();
         let mut claimed = false;
+        // [ORB-12903] The worker's own scope, located while the child is
+        // alive: once every process in it is gone the cgroup goes with it.
+        let mut scope = None;
         loop {
             #[cfg(test)]
             worker_observer_read_counter::record_in(self.runs.as_ref(), run_id);
@@ -224,6 +228,12 @@ impl PipelineWorkerSupervisor {
                 .runs
                 .get_job_run(run_id)?
                 .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, run_id.to_string()))?;
+            // Read after the run: a claim observed here was made by the exec'd
+            // worker, which `systemd-run --scope` only starts once it is
+            // inside its scope.
+            if scope.is_none() {
+                scope = WorkerScopeCgroup::of_process(child_pid);
+            }
             if run.pid == Some(child_pid) && !claimed {
                 let _ = self.record_audit(
                     "pipeline.worker.claimed",
@@ -329,15 +339,27 @@ impl PipelineWorkerSupervisor {
                 } else {
                     "before claiming"
                 };
-                let message = format!(
+                let exit = format!(
                     "pipeline worker for run '{run_id}' exited with status {status} {ownership} \
-                     the persisted run from registered workspace '{}'; worker log: \
-                     '{}'{output_detail}; verify workspace registration, worker root discovery, \
-                     and action availability",
+                     the persisted run from registered workspace '{}'; worker log: '{}'",
                     workspace.display(),
                     worker_log.display(),
                 );
-                self.finalize_exit_failure(&run, &message, actor)?;
+                let (error_code, message) =
+                    match scope.as_ref().and_then(WorkerScopeCgroup::limit_breach) {
+                        Some(breach) => (
+                            Some(WORKER_RESOURCE_LIMIT_ERROR_CODE),
+                            format!("{}; {exit}{output_detail}", breach.describe()),
+                        ),
+                        None => (
+                            None,
+                            format!(
+                                "{exit}{output_detail}; verify workspace registration, worker root \
+                             discovery, and action availability"
+                            ),
+                        ),
+                    };
+                self.finalize_exit_failure(&run, error_code, &message, actor)?;
                 return Ok(());
             }
 
@@ -389,6 +411,7 @@ impl PipelineWorkerSupervisor {
     fn finalize_exit_failure(
         &self,
         run: &JobRun,
+        error_code: Option<&str>,
         message: &str,
         actor: Option<&str>,
     ) -> Result<(), OrbitError> {
@@ -410,7 +433,14 @@ impl PipelineWorkerSupervisor {
             _ => return Ok(()),
         };
         let finished_at = Utc::now();
-        self.record_diagnostic_step(&current, started_at, finished_at, message, state)?;
+        self.record_diagnostic_step(
+            &current,
+            started_at,
+            finished_at,
+            error_code,
+            message,
+            state,
+        )?;
         self.terminalize(&current, state, finished_at)?;
         self.record_worker_failure_audit(audit_name, &current.run_id, message, actor)
     }
@@ -435,6 +465,7 @@ impl PipelineWorkerSupervisor {
             run,
             run.scheduled_at,
             finished_at,
+            None,
             message,
             JobRunState::Interrupted,
         )?;
@@ -466,6 +497,7 @@ impl PipelineWorkerSupervisor {
         run: &JobRun,
         started_at: DateTime<Utc>,
         finished_at: DateTime<Utc>,
+        error_code: Option<&str>,
         message: &str,
         state: JobRunState,
     ) -> Result<(), OrbitError> {
@@ -474,7 +506,7 @@ impl PipelineWorkerSupervisor {
             run,
             started_at,
             finished_at,
-            None,
+            error_code,
             message,
             state,
         )

@@ -209,7 +209,7 @@ impl ConfigStore {
         }
         Err(OrbitError::InvalidInput(format!(
             "config key '{key}' belongs to the global config only; rerun with --global to edit \
-             this machine's identity in '{}'",
+             this machine's settings in '{}'",
             redact_home_dir(&self.path.display().to_string())
         )))
     }
@@ -323,12 +323,13 @@ impl ConfigStore {
     /// again. Emptied parent tables are left in place: a `[workflow]` header
     /// with a hand-written comment above it is content an operator wrote, and
     /// an empty table admits exactly like an absent one.
-    /// `machine.*` is the one exception: there is no layer below this machine's
-    /// identity to fall back to, and clearing one of its three keys would leave
-    /// a partial `[machine]` table that fails closed on the next load.
+    /// The machine identity keys are the one exception: there is no layer
+    /// below this machine's identity to fall back to, and clearing one of its
+    /// three keys would leave a partial `[machine]` table that fails closed on
+    /// the next load. `machine.worker_*` limits unset to their defaults.
     pub fn unset_value(&mut self, key: &str) -> Result<bool, OrbitError> {
         registry::admit_settable_config_key(key)?;
-        if registry::is_global_only_key(key) {
+        if registry::is_machine_identity_key(key) {
             return Err(OrbitError::InvalidInput(format!(
                 "config key '{key}' cannot be unset: this machine's identity has no layer to \
                  fall back to, and a partial [machine] table does not load. Rename it with \

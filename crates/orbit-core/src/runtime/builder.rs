@@ -270,6 +270,7 @@ pub(crate) fn build_context_from_roots(
             runtime_config.complexity_crews.clone(),
             system_crew,
             operation,
+            runtime_config.snapshot.worker_containment(),
         ),
     ))
 }

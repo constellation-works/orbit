@@ -287,3 +287,135 @@ fn unrequested_signal_exit_is_not_treated_as_a_cancellation() {
     assert!(!recorded);
     assert!(fixture.audits(&run.run_id).is_empty());
 }
+
+/// [ORB-12903] Live containment against the host's systemd user manager: a
+/// worker that forks without bound under a tight `TasksMax` settles its own
+/// run with `worker_resource_limit`, while a sibling worker in its own scope
+/// and this parent process keep running.
+///
+/// Ignored by default because CI and sandboxes have no user bus. On a Linux
+/// host with one: `cargo test -p orbit-core contained_fork_bomb -- --ignored`.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "needs a reachable systemd user manager"]
+fn contained_fork_bomb_fails_its_own_run_while_a_sibling_survives() {
+    use std::time::{Duration, Instant};
+
+    use orbit_config::WorkerContainmentSettings;
+
+    use crate::application::job::pipeline::worker::command::worker_command_override;
+    use crate::application::job::pipeline::worker::log::configure_pipeline_worker_stdio;
+    use crate::application::job::pipeline::worker::scope::{
+        WORKER_RESOURCE_LIMIT_ERROR_CODE, WorkerLimits, WorkerScopeCgroup,
+    };
+
+    const TASKS_MAX: u32 = 32;
+    let fixture = Fixture::new();
+    let workspace = fixture._root.path().join("repo");
+    std::fs::create_dir_all(&workspace).expect("fixture workspace");
+    let logs_dir = workspace.join(".orbit/logs");
+    let command = WorkerCommandConfig::for_paths(&WorkspacePaths::new(
+        workspace.clone(),
+        workspace.join(".orbit"),
+        fixture._root.path().join("global"),
+    ))
+    .contained(WorkerLimits::from_settings(&WorkerContainmentSettings {
+        enabled: true,
+        memory_high: "48M".to_string(),
+        memory_max: "64M".to_string(),
+        tasks_max: TASKS_MAX,
+    }));
+    let spawn = |run: &JobRun, argv: &[&str]| -> u32 {
+        worker_command_override::set(argv.iter().copied());
+        let mut worker = command
+            .build(&workspace, &run.run_id)
+            .expect("build contained worker");
+        worker_command_override::clear();
+        let log = configure_pipeline_worker_stdio(&mut worker, &logs_dir, &run.run_id)
+            .expect("worker log");
+        fixture
+            .supervisor
+            .spawn_process(&run.run_id, None, worker, log)
+            .expect("spawn contained worker")
+    };
+    let scope_of = |pid: u32| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(scope) = WorkerScopeCgroup::of_process(pid) {
+                return scope;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "worker {pid} never entered a scope"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+
+    let sibling = fixture.pending_run("contained_sibling");
+    let sibling_pid = spawn(&sibling, &["sh", "-c", "sleep 8"]);
+    let sibling_scope = scope_of(sibling_pid);
+
+    let bomb = fixture.pending_run("contained_fork_bomb");
+    let bomb_pid = spawn(&bomb, &["sh", "-c", "while :; do sleep 120 & done"]);
+    let bomb_scope = scope_of(bomb_pid);
+    assert_ne!(bomb_scope, sibling_scope, "each run gets its own scope");
+    let limit = |name: &str| {
+        std::fs::read_to_string(bomb_scope.directory().join(name))
+            .expect("scope limit file")
+            .trim()
+            .to_string()
+    };
+    assert_eq!(limit("pids.max"), TASKS_MAX.to_string());
+    assert_eq!(limit("memory.max"), (64 * 1024 * 1024).to_string());
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let settled = loop {
+        let run = fixture
+            .runs
+            .get_job_run(&bomb.run_id)
+            .expect("read bomb run")
+            .expect("bomb run exists");
+        if run.state.is_terminal() {
+            break run;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the fork bomb's run never settled"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    // The bomb's leftover children are in its session; reap the scope.
+    unsafe {
+        libc::kill(-(bomb_pid as i32), libc::SIGKILL);
+    }
+
+    let diagnostic = settled.steps.last().expect("bomb diagnostic step");
+    assert_eq!(
+        diagnostic.error_code.as_deref(),
+        Some(WORKER_RESOURCE_LIMIT_ERROR_CODE),
+        "{:?}",
+        diagnostic.error_message
+    );
+    assert!(
+        diagnostic
+            .error_message
+            .as_deref()
+            .is_some_and(|message| message.contains("task limit"))
+    );
+    assert_eq!(
+        unsafe { libc::kill(sibling_pid as i32, 0) },
+        0,
+        "the sibling worker outlives the bomb's run"
+    );
+    assert_eq!(sibling_scope.limit_breach(), None);
+    let sibling_run = fixture
+        .runs
+        .get_job_run(&sibling.run_id)
+        .expect("read sibling run")
+        .expect("sibling run exists");
+    assert!(!sibling_run.state.is_terminal());
+    unsafe {
+        libc::kill(-(sibling_pid as i32), libc::SIGKILL);
+    }
+}

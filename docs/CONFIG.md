@@ -86,6 +86,27 @@ Three rules follow from "this is one machine's identity, not a repository settin
 
 A pre-`[machine]` installation carried these values in `~/.orbit/host.toml`. That file is folded into `[machine]` on first load and removed. If both exist and disagree, Orbit refuses to start and names both paths — they are two different answers to "who is this machine", and either choice orphans the ids minted under the other. Reconcile them by deleting the stale file.
 
+### Worker limits
+
+The same global-only table bounds every detached pipeline worker this machine launches. On Linux with a reachable systemd user manager each worker — and everything it spawns: agent CLIs, cargo, rustc, test binaries — runs in its own transient scope, `orbit-worker-<run_id>-<nonce>.scope`, so one runaway run is throttled or OOM-killed inside that scope instead of taking the host down.
+
+```toml
+[machine]
+worker_containment = true    # false launches workers in the caller's cgroup
+worker_memory_high = "40%"   # MemoryHigh=: the kernel throttles the run above this
+worker_memory_max  = "50%"   # MemoryMax=: OOM kills stay inside the run
+worker_tasks_max   = 4096    # TasksMax=: processes + threads before fork/clone fails
+```
+
+| Key | Default | What it is |
+|---|---|---|
+| `machine.worker_containment` | `true` | Launch each worker in its own scope. Without a user manager (macOS, containers, sandboxes without a user bus) or with `false`, workers launch in the caller's cgroup and each Orbit process logs one warning. |
+| `machine.worker_memory_high` | `40%` | Scope `MemoryHigh=`. Bytes with an optional `K`/`M`/`G`/`T` suffix, a percentage of physical RAM, or `infinity`. |
+| `machine.worker_memory_max` | `50%` | Scope `MemoryMax=`, same grammar. |
+| `machine.worker_tasks_max` | `4096` | Scope `TasksMax=`, at least 1. |
+
+Percentages are resolved by systemd against the host's physical RAM, so the defaults scale with the machine. Unlike the identity keys, a worker limit can be set with `orbit config set --global machine.<key> <value>` and unset back to its default. A run that fails after its scope hit a limit carries the error code `worker_resource_limit` in `orbit run show`, naming the limit and how often it was hit. Operating and inspecting the scopes: the orbit-setup skill's [operational-logs reference](../crates/orbit-core/assets/skills/orbit-setup/references/operational-logs.md#worker-resource-containment).
+
 ---
 
 ## `[workflow]` — branch and crew defaults

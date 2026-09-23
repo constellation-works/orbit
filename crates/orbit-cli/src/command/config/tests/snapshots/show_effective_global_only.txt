@@ -2,7 +2,14 @@ orbit config — effective
 
 Layers (later wins)          built-in defaults → global <global-root>/config.toml → workspace <workspace-root>/config.toml (absent)
 
-Machine (machine.*)          who this machine is (global config only) — 3 keys unset (pass --all to list them)
+Machine (machine.*)          who this machine is and how it bounds workers (global config only)
+  id                               –                     unset    Stable generated identity of this machine (hm_...). Written once by `orbit init` and never reused; not settable.
+  name                             –                     unset    Operator-chosen display name for this machine. The one `[machine]` value that may change: `orbit config set --global machine.name <value>`.
+  task_prefix                      –                     unset    Immutable task-id namespace for ids minted on this machine (2-5 uppercase ASCII letters). Chosen once by `orbit init`; not settable.
+  worker_containment               true                  default  Launch each detached pipeline worker in its own transient systemd user scope bounded by the machine.worker_* limits (Linux with a systemd user manager). false, or no reachable user manager, launches workers in the caller's cgroup with a warning.
+  worker_memory_high               40%                   default  MemoryHigh= for each contained worker scope, where the kernel starts throttling the run: bytes with an optional K/M/G/T suffix, a percentage of physical RAM, or infinity (default 40%).
+  worker_memory_max                50%                   default  MemoryMax= for each contained worker scope, where the kernel OOM-kills inside the run instead of the host: bytes with an optional K/M/G/T suffix, a percentage of physical RAM, or infinity (default 50%).
+  worker_tasks_max                 4096                  default  TasksMax= for each contained worker scope: processes and threads the run may hold at once before fork/clone fails (>= 1, default 4096).
 
 Delivery (workflow.*)        how tasks are shipped
   base_branch                      main                  global   Config fallback for ship/auto/pilot base branch when no registered workspace base_branch is bound.

@@ -5,8 +5,8 @@ use tempfile::tempdir;
 
 use super::{roots, write_config};
 use crate::{
-    ConfigScope, ConfigStore, MachineSettings, ResolvedConfig, admit_settable_config_key,
-    load_machine_settings,
+    ConfigScope, ConfigStore, MachineSettings, ResolvedConfig, WorkerContainmentSettings,
+    admit_settable_config_key, load_machine_settings,
 };
 
 const IDENTITY: &str =
@@ -254,4 +254,79 @@ fn an_identity_key_cannot_be_unset_into_a_partial_table() {
         store.is_key_set("machine.name"),
         "the refusal must not stage a removal"
     );
+}
+
+/// [ORB-12903] Worker limits live in the global `[machine]` table beside the
+/// identity, default on, and reach consumers as admitted systemd values.
+#[test]
+fn worker_limits_default_on_and_admit_systemd_sizes() {
+    let global = tempdir().expect("global");
+    write_config(global.path(), IDENTITY);
+    let defaults = ResolvedConfig::load(&roots(global.path(), global.path()))
+        .expect("layered load")
+        .snapshot
+        .worker_containment();
+    assert!(defaults.enabled);
+    assert!(defaults.memory_max.ends_with('%'), "derived from host RAM");
+    assert!(defaults.tasks_max > 0);
+
+    write_config(
+        global.path(),
+        &format!(
+            "{IDENTITY}worker_containment = false\nworker_memory_high = \"6G\"\n\
+             worker_memory_max = \"infinity\"\nworker_tasks_max = 512\n"
+        ),
+    );
+    let configured = ResolvedConfig::load(&roots(global.path(), global.path()))
+        .expect("layered load")
+        .snapshot
+        .worker_containment();
+    assert_eq!(
+        configured,
+        WorkerContainmentSettings {
+            enabled: false,
+            memory_high: "6G".to_string(),
+            memory_max: "infinity".to_string(),
+            tasks_max: 512,
+        }
+    );
+}
+
+/// Each value is later one `systemd-run --property=` argument; anything the
+/// manager would reject must fail at load, not at every worker launch.
+#[test]
+fn malformed_worker_limits_fail_closed_naming_the_key() {
+    for (line, key) in [
+        ("worker_memory_max = \"8 G\"", "machine.worker_memory_max"),
+        ("worker_memory_max = \"150%\"", "machine.worker_memory_max"),
+        (
+            "worker_memory_high = \"8G TasksMax=1\"",
+            "machine.worker_memory_high",
+        ),
+        ("worker_memory_high = \"0\"", "machine.worker_memory_high"),
+        ("worker_tasks_max = 0", "machine.worker_tasks_max"),
+    ] {
+        let global = tempdir().expect("global");
+        write_config(global.path(), &format!("{IDENTITY}{line}\n"));
+        let error = ResolvedConfig::load(&roots(global.path(), global.path()))
+            .expect_err("malformed worker limit must not load")
+            .to_string();
+        assert!(error.contains(key), "{line}: {error}");
+    }
+}
+
+/// Unlike the identity, a worker limit has a built-in default to fall back to.
+#[test]
+fn a_worker_limit_unsets_to_its_default() {
+    let global = tempdir().expect("global");
+    let path = global.path().join("config.toml");
+    std::fs::write(&path, format!("{IDENTITY}worker_tasks_max = 512\n")).expect("seed");
+
+    let mut store = ConfigStore::open(ConfigScope::Global, &path).expect("open");
+    assert!(
+        store
+            .unset_value("machine.worker_tasks_max")
+            .expect("unset worker limit")
+    );
+    assert!(store.is_key_set("machine.id"));
 }

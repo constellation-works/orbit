@@ -6,6 +6,12 @@ Description=Orbit routine sweep (fires due routines on this host)
 [Service]
 Type=oneshot
 KillMode=process
+# Backstop for work left in this unit's cgroup [ORB-12903]: pipeline workers
+# normally leave it for their own bounded `orbit-worker-*.scope`, but with
+# `machine.worker_containment = false` they stay here. MemoryHigh throttles
+# rather than kills, so a restart still never takes an in-flight run down.
+MemoryHigh=70%
+TasksMax=4096
 # User managers do not inherit an interactive shell PATH. `%h` is expanded by
 # systemd for the service user, keeping provider and Rust tool launchers
 # discoverable without embedding a host-specific home directory.
