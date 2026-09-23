@@ -3126,6 +3126,7 @@ fn unmanaged_orbit_workspace_env_does_not_bind_mcp() {
     let workspace = McpWorkspace::init();
     let child = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
         .env("ORBIT_WORKSPACE", "ws_mcp-roundtrip")
+        .env("ORBIT_SESSION_ID", "inherited-inspection-id")
         .args(["mcp", "serve"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -3147,6 +3148,81 @@ fn unmanaged_orbit_workspace_env_does_not_bind_mcp() {
         unscoped["message"]
             .as_str()
             .is_some_and(|message| { message.contains("requires an explicit workspace selector") })
+    );
+}
+
+/// A source-inspection provider has an Orbit invocation identity but no job
+/// run. The MCP server it starts must bind before its first tool call.
+#[test]
+fn managed_source_inspection_mcp_search_uses_the_dispatching_workspace() {
+    let workspace = McpWorkspace::init();
+    let task_id = author_task(&workspace, "Inspection binding search fixture");
+    let child = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .env("ORBIT_MANAGED_RUN_CONTEXT", "1")
+        .env_remove("ORBIT_RUN_ID")
+        .env("ORBIT_SESSION_ID", "inspection-invocation")
+        .env("ORBIT_WORKSPACE", "ws_mcp-roundtrip")
+        .env("PATH", McpWorkspace::stub_bin_dir(&workspace.home))
+        .args(["mcp", "serve"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn inspection MCP server");
+    let mut client = McpClient::new(child);
+    client.request(
+        "initialize",
+        json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "inspection-provider", "version": "0" },
+        }),
+    );
+    client.notify("notifications/initialized");
+
+    let listed = client.request("tools/list", Value::Null);
+    let description = tool_workspace_description(&listed, "orbit_search");
+    assert!(
+        description.contains("Optional in this session"),
+        "{description}"
+    );
+    let search_schema = listed["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .find(|tool| tool["name"] == "orbit_search")
+        .expect("search tool listed");
+    assert!(
+        search_schema["inputSchema"]["required"]
+            .as_array()
+            .is_none_or(|required| !required.iter().any(|field| field == "workspace")),
+        "the inspection session must advertise workspace as optional: {search_schema}"
+    );
+    let found = client.call_tool_ok(
+        "orbit_search",
+        json!({
+            "query": "Inspection binding search fixture",
+            "model": "codex",
+        }),
+    );
+    assert!(found.to_string().contains(&task_id), "{found}");
+    assert_eq!(
+        latest_tool_audit_workspace(&workspace, "orbit.search").as_deref(),
+        Some("ws_mcp-roundtrip")
+    );
+    let conflicting = client.call_tool_err(
+        "orbit_search",
+        json!({
+            "workspace": "ws_not_registered",
+            "query": "Inspection binding search fixture",
+            "model": "codex",
+        }),
+    );
+    assert!(
+        conflicting["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("ws_not_registered")),
+        "an explicit payload selector must fail closed: {conflicting}"
     );
 }
 

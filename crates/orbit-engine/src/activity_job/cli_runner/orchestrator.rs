@@ -351,11 +351,13 @@ pub fn run_cli_backend(
     // direct-agent executions. The AGENT_* fields preserve ORB-10342's
     // commit-telemetry contract and omit unknown model/task values.
     let mut dispatch_env = provenance_env(ProvenanceEnv {
-        orbit_run_id: Some(run_id),
+        orbit_run_id: inspection.is_none().then_some(run_id),
         orbit_managed_run_context: true,
         orbit_agent_name: tool_ctx.agent_name.as_deref(),
         orbit_agent_model: tool_ctx.model_name.as_deref(),
-        orbit_session_id: None,
+        // A source inspection is an Orbit-dispatched invocation without a
+        // job run. Give its nested MCP child a separate managed identity.
+        orbit_session_id: inspection.as_ref().map(|_| run_id),
         orbit_task_id: task_id,
         orbit_active_task: true,
         agent_run_id: Some(run_id),
@@ -402,7 +404,8 @@ pub fn run_cli_backend(
     };
     // Carry the trusted logical `ws_*` identity so nested `orbit tool run`
     // and `orbit mcp serve` do not rediscover ownership from a linked-worktree
-    // cwd. The child honors this only together with managed-run provenance;
+    // cwd. The child honors this only with managed provenance plus a run or
+    // source-inspection invocation identity;
     // an explicit `--workspace` or tool-payload selector still wins and still
     // fails closed. [ORB-11117]
     if let Some(workspace) = host.orbit_workspace_selector() {
@@ -428,6 +431,11 @@ pub fn run_cli_backend(
     // allowlist forwarded from an outer process. [ORB-10917]
     let mut child_env =
         provider_child_environment(host, &provider, sandbox, invocation.required_env_vars);
+    if inspection.is_some() {
+        // This invocation has no job-run authority. An outer managed process
+        // may have passed its own run id through the allowlist.
+        child_env.retain(|(key, _)| key != "ORBIT_RUN_ID");
+    }
     if registry_locator_injected {
         // A host process may itself have been launched with an operator
         // `ORBIT_ROOT`. Do not reinterpret that pinned-data-root input as the
