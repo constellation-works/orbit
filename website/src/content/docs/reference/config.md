@@ -42,7 +42,7 @@ otherwise `[workflow] default_crew` applies.
 ```toml
 [crews.sol]
 provider = "codex"
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 effort = "high"
 description = "Systems implementation"
 tags = ["implementation", "review"]

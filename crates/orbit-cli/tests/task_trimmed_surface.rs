@@ -459,7 +459,7 @@ fn task_add_attributes_from_model_flag_and_managed_identity_env() {
         "--complexity",
         "low",
         "--model",
-        "gpt-5.6-sol",
+        "gpt-6-sol",
         "--json",
     ]);
     assert_eq!(explicit["created_by"], json!("codex"));

@@ -60,7 +60,7 @@ fn effective_json_includes_configured_crew_effort_and_omits_unconfigured() {
 default_crew = "sol"
 
 [crews.sol]
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 provider = "codex"
 effort = "medium"
 
@@ -441,13 +441,13 @@ default_crew = "sol"
 system_crew = "luna"
 
 [crews.sol]
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 provider = "codex"
 effort = "medium"
 tags = ["deep"]
 
 [crews.luna]
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 provider = "codex"
 "#,
     )
@@ -549,7 +549,7 @@ default_crew = "sol"
 enabled = false
 
 [crews.sol]
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 provider = "codex"
 effort = "medium"
 "#,
@@ -568,7 +568,7 @@ base_branch = "main"
 default_crew = "sol"
 
 [crews.sol]
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 provider = "codex"
 effort = "medium"
 "#,

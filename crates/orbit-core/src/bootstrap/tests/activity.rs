@@ -39,12 +39,12 @@ system_crew = "system"
 
 [crews.sol]
 provider = "codex"
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 backend = "cli"
 
 [crews.system]
 provider = "codex"
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 backend = "cli"
 "#,
     )
@@ -54,23 +54,17 @@ backend = "cli"
     let run_input = json!({ "crew": "sol" });
 
     let expected = BTreeMap::from([
-        ("agent_implement", ("codex", "gpt-5.6-sol".to_string())),
+        ("agent_implement", ("codex", "gpt-6-sol".to_string())),
         // The exploration invocation names no crew either: an operator
         // chooses one per submission, and an omitted choice falls through
         // to the run's crew exactly like every other activity here.
-        ("agent_invoke", ("codex", "gpt-5.6-sol".to_string())),
+        ("agent_invoke", ("codex", "gpt-6-sol".to_string())),
         // [ORB-11333] The reviewer names no crew literally either: the
         // gate injects the configured `operation.review_crew` per run.
-        ("agent_review_repair", ("codex", "gpt-5.6-sol".to_string())),
-        (
-            "step_failure_recovery",
-            ("codex", "gpt-5.6-luna".to_string()),
-        ),
-        (
-            "pr_conflict_recovery",
-            ("codex", "gpt-5.6-luna".to_string()),
-        ),
-        ("task_pilot", ("codex", "gpt-5.6-luna".to_string())),
+        ("agent_review_repair", ("codex", "gpt-6-sol".to_string())),
+        ("step_failure_recovery", ("codex", "gpt-6-luna".to_string())),
+        ("pr_conflict_recovery", ("codex", "gpt-6-luna".to_string())),
+        ("task_pilot", ("codex", "gpt-6-luna".to_string())),
     ]);
     let mut actual = BTreeMap::new();
 

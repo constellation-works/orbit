@@ -37,7 +37,7 @@ fn show_args(scope: ConfigScopeArg) -> ConfigShowArgs {
 fn write_sol_crew(path: &std::path::Path) {
     fs::write(
         path,
-        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-5.6-sol\"\nprovider = \"codex\"\n",
+        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-6-sol\"\nprovider = \"codex\"\n",
     )
     .expect("write sol crew config");
 }
@@ -103,7 +103,7 @@ fn get_reads_hand_authored_crew_effort() {
     let (_root, runtime, _global_root, workspace_root) = test_runtime();
     fs::write(
         workspace_root.join("config.toml"),
-        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-5.6-sol\"\nprovider = \"codex\"\neffort = \"high\"\n",
+        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nmodel = \"gpt-6-sol\"\nprovider = \"codex\"\neffort = \"high\"\n",
     )
     .expect("write hand-authored effort");
 

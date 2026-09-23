@@ -205,7 +205,7 @@ fn events_outside_the_window_are_excluded() {
 
 #[test]
 fn derived_event_actor_matches_the_persisted_projection() {
-    let store = store_with_roles(&["opus", "admin", "unverified", "gpt-5.6-luna"]);
+    let store = store_with_roles(&["opus", "admin", "unverified", "gpt-6-luna"]);
 
     let events = store
         .list_audit_events(&AuditEventFilter {

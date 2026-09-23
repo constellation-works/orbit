@@ -21,10 +21,14 @@ fn agent_granularities_collapse_to_one_canonical_actor() {
         assert_eq!(actor.vendor.as_deref(), Some("anthropic"), "{label}");
     }
 
-    for label in ["codex", "gpt-5.6-luna", "gpt-5.4-mini"] {
+    for label in ["codex", "gpt-6-sol", "gpt-6-luna", "gpt-5.4-mini"] {
         let actor = canonical_actor_for_role_label(label);
         assert_eq!(actor.id, "codex", "{label}");
         assert_eq!(actor.vendor.as_deref(), Some("openai"), "{label}");
+        if label.starts_with("gpt-6-") {
+            assert_eq!(actor.family.as_deref(), Some("codex"), "{label}");
+            assert_eq!(actor.model.as_deref(), Some(label), "{label}");
+        }
     }
 
     let grok = canonical_actor_for_role_label("grok-4.6");
@@ -121,7 +125,7 @@ fn unrecognized_model_stays_a_distinct_agent() {
 
 #[test]
 fn every_derivation_is_stamped_with_the_alias_map_version() {
-    for label in ["claude", "admin", "", "unverified", "gpt-5.6-luna"] {
+    for label in ["claude", "admin", "", "unverified", "gpt-6-luna"] {
         assert_eq!(
             canonical_actor_for_role_label(label).alias_version,
             ACTOR_ALIAS_MAP_VERSION,

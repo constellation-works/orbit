@@ -41,7 +41,7 @@ default_crew = "sol"
 system_crew = "qa"
 
 [crews.sol]
-model = "gpt-5.6-sol"
+model = "gpt-6-sol"
 provider = "codex"
 backend = "cli"
 
@@ -305,7 +305,7 @@ default_crew = "repair"
 system_crew = "repair"
 [crews.repair]
 provider = "codex"
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 "#,
     ));
     seed_executor(
@@ -496,7 +496,7 @@ default_crew = "repair"
 system_crew = "repair"
 [crews.repair]
 provider = "codex"
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 "#,
         ));
         seed_executor(

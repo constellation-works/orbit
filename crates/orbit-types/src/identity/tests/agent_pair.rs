@@ -76,6 +76,13 @@ mod resolution {
             infer_agent_family_from_model("gpt-5.5").as_deref(),
             Some("codex")
         );
+        for model in ["gpt-6-sol", "gpt-6-luna"] {
+            assert_eq!(
+                infer_agent_family_from_model(model).as_deref(),
+                Some("codex"),
+                "{model} must route to Codex"
+            );
+        }
         assert_eq!(
             infer_agent_family_from_model("o3-mini").as_deref(),
             Some("codex")

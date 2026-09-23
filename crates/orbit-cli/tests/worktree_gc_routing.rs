@@ -423,7 +423,7 @@ fn configure_fixture_crew(root: &Path) {
 
     if !config.contains("[crews.sol]") {
         config.push_str(
-            "\n[crews.sol]\nprovider = \"codex\"\nmodel = \"gpt-5.6-sol\"\nbackend = \"cli\"\n",
+            "\n[crews.sol]\nprovider = \"codex\"\nmodel = \"gpt-6-sol\"\nbackend = \"cli\"\n",
         );
     }
 

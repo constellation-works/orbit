@@ -148,6 +148,7 @@ fn context_window_suffix_falls_back_to_the_base_row() {
 #[test]
 fn every_fleet_model_string_is_priced() {
     const FLEET_MODELS: &[&str] = &[
+        "claude-opus-5-5",
         "claude-opus-5",
         "claude-opus-4-8",
         "claude-opus-4-8[1m]",
@@ -156,9 +157,9 @@ fn every_fleet_model_string_is_priced() {
         "claude-haiku-4-5-20251001",
         "claude-fable-5",
         "claude-fable-5-1",
-        "gpt-5.6-sol",
         "gpt-5.6-terra",
-        "gpt-5.6-luna",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-6-astra",
         "gemini-3.5-flash",
         "gemini-3.8-flash",
@@ -185,6 +186,54 @@ fn every_fleet_model_string_is_priced() {
         assert!(
             derive_cost_usd(model, at, &usage).is_some(),
             "fleet model {model} has no covering price row in model_prices.yaml"
+        );
+    }
+    // Retired defaults still need their original rows for recorded runs.
+    for model in ["gpt-5.6-sol", "gpt-5.6-luna"] {
+        assert!(
+            derive_cost_usd(model, dt("2026-09-21T23:59:59Z"), &usage).is_some(),
+            "historical fleet model {model} lost its price row"
+        );
+    }
+}
+
+#[test]
+fn september_22_model_onboarding_has_published_rates_and_closes_old_defaults() {
+    let before = dt("2026-09-21T23:59:59Z");
+    let at = dt("2026-09-22T00:00:00Z");
+    for (model, rates) in [
+        ("gpt-6-sol", [2.0, 0.2, 2.5, 2.5, 10.0]),
+        ("gpt-6-luna", [0.1, 0.01, 0.125, 0.125, 0.5]),
+        ("claude-opus-5-5", [4.0, 0.2, 5.0, 8.0, 20.0]),
+    ] {
+        assert!(
+            covering_rows(model, before).is_empty(),
+            "{model} predates launch"
+        );
+        let rows = covering_rows(model, at);
+        assert_eq!(rows.len(), 1, "{model} has one launch price row");
+        let row = rows[0];
+        assert_eq!(
+            [
+                row.input_per_million_usd,
+                row.cache_read_per_million_usd,
+                row.cache_create_per_million_usd,
+                row.cache_create_1h_per_million_usd,
+                row.output_per_million_usd
+            ],
+            rates,
+            "{model} differs from provider's standard rates (ORB-10338 cost regression)"
+        );
+    }
+    for model in ["gpt-5.6-sol", "gpt-5.6-luna"] {
+        assert_eq!(
+            covering_rows(model, before).len(),
+            1,
+            "{model} historical rate"
+        );
+        assert!(
+            covering_rows(model, at).is_empty(),
+            "{model} retired row remains open"
         );
     }
 }

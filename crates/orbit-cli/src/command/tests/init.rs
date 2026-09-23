@@ -118,9 +118,9 @@ fn non_interactive_init_against_non_global_root_leaves_home_skill_links_untouche
         ("opus", "claude", "opus"),
         ("sonnet", "claude", "sonnet"),
         ("fable", "claude", "fable"),
-        ("sol", "codex", "gpt-5.6-sol"),
+        ("sol", "codex", "gpt-6-sol"),
         ("terra", "codex", "gpt-5.6-terra"),
-        ("luna", "codex", "gpt-5.6-luna"),
+        ("luna", "codex", "gpt-6-luna"),
         ("gemini", "gemini", "gemini-3.7-flash"),
         ("grok", "grok", "grok-4.7"),
         ("system", "", ""),
@@ -140,7 +140,7 @@ fn non_interactive_init_against_non_global_root_leaves_home_skill_links_untouche
                 // then gemini flash. Cheapest tier per family, not the
                 // family default.
                 let (provider, model) = if crews.contains_key("luna") {
-                    ("codex", "gpt-5.6-luna")
+                    ("codex", "gpt-6-luna")
                 } else if crews.contains_key("sonnet") {
                     ("claude", "sonnet")
                 } else if crews.contains_key("grok") {

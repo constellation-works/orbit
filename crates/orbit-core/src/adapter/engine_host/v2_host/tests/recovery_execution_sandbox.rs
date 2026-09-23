@@ -82,7 +82,7 @@ default_crew = "repair"
 system_crew = "repair"
 [crews.repair]
 provider = "codex"
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 "#,
     ));
     seed_executor(
@@ -441,7 +441,7 @@ fn assert_recovery_evidence(
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].activity_id, "step_failure_recovery");
     assert_eq!(records[0].agent, "codex");
-    assert_eq!(records[0].model.as_deref(), Some("gpt-5.6-luna"));
+    assert_eq!(records[0].model.as_deref(), Some("gpt-6-luna"));
     assert_eq!(records[0].task_ids, [task_id.to_string()]);
 }
 

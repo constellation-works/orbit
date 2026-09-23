@@ -2,24 +2,24 @@
 type: design
 summary: "Spec: Canonical Audit Actor Identity"
 tags: ["auditability"]
-last_validated: 2026-09-11
+last_validated: 2026-09-23
 ---
 
 # Spec: Canonical Audit Actor Identity
 
 `audit_events.role` is a single free-text label that conflates five unrelated kinds of
-value. Measured over a 30d window on the production audit database (as of 2026-08-16;
-not re-verified in this checkout):
+value. A 30d production audit window measured this mix as of 2026-08-16; the table
+uses current model names as examples of each kind, not as a copy of that sample:
 
-| kind | observed values |
+| kind | example values |
 |---|---|
 | agent family | `codex`, `claude`, `grok` |
-| model string | `claude-opus-5`, `gpt-5.6-luna`, `opus`, `sonnet`, `claude-sonnet-5` |
+| model string | `claude-opus-5-5`, `gpt-6-luna`, `opus`, `sonnet`, `claude-sonnet-5` |
 | system / synthetic | `admin`, `hook` |
 | unattributed | `unknown`, `unverified`, `agent` |
 | human | `human` |
 
-Two defects follow. **Granularity split**: `claude`, `opus`, and `claude-opus-5` are one
+Two defects follow. **Granularity split**: `claude`, `opus`, and `claude-opus-5-5` are one
 actor recorded at three grains, so every per-agent denominator is split across rows that
 should aggregate. **Kind conflation**: `admin` is hardcoded on ID-allocation and direct-CLI
 rows, `hook` is machinery, and `unknown` is overwhelmingly human-run read-only inspection —
@@ -55,7 +55,7 @@ label to a `CanonicalActor`:
 | `alias_version` | the alias-map version that produced this record |
 
 `kind` is what makes "real agents only" expressible without string-matching a label.
-`id` is what collapses the granularity split: `claude`, `opus`, and `claude-opus-5` all
+`id` is what collapses the granularity split: `claude`, `opus`, and `claude-opus-5-5` all
 carry `id = "claude"` while `model` keeps the finer grain retrievable.
 
 ## The Alias Map
@@ -68,7 +68,7 @@ carry `id = "claude"` while `model` keeps the finer grain retrievable.
    distinct diagnostics stay distinct.
 3. A bare agent family name (`claude`) → agent with no model recorded.
 4. A model string whose family is inferable via `identity::agent_from_model`
-   (`claude-opus-5`, `opus`, `fable-5.1`, `gpt-5.6-luna`), or a shorthand in the
+   (`claude-opus-5-5`, `opus`, `fable-5.1`, `gpt-6-luna`), or a shorthand in the
    explicit table (`haiku`) → agent with both family and model.
 5. Anything else → an agent with unknown family, keeping the label as both `id` and
    `model`. Every label reaching this point came from an attribution path that held a
