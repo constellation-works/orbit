@@ -387,6 +387,27 @@ fn generation_root_uses_managed_registry_when_no_override_is_present() {
 }
 
 #[test]
+fn inspection_invocation_uses_the_managed_registry_without_a_job_run() {
+    let home = tempdir().expect("home tempdir");
+    let registry = tempdir().expect("registry");
+    let home_var = home.path().to_string_lossy().into_owned();
+    let registry_var = registry.path().to_string_lossy().into_owned();
+    let _env = test_env::scoped([
+        ("HOME", Some(home_var.as_str())),
+        ("ORBIT_ROOT", None),
+        ("ORBIT_REGISTRY_ROOT", Some(registry_var.as_str())),
+        ("ORBIT_MANAGED_RUN_CONTEXT", Some("1")),
+        ("ORBIT_RUN_ID", None),
+        ("ORBIT_SESSION_ID", Some("inspection-invocation")),
+    ]);
+
+    assert_eq!(
+        resolve_generation_root(None).expect("inspection registry"),
+        registry.path()
+    );
+}
+
+#[test]
 fn try_resolve_rejects_uninitialized_root_override() {
     let _env = test_env::unset(["ORBIT_ROOT"]);
     let parent = tempdir().expect("parent tempdir");

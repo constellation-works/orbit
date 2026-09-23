@@ -331,8 +331,10 @@ fn dispatch_binds_native_reads_envelope_and_cwd_but_retains_task_authority() {
     write_executable(
         &script,
         r#"#!/bin/sh
-envelope=$(cat)
-if [ "$(cat target.txt)" != pinned ]; then
+envelope=
+while IFS= read -r line; do envelope="$envelope$line"; done
+IFS= read -r target < target.txt
+if [ "$target" != pinned ]; then
   echo "native source read did not use the pinned checkout" >&2
   exit 11
 fi
@@ -340,14 +342,18 @@ if [ "$ORBIT_WORKSPACE" != ws_owner ]; then
   echo "managed workspace identity was not retained" >&2
   exit 12
 fi
+if [ "$ORBIT_MANAGED_RUN_CONTEXT" != 1 ] || [ "$ORBIT_SESSION_ID" != inspection-test ] || [ -n "$ORBIT_RUN_ID" ]; then
+  echo "source inspection did not carry its managed invocation identity" >&2
+  exit 15
+fi
 if [ "$ORBIT_REGISTRY_ROOT" != /authoritative/registry ]; then
   echo "managed registry identity was not retained" >&2
   exit 13
 fi
-if ! printf '%s' "$envelope" | grep -F "$(pwd)" >/dev/null; then
-  echo "envelope did not retain the dispatched cwd" >&2
-  exit 14
-fi
+case "$envelope" in
+  *"$(pwd)"*) ;;
+  *) echo "envelope did not retain the dispatched cwd" >&2; exit 14 ;;
+esac
 printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
 "#,
     );

@@ -5,7 +5,7 @@ use orbit_common::OrbitError;
 use serde::Deserialize;
 
 use crate::paths;
-use crate::runtime::run_input::managed_run_context_from_env;
+use crate::runtime::run_input::managed_dispatch_context_from_env;
 
 /// Registry locator emitted to children of an Orbit-managed run.
 ///
@@ -18,7 +18,7 @@ const ORBIT_REGISTRY_ROOT_ENV: &str = "ORBIT_REGISTRY_ROOT";
 /// Direct commands use `~/.orbit/`. A trusted managed child may instead carry
 /// the dispatching host's registry locator; this never selects its workspace.
 pub fn resolve_global_root() -> Result<PathBuf, OrbitError> {
-    if managed_run_context_from_env()
+    if managed_dispatch_context_from_env()
         && let Ok(value) = std::env::var(ORBIT_REGISTRY_ROOT_ENV)
         && !value.trim().is_empty()
     {
