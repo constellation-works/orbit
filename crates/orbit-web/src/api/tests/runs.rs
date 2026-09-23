@@ -1113,6 +1113,90 @@ async fn job_run_endpoint_refuses_unauthorized_unknown_and_delivery_without_crea
     );
 }
 
+/// Launch a separate test process with a temporary working directory. Changing
+/// this test process's cwd would race every other route test in the suite.
+#[tokio::test]
+async fn job_run_endpoint_uses_catalog_even_when_cwd_has_a_colliding_file() {
+    const FIXTURE_ENV: &str = "ORBIT_WEB_JOB_CWD_COLLISION_FIXTURE";
+    if std::env::var_os(FIXTURE_ENV).is_none() {
+        let cwd = tempfile::tempdir().expect("temporary cwd");
+        let catalog_id = "qa_catalog_collision";
+        let file_only_id = "qa_file_only";
+        let yaml = |name: &str| {
+            format!(
+                "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {name}\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      spec:\n        type: deterministic\n        action: sleep\n        config: {{}}\n"
+            )
+        };
+        std::fs::write(cwd.path().join(catalog_id), yaml("qa_file_shadow"))
+            .expect("write colliding direct-path job");
+        std::fs::write(cwd.path().join(file_only_id), yaml(file_only_id))
+            .expect("write file-only direct-path job");
+
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "job_run_endpoint_uses_catalog_even_when_cwd_has_a_colliding_file",
+                "--nocapture",
+            ])
+            .current_dir(cwd.path())
+            .env(FIXTURE_ENV, "1")
+            .output()
+            .expect("run isolated route fixture");
+        assert!(
+            output.status.success(),
+            "isolated route fixture failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    substitute_pipeline_worker();
+    let runtime = OrbitRuntime::in_memory().expect("build runtime");
+    let catalog_id = "qa_catalog_collision";
+    write_replay_job(&runtime, catalog_id);
+    let subroutine_path = write_replay_job(&runtime, "qa_subroutine_route");
+    let subroutine_yaml = std::fs::read_to_string(&subroutine_path).expect("read fixture job");
+    std::fs::write(
+        &subroutine_path,
+        subroutine_yaml.replace("kind: workflow", "kind: subroutine"),
+    )
+    .expect("write subroutine catalog job");
+    let state = crate::state::DashboardState::single(Arc::new(runtime.clone()));
+    state.set_operator_session(true);
+
+    let response = request_job_run(state.clone(), catalog_id).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let payload = body_json(response).await;
+    assert_eq!(
+        payload["job_id"], catalog_id,
+        "cwd file must not shadow the catalog job"
+    );
+    let run_id = payload["run_id"].as_str().expect("run id");
+    assert_eq!(
+        runtime.show_job_run(run_id).expect("persisted run").job_id,
+        catalog_id
+    );
+
+    let response = request_job_run(state.clone(), "qa_file_only").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = request_job_run(state, "qa_subroutine_route").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        body_json(response).await["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("kind: subroutine"))
+    );
+    let runs = runtime
+        .list_job_runs(JobRunListParams::default())
+        .expect("list runs");
+    assert_eq!(
+        runs.len(),
+        1,
+        "refused file-only and subroutine ids persist no run"
+    );
+    assert_eq!(runs[0].run_id, run_id);
+}
+
 // ─── auto-drain stop [ORB-12728] ──────────────────────────────────────────
 
 async fn request_auto_drain_stop(

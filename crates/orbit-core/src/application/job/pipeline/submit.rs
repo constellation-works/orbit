@@ -313,15 +313,7 @@ impl OrbitRuntime {
     ) -> Result<PipelineInvokeResult, OrbitError> {
         let direct_path = Path::new(job_ref);
         if !direct_path.is_file() {
-            let entry = self.show_job_catalog_entry(job_ref)?;
-            if entry.kind() == orbit_types::workflow::JobKind::Subroutine {
-                return Err(OrbitError::InvalidInput(format!(
-                    "job '{}' declares `kind: subroutine` and cannot be run directly (asset: {}).",
-                    entry.job_id,
-                    entry.path.display()
-                )));
-            }
-            return self.submit_pipeline_run(&entry.job_id, input, None, actor);
+            return self.submit_catalog_job_run(job_ref, input, actor);
         }
 
         let (job_name, spec, yaml) = self.load_direct_job_definition(direct_path)?;
@@ -334,6 +326,25 @@ impl OrbitRuntime {
         });
         self.record_submission_audit(&job_name, &input, actor, &result)?;
         result
+    }
+    /// Submit a catalog job by id. This entry point never interprets the id as
+    /// a path, so request surfaces can reject direct files while preserving the
+    /// same catalog validation and subroutine refusal as the CLI.
+    pub fn submit_catalog_job_run(
+        &self,
+        job_id: &str,
+        input: Value,
+        actor: Option<&str>,
+    ) -> Result<PipelineInvokeResult, OrbitError> {
+        let entry = self.show_job_catalog_entry(job_id)?;
+        if entry.kind() == orbit_types::workflow::JobKind::Subroutine {
+            return Err(OrbitError::InvalidInput(format!(
+                "job '{}' declares `kind: subroutine` and cannot be run directly (asset: {}).",
+                entry.job_id,
+                entry.path.display()
+            )));
+        }
+        self.submit_pipeline_run(&entry.job_id, input, None, actor)
     }
     /// Read and fully validate a direct-path job definition in the submitting
     /// process, so a broken asset is refused before any run is persisted.
